@@ -1,0 +1,276 @@
+"""Phase 3: Single-Pass <cognition> + Narrative Prose Streamer & Parser."""
+
+from __future__ import annotations
+
+import asyncio
+import re
+from collections.abc import AsyncIterator
+from typing import Any
+
+from app.config import settings
+from app.engine.llm_client import llm_client
+from app.schemas.character import CharacterRecord, CharacterStateSnapshot, CognitionBlock
+from app.schemas.turn import PreTurnAnalysis, RecalledMemoryItem
+from app.schemas.world import LocationNode, NeighborLocationView
+
+_RECALL_RE = re.compile(r"<recall>(.*?)</recall>", re.DOTALL | re.I)
+_FEELING_RE = re.compile(
+    r"<feeling(?P<attrs>[^>]*)>(?P<text>.*?)</feeling>",
+    re.DOTALL | re.I,
+)
+_VALENCE_ATTR_RE = re.compile(r'valence\s*=\s*["\']?([+-]?\d+(?:\.\d+)?)["\']?', re.I)
+_AROUSAL_ATTR_RE = re.compile(r'arousal\s*=\s*["\']?([+-]?\d+(?:\.\d+)?)["\']?', re.I)
+_WANT_RE = re.compile(r"<want>(.*?)</want>", re.DOTALL | re.I)
+_PLAN_RE = re.compile(r"<plan>(.*?)</plan>", re.DOTALL | re.I)
+
+
+def _clamp(val: float, low: float, high: float) -> float:
+    return max(low, min(high, val))
+
+
+def parse_cognition_xml(
+    cognition_xml: str,
+    fallback_state: CharacterStateSnapshot,
+) -> CognitionBlock:
+    """Parse inner tags of <cognition>...</cognition> into a validated CognitionBlock."""
+    recall_match = _RECALL_RE.search(cognition_xml)
+    feeling_match = _FEELING_RE.search(cognition_xml)
+    want_match = _WANT_RE.search(cognition_xml)
+    plan_match = _PLAN_RE.search(cognition_xml)
+
+    recall = recall_match.group(1).strip() if recall_match else "Holding onto the current thread of conversation."
+    feeling = feeling_match.group("text").strip() if feeling_match else fallback_state.mood_label
+    valence = fallback_state.valence
+    arousal = fallback_state.arousal
+
+    if feeling_match:
+        attrs = feeling_match.group("attrs") or ""
+        v_m = _VALENCE_ATTR_RE.search(attrs)
+        a_m = _AROUSAL_ATTR_RE.search(attrs)
+        if v_m:
+            try:
+                valence = _clamp(float(v_m.group(1)), -1.0, 1.0)
+            except ValueError:
+                pass
+        if a_m:
+            try:
+                arousal = _clamp(float(a_m.group(1)), 0.0, 1.0)
+            except ValueError:
+                pass
+
+    want = want_match.group(1).strip() if want_match else fallback_state.active_want
+    plan = plan_match.group(1).strip() if plan_match else fallback_state.active_plan
+
+    return CognitionBlock(
+        recall=recall,
+        feeling=feeling,
+        valence=round(valence, 2),
+        arousal=round(arousal, 2),
+        want=want,
+        plan=plan,
+    )
+
+
+def build_offline_simulated_response(
+    *,
+    user_message: str,
+    character: CharacterRecord,
+    previous_state: CharacterStateSnapshot,
+    active_location: LocationNode,
+    neighbors: list[NeighborLocationView],
+    recalled_items: list[RecalledMemoryItem],
+    pre_turn: PreTurnAnalysis,
+) -> str:
+    """Construct a context-grounded <cognition> + prose response when running without a live LLM server."""
+    top_memory = (
+        f"Recalling '{recalled_items[0].title}': {recalled_items[0].content}"
+        if recalled_items
+        else f"Watching the door of {active_location.name} and weighing {character.name}'s history here."
+    )
+
+    if "vulnerable" in pre_turn.user_sentiment:
+        new_val = _clamp(previous_state.valence + 0.15, -1.0, 1.0)
+        new_arousal = _clamp(previous_state.arousal + 0.2, 0.0, 1.0)
+        feeling_text = "Protective instinct kicking in beneath her dry exterior; alert and focused."
+        want_text = "Stabilize the situation and get them somewhere safe away from prying eyes."
+    elif "confrontational" in pre_turn.user_sentiment or "tense" in pre_turn.user_sentiment:
+        new_val = _clamp(previous_state.valence - 0.25, -1.0, 1.0)
+        new_arousal = _clamp(previous_state.arousal + 0.25, 0.0, 1.0)
+        feeling_text = "Razor-sharp tension; guarded and unwilling to be backed into a corner."
+        want_text = "Maintain control of the room and deter any reckless move."
+    else:
+        new_val = _clamp(previous_state.valence + 0.05, -1.0, 1.0)
+        new_arousal = _clamp(previous_state.arousal, 0.0, 1.0)
+        feeling_text = f"Measured and observant, reading their tone ({pre_turn.user_sentiment})."
+        want_text = "Uncover the full truth of what brought them in tonight."
+
+    target_exit = neighbors[0] if neighbors else None
+    if pre_turn.spatial_intent == "move_known" and pre_turn.target_location_hint:
+        plan_text = f"Lead the way toward {pre_turn.target_location_hint} while keeping watch."
+        action_prose = (
+            f"*{character.name} gives a curt nod toward {pre_turn.target_location_hint}, "
+            f"checking the sightlines of {active_location.name} before moving.*\n\n"
+            f"\"Come on, then. Let's not linger out in the open where every sensor in the sector can log us.\""
+        )
+    elif pre_turn.spatial_intent == "explore_new":
+        plan_text = "Follow their lead into the unmapped area with hand near weapon."
+        action_prose = (
+            f"*{character.name}'s eyes narrow as she steps forward beside you, the micro-servos in her "
+            f"forearm clicking into readiness as the unmapped threshold opens ahead.*\n\n"
+            f"\"Stay behind my left shoulder. Nobody's cleared this section in months.\""
+        )
+    elif pre_turn.resolved_roll is not None:
+        roll = pre_turn.resolved_roll
+        plan_text = f"React immediately to their {roll.outcome_tier.lower()} on {roll.skill_or_approach}."
+        if "Success" in roll.outcome_tier:
+            action_prose = (
+                f"*{character.name} watches the maneuver play out inside {active_location.name} "
+                f"[{roll.outcome_tier}: rolled {roll.total} vs DC {roll.difficulty_class}], "
+                f"a faint smirk tugging at the corner of her mouth.*\n\n"
+                f"\"Not bad. Most people who try that in here end up losing a finger—or their dignity. "
+                f"Alright, you've bought yourself some leverage. What's the next play?\""
+            )
+        else:
+            action_prose = (
+                f"*{character.name} winces slightly as the attempt goes sideways inside {active_location.name} "
+                f"[{roll.outcome_tier}: rolled {roll.total} vs DC {roll.difficulty_class}], "
+                f"stepping in smoothly to contain the fallout.*\n\n"
+                f"\"Easy—force it any harder and you'll trip every alarm on the block. Step back and let me look at it.\""
+            )
+    else:
+        exit_mention = (
+            f" glancing briefly toward the {target_exit.direction_label.lower()}"
+            if target_exit
+            else ""
+        )
+        plan_text = "Respond to their subtext directly and test their next move."
+        mem_cue = (
+            f" \"And don't think I've forgotten about {recalled_items[0].title.lower()},\" *she adds quietly.*"
+            if recalled_items
+            else ""
+        )
+        action_prose = (
+            f"*Inside {active_location.name}, {character.name} studies your face,{exit_mention} "
+            f"before leaning an elbow against the counter.*\n\n"
+            f"\"I hear what you're saying, even the part you're trying not to say out loud.\"{mem_cue} "
+            f"\"So tell me straight—what's our move from here?\""
+        )
+
+    return (
+        "<cognition>\n"
+        f"  <recall>{top_memory}</recall>\n"
+        f"  <feeling valence=\"{new_val:.2f}\" arousal=\"{new_arousal:.2f}\">{feeling_text}</feeling>\n"
+        f"  <want>{want_text}</want>\n"
+        f"  <plan>{plan_text}</plan>\n"
+        "</cognition>\n"
+        f"{action_prose}"
+    )
+
+
+async def stream_phase3_actor(
+    *,
+    messages: list[dict[str, str]],
+    user_message: str,
+    character: CharacterRecord,
+    previous_state: CharacterStateSnapshot,
+    active_location: LocationNode,
+    neighbors: list[NeighborLocationView],
+    recalled_items: list[RecalledMemoryItem],
+    pre_turn: PreTurnAnalysis,
+) -> AsyncIterator[dict[str, Any]]:
+    """Stream Phase 3 response, splitting <cognition> tokens from narrative prose tokens in real time."""
+    raw_chunks: list[str] = []
+
+    async def _token_generator() -> AsyncIterator[str]:
+        try:
+            async for delta in llm_client.stream_chat(messages, profile=settings.actor_profile):
+                yield delta
+        except Exception:
+            if not settings.allow_offline_fallback:
+                raise
+            simulated = build_offline_simulated_response(
+                user_message=user_message,
+                character=character,
+                previous_state=previous_state,
+                active_location=active_location,
+                neighbors=neighbors,
+                recalled_items=recalled_items,
+                pre_turn=pre_turn,
+            )
+            # Stream in small chunks to mirror real SSE token cadence
+            step = 18
+            for i in range(0, len(simulated), step):
+                yield simulated[i : i + step]
+                await asyncio.sleep(0.005)
+
+    buffer = ""
+    in_cognition = True
+    cognition_emitted = False
+    prose_Accumulator: list[str] = []
+    cognition_block = CognitionBlock(
+        recall="",
+        feeling=previous_state.mood_label,
+        valence=previous_state.valence,
+        arousal=previous_state.arousal,
+        want=previous_state.active_want,
+        plan=previous_state.active_plan,
+    )
+
+    async for delta in _token_generator():
+        raw_chunks.append(delta)
+        if in_cognition:
+            buffer += delta
+            lower_buf = buffer.lower()
+            close_idx = lower_buf.find("</cognition>")
+            if close_idx != -1:
+                cog_end = close_idx + len("</cognition>")
+                cog_raw = buffer[:cog_end]
+                remainder = re.sub(r"^[\s`]*", "", buffer[cog_end:])
+                cognition_block = parse_cognition_xml(cog_raw, previous_state)
+                in_cognition = False
+                cognition_emitted = True
+                yield {
+                    "event": "cognition_complete",
+                    "data": cognition_block.model_dump(),
+                }
+                if remainder:
+                    prose_Accumulator.append(remainder)
+                    yield {"event": "prose_delta", "data": {"delta": remainder}}
+            elif (
+                len(buffer) > 120
+                and "<cognition" not in lower_buf
+                and "<think" not in lower_buf
+                and "<recall" not in lower_buf
+            ):
+                # Model skipped <cognition>; flush buffer directly as prose
+                in_cognition = False
+                cognition_emitted = True
+                yield {
+                    "event": "cognition_complete",
+                    "data": cognition_block.model_dump(),
+                }
+                prose_Accumulator.append(buffer)
+                yield {"event": "prose_delta", "data": {"delta": buffer}}
+            else:
+                yield {"event": "cognition_delta", "data": {"raw_buffer": buffer}}
+        else:
+            prose_Accumulator.append(delta)
+            yield {"event": "prose_delta", "data": {"delta": delta}}
+
+    if not cognition_emitted:
+        # Handle edge case where stream ended before </cognition> closed
+        cognition_block = parse_cognition_xml(buffer, previous_state)
+        yield {"event": "cognition_complete", "data": cognition_block.model_dump()}
+        cleaned = re.sub(r"<cognition>.*?</cognition>", "", buffer, flags=re.DOTALL | re.I).strip()
+        if cleaned:
+            prose_Accumulator.append(cleaned)
+            yield {"event": "prose_delta", "data": {"delta": cleaned}}
+
+    final_prose = "".join(prose_Accumulator).strip()
+    yield {
+        "event": "actor_finished",
+        "data": {
+            "cognition": cognition_block.model_dump(),
+            "raw_prose": final_prose,
+        },
+    }

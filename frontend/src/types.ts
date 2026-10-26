@@ -1,0 +1,337 @@
+export interface VoiceAnchor {
+  context: string;
+  snippet: string;
+}
+
+export interface BaselinePsyche {
+  mood_label: string;
+  valence: number;
+  arousal: number;
+  core_drive: string;
+  core_fear: string;
+  default_want: string;
+  default_plan: string;
+}
+
+export interface MemoryShard {
+  title: string;
+  content: string;
+  keywords: string[];
+  emotional_weight: number;
+}
+
+export interface CharacterWizardSeed {
+  name: string;
+  archetype: string;
+  role_in_story: string;
+  personality_keywords: string[];
+  rough_notes: string;
+  world_id?: string | null;
+}
+
+export interface CharacterWizardDraft {
+  name: string;
+  tagline: string;
+  physical_appearance: string;
+  core_persona: string;
+  initial_message: string;
+  inventory: string[];
+  voice_anchors: VoiceAnchor[];
+  baseline_psyche: BaselinePsyche;
+  memory_shards: MemoryShard[];
+}
+
+export interface CharacterRecord extends CharacterWizardDraft {
+  id: string;
+  world_id?: string | null;
+  pending_deletion?: boolean;
+  created_at: string;
+}
+
+export interface CognitionBlock {
+  recall: string;
+  feeling: string;
+  valence: number;
+  arousal: number;
+  want: string;
+  plan: string;
+}
+
+export interface CharacterStateSnapshot {
+  turn_id: string;
+  character_id: string;
+  current_location_id: string;
+  mood_label: string;
+  valence: number;
+  arousal: number;
+  active_want: string;
+  active_plan: string;
+  relationship_notes: Record<string, string>;
+  inventory: string[];
+}
+
+export interface WorldGlobalRules {
+  genre: string;
+  tone: string;
+  setting_overview: string;
+  tech_or_magic_rules: string;
+  starting_timestamp: string;
+}
+
+export type CompassDirection = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
+
+export interface LocationNode {
+  id: string;
+  world_id: string;
+  created_at_turn_id?: string | null;
+  name: string;
+  summary: string;
+  description: string;
+  environmental_tags: string[];
+  is_starting_location: boolean;
+  is_hub?: boolean;
+}
+
+export interface LocationEdge {
+  id: string;
+  world_id: string;
+  from_location_id: string;
+  to_location_id: string;
+  direction_label: string;
+  compass_direction?: CompassDirection | null;
+  travel_minutes: number;
+  is_locked_or_hidden: boolean;
+  created_at_turn_id?: string | null;
+  superseded_at_turn_id?: string | null;
+}
+
+export interface NeighborLocationView {
+  edge_id: string;
+  direction_label: string;
+  compass_direction?: CompassDirection | null;
+  travel_minutes: number;
+  is_locked_or_hidden: boolean;
+  destination: LocationNode;
+}
+
+export interface LoreNode {
+  id: string;
+  world_id: string;
+  title: string;
+  category: string;
+  content: string;
+  entity_tags: string[];
+}
+
+export interface WorldRecord {
+  id: string;
+  name: string;
+  global_rules: WorldGlobalRules;
+  pending_deletion?: boolean;
+  created_at: string;
+  locations: LocationNode[];
+  edges: LocationEdge[];
+  lore_nodes: LoreNode[];
+}
+
+export interface WorldWizardSeed {
+  name: string;
+  genre_and_tone: string;
+  core_premise: string;
+  initial_hub_concept: string;
+  location_count: number;
+}
+
+export interface WorldWizardDraft {
+  name: string;
+  global_rules: WorldGlobalRules;
+  locations: Array<{
+    key: string;
+    name: string;
+    summary: string;
+    description: string;
+    environmental_tags: string[];
+    is_starting_location: boolean;
+  }>;
+  edges: Array<{
+    from_key: string;
+    to_key: string;
+    direction_label: string;
+    reverse_direction_label: string;
+    travel_minutes: number;
+    is_locked_or_hidden: boolean;
+    bidirectional: boolean;
+  }>;
+  lore_nodes: Array<{
+    title: string;
+    category: "faction" | "history" | "item" | "culture" | "rule" | "rumor";
+    content: string;
+    entity_tags: string[];
+  }>;
+}
+
+export interface MechanicsTrigger {
+  requires_roll: boolean;
+  action_description: string;
+  skill_or_approach: string;
+  difficulty_class: number;
+  relevant_modifier: number;
+}
+
+export interface DiceRollResult {
+  action_description: string;
+  skill_or_approach: string;
+  d20_raw: number;
+  modifier: number;
+  total: number;
+  difficulty_class: number;
+  outcome_tier:
+    | "Critical Failure"
+    | "Failure with Consequence"
+    | "Partial Success"
+    | "Clean Success"
+    | "Critical Success";
+  narrative_directive: string;
+}
+
+export interface PreTurnAnalysis {
+  user_sentiment: string;
+  subtext_interpretation: string;
+  mentioned_entities: string[];
+  memory_search_queries: string[];
+  spatial_intent: "stay" | "move_known" | "explore_new";
+  target_location_hint?: string | null;
+  active_speaker_id?: string | null;
+  speaker_order?: string[];
+  mechanics_check: MechanicsTrigger;
+  resolved_roll?: DiceRollResult | null;
+}
+
+export interface RecalledMemoryItem {
+  id: string;
+  source_type: "lore" | "character_shard" | "episodic_chunk";
+  title: string;
+  content: string;
+  score: number;
+}
+
+export interface WorldStateSnapshot {
+  turn_id: string;
+  world_timestamp: string;
+  active_location_id: string;
+  scene_flags: string[];
+}
+
+export interface PostTurnStateDelta {
+  elapsed_minutes: number;
+  new_world_timestamp?: string | null;
+  transition_type: "stay" | "move_existing" | "improvise_new";
+  target_location_id?: string | null;
+  notable_event_summary?: string | null;
+  scene_flags_updated: string[];
+  scene_flags_removed?: string[];
+  inventory_added?: string[];
+  inventory_removed?: string[];
+  relationship_shift_note?: string | null;
+}
+
+export interface EpisodicChunkRecord {
+  id: string;
+  campaign_id: string;
+  start_turn_depth: number;
+  end_turn_depth: number;
+  leaf_turn_id: string;
+  summary_text: string;
+  created_at: string;
+}
+
+export interface TurnNodeRecord {
+  id: string;
+  campaign_id: string;
+  parent_turn_id?: string | null;
+  depth_index: number;
+  user_message: string;
+  actor_id: string;
+  raw_prose: string;
+  cognition: CognitionBlock;
+  pre_turn: PreTurnAnalysis;
+  post_turn?: PostTurnStateDelta | null;
+  world_snapshot: WorldStateSnapshot;
+  character_state: CharacterStateSnapshot;
+  character_states?: Record<string, CharacterStateSnapshot>;
+  recalled_items: RecalledMemoryItem[];
+  created_at: string;
+}
+
+export interface CampaignRecord {
+  id: string;
+  name: string;
+  world_id: string;
+  character_id: string;
+  participant_character_ids?: string[];
+  active_leaf_turn_id?: string | null;
+  created_at: string;
+}
+
+export interface CampaignStateBundle {
+  campaign: CampaignRecord;
+  active_branch_turns: TurnNodeRecord[];
+  all_turn_nodes: TurnNodeRecord[];
+  current_world_snapshot: WorldStateSnapshot;
+  current_character_state: CharacterStateSnapshot;
+  character_states?: Record<string, CharacterStateSnapshot>;
+  present_character_ids?: string[];
+  active_location: LocationNode;
+  neighbor_locations: NeighborLocationView[];
+  visible_locations: LocationNode[];
+  visible_edges?: LocationEdge[];
+  episodic_chunks: EpisodicChunkRecord[];
+}
+
+export interface ModelProfile {
+  base_url: string;
+  api_key: string;
+  model: string;
+  temperature: number;
+  max_tokens: number;
+  timeout_seconds: number;
+}
+
+export interface AppSettings {
+  db_path: string;
+  actor_profile: ModelProfile;
+  clerk_profile: ModelProfile;
+  embedding_profile: {
+    mode: "local_hash" | "openai_compat" | "fastembed";
+    base_url: string;
+    api_key: string;
+    model: string;
+    dimensions: number;
+  };
+  memory_config: {
+    working_memory_turns: number;
+    episodic_chunk_size: number;
+    rag_top_k: number;
+  };
+  allow_offline_fallback: boolean;
+}
+
+export interface OllamaModelInfo {
+  name: string;
+  size_mb: number;
+  parameter_size: string;
+  quantization_level: string;
+  family: string;
+  is_embedding: boolean;
+}
+
+export interface OllamaStatusResponse {
+  reachable: boolean;
+  ollama_root_url: string;
+  error?: string | null;
+  models: OllamaModelInfo[];
+  chat_models: string[];
+  embedding_models: string[];
+  active_actor_model: string;
+  active_clerk_model: string;
+}
