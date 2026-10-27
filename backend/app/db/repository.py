@@ -1033,11 +1033,12 @@ class CantinaRepository:
                 (w_id, owner_id, draft.name, draft.global_rules.model_dump_json(), now),
             )
 
+            has_start = any(loc.is_starting_location for loc in draft.locations)
             key_to_loc_id: dict[str, str] = {}
             for idx, loc in enumerate(draft.locations):
                 loc_id = f"loc_{uuid.uuid4().hex[:10]}"
                 key_to_loc_id[loc.key] = loc_id
-                is_start = 1 if (loc.is_starting_location or idx == 0) else 0
+                is_start = 1 if (loc.is_starting_location or (not has_start and idx == 0)) else 0
                 is_hub = 1 if getattr(loc, "is_hub", False) else 0
                 conn.execute(
                     """

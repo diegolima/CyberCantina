@@ -11,13 +11,35 @@ from app.schemas.world import (
     WorldGlobalRules,
     WorldWizardDraft,
     WorldWizardSeed,
+    normalize_compass_direction,
+    pick_available_compass_direction,
 )
+
+
+def _normalize_draft_topology(draft: WorldWizardDraft) -> WorldWizardDraft:
+    """Ensure starting location is set and edges have non-colliding compass directions."""
+    if not any(loc.is_starting_location for loc in draft.locations):
+        draft.locations[0].is_starting_location = True
+    for loc in draft.locations:
+        if loc.is_starting_location:
+            loc.is_hub = True
+
+    occupied_from: dict[str, set[str]] = {}
+    for edge in draft.edges:
+        occ = occupied_from.setdefault(edge.from_key, set())
+        preferred = normalize_compass_direction(
+            edge.compass_direction, edge.direction_label
+        )
+        cdir = pick_available_compass_direction(preferred, occ)
+        occ.add(cdir)
+        edge.compass_direction = cdir
+    return draft
 
 
 def _fallback_world_expansion(seed: WorldWizardSeed) -> WorldWizardDraft:
     """Seed-adaptive fallback world & spatial graph generator when the LLM server is offline."""
     hub_name = seed.initial_hub_concept.strip() or f"{seed.name} Central Sanctuary"
-    return WorldWizardDraft(
+    draft = WorldWizardDraft(
         name=seed.name,
         global_rules=WorldGlobalRules(
             genre=seed.genre_and_tone,
@@ -41,6 +63,7 @@ def _fallback_world_expansion(seed: WorldWizardSeed) -> WorldWizardDraft:
                 ),
                 environmental_tags=["ambient lighting", "central counter", "vantage point"],
                 is_starting_location=True,
+                is_hub=True,
             ),
             LocationNodeDraft(
                 key="private_backroom",
@@ -79,6 +102,7 @@ def _fallback_world_expansion(seed: WorldWizardSeed) -> WorldWizardDraft:
                 to_key="private_backroom",
                 direction_label="Reinforced side door",
                 reverse_direction_label="Door back to the main hub",
+                compass_direction="E",
                 travel_minutes=1,
             ),
             LocationEdgeDraft(
@@ -86,6 +110,7 @@ def _fallback_world_expansion(seed: WorldWizardSeed) -> WorldWizardDraft:
                 to_key="outer_courtyard",
                 direction_label="Main entrance threshold",
                 reverse_direction_label="Entrance into the hub",
+                compass_direction="S",
                 travel_minutes=2,
             ),
             LocationEdgeDraft(
@@ -93,6 +118,7 @@ def _fallback_world_expansion(seed: WorldWizardSeed) -> WorldWizardDraft:
                 to_key="overlook_gallery",
                 direction_label="Narrow staircase up",
                 reverse_direction_label="Staircase down to the main floor",
+                compass_direction="N",
                 travel_minutes=1,
             ),
         ],
@@ -125,6 +151,7 @@ def _fallback_world_expansion(seed: WorldWizardSeed) -> WorldWizardDraft:
             ),
         ],
     )
+    return _normalize_draft_topology(draft)
 
 
 async def generate_world_draft(
@@ -140,7 +167,7 @@ async def generate_world_draft(
         "`name`, 1-sentence `summary` (used when shown as an adjacent exit), 3-4 sentence sensory `description` "
         "(used when characters are inside), `environmental_tags`, and mark the primary hub `is_starting_location: true`.\n"
         "3. edges: Connect the locations using LocationEdgeDraft (`from_key`, `to_key`, evocative `direction_label`, "
-        "`reverse_direction_label`, `travel_minutes`, `is_locked_or_hidden`, `bidirectional: true`). Every location must be reachable.\n"
+        "`reverse_direction_label`, `compass_direction` in N/NE/E/SE/S/SW/W/NW, `travel_minutes`, `is_locked_or_hidden`, `bidirectional: true`). Every location must be reachable.\n"
         "4. lore_nodes: Create 4 LoreNodeDraft entries covering key factions, history, items, or cultural rules with `entity_tags`.\n"
         "Return ONLY valid JSON matching WorldWizardDraft."
     )
@@ -165,9 +192,7 @@ async def generate_world_draft(
         )
         if not draft.locations:
             return _fallback_world_expansion(seed)
-        if not any(loc.is_starting_location for loc in draft.locations):
-            draft.locations[0].is_starting_location = True
-        return draft
+        return _normalize_draft_topology(draft)
     except Exception:
         if not settings.allow_offline_fallback:
             raise

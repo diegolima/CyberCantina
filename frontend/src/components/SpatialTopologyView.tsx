@@ -49,6 +49,49 @@ export const COMPASS_ANGLES: Record<CompassDirection, number> = {
   NW: (-3 * Math.PI) / 4,
 };
 
+export function inferCompassDirection(
+  rawDir?: string | null,
+  fallbackText = ""
+): CompassDirection {
+  if (rawDir) {
+    const cleaned = rawDir.replace(/[^A-Za-z]/g, "").toUpperCase();
+    const aliasMap: Record<string, CompassDirection> = {
+      N: "N",
+      NORTH: "N",
+      NE: "NE",
+      NORTHEAST: "NE",
+      E: "E",
+      EAST: "E",
+      SE: "SE",
+      SOUTHEAST: "SE",
+      S: "S",
+      SOUTH: "S",
+      SW: "SW",
+      SOUTHWEST: "SW",
+      W: "W",
+      WEST: "W",
+      NW: "NW",
+      NORTHWEST: "NW",
+    };
+    if (aliasMap[cleaned]) return aliasMap[cleaned];
+  }
+  const low = `${rawDir ?? ""} ${fallbackText}`.toLowerCase();
+  const patterns: Array<[RegExp, CompassDirection]> = [
+    [/\b(north[\s-]?east|ne)\b/, "NE"],
+    [/\b(north[\s-]?west|nw)\b/, "NW"],
+    [/\b(south[\s-]?east|se)\b/, "SE"],
+    [/\b(south[\s-]?west|sw)\b/, "SW"],
+    [/\b(north|northern|back|rear|behind|upstairs|up|above|mezzanine|roof)\b/, "N"],
+    [/\b(east|eastern|right|starboard)\b/, "E"],
+    [/\b(south|southern|front|street|outside|downstairs|down|below|basement|sub-basement|hatch|cellar)\b/, "S"],
+    [/\b(west|western|left|port|alley|side)\b/, "W"],
+  ];
+  for (const [pat, cdir] of patterns) {
+    if (pat.test(low)) return cdir;
+  }
+  return "N";
+}
+
 export function pickCompassSlot(
   preferred: CompassDirection | null | undefined,
   occupied: Set<CompassDirection>

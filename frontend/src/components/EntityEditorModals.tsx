@@ -24,9 +24,16 @@ import {
   LoreNode,
   MemoryShard,
   VoiceAnchor,
+  WorldGlobalRules,
   WorldRecord,
+  WorldWizardDraft,
 } from "../types";
-import { OPPOSITE_COMPASS, SpatialTopologyView } from "./SpatialTopologyView";
+import {
+  OPPOSITE_COMPASS,
+  SpatialTopologyView,
+  inferCompassDirection,
+  pickCompassSlot,
+} from "./SpatialTopologyView";
 
 interface ClickToEditFieldProps {
   label?: string;
@@ -952,10 +959,196 @@ export const CharacterInspectorModal: React.FC<
 // World Inspector & Inline Editor Modal
 // ============================================================================
 
+export function draftToWorldRecord(draft: WorldWizardDraft): WorldRecord {
+  const draftWorldId = "draft_world";
+  const usedIds = new Set<string>();
+  const keyToId = new Map<string, string>();
+  const nameToId = new Map<string, string>();
+
+  const firstStartIdx = draft.locations.findIndex(
+    (loc) => loc.is_starting_location
+  );
+  const startIdx = firstStartIdx >= 0 ? firstStartIdx : 0;
+
+  const locations: LocationNode[] = draft.locations.map((loc, idx) => {
+    const rawKey = (loc.key || "").trim();
+    let id = rawKey || `draft_loc_${idx}`;
+    while (usedIds.has(id)) {
+      id = `${rawKey || "draft_loc"}_${idx}_${Math.random().toString(36).slice(2, 6)}`;
+    }
+    usedIds.add(id);
+    if (rawKey && !keyToId.has(rawKey)) {
+      keyToId.set(rawKey, id);
+    }
+    keyToId.set(id, id);
+    if (loc.name) {
+      nameToId.set(loc.name.trim().toLowerCase(), id);
+    }
+
+    const isStart = idx === startIdx;
+    return {
+      id,
+      world_id: draftWorldId,
+      name: loc.name,
+      summary: loc.summary,
+      description: loc.description,
+      environmental_tags: [...(loc.environmental_tags ?? [])],
+      is_starting_location: isStart,
+      is_hub: Boolean(loc.is_hub ?? isStart),
+    };
+  });
+
+  const resolveLocId = (keyOrName: string): string | undefined => {
+    const trimmed = (keyOrName || "").trim();
+    return keyToId.get(trimmed) ?? nameToId.get(trimmed.toLowerCase());
+  };
+
+  const occupiedFrom = new Map<string, Set<CompassDirection>>();
+  const edges: LocationEdge[] = [];
+  const hasDirectedPair = (fromId: string, toId: string) =>
+    edges.some(
+      (e) => e.from_location_id === fromId && e.to_location_id === toId
+    );
+
+  draft.edges.forEach((edge, idx) => {
+    const fromId = resolveLocId(edge.from_key);
+    const toId = resolveLocId(edge.to_key);
+    if (!fromId || !toId || fromId === toId) return;
+
+    let fromOcc = occupiedFrom.get(fromId);
+    if (!fromOcc) {
+      fromOcc = new Set<CompassDirection>();
+      occupiedFrom.set(fromId, fromOcc);
+    }
+    const preferredDir = inferCompassDirection(
+      edge.compass_direction,
+      edge.direction_label
+    );
+    const fwdDir = pickCompassSlot(preferredDir, fromOcc);
+
+    if (!hasDirectedPair(fromId, toId)) {
+      fromOcc.add(fwdDir);
+      edges.push({
+        id: `draft_edge_${idx}_fwd`,
+        world_id: draftWorldId,
+        from_location_id: fromId,
+        to_location_id: toId,
+        direction_label: edge.direction_label || "Passage",
+        compass_direction: fwdDir,
+        travel_minutes: edge.travel_minutes ?? 1,
+        is_locked_or_hidden: Boolean(edge.is_locked_or_hidden),
+      });
+    }
+
+    if (edge.bidirectional !== false && !hasDirectedPair(toId, fromId)) {
+      let toOcc = occupiedFrom.get(toId);
+      if (!toOcc) {
+        toOcc = new Set<CompassDirection>();
+        occupiedFrom.set(toId, toOcc);
+      }
+      const revDir = pickCompassSlot(OPPOSITE_COMPASS[fwdDir], toOcc);
+      toOcc.add(revDir);
+      const fromLocName =
+        locations.find((l) => l.id === fromId)?.name ?? edge.from_key;
+      edges.push({
+        id: `draft_edge_${idx}_rev`,
+        world_id: draftWorldId,
+        from_location_id: toId,
+        to_location_id: fromId,
+        direction_label:
+          edge.reverse_direction_label || `Return to ${fromLocName}`,
+        compass_direction: revDir,
+        travel_minutes: edge.travel_minutes ?? 1,
+        is_locked_or_hidden: Boolean(edge.is_locked_or_hidden),
+      });
+    }
+  });
+
+  const lore_nodes: LoreNode[] = (draft.lore_nodes ?? []).map((lore, idx) => ({
+    id: `draft_lore_${idx}`,
+    world_id: draftWorldId,
+    title: lore.title,
+    category: lore.category,
+    content: lore.content,
+    entity_tags: [...(lore.entity_tags ?? [])],
+  }));
+
+  return {
+    id: draftWorldId,
+    name: draft.name,
+    global_rules: { ...draft.global_rules },
+    created_at: new Date().toISOString(),
+    locations,
+    edges,
+    lore_nodes,
+  };
+}
+
+export function worldStateToDraft(state: {
+  name: string;
+  global_rules: WorldGlobalRules;
+  locations: LocationNode[];
+  edges: LocationEdge[];
+  lore_nodes: LoreNode[];
+}): WorldWizardDraft {
+  const validCategories = new Set([
+    "faction",
+    "history",
+    "item",
+    "culture",
+    "rule",
+    "rumor",
+  ]);
+  const hasStart = state.locations.some((l) => l.is_starting_location);
+  return {
+    name: state.name.trim() || "Untitled World",
+    global_rules: state.global_rules,
+    locations: state.locations.map((loc, idx) => ({
+      key: loc.id || `loc_${idx}`,
+      name: loc.name.trim() || `Location ${idx + 1}`,
+      summary: loc.summary.trim() || loc.name.trim() || `Location ${idx + 1}`,
+      description:
+        loc.description.trim() || loc.summary.trim() || loc.name.trim(),
+      environmental_tags: loc.environmental_tags,
+      is_starting_location: hasStart
+        ? Boolean(loc.is_starting_location)
+        : idx === 0,
+      is_hub: Boolean(loc.is_hub),
+    })),
+    edges: state.edges.map((edge) => ({
+      from_key: edge.from_location_id,
+      to_key: edge.to_location_id,
+      direction_label: edge.direction_label,
+      reverse_direction_label: "",
+      compass_direction: edge.compass_direction ?? null,
+      travel_minutes: edge.travel_minutes,
+      is_locked_or_hidden: Boolean(edge.is_locked_or_hidden),
+      bidirectional: false,
+    })),
+    lore_nodes: state.lore_nodes.map((lore) => ({
+      title: lore.title.trim() || "Untitled Lore",
+      category: (validCategories.has(lore.category)
+        ? lore.category
+        : "faction") as WorldWizardDraft["lore_nodes"][number]["category"],
+      content: lore.content,
+      entity_tags: lore.entity_tags,
+    })),
+  };
+}
+
 interface WorldInspectorModalProps {
   world: WorldRecord;
   onClose: () => void;
   onSaved: (updated: WorldRecord) => void;
+  mode?: "inspector" | "wizard";
+  onBackToSeed?: () => void;
+  onCommitDraft?: (payload: {
+    name: string;
+    global_rules: WorldGlobalRules;
+    locations: LocationNode[];
+    edges: LocationEdge[];
+    lore_nodes: LoreNode[];
+  }) => Promise<WorldRecord>;
 }
 
 type WorldTab = "base" | "map" | "lore";
@@ -964,6 +1157,9 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   world,
   onClose,
   onSaved,
+  mode = "inspector",
+  onBackToSeed,
+  onCommitDraft,
 }) => {
   const [activeTab, setActiveTab] = useState<WorldTab>("base");
   const [name, setName] = useState(world.name);
@@ -1123,16 +1319,24 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   };
 
   const handleSave = async () => {
+    if (locations.length === 0) {
+      setError("At least one location is required.");
+      return;
+    }
     setSaving(true);
     setError(null);
+    const payload = {
+      name: name.trim() || world.name,
+      global_rules: globalRules,
+      locations,
+      edges,
+      lore_nodes: loreNodes,
+    };
     try {
-      const updated = await api.updateWorld(world.id, {
-        name: name.trim() || world.name,
-        global_rules: globalRules,
-        locations,
-        edges,
-        lore_nodes: loreNodes,
-      });
+      const updated =
+        mode === "wizard" && onCommitDraft
+          ? await onCommitDraft(payload)
+          : await api.updateWorld(world.id, payload);
       onSaved(updated);
     } catch (err) {
       setError(String(err));
@@ -1142,7 +1346,10 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   };
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div
+      className="modal-backdrop"
+      onClick={mode === "wizard" ? undefined : onClose}
+    >
       <div
         className="modal-panel"
         style={{
@@ -1155,6 +1362,21 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
           <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <Globe size={18} color="var(--accent-cyan)" />
             World Sheet
+            {mode === "wizard" && (
+              <span
+                style={{
+                  fontSize: "0.72rem",
+                  color: "var(--accent-cyan)",
+                  background: "rgba(34, 211, 238, 0.1)",
+                  border: "1px solid rgba(34, 211, 238, 0.3)",
+                  padding: "2px 8px",
+                  borderRadius: 999,
+                  fontWeight: 500,
+                }}
+              >
+                1.2 Wizard Draft
+              </span>
+            )}
           </span>
           <button type="button" className="btn" onClick={onClose}>
             <X size={15} />
@@ -1215,9 +1437,9 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 border: "1px solid var(--border-subtle)",
               }}
             >
-              Click on any field below to edit it. Active campaigns running in
-              this world remain pinned to their original world snapshot
-              automatically.
+              {mode === "wizard"
+                ? "Click on any field below to edit it, or switch to the Map and Lore tabs above to customize locations, passages, and GraphRAG lore before committing your world."
+                : "Click on any field below to edit it. Active campaigns running in this world remain pinned to their original world snapshot automatically."}
             </div>
 
             <div
@@ -1525,27 +1747,74 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
         </div>
 
         <div className="modal-footer">
-          <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
-            {isDirty
-              ? "Unsaved edits ready. Saving preserves existing campaigns via silent versioning."
-              : "Click any field above to edit."}
-          </div>
-          <div style={{ display: "flex", gap: 10 }}>
-            <button type="button" className="btn" onClick={onClose}>
-              {isDirty ? "Cancel" : "Close"}
-            </button>
-            {isDirty && (
-              <button
-                type="button"
-                className="btn btn-amber"
-                disabled={saving}
-                onClick={handleSave}
+          {mode === "wizard" ? (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                {onBackToSeed && (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={saving}
+                    onClick={onBackToSeed}
+                  >
+                    ← Back to Seed
+                  </button>
+                )}
+                <span
+                  style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}
+                >
+                  {isDirty
+                    ? "Draft customized. Ready to commit world & spatial graph."
+                    : "Click any field above or switch tabs to customize before committing."}
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={saving}
+                  onClick={onClose}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-cyan"
+                  disabled={saving || locations.length === 0}
+                  onClick={handleSave}
+                >
+                  <Check size={15} />
+                  {saving ? "Saving..." : "Commit World & Spatial Graph"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div
+                style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}
               >
-                <Check size={14} />
-                {saving ? "Saving..." : "Save Changes"}
-              </button>
-            )}
-          </div>
+                {isDirty
+                  ? "Unsaved edits ready. Saving preserves existing campaigns via silent versioning."
+                  : "Click any field above to edit."}
+              </div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button type="button" className="btn" onClick={onClose}>
+                  {isDirty ? "Cancel" : "Close"}
+                </button>
+                {isDirty && (
+                  <button
+                    type="button"
+                    className="btn btn-amber"
+                    disabled={saving}
+                    onClick={handleSave}
+                  >
+                    <Check size={14} />
+                    {saving ? "Saving..." : "Save Changes"}
+                  </button>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

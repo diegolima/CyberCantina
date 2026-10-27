@@ -154,12 +154,14 @@ export interface WorldWizardDraft {
     description: string;
     environmental_tags: string[];
     is_starting_location: boolean;
+    is_hub?: boolean;
   }>;
   edges: Array<{
     from_key: string;
     to_key: string;
     direction_label: string;
     reverse_direction_label: string;
+    compass_direction?: CompassDirection | null;
     travel_minutes: number;
     is_locked_or_hidden: boolean;
     bidirectional: boolean;

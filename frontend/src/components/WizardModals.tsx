@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Sparkles, Globe, UserPlus, X, Check, Plus, Trash2 } from "lucide-react";
 import { api } from "../api";
 import {
@@ -7,6 +7,11 @@ import {
   WorldRecord,
   WorldWizardDraft,
 } from "../types";
+import {
+  WorldInspectorModal,
+  draftToWorldRecord,
+  worldStateToDraft,
+} from "./EntityEditorModals";
 
 interface CharacterWizardModalProps {
   worlds: WorldRecord[];
@@ -449,6 +454,11 @@ export const WorldWizardModal: React.FC<WorldWizardModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const draftWorld = useMemo(
+    () => (draft ? draftToWorldRecord(draft) : null),
+    [draft]
+  );
+
   const handleGenerateDraft = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -469,18 +479,21 @@ export const WorldWizardModal: React.FC<WorldWizardModalProps> = ({
     }
   };
 
-  const handleCommit = async () => {
-    if (!draft) return;
-    setLoading(true);
-    try {
-      const created = await api.commitWorld(draft);
-      onCreated(created);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setLoading(false);
-    }
-  };
+  if (draftWorld) {
+    return (
+      <WorldInspectorModal
+        world={draftWorld}
+        mode="wizard"
+        onClose={onClose}
+        onBackToSeed={() => setDraft(null)}
+        onCommitDraft={async (payload) => {
+          const nextDraft = worldStateToDraft(payload);
+          return api.commitWorld(nextDraft);
+        }}
+        onSaved={onCreated}
+      />
+    );
+  }
 
   return (
     <div className="modal-backdrop">
@@ -502,142 +515,68 @@ export const WorldWizardModal: React.FC<WorldWizardModalProps> = ({
             </div>
           )}
 
-          {!draft ? (
-            <form onSubmit={handleGenerateDraft} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <div className="field-group">
-                <label>World / Scenario Name</label>
-                <input
-                  className="field-input"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  required
-                />
-              </div>
-
-              <div className="field-group">
-                <label>Genre & Tone</label>
-                <input
-                  className="field-input"
-                  value={genreAndTone}
-                  onChange={(e) => setGenreAndTone(e.target.value)}
-                  required
-                />
-              </div>
-
-              <div className="field-group">
-                <label>Core Premise & Conflict</label>
-                <textarea
-                  className="field-textarea"
-                  value={corePremise}
-                  onChange={(e) => setCorePremise(e.target.value)}
-                  required
-                />
-              </div>
-
-              <div className="field-group">
-                <label>Starting Hub Location Concept</label>
-                <input
-                  className="field-input"
-                  value={hubConcept}
-                  onChange={(e) => setHubConcept(e.target.value)}
-                />
-              </div>
-
-              <div className="field-group">
-                <label>Initial Connected Locations (3–8)</label>
-                <input
-                  type="number"
-                  min={3}
-                  max={8}
-                  className="field-input"
-                  value={locationCount}
-                  onChange={(e) => setLocationCount(Number(e.target.value))}
-                />
-              </div>
-
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 6 }}>
-                <button type="button" className="btn" onClick={onClose}>
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-cyan" disabled={loading}>
-                  <Sparkles size={15} />
-                  {loading ? "Building Spatial Graph..." : "Generate World & Spatial Graph"}
-                </button>
-              </div>
-            </form>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <div className="cog-step">
-                <div className="cog-step-label">Global Rules & Tech/Magic Constraints</div>
-                <div style={{ fontSize: "0.8rem" }}>
-                  <strong>Overview:</strong> {draft.global_rules.setting_overview}
-                  <br />
-                  <strong>Rules:</strong> {draft.global_rules.tech_or_magic_rules}
-                </div>
-              </div>
-
-              <div>
-                <div className="sidebar-label">
-                  Generated Spatial Graph Locations ({draft.locations.length})
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {draft.locations.map((loc) => (
-                    <div key={loc.key} className="cog-step" style={{ fontSize: "0.78rem" }}>
-                      <strong style={{ color: "var(--accent-amber)" }}>
-                        {loc.name} {loc.is_starting_location ? "(Starting Hub)" : ""}
-                      </strong>
-                      : {loc.summary}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <div className="sidebar-label">
-                  Spatial Connections ({draft.edges.length} Bidirectional Edges)
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                  {draft.edges.map((e, idx) => (
-                    <div key={idx} style={{ fontSize: "0.76rem", color: "var(--text-secondary)" }}>
-                      • <strong>{e.from_key}</strong> ↔ <strong>{e.to_key}</strong> via{" "}
-                      <em>"{e.direction_label}"</em> ({e.travel_minutes}m)
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <div className="sidebar-label">
-                  World Lore Nodes ({draft.lore_nodes.length})
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                  {draft.lore_nodes.map((l, idx) => (
-                    <div key={idx} className="cog-step" style={{ fontSize: "0.76rem" }}>
-                      <strong style={{ color: "var(--accent-emerald)" }}>
-                        [{l.category}] {l.title}:
-                      </strong>{" "}
-                      {l.content}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
-                <button type="button" className="btn" onClick={() => setDraft(null)}>
-                  ← Back to Seed
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-cyan"
-                  onClick={handleCommit}
-                  disabled={loading}
-                >
-                  <Check size={15} />
-                  {loading ? "Saving..." : "Commit World & Spatial Graph"}
-                </button>
-              </div>
+          <form onSubmit={handleGenerateDraft} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div className="field-group">
+              <label>World / Scenario Name</label>
+              <input
+                className="field-input"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+              />
             </div>
-          )}
+
+            <div className="field-group">
+              <label>Genre & Tone</label>
+              <input
+                className="field-input"
+                value={genreAndTone}
+                onChange={(e) => setGenreAndTone(e.target.value)}
+                required
+              />
+            </div>
+
+            <div className="field-group">
+              <label>Core Premise & Conflict</label>
+              <textarea
+                className="field-textarea"
+                value={corePremise}
+                onChange={(e) => setCorePremise(e.target.value)}
+                required
+              />
+            </div>
+
+            <div className="field-group">
+              <label>Starting Hub Location Concept</label>
+              <input
+                className="field-input"
+                value={hubConcept}
+                onChange={(e) => setHubConcept(e.target.value)}
+              />
+            </div>
+
+            <div className="field-group">
+              <label>Initial Connected Locations (3–8)</label>
+              <input
+                type="number"
+                min={3}
+                max={8}
+                className="field-input"
+                value={locationCount}
+                onChange={(e) => setLocationCount(Number(e.target.value))}
+              />
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 6 }}>
+              <button type="button" className="btn" onClick={onClose}>
+                Cancel
+              </button>
+              <button type="submit" className="btn btn-cyan" disabled={loading}>
+                <Sparkles size={15} />
+                {loading ? "Building Spatial Graph..." : "Generate World & Spatial Graph"}
+              </button>
+            </div>
+          </form>
         </div>
       </div>
     </div>
