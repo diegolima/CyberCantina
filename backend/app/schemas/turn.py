@@ -6,7 +6,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.schemas.character import CharacterStateSnapshot, CognitionBlock
+from app.schemas.character import (
+    CharacterRecord,
+    CharacterStateSnapshot,
+    CognitionBlock,
+    MemoryShard,
+)
 from app.schemas.world import (
     CompassDirection,
     LocationEdge,
@@ -207,12 +212,19 @@ class CampaignStateBundle(BaseModel):
     current_world_snapshot: WorldStateSnapshot
     current_character_state: CharacterStateSnapshot
     character_states: dict[str, CharacterStateSnapshot] = Field(default_factory=dict)
+    character_records: dict[str, CharacterRecord] = Field(default_factory=dict)
     present_character_ids: list[str] = Field(default_factory=list)
     active_location: LocationNode
     neighbor_locations: list[NeighborLocationView]
     visible_locations: list[LocationNode]
     visible_edges: list[LocationEdge] = Field(default_factory=list)
     episodic_chunks: list[EpisodicChunkRecord]
+
+
+class CampaignCharacterMemoriesUpdateRequest(BaseModel):
+    """Payload to update campaign-scoped memory shards for a character."""
+
+    memory_shards: list[MemoryShard] = Field(default_factory=list)
 
 
 class TurnSubmitRequest(BaseModel):

@@ -16,7 +16,11 @@ from app.engine.phase2_context import assemble_four_zone_messages
 from app.engine.phase3_actor import parse_cognition_xml
 from app.engine.phase4_clerk import merge_inventory, merge_scene_flags
 from app.main import _execute_turn_stream_events
-from app.schemas.character import CharacterUpdatePayload, CharacterWizardSeed
+from app.schemas.character import (
+    CharacterUpdatePayload,
+    CharacterWizardSeed,
+    MemoryShard,
+)
 from app.schemas.turn import ImprovisedLocationSpec, TurnSubmitRequest
 from app.schemas.world import COMPASS_DIRECTIONS, WorldUpdatePayload, WorldWizardSeed
 from app.wizards.character_wizard import generate_character_draft
@@ -1043,3 +1047,102 @@ async def test_manual_linked_location_creation_is_branch_bound(
     # Deleting the turn the room was bound to removes it
     after = temp_repo.delete_last_turn(camp_id)
     assert all(l.name != "Hidden Pharmacy" for l in after.visible_locations)
+
+
+async def test_campaign_item_equip_actions_add_and_remove(temp_repo: CantinaRepository) -> None:
+    """Verify item management on active leaf turn supports add, equip, unequip, and remove."""
+    camp_id = "camp_neon_rust_default"
+    char_id = "char_kira_vance"
+
+    # Add a new carried item
+    bundle = temp_repo.toggle_campaign_item_equip(
+        camp_id,
+        item="Sub-dermal Lockpick",
+        action="add",
+        target="inventory",
+        character_id=char_id,
+    )
+    st = bundle.character_states[char_id]
+    assert "Sub-dermal Lockpick" in st.inventory
+
+    # Equip the item
+    bundle = temp_repo.toggle_campaign_item_equip(
+        camp_id,
+        item="Sub-dermal Lockpick",
+        action="equip",
+        character_id=char_id,
+    )
+    st = bundle.character_states[char_id]
+    assert "Sub-dermal Lockpick" in st.equipped
+    assert "Sub-dermal Lockpick" not in st.inventory
+
+    # Unequip back to inventory
+    bundle = temp_repo.toggle_campaign_item_equip(
+        camp_id,
+        item="Sub-dermal Lockpick",
+        action="unequip",
+        character_id=char_id,
+    )
+    st = bundle.character_states[char_id]
+    assert "Sub-dermal Lockpick" in st.inventory
+    assert "Sub-dermal Lockpick" not in st.equipped
+
+    # Remove the item
+    bundle = temp_repo.toggle_campaign_item_equip(
+        camp_id,
+        item="Sub-dermal Lockpick",
+        action="remove",
+        character_id=char_id,
+    )
+    st = bundle.character_states[char_id]
+    assert "Sub-dermal Lockpick" not in st.inventory
+    assert "Sub-dermal Lockpick" not in st.equipped
+
+
+async def test_campaign_scoped_character_memories(temp_repo: CantinaRepository) -> None:
+    """Verify memory shards edited in a campaign are strictly campaign-scoped and indexed."""
+    camp_id = "camp_neon_rust_default"
+    char_id = "char_kira_vance"
+
+    # Get original shards
+    orig_char = temp_repo.get_character(char_id)
+    orig_titles = [m.title for m in orig_char.memory_shards]
+    assert len(orig_titles) > 0
+
+    new_shards = [
+        MemoryShard(
+            title="A Secret Promise in Neon Rust",
+            content="Kira promised never to return to the lower sub-levels after the incident.",
+            keywords=["promise", "sub-levels", "secret"],
+            emotional_weight=0.9,
+        )
+    ]
+
+    bundle = await temp_repo.aupdate_campaign_character_memories(
+        campaign_id=camp_id,
+        character_id=char_id,
+        memory_shards=new_shards,
+    )
+
+    # 1. Bundle contains character_records with new shard
+    assert char_id in bundle.character_records
+    assert [m.title for m in bundle.character_records[char_id].memory_shards] == ["A Secret Promise in Neon Rust"]
+
+    # 2. get_character with campaign_id returns campaign-scoped shards
+    camp_char = temp_repo.get_character(char_id, campaign_id=camp_id)
+    assert [m.title for m in camp_char.memory_shards] == ["A Secret Promise in Neon Rust"]
+
+    # 3. Base character remains unchanged!
+    base_char = temp_repo.get_character(char_id)
+    assert [m.title for m in base_char.memory_shards] == orig_titles
+
+    # 4. Search in this campaign retrieves campaign shard
+    recalled = await temp_repo.vector_store.search_memories(
+        queries=["secret promise"],
+        mentioned_entities=["sub-levels"],
+        world_id="world_neon_rust",
+        character_id=char_id,
+        campaign_id=camp_id,
+        valid_branch_turn_ids=set(),
+    )
+    assert any("Secret Promise" in item.title for item in recalled)

@@ -9,6 +9,7 @@ import {
   CharacterWizardDraft,
   CharacterWizardSeed,
   CognitionBlock,
+  MemoryShard,
   OllamaStatusResponse,
   PreTurnAnalysis,
   ProfileModelSettingsResponse,
@@ -541,7 +542,8 @@ export const api = {
     campaignId: string,
     payload: {
       item: string;
-      action: "equip" | "unequip";
+      action: "equip" | "unequip" | "remove" | "add";
+      target?: "equipped" | "inventory";
       character_id?: string;
     }
   ) =>
@@ -550,6 +552,18 @@ export const api = {
       {
         method: "POST",
         body: JSON.stringify(payload),
+      }
+    ),
+  updateCampaignCharacterMemories: (
+    campaignId: string,
+    characterId: string,
+    memoryShards: MemoryShard[]
+  ) =>
+    fetchJson<CampaignStateBundle>(
+      `${API_BASE}/campaigns/${campaignId}/characters/${characterId}/memories`,
+      {
+        method: "POST",
+        body: JSON.stringify({ memory_shards: memoryShards }),
       }
     ),
   createLinkedLocation: (

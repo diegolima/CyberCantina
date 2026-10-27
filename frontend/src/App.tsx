@@ -45,6 +45,7 @@ import {
   CampaignStateBundle,
   CharacterRecord,
   CognitionBlock,
+  MemoryShard,
   PreTurnAnalysis,
   RecalledMemoryItem,
   UserProfile,
@@ -598,7 +599,8 @@ export const App: React.FC = () => {
 
   const handleToggleItemEquip = async (payload: {
     item: string;
-    action: "equip" | "unequip";
+    action: "equip" | "unequip" | "remove" | "add";
+    target?: "equipped" | "inventory";
     character_id?: string;
   }) => {
     if (!bundle || isStreaming) return;
@@ -606,7 +608,25 @@ export const App: React.FC = () => {
       const updated = await api.toggleItemEquip(bundle.campaign.id, payload);
       setBundle(updated);
     } catch (err) {
-      console.error("Failed to toggle item equipment:", err);
+      console.error("Failed to manage item equipment/inventory:", err);
+    }
+  };
+
+  const handleUpdateCampaignMemories = async (
+    characterId: string,
+    memoryShards: MemoryShard[]
+  ) => {
+    if (!bundle || isStreaming) return;
+    try {
+      const updated = await api.updateCampaignCharacterMemories(
+        bundle.campaign.id,
+        characterId,
+        memoryShards
+      );
+      setBundle(updated);
+    } catch (err) {
+      console.error("Failed to update campaign character memories:", err);
+      throw err;
     }
   };
 
@@ -1028,6 +1048,8 @@ export const App: React.FC = () => {
           onOverrideLocation={handleOverrideLocation}
           onCreateLinkedLocation={handleCreateLinkedLocation}
           onToggleItemEquip={handleToggleItemEquip}
+          onUpdateCampaignMemories={handleUpdateCampaignMemories}
+          worlds={worlds}
         />
       ) : (
         <aside className="inspector" />

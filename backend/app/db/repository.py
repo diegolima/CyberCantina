@@ -2211,6 +2211,7 @@ class CantinaRepository:
     def get_character(
         self,
         character_id: str,
+        campaign_id: str | None = None,
         owner_id: str | None = None,
     ) -> CharacterRecord:
         conn = self._connect()
@@ -2226,10 +2227,22 @@ class CantinaRepository:
                 ).fetchone()
             if not row:
                 raise KeyError(f"Character '{character_id}' not found")
+
+            camp_mem_row = None
+            if campaign_id:
+                camp_mem_row = conn.execute(
+                    "SELECT memory_shards_json FROM campaign_character_memories WHERE campaign_id = ? AND character_id = ?",
+                    (campaign_id, character_id),
+                ).fetchone()
         finally:
             conn.close()
 
         row_keys = row.keys()
+        shards_json = (
+            camp_mem_row["memory_shards_json"]
+            if camp_mem_row
+            else (row["memory_shards_json"] if "memory_shards_json" in row_keys else "[]")
+        )
         return CharacterRecord(
             id=row["id"],
             world_id=row["world_id"],
@@ -2247,10 +2260,113 @@ class CantinaRepository:
             baseline_psyche=BaselinePsyche.model_validate_json(row["baseline_psyche_json"]),
             memory_shards=[
                 MemoryShard.model_validate(m)
-                for m in json.loads(row["memory_shards_json"] or "[]")
+                for m in json.loads(shards_json or "[]")
             ],
             pending_deletion=bool(row["pending_deletion"]) if "pending_deletion" in row_keys else False,
             created_at=row["created_at"],
+        )
+
+    def get_campaign_character_memories(
+        self, campaign_id: str, character_id: str
+    ) -> list[MemoryShard] | None:
+        """Return campaign-scoped memory shards for a character if customized, or None."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT memory_shards_json FROM campaign_character_memories WHERE campaign_id = ? AND character_id = ?",
+                (campaign_id, character_id),
+            ).fetchone()
+            if not row:
+                return None
+            return [
+                MemoryShard.model_validate(m)
+                for m in json.loads(row["memory_shards_json"] or "[]")
+            ]
+        finally:
+            conn.close()
+
+    def update_campaign_character_memories(
+        self,
+        campaign_id: str,
+        character_id: str,
+        memory_shards: list[MemoryShard],
+        shard_embeddings: dict[int, np.ndarray] | None = None,
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
+        """Persist campaign-scoped character memories and re-index vector entries for this campaign."""
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
+        # Ensure character exists
+        self.get_character(character_id)
+        now = utc_now_iso()
+        shards_json = json.dumps([m.model_dump() for m in memory_shards])
+
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO campaign_character_memories (campaign_id, character_id, memory_shards_json, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(campaign_id, character_id) DO UPDATE SET
+                    memory_shards_json = excluded.memory_shards_json,
+                    updated_at = excluded.updated_at
+                """,
+                (campaign_id, character_id, shards_json, now),
+            )
+            # Remove existing campaign-scoped vector entries for this character
+            conn.execute(
+                """
+                DELETE FROM vector_entries
+                WHERE campaign_id = ? AND character_id = ? AND source_type = 'character_shard'
+                """,
+                (campaign_id, character_id),
+            )
+            # Re-index new shards for this campaign
+            for idx, shard in enumerate(memory_shards):
+                shard_id = f"shard_{campaign_id}_{character_id}_{idx}"
+                precomputed = shard_embeddings.get(idx) if shard_embeddings else None
+                self.vector_store.upsert_entry(
+                    entry_id=shard_id,
+                    source_type="character_shard",
+                    character_id=character_id,
+                    world_id=campaign.world_id,
+                    campaign_id=campaign_id,
+                    title=shard.title,
+                    content=shard.content,
+                    keywords=shard.keywords,
+                    embedding=precomputed,
+                    conn=conn,
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
+
+    async def aupdate_campaign_character_memories(
+        self,
+        campaign_id: str,
+        character_id: str,
+        memory_shards: list[MemoryShard],
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
+        """Asynchronously compute embeddings for campaign-scoped memory shards and update."""
+        shard_embeddings: dict[int, np.ndarray] = {}
+        if memory_shards:
+            computed = await asyncio.gather(
+                *(
+                    embed_text(
+                        combine_entry_text(shard.title, shard.content, shard.keywords)
+                    )
+                    for shard in memory_shards
+                )
+            )
+            shard_embeddings = {idx: vec for idx, vec in enumerate(computed)}
+        return self.update_campaign_character_memories(
+            campaign_id=campaign_id,
+            character_id=character_id,
+            memory_shards=memory_shards,
+            shard_embeddings=shard_embeddings,
+            owner_id=owner_id,
         )
 
     def update_character(
@@ -3494,11 +3610,12 @@ class CantinaRepository:
         campaign_id: str,
         *,
         item: str,
-        action: str,  # "equip" | "unequip"
+        action: str,  # "equip" | "unequip" | "remove" | "add"
+        target: str | None = None,  # "equipped" | "inventory"
         character_id: str | None = None,
         owner_id: str | None = None,
     ) -> CampaignStateBundle:
-        """Move an item between inventory and equipped on the active leaf turn (applies from next turn)."""
+        """Equip, unequip, remove, or add an item on the active leaf turn (applies from next turn)."""
         campaign = self.get_campaign(campaign_id, owner_id=owner_id)
         if not campaign.active_leaf_turn_id:
             raise ValueError(f"Campaign '{campaign_id}' has no active turn")
@@ -3548,8 +3665,27 @@ class CantinaRepository:
             if final_item and not any(_clean(inv).lower() == final_item.lower() for inv in inventory):
                 inventory.append(final_item)
             equipped = new_eq
+        elif action == "remove":
+            # Remove matching item from both equipped and inventory
+            equipped = [
+                eq for eq in equipped
+                if _clean(eq).lower() != target_low and eq.strip().lower() != item.strip().lower()
+            ]
+            inventory = [
+                it for it in inventory
+                if _clean(it).lower() != target_low and it.strip().lower() != item.strip().lower()
+            ]
+        elif action == "add":
+            # Add item to equipped (if target == 'equipped') or carried inventory (default)
+            if clean_target:
+                if target == "equipped":
+                    if not any(_clean(eq).lower() == target_low for eq in equipped):
+                        equipped.append(clean_target)
+                else:
+                    if not any(_clean(inv).lower() == target_low for inv in inventory):
+                        inventory.append(clean_target)
         else:
-            raise ValueError(f"Invalid item equip action '{action}'. Must be 'equip' or 'unequip'.")
+            raise ValueError(f"Invalid item equip action '{action}'. Must be 'equip', 'unequip', 'remove', or 'add'.")
 
         conn = self._connect()
         try:
@@ -3676,6 +3812,23 @@ class CantinaRepository:
             if st.current_location_id == active_loc.id
         ]
 
+        char_ids: list[str] = []
+        if campaign.character_id and campaign.character_id not in char_ids:
+            char_ids.append(campaign.character_id)
+        for cid in campaign.participant_character_ids or []:
+            if cid not in char_ids:
+                char_ids.append(cid)
+        for cid in leaf_turn.character_states.keys():
+            if cid not in char_ids:
+                char_ids.append(cid)
+
+        char_records: dict[str, CharacterRecord] = {}
+        for cid in char_ids:
+            try:
+                char_records[cid] = self.get_character(cid, campaign_id=campaign_id)
+            except KeyError:
+                pass
+
         return CampaignStateBundle(
             campaign=campaign,
             active_branch_turns=branch_turns,
@@ -3683,6 +3836,7 @@ class CantinaRepository:
             current_world_snapshot=leaf_turn.world_snapshot,
             current_character_state=leaf_turn.character_state,
             character_states=leaf_turn.character_states,
+            character_records=char_records,
             present_character_ids=present_ids,
             active_location=active_loc,
             neighbor_locations=neighbors,

@@ -134,6 +134,16 @@ CREATE TABLE IF NOT EXISTS campaign_characters (
 
 CREATE INDEX IF NOT EXISTS idx_campaign_characters_char ON campaign_characters(character_id);
 
+CREATE TABLE IF NOT EXISTS campaign_character_memories (
+    campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+    memory_shards_json TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (campaign_id, character_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_campaign_char_memories ON campaign_character_memories(campaign_id, character_id);
+
 CREATE TABLE IF NOT EXISTS turn_nodes (
     id TEXT PRIMARY KEY,
     campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,

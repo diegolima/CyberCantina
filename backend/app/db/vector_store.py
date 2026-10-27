@@ -314,15 +314,31 @@ class VectorStore:
 
         conn = self._connect()
         try:
-            rows = conn.execute(
+            has_campaign_shards = conn.execute(
                 """
+                SELECT 1 FROM vector_entries
+                WHERE campaign_id = ? AND character_id = ? AND source_type = 'character_shard'
+                LIMIT 1
+                """,
+                (campaign_id, character_id),
+            ).fetchone() is not None
+
+            if has_campaign_shards:
+                char_clause = "(character_id = ? AND campaign_id = ? AND source_type = 'character_shard')"
+                params = (world_id, character_id, campaign_id, campaign_id)
+            else:
+                char_clause = "(character_id = ? AND (campaign_id IS NULL OR campaign_id = '') AND source_type = 'character_shard')"
+                params = (world_id, character_id, campaign_id)
+
+            rows = conn.execute(
+                f"""
                 SELECT id, source_type, character_id, anchor_turn_id, title, content, keywords_json, embedding_blob
                 FROM vector_entries
                 WHERE (world_id = ? AND source_type = 'lore')
-                   OR (character_id = ? AND source_type = 'character_shard')
+                   OR {char_clause}
                    OR (campaign_id = ? AND source_type = 'episodic_chunk')
                 """,
-                (world_id, character_id, campaign_id),
+                params,
             ).fetchall()
         finally:
             conn.close()

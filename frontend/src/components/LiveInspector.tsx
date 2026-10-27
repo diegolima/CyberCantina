@@ -20,12 +20,14 @@ import {
   CharacterRecord,
   CharacterStateSnapshot,
   CompassDirection,
+  MemoryShard,
   NeighborLocationView,
   RecalledMemoryItem,
   WorldRecord,
 } from "../types";
 import { InspectorSection, usePersistentState } from "./inspector/InspectorPrimitives";
 import { CharacterRow } from "./inspector/CharacterRow";
+import { CampaignCharacterModal } from "./inspector/CampaignCharacterModal";
 import { LoreIndexModal } from "./inspector/LoreIndexModal";
 import {
   COMPASS_ANGLES,
@@ -75,9 +77,15 @@ interface LiveInspectorProps {
   }) => Promise<string | void>;
   onToggleItemEquip?: (payload: {
     item: string;
-    action: "equip" | "unequip";
+    action: "equip" | "unequip" | "remove" | "add";
+    target?: "equipped" | "inventory";
     character_id?: string;
   }) => Promise<void> | void;
+  onUpdateCampaignMemories?: (
+    characterId: string,
+    memoryShards: MemoryShard[]
+  ) => Promise<void>;
+  worlds?: WorldRecord[];
 }
 
 export const LiveInspector: React.FC<LiveInspectorProps> = ({
@@ -90,6 +98,8 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   onOverrideLocation,
   onCreateLinkedLocation,
   onToggleItemEquip,
+  onUpdateCampaignMemories,
+  worlds = [],
 }) => {
   const activeLoc = bundle.active_location;
   const [selectedLocId, setSelectedLocId] = useState<string>(activeLoc.id);
@@ -99,6 +109,7 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   const [showLoreIndex, setShowLoreIndex] = useState(false);
   const [expandedRecalls, setExpandedRecalls] = useState<Set<string>>(new Set());
   const [showAllFlags, setShowAllFlags] = useState(false);
+  const [sheetCharacterId, setSheetCharacterId] = useState<string | null>(null);
 
   // Latest vs previous turn on the active branch, used for "changed this turn" indicators
   const turns = bundle.active_branch_turns;
@@ -136,7 +147,7 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
     const locNames = new Map(bundle.visible_locations.map((l) => [l.id, l.name]));
 
     const rows = orderedIds.flatMap((id) => {
-      const record = byId.get(id);
+      const record = bundle.character_records?.[id] ?? byId.get(id);
       const state =
         bundle.character_states?.[id] ??
         (id === character.id ? bundle.current_character_state : undefined);
@@ -162,6 +173,11 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
     // Stable partition keeps the primary character on top among present ones
     return [...rows.filter((r) => r.isPresent), ...rows.filter((r) => !r.isPresent)];
   }, [participants, character, bundle, prevTurn, activeLoc.id]);
+
+  const sheetRow = useMemo(
+    () => characterRows.find((r) => r.record.id === sheetCharacterId),
+    [characterRows, sheetCharacterId]
+  );
 
   const indexedCharacters = useMemo(
     () => characterRows.map((r) => r.record),
@@ -613,7 +629,7 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
         </div>
       )}
 
-      {/* 3. Characters (collapsed "Name · Mood" rows, expandable to full affective & goal state) */}
+      {/* 3. Characters (collapsed "Name · Mood" rows, expandable to meters & gear) */}
       {characterRows.length > 0 && (
         <div className="inspector-card inspector-collapsible">
           {characterRows.map((row) => (
@@ -625,9 +641,29 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
               elsewhereLocationName={row.elsewhereLocationName}
               moodChanged={row.moodChanged}
               onToggleItemEquip={onToggleItemEquip}
+              onOpenSheet={(cid) => setSheetCharacterId(cid)}
             />
           ))}
         </div>
+      )}
+
+      {/* Full Campaign Character Sheet / Dossier Modal */}
+      {sheetRow && (
+        <CampaignCharacterModal
+          character={sheetRow.record}
+          state={sheetRow.state}
+          isPresent={sheetRow.isPresent}
+          elsewhereLocationName={sheetRow.elsewhereLocationName}
+          campaignId={bundle.campaign.id}
+          worlds={worlds}
+          onClose={() => setSheetCharacterId(null)}
+          onItemAction={onToggleItemEquip || (() => {})}
+          onSaveMemories={async (cid, shards) => {
+            if (onUpdateCampaignMemories) {
+              await onUpdateCampaignMemories(cid, shards);
+            }
+          }}
+        />
       )}
 
       {/* 4. Story (Zone 2 Episodic Summaries) */}

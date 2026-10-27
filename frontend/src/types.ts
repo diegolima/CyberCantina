@@ -284,6 +284,7 @@ export interface CampaignStateBundle {
   current_world_snapshot: WorldStateSnapshot;
   current_character_state: CharacterStateSnapshot;
   character_states?: Record<string, CharacterStateSnapshot>;
+  character_records?: Record<string, CharacterRecord>;
   present_character_ids?: string[];
   active_location: LocationNode;
   neighbor_locations: NeighborLocationView[];

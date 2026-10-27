@@ -1,5 +1,12 @@
 import React, { useId } from "react";
-import { ChevronDown, ChevronRight, CircleMinus, CirclePlus, MapPin } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  CircleMinus,
+  CirclePlus,
+  MapPin,
+  SlidersHorizontal,
+} from "lucide-react";
 import { CharacterRecord, CharacterStateSnapshot } from "../../types";
 import { ChangeDot, MiniMoodBars, usePersistentState } from "./InspectorPrimitives";
 
@@ -15,12 +22,15 @@ interface CharacterRowProps {
   /** Callback to toggle equipping or unequipping an item (applied next turn) */
   onToggleItemEquip?: (payload: {
     item: string;
-    action: "equip" | "unequip";
+    action: "equip" | "unequip" | "remove" | "add";
+    target?: "equipped" | "inventory";
     character_id?: string;
   }) => Promise<void> | void;
+  /** Open full character sheet dossier modal */
+  onOpenSheet?: (characterId: string) => void;
 }
 
-/** Collapsible "Name · Mood" row expanding into the full affective & goal state. */
+/** Collapsible "Name · Mood" row expanding into the affective meters, gear, and "More" sheet. */
 export const CharacterRow: React.FC<CharacterRowProps> = ({
   character,
   state,
@@ -28,6 +38,7 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
   elsewhereLocationName,
   moodChanged,
   onToggleItemEquip,
+  onOpenSheet,
 }) => {
   const [open, setOpen] = usePersistentState<boolean>(
     `character.${character.id}`,
@@ -50,8 +61,6 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
       (it) => !/^\[(?:worn|equipped)\]/i.test(it)
     );
   }
-
-  const relationships = Object.entries(state.relationship_notes || {});
 
   return (
     <div className={`char-row ${isPresent ? "" : "char-row-absent"}`}>
@@ -87,6 +96,7 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
 
       {open && (
         <div id={bodyId} className="char-row-body">
+          {/* Valence Meter */}
           <div className="meter-row">
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.73rem" }}>
               <span>Valence (Distressed ↔ Warm)</span>
@@ -106,6 +116,7 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
             </div>
           </div>
 
+          {/* Arousal / Tension Meter */}
           <div className="meter-row">
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.73rem" }}>
               <span>Arousal / Tension</span>
@@ -119,6 +130,7 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
             </div>
           </div>
 
+          {/* Gear & Inventory */}
           <div
             style={{
               marginTop: 10,
@@ -128,28 +140,6 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
               fontSize: "0.76rem",
             }}
           >
-            <div className="cog-step">
-              <div className="cog-step-label">Active Scene Want</div>
-              <div>{state.active_want}</div>
-            </div>
-            <div className="cog-step">
-              <div className="cog-step-label">Active Tactical Plan</div>
-              <div>{state.active_plan}</div>
-            </div>
-            <div className="cog-step">
-              <div className="cog-step-label">Core Drive &amp; Fear</div>
-              <div>
-                <strong>Drive:</strong> {character.baseline_psyche.core_drive}
-                <br />
-                <strong>Fear:</strong> {character.baseline_psyche.core_fear}
-              </div>
-            </div>
-            {character.physical_appearance && (
-              <div className="cog-step">
-                <div className="cog-step-label">Physical Appearance (Zone 1)</div>
-                <div>{character.physical_appearance}</div>
-              </div>
-            )}
             {/* Equipped Attire & Gear */}
             <div className="cog-step">
               <div className="cog-step-label">
@@ -231,17 +221,30 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
                 </div>
               )}
             </div>
-            {relationships.length > 0 && (
-              <div className="cog-step">
-                <div className="cog-step-label">Relationship &amp; Trust Notes</div>
-                <div>
-                  {relationships.map(([k, v]) => (
-                    <div key={k}>
-                      <strong>{k}:</strong> {v}
-                    </div>
-                  ))}
-                </div>
-              </div>
+
+            {/* "More" Button to open Character Sheet / Dossier Modal */}
+            {onOpenSheet && (
+              <button
+                type="button"
+                className="btn"
+                style={{
+                  width: "100%",
+                  marginTop: 4,
+                  padding: "6px 10px",
+                  fontSize: "0.75rem",
+                  justifyContent: "center",
+                  gap: 6,
+                  background: "var(--bg-card)",
+                  border: "1px solid var(--border-subtle)",
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenSheet(character.id);
+                }}
+              >
+                <SlidersHorizontal size={13} color="var(--accent-amber)" />
+                <span>More · Character Sheet</span>
+              </button>
             )}
           </div>
         </div>

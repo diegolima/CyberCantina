@@ -77,6 +77,7 @@ from app.schemas.character import (
     CognitionBlock,
 )
 from app.schemas.turn import (
+    CampaignCharacterMemoriesUpdateRequest,
     CampaignRecord,
     CampaignStateBundle,
     TurnSubmitRequest,
@@ -174,7 +175,8 @@ class LocationOverrideRequest(BaseModel):
 
 class ItemEquipToggleRequest(BaseModel):
     item: str
-    action: Literal["equip", "unequip"]
+    action: Literal["equip", "unequip", "remove", "add"]
+    target: Literal["equipped", "inventory"] | None = None
     character_id: str | None = None
 
 
@@ -1190,13 +1192,35 @@ def toggle_campaign_item_equip(
     req: ItemEquipToggleRequest,
     current_user: UserProfile = Depends(get_current_user),
 ) -> CampaignStateBundle:
-    """Equip or unequip an item for a character on the active leaf turn (applies next turn)."""
+    """Equip, unequip, remove, or add an item for a character on the active leaf turn (applies next turn)."""
     try:
         return get_repo().toggle_campaign_item_equip(
             campaign_id,
             item=req.item,
             action=req.action,
+            target=req.target,
             character_id=req.character_id,
+            owner_id=current_user.id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/campaigns/{campaign_id}/characters/{character_id}/memories", response_model=CampaignStateBundle)
+async def update_campaign_character_memories(
+    campaign_id: str,
+    character_id: str,
+    req: CampaignCharacterMemoriesUpdateRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Update campaign-scoped memory shards for a character (applies from next turn onwards)."""
+    try:
+        return await get_repo().aupdate_campaign_character_memories(
+            campaign_id,
+            character_id,
+            memory_shards=req.memory_shards,
             owner_id=current_user.id,
         )
     except KeyError as exc:
@@ -1259,12 +1283,12 @@ async def _execute_turn_stream_events(
     parent_turn = branch_turns[-1]
 
     world = repo.get_world(campaign.world_id, valid_turn_ids=valid_turn_ids)
-    primary_character = repo.get_character(campaign.character_id)
+    primary_character = repo.get_character(campaign.character_id, campaign_id=campaign.id)
     participant_ids = campaign.participant_character_ids or [campaign.character_id]
     participants: list[CharacterRecord] = []
     for cid in participant_ids:
         try:
-            participants.append(repo.get_character(cid))
+            participants.append(repo.get_character(cid, campaign_id=campaign.id))
         except KeyError:
             continue
     if not participants:
