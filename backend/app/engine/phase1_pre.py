@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 import re
 
-from app.config import settings
+from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
 from app.schemas.character import CharacterRecord
 from app.schemas.turn import DiceRollResult, MechanicsTrigger, PreTurnAnalysis
@@ -252,6 +252,7 @@ async def run_phase1_pre_analysis(
     manual_dice_override: int | None = None,
     present_characters: list[CharacterRecord] | None = None,
     previous_speaker_id: str | None = None,
+    profile: ModelProfile | None = None,
 ) -> PreTurnAnalysis:
     """Execute Phase 1 Pre-Turn Analysis via the Auxiliary Clerk (with offline fallback) and resolve RNG."""
     room_chars = present_characters if present_characters else [character]
@@ -293,6 +294,7 @@ async def run_phase1_pre_analysis(
         f"User Message:\n{user_message}"
     )
 
+    clerk_prof = profile or settings.clerk_profile
     try:
         analysis = await llm_client.complete_structured(
             [
@@ -300,7 +302,7 @@ async def run_phase1_pre_analysis(
                 {"role": "user", "content": user_prompt},
             ],
             PreTurnAnalysis,
-            profile=settings.clerk_profile,
+            profile=clerk_prof,
         )
     except Exception:
         if not settings.allow_offline_fallback:

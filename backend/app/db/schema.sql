@@ -1,7 +1,55 @@
 PRAGMA foreign_keys = ON;
 
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    display_name TEXT NOT NULL,
+    password_hash TEXT NULL,
+    role TEXT NOT NULL DEFAULT 'user', -- 'user' | 'admin'
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+
+CREATE TABLE IF NOT EXISTS user_passkeys (
+    id TEXT PRIMARY KEY, -- credential_id (Base64URL)
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    friendly_name TEXT NOT NULL,
+    public_key BLOB NOT NULL,
+    sign_count INTEGER NOT NULL DEFAULT 0,
+    transports_json TEXT NOT NULL DEFAULT '[]',
+    aaguid TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    last_used_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_passkeys_user ON user_passkeys(user_id);
+
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id TEXT PRIMARY KEY, -- SHA-256 hex digest of raw session token
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_agent TEXT NOT NULL DEFAULT '',
+    ip_address TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    last_active_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_last_active ON user_sessions(last_active_at);
+
+CREATE TABLE IF NOT EXISTS user_model_settings (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    actor_profile_json TEXT NULL,
+    clerk_profile_json TEXT NULL,
+    working_memory_turns INTEGER NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS worlds (
     id TEXT PRIMARY KEY,
+    owner_id TEXT NULL REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     global_rules_json TEXT NOT NULL,
     pending_deletion INTEGER NOT NULL DEFAULT 0,
@@ -50,12 +98,14 @@ CREATE INDEX IF NOT EXISTS idx_lore_nodes_world ON lore_nodes(world_id);
 
 CREATE TABLE IF NOT EXISTS characters (
     id TEXT PRIMARY KEY,
+    owner_id TEXT NULL REFERENCES users(id) ON DELETE CASCADE,
     world_id TEXT NULL REFERENCES worlds(id) ON DELETE SET NULL,
     name TEXT NOT NULL,
     tagline TEXT NOT NULL,
     physical_appearance TEXT NOT NULL DEFAULT '',
     core_persona TEXT NOT NULL,
     initial_message TEXT NOT NULL DEFAULT '',
+    equipped_json TEXT NOT NULL DEFAULT '[]',
     inventory_json TEXT NOT NULL DEFAULT '[]',
     voice_anchors_json TEXT NOT NULL DEFAULT '[]',
     baseline_psyche_json TEXT NOT NULL,
@@ -66,6 +116,7 @@ CREATE TABLE IF NOT EXISTS characters (
 
 CREATE TABLE IF NOT EXISTS campaigns (
     id TEXT PRIMARY KEY,
+    owner_id TEXT NULL REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE RESTRICT,
     character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE RESTRICT,
@@ -118,6 +169,7 @@ CREATE TABLE IF NOT EXISTS character_states (
     active_want TEXT NOT NULL,
     active_plan TEXT NOT NULL,
     relationship_notes_json TEXT NOT NULL DEFAULT '{}',
+    equipped_json TEXT NOT NULL DEFAULT '[]',
     inventory_json TEXT NOT NULL DEFAULT '[]',
     PRIMARY KEY (turn_id, character_id)
 );

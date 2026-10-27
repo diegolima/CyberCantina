@@ -7,14 +7,32 @@ import json
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.config import AppSettings, persist_settings, settings
+from app.auth import (
+    SESSION_COOKIE_NAME,
+    SESSION_IDLE_TIMEOUT_SECONDS,
+    create_passkey_authentication_challenge,
+    create_passkey_registration_challenge,
+    extract_raw_token,
+    generate_random_password,
+    generate_session_token,
+    get_current_user,
+    get_optional_user,
+    hash_password,
+    hash_session_token,
+    require_admin,
+    resolve_rp_id_and_origin,
+    verify_passkey_authentication,
+    verify_passkey_registration,
+    verify_password,
+)
+from app.config import AppSettings, ModelProfile, persist_settings, settings
 from app.db.repository import CantinaRepository
 from app.db.seed import ensure_default_seed
 from app.engine.llm_client import (
@@ -26,6 +44,30 @@ from app.engine.phase1_pre import run_phase1_pre_analysis
 from app.engine.phase2_context import assemble_four_zone_messages, was_character_present_on_turn
 from app.engine.phase3_actor import stream_phase3_actor
 from app.engine.phase4_clerk import run_phase4_post_turn_clerk
+from app.schemas.auth import (
+    AdminChangeUsernameRequest,
+    AdminCreateUserRequest,
+    AdminResetPasswordResponse,
+    AuthSessionResponse,
+    AuthStatusResponse,
+    ChangePasswordRequest,
+    InitialSetupRequest,
+    LoginRequest,
+    PasskeyDeleteRequest,
+    PasskeyLoginFinishRequest,
+    PasskeyLoginStartRequest,
+    PasskeyLoginStartResponse,
+    PasskeyRegisterFinishRequest,
+    PasskeyRegisterStartRequest,
+    PasskeyRegisterStartResponse,
+    ProfileDeleteAccountRequest,
+    ProfileModelSettingsResponse,
+    ProfileResetDataRequest,
+    ProfileUpdateRequest,
+    RegisterRequest,
+    UserModelSettingsPayload,
+    UserProfile,
+)
 from app.schemas.character import (
     CharacterRecord,
     CharacterStateSnapshot,
@@ -79,6 +121,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     repo.init_db()
     run_entity_pruner()
     ensure_default_seed(repo)
+    users = repo.list_users()
+    if users:
+        admin = next((u for u in users if u.role == "admin"), users[0])
+        repo.claim_unowned_entities(admin.id)
     await auto_configure_ollama_models()
     pruner_task = asyncio.create_task(_periodic_entity_pruner())
     try:
@@ -126,6 +172,12 @@ class LocationOverrideRequest(BaseModel):
     location_id: str
 
 
+class ItemEquipToggleRequest(BaseModel):
+    item: str
+    action: Literal["equip", "unequip"]
+    character_id: str | None = None
+
+
 class LinkedLocationCreateRequest(BaseModel):
     from_location_id: str
     name: str
@@ -138,6 +190,666 @@ class LinkedLocationCreateRequest(BaseModel):
 class CharacterCommitRequest(BaseModel):
     draft: CharacterWizardDraft
     world_id: str | None = None
+
+
+def _issue_session_response(
+    repo: CantinaRepository,
+    user: UserProfile,
+    request: Request,
+    response: Response,
+) -> AuthSessionResponse:
+    raw_token, token_hash = generate_session_token()
+    ua = request.headers.get("user-agent", "")
+    ip = request.client.host if request.client else ""
+    repo.create_session(
+        session_id_hash=token_hash,
+        user_id=user.id,
+        user_agent=ua,
+        ip_address=ip,
+    )
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=raw_token,
+        httponly=True,
+        samesite="lax",
+        max_age=SESSION_IDLE_TIMEOUT_SECONDS * 30,
+        path="/",
+    )
+    return AuthSessionResponse(
+        token=raw_token,
+        user=user,
+        single_user_mode=repo.is_single_user_passwordless_mode(),
+    )
+
+
+# ------------------------------------------------------------------
+# Authentication, Setup, Passkeys, Profile & Admin
+# ------------------------------------------------------------------
+
+
+@app.get("/api/auth/status", response_model=AuthStatusResponse)
+def get_auth_status(
+    current_user: UserProfile | None = Depends(get_optional_user),
+) -> AuthStatusResponse:
+    repo = get_repo()
+    user_count = repo.count_users()
+    setup_required = user_count == 0
+    single_user_mode = repo.is_single_user_passwordless_mode()
+    return AuthStatusResponse(
+        setup_required=setup_required,
+        single_user_mode=single_user_mode,
+        authenticated=current_user is not None,
+        user=current_user,
+    )
+
+
+@app.post("/api/auth/setup", response_model=AuthSessionResponse)
+def initial_setup(
+    req: InitialSetupRequest,
+    request: Request,
+    response: Response,
+) -> AuthSessionResponse:
+    repo = get_repo()
+    if repo.count_users() > 0:
+        raise HTTPException(
+            status_code=403,
+            detail="Initial setup has already been completed.",
+        )
+
+    clean_username = req.username.strip()
+    if not clean_username:
+        raise HTTPException(status_code=400, detail="Username is required.")
+
+    if not req.password and not req.confirm_blank_password:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Leaving the admin user's password blank will disable multi-user support. "
+                "Please confirm to proceed."
+            ),
+        )
+
+    pwd_hash = hash_password(req.password) if req.password else None
+    try:
+        admin_user = repo.create_user(
+            username=clean_username,
+            display_name=req.display_name or clean_username,
+            password_hash=pwd_hash,
+            role="admin",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    ensure_default_seed(repo, owner_id=admin_user.id)
+    repo.claim_unowned_entities(admin_user.id)
+    return _issue_session_response(repo, admin_user, request, response)
+
+
+@app.post("/api/auth/login", response_model=AuthSessionResponse)
+def login_with_password(
+    req: LoginRequest,
+    request: Request,
+    response: Response,
+) -> AuthSessionResponse:
+    repo = get_repo()
+    try:
+        user = repo.get_user_by_username(req.username)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=401, detail="Invalid username or password."
+        ) from exc
+
+    pwd_hash = repo.get_user_password_hash(user.id)
+    if pwd_hash is None:
+        if repo.is_single_user_passwordless_mode():
+            return _issue_session_response(repo, user, request, response)
+        raise HTTPException(
+            status_code=401,
+            detail="Password login is not configured for this account. Use a passkey or contact an administrator.",
+        )
+
+    if not verify_password(req.password, pwd_hash):
+        raise HTTPException(status_code=401, detail="Invalid username or password.")
+
+    return _issue_session_response(repo, user, request, response)
+
+
+@app.post("/api/auth/register", response_model=AuthSessionResponse)
+def register_user(
+    req: RegisterRequest,
+    request: Request,
+    response: Response,
+) -> AuthSessionResponse:
+    repo = get_repo()
+    if repo.count_users() == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Complete initial administrator setup before registering accounts.",
+        )
+    if repo.is_single_user_passwordless_mode():
+        raise HTTPException(
+            status_code=403,
+            detail="Multi-user support is disabled while the admin account has no password.",
+        )
+    if not req.password:
+        raise HTTPException(
+            status_code=400,
+            detail="A password is required for new user accounts.",
+        )
+
+    pwd_hash = hash_password(req.password)
+    try:
+        user = repo.create_user(
+            username=req.username,
+            display_name=req.display_name or req.username,
+            password_hash=pwd_hash,
+            role="user",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return _issue_session_response(repo, user, request, response)
+
+
+@app.post("/api/auth/logout")
+def logout_user(
+    response: Response,
+    raw_token: str | None = Depends(extract_raw_token),
+) -> dict[str, str]:
+    repo = get_repo()
+    if raw_token:
+        repo.delete_session(hash_session_token(raw_token))
+    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
+    return {"status": "logged_out"}
+
+
+@app.post("/api/auth/passkey/login/start", response_model=PasskeyLoginStartResponse)
+def start_passkey_login(
+    req: PasskeyLoginStartRequest,
+    request: Request,
+) -> PasskeyLoginStartResponse:
+    repo = get_repo()
+    rp_id, origin = resolve_rp_id_and_origin(request)
+    allowed_ids: list[str] | None = None
+    target_user_id: str | None = None
+
+    if req.username and req.username.strip():
+        try:
+            user = repo.get_user_by_username(req.username.strip())
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail=f"User '{req.username.strip()}' not found."
+            ) from exc
+        if not user.passkeys:
+            raise HTTPException(
+                status_code=400,
+                detail=f"User '{user.username}' has no registered passkeys.",
+            )
+        allowed_ids = [pk.id for pk in user.passkeys]
+        target_user_id = user.id
+
+    challenge_id, options = create_passkey_authentication_challenge(
+        rp_id=rp_id,
+        origin=origin,
+        allowed_credential_ids=allowed_ids,
+        user_id=target_user_id,
+    )
+    return PasskeyLoginStartResponse(challenge_id=challenge_id, options=options)
+
+
+@app.post("/api/auth/passkey/login/finish", response_model=AuthSessionResponse)
+def finish_passkey_login(
+    req: PasskeyLoginFinishRequest,
+    request: Request,
+    response: Response,
+) -> AuthSessionResponse:
+    repo = get_repo()
+    cred_id = str(req.credential.get("id", "")).strip()
+    if not cred_id:
+        raise HTTPException(status_code=400, detail="Missing credential ID in assertion.")
+
+    try:
+        _pk_info, user_id, pub_key_bytes, sign_count = repo.get_passkey_record(cred_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=401, detail="Passkey credential not recognized."
+        ) from exc
+
+    try:
+        new_sign_count = verify_passkey_authentication(
+            challenge_id=req.challenge_id,
+            credential_payload=req.credential,
+            credential_public_key=pub_key_bytes,
+            credential_current_sign_count=sign_count,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=401, detail=f"Passkey verification failed: {exc}"
+        ) from exc
+
+    repo.update_passkey_sign_count(cred_id, new_sign_count)
+    user = repo.get_user_by_id(user_id)
+    return _issue_session_response(repo, user, request, response)
+
+
+# ------------------------------------------------------------------
+# User Profile & Passkey Management
+# ------------------------------------------------------------------
+
+
+@app.get("/api/profile", response_model=UserProfile)
+def get_my_profile(
+    current_user: UserProfile = Depends(get_current_user),
+) -> UserProfile:
+    return current_user
+
+
+@app.put("/api/profile", response_model=UserProfile)
+def update_my_profile(
+    req: ProfileUpdateRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> UserProfile:
+    repo = get_repo()
+    try:
+        return repo.update_user_display_name(current_user.id, req.display_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/profile/password", response_model=AuthStatusResponse)
+def change_my_password(
+    req: ChangePasswordRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> AuthStatusResponse:
+    repo = get_repo()
+    existing_hash = repo.get_user_password_hash(current_user.id)
+
+    # Confirm current password before password changes are made (if account already has a password)
+    if existing_hash is not None:
+        if not verify_password(req.current_password, existing_hash):
+            raise HTTPException(
+                status_code=400,
+                detail="Current password confirmation failed.",
+            )
+
+    if not req.new_password:
+        if current_user.role != "admin":
+            raise HTTPException(
+                status_code=400,
+                detail="Standard user accounts cannot have a blank password.",
+            )
+        if repo.count_users() > 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Admin accounts cannot have a blank password while other users exist in the system.",
+            )
+        if not req.confirm_blank_password:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Leaving the admin user's password blank will disable multi-user support. "
+                    "Please confirm to proceed."
+                ),
+            )
+        new_hash = None
+    else:
+        new_hash = hash_password(req.new_password)
+
+    try:
+        updated_user = repo.update_user_password_hash(current_user.id, new_hash)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return AuthStatusResponse(
+        setup_required=False,
+        single_user_mode=repo.is_single_user_passwordless_mode(),
+        authenticated=True,
+        user=updated_user,
+    )
+
+
+@app.post(
+    "/api/profile/passkeys/register/start",
+    response_model=PasskeyRegisterStartResponse,
+)
+def start_passkey_registration(
+    req: PasskeyRegisterStartRequest,
+    request: Request,
+    current_user: UserProfile = Depends(get_current_user),
+) -> PasskeyRegisterStartResponse:
+    repo = get_repo()
+    existing_hash = repo.get_user_password_hash(current_user.id)
+    if existing_hash is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Set an account password before registering or renewing passkeys.",
+        )
+    if not verify_password(req.current_password, existing_hash):
+        raise HTTPException(
+            status_code=400,
+            detail="Current password confirmation failed.",
+        )
+
+    if req.replace_credential_id:
+        owned_ids = {pk.id for pk in current_user.passkeys}
+        if req.replace_credential_id not in owned_ids:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Passkey '{req.replace_credential_id}' not found on your account.",
+            )
+
+    rp_id, origin = resolve_rp_id_and_origin(request)
+    challenge_id, options = create_passkey_registration_challenge(
+        user=current_user,
+        rp_id=rp_id,
+        origin=origin,
+        friendly_name=req.friendly_name,
+        replace_credential_id=req.replace_credential_id,
+    )
+    return PasskeyRegisterStartResponse(challenge_id=challenge_id, options=options)
+
+
+@app.post("/api/profile/passkeys/register/finish", response_model=UserProfile)
+def finish_passkey_registration(
+    req: PasskeyRegisterFinishRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> UserProfile:
+    repo = get_repo()
+    try:
+        (
+            pending,
+            cred_id_b64,
+            pub_key_bytes,
+            sign_count,
+            aaguid,
+            transports,
+        ) = verify_passkey_registration(
+            challenge_id=req.challenge_id,
+            credential_payload=req.credential,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Passkey registration verification failed: {exc}",
+        ) from exc
+
+    if pending.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Passkey challenge user mismatch.")
+
+    repo.add_passkey(
+        credential_id=cred_id_b64,
+        user_id=current_user.id,
+        friendly_name=pending.friendly_name,
+        public_key=pub_key_bytes,
+        sign_count=sign_count,
+        transports=transports,
+        aaguid=aaguid,
+        replace_credential_id=pending.replace_credential_id,
+    )
+    return repo.get_user_by_id(current_user.id)
+
+
+@app.post("/api/profile/passkeys/{credential_id}/delete", response_model=UserProfile)
+def delete_my_passkey(
+    credential_id: str,
+    req: PasskeyDeleteRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> UserProfile:
+    repo = get_repo()
+    existing_hash = repo.get_user_password_hash(current_user.id)
+    if existing_hash is not None and not verify_password(
+        req.current_password, existing_hash
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Current password confirmation failed.",
+        )
+    try:
+        repo.delete_passkey(current_user.id, credential_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return repo.get_user_by_id(current_user.id)
+
+
+@app.post("/api/profile/reset-data")
+def reset_my_data(
+    req: ProfileResetDataRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> dict[str, str]:
+    repo = get_repo()
+    pwd_hash = repo.get_user_password_hash(current_user.id)
+    if pwd_hash is not None and not verify_password(req.current_password, pwd_hash):
+        raise HTTPException(
+            status_code=400,
+            detail="Current password confirmation failed.",
+        )
+    repo.reset_user_data(current_user.id)
+    return {
+        "status": "ok",
+        "message": "All user data (characters, worlds, and campaigns) has been reset.",
+    }
+
+
+@app.delete("/api/profile")
+@app.post("/api/profile/delete")
+def delete_my_account(
+    req: ProfileDeleteAccountRequest,
+    response: Response,
+    current_user: UserProfile = Depends(get_current_user),
+) -> dict[str, str]:
+    repo = get_repo()
+    if current_user.role == "admin":
+        if repo.count_admin_users() <= 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot delete the only remaining administrator account. At least 1 admin user must remain in the system.",
+            )
+    pwd_hash = repo.get_user_password_hash(current_user.id)
+    if pwd_hash is not None and not verify_password(req.current_password, pwd_hash):
+        raise HTTPException(
+            status_code=400,
+            detail="Current password confirmation failed.",
+        )
+    repo.delete_user(current_user.id)
+    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
+    return {"status": "deleted"}
+
+
+# ------------------------------------------------------------------
+# Per-User Model Overrides & Effective Settings Resolution
+# ------------------------------------------------------------------
+
+
+def get_effective_user_model_settings(
+    user_id: str | None,
+) -> tuple[ModelProfile, ModelProfile, int]:
+    """Resolve effective (actor_profile, clerk_profile, working_memory_turns) for a user.
+
+    If overrides are enabled in system settings and the user has saved custom settings,
+    those take precedence. Otherwise, defaults from AppSettings are returned.
+    """
+    default_actor = settings.actor_profile
+    default_clerk = settings.clerk_profile
+    default_wm_turns = settings.memory_config.working_memory_turns
+
+    if not settings.allow_user_model_overrides or not user_id:
+        return default_actor, default_clerk, default_wm_turns
+
+    user_settings = get_repo().get_user_model_settings(user_id)
+    if not user_settings:
+        return default_actor, default_clerk, default_wm_turns
+
+    effective_actor = user_settings.actor_profile or default_actor
+    effective_clerk = user_settings.clerk_profile or default_clerk
+    effective_wm_turns = (
+        user_settings.working_memory_turns
+        if user_settings.working_memory_turns is not None
+        else default_wm_turns
+    )
+    return effective_actor, effective_clerk, effective_wm_turns
+
+
+@app.get("/api/profile/models", response_model=ProfileModelSettingsResponse)
+def get_profile_models(
+    current_user: UserProfile = Depends(get_current_user),
+) -> ProfileModelSettingsResponse:
+    repo = get_repo()
+    user_override = repo.get_user_model_settings(current_user.id)
+    eff_actor, eff_clerk, eff_wm_turns = get_effective_user_model_settings(current_user.id)
+    has_override = user_override is not None and (
+        user_override.actor_profile is not None
+        or user_override.clerk_profile is not None
+        or user_override.working_memory_turns is not None
+    )
+    return ProfileModelSettingsResponse(
+        allow_user_model_overrides=settings.allow_user_model_overrides,
+        has_override=has_override,
+        effective_actor_profile=eff_actor,
+        effective_clerk_profile=eff_clerk,
+        effective_working_memory_turns=eff_wm_turns,
+        user_actor_profile=user_override.actor_profile if user_override else None,
+        user_clerk_profile=user_override.clerk_profile if user_override else None,
+        user_working_memory_turns=user_override.working_memory_turns if user_override else None,
+        default_actor_profile=settings.actor_profile,
+        default_clerk_profile=settings.clerk_profile,
+        default_working_memory_turns=settings.memory_config.working_memory_turns,
+    )
+
+
+@app.put("/api/profile/models", response_model=ProfileModelSettingsResponse)
+def update_profile_models(
+    payload: UserModelSettingsPayload,
+    current_user: UserProfile = Depends(get_current_user),
+) -> ProfileModelSettingsResponse:
+    if not settings.allow_user_model_overrides:
+        raise HTTPException(
+            status_code=403,
+            detail="Per-user model overrides are currently disabled by the system administrator.",
+        )
+    repo = get_repo()
+    repo.save_user_model_settings(current_user.id, payload)
+    return get_profile_models(current_user=current_user)
+
+
+@app.delete("/api/profile/models", response_model=ProfileModelSettingsResponse)
+def reset_profile_models(
+    current_user: UserProfile = Depends(get_current_user),
+) -> ProfileModelSettingsResponse:
+    repo = get_repo()
+    repo.delete_user_model_settings(current_user.id)
+    return get_profile_models(current_user=current_user)
+
+
+# ------------------------------------------------------------------
+# Admin Area Endpoints
+# ------------------------------------------------------------------
+
+
+@app.get("/api/admin/users", response_model=list[UserProfile])
+def admin_list_users(
+    q: str | None = None,
+    _admin: UserProfile = Depends(require_admin),
+) -> list[UserProfile]:
+    return get_repo().list_users(search_query=q)
+
+
+@app.post("/api/admin/users", response_model=UserProfile)
+def admin_create_user(
+    req: AdminCreateUserRequest,
+    _admin: UserProfile = Depends(require_admin),
+) -> UserProfile:
+    repo = get_repo()
+    if repo.is_single_user_passwordless_mode():
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot create additional users while the admin account has a blank password.",
+        )
+    if not req.password:
+        raise HTTPException(
+            status_code=400,
+            detail="A password is required when creating a user account.",
+        )
+    pwd_hash = hash_password(req.password)
+    try:
+        return repo.create_user(
+            username=req.username,
+            display_name=req.display_name or req.username,
+            password_hash=pwd_hash,
+            role=req.role,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/admin/users/{user_id}/username", response_model=UserProfile)
+def admin_change_username(
+    user_id: str,
+    req: AdminChangeUsernameRequest,
+    _admin: UserProfile = Depends(require_admin),
+) -> UserProfile:
+    repo = get_repo()
+    try:
+        return repo.update_user_username(user_id, req.username)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post(
+    "/api/admin/users/{user_id}/reset-password",
+    response_model=AdminResetPasswordResponse,
+)
+def admin_reset_user_password(
+    user_id: str,
+    admin_user: UserProfile = Depends(require_admin),
+    raw_token: str | None = Depends(extract_raw_token),
+) -> AdminResetPasswordResponse:
+    repo = get_repo()
+    generated_pwd = generate_random_password(16)
+    pwd_hash = hash_password(generated_pwd)
+    try:
+        updated = repo.update_user_password_hash(user_id, pwd_hash)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    keep_hash = (
+        hash_session_token(raw_token)
+        if (raw_token and user_id == admin_user.id)
+        else None
+    )
+    repo.delete_all_user_sessions(user_id, except_session_hash=keep_hash)
+    return AdminResetPasswordResponse(
+        user=updated,
+        generated_password=generated_pwd,
+    )
+
+
+@app.delete("/api/admin/users/{user_id}")
+def admin_delete_user(
+    user_id: str,
+    response: Response,
+    admin_user: UserProfile = Depends(require_admin),
+) -> dict[str, str]:
+    repo = get_repo()
+    try:
+        target_user = repo.get_user_by_id(user_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if target_user.role == "admin":
+        if repo.count_admin_users() <= 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot delete the only remaining administrator account. At least 1 admin user must remain in the system.",
+            )
+
+    repo.delete_user(user_id)
+    if user_id == admin_user.id:
+        response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
+    return {"status": "deleted", "user_id": user_id}
 
 
 # ------------------------------------------------------------------
@@ -156,17 +868,23 @@ async def get_ollama_status(base_url: str | None = None) -> OllamaStatusResponse
 
 
 @app.get("/api/settings", response_model=AppSettings)
-def get_settings() -> AppSettings:
+def get_settings(
+    _user: UserProfile = Depends(get_current_user),
+) -> AppSettings:
     return settings
 
 
 @app.put("/api/settings", response_model=AppSettings)
-def update_settings(updated: AppSettings) -> AppSettings:
+def update_settings(
+    updated: AppSettings,
+    _admin: UserProfile = Depends(require_admin),
+) -> AppSettings:
     settings.actor_profile = updated.actor_profile
     settings.clerk_profile = updated.clerk_profile
     settings.embedding_profile = updated.embedding_profile
     settings.memory_config = updated.memory_config
     settings.allow_offline_fallback = updated.allow_offline_fallback
+    settings.allow_user_model_overrides = updated.allow_user_model_overrides
     persist_settings(settings)
     return settings
 
@@ -177,36 +895,54 @@ def update_settings(updated: AppSettings) -> AppSettings:
 
 
 @app.get("/api/worlds", response_model=list[WorldRecord])
-def list_worlds() -> list[WorldRecord]:
-    return get_repo().list_worlds()
+def list_worlds(
+    current_user: UserProfile = Depends(get_current_user),
+) -> list[WorldRecord]:
+    return get_repo().list_worlds(owner_id=current_user.id)
 
 
 @app.get("/api/worlds/{world_id}", response_model=WorldRecord)
-def get_world(world_id: str) -> WorldRecord:
+def get_world(
+    world_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> WorldRecord:
     try:
-        return get_repo().get_world(world_id)
+        return get_repo().get_world(world_id, owner_id=current_user.id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/api/wizards/world/draft", response_model=WorldWizardDraft)
-async def wizard_draft_world(seed: WorldWizardSeed) -> WorldWizardDraft:
+async def wizard_draft_world(
+    seed: WorldWizardSeed,
+    current_user: UserProfile = Depends(get_current_user),
+) -> WorldWizardDraft:
+    eff_actor, _, _ = get_effective_user_model_settings(current_user.id)
     try:
-        return await generate_world_draft(seed)
+        return await generate_world_draft(seed, profile=eff_actor)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post("/api/wizards/world/commit", response_model=WorldRecord)
-async def wizard_commit_world(draft: WorldWizardDraft) -> WorldRecord:
-    return await get_repo().acreate_world_from_draft(draft)
+async def wizard_commit_world(
+    draft: WorldWizardDraft,
+    current_user: UserProfile = Depends(get_current_user),
+) -> WorldRecord:
+    return await get_repo().acreate_world_from_draft(draft, owner_id=current_user.id)
 
 
 @app.put("/api/worlds/{world_id}", response_model=WorldRecord)
-async def update_world(world_id: str, payload: WorldUpdatePayload) -> WorldRecord:
+async def update_world(
+    world_id: str,
+    payload: WorldUpdatePayload,
+    current_user: UserProfile = Depends(get_current_user),
+) -> WorldRecord:
     """Update a world in-place if unused, or silently fork a new version if used by campaigns."""
     try:
-        return await get_repo().aupdate_world(world_id, payload)
+        return await get_repo().aupdate_world(
+            world_id, payload, owner_id=current_user.id
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -215,11 +951,12 @@ async def update_world(world_id: str, payload: WorldUpdatePayload) -> WorldRecor
 def delete_world(
     world_id: str,
     background_tasks: BackgroundTasks,
+    current_user: UserProfile = Depends(get_current_user),
 ) -> dict[str, int | str | bool]:
     """Mark a world as pending deletion (hiding it from the UI) and trigger background pruning."""
     repo = get_repo()
     try:
-        result = repo.mark_world_pending_deletion(world_id)
+        result = repo.mark_world_pending_deletion(world_id, owner_id=current_user.id)
         background_tasks.add_task(run_entity_pruner)
         return result
     except KeyError as exc:
@@ -232,43 +969,63 @@ def delete_world(
 
 
 @app.get("/api/characters", response_model=list[CharacterRecord])
-def list_characters() -> list[CharacterRecord]:
-    return get_repo().list_characters()
+def list_characters(
+    current_user: UserProfile = Depends(get_current_user),
+) -> list[CharacterRecord]:
+    return get_repo().list_characters(owner_id=current_user.id)
 
 
 @app.get("/api/characters/{character_id}", response_model=CharacterRecord)
-def get_character(character_id: str) -> CharacterRecord:
+def get_character(
+    character_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CharacterRecord:
     try:
-        return get_repo().get_character(character_id)
+        return get_repo().get_character(character_id, owner_id=current_user.id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/api/wizards/character/draft", response_model=CharacterWizardDraft)
-async def wizard_draft_character(seed: CharacterWizardSeed) -> CharacterWizardDraft:
+async def wizard_draft_character(
+    seed: CharacterWizardSeed,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CharacterWizardDraft:
     repo = get_repo()
     world = None
     if seed.world_id:
         try:
-            world = repo.get_world(seed.world_id)
+            world = repo.get_world(seed.world_id, owner_id=current_user.id)
         except KeyError:
             world = None
+    eff_actor, _, _ = get_effective_user_model_settings(current_user.id)
     try:
-        return await generate_character_draft(seed, world=world)
+        return await generate_character_draft(seed, world=world, profile=eff_actor)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post("/api/wizards/character/commit", response_model=CharacterRecord)
-async def wizard_commit_character(req: CharacterCommitRequest) -> CharacterRecord:
-    return await get_repo().acreate_character_from_draft(req.draft, world_id=req.world_id)
+async def wizard_commit_character(
+    req: CharacterCommitRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CharacterRecord:
+    return await get_repo().acreate_character_from_draft(
+        req.draft, world_id=req.world_id, owner_id=current_user.id
+    )
 
 
 @app.put("/api/characters/{character_id}", response_model=CharacterRecord)
-async def update_character(character_id: str, payload: CharacterUpdatePayload) -> CharacterRecord:
+async def update_character(
+    character_id: str,
+    payload: CharacterUpdatePayload,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CharacterRecord:
     """Update a character in-place if unused, or silently fork a new version if used by campaigns."""
     try:
-        return await get_repo().aupdate_character(character_id, payload)
+        return await get_repo().aupdate_character(
+            character_id, payload, owner_id=current_user.id
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -277,11 +1034,14 @@ async def update_character(character_id: str, payload: CharacterUpdatePayload) -
 def delete_character(
     character_id: str,
     background_tasks: BackgroundTasks,
+    current_user: UserProfile = Depends(get_current_user),
 ) -> dict[str, int | str | bool]:
     """Mark a character as pending deletion (hiding it from the UI) and trigger background pruning."""
     repo = get_repo()
     try:
-        result = repo.mark_character_pending_deletion(character_id)
+        result = repo.mark_character_pending_deletion(
+            character_id, owner_id=current_user.id
+        )
         background_tasks.add_task(run_entity_pruner)
         return result
     except KeyError as exc:
@@ -294,12 +1054,17 @@ def delete_character(
 
 
 @app.get("/api/campaigns", response_model=list[CampaignRecord])
-def list_campaigns() -> list[CampaignRecord]:
-    return get_repo().list_campaigns()
+def list_campaigns(
+    current_user: UserProfile = Depends(get_current_user),
+) -> list[CampaignRecord]:
+    return get_repo().list_campaigns(owner_id=current_user.id)
 
 
 @app.post("/api/campaigns", response_model=CampaignStateBundle)
-def create_campaign(req: CampaignCreateRequest) -> CampaignStateBundle:
+def create_campaign(
+    req: CampaignCreateRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
     repo = get_repo()
     try:
         camp = repo.create_campaign(
@@ -309,8 +1074,9 @@ def create_campaign(req: CampaignCreateRequest) -> CampaignStateBundle:
             character_ids=req.character_ids,
             character_locations=req.character_locations,
             opening_prose=req.opening_prose,
+            owner_id=current_user.id,
         )
-        return repo.get_campaign_state_bundle(camp.id)
+        return repo.get_campaign_state_bundle(camp.id, owner_id=current_user.id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -319,6 +1085,7 @@ def create_campaign(req: CampaignCreateRequest) -> CampaignStateBundle:
 def add_campaign_character(
     campaign_id: str,
     req: CampaignAddCharacterRequest,
+    current_user: UserProfile = Depends(get_current_user),
 ) -> CampaignStateBundle:
     """Add an additional character to a campaign (optionally stationed at a specific location_id)."""
     repo = get_repo()
@@ -327,6 +1094,7 @@ def add_campaign_character(
             campaign_id=campaign_id,
             character_id=req.character_id,
             location_id=req.location_id,
+            owner_id=current_user.id,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -336,11 +1104,12 @@ def add_campaign_character(
 def delete_campaign(
     campaign_id: str,
     background_tasks: BackgroundTasks,
+    current_user: UserProfile = Depends(get_current_user),
 ) -> dict[str, str]:
     """Delete a campaign and its entire timeline, then prune any unreferenced pending_deletion characters and worlds."""
     repo = get_repo()
     try:
-        repo.delete_campaign(campaign_id)
+        repo.delete_campaign(campaign_id, owner_id=current_user.id)
         background_tasks.add_task(run_entity_pruner)
         return {"status": "deleted", "campaign_id": campaign_id}
     except KeyError as exc:
@@ -348,9 +1117,14 @@ def delete_campaign(
 
 
 @app.get("/api/campaigns/{campaign_id}/state", response_model=CampaignStateBundle)
-def get_campaign_state(campaign_id: str) -> CampaignStateBundle:
+def get_campaign_state(
+    campaign_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
     try:
-        return get_repo().get_campaign_state_bundle(campaign_id)
+        return get_repo().get_campaign_state_bundle(
+            campaign_id, owner_id=current_user.id
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -359,9 +1133,12 @@ def get_campaign_state(campaign_id: str) -> CampaignStateBundle:
 def checkout_campaign_branch(
     campaign_id: str,
     req: BranchCheckoutRequest,
+    current_user: UserProfile = Depends(get_current_user),
 ) -> CampaignStateBundle:
     try:
-        return get_repo().checkout_turn_branch(campaign_id, req.turn_id)
+        return get_repo().checkout_turn_branch(
+            campaign_id, req.turn_id, owner_id=current_user.id
+        )
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -370,6 +1147,7 @@ def checkout_campaign_branch(
 def create_campaign_linked_location(
     campaign_id: str,
     req: LinkedLocationCreateRequest,
+    current_user: UserProfile = Depends(get_current_user),
 ) -> CampaignStateBundle:
     """Manually create a new location linked to an existing one (bound to the active timeline)."""
     try:
@@ -381,6 +1159,7 @@ def create_campaign_linked_location(
             environmental_tags=req.environmental_tags,
             compass_direction=req.compass_direction,
             travel_minutes=req.travel_minutes,
+            owner_id=current_user.id,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -392,10 +1171,34 @@ def create_campaign_linked_location(
 def override_campaign_location(
     campaign_id: str,
     req: LocationOverrideRequest,
+    current_user: UserProfile = Depends(get_current_user),
 ) -> CampaignStateBundle:
     """Override the current active location on the leaf turn (fixing Clerk hallucinations for the next turn or swipe)."""
     try:
-        return get_repo().override_campaign_location(campaign_id, req.location_id)
+        return get_repo().override_campaign_location(
+            campaign_id, req.location_id, owner_id=current_user.id
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/campaigns/{campaign_id}/item-equip", response_model=CampaignStateBundle)
+def toggle_campaign_item_equip(
+    campaign_id: str,
+    req: ItemEquipToggleRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Equip or unequip an item for a character on the active leaf turn (applies next turn)."""
+    try:
+        return get_repo().toggle_campaign_item_equip(
+            campaign_id,
+            item=req.item,
+            action=req.action,
+            character_id=req.character_id,
+            owner_id=current_user.id,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -403,10 +1206,13 @@ def override_campaign_location(
 
 
 @app.delete("/api/campaigns/{campaign_id}/turns/last", response_model=CampaignStateBundle)
-def delete_campaign_last_turn(campaign_id: str) -> CampaignStateBundle:
+def delete_campaign_last_turn(
+    campaign_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
     """Delete the last user message turn on the active branch, including all generated swipes."""
     try:
-        return get_repo().delete_last_turn(campaign_id)
+        return get_repo().delete_last_turn(campaign_id, owner_id=current_user.id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -414,10 +1220,16 @@ def delete_campaign_last_turn(campaign_id: str) -> CampaignStateBundle:
 
 
 @app.delete("/api/campaigns/{campaign_id}/turns/{turn_id}", response_model=CampaignStateBundle)
-def delete_campaign_turn(campaign_id: str, turn_id: str) -> CampaignStateBundle:
+def delete_campaign_turn(
+    campaign_id: str,
+    turn_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
     """Delete the specified last user message turn (and its sibling swipes) from the campaign."""
     try:
-        return get_repo().delete_last_turn(campaign_id, turn_id=turn_id)
+        return get_repo().delete_last_turn(
+            campaign_id, turn_id=turn_id, owner_id=current_user.id
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -432,10 +1244,11 @@ def delete_campaign_turn(campaign_id: str, turn_id: str) -> CampaignStateBundle:
 async def _execute_turn_stream_events(
     campaign_id: str,
     req: TurnSubmitRequest,
+    owner_id: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Orchestrate Phases 1, 2, 3, and 4 for a single turn, yielding structured events."""
     repo = get_repo()
-    campaign = repo.get_campaign(campaign_id)
+    campaign = repo.get_campaign(campaign_id, owner_id=owner_id)
     parent_id = req.parent_turn_id or campaign.active_leaf_turn_id
     if not parent_id:
         raise RuntimeError(f"Campaign '{campaign_id}' has no parent turn node")
@@ -504,6 +1317,8 @@ async def _execute_turn_stream_events(
     for loc in world.locations:
         known_entities.append(loc.name)
 
+    eff_actor, eff_clerk, eff_wm_turns = get_effective_user_model_settings(owner_id)
+
     # PHASE 1: Auxiliary Pre-Turn Analysis, Multi-Character Speaker Orchestration & RNG Mechanics
     pre_turn = await run_phase1_pre_analysis(
         user_message=req.user_message,
@@ -514,6 +1329,7 @@ async def _execute_turn_stream_events(
         manual_dice_override=req.manual_dice_override,
         present_characters=present_characters,
         previous_speaker_id=parent_turn.actor_id,
+        profile=eff_clerk,
     )
 
     # Resolve active speaker selected by Phase 1 from characters present in the room
@@ -534,6 +1350,7 @@ async def _execute_turn_stream_events(
             active_want=character.baseline_psyche.default_want,
             active_plan=character.baseline_psyche.default_plan,
             relationship_notes={"user": "Acquaintance / Uncertain trust"},
+            equipped=list(character.equipped),
             inventory=list(character.inventory),
         ),
     )
@@ -574,6 +1391,7 @@ async def _execute_turn_stream_events(
         user_message=req.user_message,
         present_characters=present_characters,
         character_name_map={c.id: c.name for c in participants},
+        working_memory_turns=eff_wm_turns,
     )
 
     # PHASE 3: Guided Single-Pass <cognition> + Narrative Prose Streaming
@@ -596,6 +1414,7 @@ async def _execute_turn_stream_events(
         neighbors=neighbors,
         recalled_items=recalled_items,
         pre_turn=pre_turn,
+        profile=eff_actor,
     ):
         if item["event"] == "actor_finished":
             final_cognition = CognitionBlock.model_validate(item["data"]["cognition"])
@@ -622,6 +1441,7 @@ async def _execute_turn_stream_events(
         active_want=final_cognition.want or prev_char_state.active_want,
         active_plan=final_cognition.plan or prev_char_state.active_plan,
         relationship_notes=prev_char_state.relationship_notes,
+        equipped=list(prev_char_state.equipped),
         inventory=list(prev_char_state.inventory),
     )
 
@@ -651,6 +1471,8 @@ async def _execute_turn_stream_events(
         completed_turn=saved_turn,
         active_location=active_location,
         neighbors=neighbors,
+        profile=eff_clerk,
+        working_memory_turns=eff_wm_turns,
     )
     bundle = repo.get_campaign_state_bundle(campaign.id)
     yield {
@@ -666,12 +1488,15 @@ async def _execute_turn_stream_events(
 async def stream_campaign_turn(
     campaign_id: str,
     req: TurnSubmitRequest,
+    current_user: UserProfile = Depends(get_current_user),
 ) -> StreamingResponse:
     """SSE endpoint streaming Phase 1, Phase 3 (<cognition> + prose), and Phase 4 updates."""
 
     async def _sse_generator() -> AsyncIterator[str]:
         try:
-            async for packet in _execute_turn_stream_events(campaign_id, req):
+            async for packet in _execute_turn_stream_events(
+                campaign_id, req, owner_id=current_user.id
+            ):
                 ev_name = packet["event"]
                 payload = json.dumps(packet["data"])
                 yield f"event: {ev_name}\ndata: {payload}\n\n"
@@ -694,15 +1519,20 @@ async def stream_campaign_turn(
 async def submit_campaign_turn_sync(
     campaign_id: str,
     req: TurnSubmitRequest,
+    current_user: UserProfile = Depends(get_current_user),
 ) -> CampaignStateBundle:
     """Execute all 4 phases synchronously and return the updated CampaignStateBundle."""
     try:
         final_bundle: dict[str, Any] | None = None
-        async for packet in _execute_turn_stream_events(campaign_id, req):
+        async for packet in _execute_turn_stream_events(
+            campaign_id, req, owner_id=current_user.id
+        ):
             if packet["event"] == "phase4_complete":
                 final_bundle = packet["data"]["state_bundle"]
         if final_bundle is not None:
             return CampaignStateBundle.model_validate(final_bundle)
-        return get_repo().get_campaign_state_bundle(campaign_id)
+        return get_repo().get_campaign_state_bundle(
+            campaign_id, owner_id=current_user.id
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

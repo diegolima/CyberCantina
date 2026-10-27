@@ -97,11 +97,13 @@ class CharacterWizardDraft(BaseModel):
             "(actions in *italics*, spoken dialogue in \"quotes\")."
         ),
     )
+    equipped: list[str] = Field(
+        default_factory=list,
+        description="Starting equipped attire, armor, cyberware, or wielded weapons.",
+    )
     inventory: list[str] = Field(
         default_factory=list,
-        description=(
-            "Starting inventory of worn clothes/armor (prefixed with '[Worn] ') and carried objects/weapons."
-        ),
+        description="Starting carried inventory of tools, personal items, or stashed objects.",
     )
     voice_anchors: list[VoiceAnchor] = Field(default_factory=list)
     baseline_psyche: BaselinePsyche
@@ -158,4 +160,5 @@ class CharacterStateSnapshot(BaseModel):
     active_want: str
     active_plan: str
     relationship_notes: dict[str, str] = Field(default_factory=dict)
+    equipped: list[str] = Field(default_factory=list)
     inventory: list[str] = Field(default_factory=list)

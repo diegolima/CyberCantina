@@ -4,14 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
 
+from app.config import ModelProfile
 from app.db.vector_store import VectorStore, combine_entry_text, embed_text
+from app.schemas.auth import (
+    PasskeyInfo,
+    UserModelSettingsPayload,
+    UserProfile,
+    UserRole,
+)
 from app.schemas.character import (
     BaselinePsyche,
     CharacterRecord,
@@ -84,6 +92,13 @@ class CantinaRepository:
                 conn.execute(
                     "ALTER TABLE worlds ADD COLUMN pending_deletion INTEGER NOT NULL DEFAULT 0"
                 )
+            if "owner_id" not in world_cols:
+                conn.execute(
+                    "ALTER TABLE worlds ADD COLUMN owner_id TEXT NULL REFERENCES users(id) ON DELETE CASCADE"
+                )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_worlds_owner ON worlds(owner_id)"
+            )
 
             char_cols = {
                 r["name"]
@@ -93,6 +108,36 @@ class CantinaRepository:
                 conn.execute(
                     "ALTER TABLE characters ADD COLUMN pending_deletion INTEGER NOT NULL DEFAULT 0"
                 )
+            if "owner_id" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN owner_id TEXT NULL REFERENCES users(id) ON DELETE CASCADE"
+                )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_characters_owner ON characters(owner_id)"
+            )
+
+            camp_cols = {
+                r["name"]
+                for r in conn.execute("PRAGMA table_info(campaigns)").fetchall()
+            }
+            if "owner_id" not in camp_cols:
+                conn.execute(
+                    "ALTER TABLE campaigns ADD COLUMN owner_id TEXT NULL REFERENCES users(id) ON DELETE CASCADE"
+                )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_campaigns_owner ON campaigns(owner_id)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_model_settings (
+                    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                    actor_profile_json TEXT NULL,
+                    clerk_profile_json TEXT NULL,
+                    working_memory_turns INTEGER NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
             if "physical_appearance" not in char_cols:
                 conn.execute(
                     "ALTER TABLE characters ADD COLUMN physical_appearance TEXT NOT NULL DEFAULT ''"
@@ -100,6 +145,10 @@ class CantinaRepository:
             if "initial_message" not in char_cols:
                 conn.execute(
                     "ALTER TABLE characters ADD COLUMN initial_message TEXT NOT NULL DEFAULT ''"
+                )
+            if "equipped_json" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN equipped_json TEXT NOT NULL DEFAULT '[]'"
                 )
             if "inventory_json" not in char_cols:
                 conn.execute(
@@ -110,6 +159,10 @@ class CantinaRepository:
                 r["name"]
                 for r in conn.execute("PRAGMA table_info(character_states)").fetchall()
             }
+            if "equipped_json" not in cs_cols:
+                conn.execute(
+                    "ALTER TABLE character_states ADD COLUMN equipped_json TEXT NOT NULL DEFAULT '[]'"
+                )
             if "inventory_json" not in cs_cols:
                 conn.execute(
                     "ALTER TABLE character_states ADD COLUMN inventory_json TEXT NOT NULL DEFAULT '[]'"
@@ -161,9 +214,56 @@ class CantinaRepository:
                         (assigned, er["id"]),
                     )
 
-            # Backfill default Kira Vance physical_appearance, initial_message, and inventory if upgrading an existing DB
+            # Migrate legacy [Worn] items from inventory_json to equipped_json
+            legacy_char_rows = conn.execute(
+                "SELECT id, inventory_json, equipped_json FROM characters"
+            ).fetchall()
+            for row in legacy_char_rows:
+                inv = json.loads(row["inventory_json"] or "[]")
+                eq = json.loads(row["equipped_json"] or "[]")
+                new_inv = []
+                new_eq = list(eq)
+                modified = False
+                for item in inv:
+                    if re.match(r"^\[(?:worn|equipped)\]\s*", item, re.IGNORECASE):
+                        clean_item = re.sub(r"^\[(?:worn|equipped)\]\s*", "", item, flags=re.IGNORECASE).strip()
+                        if clean_item and clean_item not in new_eq:
+                            new_eq.append(clean_item)
+                        modified = True
+                    else:
+                        new_inv.append(item)
+                if modified:
+                    conn.execute(
+                        "UPDATE characters SET equipped_json = ?, inventory_json = ? WHERE id = ?",
+                        (json.dumps(new_eq), json.dumps(new_inv), row["id"]),
+                    )
+
+            legacy_cs_rows = conn.execute(
+                "SELECT turn_id, character_id, inventory_json, equipped_json FROM character_states"
+            ).fetchall()
+            for row in legacy_cs_rows:
+                inv = json.loads(row["inventory_json"] or "[]")
+                eq = json.loads(row["equipped_json"] or "[]")
+                new_inv = []
+                new_eq = list(eq)
+                modified = False
+                for item in inv:
+                    if re.match(r"^\[(?:worn|equipped)\]\s*", item, re.IGNORECASE):
+                        clean_item = re.sub(r"^\[(?:worn|equipped)\]\s*", "", item, flags=re.IGNORECASE).strip()
+                        if clean_item and clean_item not in new_eq:
+                            new_eq.append(clean_item)
+                        modified = True
+                    else:
+                        new_inv.append(item)
+                if modified:
+                    conn.execute(
+                        "UPDATE character_states SET equipped_json = ?, inventory_json = ? WHERE turn_id = ? AND character_id = ?",
+                        (json.dumps(new_eq), json.dumps(new_inv), row["turn_id"], row["character_id"]),
+                    )
+
+            # Backfill default Kira Vance physical_appearance, initial_message, equipped, and inventory if upgrading an existing DB
             kira_row = conn.execute(
-                "SELECT id, physical_appearance, initial_message, inventory_json FROM characters WHERE id = 'char_kira_vance'"
+                "SELECT id, physical_appearance, initial_message, equipped_json, inventory_json FROM characters WHERE id = 'char_kira_vance'"
             ).fetchone()
             if kira_row:
                 default_kira_appearance = (
@@ -182,11 +282,15 @@ class CantinaRepository:
                     "without taking her eyes off you.* \"And you look like you just outran half of Sector 9. Talk to me—are we "
                     "having a quiet drink, or do I need to warm up the surgical chair in the back?\""
                 )
+                default_kira_equipped = json.dumps(
+                    [
+                        "Dark charcoal utility tank top",
+                        "Oil-stained leather ripperdoc apron",
+                        "Heavy reinforced work boots",
+                    ]
+                )
                 default_kira_inv = json.dumps(
                     [
-                        "[Worn] Dark charcoal utility tank top",
-                        "[Worn] Oil-stained leather ripperdoc apron",
-                        "[Worn] Heavy reinforced work boots",
                         "Diagnostic medical penlight",
                         "Concealed Vespera trauma med-injector",
                     ]
@@ -201,13 +305,22 @@ class CantinaRepository:
                         "UPDATE characters SET initial_message = ? WHERE id = 'char_kira_vance'",
                         (default_kira_msg,),
                     )
+                if not kira_row["equipped_json"] or kira_row["equipped_json"] == "[]":
+                    conn.execute(
+                        "UPDATE characters SET equipped_json = ? WHERE id = 'char_kira_vance'",
+                        (default_kira_equipped,),
+                    )
+                    conn.execute(
+                        "UPDATE character_states SET equipped_json = ? WHERE character_id = 'char_kira_vance' AND (equipped_json IS NULL OR equipped_json = '[]')",
+                        (default_kira_equipped,),
+                    )
                 if not kira_row["inventory_json"] or kira_row["inventory_json"] == "[]":
                     conn.execute(
                         "UPDATE characters SET inventory_json = ? WHERE id = 'char_kira_vance'",
                         (default_kira_inv,),
                     )
                     conn.execute(
-                        "UPDATE character_states SET inventory_json = ? WHERE character_id = 'char_kira_vance' AND inventory_json = '[]'",
+                        "UPDATE character_states SET inventory_json = ? WHERE character_id = 'char_kira_vance' AND (inventory_json IS NULL OR inventory_json = '[]')",
                         (default_kira_inv,),
                     )
 
@@ -248,6 +361,658 @@ class CantinaRepository:
             conn.close()
 
     # ------------------------------------------------------------------
+    # Users, Passkeys & Sessions (Multi-Tenancy & RBAC)
+    # ------------------------------------------------------------------
+
+    def count_users(self) -> int:
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT COUNT(*) AS cnt FROM users").fetchone()
+            return int(row["cnt"]) if row else 0
+        finally:
+            conn.close()
+
+    def count_admin_users(self) -> int:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM users WHERE role = 'admin'"
+            ).fetchone()
+            return int(row["cnt"]) if row else 0
+        finally:
+            conn.close()
+
+    def is_single_user_passwordless_mode(self) -> bool:
+        """Return True if exactly 1 user exists, is an admin, and has no password set."""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT id, role, password_hash FROM users"
+            ).fetchall()
+            if len(rows) != 1:
+                return False
+            only_user = rows[0]
+            return only_user["role"] == "admin" and not only_user["password_hash"]
+        finally:
+            conn.close()
+
+    def get_passwordless_admin(self) -> UserProfile | None:
+        """Return the single passwordless admin UserProfile if single-user mode is active."""
+        conn = self._connect()
+        try:
+            rows = conn.execute("SELECT id, role, password_hash FROM users").fetchall()
+            if len(rows) != 1:
+                return None
+            only_user = rows[0]
+            if only_user["role"] == "admin" and not only_user["password_hash"]:
+                return self.get_user_by_id(only_user["id"])
+            return None
+        finally:
+            conn.close()
+
+    def create_user(
+        self,
+        *,
+        username: str,
+        display_name: str | None = None,
+        password_hash: str | None = None,
+        role: UserRole = "user",
+        user_id: str | None = None,
+    ) -> UserProfile:
+        clean_username = username.strip()
+        if not clean_username:
+            raise ValueError("Username cannot be empty")
+        clean_display = (display_name or clean_username).strip() or clean_username
+        u_id = user_id or f"user_{uuid.uuid4().hex[:10]}"
+        now = utc_now_iso()
+
+        conn = self._connect()
+        try:
+            existing = conn.execute(
+                "SELECT id FROM users WHERE username = ? COLLATE NOCASE",
+                (clean_username,),
+            ).fetchone()
+            if existing:
+                raise ValueError(f"Username '{clean_username}' is already taken")
+
+            conn.execute(
+                """
+                INSERT INTO users (id, username, display_name, password_hash, role, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (u_id, clean_username, clean_display, password_hash, role, now, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return self.get_user_by_id(u_id)
+
+    def get_user_by_id(self, user_id: str) -> UserProfile:
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+            if not row:
+                raise KeyError(f"User '{user_id}' not found")
+            pk_rows = conn.execute(
+                "SELECT * FROM user_passkeys WHERE user_id = ? ORDER BY created_at ASC",
+                (user_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        passkeys = [
+            PasskeyInfo(
+                id=pk["id"],
+                friendly_name=pk["friendly_name"],
+                transports=json.loads(pk["transports_json"] or "[]"),
+                aaguid=pk["aaguid"] or "",
+                created_at=pk["created_at"],
+                last_used_at=pk["last_used_at"],
+            )
+            for pk in pk_rows
+        ]
+        role_val: UserRole = "admin" if row["role"] == "admin" else "user"
+        return UserProfile(
+            id=row["id"],
+            username=row["username"],
+            display_name=row["display_name"],
+            role=role_val,
+            has_password=bool(row["password_hash"]),
+            passkeys=passkeys,
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    def get_user_by_username(self, username: str) -> UserProfile:
+        clean = username.strip()
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT id FROM users WHERE username = ? COLLATE NOCASE",
+                (clean,),
+            ).fetchone()
+            if not row:
+                raise KeyError(f"User '{clean}' not found")
+            user_id = row["id"]
+        finally:
+            conn.close()
+        return self.get_user_by_id(user_id)
+
+    def get_user_password_hash(self, user_id: str) -> str | None:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT password_hash FROM users WHERE id = ?", (user_id,)
+            ).fetchone()
+            if not row:
+                raise KeyError(f"User '{user_id}' not found")
+            return row["password_hash"]
+        finally:
+            conn.close()
+
+    def list_users(self, search_query: str | None = None) -> list[UserProfile]:
+        conn = self._connect()
+        try:
+            if search_query and search_query.strip():
+                q = f"%{search_query.strip()}%"
+                rows = conn.execute(
+                    """
+                    SELECT id FROM users
+                    WHERE username LIKE ? OR display_name LIKE ?
+                    ORDER BY created_at ASC
+                    """,
+                    (q, q),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id FROM users ORDER BY created_at ASC"
+                ).fetchall()
+        finally:
+            conn.close()
+        return [self.get_user_by_id(r["id"]) for r in rows]
+
+    def update_user_display_name(self, user_id: str, display_name: str) -> UserProfile:
+        clean_name = display_name.strip()
+        if not clean_name:
+            raise ValueError("Display name cannot be empty")
+        now = utc_now_iso()
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                "UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?",
+                (clean_name, now, user_id),
+            )
+            if cur.rowcount == 0:
+                raise KeyError(f"User '{user_id}' not found")
+            conn.commit()
+        finally:
+            conn.close()
+        return self.get_user_by_id(user_id)
+
+    def update_user_username(self, user_id: str, new_username: str) -> UserProfile:
+        clean_username = new_username.strip()
+        if not clean_username:
+            raise ValueError("Username cannot be empty")
+        now = utc_now_iso()
+        conn = self._connect()
+        try:
+            existing = conn.execute(
+                "SELECT id FROM users WHERE username = ? COLLATE NOCASE AND id != ?",
+                (clean_username, user_id),
+            ).fetchone()
+            if existing:
+                raise ValueError(f"Username '{clean_username}' is already taken")
+
+            cur = conn.execute(
+                "UPDATE users SET username = ?, updated_at = ? WHERE id = ?",
+                (clean_username, now, user_id),
+            )
+            if cur.rowcount == 0:
+                raise KeyError(f"User '{user_id}' not found")
+            conn.commit()
+        finally:
+            conn.close()
+        return self.get_user_by_id(user_id)
+
+    def update_user_password_hash(
+        self, user_id: str, password_hash: str | None
+    ) -> UserProfile:
+        now = utc_now_iso()
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT role FROM users WHERE id = ?", (user_id,)
+            ).fetchone()
+            if not row:
+                raise KeyError(f"User '{user_id}' not found")
+
+            if password_hash is None:
+                if row["role"] != "admin":
+                    raise ValueError("Standard user accounts cannot have a blank password")
+                cnt_row = conn.execute("SELECT COUNT(*) AS cnt FROM users").fetchone()
+                total_users = int(cnt_row["cnt"]) if cnt_row else 0
+                if total_users > 1:
+                    raise ValueError(
+                        "Admin accounts cannot have a blank password while other users exist in the system"
+                    )
+
+            conn.execute(
+                "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+                (password_hash, now, user_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return self.get_user_by_id(user_id)
+
+    def claim_unowned_entities(self, user_id: str) -> None:
+        """Assign any pre-existing worlds, characters, and campaigns with owner_id IS NULL to user_id."""
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE worlds SET owner_id = ? WHERE owner_id IS NULL",
+                (user_id,),
+            )
+            conn.execute(
+                "UPDATE characters SET owner_id = ? WHERE owner_id IS NULL",
+                (user_id,),
+            )
+            conn.execute(
+                "UPDATE campaigns SET owner_id = ? WHERE owner_id IS NULL",
+                (user_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def reset_user_data(self, user_id: str) -> None:
+        """Permanently delete all user-owned data: campaigns, characters, and worlds (plus vector store entries and spatial graph)."""
+        conn = self._connect()
+        try:
+            # 1. Delete user campaigns and their turn-improvised nodes/edges/vectors
+            camp_rows = conn.execute(
+                "SELECT id FROM campaigns WHERE owner_id = ?", (user_id,)
+            ).fetchall()
+            for r in camp_rows:
+                c_id = r["id"]
+                conn.execute(
+                    "DELETE FROM vector_entries WHERE campaign_id = ?", (c_id,)
+                )
+                conn.execute(
+                    """
+                    DELETE FROM location_edges
+                    WHERE created_at_turn_id IN (
+                        SELECT id FROM turn_nodes WHERE campaign_id = ?
+                    )
+                    """,
+                    (c_id,),
+                )
+                conn.execute(
+                    """
+                    DELETE FROM location_nodes
+                    WHERE created_at_turn_id IN (
+                        SELECT id FROM turn_nodes WHERE campaign_id = ?
+                    )
+                    """,
+                    (c_id,),
+                )
+                conn.execute("DELETE FROM campaigns WHERE id = ?", (c_id,))
+
+            # 2. Delete user characters and associated shard vectors
+            conn.execute(
+                """
+                DELETE FROM vector_entries
+                WHERE character_id IN (SELECT id FROM characters WHERE owner_id = ?)
+                """,
+                (user_id,),
+            )
+            conn.execute(
+                """
+                DELETE FROM campaign_characters
+                WHERE character_id IN (SELECT id FROM characters WHERE owner_id = ?)
+                """,
+                (user_id,),
+            )
+            conn.execute(
+                """
+                DELETE FROM character_states
+                WHERE character_id IN (SELECT id FROM characters WHERE owner_id = ?)
+                """,
+                (user_id,),
+            )
+            conn.execute("DELETE FROM characters WHERE owner_id = ?", (user_id,))
+
+            # 3. Delete user worlds and associated lore vectors, nodes, and edges
+            conn.execute(
+                """
+                DELETE FROM vector_entries
+                WHERE world_id IN (SELECT id FROM worlds WHERE owner_id = ?)
+                """,
+                (user_id,),
+            )
+            world_rows = conn.execute(
+                "SELECT id FROM worlds WHERE owner_id = ?", (user_id,)
+            ).fetchall()
+            for w in world_rows:
+                w_id = w["id"]
+                conn.execute("DELETE FROM location_edges WHERE world_id = ?", (w_id,))
+                conn.execute("DELETE FROM location_nodes WHERE world_id = ?", (w_id,))
+                conn.execute("DELETE FROM lore_nodes WHERE world_id = ?", (w_id,))
+                conn.execute("DELETE FROM worlds WHERE id = ?", (w_id,))
+
+            conn.commit()
+        finally:
+            conn.close()
+
+    def delete_user(self, user_id: str) -> None:
+        """Permanently delete a user account, credentials, passkeys, sessions, and all their user data."""
+        # Ensure user exists (raises KeyError if not found)
+        self.get_user_by_id(user_id)
+        # 1. Wipe all user characters, worlds, and campaigns
+        self.reset_user_data(user_id)
+        # 2. Remove sessions, passkeys, user model overrides, and user account record
+        conn = self._connect()
+        try:
+            conn.execute("DELETE FROM user_model_settings WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM user_sessions WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM user_passkeys WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_user_model_settings(self, user_id: str) -> UserModelSettingsPayload | None:
+        """Fetch per-user model settings overrides if present."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT actor_profile_json, clerk_profile_json, working_memory_turns FROM user_model_settings WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            if not row:
+                return None
+            actor = (
+                ModelProfile.model_validate_json(row["actor_profile_json"])
+                if row["actor_profile_json"]
+                else None
+            )
+            clerk = (
+                ModelProfile.model_validate_json(row["clerk_profile_json"])
+                if row["clerk_profile_json"]
+                else None
+            )
+            return UserModelSettingsPayload(
+                actor_profile=actor,
+                clerk_profile=clerk,
+                working_memory_turns=row["working_memory_turns"],
+            )
+        finally:
+            conn.close()
+
+    def save_user_model_settings(
+        self, user_id: str, payload: UserModelSettingsPayload
+    ) -> UserModelSettingsPayload:
+        """Upsert per-user model settings overrides."""
+        conn = self._connect()
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            actor_json = (
+                payload.actor_profile.model_dump_json()
+                if payload.actor_profile
+                else None
+            )
+            clerk_json = (
+                payload.clerk_profile.model_dump_json()
+                if payload.clerk_profile
+                else None
+            )
+            conn.execute(
+                """
+                INSERT INTO user_model_settings (user_id, actor_profile_json, clerk_profile_json, working_memory_turns, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    actor_profile_json = excluded.actor_profile_json,
+                    clerk_profile_json = excluded.clerk_profile_json,
+                    working_memory_turns = excluded.working_memory_turns,
+                    updated_at = excluded.updated_at
+                """,
+                (user_id, actor_json, clerk_json, payload.working_memory_turns, now),
+            )
+            conn.commit()
+            return payload
+        finally:
+            conn.close()
+
+    def delete_user_model_settings(self, user_id: str) -> None:
+        """Remove per-user model settings overrides, reverting back to global defaults."""
+        conn = self._connect()
+        try:
+            conn.execute("DELETE FROM user_model_settings WHERE user_id = ?", (user_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def add_passkey(
+        self,
+        *,
+        credential_id: str,
+        user_id: str,
+        friendly_name: str,
+        public_key: bytes,
+        sign_count: int = 0,
+        transports: list[str] | None = None,
+        aaguid: str = "",
+        replace_credential_id: str | None = None,
+    ) -> PasskeyInfo:
+        now = utc_now_iso()
+        clean_name = friendly_name.strip() or "Passkey"
+        transports_json = json.dumps(transports or [])
+        conn = self._connect()
+        try:
+            if replace_credential_id:
+                conn.execute(
+                    "DELETE FROM user_passkeys WHERE id = ? AND user_id = ?",
+                    (replace_credential_id, user_id),
+                )
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO user_passkeys (
+                    id, user_id, friendly_name, public_key, sign_count,
+                    transports_json, aaguid, created_at, last_used_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    credential_id,
+                    user_id,
+                    clean_name,
+                    public_key,
+                    sign_count,
+                    transports_json,
+                    aaguid,
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                "UPDATE users SET updated_at = ? WHERE id = ?",
+                (now, user_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return PasskeyInfo(
+            id=credential_id,
+            friendly_name=clean_name,
+            transports=transports or [],
+            aaguid=aaguid,
+            created_at=now,
+            last_used_at=now,
+        )
+
+    def get_passkey_record(
+        self, credential_id: str
+    ) -> tuple[PasskeyInfo, str, bytes, int]:
+        """Return (PasskeyInfo, user_id, public_key_bytes, sign_count) for credential_id."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT * FROM user_passkeys WHERE id = ?",
+                (credential_id,),
+            ).fetchone()
+            if not row:
+                raise KeyError(f"Passkey '{credential_id}' not found")
+        finally:
+            conn.close()
+
+        info = PasskeyInfo(
+            id=row["id"],
+            friendly_name=row["friendly_name"],
+            transports=json.loads(row["transports_json"] or "[]"),
+            aaguid=row["aaguid"] or "",
+            created_at=row["created_at"],
+            last_used_at=row["last_used_at"],
+        )
+        return info, row["user_id"], bytes(row["public_key"]), int(row["sign_count"])
+
+    def update_passkey_sign_count(
+        self, credential_id: str, new_sign_count: int
+    ) -> None:
+        now = utc_now_iso()
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE user_passkeys SET sign_count = ?, last_used_at = ? WHERE id = ?",
+                (new_sign_count, now, credential_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def delete_passkey(self, user_id: str, credential_id: str) -> None:
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                "DELETE FROM user_passkeys WHERE id = ? AND user_id = ?",
+                (credential_id, user_id),
+            )
+            if cur.rowcount == 0:
+                raise KeyError(f"Passkey '{credential_id}' not found")
+            conn.commit()
+        finally:
+            conn.close()
+
+    def create_session(
+        self,
+        *,
+        session_id_hash: str,
+        user_id: str,
+        user_agent: str = "",
+        ip_address: str = "",
+    ) -> None:
+        now_dt = datetime.now(timezone.utc)
+        now_iso = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        expires_iso = (now_dt + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO user_sessions (
+                    id, user_id, user_agent, ip_address, created_at, last_active_at, expires_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id_hash,
+                    user_id,
+                    user_agent[:255],
+                    ip_address[:64],
+                    now_iso,
+                    now_iso,
+                    expires_iso,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_and_touch_session(
+        self,
+        session_id_hash: str,
+        idle_timeout_seconds: int = 86400,
+    ) -> UserProfile | None:
+        """Validate session against 24h sliding inactivity window and update last_active_at."""
+        now_dt = datetime.now(timezone.utc)
+        now_iso = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT * FROM user_sessions WHERE id = ?",
+                (session_id_hash,),
+            ).fetchone()
+            if not row:
+                return None
+
+            last_active_str = row["last_active_at"]
+            try:
+                last_active_dt = datetime.strptime(
+                    last_active_str, "%Y-%m-%dT%H:%M:%SZ"
+                ).replace(tzinfo=timezone.utc)
+            except ValueError:
+                last_active_dt = now_dt
+
+            idle_seconds = (now_dt - last_active_dt).total_seconds()
+            if idle_seconds > idle_timeout_seconds:
+                conn.execute(
+                    "DELETE FROM user_sessions WHERE id = ?", (session_id_hash,)
+                )
+                conn.commit()
+                return None
+
+            conn.execute(
+                "UPDATE user_sessions SET last_active_at = ? WHERE id = ?",
+                (now_iso, session_id_hash),
+            )
+            conn.commit()
+            user_id = row["user_id"]
+        finally:
+            conn.close()
+
+        try:
+            return self.get_user_by_id(user_id)
+        except KeyError:
+            return None
+
+    def delete_session(self, session_id_hash: str) -> None:
+        conn = self._connect()
+        try:
+            conn.execute("DELETE FROM user_sessions WHERE id = ?", (session_id_hash,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def delete_all_user_sessions(
+        self, user_id: str, except_session_hash: str | None = None
+    ) -> None:
+        conn = self._connect()
+        try:
+            if except_session_hash:
+                conn.execute(
+                    "DELETE FROM user_sessions WHERE user_id = ? AND id != ?",
+                    (user_id, except_session_hash),
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM user_sessions WHERE user_id = ?",
+                    (user_id,),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------------
     # Worlds & Spatial Graph
     # ------------------------------------------------------------------
 
@@ -256,6 +1021,7 @@ class CantinaRepository:
         draft: WorldWizardDraft,
         world_id: str | None = None,
         lore_embeddings: list[np.ndarray] | None = None,
+        owner_id: str | None = None,
     ) -> WorldRecord:
         """Persist a WorldWizardDraft (rules, initial locations, edges, lore) and index lore vectors."""
         w_id = world_id or f"world_{uuid.uuid4().hex[:10]}"
@@ -263,8 +1029,8 @@ class CantinaRepository:
         conn = self._connect()
         try:
             conn.execute(
-                "INSERT INTO worlds (id, name, global_rules_json, created_at) VALUES (?, ?, ?, ?)",
-                (w_id, draft.name, draft.global_rules.model_dump_json(), now),
+                "INSERT INTO worlds (id, owner_id, name, global_rules_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                (w_id, owner_id, draft.name, draft.global_rules.model_dump_json(), now),
             )
 
             key_to_loc_id: dict[str, str] = {}
@@ -394,6 +1160,7 @@ class CantinaRepository:
         self,
         draft: WorldWizardDraft,
         world_id: str | None = None,
+        owner_id: str | None = None,
     ) -> WorldRecord:
         """Asynchronously pre-compute lore embeddings using embed_text and persist WorldWizardDraft."""
         embeddings: list[np.ndarray] = []
@@ -412,19 +1179,36 @@ class CantinaRepository:
             draft,
             world_id=world_id,
             lore_embeddings=embeddings,
+            owner_id=owner_id,
         )
 
-    def list_worlds(self, include_pending_deletion: bool = False) -> list[WorldRecord]:
+    def list_worlds(
+        self,
+        include_pending_deletion: bool = False,
+        owner_id: str | None = None,
+    ) -> list[WorldRecord]:
         conn = self._connect()
         try:
-            if include_pending_deletion:
-                rows = conn.execute(
-                    "SELECT id FROM worlds ORDER BY created_at DESC"
-                ).fetchall()
+            if owner_id is not None:
+                if include_pending_deletion:
+                    rows = conn.execute(
+                        "SELECT id FROM worlds WHERE owner_id = ? ORDER BY created_at DESC",
+                        (owner_id,),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT id FROM worlds WHERE owner_id = ? AND pending_deletion = 0 ORDER BY created_at DESC",
+                        (owner_id,),
+                    ).fetchall()
             else:
-                rows = conn.execute(
-                    "SELECT id FROM worlds WHERE pending_deletion = 0 ORDER BY created_at DESC"
-                ).fetchall()
+                if include_pending_deletion:
+                    rows = conn.execute(
+                        "SELECT id FROM worlds ORDER BY created_at DESC"
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT id FROM worlds WHERE pending_deletion = 0 ORDER BY created_at DESC"
+                    ).fetchall()
         finally:
             conn.close()
         return [self.get_world(r["id"], base_only=True) for r in rows]
@@ -434,10 +1218,17 @@ class CantinaRepository:
         world_id: str,
         valid_turn_ids: set[str] | None = None,
         base_only: bool = False,
+        owner_id: str | None = None,
     ) -> WorldRecord:
         conn = self._connect()
         try:
-            w_row = conn.execute("SELECT * FROM worlds WHERE id = ?", (world_id,)).fetchone()
+            if owner_id is not None:
+                w_row = conn.execute(
+                    "SELECT * FROM worlds WHERE id = ? AND owner_id = ?",
+                    (world_id, owner_id),
+                ).fetchone()
+            else:
+                w_row = conn.execute("SELECT * FROM worlds WHERE id = ?", (world_id,)).fetchone()
             if not w_row:
                 raise KeyError(f"World '{world_id}' not found")
 
@@ -508,12 +1299,22 @@ class CantinaRepository:
         world_id: str,
         payload: WorldUpdatePayload,
         lore_embeddings: dict[int, np.ndarray] | None = None,
+        owner_id: str | None = None,
     ) -> WorldRecord:
         """Update a world in-place if unused, or silently fork a new Copy-on-Write version if used by campaigns."""
-        orig = self.get_world(world_id, base_only=True)
+        orig = self.get_world(world_id, base_only=True, owner_id=owner_id)
         now = utc_now_iso()
         conn = self._connect()
         try:
+            w_owner_row = conn.execute(
+                "SELECT owner_id FROM worlds WHERE id = ?", (world_id,)
+            ).fetchone()
+            effective_owner_id = (
+                w_owner_row["owner_id"]
+                if w_owner_row and "owner_id" in w_owner_row.keys()
+                else owner_id
+            )
+
             usage_row = conn.execute(
                 "SELECT COUNT(*) AS cnt FROM campaigns WHERE world_id = ?",
                 (world_id,),
@@ -629,10 +1430,16 @@ class CantinaRepository:
                 target_world_id = f"world_{uuid.uuid4().hex[:10]}"
                 conn.execute(
                     """
-                    INSERT INTO worlds (id, name, global_rules_json, pending_deletion, created_at)
-                    VALUES (?, ?, ?, 0, ?)
+                    INSERT INTO worlds (id, owner_id, name, global_rules_json, pending_deletion, created_at)
+                    VALUES (?, ?, ?, ?, 0, ?)
                     """,
-                    (target_world_id, payload.name, payload.global_rules.model_dump_json(), now),
+                    (
+                        target_world_id,
+                        effective_owner_id,
+                        payload.name,
+                        payload.global_rules.model_dump_json(),
+                        now,
+                    ),
                 )
 
                 loc_id_map = {}
@@ -757,7 +1564,12 @@ class CantinaRepository:
 
         return self.get_world(target_world_id, base_only=True)
 
-    async def aupdate_world(self, world_id: str, payload: WorldUpdatePayload) -> WorldRecord:
+    async def aupdate_world(
+        self,
+        world_id: str,
+        payload: WorldUpdatePayload,
+        owner_id: str | None = None,
+    ) -> WorldRecord:
         """Asynchronously pre-compute embeddings for new/modified lore nodes and update world."""
         lore_embeddings: dict[int, np.ndarray] = {}
         if payload.lore_nodes:
@@ -770,15 +1582,25 @@ class CantinaRepository:
                 )
             )
             lore_embeddings = {idx: vec for idx, vec in enumerate(computed)}
-        return self.update_world(world_id, payload, lore_embeddings=lore_embeddings)
+        return self.update_world(
+            world_id, payload, lore_embeddings=lore_embeddings, owner_id=owner_id
+        )
 
-    def mark_world_pending_deletion(self, world_id: str) -> dict[str, int | str | bool]:
+    def mark_world_pending_deletion(
+        self, world_id: str, owner_id: str | None = None
+    ) -> dict[str, int | str | bool]:
         """Soft-delete a world by marking pending_deletion = 1 and counting campaigns using it."""
         conn = self._connect()
         try:
-            row = conn.execute(
-                "SELECT id FROM worlds WHERE id = ?", (world_id,)
-            ).fetchone()
+            if owner_id is not None:
+                row = conn.execute(
+                    "SELECT id FROM worlds WHERE id = ? AND owner_id = ?",
+                    (world_id, owner_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT id FROM worlds WHERE id = ?", (world_id,)
+                ).fetchone()
             if not row:
                 raise KeyError(f"World '{world_id}' not found")
 
@@ -1267,6 +2089,7 @@ class CantinaRepository:
         world_id: str | None = None,
         character_id: str | None = None,
         shard_embeddings: list[np.ndarray] | None = None,
+        owner_id: str | None = None,
     ) -> CharacterRecord:
         """Persist a CharacterWizardDraft and embed its backstory shards into the VectorStore."""
         c_id = character_id or f"char_{uuid.uuid4().hex[:10]}"
@@ -1276,20 +2099,22 @@ class CantinaRepository:
             conn.execute(
                 """
                 INSERT INTO characters (
-                    id, world_id, name, tagline, physical_appearance, core_persona,
-                    initial_message, inventory_json, voice_anchors_json,
+                    id, owner_id, world_id, name, tagline, physical_appearance, core_persona,
+                    initial_message, equipped_json, inventory_json, voice_anchors_json,
                     baseline_psyche_json, memory_shards_json, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     c_id,
+                    owner_id,
                     world_id,
                     draft.name,
                     draft.tagline,
                     draft.physical_appearance,
                     draft.core_persona,
                     draft.initial_message,
+                    json.dumps(draft.equipped),
                     json.dumps(draft.inventory),
                     json.dumps([v.model_dump() for v in draft.voice_anchors]),
                     draft.baseline_psyche.model_dump_json(),
@@ -1328,6 +2153,7 @@ class CantinaRepository:
         draft: CharacterWizardDraft,
         world_id: str | None = None,
         character_id: str | None = None,
+        owner_id: str | None = None,
     ) -> CharacterRecord:
         """Asynchronously pre-compute shard embeddings using embed_text and persist CharacterWizardDraft."""
         embeddings: list[np.ndarray] = []
@@ -1347,29 +2173,56 @@ class CantinaRepository:
             world_id=world_id,
             character_id=character_id,
             shard_embeddings=embeddings,
+            owner_id=owner_id,
         )
 
-    def list_characters(self, include_pending_deletion: bool = False) -> list[CharacterRecord]:
+    def list_characters(
+        self,
+        include_pending_deletion: bool = False,
+        owner_id: str | None = None,
+    ) -> list[CharacterRecord]:
         conn = self._connect()
         try:
-            if include_pending_deletion:
-                rows = conn.execute(
-                    "SELECT id FROM characters ORDER BY created_at DESC"
-                ).fetchall()
+            if owner_id is not None:
+                if include_pending_deletion:
+                    rows = conn.execute(
+                        "SELECT id FROM characters WHERE owner_id = ? ORDER BY created_at DESC",
+                        (owner_id,),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT id FROM characters WHERE owner_id = ? AND pending_deletion = 0 ORDER BY created_at DESC",
+                        (owner_id,),
+                    ).fetchall()
             else:
-                rows = conn.execute(
-                    "SELECT id FROM characters WHERE pending_deletion = 0 ORDER BY created_at DESC"
-                ).fetchall()
+                if include_pending_deletion:
+                    rows = conn.execute(
+                        "SELECT id FROM characters ORDER BY created_at DESC"
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT id FROM characters WHERE pending_deletion = 0 ORDER BY created_at DESC"
+                    ).fetchall()
         finally:
             conn.close()
         return [self.get_character(r["id"]) for r in rows]
 
-    def get_character(self, character_id: str) -> CharacterRecord:
+    def get_character(
+        self,
+        character_id: str,
+        owner_id: str | None = None,
+    ) -> CharacterRecord:
         conn = self._connect()
         try:
-            row = conn.execute(
-                "SELECT * FROM characters WHERE id = ?", (character_id,)
-            ).fetchone()
+            if owner_id is not None:
+                row = conn.execute(
+                    "SELECT * FROM characters WHERE id = ? AND owner_id = ?",
+                    (character_id, owner_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT * FROM characters WHERE id = ?", (character_id,)
+                ).fetchone()
             if not row:
                 raise KeyError(f"Character '{character_id}' not found")
         finally:
@@ -1384,6 +2237,7 @@ class CantinaRepository:
             physical_appearance=row["physical_appearance"] if "physical_appearance" in row_keys else "",
             core_persona=row["core_persona"],
             initial_message=row["initial_message"] if "initial_message" in row_keys else "",
+            equipped=json.loads(row["equipped_json"] or "[]") if "equipped_json" in row_keys else [],
             inventory=json.loads(row["inventory_json"] or "[]") if "inventory_json" in row_keys else [],
             voice_anchors=[
                 VoiceAnchor.model_validate(v)
@@ -1403,14 +2257,24 @@ class CantinaRepository:
         character_id: str,
         payload: CharacterUpdatePayload,
         shard_embeddings: dict[int, np.ndarray] | None = None,
+        owner_id: str | None = None,
     ) -> CharacterRecord:
         """Update a character in-place if unused, or silently fork a new Copy-on-Write version if used by campaigns."""
-        orig = self.get_character(character_id)
+        orig = self.get_character(character_id, owner_id=owner_id)
         now = utc_now_iso()
         target_world_id = payload.world_id if payload.world_id is not None else orig.world_id
 
         conn = self._connect()
         try:
+            c_owner_row = conn.execute(
+                "SELECT owner_id FROM characters WHERE id = ?", (character_id,)
+            ).fetchone()
+            effective_owner_id = (
+                c_owner_row["owner_id"]
+                if c_owner_row and "owner_id" in c_owner_row.keys()
+                else owner_id
+            )
+
             usage_row = conn.execute(
                 """
                 SELECT COUNT(DISTINCT campaign_id) AS cnt
@@ -1438,6 +2302,7 @@ class CantinaRepository:
                 for r in vec_rows
             }
 
+            equipped_json = json.dumps(payload.equipped)
             inventory_json = json.dumps(payload.inventory)
             voice_json = json.dumps([v.model_dump() for v in payload.voice_anchors])
             psyche_json = payload.baseline_psyche.model_dump_json()
@@ -1450,7 +2315,7 @@ class CantinaRepository:
                     """
                     UPDATE characters
                     SET world_id = ?, name = ?, tagline = ?, physical_appearance = ?,
-                        core_persona = ?, initial_message = ?, inventory_json = ?,
+                        core_persona = ?, initial_message = ?, equipped_json = ?, inventory_json = ?,
                         voice_anchors_json = ?, baseline_psyche_json = ?, memory_shards_json = ?
                     WHERE id = ?
                     """,
@@ -1461,6 +2326,7 @@ class CantinaRepository:
                         payload.physical_appearance,
                         payload.core_persona,
                         payload.initial_message,
+                        equipped_json,
                         inventory_json,
                         voice_json,
                         psyche_json,
@@ -1482,21 +2348,23 @@ class CantinaRepository:
                 conn.execute(
                     """
                     INSERT INTO characters (
-                        id, world_id, name, tagline, physical_appearance, core_persona,
-                        initial_message, inventory_json, voice_anchors_json,
+                        id, owner_id, world_id, name, tagline, physical_appearance, core_persona,
+                        initial_message, equipped_json, inventory_json, voice_anchors_json,
                         baseline_psyche_json, memory_shards_json,
                         pending_deletion, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
                     """,
                     (
                         target_char_id,
+                        effective_owner_id,
                         target_world_id,
                         payload.name,
                         payload.tagline,
                         payload.physical_appearance,
                         payload.core_persona,
                         payload.initial_message,
+                        equipped_json,
                         inventory_json,
                         voice_json,
                         psyche_json,
@@ -1552,6 +2420,7 @@ class CantinaRepository:
         self,
         character_id: str,
         payload: CharacterUpdatePayload,
+        owner_id: str | None = None,
     ) -> CharacterRecord:
         """Asynchronously pre-compute embeddings for new/modified memory shards and update character."""
         shard_embeddings: dict[int, np.ndarray] = {}
@@ -1569,15 +2438,24 @@ class CantinaRepository:
             character_id,
             payload,
             shard_embeddings=shard_embeddings,
+            owner_id=owner_id,
         )
 
-    def mark_character_pending_deletion(self, character_id: str) -> dict[str, int | str | bool]:
+    def mark_character_pending_deletion(
+        self, character_id: str, owner_id: str | None = None
+    ) -> dict[str, int | str | bool]:
         """Soft-delete a character by marking pending_deletion = 1 and counting campaigns using it."""
         conn = self._connect()
         try:
-            row = conn.execute(
-                "SELECT id FROM characters WHERE id = ?", (character_id,)
-            ).fetchone()
+            if owner_id is not None:
+                row = conn.execute(
+                    "SELECT id FROM characters WHERE id = ? AND owner_id = ?",
+                    (character_id, owner_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT id FROM characters WHERE id = ?", (character_id,)
+                ).fetchone()
             if not row:
                 raise KeyError(f"Character '{character_id}' not found")
 
@@ -1682,19 +2560,24 @@ class CantinaRepository:
         character_locations: dict[str, str] | None = None,
         opening_prose: str | None = None,
         campaign_id: str | None = None,
+        owner_id: str | None = None,
     ) -> CampaignRecord:
         """Create a new campaign and initialize Turn 0 (opening scene snapshot)."""
         camp_id = campaign_id or f"camp_{uuid.uuid4().hex[:10]}"
         now = utc_now_iso()
-        world = self.get_world(world_id)
-        character = self.get_character(character_id)
+        world = self.get_world(world_id, owner_id=owner_id)
+        character = self.get_character(character_id, owner_id=owner_id)
 
         all_char_ids: list[str] = [character_id]
         for cid in character_ids or []:
             if cid not in all_char_ids:
                 all_char_ids.append(cid)
 
-        extra_characters = [self.get_character(cid) for cid in all_char_ids if cid != character_id]
+        extra_characters = [
+            self.get_character(cid, owner_id=owner_id)
+            for cid in all_char_ids
+            if cid != character_id
+        ]
 
         start_loc = next(
             (loc for loc in world.locations if loc.is_starting_location),
@@ -1707,10 +2590,10 @@ class CantinaRepository:
         try:
             conn.execute(
                 """
-                INSERT INTO campaigns (id, name, world_id, character_id, active_leaf_turn_id, created_at)
-                VALUES (?, ?, ?, ?, NULL, ?)
+                INSERT INTO campaigns (id, owner_id, name, world_id, character_id, active_leaf_turn_id, created_at)
+                VALUES (?, ?, ?, ?, ?, NULL, ?)
                 """,
-                (camp_id, name, world_id, character_id, now),
+                (camp_id, owner_id, name, world_id, character_id, now),
             )
             for cid in all_char_ids:
                 conn.execute(
@@ -1769,6 +2652,7 @@ class CantinaRepository:
             active_want=character.baseline_psyche.default_want,
             active_plan=character.baseline_psyche.default_plan,
             relationship_notes={"user": "Acquaintance / Uncertain trust"},
+            equipped=list(character.equipped),
             inventory=list(character.inventory),
         )
         extra_states = [
@@ -1782,6 +2666,7 @@ class CantinaRepository:
                 active_want=extra_char.baseline_psyche.default_want,
                 active_plan=extra_char.baseline_psyche.default_plan,
                 relationship_notes={"user": "Acquaintance / Uncertain trust"},
+                equipped=list(extra_char.equipped),
                 inventory=list(extra_char.inventory),
             )
             for extra_char in extra_characters
@@ -1814,12 +2699,13 @@ class CantinaRepository:
         campaign_id: str,
         character_id: str,
         location_id: str | None = None,
+        owner_id: str | None = None,
     ) -> CampaignStateBundle:
         """Register an additional character in an active campaign and initialize their state at the current leaf turn."""
-        campaign = self.get_campaign(campaign_id)
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
         if not campaign.active_leaf_turn_id:
             raise RuntimeError(f"Campaign '{campaign_id}' has no active leaf turn")
-        char = self.get_character(character_id)
+        char = self.get_character(character_id, owner_id=owner_id)
         leaf_turn = self.get_turn_node(campaign.active_leaf_turn_id)
         target_loc_id = location_id or leaf_turn.world_snapshot.active_location_id
         # Validate location exists
@@ -1841,9 +2727,9 @@ class CantinaRepository:
                 """
                 INSERT INTO character_states (
                     turn_id, character_id, current_location_id, mood_label,
-                    valence, arousal, active_want, active_plan, relationship_notes_json, inventory_json
+                    valence, arousal, active_want, active_plan, relationship_notes_json, equipped_json, inventory_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(turn_id, character_id) DO UPDATE SET
                     current_location_id = excluded.current_location_id
                 """,
@@ -1857,6 +2743,7 @@ class CantinaRepository:
                     char.baseline_psyche.default_want,
                     char.baseline_psyche.default_plan,
                     json.dumps({"user": "Acquaintance / Uncertain trust"}),
+                    json.dumps(char.equipped),
                     json.dumps(char.inventory),
                 ),
             )
@@ -1864,20 +2751,36 @@ class CantinaRepository:
         finally:
             conn.close()
 
-        return self.get_campaign_state_bundle(campaign_id)
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
 
-    def list_campaigns(self) -> list[CampaignRecord]:
+    def list_campaigns(self, owner_id: str | None = None) -> list[CampaignRecord]:
         conn = self._connect()
         try:
-            rows = conn.execute("SELECT id FROM campaigns ORDER BY created_at DESC").fetchall()
+            if owner_id is not None:
+                rows = conn.execute(
+                    "SELECT id FROM campaigns WHERE owner_id = ? ORDER BY created_at DESC",
+                    (owner_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute("SELECT id FROM campaigns ORDER BY created_at DESC").fetchall()
         finally:
             conn.close()
         return [self.get_campaign(r["id"]) for r in rows]
 
-    def get_campaign(self, campaign_id: str) -> CampaignRecord:
+    def get_campaign(
+        self, campaign_id: str, owner_id: str | None = None
+    ) -> CampaignRecord:
         conn = self._connect()
         try:
-            r = conn.execute("SELECT * FROM campaigns WHERE id = ?", (campaign_id,)).fetchone()
+            if owner_id is not None:
+                r = conn.execute(
+                    "SELECT * FROM campaigns WHERE id = ? AND owner_id = ?",
+                    (campaign_id, owner_id),
+                ).fetchone()
+            else:
+                r = conn.execute(
+                    "SELECT * FROM campaigns WHERE id = ?", (campaign_id,)
+                ).fetchone()
             if not r:
                 raise KeyError(f"Campaign '{campaign_id}' not found")
             cc_rows = conn.execute(
@@ -1899,13 +2802,21 @@ class CantinaRepository:
         finally:
             conn.close()
 
-    def delete_campaign(self, campaign_id: str) -> None:
+    def delete_campaign(
+        self, campaign_id: str, owner_id: str | None = None
+    ) -> None:
         """Delete a campaign, its entire turn tree, episodic vectors, and campaign-improvised locations."""
         conn = self._connect()
         try:
-            row = conn.execute(
-                "SELECT id FROM campaigns WHERE id = ?", (campaign_id,)
-            ).fetchone()
+            if owner_id is not None:
+                row = conn.execute(
+                    "SELECT id FROM campaigns WHERE id = ? AND owner_id = ?",
+                    (campaign_id, owner_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT id FROM campaigns WHERE id = ?", (campaign_id,)
+                ).fetchone()
             if not row:
                 raise KeyError(f"Campaign '{campaign_id}' not found")
 
@@ -2026,6 +2937,9 @@ class CantinaRepository:
                             active_want=pcs["active_want"],
                             active_plan=pcs["active_plan"],
                             relationship_notes=json.loads(pcs["relationship_notes_json"] or "{}"),
+                            equipped=json.loads(pcs["equipped_json"] or "[]")
+                            if "equipped_json" in pcs.keys()
+                            else [],
                             inventory=json.loads(pcs["inventory_json"] or "[]")
                             if "inventory_json" in pcs.keys()
                             else [],
@@ -2036,9 +2950,9 @@ class CantinaRepository:
                     """
                     INSERT INTO character_states (
                         turn_id, character_id, current_location_id, mood_label,
-                        valence, arousal, active_want, active_plan, relationship_notes_json, inventory_json
+                        valence, arousal, active_want, active_plan, relationship_notes_json, equipped_json, inventory_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         turn_id,
@@ -2050,6 +2964,7 @@ class CantinaRepository:
                         st.active_want,
                         st.active_plan,
                         json.dumps(st.relationship_notes),
+                        json.dumps(st.equipped),
                         json.dumps(st.inventory),
                     ),
                 )
@@ -2107,7 +3022,7 @@ class CantinaRepository:
                     """
                     UPDATE character_states
                     SET current_location_id = ?, mood_label = ?, valence = ?, arousal = ?,
-                        active_want = ?, active_plan = ?, relationship_notes_json = ?, inventory_json = ?
+                        active_want = ?, active_plan = ?, relationship_notes_json = ?, equipped_json = ?, inventory_json = ?
                     WHERE turn_id = ? AND character_id = ?
                     """,
                     (
@@ -2118,6 +3033,7 @@ class CantinaRepository:
                         st.active_want,
                         st.active_plan,
                         json.dumps(st.relationship_notes),
+                        json.dumps(st.equipped),
                         json.dumps(st.inventory),
                         turn_id,
                         st.character_id,
@@ -2286,6 +3202,9 @@ class CantinaRepository:
                 active_want=r["active_want"],
                 active_plan=r["active_plan"],
                 relationship_notes=json.loads(r["relationship_notes_json"] or "{}"),
+                equipped=json.loads(r["equipped_json"] or "[]")
+                if "equipped_json" in r.keys()
+                else [],
                 inventory=json.loads(r["inventory_json"] or "[]")
                 if "inventory_json" in r.keys()
                 else [],
@@ -2315,6 +3234,7 @@ class CantinaRepository:
                     cs.active_want,
                     cs.active_plan,
                     cs.relationship_notes_json,
+                    cs.equipped_json,
                     cs.inventory_json
                 FROM turn_nodes t
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
@@ -2358,6 +3278,7 @@ class CantinaRepository:
                     cs.active_want,
                     cs.active_plan,
                     cs.relationship_notes_json,
+                    cs.equipped_json,
                     cs.inventory_json
                 FROM branch_path bp
                 JOIN turn_nodes t ON t.id = bp.id
@@ -2391,6 +3312,7 @@ class CantinaRepository:
                     cs.active_want,
                     cs.active_plan,
                     cs.relationship_notes_json,
+                    cs.equipped_json,
                     cs.inventory_json
                 FROM turn_nodes t
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
@@ -2409,9 +3331,10 @@ class CantinaRepository:
         self,
         campaign_id: str,
         turn_id: str | None = None,
+        owner_id: str | None = None,
     ) -> CampaignStateBundle:
         """Delete the last user message turn on the active branch, including all generated swipes and their subtrees."""
-        campaign = self.get_campaign(campaign_id)
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
         if not campaign.active_leaf_turn_id:
             raise ValueError(f"Campaign '{campaign_id}' has no active turn")
 
@@ -2504,15 +3427,16 @@ class CantinaRepository:
         finally:
             conn.close()
 
-        return self.get_campaign_state_bundle(campaign_id)
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
 
     def override_campaign_location(
         self,
         campaign_id: str,
         location_id: str,
+        owner_id: str | None = None,
     ) -> CampaignStateBundle:
         """Override the active location on the current leaf turn (fixing Clerk hallucinations for the next turn or swipe)."""
-        campaign = self.get_campaign(campaign_id)
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
         if not campaign.active_leaf_turn_id:
             raise ValueError(f"Campaign '{campaign_id}' has no active turn")
 
@@ -2562,7 +3486,85 @@ class CantinaRepository:
         finally:
             conn.close()
 
-        return self.get_campaign_state_bundle(campaign_id)
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
+
+    def toggle_campaign_item_equip(
+        self,
+        campaign_id: str,
+        *,
+        item: str,
+        action: str,  # "equip" | "unequip"
+        character_id: str | None = None,
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
+        """Move an item between inventory and equipped on the active leaf turn (applies from next turn)."""
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
+        if not campaign.active_leaf_turn_id:
+            raise ValueError(f"Campaign '{campaign_id}' has no active turn")
+
+        leaf_turn = self.get_turn_node(campaign.active_leaf_turn_id)
+        target_char_id = character_id or leaf_turn.actor_id or campaign.character_id
+        target_state = leaf_turn.character_states.get(target_char_id, leaf_turn.character_state)
+        if target_state.character_id != target_char_id and leaf_turn.actor_id == target_char_id:
+            target_state = leaf_turn.character_state
+
+        def _clean(raw: str) -> str:
+            s = raw.strip()
+            s = re.sub(r"^\[(?:worn|carried|equipped|held|stashed|clothing|item|object)\]\s*", "", s, flags=re.IGNORECASE)
+            s = re.sub(r"\s*\((?:worn|carried|equipped|held|stashed|clothing|item|object)\)$", "", s, flags=re.IGNORECASE)
+            return s.strip()
+
+        clean_target = _clean(item)
+        target_low = clean_target.lower()
+        equipped = list(target_state.equipped)
+        inventory = list(target_state.inventory)
+
+        if action == "equip":
+            # Remove matching item from inventory, add to equipped
+            removed_label: str | None = None
+            new_inv: list[str] = []
+            for it in inventory:
+                it_clean = _clean(it)
+                if removed_label is None and (it.strip().lower() == item.strip().lower() or it_clean.lower() == target_low):
+                    removed_label = it_clean
+                else:
+                    new_inv.append(it)
+            final_item = removed_label or clean_target
+            if final_item and not any(_clean(eq).lower() == final_item.lower() for eq in equipped):
+                equipped.append(final_item)
+            inventory = new_inv
+        elif action == "unequip":
+            # Remove matching item from equipped, add to inventory
+            removed_label = None
+            new_eq: list[str] = []
+            for eq in equipped:
+                eq_clean = _clean(eq)
+                if removed_label is None and (eq.strip().lower() == item.strip().lower() or eq_clean.lower() == target_low):
+                    removed_label = eq_clean
+                else:
+                    new_eq.append(eq)
+            final_item = removed_label or clean_target
+            if final_item and not any(_clean(inv).lower() == final_item.lower() for inv in inventory):
+                inventory.append(final_item)
+            equipped = new_eq
+        else:
+            raise ValueError(f"Invalid item equip action '{action}'. Must be 'equip' or 'unequip'.")
+
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                UPDATE character_states
+                SET equipped_json = ?, inventory_json = ?
+                WHERE turn_id = ? AND character_id = ?
+                """,
+                (json.dumps(equipped), json.dumps(inventory), leaf_turn.id, target_char_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
 
     def create_linked_location(
         self,
@@ -2575,12 +3577,13 @@ class CantinaRepository:
         compass_direction: str,
         travel_minutes: int,
         summary: str | None = None,
+        owner_id: str | None = None,
     ) -> CampaignStateBundle:
         """Manually create a new room linked to from_location_id, bound to the active leaf turn (branch-safe).
 
         Respects the 8-neighbor cap: if from_location_id is full, a directional Passage Hub is used.
         """
-        campaign = self.get_campaign(campaign_id)
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
         if not campaign.active_leaf_turn_id:
             raise ValueError(f"Campaign '{campaign_id}' has no active turn")
         clean_name = name.strip()
@@ -2618,10 +3621,16 @@ class CantinaRepository:
             spec=spec,
             valid_turn_ids=valid_turn_ids,
         )
-        return self.get_campaign_state_bundle(campaign_id)
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
 
-    def checkout_turn_branch(self, campaign_id: str, turn_id: str) -> CampaignStateBundle:
+    def checkout_turn_branch(
+        self,
+        campaign_id: str,
+        turn_id: str,
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
         """Switch the campaign's active_leaf_turn_id to any node in the tree, rolling back state."""
+        self.get_campaign(campaign_id, owner_id=owner_id)
         turn = self.get_turn_node(turn_id)
         if turn.campaign_id != campaign_id:
             raise ValueError(f"Turn '{turn_id}' does not belong to campaign '{campaign_id}'")
@@ -2634,11 +3643,15 @@ class CantinaRepository:
             conn.commit()
         finally:
             conn.close()
-        return self.get_campaign_state_bundle(campaign_id)
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
 
-    def get_campaign_state_bundle(self, campaign_id: str) -> CampaignStateBundle:
+    def get_campaign_state_bundle(
+        self,
+        campaign_id: str,
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
         """Assemble the full live state bundle for the active branch."""
-        campaign = self.get_campaign(campaign_id)
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
         if not campaign.active_leaf_turn_id:
             raise RuntimeError(f"Campaign '{campaign_id}' has no root turn")
 
@@ -2744,6 +3757,9 @@ class CantinaRepository:
                 active_want=r["active_want"],
                 active_plan=r["active_plan"],
                 relationship_notes=json.loads(r["relationship_notes_json"] or "{}"),
+                equipped=json.loads(r["equipped_json"] or "[]")
+                if "equipped_json" in r.keys()
+                else [],
                 inventory=json.loads(r["inventory_json"] or "[]")
                 if "inventory_json" in r.keys()
                 else [],

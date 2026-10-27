@@ -35,6 +35,7 @@ export interface CharacterWizardDraft {
   physical_appearance: string;
   core_persona: string;
   initial_message: string;
+  equipped?: string[];
   inventory: string[];
   voice_anchors: VoiceAnchor[];
   baseline_psyche: BaselinePsyche;
@@ -67,6 +68,7 @@ export interface CharacterStateSnapshot {
   active_want: string;
   active_plan: string;
   relationship_notes: Record<string, string>;
+  equipped?: string[];
   inventory: string[];
 }
 
@@ -314,6 +316,7 @@ export interface AppSettings {
     rag_top_k: number;
   };
   allow_offline_fallback: boolean;
+  allow_user_model_overrides: boolean;
 }
 
 export interface OllamaModelInfo {
@@ -335,3 +338,64 @@ export interface OllamaStatusResponse {
   active_actor_model: string;
   active_clerk_model: string;
 }
+
+export type UserRole = "user" | "admin";
+
+export interface PasskeyInfo {
+  id: string;
+  friendly_name: string;
+  transports: string[];
+  aaguid: string;
+  created_at: string;
+  last_used_at: string;
+}
+
+export interface UserProfile {
+  id: string;
+  username: string;
+  display_name: string;
+  role: UserRole;
+  has_password: boolean;
+  passkeys: PasskeyInfo[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AuthStatusResponse {
+  setup_required: boolean;
+  single_user_mode: boolean;
+  authenticated: boolean;
+  user?: UserProfile | null;
+}
+
+export interface AuthSessionResponse {
+  token: string;
+  user: UserProfile;
+  single_user_mode: boolean;
+}
+
+export interface AdminResetPasswordResponse {
+  user: UserProfile;
+  generated_password: string;
+}
+
+export interface UserModelSettingsPayload {
+  actor_profile?: ModelProfile | null;
+  clerk_profile?: ModelProfile | null;
+  working_memory_turns?: number | null;
+}
+
+export interface ProfileModelSettingsResponse {
+  allow_user_model_overrides: boolean;
+  has_override: boolean;
+  effective_actor_profile: ModelProfile;
+  effective_clerk_profile: ModelProfile;
+  effective_working_memory_turns: number;
+  user_actor_profile?: ModelProfile | null;
+  user_clerk_profile?: ModelProfile | null;
+  user_working_memory_turns?: number | null;
+  default_actor_profile: ModelProfile;
+  default_clerk_profile: ModelProfile;
+  default_working_memory_turns: number;
+}
+

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.config import settings
+from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
 from app.schemas.character import (
     BaselinePsyche,
@@ -34,14 +34,16 @@ def _fallback_character_expansion(
         else " Shadows stretch across the room as ambient noise hums in the background."
     )
 
-    default_items = [
-        f"[Worn] Practical {seed.archetype.split()[0].lower() if seed.archetype.split() else 'street'} jacket",
-        "[Worn] Dark utility shirt and reinforced trousers",
-        "[Worn] Scuffed work boots",
+    default_equipped = [
+        f"Practical {seed.archetype.split()[0].lower() if seed.archetype.split() else 'street'} jacket",
+        "Dark utility shirt and reinforced trousers",
+        "Scuffed work boots",
+    ]
+    default_inventory = [
         "Encrypted personal comm-link",
     ]
     if seed.rough_notes.strip():
-        default_items.append(f"Signature item ({seed.rough_notes.strip()[:48].rstrip('.')})")
+        default_inventory.append(f"Signature item ({seed.rough_notes.strip()[:48].rstrip('.')})")
 
     return CharacterWizardDraft(
         name=seed.name,
@@ -63,7 +65,8 @@ def _fallback_character_expansion(
             f"\"You made it,\" *{seed.name} says quietly, gesturing toward a spot nearby.* "
             f"\"We don't have much time before attention catches up with us. Tell me what you found.\""
         ),
-        inventory=default_items,
+        equipped=default_equipped,
+        inventory=default_inventory,
         voice_anchors=[
             VoiceAnchor(
                 context="Calm / Conversational",
@@ -131,6 +134,7 @@ def _fallback_character_expansion(
 async def generate_character_draft(
     seed: CharacterWizardSeed,
     world: WorldRecord | None = None,
+    profile: ModelProfile | None = None,
 ) -> CharacterWizardDraft:
     """Use the LLM to expand a CharacterWizardSeed into an optimized CharacterWizardDraft."""
     world_context = ""
@@ -162,13 +166,13 @@ async def generate_character_draft(
         "speech cadence, psychological tells, and behavioral boundaries. Avoid vague clichés and avoid repeating clothing.\n"
         "3. initial_message: Write an evocative 2-3 paragraph Turn 0 opening scene and greeting from the character "
         "using *italics* for physical actions/atmosphere and \"quotes\" for spoken dialogue.\n"
-        "4. inventory: Provide 3-6 starting items including currently worn clothes/armor (prefix worn attire with "
-        "'[Worn] ', e.g. '[Worn] Weathered leather flight jacket') and carried tools, weapons, or personal objects.\n"
-        "5. voice_anchors: Provide 3 distinct action+dialogue examples ('Calm / Banter', 'Guarded / Conflict', "
+        "4. equipped: Provide 2-4 starting worn clothing, armor, or wielded objects (e.g. 'Weathered leather flight jacket', 'Steel-toe boots').\n"
+        "5. inventory: Provide 2-4 carried tools, weapons, or personal objects in backpack or pockets.\n"
+        "6. voice_anchors: Provide 3 distinct action+dialogue examples ('Calm / Banter', 'Guarded / Conflict', "
         "'Vulnerable / Urgent') using *italics* for physical action and \"quotes\" for spoken lines.\n"
-        "6. baseline_psyche: Define realistic initial valence (-1.0 to 1.0), arousal (0.0 to 1.0), core_drive, "
+        "7. baseline_psyche: Define realistic initial valence (-1.0 to 1.0), arousal (0.0 to 1.0), core_drive, "
         "core_fear, default_want, and default_plan.\n"
-        "7. memory_shards: Break the character's backstory into 4 atomic, self-contained memory shards with "
+        "8. memory_shards: Break the character's backstory into 4 atomic, self-contained memory shards with "
         "entity keywords so they can be retrieved via semantic RAG only when relevant.\n"
         "Return ONLY valid JSON matching CharacterWizardDraft."
     )
@@ -182,6 +186,7 @@ async def generate_character_draft(
     )
 
     fallback = _fallback_character_expansion(seed, world)
+    actor_prof = profile or settings.actor_profile
     try:
         draft = await llm_client.complete_structured(
             [
@@ -189,15 +194,27 @@ async def generate_character_draft(
                 {"role": "user", "content": user_prompt},
             ],
             CharacterWizardDraft,
-            profile=settings.actor_profile,
+            profile=actor_prof,
             max_tokens=4096,
         )
         if not draft.physical_appearance.strip():
             draft.physical_appearance = fallback.physical_appearance
         if not draft.initial_message.strip():
             draft.initial_message = fallback.initial_message
-        if not draft.inventory:
+        if not draft.equipped and not draft.inventory:
+            draft.equipped = fallback.equipped
             draft.inventory = fallback.inventory
+        elif not draft.equipped:
+            # If LLM put [Worn] items into inventory, separate them
+            new_inv = []
+            new_eq = []
+            for it in draft.inventory:
+                if re.match(r"^\[(?:worn|equipped)\]\s*", it, re.IGNORECASE):
+                    new_eq.append(re.sub(r"^\[(?:worn|equipped)\]\s*", "", it, flags=re.IGNORECASE).strip())
+                else:
+                    new_inv.append(it)
+            draft.equipped = new_eq or fallback.equipped
+            draft.inventory = new_inv or fallback.inventory
         return draft
     except Exception:
         if not settings.allow_offline_fallback:

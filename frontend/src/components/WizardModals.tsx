@@ -208,6 +208,7 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
                 />
               </div>
 
+              {/* Equipped Attire */}
               <div
                 style={{
                   background: "var(--bg-card)",
@@ -227,7 +228,7 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
                   }}
                 >
                   <span className="sidebar-label">
-                    Starting Inventory — Attire & Objects ({draft.inventory.length})
+                    Equipped Attire &amp; Gear ({(draft.equipped ?? []).length})
                   </span>
                   <button
                     type="button"
@@ -236,7 +237,83 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
                     onClick={() =>
                       setDraft({
                         ...draft,
-                        inventory: [...draft.inventory, "[Worn] New attire or item"],
+                        equipped: [...(draft.equipped ?? []), "New equipped attire"],
+                      })
+                    }
+                  >
+                    <Plus size={12} /> Add Equipped
+                  </button>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {(draft.equipped ?? []).map((item, idx) => (
+                    <div
+                      key={idx}
+                      style={{ display: "flex", alignItems: "center", gap: 6 }}
+                    >
+                      <input
+                        className="field-input"
+                        style={{ flex: 1, padding: "5px 8px", fontSize: "0.78rem" }}
+                        value={item}
+                        placeholder="e.g. Leather jacket"
+                        onChange={(e) => {
+                          const next = [...(draft.equipped ?? [])];
+                          next[idx] = e.target.value;
+                          setDraft({ ...draft, equipped: next });
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="item-remove-btn"
+                        onClick={() =>
+                          setDraft({
+                            ...draft,
+                            equipped: (draft.equipped ?? []).filter((_, i) => i !== idx),
+                          })
+                        }
+                        title="Remove equipped item"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  ))}
+                  {(draft.equipped ?? []).length === 0 && (
+                    <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontStyle: "italic" }}>
+                      No equipped gear specified.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Carried Inventory */}
+              <div
+                style={{
+                  background: "var(--bg-card)",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: 8,
+                  padding: 10,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                  }}
+                >
+                  <span className="sidebar-label">
+                    Carried Inventory ({draft.inventory.length})
+                  </span>
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ padding: "3px 8px", fontSize: "0.72rem" }}
+                    onClick={() =>
+                      setDraft({
+                        ...draft,
+                        inventory: [...draft.inventory, "New carried item"],
                       })
                     }
                   >
@@ -253,6 +330,7 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
                         className="field-input"
                         style={{ flex: 1, padding: "5px 8px", fontSize: "0.78rem" }}
                         value={item}
+                        placeholder="e.g. Encrypted datapad"
                         onChange={(e) => {
                           const next = [...draft.inventory];
                           next[idx] = e.target.value;
@@ -274,6 +352,11 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
                       </button>
                     </div>
                   ))}
+                  {draft.inventory.length === 0 && (
+                    <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontStyle: "italic" }}>
+                      No carried items specified.
+                    </div>
+                  )}
                 </div>
               </div>
 

@@ -1,5 +1,5 @@
 import React, { useId } from "react";
-import { ChevronDown, ChevronRight, MapPin } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleMinus, CirclePlus, MapPin } from "lucide-react";
 import { CharacterRecord, CharacterStateSnapshot } from "../../types";
 import { ChangeDot, MiniMoodBars, usePersistentState } from "./InspectorPrimitives";
 
@@ -12,6 +12,12 @@ interface CharacterRowProps {
   elsewhereLocationName?: string;
   /** Whether the mood shifted on the latest turn. */
   moodChanged?: boolean;
+  /** Callback to toggle equipping or unequipping an item (applied next turn) */
+  onToggleItemEquip?: (payload: {
+    item: string;
+    action: "equip" | "unequip";
+    character_id?: string;
+  }) => Promise<void> | void;
 }
 
 /** Collapsible "Name · Mood" row expanding into the full affective & goal state. */
@@ -21,6 +27,7 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
   isPresent,
   elsewhereLocationName,
   moodChanged,
+  onToggleItemEquip,
 }) => {
   const [open, setOpen] = usePersistentState<boolean>(
     `character.${character.id}`,
@@ -29,7 +36,21 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
   const bodyId = useId();
   const valencePct = Math.round(((state.valence + 1) / 2) * 100);
   const arousalPct = Math.round(state.arousal * 100);
-  const inventory = state.inventory ?? [];
+
+  let equippedList = state.equipped ?? [];
+  let inventoryList = state.inventory ?? [];
+  if (
+    equippedList.length === 0 &&
+    inventoryList.some((it) => /^\[(?:worn|equipped)\]/i.test(it))
+  ) {
+    equippedList = inventoryList
+      .filter((it) => /^\[(?:worn|equipped)\]/i.test(it))
+      .map((it) => it.replace(/^\[(?:worn|equipped)\]\s*/i, ""));
+    inventoryList = inventoryList.filter(
+      (it) => !/^\[(?:worn|equipped)\]/i.test(it)
+    );
+  }
+
   const relationships = Object.entries(state.relationship_notes || {});
 
   return (
@@ -129,32 +150,85 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
                 <div>{character.physical_appearance}</div>
               </div>
             )}
+            {/* Equipped Attire & Gear */}
             <div className="cog-step">
-              <div className="cog-step-label">Live Inventory &amp; Attire ({inventory.length})</div>
-              {inventory.length > 0 ? (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
-                  {inventory.map((item, idx) => {
-                    const isWorn = /^\[worn\]/i.test(item.trim());
-                    return (
-                      <span
-                        key={idx}
-                        className="badge"
-                        style={{
-                          fontSize: "0.68rem",
-                          padding: "2px 6px",
-                          borderColor: isWorn
-                            ? "rgba(245, 158, 11, 0.45)"
-                            : "var(--border-subtle)",
-                          color: isWorn ? "var(--accent-amber)" : "var(--text-primary)",
-                        }}
-                      >
-                        {item}
-                      </span>
-                    );
-                  })}
+              <div className="cog-step-label">
+                Equipped &amp; Worn ({equippedList.length})
+              </div>
+              {equippedList.length > 0 ? (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 4 }}>
+                  {equippedList.map((item, idx) => (
+                    <span
+                      key={idx}
+                      className="badge item-badge item-badge-equipped"
+                    >
+                      <span>{item}</span>
+                      {onToggleItemEquip && (
+                        <button
+                          type="button"
+                          className="item-action-btn"
+                          title="Unequip (move to carried inventory)"
+                          aria-label={`Unequip ${item}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleItemEquip({
+                              character_id: character.id,
+                              item,
+                              action: "unequip",
+                            });
+                          }}
+                        >
+                          <CircleMinus size={12} />
+                        </button>
+                      )}
+                    </span>
+                  ))}
                 </div>
               ) : (
-                <div style={{ color: "var(--text-muted)", fontStyle: "italic" }}>Empty</div>
+                <div style={{ color: "var(--text-muted)", fontStyle: "italic", fontSize: "0.72rem" }}>
+                  None equipped
+                </div>
+              )}
+            </div>
+
+            {/* Carried Inventory */}
+            <div className="cog-step">
+              <div className="cog-step-label">
+                Carried Inventory ({inventoryList.length})
+              </div>
+              {inventoryList.length > 0 ? (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 4 }}>
+                  {inventoryList.map((item, idx) => (
+                    <span
+                      key={idx}
+                      className="badge item-badge item-badge-inventory"
+                    >
+                      <span>{item}</span>
+                      {onToggleItemEquip && (
+                        <button
+                          type="button"
+                          className="item-action-btn"
+                          title="Equip (move to equipped gear)"
+                          aria-label={`Equip ${item}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleItemEquip({
+                              character_id: character.id,
+                              item,
+                              action: "equip",
+                            });
+                          }}
+                        >
+                          <CirclePlus size={12} />
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ color: "var(--text-muted)", fontStyle: "italic", fontSize: "0.72rem" }}>
+                  Empty inventory
+                </div>
               )}
             </div>
             {relationships.length > 0 && (

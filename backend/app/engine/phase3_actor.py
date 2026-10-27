@@ -7,7 +7,7 @@ import re
 from collections.abc import AsyncIterator
 from typing import Any
 
-from app.config import settings
+from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
 from app.schemas.character import CharacterRecord, CharacterStateSnapshot, CognitionBlock
 from app.schemas.turn import PreTurnAnalysis, RecalledMemoryItem
@@ -177,13 +177,15 @@ async def stream_phase3_actor(
     neighbors: list[NeighborLocationView],
     recalled_items: list[RecalledMemoryItem],
     pre_turn: PreTurnAnalysis,
+    profile: ModelProfile | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream Phase 3 response, splitting <cognition> tokens from narrative prose tokens in real time."""
     raw_chunks: list[str] = []
+    actor_prof = profile or settings.actor_profile
 
     async def _token_generator() -> AsyncIterator[str]:
         try:
-            async for delta in llm_client.stream_chat(messages, profile=settings.actor_profile):
+            async for delta in llm_client.stream_chat(messages, profile=actor_prof):
                 yield delta
         except Exception:
             if not settings.allow_offline_fallback:

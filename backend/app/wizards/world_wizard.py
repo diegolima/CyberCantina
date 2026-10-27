@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.config import settings
+from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
 from app.schemas.world import (
     LocationEdgeDraft,
@@ -127,7 +127,10 @@ def _fallback_world_expansion(seed: WorldWizardSeed) -> WorldWizardDraft:
     )
 
 
-async def generate_world_draft(seed: WorldWizardSeed) -> WorldWizardDraft:
+async def generate_world_draft(
+    seed: WorldWizardSeed,
+    profile: ModelProfile | None = None,
+) -> WorldWizardDraft:
     """Use the LLM to expand a WorldWizardSeed into an interconnected WorldWizardDraft."""
     system_prompt = (
         "You are an expert AI Worldbuilder & Spatial Level Designer for an agentic roleplay framework.\n"
@@ -149,6 +152,7 @@ async def generate_world_draft(seed: WorldWizardSeed) -> WorldWizardDraft:
         f"Requested Locations: {seed.location_count}"
     )
 
+    actor_prof = profile or settings.actor_profile
     try:
         draft = await llm_client.complete_structured(
             [
@@ -156,7 +160,7 @@ async def generate_world_draft(seed: WorldWizardSeed) -> WorldWizardDraft:
                 {"role": "user", "content": user_prompt},
             ],
             WorldWizardDraft,
-            profile=settings.actor_profile,
+            profile=actor_prof,
             max_tokens=4096,
         )
         if not draft.locations:

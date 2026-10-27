@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 
-from app.config import settings
+from app.config import ModelProfile, settings
 from app.db.repository import CantinaRepository
 from app.engine.llm_client import llm_client
 from app.engine.world_clock import (
@@ -375,6 +375,7 @@ def _heuristic_spatial_and_inventory_delta(
 async def summarize_turn_chunk(
     turns: list[TurnNodeRecord],
     character: CharacterRecord,
+    profile: ModelProfile | None = None,
 ) -> str:
     """Summarize a slice of working memory turns into a compact episodic paragraph."""
     transcript = "\n".join(
@@ -386,13 +387,14 @@ async def summarize_turn_chunk(
         "episodic memory paragraph. Preserve key plot decisions, emotional shifts, promises, "
         "and location changes."
     )
+    clerk_prof = profile or settings.clerk_profile
     try:
         summary = await llm_client.complete_text(
             [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": transcript},
             ],
-            profile=settings.clerk_profile,
+            profile=clerk_prof,
             temperature=0.2,
             max_tokens=256,
         )
@@ -422,8 +424,11 @@ async def run_phase4_post_turn_clerk(
     completed_turn: TurnNodeRecord,
     active_location: LocationNode,
     neighbors: list[NeighborLocationView],
+    profile: ModelProfile | None = None,
+    working_memory_turns: int | None = None,
 ) -> tuple[TurnNodeRecord, list[EpisodicChunkRecord]]:
     """Run Phase 4 Clerk to advance the clock, mutate the Spatial Graph, and compress Episodic Memory."""
+    clerk_prof = profile or settings.clerk_profile
     neighbor_options = "\n".join(
         f"- [{n.compass_direction or 'N'}] id='{n.destination.id}': {n.destination.name} (via {n.direction_label}, {n.travel_minutes}m)"
         for n in neighbors
@@ -431,6 +436,11 @@ async def run_phase4_post_turn_clerk(
     existing_flags_str = (
         ", ".join(completed_turn.world_snapshot.scene_flags)
         if completed_turn.world_snapshot.scene_flags
+        else "None"
+    )
+    equipped_str = (
+        ", ".join(completed_turn.character_state.equipped)
+        if completed_turn.character_state.equipped
         else "None"
     )
     existing_inventory_str = (
@@ -460,15 +470,16 @@ async def run_phase4_post_turn_clerk(
         "- notable_event_summary (1-sentence summary if a significant plot/relationship event occurred, else null)\n"
         "- scene_flags_updated (list of newly added scene/fact flags; existing flags are preserved automatically)\n"
         "- scene_flags_removed (list of obsolete flags to remove, if any)\n"
-        f"- inventory_added (list of clothes or objects newly put on, picked up, or acquired by {character.name} this turn; prefix worn clothing/armor with '[Worn] '; ignore momentary scene furniture/props not kept)\n"
-        f"- inventory_removed (list of clothes or objects taken off, dropped, given away, or consumed by {character.name} this turn; match names from Current Inventory & Attire)\n"
+        f"- inventory_added (list of items newly picked up, acquired, or crafted by {character.name} this turn; ignore momentary scene furniture/props not kept)\n"
+        f"- inventory_removed (list of items dropped, given away, consumed, or lost by {character.name} this turn; match names from Equipped / Worn or Carried Inventory)\n"
         "- relationship_shift_note (string or null)"
     )
     user_prompt = (
         f"Current In-Game Time (start of this turn): {current_time_str}\n"
         f"Current Location: {active_location.name} (id='{active_location.id}')\n"
         f"Current Scene Flags: {existing_flags_str}\n"
-        f"{character.name} Current Inventory & Attire: {existing_inventory_str}\n"
+        f"{character.name} Equipped / Worn: {equipped_str}\n"
+        f"{character.name} Carried Inventory: {existing_inventory_str}\n"
         f"Known Exits:\n{neighbor_options}\n\n"
         f"User Message: {completed_turn.user_message}\n"
         f"{character.name} Cognition Plan: {completed_turn.cognition.plan}\n"
@@ -483,7 +494,7 @@ async def run_phase4_post_turn_clerk(
                     {"role": "user", "content": user_prompt},
                 ],
                 PostTurnStateDelta,
-                profile=settings.clerk_profile,
+                profile=clerk_prof,
             )
         except Exception:
             if not settings.allow_offline_fallback:
@@ -494,7 +505,10 @@ async def run_phase4_post_turn_clerk(
                 pre_turn=completed_turn.pre_turn,
                 active_location=active_location,
                 neighbors=neighbors,
-                current_inventory=completed_turn.character_state.inventory,
+                current_inventory=[
+                    *(completed_turn.character_state.equipped or []),
+                    *(completed_turn.character_state.inventory or []),
+                ],
                 current_timestamp=current_timestamp,
             )
 
@@ -505,7 +519,12 @@ async def run_phase4_post_turn_clerk(
     max_summarized_depth = max((c.end_turn_depth for c in existing_chunks), default=0)
 
     unsummarized = [t for t in branch_turns if t.depth_index > max_summarized_depth]
-    needs_chunk_summary = len(unsummarized) > settings.memory_config.working_memory_turns
+    wm_limit = (
+        working_memory_turns
+        if working_memory_turns is not None
+        else settings.memory_config.working_memory_turns
+    )
+    needs_chunk_summary = len(unsummarized) > wm_limit
     chunk_slice = (
         unsummarized[: settings.memory_config.episodic_chunk_size]
         if needs_chunk_summary
@@ -513,9 +532,15 @@ async def run_phase4_post_turn_clerk(
     )
 
     if needs_chunk_summary:
+        try:
+            summarize_coro = summarize_turn_chunk(
+                chunk_slice, character, profile=clerk_prof
+            )
+        except TypeError:
+            summarize_coro = summarize_turn_chunk(chunk_slice, character)
         delta, summary_text = await asyncio.gather(
             _compute_delta(),
-            summarize_turn_chunk(chunk_slice, character),
+            summarize_coro,
         )
     else:
         delta = await _compute_delta()
@@ -568,6 +593,20 @@ async def run_phase4_post_turn_clerk(
     )
     actor_new_location_id = active_location.id if user_moved_alone else new_location_id
 
+    rem_queries: set[str] = set()
+    for raw_rem in delta.inventory_removed or []:
+        cleaned = raw_rem.strip()
+        if cleaned:
+            rem_queries.add(cleaned.lower())
+            norm = _normalize_inventory_item(cleaned)
+            if norm:
+                rem_queries.add(norm)
+
+    updated_equipped = [
+        item for item in (completed_turn.character_state.equipped or [])
+        if not _matches_inventory_removal(item, rem_queries)
+    ]
+
     merged_inventory = merge_inventory(
         completed_turn.character_state.inventory,
         delta.inventory_added,
@@ -584,6 +623,7 @@ async def run_phase4_post_turn_clerk(
         active_want=completed_turn.cognition.want or completed_turn.character_state.active_want,
         active_plan=completed_turn.cognition.plan or completed_turn.character_state.active_plan,
         relationship_notes=rel_notes,
+        equipped=updated_equipped,
         inventory=merged_inventory,
     )
 

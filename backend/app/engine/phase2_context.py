@@ -131,6 +131,11 @@ def build_zone4_ephemeral_tail_frame(
         if character_state.relationship_notes
         else "None"
     )
+    equipped_text = (
+        ", ".join(character_state.equipped)
+        if character_state.equipped
+        else "None"
+    )
     inventory_text = (
         ", ".join(character_state.inventory)
         if character_state.inventory
@@ -150,10 +155,12 @@ def build_zone4_ephemeral_tail_frame(
                     if oc.physical_appearance.strip()
                     else ""
                 )
+                oc_equipped = oc_state.equipped if oc_state is not None else oc.equipped
                 oc_inv = oc_state.inventory if oc_state is not None else oc.inventory
-                inv_info = f" | Attire/Items: {', '.join(oc_inv)}" if oc_inv else ""
+                eq_info = f" | Equipped: {', '.join(oc_equipped)}" if oc_equipped else ""
+                inv_info = f" | Carried: {', '.join(oc_inv)}" if oc_inv else ""
                 other_lines.append(
-                    f"    - {oc.name} ({oc.tagline}){mood_info}{app_info}{inv_info}"
+                    f"    - {oc.name} ({oc.tagline}){mood_info}{app_info}{eq_info}{inv_info}"
                 )
             co_present_section = (
                 "\n  <other_characters_in_room>\n"
@@ -183,7 +190,8 @@ def build_zone4_ephemeral_tail_frame(
         f"    Previous Want: {character_state.active_want}\n"
         f"    Previous Plan: {character_state.active_plan}\n"
         f"    Relationship Notes: {rel_notes_text}\n"
-        f"    Current Inventory & Attire: {inventory_text}\n"
+        f"    Equipped / Worn: {equipped_text}\n"
+        f"    Carried Inventory: {inventory_text}\n"
         f"  </character_previous_mind_state>\n"
         "</scene_context>\n\n"
         f"User Action / Dialogue:\n{user_message}"
@@ -203,6 +211,7 @@ def assemble_four_zone_messages(
     user_message: str,
     present_characters: list[CharacterRecord] | None = None,
     character_name_map: dict[str, str] | None = None,
+    working_memory_turns: int | None = None,
 ) -> list[dict[str, str]]:
     """Construct the complete 4-Zone OpenAI messages array for the Main Actor Model."""
     messages: list[dict[str, str]] = [
@@ -222,7 +231,12 @@ def assemble_four_zone_messages(
         if t.depth_index > max_summarized_depth
         and was_character_present_on_turn(t, character.id)
     ]
-    working_window = unsummarized_turns[-settings.memory_config.working_memory_turns :]
+    wm_limit = (
+        working_memory_turns
+        if working_memory_turns is not None
+        else settings.memory_config.working_memory_turns
+    )
+    working_window = unsummarized_turns[-wm_limit:]
 
     # Zone 3: Verbatim recent turns (with old <cognition> stripped to preserve context window)
     name_lookup = dict(character_name_map or {})

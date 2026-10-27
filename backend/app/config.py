@@ -104,24 +104,35 @@ class AppSettings(BaseModel):
         default=False,
         description="When True, falls back to built-in heuristic simulation if the LLM endpoint is unreachable.",
     )
+    allow_user_model_overrides: bool = Field(
+        default=False,
+        description="When True, users can customize their own Actor and Clerk models in their Profile.",
+    )
 
 
 def load_initial_settings() -> AppSettings:
     """Load persisted settings from cantina_settings.json if available, else defaults."""
+    default_db_path = os.environ.get(
+        "CYBERCANTINA_DB_PATH",
+        str(Path(__file__).resolve().parent.parent / "cybercantina.db"),
+    )
     if SETTINGS_FILE_PATH.exists():
         try:
             raw = json.loads(SETTINGS_FILE_PATH.read_text(encoding="utf-8"))
-            return AppSettings.model_validate(raw)
+            raw.pop("db_path", None)
+            loaded = AppSettings.model_validate(raw)
+            loaded.db_path = default_db_path
+            return loaded
         except Exception:
             pass
-    return AppSettings()
+    return AppSettings(db_path=default_db_path)
 
 
 def persist_settings(current: AppSettings) -> None:
     """Persist runtime settings to cantina_settings.json."""
     try:
         SETTINGS_FILE_PATH.write_text(
-            current.model_dump_json(indent=2),
+            current.model_dump_json(exclude={"db_path"}, indent=2),
             encoding="utf-8",
         )
     except Exception:

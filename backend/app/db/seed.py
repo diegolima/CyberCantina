@@ -18,13 +18,17 @@ from app.schemas.world import (
 )
 
 
-def ensure_default_seed(repo: CantinaRepository) -> None:
+def ensure_default_seed(
+    repo: CantinaRepository, owner_id: str | None = None
+) -> None:
     """Seed the default cyberpunk noir world, character, and campaign only if the DB is completely empty."""
     if (
         repo.list_campaigns()
         or repo.list_worlds(include_pending_deletion=True)
         or repo.list_characters(include_pending_deletion=True)
     ):
+        if owner_id:
+            repo.claim_unowned_entities(owner_id)
         return
 
     world_draft = WorldWizardDraft(
@@ -198,7 +202,9 @@ def ensure_default_seed(repo: CantinaRepository) -> None:
             ),
         ],
     )
-    world = repo.create_world_from_draft(world_draft, world_id="world_neon_rust")
+    world = repo.create_world_from_draft(
+        world_draft, world_id="world_neon_rust", owner_id=owner_id
+    )
 
     opening_prose = (
         "*Rain hammers against the armored glass of The Neon Rust, streaking the amber glow of the street signs "
@@ -226,10 +232,12 @@ def ensure_default_seed(repo: CantinaRepository) -> None:
             "instincts toward her regulars. She wipes down glasses when thinking and never sits with her back to the door."
         ),
         initial_message=opening_prose,
+        equipped=[
+            "Dark charcoal utility tank top",
+            "Oil-stained leather ripperdoc apron",
+            "Heavy reinforced work boots",
+        ],
         inventory=[
-            "[Worn] Dark charcoal utility tank top",
-            "[Worn] Oil-stained leather ripperdoc apron",
-            "[Worn] Heavy reinforced work boots",
             "Diagnostic medical penlight",
             "Concealed Vespera trauma med-injector",
         ],
@@ -309,6 +317,7 @@ def ensure_default_seed(repo: CantinaRepository) -> None:
         char_draft,
         world_id=world.id,
         character_id="char_kira_vance",
+        owner_id=owner_id,
     )
 
     repo.create_campaign(
@@ -317,4 +326,5 @@ def ensure_default_seed(repo: CantinaRepository) -> None:
         character_id=character.id,
         opening_prose=opening_prose,
         campaign_id="camp_neon_rust_default",
+        owner_id=owner_id,
     )

@@ -427,10 +427,10 @@ async def test_phase4_concurrent_episodic_compression(
     summarize_called = False
     orig_summarize = p4_module.summarize_turn_chunk
 
-    async def tracked_summarize(turns, character):
+    async def tracked_summarize(turns, character, *args, **kwargs):
         nonlocal summarize_called
         summarize_called = True
-        return await orig_summarize(turns, character)
+        return await orig_summarize(turns, character, *args, **kwargs)
 
     monkeypatch.setattr(p4_module, "summarize_turn_chunk", tracked_summarize)
 
@@ -560,7 +560,7 @@ async def test_character_appearance_initial_message_and_dynamic_inventory(
     assert all("apron" not in item.lower() for item in merged)
     assert all("penlight" not in item.lower() for item in merged)
 
-    # 2. Verify Wizard generates physical_appearance, initial_message, and inventory, and editing updates them
+    # 2. Verify Wizard generates physical_appearance, initial_message, equipped, and inventory, and editing updates them
     world = temp_repo.get_world("world_neon_rust")
     draft = await generate_character_draft(
         CharacterWizardSeed(
@@ -575,7 +575,7 @@ async def test_character_appearance_initial_message_and_dynamic_inventory(
     )
     assert draft.physical_appearance.strip() != ""
     assert draft.initial_message.strip() != ""
-    assert len(draft.inventory) >= 2
+    assert len(draft.equipped) >= 1 or len(draft.inventory) >= 1
 
     created = temp_repo.create_character_from_draft(draft, world_id=world.id)
     updated = temp_repo.update_character(
@@ -586,7 +586,8 @@ async def test_character_appearance_initial_message_and_dynamic_inventory(
             physical_appearance="Tall, lean courier with a silver ocular implant and a jagged scar across his left cheek.",
             core_persona=created.core_persona,
             initial_message="*Inside {location_name}, Kaelen checks his chronometer.*\n\n\"You brought the package?\"",
-            inventory=["[Worn] Armored synth-leather jacket", "[Worn] Cargo trousers", "Silver neural key"],
+            equipped=["Armored synth-leather jacket", "Cargo trousers"],
+            inventory=["Silver neural key"],
             voice_anchors=created.voice_anchors,
             baseline_psyche=created.baseline_psyche,
             memory_shards=created.memory_shards,
@@ -595,9 +596,10 @@ async def test_character_appearance_initial_message_and_dynamic_inventory(
     )
     assert "silver ocular implant" in updated.physical_appearance
     assert "You brought the package?" in updated.initial_message
+    assert "Armored synth-leather jacket" in updated.equipped
     assert "Silver neural key" in updated.inventory
 
-    # 3. Launching a campaign uses character.initial_message (with {location_name} resolved) and seeds Turn 0 inventory
+    # 3. Launching a campaign uses character.initial_message (with {location_name} resolved) and seeds Turn 0 equipped & inventory
     camp = temp_repo.create_campaign(
         name="Kaelen Courier Run",
         world_id=world.id,
@@ -607,11 +609,30 @@ async def test_character_appearance_initial_message_and_dynamic_inventory(
     turn_0 = bundle_0.active_branch_turns[0]
     assert "The Neon Rust Main Floor" in turn_0.raw_prose
     assert "You brought the package?" in turn_0.raw_prose
+    assert bundle_0.current_character_state.equipped == [
+        "Armored synth-leather jacket",
+        "Cargo trousers",
+    ]
     assert bundle_0.current_character_state.inventory == [
-        "[Worn] Armored synth-leather jacket",
-        "[Worn] Cargo trousers",
         "Silver neural key",
     ]
+
+    # Test interactive equipping & unequipping via toggle_campaign_item_equip
+    toggled = temp_repo.toggle_campaign_item_equip(
+        camp.id,
+        item="Silver neural key",
+        action="equip",
+    )
+    assert "Silver neural key" in toggled.current_character_state.equipped
+    assert "Silver neural key" not in toggled.current_character_state.inventory
+
+    toggled_back = temp_repo.toggle_campaign_item_equip(
+        camp.id,
+        item="Silver neural key",
+        action="unequip",
+    )
+    assert "Silver neural key" in toggled_back.current_character_state.inventory
+    assert "Silver neural key" not in toggled_back.current_character_state.equipped
 
     # 4. Execute Turn 1 where Kaelen takes off his jacket and receives an encrypted datapad
     req_turn_1 = TurnSubmitRequest(
@@ -622,8 +643,9 @@ async def test_character_appearance_initial_message_and_dynamic_inventory(
 
     bundle_1 = temp_repo.get_campaign_state_bundle(camp.id)
     inv_1 = bundle_1.current_character_state.inventory
+    eq_1 = bundle_1.current_character_state.equipped
     assert any("datapad" in item.lower() for item in inv_1)
-    assert all("jacket" not in item.lower() for item in inv_1)
+    assert all("jacket" not in item.lower() for item in eq_1)
     assert "Silver neural key" in inv_1
 
     # 5. Verify Zone 1 static prompt remains 100% identical between Turn 0 and Turn 1 while Zone 4 reflects new inventory
@@ -656,7 +678,7 @@ async def test_character_appearance_initial_message_and_dynamic_inventory(
 
     # 6. Checkout Turn 0 branch -> inventory rolls back to Turn 0 snapshot (jacket restored, datapad gone)
     rolled_back = temp_repo.checkout_turn_branch(camp.id, turn_0.id)
-    assert "[Worn] Armored synth-leather jacket" in rolled_back.current_character_state.inventory
+    assert "Armored synth-leather jacket" in rolled_back.current_character_state.equipped
     assert all("datapad" not in item.lower() for item in rolled_back.current_character_state.inventory)
 
 
@@ -925,6 +947,53 @@ async def test_location_override_affects_next_turn_and_swipe(
     assert bundle_swipe.active_location.id == cooling_tunnels.id
     assert bundle_swipe.active_location.name == "Sub-Basement Cooling Tunnels"
     assert bundle_swipe.current_character_state.current_location_id == cooling_tunnels.id
+
+
+async def test_item_equip_toggle_applies_from_next_turn(
+    temp_repo: CantinaRepository,
+) -> None:
+    """Verify equipping or unequipping an item via toggle_campaign_item_equip updates leaf turn and persists across subsequent turns."""
+    camp_id = "camp_neon_rust_default"
+    bundle_0 = temp_repo.get_campaign_state_bundle(camp_id)
+    # Kira Vance starts with equipped clothes and carried items
+    assert "Diagnostic medical penlight" in bundle_0.current_character_state.inventory
+    assert "Diagnostic medical penlight" not in bundle_0.current_character_state.equipped
+
+    # 1. Player equips the penlight
+    eq_bundle = temp_repo.toggle_campaign_item_equip(
+        camp_id,
+        item="Diagnostic medical penlight",
+        action="equip",
+    )
+    assert "Diagnostic medical penlight" in eq_bundle.current_character_state.equipped
+    assert "Diagnostic medical penlight" not in eq_bundle.current_character_state.inventory
+
+    # 2. Advance to Turn 1 - penlight should remain equipped in Turn 1 character state
+    req_t1 = TurnSubmitRequest(user_message="Do you have that diagnostic penlight handy?")
+    async for _ev in _execute_turn_stream_events(camp_id, req_t1):
+        pass
+
+    bundle_t1 = temp_repo.get_campaign_state_bundle(camp_id)
+    assert "Diagnostic medical penlight" in bundle_t1.current_character_state.equipped
+    assert "Diagnostic medical penlight" not in bundle_t1.current_character_state.inventory
+
+    # 3. Unequip the penlight on Turn 1
+    uneq_bundle = temp_repo.toggle_campaign_item_equip(
+        camp_id,
+        item="Diagnostic medical penlight",
+        action="unequip",
+    )
+    assert "Diagnostic medical penlight" in uneq_bundle.current_character_state.inventory
+    assert "Diagnostic medical penlight" not in uneq_bundle.current_character_state.equipped
+
+    # 4. Advance to Turn 2 - penlight remains unequipped in inventory
+    req_t2 = TurnSubmitRequest(user_message="Put it back in your kit.")
+    async for _ev in _execute_turn_stream_events(camp_id, req_t2):
+        pass
+
+    bundle_t2 = temp_repo.get_campaign_state_bundle(camp_id)
+    assert "Diagnostic medical penlight" in bundle_t2.current_character_state.inventory
+    assert "Diagnostic medical penlight" not in bundle_t2.current_character_state.equipped
 
 
 

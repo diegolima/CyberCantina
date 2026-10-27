@@ -8,32 +8,46 @@ import {
   FolderKanban,
   GitBranch,
   Globe,
+  LogOut,
   Plus,
   Search,
-  Settings,
+  User,
+  UserCog,
   Users,
   X,
 } from "lucide-react";
-import { api, streamCampaignTurn } from "./api";
+import {
+  api,
+  setOnUnauthorizedHandler,
+  setStoredSessionToken,
+  streamCampaignTurn,
+} from "./api";
+import {
+  AdminModal,
+  AuthScreen,
+  InitialSetupScreen,
+  ProfileModal,
+} from "./components/AuthModals";
 import { ChatStage } from "./components/ChatStage";
 import {
   CharacterInspectorModal,
   WorldInspectorModal,
 } from "./components/EntityEditorModals";
 import { LiveInspector } from "./components/LiveInspector";
-import { SettingsModal } from "./components/SettingsModal";
 import {
   CharacterWizardModal,
   WorldWizardModal,
 } from "./components/WizardModals";
 import {
   AppSettings,
+  AuthSessionResponse,
   CampaignRecord,
   CampaignStateBundle,
   CharacterRecord,
   CognitionBlock,
   PreTurnAnalysis,
   RecalledMemoryItem,
+  UserProfile,
   WorldRecord,
 } from "./types";
 
@@ -179,6 +193,19 @@ function SidebarCategory<T>({
 }
 
 export const App: React.FC = () => {
+  const [authChecking, setAuthChecking] = useState(true);
+  const [setupRequired, setSetupRequired] = useState(false);
+  const [singleUserMode, setSingleUserMode] = useState(false);
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showAdminModal, setShowAdminModal] = useState(false);
+  const [profileInitialTab, setProfileInitialTab] = useState<
+    "identity" | "account" | "models"
+  >("identity");
+  const [adminInitialTab, setAdminInitialTab] = useState<"users" | "models">(
+    "users"
+  );
+
   const [campaigns, setCampaigns] = useState<CampaignRecord[]>([]);
   const [worlds, setWorlds] = useState<WorldRecord[]>([]);
   const [characters, setCharacters] = useState<CharacterRecord[]>([]);
@@ -199,7 +226,16 @@ export const App: React.FC = () => {
 
   const [showCharWizard, setShowCharWizard] = useState(false);
   const [showWorldWizard, setShowWorldWizard] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
+
+  const handleOpenModelSettings = () => {
+    if (currentUser?.role === "admin") {
+      setAdminInitialTab("models");
+      setShowAdminModal(true);
+    } else {
+      setProfileInitialTab("models");
+      setShowProfileModal(true);
+    }
+  };
 
   const [deleteTarget, setDeleteTarget] = useState<
     | { kind: "campaign"; campaign: CampaignRecord }
@@ -246,23 +282,93 @@ export const App: React.FC = () => {
     setActiveCharacter(c);
   };
 
+  const loadWorkspaceData = async () => {
+    const [camps, wList, cList, cfg] = await Promise.all([
+      api.listCampaigns(),
+      api.listWorlds(),
+      api.listCharacters(),
+      api.getSettings(),
+    ]);
+    setCampaigns(camps);
+    setWorlds(wList);
+    setCharacters(cList);
+    setAppSettings(cfg);
+    if (camps.length > 0) {
+      await loadCampaignBundle(camps[0].id);
+    } else {
+      setBundle(null);
+      setCampaignWorld(null);
+      setCampaignCharacter(null);
+      setActiveWorld(wList[0] ?? null);
+      setActiveCharacter(cList[0] ?? null);
+    }
+  };
+
+  const refreshAuthStatus = async () => {
+    const status = await api.getAuthStatus();
+    setSetupRequired(status.setup_required);
+    setSingleUserMode(status.single_user_mode);
+    setCurrentUser(status.user ?? null);
+    return status;
+  };
+
   useEffect(() => {
+    setOnUnauthorizedHandler(() => {
+      setCurrentUser(null);
+      setBundle(null);
+      setShowProfileModal(false);
+      setShowAdminModal(false);
+    });
     (async () => {
-      const [camps, wList, cList, cfg] = await Promise.all([
-        api.listCampaigns(),
-        api.listWorlds(),
-        api.listCharacters(),
-        api.getSettings(),
-      ]);
-      setCampaigns(camps);
-      setWorlds(wList);
-      setCharacters(cList);
-      setAppSettings(cfg);
-      if (camps.length > 0) {
-        await loadCampaignBundle(camps[0].id);
+      try {
+        const status = await refreshAuthStatus();
+        if (status.authenticated && status.user) {
+          await loadWorkspaceData();
+        }
+      } finally {
+        setAuthChecking(false);
       }
     })();
   }, []);
+
+  const handleAuthenticated = async (session: AuthSessionResponse) => {
+    setSetupRequired(false);
+    setSingleUserMode(session.single_user_mode);
+    setCurrentUser(session.user);
+    await loadWorkspaceData();
+  };
+
+  const handleLogout = async () => {
+    await api.logout();
+    const status = await refreshAuthStatus();
+    if (!status.authenticated) {
+      setCurrentUser(null);
+      setBundle(null);
+      setCampaigns([]);
+      setWorlds([]);
+      setCharacters([]);
+    }
+  };
+
+  const handleAccountDeleted = async () => {
+    setShowProfileModal(false);
+    setShowAdminModal(false);
+    setStoredSessionToken(null);
+    setCurrentUser(null);
+    setBundle(null);
+    setCampaigns([]);
+    setWorlds([]);
+    setCharacters([]);
+    try {
+      await api.logout();
+    } catch {
+      // ignore errors
+    }
+    const status = await api.getAuthStatus();
+    setSetupRequired(status.setup_required);
+    setSingleUserMode(status.single_user_mode);
+    setCurrentUser(null);
+  };
 
   const handleCreateNewCampaign = async () => {
     if (worlds.length === 0 || characters.length === 0) return;
@@ -490,6 +596,20 @@ export const App: React.FC = () => {
     setPendingLocationOverrideId(locationId);
   };
 
+  const handleToggleItemEquip = async (payload: {
+    item: string;
+    action: "equip" | "unequip";
+    character_id?: string;
+  }) => {
+    if (!bundle || isStreaming) return;
+    try {
+      const updated = await api.toggleItemEquip(bundle.campaign.id, payload);
+      setBundle(updated);
+    } catch (err) {
+      console.error("Failed to toggle item equipment:", err);
+    }
+  };
+
   const handleCreateLinkedLocation = async (payload: {
     from_location_id: string;
     name: string;
@@ -528,6 +648,29 @@ export const App: React.FC = () => {
     bundle?.active_branch_turns.map((t) => t.id) ?? []
   );
 
+  if (authChecking) {
+    return (
+      <div className="auth-stage-backdrop">
+        <div style={{ color: "var(--text-secondary)", fontSize: "0.9rem" }}>
+          Initializing CyberCantina...
+        </div>
+      </div>
+    );
+  }
+
+  if (setupRequired) {
+    return <InitialSetupScreen onComplete={handleAuthenticated} />;
+  }
+
+  if (!currentUser) {
+    return (
+      <AuthScreen
+        singleUserMode={singleUserMode}
+        onAuthenticated={handleAuthenticated}
+      />
+    );
+  }
+
   return (
     <div className="studio-shell">
       {/* Left Sidebar: 4 Collapsible, Searchable, Paged Categories */}
@@ -537,18 +680,6 @@ export const App: React.FC = () => {
             <Flame size={20} color="var(--accent-amber)" />
             <span>CYBERCANTINA</span>
           </div>
-          {appSettings && (
-            <button
-              type="button"
-              className="btn"
-              style={{ padding: "5px 9px", fontSize: "0.72rem" }}
-              onClick={() => setShowSettings(true)}
-              title="Configure Ollama Models & Memory Settings"
-            >
-              <Settings size={13} />
-              <span>{appSettings.actor_profile.model}</span>
-            </button>
-          )}
         </div>
 
         {/* 1. Characters (+new) */}
@@ -752,6 +883,85 @@ export const App: React.FC = () => {
             );
           }}
         />
+
+        {/* Bottom User Profile & Admin Area */}
+        <div className="sidebar-bottom-area">
+          <div
+            className="sidebar-user-card"
+            onClick={() => {
+              setProfileInitialTab("identity");
+              setShowProfileModal(true);
+            }}
+            title="Open User Profile, Password & Passkeys"
+          >
+            <User size={15} color="var(--accent-cyan)" />
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div
+                style={{
+                  fontWeight: 600,
+                  fontSize: "0.8rem",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                <span
+                  style={{
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {currentUser.display_name || currentUser.username}
+                </span>
+                <span className={`role-pill role-${currentUser.role}`}>
+                  {currentUser.role}
+                </span>
+              </div>
+              <div
+                style={{
+                  fontSize: "0.69rem",
+                  color: "var(--text-muted)",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                @{currentUser.username}
+                {singleUserMode ? " • Single-user mode" : ""}
+              </div>
+            </div>
+            {!singleUserMode && (
+              <button
+                type="button"
+                className="btn"
+                style={{ padding: "4px 7px", fontSize: "0.7rem" }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleLogout();
+                }}
+                title="Sign out"
+              >
+                <LogOut size={13} />
+              </button>
+            )}
+          </div>
+
+          {currentUser.role === "admin" && (
+            <button
+              type="button"
+              className="btn sidebar-admin-btn"
+              onClick={() => {
+                setAdminInitialTab("users");
+                setShowAdminModal(true);
+              }}
+              title="Open Admin Area"
+            >
+              <UserCog size={14} color="var(--accent-amber)" />
+              <span>Admin Area</span>
+            </button>
+          )}
+        </div>
       </aside>
 
       {/* Center Roleplay Stage */}
@@ -762,7 +972,7 @@ export const App: React.FC = () => {
           isStreaming={isStreaming}
           liveStream={liveStream}
           streamError={streamError}
-          onOpenSettings={() => setShowSettings(true)}
+          onOpenSettings={handleOpenModelSettings}
           onSendTurn={handleSendTurn}
           onCheckoutTurn={handleCheckoutTurn}
           onDeleteLastTurn={handleDeleteLastTurn}
@@ -817,6 +1027,7 @@ export const App: React.FC = () => {
           pendingLocationOverrideId={pendingLocationOverrideId}
           onOverrideLocation={handleOverrideLocation}
           onCreateLinkedLocation={handleCreateLinkedLocation}
+          onToggleItemEquip={handleToggleItemEquip}
         />
       ) : (
         <aside className="inspector" />
@@ -1057,11 +1268,39 @@ export const App: React.FC = () => {
         />
       )}
 
-      {showSettings && appSettings && (
-        <SettingsModal
-          initialSettings={appSettings}
-          onClose={() => setShowSettings(false)}
-          onSaved={(updated) => setAppSettings(updated)}
+      {showProfileModal && currentUser && (
+        <ProfileModal
+          user={currentUser}
+          singleUserMode={singleUserMode}
+          initialTab={profileInitialTab}
+          onClose={() => setShowProfileModal(false)}
+          onUserUpdated={async (updated) => {
+            setCurrentUser(updated);
+            await refreshAuthStatus();
+          }}
+          onAccountReset={async () => {
+            await loadWorkspaceData();
+          }}
+          onAccountDeleted={handleAccountDeleted}
+        />
+      )}
+
+      {showAdminModal && currentUser && currentUser.role === "admin" && (
+        <AdminModal
+          currentUser={currentUser}
+          singleUserMode={singleUserMode}
+          initialTab={adminInitialTab}
+          onClose={() => setShowAdminModal(false)}
+          onCurrentUserUpdated={async (updated) => {
+            setCurrentUser(updated);
+            await refreshAuthStatus();
+          }}
+          onAccountDeleted={async (deletedUserId) => {
+            if (deletedUserId === currentUser.id) {
+              await handleAccountDeleted();
+            }
+          }}
+          onSettingsUpdated={(updated) => setAppSettings(updated)}
         />
       )}
     </div>
