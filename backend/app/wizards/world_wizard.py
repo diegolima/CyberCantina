@@ -20,9 +20,6 @@ def _normalize_draft_topology(draft: WorldWizardDraft) -> WorldWizardDraft:
     """Ensure starting location is set and edges have non-colliding compass directions."""
     if not any(loc.is_starting_location for loc in draft.locations):
         draft.locations[0].is_starting_location = True
-    for loc in draft.locations:
-        if loc.is_starting_location:
-            loc.is_hub = True
 
     occupied_from: dict[str, set[str]] = {}
     for edge in draft.edges:
@@ -63,7 +60,7 @@ def _fallback_world_expansion(seed: WorldWizardSeed) -> WorldWizardDraft:
                 ),
                 environmental_tags=["ambient lighting", "central counter", "vantage point"],
                 is_starting_location=True,
-                is_hub=True,
+                is_hub=False,
             ),
             LocationNodeDraft(
                 key="private_backroom",

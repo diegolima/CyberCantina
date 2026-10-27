@@ -994,7 +994,7 @@ export function draftToWorldRecord(draft: WorldWizardDraft): WorldRecord {
       description: loc.description,
       environmental_tags: [...(loc.environmental_tags ?? [])],
       is_starting_location: isStart,
-      is_hub: Boolean(loc.is_hub ?? isStart),
+      is_hub: Boolean(loc.is_hub),
     };
   });
 
@@ -1543,7 +1543,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                           "The primary gathering hub and central gateway connecting adjoining sectors.",
                         environmental_tags: ["hub", "central", "open"],
                         is_starting_location: true,
-                        is_hub: true,
+                        is_hub: false,
                       },
                     ]);
                     markDirty();

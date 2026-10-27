@@ -177,16 +177,17 @@ async def test_character_and_world_wizards(temp_repo: CantinaRepository) -> None
     )
     w_draft = await generate_world_draft(w_seed)
     assert all(edge.compass_direction is not None for edge in w_draft.edges)
+    assert all(loc.is_hub is False for loc in w_draft.locations)
     # Simulate editing the draft in the World Sheet before committing (e.g. changing starting location)
     w_draft.locations[0].is_starting_location = False
     w_draft.locations[1].is_starting_location = True
-    w_draft.locations[1].is_hub = True
     created_world = temp_repo.create_world_from_draft(w_draft)
     assert len(created_world.locations) >= 3
     assert len(created_world.edges) >= 3
     starting_locs = [loc for loc in created_world.locations if loc.is_starting_location]
     assert len(starting_locs) == 1
     assert starting_locs[0].name == w_draft.locations[1].name
+    assert starting_locs[0].is_hub is False
 
     c_seed = CharacterWizardSeed(
         name="Master Artificer Thorne",
