@@ -13,11 +13,31 @@ export interface BaselinePsyche {
   default_plan: string;
 }
 
+export type MemoryOrigin =
+  | "backstory"
+  | "clerk_ephemeral"
+  | "clerk_promoted"
+  | "compacted";
+
+export type MemorySignificance =
+  | "trauma"
+  | "bonding"
+  | "betrayal"
+  | "revelation"
+  | "vow"
+  | "consolidated";
+
 export interface MemoryShard {
+  id?: string | null;
   title: string;
   content: string;
   keywords: string[];
   emotional_weight: number;
+  origin?: MemoryOrigin;
+  significance?: MemorySignificance | null;
+  anchor_turn_id?: string | null;
+  created_at_depth?: number | null;
+  superseded_at_turn_id?: string | null;
 }
 
 export interface CharacterWizardSeed {
@@ -226,6 +246,16 @@ export interface WorldStateSnapshot {
   scene_flags: string[];
 }
 
+export interface ExtractedCharacterMemory {
+  character_id: string;
+  title: string;
+  content: string;
+  significance: "trauma" | "bonding" | "betrayal" | "revelation" | "vow";
+  keywords: string[];
+  emotional_weight: number;
+  supersedes_memory_id?: string | null;
+}
+
 export interface PostTurnStateDelta {
   elapsed_minutes: number;
   new_world_timestamp?: string | null;
@@ -237,6 +267,7 @@ export interface PostTurnStateDelta {
   inventory_added?: string[];
   inventory_removed?: string[];
   relationship_shift_note?: string | null;
+  character_memories?: ExtractedCharacterMemory[];
 }
 
 export type NarrativeMode =
@@ -336,6 +367,7 @@ export interface AppSettings {
     working_memory_turns: number;
     episodic_chunk_size: number;
     rag_top_k: number;
+    ephemeral_memory_lifespan_turns?: number;
   };
   allow_offline_fallback: boolean;
   allow_user_model_overrides: boolean;

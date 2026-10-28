@@ -205,6 +205,7 @@ class VectorStore:
         character_id: str | None = None,
         campaign_id: str | None = None,
         anchor_turn_id: str | None = None,
+        superseded_at_turn_id: str | None = None,
         embedding: np.ndarray | None = None,
         conn: sqlite3.Connection | None = None,
     ) -> None:
@@ -221,15 +222,16 @@ class VectorStore:
                 """
                 INSERT INTO vector_entries (
                     id, source_type, world_id, character_id, campaign_id,
-                    anchor_turn_id, title, content, keywords_json, embedding_blob
+                    anchor_turn_id, superseded_at_turn_id, title, content, keywords_json, embedding_blob
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     title = excluded.title,
                     content = excluded.content,
                     keywords_json = excluded.keywords_json,
                     embedding_blob = excluded.embedding_blob,
-                    anchor_turn_id = excluded.anchor_turn_id
+                    anchor_turn_id = excluded.anchor_turn_id,
+                    superseded_at_turn_id = excluded.superseded_at_turn_id
                 """,
                 (
                     entry_id,
@@ -238,6 +240,7 @@ class VectorStore:
                     character_id,
                     campaign_id,
                     anchor_turn_id,
+                    superseded_at_turn_id,
                     title,
                     content,
                     json.dumps(kw_list),
@@ -262,6 +265,7 @@ class VectorStore:
         character_id: str | None = None,
         campaign_id: str | None = None,
         anchor_turn_id: str | None = None,
+        superseded_at_turn_id: str | None = None,
         embedding: np.ndarray | None = None,
         conn: sqlite3.Connection | None = None,
     ) -> None:
@@ -279,6 +283,7 @@ class VectorStore:
             character_id=character_id,
             campaign_id=campaign_id,
             anchor_turn_id=anchor_turn_id,
+            superseded_at_turn_id=superseded_at_turn_id,
             embedding=vec,
             conn=conn,
         )
@@ -332,7 +337,8 @@ class VectorStore:
 
             rows = conn.execute(
                 f"""
-                SELECT id, source_type, character_id, anchor_turn_id, title, content, keywords_json, embedding_blob
+                SELECT id, source_type, character_id, anchor_turn_id, superseded_at_turn_id,
+                       title, content, keywords_json, embedding_blob
                 FROM vector_entries
                 WHERE (world_id = ? AND source_type = 'lore')
                    OR {char_clause}
@@ -346,16 +352,25 @@ class VectorStore:
         scored: list[RecalledMemoryItem] = []
         for row in rows:
             anchor_turn = row["anchor_turn_id"]
-            # Enforce strict timeline branch isolation (and spatial room isolation when provided) for episodic memories
-            if row["source_type"] == "episodic_chunk" and anchor_turn is not None:
-                if anchor_turn not in valid_turns:
-                    continue
-                if (
-                    present_turns is not None
-                    and anchor_turn not in present_turns
-                    and row["character_id"] != character_id
-                ):
-                    continue
+            superseded_turn = (
+                row["superseded_at_turn_id"]
+                if "superseded_at_turn_id" in row.keys()
+                else None
+            )
+            # Enforce strict timeline branch isolation for turn-anchored or superseded memories
+            if anchor_turn is not None and anchor_turn not in valid_turns:
+                continue
+            if superseded_turn is not None and superseded_turn in valid_turns:
+                continue
+            # Enforce spatial room isolation when provided for episodic memories
+            if (
+                row["source_type"] == "episodic_chunk"
+                and anchor_turn is not None
+                and present_turns is not None
+                and anchor_turn not in present_turns
+                and row["character_id"] != character_id
+            ):
+                continue
 
             vec = np.frombuffer(row["embedding_blob"], dtype=np.float32)
             if vec.shape == query_vec.shape:

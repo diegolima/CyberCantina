@@ -1457,12 +1457,18 @@ async def _execute_turn_stream_events(
     parent_turn = branch_turns[-1]
 
     world = repo.get_world(campaign.world_id, valid_turn_ids=valid_turn_ids)
-    primary_character = repo.get_character(campaign.character_id, campaign_id=campaign.id)
+    primary_character = repo.get_character(
+        campaign.character_id, campaign_id=campaign.id, valid_turn_ids=valid_turn_ids
+    )
     participant_ids = campaign.participant_character_ids or [campaign.character_id]
     participants: list[CharacterRecord] = []
     for cid in participant_ids:
         try:
-            participants.append(repo.get_character(cid, campaign_id=campaign.id))
+            participants.append(
+                repo.get_character(
+                    cid, campaign_id=campaign.id, valid_turn_ids=valid_turn_ids
+                )
+            )
         except KeyError:
             continue
     if not participants:
@@ -1807,7 +1813,7 @@ async def _execute_turn_stream_events(
 
     yield {"event": "turn_saved", "data": saved_turn.model_dump()}
 
-    # PHASE 4: Post-Turn Clerk (Clock, Spatial Graph Transitions, Episodic Summarizer)
+    # PHASE 4: Post-Turn Clerk (Clock, Spatial Graph Transitions, Per-Character Memories, Episodic Summarizer)
     updated_turn, _chunks = await run_phase4_post_turn_clerk(
         repo=repo,
         campaign_id=campaign.id,
@@ -1816,6 +1822,7 @@ async def _execute_turn_stream_events(
         completed_turn=saved_turn,
         active_location=active_location,
         neighbors=neighbors,
+        present_characters=present_characters,
         profile=eff_clerk,
         working_memory_turns=eff_wm_turns,
         post_turn_prompt_template=effective_prompts.get("clerk_post_turn_system"),

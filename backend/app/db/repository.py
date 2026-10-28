@@ -182,6 +182,15 @@ class CantinaRepository:
                         """,
                         (p["id"], p["name"], p["description"], json.dumps(p["prompts"]), now_iso, now_iso),
                     )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE prompt_presets
+                        SET prompts_json = ?, description = ?, updated_at = ?
+                        WHERE id = ? AND is_builtin = 1
+                        """,
+                        (json.dumps(p["prompts"]), p["description"], now_iso, p["id"]),
+                    )
             if "physical_appearance" not in char_cols:
                 conn.execute(
                     "ALTER TABLE characters ADD COLUMN physical_appearance TEXT NOT NULL DEFAULT ''"
@@ -232,6 +241,15 @@ class CantinaRepository:
             if "superseded_at_turn_id" not in edge_cols:
                 conn.execute(
                     "ALTER TABLE location_edges ADD COLUMN superseded_at_turn_id TEXT NULL"
+                )
+
+            vec_cols = {
+                r["name"]
+                for r in conn.execute("PRAGMA table_info(vector_entries)").fetchall()
+            }
+            if "superseded_at_turn_id" not in vec_cols:
+                conn.execute(
+                    "ALTER TABLE vector_entries ADD COLUMN superseded_at_turn_id TEXT NULL"
                 )
 
             # Backfill compass_direction for any pre-existing location_edges missing it
@@ -2254,11 +2272,28 @@ class CantinaRepository:
             conn.close()
         return [self.get_character(r["id"]) for r in rows]
 
+    @staticmethod
+    def _is_shard_active_on_branch(
+        shard: MemoryShard, valid_turn_ids: set[str] | None
+    ) -> bool:
+        """Return True if a memory shard is active on the branch defined by valid_turn_ids."""
+        if valid_turn_ids is None:
+            return True
+        if shard.anchor_turn_id is not None and shard.anchor_turn_id not in valid_turn_ids:
+            return False
+        if (
+            shard.superseded_at_turn_id is not None
+            and shard.superseded_at_turn_id in valid_turn_ids
+        ):
+            return False
+        return True
+
     def get_character(
         self,
         character_id: str,
         campaign_id: str | None = None,
         owner_id: str | None = None,
+        valid_turn_ids: set[str] | None = None,
     ) -> CharacterRecord:
         conn = self._connect()
         try:
@@ -2289,6 +2324,14 @@ class CantinaRepository:
             if camp_mem_row
             else (row["memory_shards_json"] if "memory_shards_json" in row_keys else "[]")
         )
+        parsed_shards: list[MemoryShard] = []
+        for idx, m in enumerate(json.loads(shards_json or "[]")):
+            shard = MemoryShard.model_validate(m)
+            if not shard.id:
+                shard.id = f"shard_{character_id}_{idx}"
+            if self._is_shard_active_on_branch(shard, valid_turn_ids):
+                parsed_shards.append(shard)
+
         return CharacterRecord(
             id=row["id"],
             world_id=row["world_id"],
@@ -2304,16 +2347,16 @@ class CantinaRepository:
                 for v in json.loads(row["voice_anchors_json"] or "[]")
             ],
             baseline_psyche=BaselinePsyche.model_validate_json(row["baseline_psyche_json"]),
-            memory_shards=[
-                MemoryShard.model_validate(m)
-                for m in json.loads(shards_json or "[]")
-            ],
+            memory_shards=parsed_shards,
             pending_deletion=bool(row["pending_deletion"]) if "pending_deletion" in row_keys else False,
             created_at=row["created_at"],
         )
 
     def get_campaign_character_memories(
-        self, campaign_id: str, character_id: str
+        self,
+        campaign_id: str,
+        character_id: str,
+        valid_turn_ids: set[str] | None = None,
     ) -> list[MemoryShard] | None:
         """Return campaign-scoped memory shards for a character if customized, or None."""
         conn = self._connect()
@@ -2324,12 +2367,33 @@ class CantinaRepository:
             ).fetchone()
             if not row:
                 return None
-            return [
-                MemoryShard.model_validate(m)
-                for m in json.loads(row["memory_shards_json"] or "[]")
-            ]
+            result: list[MemoryShard] = []
+            for idx, m in enumerate(json.loads(row["memory_shards_json"] or "[]")):
+                shard = MemoryShard.model_validate(m)
+                if not shard.id:
+                    shard.id = f"shard_{character_id}_{idx}"
+                if self._is_shard_active_on_branch(shard, valid_turn_ids):
+                    result.append(shard)
+            return result
         finally:
             conn.close()
+
+    def get_raw_campaign_character_memories(
+        self, campaign_id: str, character_id: str
+    ) -> list[MemoryShard]:
+        """Return all stored campaign memory shards (across all branches), or initialized from base character."""
+        existing = self.get_campaign_character_memories(
+            campaign_id, character_id, valid_turn_ids=None
+        )
+        if existing is not None:
+            return existing
+        base_char = self.get_character(character_id)
+        return [
+            shard.model_copy(
+                update={"id": shard.id or f"shard_{character_id}_{idx}"}
+            )
+            for idx, shard in enumerate(base_char.memory_shards)
+        ]
 
     def update_campaign_character_memories(
         self,
@@ -2338,13 +2402,36 @@ class CantinaRepository:
         memory_shards: list[MemoryShard],
         shard_embeddings: dict[int, np.ndarray] | None = None,
         owner_id: str | None = None,
+        preserve_other_branches: bool = True,
     ) -> CampaignStateBundle:
         """Persist campaign-scoped character memories and re-index vector entries for this campaign."""
         campaign = self.get_campaign(campaign_id, owner_id=owner_id)
         # Ensure character exists
         self.get_character(character_id)
         now = utc_now_iso()
-        shards_json = json.dumps([m.model_dump() for m in memory_shards])
+
+        final_shards: list[MemoryShard] = []
+        for idx, s in enumerate(memory_shards):
+            if not s.id:
+                s = s.model_copy(update={"id": f"shard_{character_id}_{idx}"})
+            final_shards.append(s)
+
+        if preserve_other_branches and campaign.active_leaf_turn_id:
+            branch_turns = self.get_branch_turn_chain(campaign.active_leaf_turn_id)
+            valid_turn_ids = {t.id for t in branch_turns}
+            raw_existing = self.get_campaign_character_memories(
+                campaign_id, character_id, valid_turn_ids=None
+            )
+            if raw_existing:
+                active_ids = {s.id for s in final_shards if s.id}
+                for raw_shard in raw_existing:
+                    if (
+                        not self._is_shard_active_on_branch(raw_shard, valid_turn_ids)
+                        and raw_shard.id not in active_ids
+                    ):
+                        final_shards.append(raw_shard)
+
+        shards_json = json.dumps([m.model_dump() for m in final_shards])
 
         conn = self._connect()
         try:
@@ -2366,8 +2453,8 @@ class CantinaRepository:
                 """,
                 (campaign_id, character_id),
             )
-            # Re-index new shards for this campaign
-            for idx, shard in enumerate(memory_shards):
+            # Re-index all shards for this campaign (preserving branch anchor and superseded metadata)
+            for idx, shard in enumerate(final_shards):
                 shard_id = f"shard_{campaign_id}_{character_id}_{idx}"
                 precomputed = shard_embeddings.get(idx) if shard_embeddings else None
                 self.vector_store.upsert_entry(
@@ -2376,6 +2463,8 @@ class CantinaRepository:
                     character_id=character_id,
                     world_id=campaign.world_id,
                     campaign_id=campaign_id,
+                    anchor_turn_id=shard.anchor_turn_id,
+                    superseded_at_turn_id=shard.superseded_at_turn_id,
                     title=shard.title,
                     content=shard.content,
                     keywords=shard.keywords,
@@ -2394,6 +2483,7 @@ class CantinaRepository:
         character_id: str,
         memory_shards: list[MemoryShard],
         owner_id: str | None = None,
+        preserve_other_branches: bool = True,
     ) -> CampaignStateBundle:
         """Asynchronously compute embeddings for campaign-scoped memory shards and update."""
         shard_embeddings: dict[int, np.ndarray] = {}
@@ -2413,6 +2503,7 @@ class CantinaRepository:
             memory_shards=memory_shards,
             shard_embeddings=shard_embeddings,
             owner_id=owner_id,
+            preserve_other_branches=preserve_other_branches,
         )
 
     def update_character(
@@ -4162,7 +4253,9 @@ class CantinaRepository:
         char_records: dict[str, CharacterRecord] = {}
         for cid in char_ids:
             try:
-                char_records[cid] = self.get_character(cid, campaign_id=campaign_id)
+                char_records[cid] = self.get_character(
+                    cid, campaign_id=campaign_id, valid_turn_ids=valid_turn_ids
+                )
             except KeyError:
                 pass
 

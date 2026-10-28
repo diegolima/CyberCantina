@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+MemoryOrigin = Literal[
+    "backstory", "clerk_ephemeral", "clerk_promoted", "compacted"
+]
+MemorySignificance = Literal[
+    "trauma", "bonding", "betrayal", "revelation", "vow", "consolidated"
+]
 
 
 class VoiceAnchor(BaseModel):
@@ -39,14 +48,38 @@ class BaselinePsyche(BaseModel):
 
 
 class MemoryShard(BaseModel):
-    """Atomic backstory or episodic memory seeded into the character's vector store."""
+    """Atomic backstory or episodic/personal memory seeded into the character's vector store."""
 
+    id: str | None = Field(
+        default=None,
+        description="Optional stable identifier for branch tracking, promotion, or superseding.",
+    )
     title: str = Field(description="Short label for the memory shard.")
     content: str = Field(
         description="Self-contained 2-4 sentence memory written from an objective or personal perspective."
     )
     keywords: list[str] = Field(default_factory=list, description="Entity names and triggers.")
     emotional_weight: float = Field(default=0.7, ge=0.0, le=1.0)
+    origin: MemoryOrigin = Field(
+        default="backstory",
+        description="Origin tier: 'backstory', 'clerk_ephemeral', 'clerk_promoted', or 'compacted'.",
+    )
+    significance: MemorySignificance | None = Field(
+        default=None,
+        description="Personal significance category when extracted or compacted by the Clerk.",
+    )
+    anchor_turn_id: str | None = Field(
+        default=None,
+        description="Turn ID where this memory was formed (for branch-safe filtering).",
+    )
+    created_at_depth: int | None = Field(
+        default=None,
+        description="Turn depth index when this memory was created (for 40-turn compaction tracking).",
+    )
+    superseded_at_turn_id: str | None = Field(
+        default=None,
+        description="Turn ID where this ephemeral memory was superseded or compacted into a consolidated memory.",
+    )
 
 
 class CharacterWizardSeed(BaseModel):

@@ -70,12 +70,23 @@ DEFAULT_CLERK_PRE_TURN_SYSTEM = (
 
 DEFAULT_CLERK_EPISODIC_SUMMARY_SYSTEM = (
     "Summarize the following roleplay exchange turns into a single cohesive 2-4 sentence "
-    "episodic memory paragraph. Preserve key plot decisions, emotional shifts, promises, "
-    "and location changes."
+    "episodic memory paragraph focusing strictly on the overarching storyline: objective plot "
+    "progression, quest objectives, spatial movements, and global world state changes. "
+    "Omit private character-specific emotional shifts or personal vows, which are tracked "
+    "separately in per-character memories."
+)
+
+DEFAULT_CLERK_MEMORY_COMPACTION_SYSTEM = (
+    "You are the Character Memory Consolidation Clerk for an AI roleplay engine.\n"
+    "Synthesize the following aged ephemeral memories for {character_name} into a single, "
+    "self-contained 2-3 sentence permanent memory shard that preserves core emotional truths, "
+    "traumas, bondings, betrayals, revelations, or vows without redundancy.\n"
+    "Return ONLY a JSON object with keys: title (3-6 words), content (strictly 2-3 synthesized "
+    "sentences), keywords (list of 3-6 entity/trigger strings), emotional_weight (float 0.7-1.0)."
 )
 
 DEFAULT_CLERK_POST_TURN_SYSTEM = (
-    "You are the Post-Turn State Clerk for an AI roleplay engine.\n"
+    "You are the Post-Turn State & Memory Clerk for an AI roleplay engine.\n"
     "Inspect the completed turn and output a JSON object matching PostTurnStateDelta:\n"
     "- elapsed_minutes (int 0-1440): narrative minutes that passed during this turn. Typical "
     "dialogue/action turns take 1-10 minutes; travel adds the exit's travel time.\n"
@@ -89,12 +100,21 @@ DEFAULT_CLERK_POST_TURN_SYSTEM = (
     "- transition_type ('stay' | 'move_existing' | 'improvise_new')\n"
     "- target_location_id (if transition_type == 'move_existing', must match one of the neighbor IDs)\n"
     "- improvised_location (if transition_type == 'improvise_new', object with name, summary, description, environmental_tags, entry_direction_label, return_direction_label, compass_direction ['N'|'NE'|'E'|'SE'|'S'|'SW'|'W'|'NW'], travel_minutes)\n"
-    "- notable_event_summary (1-sentence summary if a significant plot/relationship event occurred, else null)\n"
+    "- notable_event_summary (1-sentence objective summary if a significant macro plot or world-state event occurred, else null)\n"
     "- scene_flags_updated (list of newly added scene/fact flags; existing flags are preserved automatically)\n"
     "- scene_flags_removed (list of obsolete flags to remove, if any)\n"
     "- inventory_added (list of items newly picked up, acquired, or crafted by {character_name} this turn; ignore momentary scene furniture/props not kept)\n"
     "- inventory_removed (list of items dropped, given away, consumed, or lost by {character_name} this turn; match names from Equipped / Worn or Carried Inventory)\n"
-    "- relationship_shift_note (string or null)"
+    "- relationship_shift_note (string or null)\n"
+    "- character_memories (list of ExtractedCharacterMemory objects, default []): Evaluate ONLY characters listed in "
+    "Characters Present in Scene. Extract a memory ONLY when a character experiences a profound personal moment "
+    "falling into one of 5 categories: 'trauma', 'bonding', 'betrayal', 'revelation', or 'vow'. "
+    "Routine banter, ordinary actions, or continuing an already-recorded conversation MUST produce []. "
+    "Each item requires: character_id (matching a present character ID), title (3-6 words), content (strictly 1-2 "
+    "synthesized sentences capturing the trigger and personal takeaway), significance ('trauma'|'bonding'|'betrayal'|'revelation'|'vow'), "
+    "keywords (2-5 trigger terms), emotional_weight (0.75-1.0), and supersedes_memory_id (if this turn refines or "
+    "concludes an ongoing scene already captured in a recent ephemeral memory listed under Existing Character Memories, "
+    "set to that memory's id instead of creating a duplicate; otherwise null)."
 )
 
 DEFAULT_WIZARD_WORLD_SYSTEM = (
@@ -205,8 +225,9 @@ NOVELISTIC_ACTOR_ZONE1 = (
 )
 
 NOVELISTIC_CLERK_SUMMARY = (
-    "Summarize the following roleplay exchange turns into an evocative 2-4 sentence narrative memory paragraph. "
-    "Preserve key plot turning points, interpersonal dynamics, promises, vulnerabilities, and spatial shifts."
+    "Summarize the following roleplay exchange turns into an evocative 2-4 sentence narrative memory paragraph "
+    "focusing on the overarching storyline: key plot turning points, quest objectives, spatial movements, "
+    "and global state changes, leaving character-specific emotional traumas or vows to per-character memories."
 )
 
 # --- Preset 3: Fast & Concise (Low Latency / 8B Models) ---

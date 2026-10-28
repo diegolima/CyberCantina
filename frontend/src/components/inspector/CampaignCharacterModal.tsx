@@ -612,12 +612,19 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
                   No memory shards indexed for this character.
                 </div>
               ) : (
-                memoryShards.map((shard, idx) => (
+                memoryShards.map((shard, idx) => {
+                  const isEphemeral = shard.origin === "clerk_ephemeral";
+                  const isPromoted = shard.origin === "clerk_promoted";
+                  const isCompacted = shard.origin === "compacted";
+
+                  return (
                   <div
-                    key={idx}
+                    key={shard.id || idx}
                     style={{
                       background: "var(--bg-panel)",
-                      border: "1px solid var(--border-subtle)",
+                      border: isEphemeral
+                        ? "1px dashed rgba(245, 158, 11, 0.55)"
+                        : "1px solid var(--border-subtle)",
                       borderRadius: 6,
                       padding: 10,
                       display: "flex",
@@ -625,6 +632,97 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
                       gap: 8,
                     }}
                   >
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        <span
+                          className="badge"
+                          style={{
+                            fontSize: "0.66rem",
+                            padding: "1px 6px",
+                            background: isEphemeral
+                              ? "rgba(245, 158, 11, 0.16)"
+                              : isPromoted || isCompacted
+                                ? "rgba(16, 185, 129, 0.16)"
+                                : "rgba(56, 189, 248, 0.14)",
+                            color: isEphemeral
+                              ? "var(--accent-amber)"
+                              : isPromoted || isCompacted
+                                ? "#6ee7b7"
+                                : "#7dd3fc",
+                            borderColor: isEphemeral
+                              ? "rgba(245, 158, 11, 0.4)"
+                              : isPromoted || isCompacted
+                                ? "rgba(16, 185, 129, 0.4)"
+                                : "rgba(56, 189, 248, 0.35)",
+                          }}
+                        >
+                          {isEphemeral
+                            ? "Ephemeral · Clerk-Extracted"
+                            : isPromoted
+                              ? "Promoted · Permanent"
+                              : isCompacted
+                                ? "Compacted · Permanent"
+                                : "Backstory · Permanent"}
+                        </span>
+                        {shard.significance && (
+                          <span
+                            className="badge"
+                            style={{
+                              fontSize: "0.65rem",
+                              padding: "1px 6px",
+                              textTransform: "uppercase",
+                              background: "rgba(168, 85, 247, 0.15)",
+                              color: "#d8b4fe",
+                              borderColor: "rgba(168, 85, 247, 0.35)",
+                            }}
+                          >
+                            {shard.significance}
+                          </span>
+                        )}
+                        {shard.created_at_depth != null && (
+                          <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>
+                            Turn {shard.created_at_depth}
+                          </span>
+                        )}
+                      </div>
+
+                      {isEphemeral && (
+                        <button
+                          type="button"
+                          className="btn btn-amber"
+                          style={{ padding: "2px 8px", fontSize: "0.68rem" }}
+                          disabled={isSavingMemories}
+                          onClick={async () => {
+                            const next = [...memoryShards];
+                            next[idx] = { ...next[idx], origin: "clerk_promoted" };
+                            setMemoryShards(next);
+                            setIsSavingMemories(true);
+                            try {
+                              await onSaveMemories(character.id, next);
+                              setIsMemoriesDirty(false);
+                              setMemorySaveSuccess(true);
+                              setTimeout(() => setMemorySaveSuccess(false), 3000);
+                            } catch (err) {
+                              setMemoryError(String(err));
+                            } finally {
+                              setIsSavingMemories(false);
+                            }
+                          }}
+                          title="Promote this ephemeral Clerk memory into a permanent character memory so it is never compacted away"
+                        >
+                          <Check size={11} /> Promote to Permanent
+                        </button>
+                      )}
+                    </div>
+
                     <div
                       style={{
                         display: "grid",
@@ -700,7 +798,8 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
                       />
                     </div>
                   </div>
-                ))
+                  );
+                })
               )}
 
               {isMemoriesDirty && (

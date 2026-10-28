@@ -217,7 +217,8 @@ CREATE TABLE IF NOT EXISTS vector_entries (
     world_id TEXT NULL,
     character_id TEXT NULL,
     campaign_id TEXT NULL,
-    anchor_turn_id TEXT NULL,  -- NULL for static lore/character shards; set for branch-bound episodic memories
+    anchor_turn_id TEXT NULL,  -- NULL for static lore/character shards; set for branch-bound episodic/clerk memories
+    superseded_at_turn_id TEXT NULL, -- Turn ID where this entry was superseded or compacted on a branch
     title TEXT NOT NULL,
     content TEXT NOT NULL,
     keywords_json TEXT NOT NULL DEFAULT '[]',

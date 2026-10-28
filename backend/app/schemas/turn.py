@@ -122,6 +122,64 @@ class ImprovisedLocationSpec(BaseModel):
         return normalize_compass_direction(str(v))
 
 
+class ExtractedCharacterMemory(BaseModel):
+    """Per-character high-salience personal memory extracted by the Phase 4 Clerk."""
+
+    character_id: str = Field(
+        default="",
+        description="ID (or name) of the present character who experienced this personal memory.",
+    )
+    title: str = Field(
+        description="Short 3-6 word evocative title for the memory."
+    )
+    content: str = Field(
+        description=(
+            "Strictly 1-2 synthesized sentences capturing the specific event/catalyst and "
+            "the character's personal/emotional takeaway."
+        )
+    )
+    significance: Literal["trauma", "bonding", "betrayal", "revelation", "vow"] = Field(
+        default="revelation",
+        description="Category of personal significance: 'trauma', 'bonding', 'betrayal', 'revelation', or 'vow'.",
+    )
+    keywords: list[str] = Field(
+        default_factory=list,
+        description="2-5 entity names or trigger keywords for semantic recall.",
+    )
+    emotional_weight: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description="Emotional intensity weight (0.75-1.0 for transformative moments).",
+    )
+    supersedes_memory_id: str | None = Field(
+        default=None,
+        description=(
+            "If this refines or updates an existing ephemeral memory from the ongoing scene, "
+            "set to that memory's ID instead of creating a duplicate."
+        ),
+    )
+
+    @field_validator("significance", mode="before")
+    @classmethod
+    def _coerce_significance(
+        cls, v: Any
+    ) -> Literal["trauma", "bonding", "betrayal", "revelation", "vow"]:
+        if isinstance(v, str):
+            low = v.strip().lower()
+            if low in {"trauma", "bonding", "betrayal", "revelation", "vow"}:
+                return low  # type: ignore[return-value]
+            if "traum" in low or "fear" in low or "scar" in low:
+                return "trauma"
+            if "bond" in low or "trust" in low or "friend" in low:
+                return "bonding"
+            if "betray" in low or "decei" in low or "lie" in low:
+                return "betrayal"
+            if "vow" in low or "promis" in low or "oath" in low or "swear" in low:
+                return "vow"
+        return "revelation"
+
+
 class PostTurnStateDelta(BaseModel):
     """Phase 4 output produced by the Async Post-Turn Clerk."""
 
@@ -157,6 +215,13 @@ class PostTurnStateDelta(BaseModel):
         description="Items or clothing taken off, dropped, given away, or consumed by the character this turn.",
     )
     relationship_shift_note: str | None = None
+    character_memories: list[ExtractedCharacterMemory] = Field(
+        default_factory=list,
+        description=(
+            "Significant personal memories (trauma, bonding, betrayal, revelation, vow) formed "
+            "this turn by characters present in the scene. Empty list on ordinary turns."
+        ),
+    )
 
 
 class EpisodicChunkRecord(BaseModel):

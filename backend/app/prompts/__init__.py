@@ -3,6 +3,7 @@
 from app.prompts.defaults import (
     ALL_PROMPT_KEYS,
     BUILTIN_PRESETS,
+    DEFAULT_CLERK_MEMORY_COMPACTION_SYSTEM,
     FACTORY_DEFAULT_PROMPTS,
     PROMPT_KEY_ACTOR_ZONE1,
     PROMPT_KEY_CLERK_POST_TURN,
@@ -17,6 +18,7 @@ from app.prompts.renderer import get_default_prompt, render_template, validate_p
 __all__ = [
     "ALL_PROMPT_KEYS",
     "BUILTIN_PRESETS",
+    "DEFAULT_CLERK_MEMORY_COMPACTION_SYSTEM",
     "FACTORY_DEFAULT_PROMPTS",
     "PROMPT_KEY_ACTOR_ZONE1",
     "PROMPT_KEY_CLERK_POST_TURN",

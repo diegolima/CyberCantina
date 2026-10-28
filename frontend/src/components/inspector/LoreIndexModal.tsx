@@ -58,11 +58,22 @@ export const LoreIndexModal: React.FC<LoreIndexModalProps> = ({
     const list: IndexEntry[] = [];
     for (const ch of characters) {
       ch.memory_shards.forEach((shard, i) => {
+        const tierLabel =
+          shard.origin === "clerk_ephemeral"
+            ? "Ephemeral"
+            : shard.origin === "clerk_promoted"
+              ? "Promoted"
+              : shard.origin === "compacted"
+                ? "Compacted"
+                : "Shard";
+        const tag = shard.significance
+          ? `${tierLabel} · ${shard.significance}`
+          : tierLabel;
         list.push({
-          key: `shard-${ch.id}-${i}`,
+          key: `shard-${ch.id}-${shard.id || i}`,
           kind: "shard",
           group: `${ch.name} — Memory Shards`,
-          tag: "Shard",
+          tag,
           title: shard.title,
           content: shard.content,
           recalled: recalledShardTitles.has(norm(shard.title)),

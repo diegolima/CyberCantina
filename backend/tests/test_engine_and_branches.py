@@ -14,14 +14,19 @@ from app.engine import phase4_clerk as p4_module
 from app.engine.phase1_pre import run_phase1_pre_analysis
 from app.engine.phase2_context import assemble_four_zone_messages
 from app.engine.phase3_actor import parse_cognition_xml
-from app.engine.phase4_clerk import merge_inventory, merge_scene_flags
+from app.engine.phase4_clerk import (
+    merge_inventory,
+    merge_scene_flags,
+    run_phase4_post_turn_clerk,
+)
 from app.main import _execute_turn_stream_events
 from app.schemas.character import (
     CharacterUpdatePayload,
     CharacterWizardSeed,
+    CognitionBlock,
     MemoryShard,
 )
-from app.schemas.turn import ImprovisedLocationSpec, TurnSubmitRequest
+from app.schemas.turn import ImprovisedLocationSpec, PreTurnAnalysis, TurnSubmitRequest
 from app.schemas.world import COMPASS_DIRECTIONS, WorldUpdatePayload, WorldWizardSeed
 from app.wizards.character_wizard import generate_character_draft
 from app.wizards.world_wizard import generate_world_draft
@@ -1146,3 +1151,332 @@ async def test_campaign_scoped_character_memories(temp_repo: CantinaRepository) 
         valid_branch_turn_ids=set(),
     )
     assert any("Secret Promise" in item.title for item in recalled)
+
+
+async def test_clerk_character_memories_extraction_dedup_and_room_isolation(
+    temp_repo: CantinaRepository,
+) -> None:
+    """
+    Verify Phase 4 Clerk extracts personal memories (traumas, bondings, betrayals, revelations, vows),
+    enforces room presence isolation, suppresses permanent memory redundancy, and deduplicates multi-turn scenes.
+    """
+    camp_id = "camp_neon_rust_default"
+    kira_id = "char_kira_vance"
+    world_id = "world_neon_rust"
+
+    kira = temp_repo.get_character(kira_id, campaign_id=camp_id)
+    orig_count = len(kira.memory_shards)
+
+    # Create a second character who is in a DIFFERENT room (not in present_characters)
+    absent_draft = await generate_character_draft(
+        CharacterWizardSeed(
+            name="Jax Mercer",
+            archetype="Ex-corp courier",
+            personality_keywords=["cynical", "observant"],
+        ),
+        world=temp_repo.get_world(world_id),
+    )
+    jax = temp_repo.create_character_from_draft(absent_draft, world_id=world_id)
+    jax_orig_count = len(jax.memory_shards)
+
+    bundle0 = temp_repo.get_campaign_state_bundle(camp_id)
+    root_turn = bundle0.active_branch_turns[-1]
+    active_loc = bundle0.active_location
+    neighbors = bundle0.neighbor_locations
+
+    # Turn 1: User confesses a bitter betrayal to Kira in the cantina (Jax is NOT present)
+    turn1 = temp_repo.save_turn_node(
+        turn_id="turn_mem_1",
+        campaign_id=camp_id,
+        parent_turn_id=root_turn.id,
+        depth_index=1,
+        user_message="I have to confess: I betrayed you and sold your clinic's frequency to the Syndicate.",
+        actor_id=kira_id,
+        raw_prose='*Kira freezes, her cybernetic hand trembling.* "You betrayed me to the Syndicate? After everything?"',
+        cognition=CognitionBlock(
+            recall="Recalling the Syndicate raid.",
+            feeling="Stunned betrayal",
+            valence=-0.8,
+            arousal=0.9,
+            want="Confront the user over the betrayal",
+            plan="Demand the truth",
+        ),
+        pre_turn=PreTurnAnalysis(
+            user_sentiment="guilty confession",
+            subtext_interpretation="User admits betraying Kira to the Syndicate",
+            mentioned_entities=["Syndicate", "Kira"],
+            memory_search_queries=["Syndicate betrayal"],
+            spatial_intent="stay",
+        ),
+        world_snapshot=root_turn.world_snapshot.model_copy(update={"turn_id": "turn_mem_1"}),
+        character_state=root_turn.character_state.model_copy(update={"turn_id": "turn_mem_1"}),
+        recalled_items=[],
+    )
+
+    await run_phase4_post_turn_clerk(
+        repo=temp_repo,
+        campaign_id=camp_id,
+        world_id=world_id,
+        character=kira,
+        completed_turn=turn1,
+        active_location=active_loc,
+        neighbors=neighbors,
+        present_characters=[kira],  # Jax is in another room
+    )
+
+    bundle1 = temp_repo.get_campaign_state_bundle(camp_id)
+    kira_shards_t1 = bundle1.character_records[kira_id].memory_shards
+    assert len(kira_shards_t1) == orig_count + 1
+    ephemeral_t1 = [s for s in kira_shards_t1 if s.origin == "clerk_ephemeral"]
+    assert len(ephemeral_t1) == 1
+    assert ephemeral_t1[0].significance == "betrayal"
+    assert ephemeral_t1[0].anchor_turn_id == "turn_mem_1"
+    assert ephemeral_t1[0].created_at_depth == 1
+
+    # Jax (absent) must NOT have received any memory from this scene
+    jax_after_t1 = temp_repo.get_character(jax.id, campaign_id=camp_id)
+    assert len(jax_after_t1.memory_shards) == jax_orig_count
+
+    # Turn 2: Multi-turn continuation of the exact same betrayal argument -> should supersede Turn 1's ephemeral shard, NOT add a 2nd duplicate!
+    kira_t1_rec = bundle1.character_records[kira_id]
+    turn2 = temp_repo.save_turn_node(
+        turn_id="turn_mem_2",
+        campaign_id=camp_id,
+        parent_turn_id="turn_mem_1",
+        depth_index=2,
+        user_message="I lied to you and sold you out to the Syndicate because they threatened my family.",
+        actor_id=kira_id,
+        raw_prose='*She slams her glass down.* "You still betrayed me to the Syndicate and broke my trust!"',
+        cognition=CognitionBlock(
+            recall="User betrayed her to the Syndicate.",
+            feeling="Bitter anger",
+            valence=-0.85,
+            arousal=0.85,
+            want="Process the Syndicate betrayal",
+            plan="Step back from the bar",
+        ),
+        pre_turn=PreTurnAnalysis(
+            user_sentiment="desperate",
+            subtext_interpretation="Continuing the Syndicate betrayal confrontation",
+            mentioned_entities=["Syndicate", "Kira"],
+            memory_search_queries=["Syndicate betrayal"],
+            spatial_intent="stay",
+        ),
+        world_snapshot=turn1.world_snapshot.model_copy(update={"turn_id": "turn_mem_2"}),
+        character_state=turn1.character_state.model_copy(update={"turn_id": "turn_mem_2"}),
+        recalled_items=[],
+    )
+
+    await run_phase4_post_turn_clerk(
+        repo=temp_repo,
+        campaign_id=camp_id,
+        world_id=world_id,
+        character=kira_t1_rec,
+        completed_turn=turn2,
+        active_location=active_loc,
+        neighbors=neighbors,
+        present_characters=[kira_t1_rec],
+    )
+
+    bundle2 = temp_repo.get_campaign_state_bundle(camp_id)
+    kira_shards_t2 = bundle2.character_records[kira_id].memory_shards
+    ephemeral_t2 = [s for s in kira_shards_t2 if s.origin == "clerk_ephemeral"]
+    # Still only 1 active ephemeral memory on the branch (updated in-place), preserving original created_at_depth == 1
+    assert len(ephemeral_t2) == 1
+    assert ephemeral_t2[0].anchor_turn_id == "turn_mem_2"
+    assert ephemeral_t2[0].created_at_depth == 1
+
+
+async def test_clerk_ephemeral_memory_branch_isolation_promotion_and_40_turn_compaction(
+    temp_repo: CantinaRepository,
+) -> None:
+    """
+    Verify:
+    1. Ephemeral Clerk memories are branch-isolated (invisible on alternate branches).
+    2. Manually promoted memories (origin='clerk_promoted') are never compacted.
+    3. Unpromoted ephemeral memories aged >= 40 turns are automatically compacted into a single 'compacted' permanent memory.
+    4. Rewinding before the compaction turn restores the original ephemeral memories.
+    """
+    camp_id = "camp_neon_rust_default"
+    kira_id = "char_kira_vance"
+    world_id = "world_neon_rust"
+
+    bundle0 = temp_repo.get_campaign_state_bundle(camp_id)
+    root_turn = bundle0.active_branch_turns[-1]
+    active_loc = bundle0.active_location
+    neighbors = bundle0.neighbor_locations
+    kira = bundle0.character_records[kira_id]
+
+    # Branch A, Turn 1: A solemn vow is made (creates ephemeral memory 1 at depth 1)
+    turn_a1 = temp_repo.save_turn_node(
+        turn_id="turn_branch_a1",
+        campaign_id=camp_id,
+        parent_turn_id=root_turn.id,
+        depth_index=1,
+        user_message="I solemnly swear an oath on my life that I will help you rebuild the clinic.",
+        actor_id=kira_id,
+        raw_prose='*Kira nods slowly.* "I will hold you to that solemn vow."',
+        cognition=CognitionBlock(
+            recall="",
+            feeling="Cautious hope",
+            valence=0.5,
+            arousal=0.6,
+            want="Hold user to the vow",
+            plan="Accept the oath",
+        ),
+        pre_turn=PreTurnAnalysis(
+            user_sentiment="sincere",
+            subtext_interpretation="Swearing an oath",
+            mentioned_entities=["clinic", "Kira"],
+            memory_search_queries=["oath clinic"],
+            spatial_intent="stay",
+        ),
+        world_snapshot=root_turn.world_snapshot.model_copy(update={"turn_id": "turn_branch_a1"}),
+        character_state=root_turn.character_state.model_copy(update={"turn_id": "turn_branch_a1"}),
+        recalled_items=[],
+    )
+    await run_phase4_post_turn_clerk(
+        repo=temp_repo,
+        campaign_id=camp_id,
+        world_id=world_id,
+        character=kira,
+        completed_turn=turn_a1,
+        active_location=active_loc,
+        neighbors=neighbors,
+        present_characters=[kira],
+    )
+
+    # Branch B, Turn 1 (sibling swipe from root_turn): Ordinary banter, no vow
+    turn_b1 = temp_repo.save_turn_node(
+        turn_id="turn_branch_b1",
+        campaign_id=camp_id,
+        parent_turn_id=root_turn.id,
+        depth_index=1,
+        user_message="Just pour me a synth-ale.",
+        actor_id=kira_id,
+        raw_prose='*She slides a glass across the counter.* "On the house."',
+        cognition=CognitionBlock(
+            recall="",
+            feeling="Calm",
+            valence=0.1,
+            arousal=0.3,
+            want="Serve drink",
+            plan="Pour synth-ale",
+        ),
+        pre_turn=PreTurnAnalysis(
+            user_sentiment="casual",
+            subtext_interpretation="Ordering a drink",
+            mentioned_entities=[],
+            memory_search_queries=["synth-ale"],
+            spatial_intent="stay",
+        ),
+        world_snapshot=root_turn.world_snapshot.model_copy(update={"turn_id": "turn_branch_b1"}),
+        character_state=root_turn.character_state.model_copy(update={"turn_id": "turn_branch_b1"}),
+        recalled_items=[],
+    )
+    # On Branch B, the vow memory from Branch A must NOT be visible!
+    bundle_b = temp_repo.get_campaign_state_bundle(camp_id)
+    shards_on_b = bundle_b.character_records[kira_id].memory_shards
+    assert not any(s.origin == "clerk_ephemeral" for s in shards_on_b)
+
+    # Switch back to Branch A
+    temp_repo.checkout_turn_branch(camp_id, "turn_branch_a1")
+    bundle_a = temp_repo.get_campaign_state_bundle(camp_id)
+    shards_on_a = bundle_a.character_records[kira_id].memory_shards
+    ephemeral_on_a = [s for s in shards_on_a if s.origin == "clerk_ephemeral"]
+    assert len(ephemeral_on_a) == 1
+    assert ephemeral_on_a[0].significance == "vow"
+
+    # Manually promote the first vow memory so it becomes permanent ('clerk_promoted')
+    promoted_shards = [
+        s.model_copy(update={"origin": "clerk_promoted"}) if s.origin == "clerk_ephemeral" else s
+        for s in shards_on_a
+    ]
+    # Also add two unpromoted ephemeral memories at depth 2 and depth 3
+    ephem_shard_1 = MemoryShard(
+        id="ephem_test_1",
+        title="Trauma in Sector 4",
+        content="Kira witnessed the reactor breach in Sector 4 and was haunted by the sirens.",
+        keywords=["Sector 4", "reactor", "sirens"],
+        emotional_weight=0.85,
+        origin="clerk_ephemeral",
+        significance="trauma",
+        anchor_turn_id="turn_branch_a1",
+        created_at_depth=2,
+    )
+    ephem_shard_2 = MemoryShard(
+        id="ephem_test_2",
+        title="Helix Lab Revelation",
+        content="Kira discovered that Helix Lab engineered the neural plague affecting the docks.",
+        keywords=["Helix Lab", "plague", "docks"],
+        emotional_weight=0.9,
+        origin="clerk_ephemeral",
+        significance="revelation",
+        anchor_turn_id="turn_branch_a1",
+        created_at_depth=3,
+    )
+    await temp_repo.aupdate_campaign_character_memories(
+        campaign_id=camp_id,
+        character_id=kira_id,
+        memory_shards=[*promoted_shards, ephem_shard_1, ephem_shard_2],
+    )
+
+    # Now simulate Turn at depth 45 (age of ephem_shard_1 is 43 >= 40, age of ephem_shard_2 is 42 >= 40)
+    kira_before_compact = temp_repo.get_campaign_state_bundle(camp_id).character_records[kira_id]
+    turn_a45 = temp_repo.save_turn_node(
+        turn_id="turn_branch_a45",
+        campaign_id=camp_id,
+        parent_turn_id="turn_branch_a1",
+        depth_index=45,
+        user_message="Let's check the inventory.",
+        actor_id=kira_id,
+        raw_prose='*Kira checks the supply crates.* "All accounted for."',
+        cognition=CognitionBlock(
+            recall="",
+            feeling="Focused",
+            valence=0.2,
+            arousal=0.3,
+            want="Check supplies",
+            plan="Inspect crates",
+        ),
+        pre_turn=PreTurnAnalysis(
+            user_sentiment="neutral",
+            subtext_interpretation="Checking supplies",
+            mentioned_entities=[],
+            memory_search_queries=["supplies"],
+            spatial_intent="stay",
+        ),
+        world_snapshot=turn_a1.world_snapshot.model_copy(update={"turn_id": "turn_branch_a45"}),
+        character_state=turn_a1.character_state.model_copy(update={"turn_id": "turn_branch_a45"}),
+        recalled_items=[],
+    )
+
+    await run_phase4_post_turn_clerk(
+        repo=temp_repo,
+        campaign_id=camp_id,
+        world_id=world_id,
+        character=kira_before_compact,
+        completed_turn=turn_a45,
+        active_location=active_loc,
+        neighbors=neighbors,
+        present_characters=[kira_before_compact],
+        ephemeral_lifespan_turns=40,
+    )
+
+    bundle_a45 = temp_repo.get_campaign_state_bundle(camp_id)
+    shards_a45 = bundle_a45.character_records[kira_id].memory_shards
+
+    # 1. The manually promoted memory is untouched!
+    assert any(s.origin == "clerk_promoted" and s.significance == "vow" for s in shards_a45)
+    # 2. The two aged ephemeral memories were compacted into 1 'compacted' permanent memory!
+    assert not any(s.origin == "clerk_ephemeral" for s in shards_a45)
+    compacted_list = [s for s in shards_a45 if s.origin == "compacted"]
+    assert len(compacted_list) == 1
+    assert compacted_list[0].significance == "consolidated"
+
+    # 3. If user rewinds back to turn_branch_a1 (before compaction turn_branch_a45), the 2 ephemeral memories are restored!
+    temp_repo.checkout_turn_branch(camp_id, "turn_branch_a1")
+    bundle_rewound = temp_repo.get_campaign_state_bundle(camp_id)
+    shards_rewound = bundle_rewound.character_records[kira_id].memory_shards
+    assert len([s for s in shards_rewound if s.origin == "clerk_ephemeral"]) == 2
+    assert not any(s.origin == "compacted" for s in shards_rewound)

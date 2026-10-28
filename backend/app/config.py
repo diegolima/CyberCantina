@@ -69,6 +69,15 @@ class MemoryTierConfig(BaseModel):
         le=15,
         description="Maximum recalled vector memories & lore entries injected into Zone 4.",
     )
+    ephemeral_memory_lifespan_turns: int = Field(
+        default=40,
+        ge=4,
+        le=200,
+        description=(
+            "Number of turns before unpromoted Clerk-extracted ephemeral character memories "
+            "are compacted into a single permanent memory."
+        ),
+    )
 
 
 class AppSettings(BaseModel):
