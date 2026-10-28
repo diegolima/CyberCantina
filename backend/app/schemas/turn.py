@@ -200,6 +200,7 @@ class CampaignRecord(BaseModel):
     character_id: str
     participant_character_ids: list[str] = Field(default_factory=list)
     active_leaf_turn_id: str | None = None
+    prompt_preset_id: str | None = None
     created_at: str
 
 

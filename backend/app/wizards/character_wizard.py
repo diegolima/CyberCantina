@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
+from app.prompts import get_default_prompt, render_template
 from app.schemas.character import (
     BaselinePsyche,
     CharacterWizardDraft,
@@ -135,6 +136,7 @@ async def generate_character_draft(
     seed: CharacterWizardSeed,
     world: WorldRecord | None = None,
     profile: ModelProfile | None = None,
+    prompt_template: str | None = None,
 ) -> CharacterWizardDraft:
     """Use the LLM to expand a CharacterWizardSeed into an optimized CharacterWizardDraft."""
     world_context = ""
@@ -155,26 +157,8 @@ async def generate_character_draft(
             f"{loc_line}"
         )
 
-    system_prompt = (
-        "You are an expert AI Roleplay Character Architect.\n"
-        "Transform the user's basic character seed into a rich, structured CharacterWizardDraft JSON object.\n"
-        "Guidelines for LLM Roleplay Optimization:\n"
-        "1. physical_appearance: Write a dedicated 50-100 word description of the character's permanent anatomical "
-        "features (age, build, posture, facial structure, eyes, hair, scars, permanent cyberware or markings). "
-        "Do NOT put clothing, armor, or held objects here—those belong in inventory.\n"
-        "2. core_persona: Write a high-density 150-250 word character sheet focusing on psychology, demeanor, "
-        "speech cadence, psychological tells, and behavioral boundaries. Avoid vague clichés and avoid repeating clothing.\n"
-        "3. initial_message: Write an evocative 2-3 paragraph Turn 0 opening scene and greeting from the character "
-        "using *italics* for physical actions/atmosphere and \"quotes\" for spoken dialogue.\n"
-        "4. equipped: Provide 2-4 starting worn clothing, armor, or wielded objects (e.g. 'Weathered leather flight jacket', 'Steel-toe boots').\n"
-        "5. inventory: Provide 2-4 carried tools, weapons, or personal objects in backpack or pockets.\n"
-        "6. voice_anchors: Provide 3 distinct action+dialogue examples ('Calm / Banter', 'Guarded / Conflict', "
-        "'Vulnerable / Urgent') using *italics* for physical action and \"quotes\" for spoken lines.\n"
-        "7. baseline_psyche: Define realistic initial valence (-1.0 to 1.0), arousal (0.0 to 1.0), core_drive, "
-        "core_fear, default_want, and default_plan.\n"
-        "8. memory_shards: Break the character's backstory into 4 atomic, self-contained memory shards with "
-        "entity keywords so they can be retrieved via semantic RAG only when relevant.\n"
-        "Return ONLY valid JSON matching CharacterWizardDraft."
+    system_prompt = render_template(
+        prompt_template or get_default_prompt("wizard_character_system")
     )
     user_prompt = (
         f"Name: {seed.name}\n"

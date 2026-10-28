@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.config import settings
 from app.engine.world_clock import describe_world_timestamp
+from app.prompts import get_default_prompt, render_template
 from app.schemas.character import CharacterRecord, CharacterStateSnapshot
 from app.schemas.turn import (
     EpisodicChunkRecord,
@@ -18,6 +19,7 @@ from app.schemas.world import LocationNode, NeighborLocationView, WorldRecord
 def build_zone1_static_system_prompt(
     world: WorldRecord,
     character: CharacterRecord,
+    prompt_template: str | None = None,
 ) -> str:
     """Zone 1: Strictly static system prompt prefix to guarantee 100% KV-cache hits across turns."""
     voice_lines = "\n".join(
@@ -28,34 +30,22 @@ def build_zone1_static_system_prompt(
         if character.physical_appearance.strip()
         else ""
     )
-    return (
-        f"You are roleplaying as {character.name} in an interactive narrative.\n\n"
-        f"=== WORLD SETTING: {world.name} ===\n"
-        f"Genre & Tone: {world.global_rules.genre} — {world.global_rules.tone}\n"
-        f"Overview: {world.global_rules.setting_overview}\n"
-        f"World Rules: {world.global_rules.tech_or_magic_rules}\n\n"
-        f"=== CHARACTER IDENTITY: {character.name} ===\n"
-        f"Tagline: {character.tagline}\n"
-        f"{appearance_line}"
-        f"Persona: {character.core_persona}\n"
-        f"Core Drive: {character.baseline_psyche.core_drive}\n"
-        f"Core Fear: {character.baseline_psyche.core_fear}\n\n"
-        f"=== VOICE & MANNERISM ANCHORS ===\n"
-        f"{voice_lines}\n\n"
-        "=== COGNITIVE & NARRATIVE OUTPUT PROTOCOL ===\n"
-        "Before writing your narrative response, you MUST think through the turn inside a single "
-        "<cognition> XML block following this exact 4-step cognitive flow:\n"
-        "<cognition>\n"
-        "  <recall>What you remember from your history, lore, or recent events relevant right now.</recall>\n"
-        "  <feeling valence=\"0.0\" arousal=\"0.5\">How you feel right now (valence -1.0 to +1.0, arousal 0.0 to 1.0) and why.</feeling>\n"
-        "  <want>What you immediately need or want in this scene.</want>\n"
-        "  <plan>Your concrete plan for what to do or say in this turn.</plan>\n"
-        "</cognition>\n"
-        "Immediately after closing </cognition>, write your immersive, in-character narrative prose "
-        "(actions in *italics*, spoken dialogue in \"quotes\"). Never speak or act on behalf of the user.\n"
-        "The current in-game date and time is given in <world_clock> each turn: keep lighting, "
-        "activity, fatigue, and any time references consistent with it, and treat it as the time "
-        "at the start of the user's action."
+    template = prompt_template or get_default_prompt("actor_zone1_system")
+    return render_template(
+        template,
+        character_name=character.name,
+        world_name=world.name,
+        genre=world.global_rules.genre,
+        tone=world.global_rules.tone,
+        setting_overview=world.global_rules.setting_overview,
+        tech_or_magic_rules=world.global_rules.tech_or_magic_rules,
+        tagline=character.tagline,
+        appearance_section=appearance_line,
+        physical_appearance=character.physical_appearance,
+        core_persona=character.core_persona,
+        core_drive=character.baseline_psyche.core_drive,
+        core_fear=character.baseline_psyche.core_fear,
+        voice_lines=voice_lines,
     )
 
 
@@ -212,10 +202,16 @@ def assemble_four_zone_messages(
     present_characters: list[CharacterRecord] | None = None,
     character_name_map: dict[str, str] | None = None,
     working_memory_turns: int | None = None,
+    actor_system_prompt_template: str | None = None,
 ) -> list[dict[str, str]]:
     """Construct the complete 4-Zone OpenAI messages array for the Main Actor Model."""
     messages: list[dict[str, str]] = [
-        {"role": "system", "content": build_zone1_static_system_prompt(world, character)}
+        {
+            "role": "system",
+            "content": build_zone1_static_system_prompt(
+                world, character, prompt_template=actor_system_prompt_template
+            ),
+        }
     ]
 
     # Zone 2: Chunked episodic summaries

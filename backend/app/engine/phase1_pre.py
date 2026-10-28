@@ -7,6 +7,7 @@ import re
 
 from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
+from app.prompts import get_default_prompt, render_template
 from app.schemas.character import CharacterRecord
 from app.schemas.turn import DiceRollResult, MechanicsTrigger, PreTurnAnalysis
 from app.schemas.world import LocationNode, NeighborLocationView
@@ -253,6 +254,7 @@ async def run_phase1_pre_analysis(
     present_characters: list[CharacterRecord] | None = None,
     previous_speaker_id: str | None = None,
     profile: ModelProfile | None = None,
+    prompt_template: str | None = None,
 ) -> PreTurnAnalysis:
     """Execute Phase 1 Pre-Turn Analysis via the Auxiliary Clerk (with offline fallback) and resolve RNG."""
     room_chars = present_characters if present_characters else [character]
@@ -270,20 +272,8 @@ async def run_phase1_pre_analysis(
         f"- id='{c.id}': {c.name} ({c.tagline})" for c in room_chars
     )
 
-    system_prompt = (
-        "You are the Auxiliary Subconscious & Game Master Clerk for an AI roleplay engine.\n"
-        "Analyze the user's latest message in the context of the active location, present characters, and exits.\n"
-        "Return ONLY a JSON object matching the PreTurnAnalysis schema with keys:\n"
-        "- user_sentiment (string)\n"
-        "- subtext_interpretation (string)\n"
-        "- mentioned_entities (list of strings)\n"
-        "- memory_search_queries (list of 1-2 short semantic search strings)\n"
-        "- spatial_intent ('stay' | 'move_known' | 'explore_new')\n"
-        "- target_location_hint (string or null)\n"
-        "- active_speaker_id (character id from Characters Present in Room who should respond first)\n"
-        "- speaker_order (ordered list of character ids from Characters Present in Room)\n"
-        "- mechanics_check: {requires_roll (bool), action_description (str), skill_or_approach (str), difficulty_class (int 5-20), relevant_modifier (int -3 to +3)}\n"
-        "Set requires_roll=true ONLY if the user attempts a risky or uncertain physical/social/technical action."
+    system_prompt = render_template(
+        prompt_template or get_default_prompt("clerk_pre_turn_system")
     )
     user_prompt = (
         f"Characters Present in Room ({active_location.name}):\n{present_desc}\n"

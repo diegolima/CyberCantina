@@ -134,6 +134,7 @@ class UserModelSettingsPayload(BaseModel):
     actor_profile: ModelProfile | None = None
     clerk_profile: ModelProfile | None = None
     working_memory_turns: int | None = Field(default=None, ge=4, le=64)
+    active_prompt_preset_id: str | None = None
 
 
 class ProfileModelSettingsResponse(BaseModel):
@@ -145,6 +146,7 @@ class ProfileModelSettingsResponse(BaseModel):
     user_actor_profile: ModelProfile | None = None
     user_clerk_profile: ModelProfile | None = None
     user_working_memory_turns: int | None = None
+    active_prompt_preset_id: str | None = None
     default_actor_profile: ModelProfile
     default_clerk_profile: ModelProfile
     default_working_memory_turns: int

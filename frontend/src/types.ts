@@ -274,6 +274,7 @@ export interface CampaignRecord {
   character_id: string;
   participant_character_ids?: string[];
   active_leaf_turn_id?: string | null;
+  prompt_preset_id?: string | null;
   created_at: string;
 }
 
@@ -386,6 +387,7 @@ export interface UserModelSettingsPayload {
   actor_profile?: ModelProfile | null;
   clerk_profile?: ModelProfile | null;
   working_memory_turns?: number | null;
+  active_prompt_preset_id?: string | null;
 }
 
 export interface ProfileModelSettingsResponse {
@@ -397,8 +399,52 @@ export interface ProfileModelSettingsResponse {
   user_actor_profile?: ModelProfile | null;
   user_clerk_profile?: ModelProfile | null;
   user_working_memory_turns?: number | null;
+  active_prompt_preset_id?: string | null;
   default_actor_profile: ModelProfile;
   default_clerk_profile: ModelProfile;
   default_working_memory_turns: number;
+}
+
+export interface PromptVariableDoc {
+  name: string;
+  description: string;
+}
+
+export interface PromptMetadata {
+  key: string;
+  title: string;
+  description: string;
+  available_variables: PromptVariableDoc[];
+  required_tags: string[];
+}
+
+export interface PromptPresetRecord {
+  id: string;
+  owner_id?: string | null;
+  name: string;
+  description: string;
+  is_builtin: boolean;
+  prompts: Record<string, string>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PromptPresetCreatePayload {
+  name: string;
+  description?: string;
+  base_preset_id?: string | null;
+  prompts?: Record<string, string> | null;
+}
+
+export interface PromptPresetUpdatePayload {
+  name?: string | null;
+  description?: string | null;
+  prompts?: Record<string, string> | null;
+}
+
+export interface PromptDefaultsResponse {
+  presets: PromptPresetRecord[];
+  defaults: Record<string, string>;
+  metadata: PromptMetadata[];
 }
 

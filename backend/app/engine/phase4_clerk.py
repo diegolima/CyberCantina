@@ -8,6 +8,7 @@ import re
 from app.config import ModelProfile, settings
 from app.db.repository import CantinaRepository
 from app.engine.llm_client import llm_client
+from app.prompts import get_default_prompt, render_template
 from app.engine.world_clock import (
     advance_world_timestamp,  # noqa: F401  (re-exported for backwards compatibility)
     describe_world_timestamp,
@@ -376,16 +377,15 @@ async def summarize_turn_chunk(
     turns: list[TurnNodeRecord],
     character: CharacterRecord,
     profile: ModelProfile | None = None,
+    prompt_template: str | None = None,
 ) -> str:
     """Summarize a slice of working memory turns into a compact episodic paragraph."""
     transcript = "\n".join(
         f"Turn {t.depth_index} | User: {t.user_message}\n{character.name}: {t.raw_prose}"
         for t in turns
     )
-    system_prompt = (
-        "Summarize the following roleplay exchange turns into a single cohesive 2-4 sentence "
-        "episodic memory paragraph. Preserve key plot decisions, emotional shifts, promises, "
-        "and location changes."
+    system_prompt = render_template(
+        prompt_template or get_default_prompt("clerk_episodic_summary_system")
     )
     clerk_prof = profile or settings.clerk_profile
     try:
@@ -426,6 +426,8 @@ async def run_phase4_post_turn_clerk(
     neighbors: list[NeighborLocationView],
     profile: ModelProfile | None = None,
     working_memory_turns: int | None = None,
+    post_turn_prompt_template: str | None = None,
+    summary_prompt_template: str | None = None,
 ) -> tuple[TurnNodeRecord, list[EpisodicChunkRecord]]:
     """Run Phase 4 Clerk to advance the clock, mutate the Spatial Graph, and compress Episodic Memory."""
     clerk_prof = profile or settings.clerk_profile
@@ -452,27 +454,9 @@ async def run_phase4_post_turn_clerk(
     current_timestamp = completed_turn.world_snapshot.world_timestamp
     current_time_str = describe_world_timestamp(current_timestamp)
 
-    system_prompt = (
-        "You are the Post-Turn State Clerk for an AI roleplay engine.\n"
-        "Inspect the completed turn and output a JSON object matching PostTurnStateDelta:\n"
-        "- elapsed_minutes (int 0-1440): narrative minutes that passed during this turn. Typical "
-        "dialogue/action turns take 1-10 minutes; travel adds the exit's travel time.\n"
-        "- new_world_timestamp (string 'YYYY-MM-DD HH:MM' or null): the absolute in-world time at the "
-        "END of this turn. Set it ONLY when the user's message or the response states or clearly "
-        "implies a specific time or a time skip, e.g. \"it's 5am\" -> the next 05:00; \"they slept "
-        "until morning\" -> the following morning (~07:00-08:00); \"at dusk\" -> ~18:30; \"three days "
-        "later\" -> current time + 3 days. Compute it from the Current In-Game Time; it must never be "
-        "earlier than the current time (roll the date forward when the stated hour has already "
-        "passed today). When set, it overrides elapsed_minutes. Otherwise use null.\n"
-        "- transition_type ('stay' | 'move_existing' | 'improvise_new')\n"
-        "- target_location_id (if transition_type == 'move_existing', must match one of the neighbor IDs)\n"
-        "- improvised_location (if transition_type == 'improvise_new', object with name, summary, description, environmental_tags, entry_direction_label, return_direction_label, compass_direction ['N'|'NE'|'E'|'SE'|'S'|'SW'|'W'|'NW'], travel_minutes)\n"
-        "- notable_event_summary (1-sentence summary if a significant plot/relationship event occurred, else null)\n"
-        "- scene_flags_updated (list of newly added scene/fact flags; existing flags are preserved automatically)\n"
-        "- scene_flags_removed (list of obsolete flags to remove, if any)\n"
-        f"- inventory_added (list of items newly picked up, acquired, or crafted by {character.name} this turn; ignore momentary scene furniture/props not kept)\n"
-        f"- inventory_removed (list of items dropped, given away, consumed, or lost by {character.name} this turn; match names from Equipped / Worn or Carried Inventory)\n"
-        "- relationship_shift_note (string or null)"
+    system_prompt = render_template(
+        post_turn_prompt_template or get_default_prompt("clerk_post_turn_system"),
+        character_name=character.name,
     )
     user_prompt = (
         f"Current In-Game Time (start of this turn): {current_time_str}\n"
@@ -532,12 +516,12 @@ async def run_phase4_post_turn_clerk(
     )
 
     if needs_chunk_summary:
-        try:
-            summarize_coro = summarize_turn_chunk(
-                chunk_slice, character, profile=clerk_prof
-            )
-        except TypeError:
-            summarize_coro = summarize_turn_chunk(chunk_slice, character)
+        summarize_coro = summarize_turn_chunk(
+            chunk_slice,
+            character,
+            profile=clerk_prof,
+            prompt_template=summary_prompt_template,
+        )
         delta, summary_text = await asyncio.gather(
             _compute_delta(),
             summarize_coro,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
+from app.prompts import get_default_prompt, render_template
 from app.schemas.world import (
     LocationEdgeDraft,
     LocationNodeDraft,
@@ -154,19 +155,12 @@ def _fallback_world_expansion(seed: WorldWizardSeed) -> WorldWizardDraft:
 async def generate_world_draft(
     seed: WorldWizardSeed,
     profile: ModelProfile | None = None,
+    prompt_template: str | None = None,
 ) -> WorldWizardDraft:
     """Use the LLM to expand a WorldWizardSeed into an interconnected WorldWizardDraft."""
-    system_prompt = (
-        "You are an expert AI Worldbuilder & Spatial Level Designer for an agentic roleplay framework.\n"
-        "Given the user's world seed, output a JSON object matching WorldWizardDraft:\n"
-        "1. global_rules: genre, tone, setting_overview (2-4 sentences), tech_or_magic_rules, starting_timestamp ('YYYY-MM-DD HH:MM').\n"
-        f"2. locations: Create {seed.location_count} distinct, atmospheric LocationNodeDraft objects with slug `key` values, "
-        "`name`, 1-sentence `summary` (used when shown as an adjacent exit), 3-4 sentence sensory `description` "
-        "(used when characters are inside), `environmental_tags`, and mark the primary hub `is_starting_location: true`.\n"
-        "3. edges: Connect the locations using LocationEdgeDraft (`from_key`, `to_key`, evocative `direction_label`, "
-        "`reverse_direction_label`, `compass_direction` in N/NE/E/SE/S/SW/W/NW, `travel_minutes`, `is_locked_or_hidden`, `bidirectional: true`). Every location must be reachable.\n"
-        "4. lore_nodes: Create 4 LoreNodeDraft entries covering key factions, history, items, or cultural rules with `entity_tags`.\n"
-        "Return ONLY valid JSON matching WorldWizardDraft."
+    system_prompt = render_template(
+        prompt_template or get_default_prompt("wizard_world_system"),
+        location_count=seed.location_count,
     )
     user_prompt = (
         f"World Name: {seed.name}\n"

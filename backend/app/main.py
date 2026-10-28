@@ -44,6 +44,7 @@ from app.engine.phase1_pre import run_phase1_pre_analysis
 from app.engine.phase2_context import assemble_four_zone_messages, was_character_present_on_turn
 from app.engine.phase3_actor import stream_phase3_actor
 from app.engine.phase4_clerk import run_phase4_post_turn_clerk
+from app.prompts import FACTORY_DEFAULT_PROMPTS, PROMPTS_METADATA
 from app.schemas.auth import (
     AdminChangeUsernameRequest,
     AdminCreateUserRequest,
@@ -75,6 +76,13 @@ from app.schemas.character import (
     CharacterWizardDraft,
     CharacterWizardSeed,
     CognitionBlock,
+)
+from app.schemas.prompt import (
+    PromptDefaultsResponse,
+    PromptMetadata,
+    PromptPresetCreatePayload,
+    PromptPresetRecord,
+    PromptPresetUpdatePayload,
 )
 from app.schemas.turn import (
     CampaignCharacterMemoriesUpdateRequest,
@@ -702,6 +710,7 @@ def get_profile_models(
         user_override.actor_profile is not None
         or user_override.clerk_profile is not None
         or user_override.working_memory_turns is not None
+        or user_override.active_prompt_preset_id is not None
     )
     return ProfileModelSettingsResponse(
         allow_user_model_overrides=settings.allow_user_model_overrides,
@@ -712,6 +721,7 @@ def get_profile_models(
         user_actor_profile=user_override.actor_profile if user_override else None,
         user_clerk_profile=user_override.clerk_profile if user_override else None,
         user_working_memory_turns=user_override.working_memory_turns if user_override else None,
+        active_prompt_preset_id=user_override.active_prompt_preset_id if user_override else None,
         default_actor_profile=settings.actor_profile,
         default_clerk_profile=settings.clerk_profile,
         default_working_memory_turns=settings.memory_config.working_memory_turns,
@@ -740,6 +750,156 @@ def reset_profile_models(
     repo = get_repo()
     repo.delete_user_model_settings(current_user.id)
     return get_profile_models(current_user=current_user)
+
+
+# ------------------------------------------------------------------
+# Prompt Presets & Template Customization Endpoints
+# ------------------------------------------------------------------
+
+
+class SetCampaignPresetRequest(BaseModel):
+    preset_id: str | None = None
+
+
+@app.get("/api/prompts/defaults", response_model=PromptDefaultsResponse)
+def get_prompt_defaults(
+    current_user: UserProfile | None = Depends(get_optional_user),
+) -> PromptDefaultsResponse:
+    """Return factory defaults, template documentation/variables, and available presets."""
+    repo = get_repo()
+    presets = repo.list_prompt_presets(user_id=current_user.id if current_user else None)
+    return PromptDefaultsResponse(
+        presets=presets,
+        defaults=dict(FACTORY_DEFAULT_PROMPTS),
+        metadata=[PromptMetadata.model_validate(m) for m in PROMPTS_METADATA],
+    )
+
+
+@app.get("/api/prompts/presets", response_model=list[PromptPresetRecord])
+def list_prompt_presets(
+    current_user: UserProfile | None = Depends(get_optional_user),
+) -> list[PromptPresetRecord]:
+    """List all presets accessible to the current user (built-in + owned)."""
+    repo = get_repo()
+    return repo.list_prompt_presets(user_id=current_user.id if current_user else None)
+
+
+@app.get("/api/prompts/presets/{preset_id}", response_model=PromptPresetRecord)
+def get_prompt_preset(
+    preset_id: str,
+    current_user: UserProfile | None = Depends(get_optional_user),
+) -> PromptPresetRecord:
+    """Fetch details of a single prompt preset."""
+    repo = get_repo()
+    preset = repo.get_prompt_preset(preset_id)
+    if not preset:
+        raise HTTPException(status_code=404, detail=f"Preset '{preset_id}' not found")
+    return preset
+
+
+@app.post("/api/prompts/presets", response_model=PromptPresetRecord)
+def create_prompt_preset(
+    payload: PromptPresetCreatePayload,
+    current_user: UserProfile = Depends(get_current_user),
+) -> PromptPresetRecord:
+    """Create a new custom prompt preset (optionally cloned from an existing preset)."""
+    repo = get_repo()
+    base_prompts: dict[str, str] = {}
+    if payload.base_preset_id:
+        base = repo.get_prompt_preset(payload.base_preset_id)
+        if base:
+            base_prompts = dict(base.prompts)
+    if payload.prompts:
+        base_prompts.update(payload.prompts)
+
+    return repo.create_prompt_preset(
+        owner_id=current_user.id,
+        name=payload.name,
+        description=payload.description,
+        prompts=base_prompts,
+        is_builtin=False,
+    )
+
+
+@app.put("/api/prompts/presets/{preset_id}", response_model=PromptPresetRecord)
+def update_prompt_preset(
+    preset_id: str,
+    payload: PromptPresetUpdatePayload,
+    current_user: UserProfile = Depends(get_current_user),
+) -> PromptPresetRecord:
+    """Update a custom prompt preset's metadata or templates."""
+    repo = get_repo()
+    try:
+        return repo.update_prompt_preset(
+            preset_id,
+            name=payload.name,
+            description=payload.description,
+            prompts=payload.prompts,
+            user_id=current_user.id if current_user.role != "admin" else None,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@app.delete("/api/prompts/presets/{preset_id}")
+def delete_prompt_preset(
+    preset_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Delete a custom prompt preset."""
+    repo = get_repo()
+    try:
+        deleted = repo.delete_prompt_preset(
+            preset_id,
+            user_id=current_user.id if current_user.role != "admin" else None,
+        )
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Preset '{preset_id}' not found")
+        return {"status": "deleted", "id": preset_id}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@app.post("/api/prompts/presets/{preset_id}/reset", response_model=PromptPresetRecord)
+def reset_prompt_preset(
+    preset_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> PromptPresetRecord:
+    """Reset a custom prompt preset back to factory default prompt templates."""
+    repo = get_repo()
+    try:
+        return repo.reset_prompt_preset(
+            preset_id,
+            user_id=current_user.id if current_user.role != "admin" else None,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@app.put("/api/campaigns/{campaign_id}/prompt-preset", response_model=CampaignRecord)
+def set_campaign_prompt_preset(
+    campaign_id: str,
+    payload: SetCampaignPresetRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignRecord:
+    """Assign or clear an active prompt preset on a specific campaign."""
+    repo = get_repo()
+    try:
+        return repo.set_campaign_prompt_preset(
+            campaign_id,
+            payload.preset_id,
+            owner_id=current_user.id if current_user.role != "admin" else None,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 # ------------------------------------------------------------------
@@ -920,8 +1080,13 @@ async def wizard_draft_world(
     current_user: UserProfile = Depends(get_current_user),
 ) -> WorldWizardDraft:
     eff_actor, _, _ = get_effective_user_model_settings(current_user.id)
+    effective_prompts = get_repo().resolve_effective_prompts(user_id=current_user.id)
     try:
-        return await generate_world_draft(seed, profile=eff_actor)
+        return await generate_world_draft(
+            seed,
+            profile=eff_actor,
+            prompt_template=effective_prompts.get("wizard_world_system"),
+        )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -1001,8 +1166,14 @@ async def wizard_draft_character(
         except KeyError:
             world = None
     eff_actor, _, _ = get_effective_user_model_settings(current_user.id)
+    effective_prompts = repo.resolve_effective_prompts(user_id=current_user.id)
     try:
-        return await generate_character_draft(seed, world=world, profile=eff_actor)
+        return await generate_character_draft(
+            seed,
+            world=world,
+            profile=eff_actor,
+            prompt_template=effective_prompts.get("wizard_character_system"),
+        )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -1342,6 +1513,7 @@ async def _execute_turn_stream_events(
         known_entities.append(loc.name)
 
     eff_actor, eff_clerk, eff_wm_turns = get_effective_user_model_settings(owner_id)
+    effective_prompts = repo.resolve_effective_prompts(user_id=owner_id, campaign_id=campaign.id)
 
     # PHASE 1: Auxiliary Pre-Turn Analysis, Multi-Character Speaker Orchestration & RNG Mechanics
     pre_turn = await run_phase1_pre_analysis(
@@ -1354,6 +1526,7 @@ async def _execute_turn_stream_events(
         present_characters=present_characters,
         previous_speaker_id=parent_turn.actor_id,
         profile=eff_clerk,
+        prompt_template=effective_prompts.get("clerk_pre_turn_system"),
     )
 
     # Resolve active speaker selected by Phase 1 from characters present in the room
@@ -1416,6 +1589,7 @@ async def _execute_turn_stream_events(
         present_characters=present_characters,
         character_name_map={c.id: c.name for c in participants},
         working_memory_turns=eff_wm_turns,
+        actor_system_prompt_template=effective_prompts.get("actor_zone1_system"),
     )
 
     # PHASE 3: Guided Single-Pass <cognition> + Narrative Prose Streaming
@@ -1497,6 +1671,8 @@ async def _execute_turn_stream_events(
         neighbors=neighbors,
         profile=eff_clerk,
         working_memory_turns=eff_wm_turns,
+        post_turn_prompt_template=effective_prompts.get("clerk_post_turn_system"),
+        summary_prompt_template=effective_prompts.get("clerk_episodic_summary_system"),
     )
     bundle = repo.get_campaign_state_bundle(campaign.id)
     yield {

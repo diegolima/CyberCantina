@@ -4,6 +4,7 @@ import {
   Check,
   Copy,
   Cpu,
+  FileText,
   Fingerprint,
   KeyRound,
   Lock,
@@ -20,6 +21,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api";
+import { PromptPresetsManager } from "./PromptPresetsManager";
 import {
   AppSettings,
   AuthSessionResponse,
@@ -597,7 +599,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 interface ProfileModalProps {
   user: UserProfile;
   singleUserMode: boolean;
-  initialTab?: "identity" | "account" | "models";
+  initialTab?: "identity" | "account" | "models" | "prompts";
   onClose: () => void;
   onUserUpdated: (updated: UserProfile, singleUserMode?: boolean) => void;
   onAccountReset: () => Promise<void>;
@@ -613,7 +615,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   onAccountReset,
   onAccountDeleted,
 }) => {
-  const [activeTab, setActiveTab] = useState<"identity" | "account" | "models">(
+  const [activeTab, setActiveTab] = useState<"identity" | "account" | "models" | "prompts">(
     initialTab ?? "identity"
   );
   const [displayName, setDisplayName] = useState(user.display_name);
@@ -1062,6 +1064,16 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
             {modelSettings && !modelSettings.allow_user_model_overrides && (
               <span className="modal-tab-badge">Locked</span>
             )}
+          </button>
+          <button
+            type="button"
+            className={`modal-tab-btn ${
+              activeTab === "prompts" ? "active" : ""
+            }`}
+            onClick={() => setActiveTab("prompts")}
+          >
+            <FileText size={14} />
+            Prompts & Presets
           </button>
         </div>
 
@@ -2412,6 +2424,28 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                 )}
             </div>
           )}
+
+          {/* Prompts & Presets Tab */}
+          {activeTab === "prompts" && (
+            <PromptPresetsManager
+              activePresetId={modelSettings?.active_prompt_preset_id}
+              onActivePresetChanged={async (presetId) => {
+                const payload: UserModelSettingsPayload = {
+                  ...(modelSettings?.user_actor_profile
+                    ? { actor_profile: modelSettings.user_actor_profile }
+                    : {}),
+                  ...(modelSettings?.user_clerk_profile
+                    ? { clerk_profile: modelSettings.user_clerk_profile }
+                    : {}),
+                  working_memory_turns:
+                    modelSettings?.user_working_memory_turns ?? null,
+                  active_prompt_preset_id: presetId,
+                };
+                const updated = await api.updateProfileModels(payload);
+                setModelSettings(updated);
+              }}
+            />
+          )}
         </div>
       </div>
 
@@ -2434,7 +2468,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 interface AdminModalProps {
   currentUser: UserProfile;
   singleUserMode: boolean;
-  initialTab?: "users" | "models";
+  initialTab?: "users" | "models" | "prompts";
   onClose: () => void;
   onCurrentUserUpdated: (updated: UserProfile) => void;
   onAccountDeleted?: (deletedUserId: string) => Promise<void>;
@@ -2450,7 +2484,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   onAccountDeleted,
   onSettingsUpdated,
 }) => {
-  const [activeTab, setActiveTab] = useState<"users" | "models">(
+  const [activeTab, setActiveTab] = useState<"users" | "models" | "prompts">(
     initialTab ?? "users"
   );
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -2775,6 +2809,16 @@ export const AdminModal: React.FC<AdminModalProps> = ({
           >
             <Cpu size={14} />
             Models
+          </button>
+          <button
+            type="button"
+            className={`modal-tab-btn ${
+              activeTab === "prompts" ? "active" : ""
+            }`}
+            onClick={() => setActiveTab("prompts")}
+          >
+            <FileText size={14} />
+            Prompts & Presets
           </button>
         </div>
 
@@ -3985,6 +4029,9 @@ export const AdminModal: React.FC<AdminModalProps> = ({
               )}
             </div>
           )}
+
+          {/* Admin Prompts & Presets Tab */}
+          {activeTab === "prompts" && <PromptPresetsManager />}
         </div>
       </div>
 

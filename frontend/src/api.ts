@@ -13,6 +13,10 @@ import {
   OllamaStatusResponse,
   PreTurnAnalysis,
   ProfileModelSettingsResponse,
+  PromptDefaultsResponse,
+  PromptPresetCreatePayload,
+  PromptPresetRecord,
+  PromptPresetUpdatePayload,
   RecalledMemoryItem,
   TurnNodeRecord,
   UserModelSettingsPayload,
@@ -437,6 +441,35 @@ export const api = {
   resetProfileModels: () =>
     fetchJson<ProfileModelSettingsResponse>(`${API_BASE}/profile/models`, {
       method: "DELETE",
+    }),
+  getPromptDefaults: () =>
+    fetchJson<PromptDefaultsResponse>(`${API_BASE}/prompts/defaults`),
+  listPromptPresets: () =>
+    fetchJson<PromptPresetRecord[]>(`${API_BASE}/prompts/presets`),
+  getPromptPreset: (id: string) =>
+    fetchJson<PromptPresetRecord>(`${API_BASE}/prompts/presets/${id}`),
+  createPromptPreset: (payload: PromptPresetCreatePayload) =>
+    fetchJson<PromptPresetRecord>(`${API_BASE}/prompts/presets`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updatePromptPreset: (id: string, payload: PromptPresetUpdatePayload) =>
+    fetchJson<PromptPresetRecord>(`${API_BASE}/prompts/presets/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deletePromptPreset: (id: string) =>
+    fetchJson<{ status: string; id: string }>(`${API_BASE}/prompts/presets/${id}`, {
+      method: "DELETE",
+    }),
+  resetPromptPreset: (id: string) =>
+    fetchJson<PromptPresetRecord>(`${API_BASE}/prompts/presets/${id}/reset`, {
+      method: "POST",
+    }),
+  setCampaignPromptPreset: (campaignId: string, presetId: string | null) =>
+    fetchJson<CampaignRecord>(`${API_BASE}/campaigns/${campaignId}/prompt-preset`, {
+      method: "PUT",
+      body: JSON.stringify({ preset_id: presetId }),
     }),
   getOllamaStatus: (baseUrl?: string) => {
     const q = baseUrl ? `?base_url=${encodeURIComponent(baseUrl)}` : "";

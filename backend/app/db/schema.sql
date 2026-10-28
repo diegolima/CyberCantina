@@ -39,11 +39,25 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_last_active ON user_sessions(last_active_at);
 
+CREATE TABLE IF NOT EXISTS prompt_presets (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    is_builtin INTEGER NOT NULL DEFAULT 0,
+    prompts_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_prompt_presets_owner ON prompt_presets(owner_id);
+
 CREATE TABLE IF NOT EXISTS user_model_settings (
     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     actor_profile_json TEXT NULL,
     clerk_profile_json TEXT NULL,
     working_memory_turns INTEGER NULL,
+    active_prompt_preset_id TEXT NULL REFERENCES prompt_presets(id) ON DELETE SET NULL,
     updated_at TEXT NOT NULL
 );
 
@@ -121,6 +135,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE RESTRICT,
     character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE RESTRICT,
     active_leaf_turn_id TEXT NULL,
+    prompt_preset_id TEXT NULL REFERENCES prompt_presets(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL
 );
 
