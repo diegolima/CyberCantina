@@ -471,6 +471,18 @@ export const WorldWizardModal: React.FC<WorldWizardModalProps> = ({
         initial_hub_concept: hubConcept,
         location_count: locationCount,
       });
+      if (res && res.global_rules) {
+        const curGenre = (res.global_rules.genre || "").trim();
+        const curLower = curGenre.toLowerCase();
+        const intendedLower = genreAndTone.trim().toLowerCase();
+        if (
+          !curGenre ||
+          ((curLower === "cyberpunk noir" || curLower === "cyberpunk") &&
+            !intendedLower.includes("cyberpunk"))
+        ) {
+          res.global_rules.genre = genreAndTone.trim();
+        }
+      }
       setDraft(res);
     } catch (err) {
       setError(String(err));

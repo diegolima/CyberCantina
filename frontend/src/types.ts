@@ -156,6 +156,27 @@ export interface WorldRecord {
   lore_nodes: LoreNode[];
 }
 
+export interface LocationNodeDraft {
+  key: string;
+  name: string;
+  summary: string;
+  description: string;
+  environmental_tags: string[];
+  is_starting_location: boolean;
+  is_hub?: boolean;
+}
+
+export interface LocationEdgeDraft {
+  from_key: string;
+  to_key: string;
+  direction_label: string;
+  reverse_direction_label: string;
+  compass_direction?: CompassDirection | null;
+  travel_minutes: number;
+  is_locked_or_hidden: boolean;
+  bidirectional: boolean;
+}
+
 export interface WorldWizardSeed {
   name: string;
   genre_and_tone: string;
@@ -167,31 +188,26 @@ export interface WorldWizardSeed {
 export interface WorldWizardDraft {
   name: string;
   global_rules: WorldGlobalRules;
-  locations: Array<{
-    key: string;
-    name: string;
-    summary: string;
-    description: string;
-    environmental_tags: string[];
-    is_starting_location: boolean;
-    is_hub?: boolean;
-  }>;
-  edges: Array<{
-    from_key: string;
-    to_key: string;
-    direction_label: string;
-    reverse_direction_label: string;
-    compass_direction?: CompassDirection | null;
-    travel_minutes: number;
-    is_locked_or_hidden: boolean;
-    bidirectional: boolean;
-  }>;
+  locations: LocationNodeDraft[];
+  edges: LocationEdgeDraft[];
   lore_nodes: Array<{
     title: string;
     category: "faction" | "history" | "item" | "culture" | "rule" | "rumor";
     content: string;
     entity_tags: string[];
   }>;
+}
+
+export interface WorldMapDraft {
+  locations: LocationNodeDraft[];
+  edges: LocationEdgeDraft[];
+}
+
+export interface WorldMapReimagineRequest {
+  world_name: string;
+  global_rules: WorldGlobalRules;
+  map_description: string;
+  location_count?: number;
 }
 
 export interface MechanicsTrigger {

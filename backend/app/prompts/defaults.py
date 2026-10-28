@@ -11,6 +11,7 @@ PROMPT_KEY_CLERK_SUMMARY = "clerk_episodic_summary_system"
 PROMPT_KEY_CLERK_POST_TURN = "clerk_post_turn_system"
 PROMPT_KEY_WIZARD_WORLD = "wizard_world_system"
 PROMPT_KEY_WIZARD_CHARACTER = "wizard_character_system"
+PROMPT_KEY_WIZARD_MAP_REIMAGINE = "wizard_map_reimagine_system"
 
 ALL_PROMPT_KEYS = [
     PROMPT_KEY_ACTOR_ZONE1,
@@ -20,6 +21,7 @@ ALL_PROMPT_KEYS = [
     PROMPT_KEY_CLERK_POST_TURN,
     PROMPT_KEY_WIZARD_WORLD,
     PROMPT_KEY_WIZARD_CHARACTER,
+    PROMPT_KEY_WIZARD_MAP_REIMAGINE,
 ]
 
 DEFAULT_ACTOR_ZONE1_SYSTEM = (
@@ -120,7 +122,7 @@ DEFAULT_CLERK_POST_TURN_SYSTEM = (
 DEFAULT_WIZARD_WORLD_SYSTEM = (
     "You are an expert AI Worldbuilder & Spatial Level Designer for an agentic roleplay framework.\n"
     "Given the user's world seed, output a JSON object matching WorldWizardDraft:\n"
-    "1. global_rules: genre, tone, setting_overview (2-4 sentences), tech_or_magic_rules, starting_timestamp ('YYYY-MM-DD HH:MM').\n"
+    "1. global_rules: genre (must accurately reflect the genre from the user seed), tone (must match the mood/tone from the user seed), setting_overview (2-4 sentences), tech_or_magic_rules (rules appropriate for this genre and setting), starting_timestamp ('YYYY-MM-DD HH:MM').\n"
     "2. locations: Create {location_count} distinct, atmospheric LocationNodeDraft objects with slug `key` values, "
     "`name`, 1-sentence `summary` (used when shown as an adjacent exit), 3-4 sentence sensory `description` "
     "(used when characters are inside), `environmental_tags`, and mark the primary hub `is_starting_location: true`.\n"
@@ -128,6 +130,19 @@ DEFAULT_WIZARD_WORLD_SYSTEM = (
     "`reverse_direction_label`, `compass_direction` in N/NE/E/SE/S/SW/W/NW, `travel_minutes`, `is_locked_or_hidden`, `bidirectional: true`). Every location must be reachable.\n"
     "4. lore_nodes: Create 4 LoreNodeDraft entries covering key factions, history, items, or cultural rules with `entity_tags`.\n"
     "Return ONLY valid JSON matching WorldWizardDraft."
+)
+
+DEFAULT_WIZARD_MAP_REIMAGINE_SYSTEM = (
+    "You are an expert AI Spatial Level Designer and Cartographer for an agentic roleplay framework.\n"
+    "Given the world setting and the user's specific map vision and desired layout, generate a newly re-imagined interconnected spatial topology matching WorldMapDraft:\n"
+    "1. locations: Create exactly {location_count} distinct, atmospheric LocationNodeDraft objects with unique slug `key` values, "
+    "`name`, 1-sentence `summary` (used when shown as an adjacent exit), 3-4 sentence sensory `description` "
+    "(used when characters are inside), `environmental_tags`, and mark exactly one primary starting hub with `is_starting_location: true`.\n"
+    "2. edges: Connect the locations using LocationEdgeDraft (`from_key`, `to_key`, evocative `direction_label`, "
+    "`reverse_direction_label`, `compass_direction` in N/NE/E/SE/S/SW/W/NW, `travel_minutes` between 1-10, `is_locked_or_hidden: false`, `bidirectional: true`). "
+    "Every location must be reachable from the starting location via connecting edges.\n"
+    "3. Strictly adhere to the user's map vision and layout instructions, while anchoring the environment, sensory details, architecture, and technology/magic in the world's Genre ({genre}) and Tone ({tone}).\n"
+    "Return ONLY valid JSON matching WorldMapDraft."
 )
 
 DEFAULT_WIZARD_CHARACTER_SYSTEM = (
@@ -190,6 +205,7 @@ FACTORY_DEFAULT_PROMPTS: dict[str, str] = {
     PROMPT_KEY_CLERK_POST_TURN: DEFAULT_CLERK_POST_TURN_SYSTEM,
     PROMPT_KEY_WIZARD_WORLD: DEFAULT_WIZARD_WORLD_SYSTEM,
     PROMPT_KEY_WIZARD_CHARACTER: DEFAULT_WIZARD_CHARACTER_SYSTEM,
+    PROMPT_KEY_WIZARD_MAP_REIMAGINE: DEFAULT_WIZARD_MAP_REIMAGINE_SYSTEM,
 }
 
 # --- Preset 2: Novelistic & Descriptive ---
@@ -373,5 +389,16 @@ PROMPTS_METADATA = [
         "description": "System prompt used when expanding character concept seeds into rich character sheets.",
         "available_variables": [],
         "required_tags": ["CharacterWizardDraft"],
+    },
+    {
+        "key": PROMPT_KEY_WIZARD_MAP_REIMAGINE,
+        "title": "Spatial Map Re-imagining Wizard",
+        "description": "System prompt used when re-imagining or regenerating spatial topology maps from user guidance.",
+        "available_variables": [
+            {"name": "genre", "description": "Active world genre"},
+            {"name": "tone", "description": "Active world tone"},
+            {"name": "location_count", "description": "Number of locations requested"},
+        ],
+        "required_tags": ["WorldMapDraft"],
     },
 ]

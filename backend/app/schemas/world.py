@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 CompassDirection = Literal["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 
@@ -108,22 +108,44 @@ def pick_available_compass_direction(
 class WorldGlobalRules(BaseModel):
     """High-level setting rules kept in Zone 1 Static Prefix."""
 
-    genre: str = Field(default="Cyberpunk Noir", description="Primary genre and subgenre.")
+    genre: str = Field(description="Primary genre and subgenre.")
     tone: str = Field(
-        default="Gritty, atmospheric, grounded consequences, sharp dialogue.",
+        default="Immersive, atmospheric, grounded consequences, sharp dialogue.",
         description="Narrative tone and stylistic atmosphere.",
     )
     setting_overview: str = Field(
         description="2-4 sentence macro overview of the world, power structures, and daily reality."
     )
     tech_or_magic_rules: str = Field(
-        default="Cyberware requires immunosuppressive drugs; net-running is local-jacked.",
+        default="Actions and physical feats are bounded by the plausible technology, magic, or physical laws of the setting.",
         description="Key constraints so the LLM maintains world consistency.",
     )
     starting_timestamp: str = Field(
         default="2094-11-14 23:15",
         description="Initial world clock timestamp (YYYY-MM-DD HH:MM).",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_rules(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            raw_genre = data.get("genre")
+            if not raw_genre or not str(raw_genre).strip():
+                for alias in ("genre_and_tone", "genre_tone", "genre_setting"):
+                    val = data.get(alias)
+                    if isinstance(val, str) and val.strip():
+                        data["genre"] = val.strip()
+                        break
+                else:
+                    data["genre"] = "Speculative Fiction"
+            raw_tone = data.get("tone")
+            if not raw_tone or not str(raw_tone).strip():
+                for alias in ("mood", "atmosphere", "narrative_tone"):
+                    val = data.get(alias)
+                    if isinstance(val, str) and val.strip():
+                        data["tone"] = val.strip()
+                        break
+        return data
 
 
 class LocationNodeDraft(BaseModel):
@@ -199,6 +221,26 @@ class WorldWizardDraft(BaseModel):
     locations: list[LocationNodeDraft]
     edges: list[LocationEdgeDraft]
     lore_nodes: list[LoreNodeDraft]
+
+
+class WorldMapReimagineRequest(BaseModel):
+    """User request to re-imagine the spatial map of a world draft or existing world."""
+
+    world_name: str = Field(..., description="Name of the world setting.")
+    global_rules: WorldGlobalRules = Field(..., description="Active world rules and tone.")
+    map_description: str = Field(
+        ...,
+        min_length=1,
+        description="User's desired vision, thematic focus, or specific spatial layout for the regenerated map.",
+    )
+    location_count: int = Field(default=5, ge=3, le=10)
+
+
+class WorldMapDraft(BaseModel):
+    """Regenerated spatial topology package."""
+
+    locations: list[LocationNodeDraft]
+    edges: list[LocationEdgeDraft]
 
 
 class LocationNode(BaseModel):

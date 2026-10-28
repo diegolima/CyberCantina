@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
 from app.prompts import get_default_prompt, render_template
@@ -10,6 +12,8 @@ from app.schemas.world import (
     LocationNodeDraft,
     LoreNodeDraft,
     WorldGlobalRules,
+    WorldMapDraft,
+    WorldMapReimagineRequest,
     WorldWizardDraft,
     WorldWizardSeed,
     normalize_compass_direction,
@@ -17,9 +21,9 @@ from app.schemas.world import (
 )
 
 
-def _normalize_draft_topology(draft: WorldWizardDraft) -> WorldWizardDraft:
+def _normalize_topology(draft: Any) -> Any:
     """Ensure starting location is set and edges have non-colliding compass directions."""
-    if not any(loc.is_starting_location for loc in draft.locations):
+    if draft.locations and not any(loc.is_starting_location for loc in draft.locations):
         draft.locations[0].is_starting_location = True
 
     occupied_from: dict[str, set[str]] = {}
@@ -31,6 +35,40 @@ def _normalize_draft_topology(draft: WorldWizardDraft) -> WorldWizardDraft:
         cdir = pick_available_compass_direction(preferred, occ)
         occ.add(cdir)
         edge.compass_direction = cdir
+    return draft
+
+
+def _normalize_draft_topology(draft: WorldWizardDraft) -> WorldWizardDraft:
+    """Ensure starting location is set and edges have non-colliding compass directions."""
+    return _normalize_topology(draft)
+
+
+def _align_draft_rules_with_seed(
+    draft: WorldWizardDraft, seed: WorldWizardSeed
+) -> WorldWizardDraft:
+    """Ensure generated world rules match the user's intended seed rather than defaulting."""
+    seed_genre_tone = seed.genre_and_tone.strip()
+    current_genre = (draft.global_rules.genre or "").strip()
+
+    seed_lower = seed_genre_tone.lower()
+    is_cyberpunk_requested = (
+        "cyberpunk" in seed_lower
+        or "cyberpunk" in seed.name.lower()
+        or "cyberpunk" in seed.core_premise.lower()
+    )
+    if (
+        not current_genre
+        or current_genre == "Speculative Fiction"
+        or (
+            current_genre.lower() in ("cyberpunk noir", "cyberpunk")
+            and not is_cyberpunk_requested
+        )
+    ):
+        draft.global_rules.genre = seed_genre_tone
+
+    if not draft.global_rules.tone or not draft.global_rules.tone.strip():
+        draft.global_rules.tone = "Immersive, sensory-rich, consistent world logic and consequences."
+
     return draft
 
 
@@ -183,8 +221,146 @@ async def generate_world_draft(
         )
         if not draft.locations:
             return _fallback_world_expansion(seed)
+        draft = _align_draft_rules_with_seed(draft, seed)
         return _normalize_draft_topology(draft)
     except Exception:
         if not settings.allow_offline_fallback:
             raise
         return _fallback_world_expansion(seed)
+
+
+def _fallback_map_reimagine(req: WorldMapReimagineRequest) -> WorldMapDraft:
+    """Offline fallback when LLM server is not responding, tailored to req.map_description."""
+    desc_words = [
+        w.strip(".,;:!?\"'()") for w in req.map_description.split() if len(w) > 3
+    ]
+    theme_anchor = desc_words[0].capitalize() if desc_words else "Central"
+    hub_name = f"{req.world_name} {theme_anchor} Hub"
+    count = max(3, min(req.location_count, 8))
+
+    locations = [
+        LocationNodeDraft(
+            key="reimagined_hub",
+            name=hub_name,
+            summary=f"The central hub of {req.world_name}, redesigned around the new spatial layout.",
+            description=(
+                f"Anchored in the heart of {req.world_name}. {req.map_description[:160]}. "
+                "Exits lead out to surrounding quarters according to the re-imagined layout."
+            ),
+            environmental_tags=["central", "re-imagined", "arrival"],
+            is_starting_location=True,
+            is_hub=True,
+        ),
+        LocationNodeDraft(
+            key="reimagined_sector_alpha",
+            name=f"{theme_anchor} Sector Passage",
+            summary="An adjoining wing aligned with the re-imagined design.",
+            description=(
+                f"Extending away from {hub_name}, this section incorporates features from the requested layout: "
+                f"{req.map_description}."
+            ),
+            environmental_tags=["passage", "corridor"],
+        ),
+        LocationNodeDraft(
+            key="reimagined_perimeter",
+            name=f"{theme_anchor} Perimeter Outpost",
+            summary="An outer threshold overlooking the surrounding area.",
+            description=(
+                f"Positioned on the outer ring of {req.world_name}. Structural lines and atmospheric detail "
+                "mesh with the primary setting."
+            ),
+            environmental_tags=["perimeter", "vantage point"],
+        ),
+    ]
+
+    edges = [
+        LocationEdgeDraft(
+            from_key="reimagined_hub",
+            to_key="reimagined_sector_alpha",
+            direction_label="Primary transit arch",
+            reverse_direction_label="Back to central hub",
+            compass_direction="E",
+            travel_minutes=1,
+            bidirectional=True,
+        ),
+        LocationEdgeDraft(
+            from_key="reimagined_hub",
+            to_key="reimagined_perimeter",
+            direction_label="Secured perimeter corridor",
+            reverse_direction_label="Back to central hub",
+            compass_direction="N",
+            travel_minutes=2,
+            bidirectional=True,
+        ),
+    ]
+
+    if count >= 4:
+        locations.append(
+            LocationNodeDraft(
+                key="reimagined_sublevel",
+                name=f"{theme_anchor} Sub-level Chambers",
+                summary="A lower auxiliary sector matching the re-imagined layout.",
+                description=(
+                    "Beneath the main floor, quiet machinery and secondary corridors provide access "
+                    "to specialized infrastructure."
+                ),
+                environmental_tags=["lower level", "utility"],
+            )
+        )
+        edges.append(
+            LocationEdgeDraft(
+                from_key="reimagined_hub",
+                to_key="reimagined_sublevel",
+                direction_label="Access stairwell down",
+                reverse_direction_label="Stairwell up to hub",
+                compass_direction="S",
+                travel_minutes=1,
+                bidirectional=True,
+            )
+        )
+
+    draft = WorldMapDraft(locations=locations, edges=edges)
+    return _normalize_topology(draft)
+
+
+async def reimagine_world_map(
+    req: WorldMapReimagineRequest,
+    profile: ModelProfile | None = None,
+    prompt_template: str | None = None,
+) -> WorldMapDraft:
+    """Use the LLM to regenerate spatial topology based on user description and world rules."""
+    system_prompt = render_template(
+        prompt_template or get_default_prompt("wizard_map_reimagine_system"),
+        location_count=req.location_count,
+        genre=req.global_rules.genre,
+        tone=req.global_rules.tone,
+    )
+    user_prompt = (
+        f"World Name: {req.world_name}\n"
+        f"Genre: {req.global_rules.genre}\n"
+        f"Tone: {req.global_rules.tone}\n"
+        f"Setting Overview: {req.global_rules.setting_overview}\n"
+        f"World Rules / Constraints: {req.global_rules.tech_or_magic_rules}\n\n"
+        f"=== DESIRED MAP VISION & LAYOUT ===\n"
+        f"{req.map_description}\n\n"
+        f"Requested Locations Count: {req.location_count}"
+    )
+
+    actor_prof = profile or settings.actor_profile
+    try:
+        draft = await llm_client.complete_structured(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            WorldMapDraft,
+            profile=actor_prof,
+            max_tokens=4096,
+        )
+        if not draft.locations:
+            return _fallback_map_reimagine(req)
+        return _normalize_topology(draft)
+    except Exception:
+        if not settings.allow_offline_fallback:
+            raise
+        return _fallback_map_reimagine(req)

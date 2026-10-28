@@ -481,6 +481,23 @@ def test_tenant_isolation_for_worlds_characters_and_campaigns(
         },
     )
     assert w_draft_res.status_code == 200
+
+    # User 2 tests the re-imagine map endpoint
+    reimagine_res = client.post(
+        "/api/wizards/world/reimagine-map",
+        headers=u2_headers,
+        json={
+            "world_name": "User Two Citadel",
+            "global_rules": w_draft_res.json()["global_rules"],
+            "map_description": "A central solar spire connected to two hanging greenhouse terraces.",
+            "location_count": 3,
+        },
+    )
+    assert reimagine_res.status_code == 200
+    map_draft = reimagine_res.json()
+    assert len(map_draft["locations"]) >= 3
+    assert len(map_draft["edges"]) >= 2
+
     w_commit_res = client.post(
         "/api/wizards/world/commit",
         headers=u2_headers,

@@ -10,6 +10,7 @@ import {
   HeartPulse,
   Package,
   Plus,
+  Sparkles,
   Trash2,
   User,
   Users,
@@ -20,7 +21,9 @@ import {
   CharacterRecord,
   CompassDirection,
   LocationEdge,
+  LocationEdgeDraft,
   LocationNode,
+  LocationNodeDraft,
   LoreNode,
   MemoryShard,
   VoiceAnchor,
@@ -959,8 +962,13 @@ export const CharacterInspectorModal: React.FC<
 // World Inspector & Inline Editor Modal
 // ============================================================================
 
-export function draftToWorldRecord(draft: WorldWizardDraft): WorldRecord {
-  const draftWorldId = "draft_world";
+export function mapDraftToNodesAndEdges(
+  draft: {
+    locations: LocationNodeDraft[];
+    edges: LocationEdgeDraft[];
+  },
+  worldId: string
+): { locations: LocationNode[]; edges: LocationEdge[] } {
   const usedIds = new Set<string>();
   const keyToId = new Map<string, string>();
   const nameToId = new Map<string, string>();
@@ -972,9 +980,9 @@ export function draftToWorldRecord(draft: WorldWizardDraft): WorldRecord {
 
   const locations: LocationNode[] = draft.locations.map((loc, idx) => {
     const rawKey = (loc.key || "").trim();
-    let id = rawKey || `draft_loc_${idx}`;
+    let id = rawKey || `loc_${idx}`;
     while (usedIds.has(id)) {
-      id = `${rawKey || "draft_loc"}_${idx}_${Math.random().toString(36).slice(2, 6)}`;
+      id = `${rawKey || "loc"}_${idx}_${Math.random().toString(36).slice(2, 6)}`;
     }
     usedIds.add(id);
     if (rawKey && !keyToId.has(rawKey)) {
@@ -988,7 +996,7 @@ export function draftToWorldRecord(draft: WorldWizardDraft): WorldRecord {
     const isStart = idx === startIdx;
     return {
       id,
-      world_id: draftWorldId,
+      world_id: worldId,
       name: loc.name,
       summary: loc.summary,
       description: loc.description,
@@ -1029,8 +1037,8 @@ export function draftToWorldRecord(draft: WorldWizardDraft): WorldRecord {
     if (!hasDirectedPair(fromId, toId)) {
       fromOcc.add(fwdDir);
       edges.push({
-        id: `draft_edge_${idx}_fwd`,
-        world_id: draftWorldId,
+        id: `edge_${idx}_fwd_${Math.random().toString(36).slice(2, 6)}`,
+        world_id: worldId,
         from_location_id: fromId,
         to_location_id: toId,
         direction_label: edge.direction_label || "Passage",
@@ -1051,8 +1059,8 @@ export function draftToWorldRecord(draft: WorldWizardDraft): WorldRecord {
       const fromLocName =
         locations.find((l) => l.id === fromId)?.name ?? edge.from_key;
       edges.push({
-        id: `draft_edge_${idx}_rev`,
-        world_id: draftWorldId,
+        id: `edge_${idx}_rev_${Math.random().toString(36).slice(2, 6)}`,
+        world_id: worldId,
         from_location_id: toId,
         to_location_id: fromId,
         direction_label:
@@ -1063,6 +1071,13 @@ export function draftToWorldRecord(draft: WorldWizardDraft): WorldRecord {
       });
     }
   });
+
+  return { locations, edges };
+}
+
+export function draftToWorldRecord(draft: WorldWizardDraft): WorldRecord {
+  const draftWorldId = "draft_world";
+  const { locations, edges } = mapDraftToNodesAndEdges(draft, draftWorldId);
 
   const lore_nodes: LoreNode[] = (draft.lore_nodes ?? []).map((lore, idx) => ({
     id: `draft_lore_${idx}`,
@@ -1187,6 +1202,42 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   const [isDirty, setIsDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Re-imagine Map Modal state
+  const [showReimagineModal, setShowReimagineModal] = useState(false);
+  const [reimagineDescription, setReimagineDescription] = useState("");
+  const [reimagineCount, setReimagineCount] = useState(
+    Math.max(3, Math.min(8, locations.length || 4))
+  );
+  const [reimagining, setReimagining] = useState(false);
+  const [reimagineError, setReimagineError] = useState<string | null>(null);
+
+  const handleExecuteReimagine = async () => {
+    if (!reimagineDescription.trim()) return;
+    setReimagining(true);
+    setReimagineError(null);
+    try {
+      const mapDraft = await api.reimagineWorldMap({
+        world_name: name,
+        global_rules: globalRules,
+        map_description: reimagineDescription.trim(),
+        location_count: reimagineCount,
+      });
+      const { locations: newLocs, edges: newEdges } = mapDraftToNodesAndEdges(
+        mapDraft,
+        world.id
+      );
+      setLocations(newLocs);
+      setEdges(newEdges);
+      markDirty();
+      setShowReimagineModal(false);
+      setReimagineDescription("");
+    } catch (err) {
+      setReimagineError(String(err));
+    } finally {
+      setReimagining(false);
+    }
+  };
 
   const markDirty = () => {
     if (!isDirty) setIsDirty(true);
@@ -1526,31 +1577,40 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 }}
               >
                 <div style={{ color: "var(--text-muted)", marginBottom: 12 }}>
-                  No spatial locations defined. Add an initial starting hub to anchor your map.
+                  No spatial locations defined. Add an initial starting hub or generate a map with AI.
                 </div>
-                <button
-                  type="button"
-                  className="btn btn-amber"
-                  onClick={() => {
-                    const newId = `new_loc_${Date.now()}`;
-                    setLocations([
-                      {
-                        id: newId,
-                        world_id: world.id,
-                        name: "Main Plaza / Starting Hub",
-                        summary: "Central arrival threshold and starting hub.",
-                        description:
-                          "The primary gathering hub and central gateway connecting adjoining sectors.",
-                        environmental_tags: ["hub", "central", "open"],
-                        is_starting_location: true,
-                        is_hub: false,
-                      },
-                    ]);
-                    markDirty();
-                  }}
-                >
-                  <Plus size={14} /> Create Starting Hub
-                </button>
+                <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="btn btn-amber"
+                    onClick={() => {
+                      const newId = `new_loc_${Date.now()}`;
+                      setLocations([
+                        {
+                          id: newId,
+                          world_id: world.id,
+                          name: "Main Plaza / Starting Hub",
+                          summary: "Central arrival threshold and starting hub.",
+                          description:
+                            "The primary gathering hub and central gateway connecting adjoining sectors.",
+                          environmental_tags: ["hub", "central", "open"],
+                          is_starting_location: true,
+                          is_hub: false,
+                        },
+                      ]);
+                      markDirty();
+                    }}
+                  >
+                    <Plus size={14} /> Create Starting Hub
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-purple"
+                    onClick={() => setShowReimagineModal(true)}
+                  >
+                    <Sparkles size={14} /> Re-imagine Map with AI
+                  </button>
+                </div>
               </div>
             ) : (
               <SpatialTopologyView
@@ -1563,6 +1623,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                   ""
                 }
                 mode="editor"
+                onReimagineMap={() => setShowReimagineModal(true)}
                 onUpdateLocation={handleUpdateLocation}
                 onDeleteLocation={handleDeleteLocation}
                 onSetStartingLocation={handleSetStartingLocation}
@@ -1817,6 +1878,149 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
           )}
         </div>
       </div>
+
+      {/* Re-imagine Spatial Map Modal */}
+      {showReimagineModal && (
+        <div
+          className="modal-backdrop"
+          style={{ zIndex: 1200 }}
+          onClick={() => !reimagining && setShowReimagineModal(false)}
+        >
+          <div
+            className="modal-panel"
+            style={{ width: "min(620px, 95vw)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <span
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  color: "var(--accent-purple, #c084fc)",
+                }}
+              >
+                <Sparkles size={18} />
+                Re-imagine Spatial Map with AI
+              </span>
+              <button
+                type="button"
+                className="btn"
+                disabled={reimagining}
+                onClick={() => setShowReimagineModal(false)}
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            <div
+              className="modal-body"
+              style={{ display: "flex", flexDirection: "column", gap: 14 }}
+            >
+              <div
+                style={{
+                  fontSize: "0.78rem",
+                  color: "var(--text-secondary)",
+                  background: "var(--bg-card)",
+                  padding: "10px 14px",
+                  borderRadius: 6,
+                  border: "1px solid var(--border-subtle)",
+                  lineHeight: 1.5,
+                }}
+              >
+                Describe your desired layout, rooms, or spatial atmosphere for{" "}
+                <strong>{name}</strong> ({globalRules.genre}). The AI will
+                regenerate the interconnected locations and passages to match your
+                vision while preserving existing world rules and lore.
+              </div>
+
+              {reimagineError && (
+                <div
+                  style={{
+                    color: "var(--accent-rose)",
+                    fontSize: "0.82rem",
+                    background: "rgba(244, 63, 94, 0.1)",
+                    padding: "8px 12px",
+                    borderRadius: 6,
+                  }}
+                >
+                  {reimagineError}
+                </div>
+              )}
+
+              <div className="field-group">
+                <label>Desired Map Vision & Spatial Layout</label>
+                <textarea
+                  className="field-textarea"
+                  rows={4}
+                  placeholder="e.g. A multi-level subterranean bunker: a fortified decontamination airlock at the surface, branching down via service elevator to an overgrown hydroponics lab, a humming power core, and a flooded sub-level tunnel..."
+                  value={reimagineDescription}
+                  onChange={(e) => setReimagineDescription(e.target.value)}
+                  disabled={reimagining}
+                  autoFocus
+                />
+              </div>
+
+              <div className="field-group">
+                <label>Target Location Count (3–8)</label>
+                <input
+                  type="number"
+                  className="field-input"
+                  min={3}
+                  max={8}
+                  value={reimagineCount}
+                  onChange={(e) =>
+                    setReimagineCount(
+                      Math.max(3, Math.min(8, parseInt(e.target.value, 10) || 4))
+                    )
+                  }
+                  disabled={reimagining}
+                />
+              </div>
+
+              <div style={{ fontSize: "0.74rem", color: "var(--text-muted)" }}>
+                Note: Regenerating the map replaces current draft locations and
+                passages with the newly synthesized spatial topology. World
+                rules, overview, and lore entries remain intact.
+              </div>
+            </div>
+
+            <div
+              className="modal-footer"
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 8,
+                padding: "12px 16px",
+                borderTop: "1px solid var(--border-subtle)",
+              }}
+            >
+              <button
+                type="button"
+                className="btn"
+                disabled={reimagining}
+                onClick={() => setShowReimagineModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-purple"
+                disabled={reimagining || !reimagineDescription.trim()}
+                onClick={handleExecuteReimagine}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                <Sparkles size={14} />
+                {reimagining ? "Re-imagining Map..." : "Regenerate Map"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

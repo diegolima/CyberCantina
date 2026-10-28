@@ -212,6 +212,77 @@ async def test_character_and_world_wizards(temp_repo: CantinaRepository) -> None
     assert len(created_char.memory_shards) >= 3
 
 
+async def test_world_wizard_genre_preservation() -> None:
+    """Verify that World Wizard preserves the user's intended genre and does not default or revert to Cyberpunk Noir."""
+    from app.schemas.world import WorldGlobalRules, WorldWizardDraft
+    from app.wizards.world_wizard import _align_draft_rules_with_seed
+
+    # 1. Schema check: genre must be required and must not default to Cyberpunk Noir
+    schema = WorldGlobalRules.model_json_schema()
+    assert "genre" in schema.get("required", [])
+    assert schema["properties"]["genre"].get("default") is None
+
+    # 2. Coerce alias check: genre_and_tone should map to genre
+    coerced = WorldGlobalRules.model_validate({
+        "genre_and_tone": "Solarpunk Utopian Exploration",
+        "setting_overview": "Floating cities powered by photosynthesis.",
+    })
+    assert coerced.genre == "Solarpunk Utopian Exploration"
+
+    # 3. Draft generation alignment check
+    w_seed = WorldWizardSeed(
+        name="Orbital Station Helios-7",
+        genre_and_tone="Hard Sci-Fi Corporate Thriller / Claustrophobic Noir",
+        core_premise="A quarantined deep-space mining spindle.",
+        initial_hub_concept="The Oxygen Garden",
+        location_count=4,
+    )
+    draft = await generate_world_draft(w_seed)
+    assert "Hard Sci-Fi" in draft.global_rules.genre
+    assert draft.global_rules.genre != "Cyberpunk Noir"
+
+    # 4. Fallback when LLM returns hardcoded Cyberpunk Noir for non-cyberpunk world
+    spoofed_draft = WorldWizardDraft(
+        name=w_seed.name,
+        global_rules=WorldGlobalRules(
+            genre="Cyberpunk Noir",
+            tone="Gritty",
+            setting_overview="Overview",
+            tech_or_magic_rules="Rules",
+            starting_timestamp="2094-11-14 21:00",
+        ),
+        locations=draft.locations,
+        edges=draft.edges,
+        lore_nodes=draft.lore_nodes,
+    )
+    aligned = _align_draft_rules_with_seed(spoofed_draft, w_seed)
+    assert aligned.global_rules.genre == "Hard Sci-Fi Corporate Thriller / Claustrophobic Noir"
+
+
+async def test_world_wizard_reimagine_map() -> None:
+    """Verify that reimagining a world map regenerates topology according to the user prompt."""
+    from app.schemas.world import WorldGlobalRules, WorldMapReimagineRequest
+    from app.wizards.world_wizard import reimagine_world_map
+
+    req = WorldMapReimagineRequest(
+        world_name="Submerged Spindle",
+        global_rules=WorldGlobalRules(
+            genre="Underwater Sci-Fi",
+            tone="Claustrophobic, pressurized, bioluminescent",
+            setting_overview="An ocean trench research facility.",
+            tech_or_magic_rules="Deep sea suits and airlock seals.",
+            starting_timestamp="2094-11-14 21:00",
+        ),
+        map_description="A central flooded moon pool with reinforced tunnels leading to a bioluminescent greenhouse and a crushed observation dome.",
+        location_count=4,
+    )
+    map_draft = await reimagine_world_map(req)
+    assert len(map_draft.locations) >= 3
+    assert len(map_draft.edges) >= 2
+    assert any(loc.is_starting_location for loc in map_draft.locations)
+    assert all(edge.compass_direction is not None for edge in map_draft.edges)
+
+
 async def test_character_pending_deletion_and_campaign_pruning(
     temp_repo: CantinaRepository,
 ) -> None:

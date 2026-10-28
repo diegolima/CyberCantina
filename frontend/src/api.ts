@@ -23,6 +23,8 @@ import {
   UserModelSettingsPayload,
   UserProfile,
   UserRole,
+  WorldMapDraft,
+  WorldMapReimagineRequest,
   WorldRecord,
   WorldWizardDraft,
   WorldWizardSeed,
@@ -483,6 +485,11 @@ export const api = {
     fetchJson<WorldWizardDraft>(`${API_BASE}/wizards/world/draft`, {
       method: "POST",
       body: JSON.stringify(seed),
+    }),
+  reimagineWorldMap: (req: WorldMapReimagineRequest) =>
+    fetchJson<WorldMapDraft>(`${API_BASE}/wizards/world/reimagine-map`, {
+      method: "POST",
+      body: JSON.stringify(req),
     }),
   commitWorld: (draft: WorldWizardDraft) =>
     fetchJson<WorldRecord>(`${API_BASE}/wizards/world/commit`, {

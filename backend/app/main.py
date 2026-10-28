@@ -95,13 +95,15 @@ from app.schemas.turn import (
     WorldStateSnapshot,
 )
 from app.schemas.world import (
+    WorldMapDraft,
+    WorldMapReimagineRequest,
     WorldRecord,
     WorldUpdatePayload,
     WorldWizardDraft,
     WorldWizardSeed,
 )
 from app.wizards.character_wizard import generate_character_draft
-from app.wizards.world_wizard import generate_world_draft
+from app.wizards.world_wizard import generate_world_draft, reimagine_world_map
 
 
 def get_repo() -> CantinaRepository:
@@ -1089,6 +1091,23 @@ async def wizard_draft_world(
             seed,
             profile=eff_actor,
             prompt_template=effective_prompts.get("wizard_world_system"),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/api/wizards/world/reimagine-map", response_model=WorldMapDraft)
+async def wizard_reimagine_map(
+    req: WorldMapReimagineRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> WorldMapDraft:
+    eff_actor, _, _ = get_effective_user_model_settings(current_user.id)
+    effective_prompts = get_repo().resolve_effective_prompts(user_id=current_user.id)
+    try:
+        return await reimagine_world_map(
+            req,
+            profile=eff_actor,
+            prompt_template=effective_prompts.get("wizard_map_reimagine_system"),
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

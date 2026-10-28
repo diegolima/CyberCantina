@@ -210,6 +210,17 @@ body {
   border-color: var(--accent-rose);
 }
 
+.btn-purple {
+  background: rgba(168, 85, 247, 0.16);
+  border-color: rgba(168, 85, 247, 0.45);
+  color: #c084fc;
+}
+
+.btn-purple:hover:not(:disabled) {
+  background: rgba(168, 85, 247, 0.28);
+  border-color: var(--accent-purple, #a855f7);
+}
+
 .wizard-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -8,6 +8,7 @@ import {
   MapPin,
   Navigation,
   Plus,
+  Sparkles,
   Star,
   Trash2,
   X,
@@ -232,6 +233,9 @@ export interface SpatialTopologyViewProps {
   // Optional Close callback (used when rendered in a modal overlay)
   onClose?: () => void;
 
+  // Optional Re-imagine Map callback (AI topology generation)
+  onReimagineMap?: () => void;
+
   // Editor mode actions (staged updates in World Sheet)
   onUpdateLocation?: (updated: LocationNode) => void;
   onDeleteLocation?: (locationId: string) => void;
@@ -271,6 +275,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   defaultSelectedLocationId,
   mode,
   onClose,
+  onReimagineMap,
   onUpdateLocation,
   onDeleteLocation,
   onSetStartingLocation,
@@ -574,6 +579,24 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             <Crosshair size={14} />
             Center ({Math.round(zoom * 100)}%)
           </button>
+          {onReimagineMap && (
+            <button
+              type="button"
+              className="btn btn-purple"
+              style={{
+                padding: "4px 10px",
+                fontSize: "0.74rem",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+              }}
+              onClick={onReimagineMap}
+              title="Re-imagine spatial map layout with AI based on your description"
+            >
+              <Sparkles size={13} />
+              Re-imagine Map
+            </button>
+          )}
           {onClose && (
             <button
               type="button"
