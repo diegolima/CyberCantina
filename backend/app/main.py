@@ -70,6 +70,11 @@ from app.schemas.auth import (
     UserModelSettingsPayload,
     UserProfile,
 )
+from app.schemas.note import (
+    UserNoteCreatePayload,
+    UserNoteRecord,
+    UserNoteUpdatePayload,
+)
 from app.schemas.character import (
     CharacterRecord,
     CharacterStateSnapshot,
@@ -905,6 +910,83 @@ def set_campaign_prompt_preset(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# ------------------------------------------------------------------
+# User Notes (Private Player Scratchpad)
+# ------------------------------------------------------------------
+
+
+@app.get("/api/notes", response_model=list[UserNoteRecord])
+def list_my_notes(
+    current_user: UserProfile = Depends(get_current_user),
+) -> list[UserNoteRecord]:
+    """List all private notes created by the current user, ordered by starred first, then updated_at."""
+    repo = get_repo()
+    return repo.list_user_notes(current_user.id)
+
+
+@app.post("/api/notes", response_model=UserNoteRecord)
+def create_my_note(
+    payload: UserNoteCreatePayload,
+    current_user: UserProfile = Depends(get_current_user),
+) -> UserNoteRecord:
+    """Create a new private note for the current user."""
+    repo = get_repo()
+    return repo.create_user_note(
+        owner_id=current_user.id,
+        title=payload.title,
+        content=payload.content,
+        tags=payload.tags,
+        is_starred=payload.is_starred,
+    )
+
+
+@app.get("/api/notes/{note_id}", response_model=UserNoteRecord)
+def get_my_note(
+    note_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> UserNoteRecord:
+    """Get a single private note."""
+    repo = get_repo()
+    note = repo.get_user_note(note_id, current_user.id)
+    if not note:
+        raise HTTPException(status_code=404, detail=f"Note '{note_id}' not found")
+    return note
+
+
+@app.put("/api/notes/{note_id}", response_model=UserNoteRecord)
+def update_my_note(
+    note_id: str,
+    payload: UserNoteUpdatePayload,
+    current_user: UserProfile = Depends(get_current_user),
+) -> UserNoteRecord:
+    """Update title, content, tags, or starred status of a private note."""
+    repo = get_repo()
+    updated = repo.update_user_note(
+        note_id=note_id,
+        owner_id=current_user.id,
+        title=payload.title,
+        content=payload.content,
+        tags=payload.tags,
+        is_starred=payload.is_starred,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Note '{note_id}' not found")
+    return updated
+
+
+@app.delete("/api/notes/{note_id}")
+def delete_my_note(
+    note_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Delete a private note."""
+    repo = get_repo()
+    deleted = repo.delete_user_note(note_id, current_user.id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Note '{note_id}' not found")
+    return {"status": "deleted", "id": note_id}
 
 
 # ------------------------------------------------------------------

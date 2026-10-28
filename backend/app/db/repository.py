@@ -21,6 +21,11 @@ from app.schemas.auth import (
     UserProfile,
     UserRole,
 )
+from app.schemas.note import (
+    UserNoteCreatePayload,
+    UserNoteRecord,
+    UserNoteUpdatePayload,
+)
 from app.schemas.prompt import PromptPresetRecord
 from app.schemas.character import (
     BaselinePsyche,
@@ -762,6 +767,9 @@ class CantinaRepository:
                 conn.execute("DELETE FROM location_nodes WHERE world_id = ?", (w_id,))
                 conn.execute("DELETE FROM lore_nodes WHERE world_id = ?", (w_id,))
                 conn.execute("DELETE FROM worlds WHERE id = ?", (w_id,))
+
+            # 4. Delete user private notes
+            conn.execute("DELETE FROM user_notes WHERE owner_id = ?", (user_id,))
 
             conn.commit()
         finally:
@@ -4355,3 +4363,169 @@ class CantinaRepository:
             ],
             created_at=r["created_at"],
         )
+
+    # ------------------------------------------------------------------
+    # User Notes
+    # ------------------------------------------------------------------
+
+    def _row_to_user_note(self, r: sqlite3.Row) -> UserNoteRecord:
+        return UserNoteRecord(
+            id=r["id"],
+            owner_id=r["owner_id"],
+            title=r["title"],
+            content=r["content"],
+            tags=json.loads(r["tags_json"] or "[]"),
+            is_starred=bool(r["is_starred"]),
+            created_at=r["created_at"],
+            updated_at=r["updated_at"],
+        )
+
+    def list_user_notes(self, owner_id: str) -> list[UserNoteRecord]:
+        """List all notes belonging to the specified owner, ordered by is_starred DESC, updated_at DESC."""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, owner_id, title, content, tags_json, is_starred, created_at, updated_at
+                FROM user_notes
+                WHERE owner_id = ?
+                ORDER BY is_starred DESC, updated_at DESC
+                """,
+                (owner_id,),
+            ).fetchall()
+            return [self._row_to_user_note(r) for r in rows]
+        finally:
+            conn.close()
+
+    def get_user_note(self, note_id: str, owner_id: str) -> UserNoteRecord | None:
+        """Fetch a specific note if it belongs to the owner."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT id, owner_id, title, content, tags_json, is_starred, created_at, updated_at
+                FROM user_notes
+                WHERE id = ? AND owner_id = ?
+                """,
+                (note_id, owner_id),
+            ).fetchone()
+            return self._row_to_user_note(row) if row else None
+        finally:
+            conn.close()
+
+    def create_user_note(
+        self,
+        *,
+        owner_id: str,
+        title: str = "",
+        content: str = "",
+        tags: list[str] | None = None,
+        is_starred: bool = False,
+        note_id: str | None = None,
+    ) -> UserNoteRecord:
+        """Create a new note for the specified owner."""
+        nid = note_id or f"note_{uuid.uuid4().hex[:10]}"
+        now = utc_now_iso()
+        clean_tags = [t.strip().lstrip("#") for t in (tags or []) if t and t.strip()]
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO user_notes (id, owner_id, title, content, tags_json, is_starred, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    nid,
+                    owner_id,
+                    title.strip(),
+                    content,
+                    json.dumps(clean_tags),
+                    1 if is_starred else 0,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            return UserNoteRecord(
+                id=nid,
+                owner_id=owner_id,
+                title=title.strip(),
+                content=content,
+                tags=clean_tags,
+                is_starred=is_starred,
+                created_at=now,
+                updated_at=now,
+            )
+        finally:
+            conn.close()
+
+    def update_user_note(
+        self,
+        note_id: str,
+        owner_id: str,
+        *,
+        title: str | None = None,
+        content: str | None = None,
+        tags: list[str] | None = None,
+        is_starred: bool | None = None,
+    ) -> UserNoteRecord | None:
+        """Update an existing note belonging to the owner."""
+        existing = self.get_user_note(note_id, owner_id)
+        if not existing:
+            return None
+
+        new_title = existing.title if title is None else title.strip()
+        new_content = existing.content if content is None else content
+        new_tags = (
+            existing.tags
+            if tags is None
+            else [t.strip().lstrip("#") for t in tags if t and t.strip()]
+        )
+        new_starred = existing.is_starred if is_starred is None else is_starred
+        now = utc_now_iso()
+
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                UPDATE user_notes
+                SET title = ?, content = ?, tags_json = ?, is_starred = ?, updated_at = ?
+                WHERE id = ? AND owner_id = ?
+                """,
+                (
+                    new_title,
+                    new_content,
+                    json.dumps(new_tags),
+                    1 if new_starred else 0,
+                    now,
+                    note_id,
+                    owner_id,
+                ),
+            )
+            conn.commit()
+            return UserNoteRecord(
+                id=note_id,
+                owner_id=owner_id,
+                title=new_title,
+                content=new_content,
+                tags=new_tags,
+                is_starred=new_starred,
+                created_at=existing.created_at,
+                updated_at=now,
+            )
+        finally:
+            conn.close()
+
+    def delete_user_note(self, note_id: str, owner_id: str) -> bool:
+        """Delete an existing note belonging to the owner. Returns True if deleted, False if not found."""
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                "DELETE FROM user_notes WHERE id = ? AND owner_id = ?",
+                (note_id, owner_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ChevronDown,
@@ -11,6 +11,7 @@ import {
   LogOut,
   Plus,
   Search,
+  StickyNote,
   User,
   UserCog,
   Users,
@@ -34,10 +35,12 @@ import {
   WorldInspectorModal,
 } from "./components/EntityEditorModals";
 import { LiveInspector } from "./components/LiveInspector";
+import { NotesFlyout, NotesModal } from "./components/NotesDrawer";
 import {
   CharacterWizardModal,
   WorldWizardModal,
 } from "./components/WizardModals";
+import { slugifyTag } from "./utils/noteSearch";
 import {
   AppSettings,
   AuthSessionResponse,
@@ -49,6 +52,7 @@ import {
   NarrativeMode,
   PreTurnAnalysis,
   RecalledMemoryItem,
+  UserNote,
   UserProfile,
   WorldRecord,
 } from "./types";
@@ -229,6 +233,75 @@ export const App: React.FC = () => {
   const [showCharWizard, setShowCharWizard] = useState(false);
   const [showWorldWizard, setShowWorldWizard] = useState(false);
 
+  // User Notes (Player Scratchpad) State
+  const [notes, setNotes] = useState<UserNote[]>([]);
+  const [showNotesFlyout, setShowNotesFlyout] = useState(false);
+  const [showNotesModal, setShowNotesModal] = useState(false);
+  const [notesModalInitialId, setNotesModalInitialId] = useState<string | undefined>(undefined);
+
+  const noteContextTags = useMemo(() => {
+    const tags: string[] = [];
+    if (bundle?.campaign?.name) {
+      tags.push(slugifyTag(bundle.campaign.name));
+    }
+    const worldName = campaignWorld?.name || activeWorld?.name;
+    if (worldName) {
+      tags.push(slugifyTag(worldName));
+    }
+    const charName = campaignCharacter?.name || activeCharacter?.name;
+    if (charName) {
+      tags.push(slugifyTag(charName));
+    }
+    return Array.from(new Set(tags.filter(Boolean)));
+  }, [bundle, campaignWorld, activeWorld, campaignCharacter, activeCharacter]);
+
+  const handleToggleNoteStar = async (note: UserNote) => {
+    try {
+      const updated = await api.updateNote(note.id, { is_starred: !note.is_starred });
+      setNotes((prev) => prev.map((n) => (n.id === note.id ? updated : n)));
+    } catch (err) {
+      console.error("Failed to toggle note star", err);
+    }
+  };
+
+  const handleQuickAddNote = async (content: string, title = "", tags: string[] = []) => {
+    try {
+      const created = await api.createNote({
+        title,
+        content,
+        tags,
+        is_starred: false,
+      });
+      setNotes((prev) => [created, ...prev]);
+    } catch (err) {
+      console.error("Failed to create quick note", err);
+    }
+  };
+
+  const handleSaveNote = async (
+    noteId: string | null,
+    payload: { title: string; content: string; tags: string[]; is_starred: boolean }
+  ) => {
+    if (noteId) {
+      const updated = await api.updateNote(noteId, payload);
+      setNotes((prev) => prev.map((n) => (n.id === noteId ? updated : n)));
+      return updated;
+    } else {
+      const created = await api.createNote(payload);
+      setNotes((prev) => [created, ...prev]);
+      return created;
+    }
+  };
+
+  const handleDeleteNote = async (noteId: string) => {
+    try {
+      await api.deleteNote(noteId);
+      setNotes((prev) => prev.filter((n) => n.id !== noteId));
+    } catch (err) {
+      console.error("Failed to delete note", err);
+    }
+  };
+
   const handleOpenModelSettings = () => {
     if (currentUser?.role === "admin") {
       setAdminInitialTab("models");
@@ -285,16 +358,18 @@ export const App: React.FC = () => {
   };
 
   const loadWorkspaceData = async () => {
-    const [camps, wList, cList, cfg] = await Promise.all([
+    const [camps, wList, cList, cfg, userNotes] = await Promise.all([
       api.listCampaigns(),
       api.listWorlds(),
       api.listCharacters(),
       api.getSettings(),
+      api.listNotes().catch(() => [] as UserNote[]),
     ]);
     setCampaigns(camps);
     setWorlds(wList);
     setCharacters(cList);
     setAppSettings(cfg);
+    setNotes(userNotes);
     if (camps.length > 0) {
       await loadCampaignBundle(camps[0].id);
     } else {
@@ -349,6 +424,7 @@ export const App: React.FC = () => {
       setCampaigns([]);
       setWorlds([]);
       setCharacters([]);
+      setNotes([]);
     }
   };
 
@@ -361,6 +437,7 @@ export const App: React.FC = () => {
     setCampaigns([]);
     setWorlds([]);
     setCharacters([]);
+    setNotes([]);
     try {
       await api.logout();
     } catch {
@@ -916,6 +993,43 @@ export const App: React.FC = () => {
 
         {/* Bottom User Profile & Admin Area */}
         <div className="sidebar-bottom-area">
+          {/* Notes Button sitting directly above user profile */}
+          <div
+            className={`sidebar-notes-btn ${showNotesFlyout ? "active" : ""}`}
+            onClick={() => setShowNotesFlyout((prev) => !prev)}
+            title="Open Player Notes scratchpad"
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+              <StickyNote size={15} color="var(--accent-amber)" />
+              <span style={{ fontWeight: 600, fontSize: "0.81rem", color: "var(--text-primary)" }}>
+                Player Notes
+              </span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {notes.length > 0 && (
+                <span className="notes-pill-count">
+                  {notes.filter((n) => n.is_starred).length > 0
+                    ? `★ ${notes.filter((n) => n.is_starred).length}`
+                    : notes.length}
+                </span>
+              )}
+              <button
+                type="button"
+                className="btn btn-ghost"
+                style={{ padding: "2px 5px", fontSize: "0.7rem" }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setNotesModalInitialId(undefined);
+                  setShowNotesModal(true);
+                  setShowNotesFlyout(false);
+                }}
+                title="New Note / Manage All"
+              >
+                <Plus size={12} />
+              </button>
+            </div>
+          </div>
+
           <div
             className="sidebar-user-card"
             onClick={() => {
@@ -993,6 +1107,26 @@ export const App: React.FC = () => {
           )}
         </div>
       </aside>
+
+      {/* Quick Player Notes Flyout Drawer */}
+      {showNotesFlyout && (
+        <NotesFlyout
+          isOpen={showNotesFlyout}
+          notes={notes}
+          contextTags={noteContextTags}
+          activeCampaignName={bundle?.campaign?.name}
+          activeWorldName={(campaignWorld || activeWorld)?.name}
+          activeCharacterName={(campaignCharacter || activeCharacter)?.name}
+          onClose={() => setShowNotesFlyout(false)}
+          onOpenModal={(noteId) => {
+            setNotesModalInitialId(noteId);
+            setShowNotesModal(true);
+          }}
+          onToggleStar={handleToggleNoteStar}
+          onQuickAdd={handleQuickAddNote}
+          onDeleteNote={handleDeleteNote}
+        />
+      )}
 
       {/* Center Roleplay Stage */}
       {bundle && campaignCharacter ? (
@@ -1333,6 +1467,26 @@ export const App: React.FC = () => {
             }
           }}
           onSettingsUpdated={(updated) => setAppSettings(updated)}
+        />
+      )}
+
+      {/* Full Notes Manager Modal */}
+      {showNotesModal && (
+        <NotesModal
+          isOpen={showNotesModal}
+          notes={notes}
+          initialSelectedId={notesModalInitialId}
+          contextTags={noteContextTags}
+          activeCampaignName={bundle?.campaign?.name}
+          activeWorldName={(campaignWorld || activeWorld)?.name}
+          activeCharacterName={(campaignCharacter || activeCharacter)?.name}
+          onClose={() => {
+            setShowNotesModal(false);
+            setNotesModalInitialId(undefined);
+          }}
+          onSaveNote={handleSaveNote}
+          onDeleteNote={handleDeleteNote}
+          onToggleStar={handleToggleNoteStar}
         />
       )}
     </div>

@@ -9,6 +9,7 @@ import {
   CharacterWizardDraft,
   CharacterWizardSeed,
   CognitionBlock,
+  CreateNotePayload,
   MemoryShard,
   OllamaStatusResponse,
   PreTurnAnalysis,
@@ -20,7 +21,9 @@ import {
   RecalledMemoryItem,
   TurnNodeRecord,
   TurnSubmitOptions,
+  UpdateNotePayload,
   UserModelSettingsPayload,
+  UserNote,
   UserProfile,
   UserRole,
   WorldMapDraft,
@@ -474,6 +477,29 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ preset_id: presetId }),
     }),
+
+  // User Notes
+  listNotes: () => fetchJson<UserNote[]>(`${API_BASE}/notes`),
+  createNote: (payload: CreateNotePayload) =>
+    fetchJson<UserNote>(`${API_BASE}/notes`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  getNote: (noteId: string) =>
+    fetchJson<UserNote>(`${API_BASE}/notes/${encodeURIComponent(noteId)}`),
+  updateNote: (noteId: string, payload: UpdateNotePayload) =>
+    fetchJson<UserNote>(`${API_BASE}/notes/${encodeURIComponent(noteId)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteNote: (noteId: string) =>
+    fetchJson<{ status: string; id: string }>(
+      `${API_BASE}/notes/${encodeURIComponent(noteId)}`,
+      {
+        method: "DELETE",
+      }
+    ),
+
   getOllamaStatus: (baseUrl?: string) => {
     const q = baseUrl ? `?base_url=${encodeURIComponent(baseUrl)}` : "";
     return fetchJson<OllamaStatusResponse>(`${API_BASE}/ollama/status${q}`);

@@ -226,3 +226,19 @@ CREATE TABLE IF NOT EXISTS vector_entries (
 );
 
 CREATE INDEX IF NOT EXISTS idx_vector_entries_scope ON vector_entries(world_id, character_id, campaign_id);
+
+CREATE TABLE IF NOT EXISTS user_notes (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    is_starred INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_notes_owner ON user_notes(owner_id);
+CREATE INDEX IF NOT EXISTS idx_user_notes_starred ON user_notes(owner_id, is_starred);
+CREATE INDEX IF NOT EXISTS idx_user_notes_updated ON user_notes(owner_id, updated_at);
+
