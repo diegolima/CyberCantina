@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
+  AlertTriangle,
   Brain,
   ChevronDown,
   ChevronRight,
@@ -7,6 +8,7 @@ import {
   Compass,
   Dices,
   Edit3,
+  Eye,
   GitBranch,
   MapPin,
   RefreshCw,
@@ -19,6 +21,7 @@ import {
   CampaignStateBundle,
   CharacterRecord,
   CognitionBlock,
+  NarrativeMode,
   PreTurnAnalysis,
   RecalledMemoryItem,
   TurnNodeRecord,
@@ -45,6 +48,9 @@ interface ChatStageProps {
     userMessage: string;
     parentTurnId?: string | null;
     manualDiceOverride?: number | null;
+    narrativeMode?: NarrativeMode;
+    narratorDirective?: string | null;
+    durationMinutes?: number | null;
   }) => void;
   onCheckoutTurn: (turnId: string) => void;
   onDeleteLastTurn?: () => Promise<void> | void;
@@ -78,6 +84,9 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
   const [editMessageText, setEditMessageText] = useState("");
   const [isDeletingTurn, setIsDeletingTurn] = useState(false);
+  const [isDurationPickerOpen, setIsDurationPickerOpen] = useState(false);
+  const [isCustomDirectiveOpen, setIsCustomDirectiveOpen] = useState(false);
+  const [customDirectiveText, setCustomDirectiveText] = useState("");
 
   const lastBranchTurn =
     bundle.active_branch_turns[bundle.active_branch_turns.length - 1];
@@ -85,6 +94,8 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   useEffect(() => {
     setEditingTurnId(null);
     setEditMessageText("");
+    setIsDurationPickerOpen(false);
+    setIsCustomDirectiveOpen(false);
   }, [bundle.campaign.id, lastBranchTurn?.id]);
 
   const toggleCognition = (id: string) => {
@@ -95,12 +106,120 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     setOpenMemoryIds((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const handleInvokeNarrator = (
+    mode: NarrativeMode,
+    directive?: string,
+    durationMinutes?: number
+  ) => {
+    setIsDurationPickerOpen(false);
+    setIsCustomDirectiveOpen(false);
+
+    if (mode === "custom") {
+      setIsCustomDirectiveOpen(true);
+      return;
+    }
+
+    if (mode === "describe") {
+      onSendTurn({
+        userMessage: "[Describe the current scene]",
+        narrativeMode: "describe",
+      });
+    } else if (mode === "advance") {
+      const durMsg = durationMinutes
+        ? `wait for ${durationMinutes} minutes`
+        : directive || "wait for a few moments";
+      onSendTurn({
+        userMessage: `[Advance the story: ${durMsg}]`,
+        narrativeMode: "advance",
+        narratorDirective: durMsg,
+        durationMinutes: durationMinutes ?? null,
+      });
+    } else if (mode === "complication") {
+      onSendTurn({
+        userMessage: directive
+          ? `[Introduce a complication: ${directive}]`
+          : "[Introduce an unexpected complication or external event]",
+        narrativeMode: "complication",
+        narratorDirective: directive || "An unexpected complication occurs",
+      });
+    } else if (mode === "perception") {
+      onSendTurn({
+        userMessage: directive
+          ? `[Perception check: ${directive}]`
+          : "[Examine the scene for subtle details and lore]",
+        narrativeMode: "perception",
+        narratorDirective: directive || "Check for subtle details and lore",
+      });
+    }
+  };
+
+  const handleSendCustomDirective = () => {
+    const trimmed = customDirectiveText.trim();
+    if (!trimmed || isStreaming) return;
+    onSendTurn({
+      userMessage: trimmed,
+      narrativeMode: "custom",
+      narratorDirective: trimmed,
+    });
+    setCustomDirectiveText("");
+    setIsCustomDirectiveOpen(false);
+  };
+
   const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim() || isStreaming) return;
+    const raw = inputText.trim();
+    if (!raw || isStreaming) return;
+
+    // Check for slash command shortcuts
+    if (raw.startsWith("/")) {
+      const parts = raw.slice(1).split(/\s+/);
+      const cmd = parts[0].toLowerCase();
+      const arg = parts.slice(1).join(" ").trim();
+
+      if (cmd === "look" || cmd === "scene" || cmd === "describe") {
+        setInputText("");
+        handleInvokeNarrator("describe");
+        return;
+      }
+      if (cmd === "wait" || cmd === "pass") {
+        setInputText("");
+        let dur: number | undefined;
+        if (arg.endsWith("m") || arg.endsWith("min") || arg.endsWith("minutes")) {
+          dur = parseInt(arg, 10);
+        } else if (arg.endsWith("h") || arg.endsWith("hr") || arg.endsWith("hours")) {
+          dur = parseInt(arg, 10) * 60;
+        }
+        handleInvokeNarrator("advance", arg || "a few moments", isNaN(dur as number) ? undefined : dur);
+        return;
+      }
+      if (cmd === "event" || cmd === "complication") {
+        setInputText("");
+        handleInvokeNarrator("complication", arg || undefined);
+        return;
+      }
+      if (cmd === "perception" || cmd === "recall" || cmd === "check") {
+        setInputText("");
+        handleInvokeNarrator("perception", arg || undefined);
+        return;
+      }
+      if (cmd === "narrate" || cmd === "direct" || cmd === "custom") {
+        setInputText("");
+        if (arg) {
+          onSendTurn({
+            userMessage: arg,
+            narrativeMode: "custom",
+            narratorDirective: arg,
+          });
+        } else {
+          setIsCustomDirectiveOpen(true);
+        }
+        return;
+      }
+    }
+
     const parsedDice = diceOverride ? parseInt(diceOverride, 10) : null;
     onSendTurn({
-      userMessage: inputText.trim(),
+      userMessage: raw,
       manualDiceOverride:
         parsedDice && parsedDice >= 1 && parsedDice <= 20 ? parsedDice : null,
     });
@@ -108,8 +227,85 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     setDiceOverride("");
   };
 
+  const inferNarratorTurnOptions = (
+    turn: TurnNodeRecord,
+    customMessage?: string
+  ): {
+    isNarrator: boolean;
+    narrativeMode?: NarrativeMode;
+    narratorDirective?: string;
+    durationMinutes?: number;
+  } => {
+    if (turn.actor_id !== "__narrator__") {
+      return { isNarrator: false };
+    }
+
+    const msg = (customMessage ?? turn.user_message).trim();
+    const lower = msg.toLowerCase();
+
+    if (lower.includes("describe the current scene")) {
+      return { isNarrator: true, narrativeMode: "describe" };
+    }
+
+    if (
+      lower.includes("advance the story") ||
+      lower.includes("wait for") ||
+      lower.includes("minutes elapse")
+    ) {
+      const minMatch = msg.match(/(\d+)\s*minutes?/i);
+      const durationMinutes = minMatch ? parseInt(minMatch[1], 10) : undefined;
+      const directiveMatch = msg.match(/^\[Advance the story:\s*(.*?)\]$/i);
+      const directive = directiveMatch ? directiveMatch[1].trim() : undefined;
+      return {
+        isNarrator: true,
+        narrativeMode: "advance",
+        durationMinutes,
+        narratorDirective: directive,
+      };
+    }
+
+    if (lower.includes("complication")) {
+      const dirMatch = msg.match(/^\[Introduce a complication:\s*(.*?)\]$/i);
+      const directive = dirMatch ? dirMatch[1].trim() : undefined;
+      return {
+        isNarrator: true,
+        narrativeMode: "complication",
+        narratorDirective: directive,
+      };
+    }
+
+    if (lower.includes("perception") || lower.includes("examine the scene")) {
+      const dirMatch = msg.match(/^\[Perception check:\s*(.*?)\]$/i);
+      const directive = dirMatch ? dirMatch[1].trim() : undefined;
+      return {
+        isNarrator: true,
+        narrativeMode: "perception",
+        narratorDirective: directive,
+      };
+    }
+
+    // Custom directive
+    return {
+      isNarrator: true,
+      narrativeMode: "custom",
+      narratorDirective: msg.replace(/^\[|\]$/g, ""),
+    };
+  };
+
   const handleSwipeRegenerate = (turn: TurnNodeRecord) => {
     if (isStreaming || isDeletingTurn || !turn.parent_turn_id) return;
+    const narratorOpts = inferNarratorTurnOptions(turn);
+    if (narratorOpts.isNarrator) {
+      onSendTurn({
+        userMessage: turn.user_message,
+        parentTurnId: turn.parent_turn_id,
+        narrativeMode: narratorOpts.narrativeMode,
+        narratorDirective: narratorOpts.narratorDirective,
+        durationMinutes: narratorOpts.durationMinutes,
+      });
+      return;
+    }
+
     onSendTurn({
       userMessage: turn.user_message,
       parentTurnId: turn.parent_turn_id,
@@ -133,6 +329,19 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     const parsedDice = diceOverride ? parseInt(diceOverride, 10) : null;
     setEditingTurnId(null);
     setEditMessageText("");
+
+    const narratorOpts = inferNarratorTurnOptions(turn, trimmed);
+    if (narratorOpts.isNarrator) {
+      onSendTurn({
+        userMessage: trimmed,
+        parentTurnId: turn.parent_turn_id,
+        narrativeMode: narratorOpts.narrativeMode,
+        narratorDirective: narratorOpts.narratorDirective || trimmed,
+        durationMinutes: narratorOpts.durationMinutes,
+      });
+      return;
+    }
+
     onSendTurn({
       userMessage: trimmed,
       parentTurnId: turn.parent_turn_id,
@@ -190,13 +399,15 @@ export const ChatStage: React.FC<ChatStageProps> = ({
           const isLastTurn =
             !isRoot && turnIdx === bundle.active_branch_turns.length - 1;
           const isEditingThisTurn = isLastTurn && editingTurnId === turn.id;
+          const isNarratorTurn = turn.actor_id === "__narrator__";
+          const isCueMessage = turn.user_message.startsWith("[") && turn.user_message.endsWith("]");
           const cogOpen = openCognitionIds[turn.id] ?? (turn.depth_index === bundle.active_branch_turns.length - 1);
           const memOpen = openMemoryIds[turn.id] ?? false;
           const siblings = siblingsByParent[turn.parent_turn_id ?? "ROOT"] || [];
           const roll = turn.pre_turn.resolved_roll;
 
           return (
-            <div key={turn.id} className="turn-card">
+            <div key={turn.id} className={`turn-card ${isNarratorTurn ? "narrator-turn-card" : ""}`}>
               {!isRoot &&
                 (isEditingThisTurn ? (
                   <div className="user-bubble user-bubble-editing">
@@ -242,6 +453,31 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                       </button>
                     </div>
                   </div>
+                ) : isCueMessage ? (
+                  turn.user_message.toLowerCase().includes("advance the story") ||
+                  turn.user_message.toLowerCase().includes("wait for") ||
+                  turn.user_message.toLowerCase().includes("minutes elapse") ? (
+                    <div className="user-bubble user-bubble-narrator-time">
+                      <Clock size={12} color="var(--accent-amber)" />
+                      <span>{turn.user_message.replace(/^\[|\]$/g, "")}</span>
+                    </div>
+                  ) : turn.user_message.toLowerCase().includes("complication") ? (
+                    <div className="user-bubble user-bubble-narrator-complication">
+                      <AlertTriangle size={12} color="var(--accent-rose)" />
+                      <span>{turn.user_message.replace(/^\[|\]$/g, "")}</span>
+                    </div>
+                  ) : turn.user_message.toLowerCase().includes("perception") ||
+                    turn.user_message.toLowerCase().includes("examine") ? (
+                    <div className="user-bubble user-bubble-narrator-perception">
+                      <Brain size={12} color="var(--accent-violet)" />
+                      <span>{turn.user_message.replace(/^\[|\]$/g, "")}</span>
+                    </div>
+                  ) : (
+                    <div className="user-bubble user-bubble-narrator-cue">
+                      <Sparkles size={12} color="var(--accent-cyan)" />
+                      <span>{turn.user_message}</span>
+                    </div>
+                  )
                 ) : (
                   <div className="user-bubble">{turn.user_message}</div>
                 ))}
@@ -249,6 +485,20 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               {/* Phase 1 Auxiliary Pre-Turn & RAG Badges */}
               {!isRoot && (
                 <div className="meta-strip">
+                  {isNarratorTurn && (
+                    <span className="badge badge-narrator">
+                      <Eye size={12} color="var(--accent-cyan)" />
+                      {turn.user_message.toLowerCase().includes("advance") ||
+                      turn.user_message.toLowerCase().includes("wait")
+                        ? "Narrator (Time Advance)"
+                        : turn.user_message.toLowerCase().includes("complication")
+                        ? "Narrator (Complication)"
+                        : turn.user_message.toLowerCase().includes("perception") ||
+                          turn.user_message.toLowerCase().includes("examine")
+                        ? "Narrator (Perception & Lore)"
+                        : "Narrator (Objective Lens)"}
+                    </span>
+                  )}
                   <span className="badge" title={turn.pre_turn.subtext_interpretation}>
                     <Sparkles size={12} color="var(--accent-cyan)" />
                     Tone: {turn.pre_turn.user_sentiment}
@@ -320,38 +570,59 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                   onClick={() => toggleCognition(turn.id)}
                 >
                   <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <Brain size={14} />
-                    {character.name} Inner Cognition (Recall → Feel → Want → Plan)
+                    {isNarratorTurn ? <Eye size={14} color="var(--accent-cyan)" /> : <Brain size={14} />}
+                    {isNarratorTurn
+                      ? "Objective Scene Observation (Detached & Indifferent)"
+                      : `${character.name} Inner Cognition (Recall → Feel → Want → Plan)`}
                   </span>
                   <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
-                      Valence {turn.cognition.valence >= 0 ? "+" : ""}
-                      {turn.cognition.valence.toFixed(2)} | Arousal{" "}
-                      {turn.cognition.arousal.toFixed(2)}
-                    </span>
+                    {!isNarratorTurn && (
+                      <span style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
+                        Valence {turn.cognition.valence >= 0 ? "+" : ""}
+                        {turn.cognition.valence.toFixed(2)} | Arousal{" "}
+                        {turn.cognition.arousal.toFixed(2)}
+                      </span>
+                    )}
                     {cogOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                   </span>
                 </div>
 
                 {cogOpen && (
-                  <div className="cognition-steps">
-                    <div className="cog-step">
-                      <div className="cog-step-label">1. Memory Recall</div>
-                      <div>{turn.cognition.recall || "Present in the moment."}</div>
+                  isNarratorTurn ? (
+                    <div className="cognition-steps">
+                      <div className="cog-step">
+                        <div className="cog-step-label">Focus Area</div>
+                        <div>{turn.cognition.recall || bundle.active_location.name}</div>
+                      </div>
+                      <div className="cog-step">
+                        <div className="cog-step-label">Stance</div>
+                        <div>Impersonal, neutral, zero emotional puppeteering or helpful hints.</div>
+                      </div>
+                      <div className="cog-step">
+                        <div className="cog-step-label">Directorial Plan</div>
+                        <div>{turn.cognition.plan || "Sensory environmental description"}</div>
+                      </div>
                     </div>
-                    <div className="cog-step">
-                      <div className="cog-step-label">2. Affect & Feeling</div>
-                      <div>{turn.cognition.feeling}</div>
+                  ) : (
+                    <div className="cognition-steps">
+                      <div className="cog-step">
+                        <div className="cog-step-label">1. Memory Recall</div>
+                        <div>{turn.cognition.recall || "Present in the moment."}</div>
+                      </div>
+                      <div className="cog-step">
+                        <div className="cog-step-label">2. Affect & Feeling</div>
+                        <div>{turn.cognition.feeling}</div>
+                      </div>
+                      <div className="cog-step">
+                        <div className="cog-step-label">3. Immediate Want</div>
+                        <div>{turn.cognition.want}</div>
+                      </div>
+                      <div className="cog-step">
+                        <div className="cog-step-label">4. Tactical Plan</div>
+                        <div>{turn.cognition.plan}</div>
+                      </div>
                     </div>
-                    <div className="cog-step">
-                      <div className="cog-step-label">3. Immediate Want</div>
-                      <div>{turn.cognition.want}</div>
-                    </div>
-                    <div className="cog-step">
-                      <div className="cog-step-label">4. Tactical Plan</div>
-                      <div>{turn.cognition.plan}</div>
-                    </div>
-                  </div>
+                  )
                 )}
               </div>
 
@@ -459,7 +730,14 @@ export const ChatStage: React.FC<ChatStageProps> = ({
             className="turn-card"
             style={{ borderColor: "var(--accent-amber)" }}
           >
-            <div className="user-bubble">{liveStream.userMessage}</div>
+            {liveStream.userMessage.startsWith("[") && liveStream.userMessage.endsWith("]") ? (
+              <div className="user-bubble user-bubble-narrator-cue">
+                <Sparkles size={12} color="var(--accent-amber)" />
+                <span>{liveStream.userMessage}</span>
+              </div>
+            ) : (
+              <div className="user-bubble">{liveStream.userMessage}</div>
+            )}
             <div className="meta-strip">
               <span className="badge badge-dice">{liveStream.phaseStatus}</span>
               {liveStream.preTurn?.resolved_roll && (
@@ -475,29 +753,52 @@ export const ChatStage: React.FC<ChatStageProps> = ({
             <div className="cognition-box">
               <div className="cognition-header">
                 <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <Brain size={14} />
-                  Streaming &lt;cognition&gt;...
+                  {liveStream.cognitionParsed?.feeling === "Objective / Detached" ? (
+                    <Eye size={14} color="var(--accent-cyan)" />
+                  ) : (
+                    <Brain size={14} />
+                  )}
+                  {liveStream.cognitionParsed?.feeling === "Objective / Detached"
+                    ? "Objective Scene Observation (Detached & Indifferent)"
+                    : "Streaming <cognition>..."}
                 </span>
               </div>
               {liveStream.cognitionParsed ? (
-                <div className="cognition-steps">
-                  <div className="cog-step">
-                    <div className="cog-step-label">1. Recall</div>
-                    <div>{liveStream.cognitionParsed.recall}</div>
+                liveStream.cognitionParsed.feeling === "Objective / Detached" ? (
+                  <div className="cognition-steps">
+                    <div className="cog-step">
+                      <div className="cog-step-label">Focus Area</div>
+                      <div>{liveStream.cognitionParsed.recall || bundle.active_location.name}</div>
+                    </div>
+                    <div className="cog-step">
+                      <div className="cog-step-label">Stance</div>
+                      <div>Impersonal, neutral, no emotional puppeteering or helpful hints.</div>
+                    </div>
+                    <div className="cog-step">
+                      <div className="cog-step-label">Directorial Plan</div>
+                      <div>{liveStream.cognitionParsed.plan || "Sensory environmental description"}</div>
+                    </div>
                   </div>
-                  <div className="cog-step">
-                    <div className="cog-step-label">2. Feeling</div>
-                    <div>{liveStream.cognitionParsed.feeling}</div>
+                ) : (
+                  <div className="cognition-steps">
+                    <div className="cog-step">
+                      <div className="cog-step-label">1. Recall</div>
+                      <div>{liveStream.cognitionParsed.recall}</div>
+                    </div>
+                    <div className="cog-step">
+                      <div className="cog-step-label">2. Feeling</div>
+                      <div>{liveStream.cognitionParsed.feeling}</div>
+                    </div>
+                    <div className="cog-step">
+                      <div className="cog-step-label">3. Want</div>
+                      <div>{liveStream.cognitionParsed.want}</div>
+                    </div>
+                    <div className="cog-step">
+                      <div className="cog-step-label">4. Plan</div>
+                      <div>{liveStream.cognitionParsed.plan}</div>
+                    </div>
                   </div>
-                  <div className="cog-step">
-                    <div className="cog-step-label">3. Want</div>
-                    <div>{liveStream.cognitionParsed.want}</div>
-                  </div>
-                  <div className="cog-step">
-                    <div className="cog-step-label">4. Plan</div>
-                    <div>{liveStream.cognitionParsed.plan}</div>
-                  </div>
-                </div>
+                )
               ) : (
                 <pre
                   style={{
@@ -550,6 +851,65 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       {/* Quick Action Bar + Composer */}
       <form className="composer-bar" onSubmit={handleSend}>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          {/* Dedicated Narrator Action Chips */}
+          <button
+            type="button"
+            className="btn narrator-quick-chip"
+            onClick={() => handleInvokeNarrator("describe")}
+            title="Describe current scene [/look]"
+          >
+            <Eye size={11} color="var(--accent-cyan)" />
+            <span>Look Around</span>
+          </button>
+
+          <button
+            type="button"
+            className={`btn narrator-quick-chip ${isDurationPickerOpen ? "active" : ""}`}
+            onClick={() => {
+              setIsCustomDirectiveOpen(false);
+              setIsDurationPickerOpen((prev) => !prev);
+            }}
+            title="Advance in-game time [/wait]"
+          >
+            <Clock size={11} color="var(--accent-amber)" />
+            <span>Pass Time</span>
+          </button>
+
+          <button
+            type="button"
+            className="btn narrator-quick-chip"
+            onClick={() => handleInvokeNarrator("complication")}
+            title="Introduce external complication [/event]"
+          >
+            <AlertTriangle size={11} color="var(--accent-rose)" />
+            <span>Complication</span>
+          </button>
+
+          <button
+            type="button"
+            className="btn narrator-quick-chip"
+            onClick={() => handleInvokeNarrator("perception")}
+            title="Scrutinize details and lore [/perception]"
+          >
+            <Brain size={11} color="var(--accent-violet)" />
+            <span>Perception</span>
+          </button>
+
+          <button
+            type="button"
+            className={`btn narrator-quick-chip ${isCustomDirectiveOpen ? "active" : ""}`}
+            onClick={() => {
+              setIsDurationPickerOpen(false);
+              setIsCustomDirectiveOpen((prev) => !prev);
+            }}
+            title="Direct the neutral narrator with a custom prompt [/narrate]"
+          >
+            <Sparkles size={11} color="var(--accent-amber)" />
+            <span>Custom Narrator Directive</span>
+          </button>
+
+          <div style={{ height: 14, width: 1, background: "var(--border-subtle)" }} />
+
           <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
             Quick Exits:
           </span>
@@ -569,6 +929,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               {nb.destination.name} ({nb.travel_minutes}m)
             </button>
           ))}
+
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
             <Dices size={14} color="var(--accent-amber)" />
             <input
@@ -585,10 +946,123 @@ export const ChatStage: React.FC<ChatStageProps> = ({
           </div>
         </div>
 
+        {/* Quick Duration Picker Bar */}
+        {isDurationPickerOpen && (
+          <div className="narrator-duration-picker">
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: "0.74rem", color: "var(--accent-amber)", fontWeight: 600, display: "flex", alignItems: "center", gap: 5 }}>
+                <Clock size={13} />
+                How much in-game time should elapse without player actions?
+              </span>
+              <button
+                type="button"
+                className="btn"
+                style={{ padding: "1px 6px", border: "none" }}
+                onClick={() => setIsDurationPickerOpen(false)}
+              >
+                <X size={12} />
+              </button>
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+              <button
+                type="button"
+                className="btn btn-duration"
+                onClick={() => handleInvokeNarrator("advance", undefined, 5)}
+              >
+                5 min
+              </button>
+              <button
+                type="button"
+                className="btn btn-duration"
+                onClick={() => handleInvokeNarrator("advance", undefined, 15)}
+              >
+                15 min
+              </button>
+              <button
+                type="button"
+                className="btn btn-duration"
+                onClick={() => handleInvokeNarrator("advance", undefined, 30)}
+              >
+                30 min
+              </button>
+              <button
+                type="button"
+                className="btn btn-duration"
+                onClick={() => handleInvokeNarrator("advance", undefined, 60)}
+              >
+                1 hour
+              </button>
+              <button
+                type="button"
+                className="btn btn-duration"
+                onClick={() => handleInvokeNarrator("advance", undefined, 240)}
+              >
+                4 hours
+              </button>
+              <button
+                type="button"
+                className="btn btn-duration"
+                onClick={() => handleInvokeNarrator("advance", "wait until dawn / morning")}
+              >
+                Until Morning
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Custom Director Directive Drawer */}
+        {isCustomDirectiveOpen && (
+          <div className="narrator-directive-box">
+            <div className="narrator-directive-header">
+              <Sparkles size={13} color="var(--accent-amber)" />
+              <span>Direct the Neutral Narrator</span>
+              <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginLeft: "auto" }}>
+                Objective, sensory, or atmospheric focus
+              </span>
+              <button
+                type="button"
+                className="btn"
+                style={{ padding: "2px 6px", border: "none" }}
+                onClick={() => setIsCustomDirectiveOpen(false)}
+              >
+                <X size={12} />
+              </button>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                type="text"
+                className="field-input"
+                autoFocus
+                placeholder="What should the narrator focus on? (e.g. 'A sudden tremor shakes the catwalk', 'Describe the rain starting outside')..."
+                value={customDirectiveText}
+                onChange={(e) => setCustomDirectiveText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && customDirectiveText.trim() && !isStreaming) {
+                    e.preventDefault();
+                    handleSendCustomDirective();
+                  } else if (e.key === "Escape") {
+                    setIsCustomDirectiveOpen(false);
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="btn btn-amber"
+                style={{ padding: "3px 14px", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 5 }}
+                disabled={isStreaming || !customDirectiveText.trim()}
+                onClick={handleSendCustomDirective}
+              >
+                <Send size={12} />
+                Invoke
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="composer-row">
           <textarea
             className="composer-input"
-            placeholder={`Write your action or dialogue to ${character.name}... (Try mentioning 'Vespera', 'Meridian Heist', moving to an exit, or attempting a risky action like hacking/lockpicking)`}
+            placeholder={`Write your action or dialogue to ${character.name}... (Or try /look, /wait 30m, /event, /perception, /narrate)`}
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={(e) => {

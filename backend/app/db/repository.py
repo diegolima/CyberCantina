@@ -3683,7 +3683,10 @@ class CantinaRepository:
                     cs.inventory_json
                 FROM turn_nodes t
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
-                JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = t.actor_id
+                JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = (
+                    CASE WHEN t.actor_id = '__narrator__' THEN (SELECT character_id FROM campaigns WHERE id = t.campaign_id)
+                    ELSE t.actor_id END
+                )
                 WHERE t.id = ?
                 """,
                 (turn_id,),
@@ -3728,7 +3731,10 @@ class CantinaRepository:
                 FROM branch_path bp
                 JOIN turn_nodes t ON t.id = bp.id
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
-                JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = t.actor_id
+                JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = (
+                    CASE WHEN t.actor_id = '__narrator__' THEN (SELECT character_id FROM campaigns WHERE id = t.campaign_id)
+                    ELSE t.actor_id END
+                )
                 ORDER BY t.depth_index ASC
                 """,
                 (leaf_turn_id,),
@@ -3761,7 +3767,10 @@ class CantinaRepository:
                     cs.inventory_json
                 FROM turn_nodes t
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
-                JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = t.actor_id
+                JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = (
+                    CASE WHEN t.actor_id = '__narrator__' THEN (SELECT character_id FROM campaigns WHERE id = t.campaign_id)
+                    ELSE t.actor_id END
+                )
                 WHERE t.campaign_id = ?
                 ORDER BY t.depth_index ASC, t.created_at ASC, t.rowid ASC
                 """,

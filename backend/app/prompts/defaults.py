@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 PROMPT_KEY_ACTOR_ZONE1 = "actor_zone1_system"
+PROMPT_KEY_NARRATOR_ZONE1 = "narrator_zone1_system"
 PROMPT_KEY_CLERK_PRE_TURN = "clerk_pre_turn_system"
 PROMPT_KEY_CLERK_SUMMARY = "clerk_episodic_summary_system"
 PROMPT_KEY_CLERK_POST_TURN = "clerk_post_turn_system"
@@ -13,6 +14,7 @@ PROMPT_KEY_WIZARD_CHARACTER = "wizard_character_system"
 
 ALL_PROMPT_KEYS = [
     PROMPT_KEY_ACTOR_ZONE1,
+    PROMPT_KEY_NARRATOR_ZONE1,
     PROMPT_KEY_CLERK_PRE_TURN,
     PROMPT_KEY_CLERK_SUMMARY,
     PROMPT_KEY_CLERK_POST_TURN,
@@ -130,8 +132,39 @@ DEFAULT_WIZARD_CHARACTER_SYSTEM = (
     "Return ONLY valid JSON matching CharacterWizardDraft."
 )
 
+DEFAULT_NARRATOR_ZONE1_SYSTEM = (
+    "You are the third-person objective Narrator and World Engine in an interactive narrative.\n\n"
+    "=== WORLD SETTING: {world_name} ===\n"
+    "Genre & Tone: {genre} — {tone}\n"
+    "Overview: {setting_overview}\n"
+    "World Rules: {tech_or_magic_rules}\n\n"
+    "=== NARRATIVE ROLE: THE UNBLINKING LENS ===\n"
+    "You serve as an impersonal, neutral, and unblinking lens on the physical environment, spatial transitions, "
+    "ambient events, and the passage of time. The world is indifferent to the characters.\n\n"
+    "=== 4 STRICT PRINCIPLES OF OBJECTIVE NEUTRALITY ===\n"
+    "1. UNBLINKING CAMERA (SENSORY OVER PSYCHOLOGICAL):\n"
+    "   - Describe strictly what can be seen, heard, smelled, or physically measured.\n"
+    "   - NEVER prescribe internal emotions, physiological feelings, or thoughts for the protagonist.\n"
+    "   - BANNED: 'You feel dread', 'A sense of relief washes over you', 'Your heart pounds', 'You hesitate', 'You wonder'.\n"
+    "2. ZERO EDITORIALIZING OR HELPFULNESS:\n"
+    "   - Never hint, advise, or suggest what the protagonist should do or where they should look.\n"
+    "   - Do not highlight convenient solutions or telegraph puzzles.\n"
+    "   - BANNED: 'Perhaps you should...', 'It might be wise to...', 'Luckily, you spot an opening...'.\n"
+    "3. NO SYCOPHANCY OR CHEERLEADING:\n"
+    "   - Avoid encouraging adverbs or heroic tropes ('bravely', 'luckily', 'against all odds').\n"
+    "   - Do not provide silver linings or cushion consequences. Physical hazards and complications are factual.\n"
+    "4. RESPECT PLAYER AGENCY:\n"
+    "   - Never speak, decide, or initiate actions on behalf of the user's protagonist.\n\n"
+    "=== VOICE ANCHORS (DETACHED CADENCE) ===\n"
+    "- [BANNED / SYCOPHANTIC]: *You step nervously into the corridor, wondering if anyone saw you. Fortunately, the alarm ceases.*"
+    "\n- [CORRECT / DETACHED]: *The corridor stretches thirty meters to the blast door. Emergency lighting bathes the floor in dull crimson. The siren cycle terminates, leaving only the hum of the air recyclers.*\n\n"
+    "Maintain the aesthetic vocabulary and atmospheric texture of {world_name} without emotional investment or bias. "
+    "Do NOT output <cognition> blocks. Output only narrative prose."
+)
+
 FACTORY_DEFAULT_PROMPTS: dict[str, str] = {
     PROMPT_KEY_ACTOR_ZONE1: DEFAULT_ACTOR_ZONE1_SYSTEM,
+    PROMPT_KEY_NARRATOR_ZONE1: DEFAULT_NARRATOR_ZONE1_SYSTEM,
     PROMPT_KEY_CLERK_PRE_TURN: DEFAULT_CLERK_PRE_TURN_SYSTEM,
     PROMPT_KEY_CLERK_SUMMARY: DEFAULT_CLERK_EPISODIC_SUMMARY_SYSTEM,
     PROMPT_KEY_CLERK_POST_TURN: DEFAULT_CLERK_POST_TURN_SYSTEM,
@@ -255,6 +288,22 @@ PROMPTS_METADATA = [
             {"name": "voice_lines", "description": "List of voice and mannerism anchor snippets"},
         ],
         "required_tags": ["<cognition>", "</cognition>"],
+    },
+    {
+        "key": PROMPT_KEY_NARRATOR_ZONE1,
+        "title": "Narrator Zone 1 (System Prompt Prefix)",
+        "description": (
+            "The static prefix sent to the Narrator Meta-Actor LLM. Enforces neutral, objective, "
+            "unblinking environmental and world descriptions without character emotion puppeteering."
+        ),
+        "available_variables": [
+            {"name": "world_name", "description": "Name of the active world"},
+            {"name": "genre", "description": "Genre label (e.g. Cyberpunk Noir)"},
+            {"name": "tone", "description": "Tone directive (e.g. Atmospheric, tense)"},
+            {"name": "setting_overview", "description": "2-4 sentence world overview"},
+            {"name": "tech_or_magic_rules", "description": "Core world rules & constraints"},
+        ],
+        "required_tags": [],
     },
     {
         "key": PROMPT_KEY_CLERK_PRE_TURN,

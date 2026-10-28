@@ -19,6 +19,7 @@ import {
   PromptPresetUpdatePayload,
   RecalledMemoryItem,
   TurnNodeRecord,
+  TurnSubmitOptions,
   UserModelSettingsPayload,
   UserProfile,
   UserRole,
@@ -641,12 +642,7 @@ export interface TurnStreamCallbacks {
 
 export async function streamCampaignTurn(
   campaignId: string,
-  payload: {
-    user_message: string;
-    parent_turn_id?: string | null;
-    manual_dice_override?: number | null;
-    override_location_id?: string | null;
-  },
+  payload: TurnSubmitOptions,
   callbacks: TurnStreamCallbacks
 ): Promise<void> {
   const response = await fetch(`${API_BASE}/campaigns/${campaignId}/turns/stream`, {

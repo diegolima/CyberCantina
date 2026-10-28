@@ -46,6 +46,7 @@ import {
   CharacterRecord,
   CognitionBlock,
   MemoryShard,
+  NarrativeMode,
   PreTurnAnalysis,
   RecalledMemoryItem,
   UserProfile,
@@ -485,6 +486,9 @@ export const App: React.FC = () => {
     userMessage: string;
     parentTurnId?: string | null;
     manualDiceOverride?: number | null;
+    narrativeMode?: NarrativeMode;
+    narratorDirective?: string | null;
+    durationMinutes?: number | null;
   }) => {
     if (!bundle) return;
     setIsStreaming(true);
@@ -496,7 +500,10 @@ export const App: React.FC = () => {
       cognitionRaw: "",
       cognitionParsed: null,
       proseText: "",
-      phaseStatus: "Phase 1: Pre-Turn Analysis & GraphRAG...",
+      phaseStatus:
+        opts.narrativeMode && opts.narrativeMode !== "standard"
+          ? "Invoking Neutral Scene Narrator..."
+          : "Phase 1: Pre-Turn Analysis & GraphRAG...",
     });
 
     try {
@@ -507,6 +514,9 @@ export const App: React.FC = () => {
           parent_turn_id: opts.parentTurnId ?? bundle.campaign.active_leaf_turn_id,
           manual_dice_override: opts.manualDiceOverride ?? null,
           override_location_id: pendingLocationOverrideId,
+          narrative_mode: opts.narrativeMode,
+          narrator_directive: opts.narratorDirective,
+          duration_minutes: opts.durationMinutes,
         },
         {
           onPhase1Complete: (data) => {

@@ -80,8 +80,51 @@ def build_offline_simulated_response(
     neighbors: list[NeighborLocationView],
     recalled_items: list[RecalledMemoryItem],
     pre_turn: PreTurnAnalysis,
+    is_narrator: bool = False,
+    narrative_mode: str | None = None,
+    narrator_directive: str | None = None,
 ) -> str:
     """Construct a context-grounded <cognition> + prose response when running without a live LLM server."""
+    if is_narrator:
+        env_tags_str = (
+            ", ".join(active_location.environmental_tags)
+            if active_location.environmental_tags
+            else "ambient atmospheric hum"
+        )
+        exit_desc = (
+            f"To the {neighbors[0].direction_label.lower()}, a passage leads toward {neighbors[0].destination.name}."
+            if neighbors
+            else "No open corridors are immediately prominent."
+        )
+        if narrative_mode == "describe":
+            return (
+                f"*{active_location.name} rests in quiet stasis beneath muted lighting. {active_location.description} "
+                f"Sensory markers: {env_tags_str}. {exit_desc}*"
+            )
+        elif narrative_mode == "advance":
+            return (
+                f"*Minutes elapse steadily across {active_location.name}. The ambient cooling cycle completes with a soft pneumatic click. "
+                f"Condensation trickles down exposed conduits, and the low drone of distant power conduits rises and falls.*"
+            )
+        elif narrative_mode == "complication":
+            comp_detail = narrator_directive or "An electrical relay pops from an overhead conduit housing"
+            return (
+                f"*{active_location.name}: {comp_detail}. A burst of pale blue sparks arcs across the metal framework, "
+                f"tripping an auxiliary breaker. A low warning chime pulses three times through the ventilation.*"
+            )
+        elif narrative_mode == "perception":
+            lore_note = f" Faded industrial stenciling matches archival records: '{recalled_items[0].title}'." if recalled_items else ""
+            return (
+                f"*Careful inspection of {active_location.name} reveals subtle physical markers. "
+                f"Fine hairline fractures run along the deck plating near the bulkhead, and the air carries a faint ozone tang.{lore_note}*"
+            )
+        else:
+            directive_note = narrator_directive or "The environment remains indifferent"
+            return (
+                f"*{active_location.name}: {directive_note}. {active_location.description} "
+                f"Current surroundings: {env_tags_str}.*"
+            )
+
     top_memory = (
         f"Recalling '{recalled_items[0].title}': {recalled_items[0].content}"
         if recalled_items
@@ -178,6 +221,9 @@ async def stream_phase3_actor(
     recalled_items: list[RecalledMemoryItem],
     pre_turn: PreTurnAnalysis,
     profile: ModelProfile | None = None,
+    is_narrator: bool = False,
+    narrative_mode: str | None = None,
+    narrator_directive: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream Phase 3 response, splitting <cognition> tokens from narrative prose tokens in real time."""
     raw_chunks: list[str] = []
@@ -198,6 +244,9 @@ async def stream_phase3_actor(
                 neighbors=neighbors,
                 recalled_items=recalled_items,
                 pre_turn=pre_turn,
+                is_narrator=is_narrator,
+                narrative_mode=narrative_mode,
+                narrator_directive=narrator_directive,
             )
             # Stream in small chunks to mirror real SSE token cadence
             step = 18
@@ -206,17 +255,47 @@ async def stream_phase3_actor(
                 await asyncio.sleep(0.005)
 
     buffer = ""
-    in_cognition = True
-    cognition_emitted = False
+    in_cognition = not is_narrator
+    cognition_emitted = is_narrator
     prose_Accumulator: list[str] = []
-    cognition_block = CognitionBlock(
-        recall="",
-        feeling=previous_state.mood_label,
-        valence=previous_state.valence,
-        arousal=previous_state.arousal,
-        want=previous_state.active_want,
-        plan=previous_state.active_plan,
+    cognition_block = (
+        CognitionBlock(
+            recall=f"Observing {active_location.name}",
+            feeling="Objective / Detached",
+            valence=0.0,
+            arousal=0.0,
+            want="Depict environment and world state neutrally",
+            plan=narrator_directive
+            or (
+                "Describe scene environment"
+                if narrative_mode == "describe"
+                else (
+                    "Depict unexpected complication"
+                    if narrative_mode == "complication"
+                    else (
+                        "Detail subtle perceptual clues"
+                        if narrative_mode == "perception"
+                        else "Depict passage of time"
+                    )
+                )
+            ),
+        )
+        if is_narrator
+        else CognitionBlock(
+            recall="",
+            feeling=previous_state.mood_label,
+            valence=previous_state.valence,
+            arousal=previous_state.arousal,
+            want=previous_state.active_want,
+            plan=previous_state.active_plan,
+        )
     )
+
+    if is_narrator:
+        yield {
+            "event": "cognition_complete",
+            "data": cognition_block.model_dump(),
+        }
 
     async for delta in _token_generator():
         raw_chunks.append(delta)

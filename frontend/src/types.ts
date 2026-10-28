@@ -239,6 +239,24 @@ export interface PostTurnStateDelta {
   relationship_shift_note?: string | null;
 }
 
+export type NarrativeMode =
+  | "standard"
+  | "describe"
+  | "advance"
+  | "complication"
+  | "perception"
+  | "custom";
+
+export interface TurnSubmitOptions {
+  user_message: string;
+  parent_turn_id?: string | null;
+  manual_dice_override?: number | null;
+  override_location_id?: string | null;
+  narrative_mode?: NarrativeMode;
+  narrator_directive?: string | null;
+  duration_minutes?: number | null;
+}
+
 export interface EpisodicChunkRecord {
   id: string;
   campaign_id: string;

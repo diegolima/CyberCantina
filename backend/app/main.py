@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -88,6 +89,8 @@ from app.schemas.turn import (
     CampaignCharacterMemoriesUpdateRequest,
     CampaignRecord,
     CampaignStateBundle,
+    MechanicsTrigger,
+    PreTurnAnalysis,
     TurnSubmitRequest,
     WorldStateSnapshot,
 )
@@ -1515,42 +1518,152 @@ async def _execute_turn_stream_events(
     eff_actor, eff_clerk, eff_wm_turns = get_effective_user_model_settings(owner_id)
     effective_prompts = repo.resolve_effective_prompts(user_id=owner_id, campaign_id=campaign.id)
 
-    # PHASE 1: Auxiliary Pre-Turn Analysis, Multi-Character Speaker Orchestration & RNG Mechanics
-    pre_turn = await run_phase1_pre_analysis(
-        user_message=req.user_message,
-        character=present_characters[0],
-        active_location=active_location,
-        neighbors=neighbors,
-        known_entities=known_entities,
-        manual_dice_override=req.manual_dice_override,
-        present_characters=present_characters,
-        previous_speaker_id=parent_turn.actor_id,
-        profile=eff_clerk,
-        prompt_template=effective_prompts.get("clerk_pre_turn_system"),
-    )
+    effective_user_message = req.user_message.strip()
 
-    # Resolve active speaker selected by Phase 1 from characters present in the room
-    character = (
-        participants_by_id.get(pre_turn.active_speaker_id or "")
-        if pre_turn.active_speaker_id in {c.id for c in present_characters}
-        else None
-    ) or present_characters[0]
-    prev_char_state = parent_turn.character_states.get(
-        character.id,
-        CharacterStateSnapshot(
-            turn_id=parent_turn.id,
-            character_id=character.id,
-            current_location_id=active_location.id,
-            mood_label=character.baseline_psyche.mood_label,
-            valence=character.baseline_psyche.valence,
-            arousal=character.baseline_psyche.arousal,
-            active_want=character.baseline_psyche.default_want,
-            active_plan=character.baseline_psyche.default_plan,
-            relationship_notes={"user": "Acquaintance / Uncertain trust"},
-            equipped=list(character.equipped),
-            inventory=list(character.inventory),
-        ),
-    )
+    # Defense-in-depth: Auto-detect narrator mode if client omitted narrative_mode or swiped a narrator turn
+    if req.narrative_mode == "standard" and effective_user_message:
+        lower_msg = effective_user_message.lower()
+        if lower_msg.startswith("[describe the current scene"):
+            req.narrative_mode = "describe"
+        elif lower_msg.startswith("[advance the story") or (
+            lower_msg.startswith("[") and ("wait for" in lower_msg or "minutes elapse" in lower_msg)
+        ):
+            req.narrative_mode = "advance"
+            if not req.duration_minutes:
+                m = re.search(r"(\d+)\s*minutes?", lower_msg)
+                if m:
+                    req.duration_minutes = int(m.group(1))
+        elif lower_msg.startswith("[introduce a complication") or lower_msg.startswith("[introduce an unexpected complication"):
+            req.narrative_mode = "complication"
+            dir_match = re.search(r"^\[introduce a complication:\s*(.*?)\]$", effective_user_message, re.IGNORECASE)
+            if dir_match and not req.narrator_directive:
+                req.narrator_directive = dir_match.group(1).strip()
+        elif lower_msg.startswith("[perception check") or lower_msg.startswith("[examine the scene"):
+            req.narrative_mode = "perception"
+            dir_match = re.search(r"^\[perception check:\s*(.*?)\]$", effective_user_message, re.IGNORECASE)
+            if dir_match and not req.narrator_directive:
+                req.narrator_directive = dir_match.group(1).strip()
+        elif req.parent_turn_id and campaign.active_leaf_turn_id:
+            try:
+                active_leaf = repo.get_turn_node(campaign.active_leaf_turn_id)
+                if (
+                    active_leaf.parent_turn_id == req.parent_turn_id
+                    and active_leaf.actor_id == "__narrator__"
+                    and active_leaf.user_message.strip() == effective_user_message
+                ):
+                    req.narrative_mode = "custom"
+                    req.narrator_directive = effective_user_message
+            except KeyError:
+                pass
+
+    is_narrator = req.narrative_mode in ("describe", "advance", "complication", "perception", "custom")
+    if not effective_user_message:
+        if req.narrative_mode == "describe":
+            effective_user_message = "[Describe the current scene]"
+        elif req.narrative_mode == "advance":
+            if req.duration_minutes:
+                effective_user_message = f"[Advance the story: wait for {req.duration_minutes} minutes]"
+            elif req.narrator_directive:
+                effective_user_message = f"[Advance the story: {req.narrator_directive}]"
+            else:
+                effective_user_message = "[Advance the story without player action]"
+        elif req.narrative_mode == "complication":
+            effective_user_message = (
+                f"[Introduce a complication: {req.narrator_directive}]"
+                if req.narrator_directive
+                else "[Introduce an unexpected complication or external event]"
+            )
+        elif req.narrative_mode == "perception":
+            effective_user_message = (
+                f"[Perception check: {req.narrator_directive}]"
+                if req.narrator_directive
+                else "[Examine the scene for subtle details and lore]"
+            )
+        elif req.narrative_mode == "custom":
+            effective_user_message = req.narrator_directive or "[Director request]"
+        else:
+            raise HTTPException(status_code=400, detail="User message cannot be empty")
+
+    # PHASE 1: Auxiliary Pre-Turn Analysis, Multi-Character Speaker Orchestration & RNG Mechanics
+    if is_narrator:
+        if req.narrative_mode == "complication":
+            subtext = "Introduce an unexpected external complication or inciting incident"
+            queries = [active_location.name, "hazard", "threat", "complication"] + (
+                [req.narrator_directive] if req.narrator_directive else []
+            )
+        elif req.narrative_mode == "perception":
+            subtext = "Analyze subtle perceptual markers, sensory nuances, and historical lore tied to this space"
+            queries = [active_location.name, active_location.summary] + (
+                [req.narrator_directive] if req.narrator_directive else []
+            )
+        elif req.narrative_mode == "advance":
+            subtext = (
+                f"Depict the passage of time ({req.duration_minutes} minutes)"
+                if req.duration_minutes
+                else "Depict the passage of time and shifting ambient conditions"
+            )
+            queries = [active_location.name, "time", "routine"]
+        else:
+            subtext = (
+                f"Narrator direction: {req.narrator_directive}"
+                if req.narrator_directive
+                else "Environmental narration without player character action"
+            )
+            queries = [active_location.name] + ([req.narrator_directive] if req.narrator_directive else [])
+
+        pre_turn = PreTurnAnalysis(
+            user_sentiment="objective, observational",
+            subtext_interpretation=subtext,
+            mentioned_entities=[active_location.name],
+            memory_search_queries=queries,
+            spatial_intent="stay",
+            active_speaker_id="__narrator__",
+            speaker_order=["__narrator__"],
+            mechanics_check=MechanicsTrigger(requires_roll=False),
+            resolved_roll=None,
+        )
+        character = primary_character
+        actor_id = "__narrator__"
+        prev_char_state = parent_turn.character_states.get(
+            primary_character.id,
+            parent_turn.character_state,
+        )
+    else:
+        pre_turn = await run_phase1_pre_analysis(
+            user_message=effective_user_message,
+            character=present_characters[0],
+            active_location=active_location,
+            neighbors=neighbors,
+            known_entities=known_entities,
+            manual_dice_override=req.manual_dice_override,
+            present_characters=present_characters,
+            previous_speaker_id=parent_turn.actor_id,
+            profile=eff_clerk,
+            prompt_template=effective_prompts.get("clerk_pre_turn_system"),
+        )
+        # Resolve active speaker selected by Phase 1 from characters present in the room
+        character = (
+            participants_by_id.get(pre_turn.active_speaker_id or "")
+            if pre_turn.active_speaker_id in {c.id for c in present_characters}
+            else None
+        ) or present_characters[0]
+        actor_id = character.id
+        prev_char_state = parent_turn.character_states.get(
+            character.id,
+            CharacterStateSnapshot(
+                turn_id=parent_turn.id,
+                character_id=character.id,
+                current_location_id=active_location.id,
+                mood_label=character.baseline_psyche.mood_label,
+                valence=character.baseline_psyche.valence,
+                arousal=character.baseline_psyche.arousal,
+                active_want=character.baseline_psyche.default_want,
+                active_plan=character.baseline_psyche.default_plan,
+                relationship_notes={"user": "Acquaintance / Uncertain trust"},
+                equipped=list(character.equipped),
+                inventory=list(character.inventory),
+            ),
+        )
 
     # Hybrid GraphRAG Memory Retrieval (filtered by valid_turn_ids & character room presence)
     character_present_turn_ids = {
@@ -1585,27 +1698,58 @@ async def _execute_turn_stream_events(
         neighbors=neighbors,
         recalled_items=recalled_items,
         pre_turn=pre_turn,
-        user_message=req.user_message,
+        user_message=effective_user_message,
         present_characters=present_characters,
         character_name_map={c.id: c.name for c in participants},
         working_memory_turns=eff_wm_turns,
-        actor_system_prompt_template=effective_prompts.get("actor_zone1_system"),
+        actor_system_prompt_template=(
+            effective_prompts.get("narrator_zone1_system")
+            if is_narrator
+            else effective_prompts.get("actor_zone1_system")
+        ),
+        is_narrator=is_narrator,
+        narrative_mode=req.narrative_mode if is_narrator else None,
+        narrator_directive=req.narrator_directive if is_narrator else None,
     )
 
     # PHASE 3: Guided Single-Pass <cognition> + Narrative Prose Streaming
-    final_cognition = CognitionBlock(
-        recall="",
-        feeling=prev_char_state.mood_label,
-        valence=prev_char_state.valence,
-        arousal=prev_char_state.arousal,
-        want=prev_char_state.active_want,
-        plan=prev_char_state.active_plan,
+    final_cognition = (
+        CognitionBlock(
+            recall=f"Observing {active_location.name}",
+            feeling="Objective / Detached",
+            valence=0.0,
+            arousal=0.0,
+            want="Depict environment and world state neutrally",
+            plan=req.narrator_directive
+            or (
+                "Describe scene environment"
+                if req.narrative_mode == "describe"
+                else (
+                    "Depict unexpected complication"
+                    if req.narrative_mode == "complication"
+                    else (
+                        "Detail subtle perceptual clues"
+                        if req.narrative_mode == "perception"
+                        else "Depict passage of time"
+                    )
+                )
+            ),
+        )
+        if is_narrator
+        else CognitionBlock(
+            recall="",
+            feeling=prev_char_state.mood_label,
+            valence=prev_char_state.valence,
+            arousal=prev_char_state.arousal,
+            want=prev_char_state.active_want,
+            plan=prev_char_state.active_plan,
+        )
     )
     final_prose = ""
 
     async for item in stream_phase3_actor(
         messages=messages,
-        user_message=req.user_message,
+        user_message=effective_user_message,
         character=character,
         previous_state=prev_char_state,
         active_location=active_location,
@@ -1613,6 +1757,9 @@ async def _execute_turn_stream_events(
         recalled_items=recalled_items,
         pre_turn=pre_turn,
         profile=eff_actor,
+        is_narrator=is_narrator,
+        narrative_mode=req.narrative_mode if is_narrator else None,
+        narrator_directive=req.narrator_directive if is_narrator else None,
     ):
         if item["event"] == "actor_finished":
             final_cognition = CognitionBlock.model_validate(item["data"]["cognition"])
@@ -1633,11 +1780,11 @@ async def _execute_turn_stream_events(
         turn_id=new_turn_id,
         character_id=character.id,
         current_location_id=active_location.id,
-        mood_label=final_cognition.feeling[:80] or prev_char_state.mood_label,
-        valence=final_cognition.valence,
-        arousal=final_cognition.arousal,
-        active_want=final_cognition.want or prev_char_state.active_want,
-        active_plan=final_cognition.plan or prev_char_state.active_plan,
+        mood_label=prev_char_state.mood_label if is_narrator else (final_cognition.feeling[:80] or prev_char_state.mood_label),
+        valence=prev_char_state.valence if is_narrator else final_cognition.valence,
+        arousal=prev_char_state.arousal if is_narrator else final_cognition.arousal,
+        active_want=prev_char_state.active_want if is_narrator else (final_cognition.want or prev_char_state.active_want),
+        active_plan=prev_char_state.active_plan if is_narrator else (final_cognition.plan or prev_char_state.active_plan),
         relationship_notes=prev_char_state.relationship_notes,
         equipped=list(prev_char_state.equipped),
         inventory=list(prev_char_state.inventory),
@@ -1648,8 +1795,8 @@ async def _execute_turn_stream_events(
         campaign_id=campaign.id,
         parent_turn_id=parent_turn.id,
         depth_index=new_depth,
-        user_message=req.user_message,
-        actor_id=character.id,
+        user_message=effective_user_message,
+        actor_id=actor_id,
         raw_prose=final_prose,
         cognition=final_cognition,
         pre_turn=pre_turn,

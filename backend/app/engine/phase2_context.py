@@ -16,6 +16,22 @@ from app.schemas.turn import (
 from app.schemas.world import LocationNode, NeighborLocationView, WorldRecord
 
 
+def build_zone1_narrator_system_prompt(
+    world: WorldRecord,
+    prompt_template: str | None = None,
+) -> str:
+    """Zone 1: Strictly static system prompt prefix for the Narrator Meta-Actor."""
+    template = prompt_template or get_default_prompt("narrator_zone1_system")
+    return render_template(
+        template,
+        world_name=world.name,
+        genre=world.global_rules.genre,
+        tone=world.global_rules.tone,
+        setting_overview=world.global_rules.setting_overview,
+        tech_or_magic_rules=world.global_rules.tech_or_magic_rules,
+    )
+
+
 def build_zone1_static_system_prompt(
     world: WorldRecord,
     character: CharacterRecord,
@@ -86,6 +102,9 @@ def build_zone4_ephemeral_tail_frame(
     pre_turn: PreTurnAnalysis,
     present_characters: list[CharacterRecord] | None = None,
     all_character_states: dict[str, CharacterStateSnapshot] | None = None,
+    is_narrator: bool = False,
+    narrative_mode: str | None = None,
+    narrator_directive: str | None = None,
 ) -> str:
     """Zone 4: Dynamic turn-specific context injected at the tail of the prompt."""
     exits_text = "\n".join(
@@ -158,6 +177,62 @@ def build_zone4_ephemeral_tail_frame(
                 + "\n  </other_characters_in_room>"
             )
 
+    if is_narrator:
+        if narrative_mode == "describe":
+            default_dir = (
+                "Describe the immediate environment, lighting, acoustics, smells, and visible points of interest "
+                "with objective neutrality. Do not speak or decide for the user's character."
+            )
+        elif narrative_mode == "advance":
+            default_dir = (
+                "Advance the story and depict the passage of time without player character actions. "
+                "Detail environmental shifts, ambient sounds, lighting cycles, weather, or machine cycles."
+            )
+        elif narrative_mode == "complication":
+            default_dir = (
+                "Introduce an unexpected external complication or inciting incident (e.g. a sudden power surge, "
+                "an unannounced arrival, mechanical failure, alarm, or environmental hazard). "
+                "Do NOT force the protagonist's emotional or physical reaction; present the event as external fact."
+            )
+        elif narrative_mode == "perception":
+            default_dir = (
+                "Detail subtle perceptual clues and environmental lore tied to this space. "
+                "Focus on what is physically observable: structural wear, hidden markings, faint odors, subtle vibrations, "
+                "or technological signatures from the recalled lore. Do not tell the protagonist how to feel."
+            )
+        else:
+            default_dir = (
+                "Follow the director guidance with strict objective detachment: "
+                f"{narrator_directive or 'Depict the scene objectively.'}"
+            )
+        directive_text = narrator_directive if narrator_directive and narrative_mode not in ("describe", "complication", "perception") else default_dir
+        if narrator_directive and narrative_mode in ("complication", "perception"):
+            directive_text += f" (Focus hint: {narrator_directive})"
+        mind_state_section = (
+            f"  <narrator_directive mode=\"{narrative_mode or 'custom'}\">\n"
+            f"    Directive: {directive_text}\n"
+            f"    STRICT NEUTRALITY CONSTRAINTS:\n"
+            f"    - Zero emotional puppeteering (do not write 'you feel', 'relief', 'panic', 'dread').\n"
+            f"    - Zero helpful hints or editorial guidance (do not suggest what to do).\n"
+            f"    - Zero heroic sycophancy (no 'luckily', 'bravely', 'against all odds').\n"
+            f"    - The world is completely indifferent to the characters.\n"
+            f"  </narrator_directive>"
+        )
+        user_tail = f"Director / Narrator Request:\n{user_message}"
+    else:
+        mind_state_section = (
+            f"  <character_previous_mind_state character=\"{character.name}\">\n"
+            f"    Previous Mood: {character_state.mood_label} "
+            f"(Valence: {character_state.valence:+.2f}, Arousal: {character_state.arousal:.2f})\n"
+            f"    Previous Want: {character_state.active_want}\n"
+            f"    Previous Plan: {character_state.active_plan}\n"
+            f"    Relationship Notes: {rel_notes_text}\n"
+            f"    Equipped / Worn: {equipped_text}\n"
+            f"    Carried Inventory: {inventory_text}\n"
+            f"  </character_previous_mind_state>"
+        )
+        user_tail = f"User Action / Dialogue:\n{user_message}"
+
     return (
         "<scene_context>\n"
         f"  <world_clock>{describe_world_timestamp(world_snapshot.world_timestamp)}</world_clock>\n"
@@ -174,17 +249,9 @@ def build_zone4_ephemeral_tail_frame(
         f"    Spatial Intent: {pre_turn.spatial_intent}"
         f"{f' ({pre_turn.target_location_hint})' if pre_turn.target_location_hint else ''}\n"
         f"  </auxiliary_prompt_analysis>{rng_section}\n"
-        f"  <character_previous_mind_state character=\"{character.name}\">\n"
-        f"    Previous Mood: {character_state.mood_label} "
-        f"(Valence: {character_state.valence:+.2f}, Arousal: {character_state.arousal:.2f})\n"
-        f"    Previous Want: {character_state.active_want}\n"
-        f"    Previous Plan: {character_state.active_plan}\n"
-        f"    Relationship Notes: {rel_notes_text}\n"
-        f"    Equipped / Worn: {equipped_text}\n"
-        f"    Carried Inventory: {inventory_text}\n"
-        f"  </character_previous_mind_state>\n"
+        f"{mind_state_section}\n"
         "</scene_context>\n\n"
-        f"User Action / Dialogue:\n{user_message}"
+        f"{user_tail}"
     )
 
 
@@ -203,14 +270,22 @@ def assemble_four_zone_messages(
     character_name_map: dict[str, str] | None = None,
     working_memory_turns: int | None = None,
     actor_system_prompt_template: str | None = None,
+    is_narrator: bool = False,
+    narrative_mode: str | None = None,
+    narrator_directive: str | None = None,
 ) -> list[dict[str, str]]:
     """Construct the complete 4-Zone OpenAI messages array for the Main Actor Model."""
+    zone1_prompt = (
+        build_zone1_narrator_system_prompt(world, prompt_template=actor_system_prompt_template)
+        if is_narrator
+        else build_zone1_static_system_prompt(
+            world, character, prompt_template=actor_system_prompt_template
+        )
+    )
     messages: list[dict[str, str]] = [
         {
             "role": "system",
-            "content": build_zone1_static_system_prompt(
-                world, character, prompt_template=actor_system_prompt_template
-            ),
+            "content": zone1_prompt,
         }
     ]
 
@@ -225,7 +300,7 @@ def assemble_four_zone_messages(
         t
         for t in branch_turns
         if t.depth_index > max_summarized_depth
-        and was_character_present_on_turn(t, character.id)
+        and (is_narrator or was_character_present_on_turn(t, character.id))
     ]
     wm_limit = (
         working_memory_turns
@@ -236,14 +311,18 @@ def assemble_four_zone_messages(
 
     # Zone 3: Verbatim recent turns (with old <cognition> stripped to preserve context window)
     name_lookup = dict(character_name_map or {})
+    name_lookup["__narrator__"] = "Narrator"
     for c in present_characters or []:
         name_lookup[c.id] = c.name
     name_lookup[character.id] = character.name
 
+    active_actor_id = "__narrator__" if is_narrator else character.id
     for turn in working_window:
         prose_text = turn.raw_prose
-        if turn.actor_id != character.id and turn.actor_id in name_lookup:
+        if turn.actor_id != active_actor_id and turn.actor_id in name_lookup:
             prose_text = f"[{name_lookup[turn.actor_id]}]: {turn.raw_prose}"
+        elif turn.actor_id == "__narrator__" and active_actor_id != "__narrator__":
+            prose_text = f"[Narrator]: {turn.raw_prose}"
 
         if turn.depth_index == 0 and turn.user_message == "[Scene Start]":
             messages.append({"role": "assistant", "content": prose_text})
@@ -265,6 +344,9 @@ def assemble_four_zone_messages(
         pre_turn=pre_turn,
         present_characters=present_characters,
         all_character_states=leaf_turn.character_states,
+        is_narrator=is_narrator,
+        narrative_mode=narrative_mode,
+        narrator_directive=narrator_directive,
     )
     messages.append({"role": "user", "content": zone4_content})
     return messages

@@ -231,7 +231,7 @@ class CampaignCharacterMemoriesUpdateRequest(BaseModel):
 class TurnSubmitRequest(BaseModel):
     """Payload to execute a 4-phase roleplay turn (or swipe/branch from parent_turn_id)."""
 
-    user_message: str = Field(..., min_length=1)
+    user_message: str = Field(default="")
     parent_turn_id: str | None = Field(
         default=None,
         description=(
@@ -249,3 +249,31 @@ class TurnSubmitRequest(BaseModel):
         default=None,
         description="Optional location ID override to force the scene location for this turn or swipe.",
     )
+    narrative_mode: Literal[
+        "standard",
+        "describe",
+        "advance",
+        "complication",
+        "perception",
+        "custom",
+    ] = Field(
+        default="standard",
+        description="Turn execution mode: 'standard' for NPC dialogue/actions, or narrator modes for objective world descriptions.",
+    )
+    narrator_directive: str | None = Field(
+        default=None,
+        description="Optional guidance for the narrator meta-actor (e.g. specific environmental focus, duration, or event).",
+    )
+    duration_minutes: int | None = Field(
+        default=None,
+        ge=1,
+        le=1440,
+        description="Optional explicit minutes to advance the in-game clock when narrative_mode is 'advance'.",
+    )
+
+    @field_validator("user_message", mode="before")
+    @classmethod
+    def _coerce_user_message(cls, v: Any) -> str:
+        if v is None:
+            return ""
+        return str(v)
