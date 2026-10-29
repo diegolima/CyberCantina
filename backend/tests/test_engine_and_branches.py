@@ -100,6 +100,42 @@ async def test_phase1_rng_and_phase3_cognition_parser(temp_repo: CantinaReposito
     assert "Meridian Heist" in parsed.recall
     assert "Ripperdoc Bay" in parsed.want
 
+    bullet_xml = (
+        "<cognition>\n"
+        "  <recall>\n"
+        "  - Survived the Meridian Heist six months ago.\n"
+        "  - Unresolved debt with the Syndicate.\n"
+        "  </recall>\n"
+        "  <feeling valence=\"-0.35\" arousal=\"0.80\">Guarded and protective, hyper-aware of the back door.</feeling>\n"
+        "  <want>Get them into the Backroom Ripperdoc Bay immediately.</want>\n"
+        "  <plan>\n"
+        "  - Nod toward the lead-lined curtain.\n"
+        "  - Bolt the reinforced front security lock in silence.\n"
+        "  - Tell them to keep their head down.\n"
+        "  </plan>\n"
+        "</cognition>"
+    )
+    bullet_parsed = parse_cognition_xml(bullet_xml, bundle.current_character_state)
+    assert "- Survived the Meridian Heist" in bullet_parsed.recall
+    assert "- Unresolved debt with the Syndicate." in bullet_parsed.recall
+    assert bullet_parsed.feeling == "Guarded and protective, hyper-aware of the back door."
+    assert "- Nod toward the lead-lined curtain." in bullet_parsed.plan
+
+    from app.engine.phase3_actor import build_offline_simulated_response
+
+    simulated = build_offline_simulated_response(
+        user_message="Hello",
+        character=char,
+        previous_state=bundle.current_character_state,
+        active_location=bundle.active_location,
+        neighbors=bundle.neighbor_locations,
+        recalled_items=[],
+        pre_turn=pre,
+    )
+    sim_parsed = parse_cognition_xml(simulated, bundle.current_character_state)
+    assert sim_parsed.recall.startswith("- ")
+    assert sim_parsed.plan.startswith("- ")
+
 
 async def test_four_zone_prompt_layout_stability(temp_repo: CantinaRepository) -> None:
     """Verify Zone 1 static prefix stays identical across turns while Zone 4 holds dynamic context."""

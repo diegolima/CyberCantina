@@ -38,7 +38,7 @@ def parse_cognition_xml(
     want_match = _WANT_RE.search(cognition_xml)
     plan_match = _PLAN_RE.search(cognition_xml)
 
-    recall = recall_match.group(1).strip() if recall_match else "Holding onto the current thread of conversation."
+    recall = recall_match.group(1).strip() if recall_match else "- Holding onto the current thread of conversation."
     feeling = feeling_match.group("text").strip() if feeling_match else fallback_state.mood_label
     valence = fallback_state.valence
     arousal = fallback_state.arousal
@@ -125,11 +125,14 @@ def build_offline_simulated_response(
                 f"Current surroundings: {env_tags_str}.*"
             )
 
-    top_memory = (
-        f"Recalling '{recalled_items[0].title}': {recalled_items[0].content}"
-        if recalled_items
-        else f"Watching the door of {active_location.name} and weighing {character.name}'s history here."
-    )
+    if recalled_items:
+        bullet_points = [
+            f"- Recalling '{item.title}': {item.content}"
+            for item in recalled_items[:2]
+        ]
+        top_memory = "\n".join(bullet_points)
+    else:
+        top_memory = f"- Watching the door of {active_location.name} and weighing {character.name}'s history here."
 
     if "vulnerable" in pre_turn.user_sentiment:
         new_val = _clamp(previous_state.valence + 0.15, -1.0, 1.0)
@@ -149,14 +152,22 @@ def build_offline_simulated_response(
 
     target_exit = neighbors[0] if neighbors else None
     if pre_turn.spatial_intent == "move_known" and pre_turn.target_location_hint:
-        plan_text = f"Lead the way toward {pre_turn.target_location_hint} while keeping watch."
+        plan_bullets = [
+            f"- Check the immediate perimeter of {active_location.name} for sensors or eavesdroppers.",
+            f"- Signal assent and lead the way toward {pre_turn.target_location_hint}.",
+            "- Keep a sharp eye on corridor sightlines during transit.",
+        ]
         action_prose = (
             f"*{character.name} gives a curt nod toward {pre_turn.target_location_hint}, "
             f"checking the sightlines of {active_location.name} before moving.*\n\n"
             f"\"Come on, then. Let's not linger out in the open where every sensor in the sector can log us.\""
         )
     elif pre_turn.spatial_intent == "explore_new":
-        plan_text = "Follow their lead into the unmapped area with hand near weapon."
+        plan_bullets = [
+            "- Shift posture into a ready defensive stance with hand resting near weapon.",
+            "- Deliver a quiet warning about unmapped sector hazards.",
+            "- Step forward into the breach to take point.",
+        ]
         action_prose = (
             f"*{character.name}'s eyes narrow as she steps forward beside you, the micro-servos in her "
             f"forearm clicking into readiness as the unmapped threshold opens ahead.*\n\n"
@@ -164,7 +175,11 @@ def build_offline_simulated_response(
         )
     elif pre_turn.resolved_roll is not None:
         roll = pre_turn.resolved_roll
-        plan_text = f"React immediately to their {roll.outcome_tier.lower()} on {roll.skill_or_approach}."
+        plan_bullets = [
+            f"- Observe the immediate outcome of their {roll.outcome_tier.lower()} action on {roll.skill_or_approach}.",
+            "- Address their performance directly with dialogue.",
+            "- Determine the immediate tactical follow-up in this room.",
+        ]
         if "Success" in roll.outcome_tier:
             action_prose = (
                 f"*{character.name} watches the maneuver play out inside {active_location.name} "
@@ -186,7 +201,11 @@ def build_offline_simulated_response(
             if target_exit
             else ""
         )
-        plan_text = "Respond to their subtext directly and test their next move."
+        plan_bullets = [
+            "- Study their facial expression and body language across the counter.",
+            "- Confront the unspoken subtext of their words directly in dialogue.",
+            "- Prompt them for their next concrete move.",
+        ]
         mem_cue = (
             f" \"And don't think I've forgotten about {recalled_items[0].title.lower()},\" *she adds quietly.*"
             if recalled_items
@@ -198,13 +217,14 @@ def build_offline_simulated_response(
             f"\"I hear what you're saying, even the part you're trying not to say out loud.\"{mem_cue} "
             f"\"So tell me straight—what's our move from here?\""
         )
+    plan_text = "\n".join(plan_bullets)
 
     return (
         "<cognition>\n"
-        f"  <recall>{top_memory}</recall>\n"
+        f"  <recall>\n{top_memory}\n  </recall>\n"
         f"  <feeling valence=\"{new_val:.2f}\" arousal=\"{new_arousal:.2f}\">{feeling_text}</feeling>\n"
         f"  <want>{want_text}</want>\n"
-        f"  <plan>{plan_text}</plan>\n"
+        f"  <plan>\n{plan_text}\n  </plan>\n"
         "</cognition>\n"
         f"{action_prose}"
     )

@@ -780,24 +780,26 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                     </div>
                   </div>
                 ) : (
-                  <div className="cognition-steps">
-                    <div className="cog-step">
-                      <div className="cog-step-label">1. Recall</div>
-                      <div>{liveStream.cognitionParsed.recall}</div>
+                    <div className="cognition-steps">
+                      <div className="cog-step">
+                        <div className="cog-step-label">1. Memory Recall</div>
+                        <div>{liveStream.cognitionParsed.recall}</div>
+                      </div>
+                      <div className="cog-step">
+                        <div className="cog-step-label">2. Affect & Feeling</div>
+                        <div>
+                          {liveStream.cognitionParsed.feeling || "Calibrating..."}
+                        </div>
+                      </div>
+                      <div className="cog-step">
+                        <div className="cog-step-label">3. Immediate Want</div>
+                        <div>{liveStream.cognitionParsed.want}</div>
+                      </div>
+                      <div className="cog-step">
+                        <div className="cog-step-label">4. Tactical Plan</div>
+                        <div>{liveStream.cognitionParsed.plan}</div>
+                      </div>
                     </div>
-                    <div className="cog-step">
-                      <div className="cog-step-label">2. Feeling</div>
-                      <div>{liveStream.cognitionParsed.feeling}</div>
-                    </div>
-                    <div className="cog-step">
-                      <div className="cog-step-label">3. Want</div>
-                      <div>{liveStream.cognitionParsed.want}</div>
-                    </div>
-                    <div className="cog-step">
-                      <div className="cog-step-label">4. Plan</div>
-                      <div>{liveStream.cognitionParsed.plan}</div>
-                    </div>
-                  </div>
                 )
               ) : (
                 <pre
