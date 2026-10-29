@@ -254,6 +254,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
+          <div style={{ marginTop: 8, padding: "8px 12px", background: "rgba(255, 255, 255, 0.03)", borderRadius: 6, border: "1px solid var(--border-subtle)" }}>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", fontSize: "0.82rem" }}>
+              <input
+                type="checkbox"
+                style={{ marginTop: 2 }}
+                checked={form.delegate_cognition_to_clerk || false}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    delegate_cognition_to_clerk: e.target.checked,
+                  })
+                }
+              />
+              <span>
+                <strong>Delegate Character Cognition to Clerk Model</strong>
+                <span style={{ display: "block", fontSize: "0.74rem", color: "var(--text-secondary)", marginTop: 2 }}>
+                  When enabled, the Clerk model generates the 4-step &lt;cognition&gt; block (Recall, Feeling, Want, Plan) and injects it as context for the Primary Actor model. Recommended if using prose-only fine-tuned models.
+                </span>
+              </span>
+            </label>
+          </div>
+
           <div className="sidebar-label" style={{ color: "var(--accent-emerald)", marginTop: 6 }}>
             3. Semantic Vector Store & 3-Tier Context Window
           </div>

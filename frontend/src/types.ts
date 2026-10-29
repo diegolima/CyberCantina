@@ -76,6 +76,7 @@ export interface CognitionBlock {
   arousal: number;
   want: string;
   plan: string;
+  skipped?: boolean;
 }
 
 export interface CharacterStateSnapshot {
@@ -387,6 +388,7 @@ export interface AppSettings {
   };
   allow_offline_fallback: boolean;
   allow_user_model_overrides: boolean;
+  delegate_cognition_to_clerk: boolean;
 }
 
 export interface OllamaModelInfo {
@@ -454,6 +456,7 @@ export interface UserModelSettingsPayload {
   clerk_profile?: ModelProfile | null;
   working_memory_turns?: number | null;
   active_prompt_preset_id?: string | null;
+  delegate_cognition_to_clerk?: boolean | null;
 }
 
 export interface ProfileModelSettingsResponse {
@@ -462,13 +465,16 @@ export interface ProfileModelSettingsResponse {
   effective_actor_profile: ModelProfile;
   effective_clerk_profile: ModelProfile;
   effective_working_memory_turns: number;
+  effective_delegate_cognition_to_clerk: boolean;
   user_actor_profile?: ModelProfile | null;
   user_clerk_profile?: ModelProfile | null;
   user_working_memory_turns?: number | null;
+  user_delegate_cognition_to_clerk?: boolean | null;
   active_prompt_preset_id?: string | null;
   default_actor_profile: ModelProfile;
   default_clerk_profile: ModelProfile;
   default_working_memory_turns: number;
+  default_delegate_cognition_to_clerk: boolean;
 }
 
 export interface PromptVariableDoc {

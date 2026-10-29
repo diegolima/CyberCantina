@@ -638,6 +638,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   const [userClerkModel, setUserClerkModel] = useState("");
   const [userClerkTemp, setUserClerkTemp] = useState(0.2);
   const [userClerkTokens, setUserClerkTokens] = useState(768);
+  const [userDelegateCognition, setUserDelegateCognition] = useState<boolean>(false);
 
   const [userWmTurns, setUserWmTurns] = useState<number>(10);
 
@@ -711,6 +712,11 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
         data.user_working_memory_turns ?? data.default_working_memory_turns
       );
 
+      const activeDelegate =
+        data.user_delegate_cognition_to_clerk ??
+        data.default_delegate_cognition_to_clerk;
+      setUserDelegateCognition(activeDelegate);
+
       probeOllama(activeActor.base_url);
     } catch (err: any) {
       setErrorMsg(err?.message || "Failed to load profile models.");
@@ -744,6 +750,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
           max_tokens: userClerkTokens,
         },
         working_memory_turns: userWmTurns,
+        delegate_cognition_to_clerk: userDelegateCognition,
       };
       const res = await api.updateProfileModels(payload);
       setModelSettings(res);
@@ -769,6 +776,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       setUserClerkTemp(res.default_clerk_profile.temperature);
       setUserClerkTokens(res.default_clerk_profile.max_tokens);
       setUserWmTurns(res.default_working_memory_turns);
+      setUserDelegateCognition(res.default_delegate_cognition_to_clerk);
       setStatusMsg("Reverted to system default models.");
     } catch (err: any) {
       setErrorMsg(err?.message || "Failed to reset model overrides.");
@@ -2388,6 +2396,53 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 
                     <div
                       style={{
+                        marginTop: 10,
+                        padding: "10px 14px",
+                        background: "rgba(255, 255, 255, 0.03)",
+                        borderRadius: 6,
+                        border: "1px solid var(--border-subtle)",
+                      }}
+                    >
+                      <label
+                        style={{
+                          display: "flex",
+                          alignItems: "flex-start",
+                          gap: 10,
+                          cursor: "pointer",
+                          fontSize: "0.82rem",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          style={{ marginTop: 2 }}
+                          checked={userDelegateCognition}
+                          onChange={(e) =>
+                            setUserDelegateCognition(e.target.checked)
+                          }
+                        />
+                        <span>
+                          <strong>
+                            Delegate Character Cognition to Clerk Model
+                          </strong>
+                          <span
+                            style={{
+                              display: "block",
+                              fontSize: "0.74rem",
+                              color: "var(--text-secondary)",
+                              marginTop: 2,
+                            }}
+                          >
+                            When enabled, the Clerk model generates the 4-step
+                            &lt;cognition&gt; block (Recall, Feeling, Want, Plan)
+                            and injects it as context for the Primary Actor model.
+                            Recommended if using prose-only fine-tuned models.
+                          </span>
+                        </span>
+                      </label>
+                    </div>
+
+                    <div
+                      style={{
                         display: "flex",
                         justifyContent: "space-between",
                         alignItems: "center",
@@ -2440,6 +2495,8 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                   working_memory_turns:
                     modelSettings?.user_working_memory_turns ?? null,
                   active_prompt_preset_id: presetId,
+                  delegate_cognition_to_clerk:
+                    modelSettings?.user_delegate_cognition_to_clerk ?? null,
                 };
                 const updated = await api.updateProfileModels(payload);
                 setModelSettings(updated);
@@ -4001,6 +4058,67 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                       Actor and Clerk models and working memory window in their
                       Profile &gt; Models tab. When disabled, global admin
                       defaults are strictly enforced for all users.
+                    </p>
+                  </div>
+
+                  {/* Delegate Character Cognition to Clerk Model */}
+                  <div
+                    style={{
+                      background: appSettingsForm.delegate_cognition_to_clerk
+                        ? "rgba(16, 185, 129, 0.08)"
+                        : "var(--bg-card)",
+                      border: `1px solid ${
+                        appSettingsForm.delegate_cognition_to_clerk
+                          ? "rgba(16, 185, 129, 0.35)"
+                          : "var(--border-subtle)"
+                      }`,
+                      borderRadius: 8,
+                      padding: 14,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 6,
+                    }}
+                  >
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={appSettingsForm.delegate_cognition_to_clerk || false}
+                        onChange={(e) =>
+                          setAppSettingsForm({
+                            ...appSettingsForm,
+                            delegate_cognition_to_clerk: e.target.checked,
+                          })
+                        }
+                        style={{ width: 16, height: 16 }}
+                      />
+                      <span
+                        style={{
+                          fontWeight: 600,
+                          fontSize: "0.86rem",
+                          color: appSettingsForm.delegate_cognition_to_clerk
+                            ? "#6ee7b7"
+                            : "var(--text-primary)",
+                        }}
+                      >
+                        Delegate Character Cognition to Clerk Model
+                      </span>
+                    </label>
+                    <p
+                      style={{
+                        fontSize: "0.76rem",
+                        color: "var(--text-secondary)",
+                        margin: 0,
+                        paddingLeft: 26,
+                      }}
+                    >
+                      When enabled, the analytical Clerk model generates the 4-step &lt;cognition&gt; block (Recall, Feeling, Want, Plan) and injects it as context for the Primary Actor model. Ideal for prose-only fine-tuned models that struggle with XML generation.
                     </p>
                   </div>
 

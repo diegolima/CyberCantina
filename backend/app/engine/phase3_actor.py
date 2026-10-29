@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections.abc import AsyncIterator
 from typing import Any
@@ -12,6 +13,8 @@ from app.engine.llm_client import llm_client
 from app.schemas.character import CharacterRecord, CharacterStateSnapshot, CognitionBlock
 from app.schemas.turn import PreTurnAnalysis, RecalledMemoryItem
 from app.schemas.world import LocationNode, NeighborLocationView
+
+logger = logging.getLogger("cybercantina.phase3")
 
 _RECALL_RE = re.compile(r"<recall>(.*?)</recall>", re.DOTALL | re.I)
 _FEELING_RE = re.compile(
@@ -69,6 +72,186 @@ def parse_cognition_xml(
         want=want,
         plan=plan,
     )
+
+
+def _format_cognition_bullets(text: str) -> str:
+    """Format cognition multi-item fields (recall, plan) into clean newline-separated bullet points."""
+    if not text:
+        return ""
+    # Strip accidental outer brackets, commas, or raw metadata tags
+    t = re.sub(r"^[,\s\[]+", "", text).strip()
+    t = re.sub(r"[\]\s]+$", "", t).strip()
+    t = re.sub(
+        r"\[(EPISODIC_CHUNK|CHARACTER_SHARD|LORE)\]\s*",
+        "",
+        t,
+        flags=re.I,
+    ).strip()
+
+    # If the model emitted numbered or bulleted items on a single line (e.g. '1. Foo 2. Bar' or '1) Foo 2) Bar')
+    if "\n" not in t and re.search(r"\b[1-9][.)]\s+", t):
+        parts = re.split(r"\s*(?:^|\b)[1-9][.)]\s+", t)
+        items = [f"- {p.strip()}" for p in parts if p.strip()]
+        if items:
+            return "\n".join(items)
+
+    # If the text has newlines, normalize each bullet prefix to standard '- '
+    lines: list[str] = []
+    for line in t.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        cleaned = re.sub(r"^(?:[-*•]|\d+[.)])\s*", "- ", line)
+        if not cleaned.startswith("- "):
+            cleaned = f"- {cleaned}"
+        lines.append(cleaned)
+
+    if lines:
+        return "\n".join(lines)
+
+    return f"- {t}" if not t.startswith("- ") else t
+
+
+async def generate_clerk_cognition(
+    *,
+    user_message: str,
+    character: CharacterRecord,
+    previous_state: CharacterStateSnapshot,
+    active_location: LocationNode,
+    neighbors: list[NeighborLocationView],
+    recalled_items: list[RecalledMemoryItem],
+    pre_turn: PreTurnAnalysis,
+    profile: ModelProfile | None = None,
+    prompt_template: str | None = None,
+) -> CognitionBlock:
+    """Generate structured character cognition using the analytical Clerk model."""
+    system_prompt = (
+        prompt_template
+        or (
+            "You are the Cognitive & Psychological Director for {character_name}.\n"
+            "Your task is to analyze the character's persona, current location, recent context, "
+            "and the user's latest interaction to formulate the character's internal 4-step cognitive process.\n\n"
+            "CRITICAL DIRECTIVES:\n"
+            "- Deeply reflect {character_name}'s personality, baseline psyche, and emotional momentum.\n"
+            "- recall: 1-3 concise bullet points (each on its own line starting with '- ') of relevant lore, history, or recent events directly shaping {character_name}'s thoughts right now. Do not write continuous prose; format strictly as bullet points. Do not include raw tags or timestamps.\n"
+            "- feeling: 1 evocative sentence capturing {character_name}'s primary emotional state right now.\n"
+            "- valence: A float between -1.0 (extremely negative/hostile) and 1.0 (extremely positive/euphoric).\n"
+            "- arousal: A float between 0.0 (calm/subdued) and 1.0 (hyper-alert/agitated).\n"
+            "- want: 1 singular sentence defining {character_name}'s immediate objective in this interaction.\n"
+            "- plan: 2-3 brief sequential bullet points (each on its own line starting with '- ') detailing physical action, spoken dialogue, and tactical focus for this turn.\n"
+            "- skipped: MUST be false."
+        )
+    ).replace("{character_name}", character.name)
+
+    recalled_text = "\n".join(
+        f"  - {m.title}: {m.content}"
+        for m in recalled_items
+    ) or "  - No specific background lore triggered this turn."
+
+    roll_text = ""
+    if pre_turn.resolved_roll:
+        r = pre_turn.resolved_roll
+        roll_text = (
+            f"\nMechanics Check Outcome:\n"
+            f"Action: {r.action_description} ({r.skill_or_approach})\n"
+            f"Result: [{r.outcome_tier}] - {r.narrative_directive}\n"
+        )
+
+    rel_text = "; ".join(f"{k}: {v}" for k, v in previous_state.relationship_notes.items()) or "None"
+
+    voice_quotes = [v.snippet for v in character.voice_anchors[:2]]
+    user_prompt = (
+        f"Character Profile:\n"
+        f"- Name: {character.name}\n"
+        f"- Tagline: {character.tagline}\n"
+        f"- Core Persona: {character.core_persona[:200]}\n"
+        f"- Core Drive: {character.baseline_psyche.core_drive}\n"
+        f"- Core Fear: {character.baseline_psyche.core_fear}\n"
+        f"- Voice Quotes: {', '.join(voice_quotes) or 'None'}\n\n"
+        f"Previous Psychological State:\n"
+        f"- Mood: {previous_state.mood_label} (Valence: {previous_state.valence:+.2f}, Arousal: {previous_state.arousal:.2f})\n"
+        f"- Active Want: {previous_state.active_want}\n"
+        f"- Active Plan: {previous_state.active_plan}\n"
+        f"- Relationship Notes: {rel_text}\n\n"
+        f"Environment ({active_location.name}):\n"
+        f"- Atmosphere/Props: {', '.join(active_location.environmental_tags) or 'None'}\n\n"
+        f"Turn Context:\n"
+        f"- User Sentiment: {pre_turn.user_sentiment}\n"
+        f"- Subtext Interpretation: {pre_turn.subtext_interpretation}\n"
+        f"{roll_text}\n"
+        f"Recalled Background Memories & Lore:\n"
+        f"{recalled_text}\n\n"
+        f"User Message:\n"
+        f"\"{user_message}\""
+    )
+
+    clerk_prof = profile or settings.clerk_profile
+    try:
+        cog = await llm_client.complete_structured(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            CognitionBlock,
+            profile=clerk_prof,
+            max_tokens=1024,
+            temperature=0.7,
+            required_properties=[
+                "recall",
+                "feeling",
+                "valence",
+                "arousal",
+                "want",
+                "plan",
+                "skipped",
+            ],
+        )
+
+        # 1. Clean and normalize multi-step bullet lists for recall & plan
+        cog.recall = _format_cognition_bullets(cog.recall)
+        cog.plan = _format_cognition_bullets(cog.plan)
+
+        # 2. Extract embedded (Valence: X, Arousal: Y) from feeling if model put it inside text
+        val_match = re.search(r"valence:\s*([+-]?\d+(?:\.\d+)?)", cog.feeling, flags=re.I)
+        ar_match = re.search(r"arousal:\s*([+-]?\d+(?:\.\d+)?)", cog.feeling, flags=re.I)
+        if val_match and cog.valence == 0.0:
+            try:
+                cog.valence = max(-1.0, min(1.0, float(val_match.group(1))))
+            except ValueError:
+                pass
+        if ar_match and cog.arousal == 0.5:
+            try:
+                cog.arousal = max(0.0, min(1.0, float(ar_match.group(1))))
+            except ValueError:
+                pass
+        cog.feeling = re.sub(r"\s*\(Valence:.*?\)", "", cog.feeling, flags=re.I).strip()
+
+        # 3. Guard against blank fields
+        if not cog.feeling:
+            cog.feeling = previous_state.mood_label or "Observant and measured."
+        if not cog.want:
+            cog.want = previous_state.active_want or "Assess the situation and respond."
+        if not cog.plan:
+            cog.plan = previous_state.active_plan or "Listen and react to the user."
+
+        cog.skipped = False
+        return cog
+    except Exception as exc:
+        if not settings.allow_offline_fallback:
+            raise
+        logger.warning("Clerk cognition generation failed (%s); using heuristic cognition.", exc)
+        simulated = build_offline_simulated_response(
+            user_message=user_message,
+            character=character,
+            previous_state=previous_state,
+            active_location=active_location,
+            neighbors=neighbors,
+            recalled_items=recalled_items,
+            pre_turn=pre_turn,
+        )
+        cog = parse_cognition_xml(simulated, previous_state)
+        cog.skipped = False
+        return cog
 
 
 def build_offline_simulated_response(
@@ -244,6 +427,7 @@ async def stream_phase3_actor(
     is_narrator: bool = False,
     narrative_mode: str | None = None,
     narrator_directive: str | None = None,
+    pregenerated_cognition: CognitionBlock | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream Phase 3 response, splitting <cognition> tokens from narrative prose tokens in real time."""
     raw_chunks: list[str] = []
@@ -268,6 +452,8 @@ async def stream_phase3_actor(
                 narrative_mode=narrative_mode,
                 narrator_directive=narrator_directive,
             )
+            if pregenerated_cognition is not None:
+                simulated = re.sub(r"<cognition>.*?</cognition>\s*", "", simulated, flags=re.DOTALL | re.I)
             # Stream in small chunks to mirror real SSE token cadence
             step = 18
             for i in range(0, len(simulated), step):
@@ -275,8 +461,8 @@ async def stream_phase3_actor(
                 await asyncio.sleep(0.005)
 
     buffer = ""
-    in_cognition = not is_narrator
-    cognition_emitted = is_narrator
+    in_cognition = not is_narrator and pregenerated_cognition is None
+    cognition_emitted = is_narrator or pregenerated_cognition is not None
     prose_Accumulator: list[str] = []
     cognition_block = (
         CognitionBlock(
@@ -301,17 +487,22 @@ async def stream_phase3_actor(
             ),
         )
         if is_narrator
-        else CognitionBlock(
-            recall="",
-            feeling=previous_state.mood_label,
-            valence=previous_state.valence,
-            arousal=previous_state.arousal,
-            want=previous_state.active_want,
-            plan=previous_state.active_plan,
+        else (
+            pregenerated_cognition
+            if pregenerated_cognition is not None
+            else CognitionBlock(
+                recall="",
+                feeling=previous_state.mood_label,
+                valence=previous_state.valence,
+                arousal=previous_state.arousal,
+                want=previous_state.active_want,
+                plan=previous_state.active_plan,
+                skipped=True,
+            )
         )
     )
 
-    if is_narrator:
+    if is_narrator or pregenerated_cognition is not None:
         yield {
             "event": "cognition_complete",
             "data": cognition_block.model_dump(),
@@ -346,6 +537,15 @@ async def stream_phase3_actor(
                 # Model skipped <cognition>; flush buffer directly as prose
                 in_cognition = False
                 cognition_emitted = True
+                cognition_block = CognitionBlock(
+                    recall="",
+                    feeling=previous_state.mood_label,
+                    valence=previous_state.valence,
+                    arousal=previous_state.arousal,
+                    want=previous_state.active_want,
+                    plan=previous_state.active_plan,
+                    skipped=True,
+                )
                 yield {
                     "event": "cognition_complete",
                     "data": cognition_block.model_dump(),
@@ -360,7 +560,19 @@ async def stream_phase3_actor(
 
     if not cognition_emitted:
         # Handle edge case where stream ended before </cognition> closed
-        cognition_block = parse_cognition_xml(buffer, previous_state)
+        lower_buf = buffer.lower()
+        if "<cognition" in lower_buf or "<recall" in lower_buf:
+            cognition_block = parse_cognition_xml(buffer, previous_state)
+        else:
+            cognition_block = CognitionBlock(
+                recall="",
+                feeling=previous_state.mood_label,
+                valence=previous_state.valence,
+                arousal=previous_state.arousal,
+                want=previous_state.active_want,
+                plan=previous_state.active_plan,
+                skipped=True,
+            )
         yield {"event": "cognition_complete", "data": cognition_block.model_dump()}
         cleaned = re.sub(r"<cognition>.*?</cognition>", "", buffer, flags=re.DOTALL | re.I).strip()
         if cleaned:

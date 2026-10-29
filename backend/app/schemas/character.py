@@ -163,21 +163,25 @@ class CognitionBlock(BaseModel):
 
     recall: str = Field(
         default="",
-        description="What the character remembers from history/lore relevant to this moment.",
+        description="What the character remembers from history/lore relevant to this moment (1-3 bullet points starting with '- ' on separate lines).",
     )
     feeling: str = Field(
         default="",
-        description="How the character feels right now in response to the user's words/subtext.",
+        description="How the character feels right now in response to the user's words/subtext (1 evocative sentence).",
     )
     valence: float = Field(default=0.0, ge=-1.0, le=1.0)
     arousal: float = Field(default=0.5, ge=0.0, le=1.0)
     want: str = Field(
         default="",
-        description="What the character needs and wants in this immediate interaction.",
+        description="What the character needs and wants in this immediate interaction (1 singular sentence).",
     )
     plan: str = Field(
         default="",
-        description="What the character plans to do or say right now to pursue that want.",
+        description="What the character plans to do or say right now (2-3 sequential bullet points starting with '- ' on separate lines).",
+    )
+    skipped: bool = Field(
+        default=False,
+        description="True if the model omitted the <cognition> block and streamed prose directly.",
     )
 
 

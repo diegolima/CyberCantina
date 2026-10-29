@@ -99,6 +99,7 @@ async def test_phase1_rng_and_phase3_cognition_parser(temp_repo: CantinaReposito
     assert parsed.arousal == 0.80
     assert "Meridian Heist" in parsed.recall
     assert "Ripperdoc Bay" in parsed.want
+    assert parsed.skipped is False
 
     bullet_xml = (
         "<cognition>\n"
@@ -120,6 +121,7 @@ async def test_phase1_rng_and_phase3_cognition_parser(temp_repo: CantinaReposito
     assert "- Unresolved debt with the Syndicate." in bullet_parsed.recall
     assert bullet_parsed.feeling == "Guarded and protective, hyper-aware of the back door."
     assert "- Nod toward the lead-lined curtain." in bullet_parsed.plan
+    assert bullet_parsed.skipped is False
 
     from app.engine.phase3_actor import build_offline_simulated_response
 
@@ -135,6 +137,177 @@ async def test_phase1_rng_and_phase3_cognition_parser(temp_repo: CantinaReposito
     sim_parsed = parse_cognition_xml(simulated, bundle.current_character_state)
     assert sim_parsed.recall.startswith("- ")
     assert sim_parsed.plan.startswith("- ")
+    assert sim_parsed.skipped is False
+
+    from app.engine.phase3_actor import stream_phase3_actor
+    from unittest.mock import patch
+
+    async def mock_stream_prose(*args, **kwargs):
+        # A long chunk (> 120 chars) with no <cognition> tags
+        yield "This is a direct narrative prose stream from a model that skips the XML introspection block and immediately roleplays dialogue and description."
+
+    with patch("app.engine.phase3_actor.llm_client.stream_chat", side_effect=mock_stream_prose):
+        events = []
+        async for ev in stream_phase3_actor(
+            messages=[{"role": "user", "content": "hi"}],
+            user_message="hi",
+            character=char,
+            previous_state=bundle.current_character_state,
+            active_location=bundle.active_location,
+            neighbors=bundle.neighbor_locations,
+            recalled_items=[],
+            pre_turn=pre,
+        ):
+            events.append(ev)
+
+        cog_ev = next(e for e in events if e["event"] == "cognition_complete")
+        assert cog_ev["data"]["skipped"] is True
+        assert cog_ev["data"]["recall"] == ""
+        assert cog_ev["data"]["feeling"] == bundle.current_character_state.mood_label
+
+
+async def test_clerk_delegated_cognition_hybrid_flow(temp_repo: CantinaRepository) -> None:
+    """Verify hybrid flow: Clerk generates cognition block, injected into Actor Zone 4 & streamed directly."""
+    from app.engine.phase3_actor import generate_clerk_cognition, stream_phase3_actor
+    from app.schemas.character import CognitionBlock
+    from unittest.mock import patch, AsyncMock
+
+    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
+    char = temp_repo.get_character(bundle.campaign.character_id)
+    world = temp_repo.get_world(bundle.campaign.world_id)
+
+    mock_clerk_cog = CognitionBlock(
+        recall="- Recalling the smuggling routes beneath the rusted sector.",
+        feeling="Guarded but calculating",
+        valence=-0.15,
+        arousal=0.65,
+        want="Secure passage through the airlock before sirens trigger.",
+        plan="- Direct their attention to the manual release valve.\n- Ready sidearm.",
+        skipped=False,
+    )
+
+    with patch("app.engine.phase3_actor.llm_client.complete_structured", new_callable=AsyncMock) as mock_comp:
+        mock_comp.return_value = mock_clerk_cog
+
+        clerk_cog = await generate_clerk_cognition(
+            user_message="Is the way clear?",
+            character=char,
+            previous_state=bundle.current_character_state,
+            active_location=bundle.active_location,
+            neighbors=bundle.neighbor_locations,
+            recalled_items=[],
+            pre_turn=bundle.active_branch_turns[-1].pre_turn,
+        )
+
+        assert clerk_cog.skipped is False
+        assert clerk_cog.feeling == "Guarded but calculating"
+        assert "smuggling routes" in clerk_cog.recall
+
+    # Verify Zone 4 context injection
+    msgs = assemble_four_zone_messages(
+        world=world,
+        character=char,
+        branch_turns=bundle.active_branch_turns,
+        episodic_chunks=[],
+        active_location=bundle.active_location,
+        neighbors=bundle.neighbor_locations,
+        recalled_items=[],
+        pre_turn=bundle.active_branch_turns[-1].pre_turn,
+        user_message="Is the way clear?",
+        established_cognition=clerk_cog,
+    )
+    zone4 = msgs[-1]["content"]
+    assert "<character_active_cognition" in zone4
+    assert "Guarded but calculating" in zone4
+    assert "<actor_directive>" in zone4
+    assert "Do NOT output <cognition> blocks" in zone4
+
+    # Verify streaming: cognition is emitted immediately and tokens go straight to prose
+    async def mock_stream_prose(*args, **kwargs):
+        yield "*She gestures sharply toward the hatch.* \"Keep low.\""
+
+    with patch("app.engine.phase3_actor.llm_client.stream_chat", side_effect=mock_stream_prose):
+        events = []
+        async for ev in stream_phase3_actor(
+            messages=msgs,
+            user_message="Is the way clear?",
+            character=char,
+            previous_state=bundle.current_character_state,
+            active_location=bundle.active_location,
+            neighbors=bundle.neighbor_locations,
+            recalled_items=[],
+            pre_turn=bundle.active_branch_turns[-1].pre_turn,
+            pregenerated_cognition=clerk_cog,
+        ):
+            events.append(ev)
+
+        assert events[0]["event"] == "cognition_complete"
+        assert events[0]["data"]["skipped"] is False
+        assert events[0]["data"]["feeling"] == "Guarded but calculating"
+        assert events[1]["event"] == "prose_delta"
+        assert "Keep low" in events[1]["data"]["delta"]
+        final_ev = events[-1]
+        assert final_ev["event"] == "actor_finished"
+
+
+async def test_clerk_cognition_sanitization_and_recovery(temp_repo: CantinaRepository) -> None:
+    """Verify generate_clerk_cognition strips commas/[EPISODIC_CHUNK], extracts valence/arousal, and backfills empty fields."""
+    from app.engine.phase3_actor import generate_clerk_cognition
+    from app.schemas.character import CognitionBlock
+    from unittest.mock import patch, AsyncMock
+
+    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
+    char = temp_repo.get_character(bundle.campaign.character_id)
+
+    # Model returned raw metadata in recall, embedded valence in feeling, and inline numbered plan
+    sloppy_llm_cog = CognitionBlock(
+        recall=", [EPISODIC_CHUNK] Turn 50 Event (1242-03-16 09:30): Lana departs the hideout to scout Navya.",
+        feeling="A spike of defensive anxiety (Valence: -0.35, Arousal: 0.75)",
+        valence=0.0,
+        arousal=0.5,
+        want="",
+        plan="1. React with a sharp retort. 2. Tense posture. 3. Acknowledge necessity.",
+        skipped=False,
+    )
+
+    with patch("app.engine.phase3_actor.llm_client.complete_structured", new_callable=AsyncMock) as mock_comp:
+        mock_comp.return_value = sloppy_llm_cog
+
+        cleaned_cog = await generate_clerk_cognition(
+            user_message="Are you ready?",
+            character=char,
+            previous_state=bundle.current_character_state,
+            active_location=bundle.active_location,
+            neighbors=bundle.neighbor_locations,
+            recalled_items=[],
+            pre_turn=bundle.active_branch_turns[-1].pre_turn,
+        )
+
+        # 1. Verify call arguments used enhanced temperature, max_tokens, and required_properties
+        call_kwargs = mock_comp.call_args.kwargs
+        assert call_kwargs["temperature"] == 0.7
+        assert call_kwargs["max_tokens"] == 1024
+        assert "required_properties" in call_kwargs
+        assert "recall" in call_kwargs["required_properties"]
+
+        # 2. Verify leading comma and [EPISODIC_CHUNK] were stripped and recall is bullet formatted
+        assert not cleaned_cog.recall.startswith(",")
+        assert "[EPISODIC_CHUNK]" not in cleaned_cog.recall
+        assert cleaned_cog.recall.startswith("- ")
+        assert "Lana departs the hideout" in cleaned_cog.recall
+
+        # 3. Verify valence and arousal were parsed and technical string stripped from feeling
+        assert cleaned_cog.valence == -0.35
+        assert cleaned_cog.arousal == 0.75
+        assert cleaned_cog.feeling == "A spike of defensive anxiety"
+
+        # 4. Verify want was backfilled from previous_state rather than left empty
+        assert cleaned_cog.want == bundle.current_character_state.active_want
+
+        # 5. Verify single-line numbered plan was normalized into one point per line
+        expected_plan = "- React with a sharp retort.\n- Tense posture.\n- Acknowledge necessity."
+        assert cleaned_cog.plan == expected_plan
+        assert cleaned_cog.skipped is False
 
 
 async def test_four_zone_prompt_layout_stability(temp_repo: CantinaRepository) -> None:

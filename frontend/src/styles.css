@@ -570,6 +570,97 @@ body {
   font-weight: 700;
 }
 
+/* Skipped Cognition Banner & State */
+.cognition-box-skipped {
+  border-color: rgba(245, 158, 11, 0.45);
+  background: rgba(30, 22, 12, 0.85);
+}
+
+.cognition-skipped-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  background: rgba(245, 158, 11, 0.18);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+}
+
+.cognition-skipped-content {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cognition-skipped-banner {
+  background: rgba(45, 27, 10, 0.7);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: #fde68a;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.cognition-skipped-banner-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: #fbbf24;
+  margin-bottom: 4px;
+}
+
+.cognition-skipped-banner-desc {
+  color: rgba(253, 230, 138, 0.88);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.cognition-skipped-banner-desc code {
+  background: rgba(0, 0, 0, 0.35);
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #f59e0b;
+  font-family: inherit;
+}
+
+.cognition-retained-toggle {
+  margin-top: 8px;
+  background: transparent;
+  border: 1px dashed rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+  font-size: 0.72rem;
+  padding: 4px 9px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cognition-retained-toggle:hover {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.7);
+}
+
+.cognition-steps-retained {
+  opacity: 0.85;
+  margin-top: 4px;
+}
+
+.cog-step-muted {
+  background: rgba(20, 24, 34, 0.8);
+  border-color: rgba(245, 158, 11, 0.25);
+}
+
 /* RNG & Pre-Turn Badges */
 .meta-strip {
   display: flex;

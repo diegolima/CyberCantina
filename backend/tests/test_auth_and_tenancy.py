@@ -913,13 +913,13 @@ def test_admin_and_user_model_settings_and_overrides(
     assert bob_updated["default_actor_profile"]["model"] == "llama3.2:3b"
 
     # 9. Effective settings resolution helper check
-    eff_bob_actor, eff_bob_clerk, eff_bob_wm = main_module.get_effective_user_model_settings(bob_id)
+    eff_bob_actor, eff_bob_clerk, eff_bob_wm, *_ = main_module.get_effective_user_model_settings(bob_id)
     assert eff_bob_actor.model == "qwen2.5:7b"
     assert eff_bob_clerk.model == "mistral:latest"
     assert eff_bob_wm == 14
 
     # Admin without overrides still resolves global defaults
-    eff_admin_actor, eff_admin_clerk, eff_admin_wm = main_module.get_effective_user_model_settings(admin_id)
+    eff_admin_actor, eff_admin_clerk, eff_admin_wm, *_ = main_module.get_effective_user_model_settings(admin_id)
     assert eff_admin_actor.model == "llama3.2:3b"
     assert eff_admin_clerk.model == "llama3.1:8b"
     assert eff_admin_wm == settings.memory_config.working_memory_turns
@@ -932,6 +932,6 @@ def test_admin_and_user_model_settings_and_overrides(
     assert bob_reverted["effective_actor_profile"]["model"] == "llama3.2:3b"
     assert bob_reverted["effective_clerk_profile"]["model"] == "llama3.1:8b"
 
-    eff_bob_reverted_actor, _, _ = main_module.get_effective_user_model_settings(bob_id)
+    eff_bob_reverted_actor, *_ = main_module.get_effective_user_model_settings(bob_id)
     assert eff_bob_reverted_actor.model == "llama3.2:3b"
 

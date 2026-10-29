@@ -43,7 +43,7 @@ from app.engine.llm_client import (
 )
 from app.engine.phase1_pre import run_phase1_pre_analysis
 from app.engine.phase2_context import assemble_four_zone_messages, was_character_present_on_turn
-from app.engine.phase3_actor import stream_phase3_actor
+from app.engine.phase3_actor import generate_clerk_cognition, stream_phase3_actor
 from app.engine.phase4_clerk import run_phase4_post_turn_clerk
 from app.prompts import FACTORY_DEFAULT_PROMPTS, PROMPTS_METADATA
 from app.schemas.auth import (
@@ -682,8 +682,8 @@ def delete_my_account(
 
 def get_effective_user_model_settings(
     user_id: str | None,
-) -> tuple[ModelProfile, ModelProfile, int]:
-    """Resolve effective (actor_profile, clerk_profile, working_memory_turns) for a user.
+) -> tuple[ModelProfile, ModelProfile, int, bool]:
+    """Resolve effective (actor_profile, clerk_profile, working_memory_turns, delegate_cognition_to_clerk) for a user.
 
     If overrides are enabled in system settings and the user has saved custom settings,
     those take precedence. Otherwise, defaults from AppSettings are returned.
@@ -691,13 +691,14 @@ def get_effective_user_model_settings(
     default_actor = settings.actor_profile
     default_clerk = settings.clerk_profile
     default_wm_turns = settings.memory_config.working_memory_turns
+    default_delegate = settings.delegate_cognition_to_clerk
 
     if not settings.allow_user_model_overrides or not user_id:
-        return default_actor, default_clerk, default_wm_turns
+        return default_actor, default_clerk, default_wm_turns, default_delegate
 
     user_settings = get_repo().get_user_model_settings(user_id)
     if not user_settings:
-        return default_actor, default_clerk, default_wm_turns
+        return default_actor, default_clerk, default_wm_turns, default_delegate
 
     effective_actor = user_settings.actor_profile or default_actor
     effective_clerk = user_settings.clerk_profile or default_clerk
@@ -706,7 +707,12 @@ def get_effective_user_model_settings(
         if user_settings.working_memory_turns is not None
         else default_wm_turns
     )
-    return effective_actor, effective_clerk, effective_wm_turns
+    effective_delegate = (
+        user_settings.delegate_cognition_to_clerk
+        if user_settings.delegate_cognition_to_clerk is not None
+        else default_delegate
+    )
+    return effective_actor, effective_clerk, effective_wm_turns, effective_delegate
 
 
 @app.get("/api/profile/models", response_model=ProfileModelSettingsResponse)
@@ -715,12 +721,13 @@ def get_profile_models(
 ) -> ProfileModelSettingsResponse:
     repo = get_repo()
     user_override = repo.get_user_model_settings(current_user.id)
-    eff_actor, eff_clerk, eff_wm_turns = get_effective_user_model_settings(current_user.id)
+    eff_actor, eff_clerk, eff_wm_turns, eff_delegate = get_effective_user_model_settings(current_user.id)
     has_override = user_override is not None and (
         user_override.actor_profile is not None
         or user_override.clerk_profile is not None
         or user_override.working_memory_turns is not None
         or user_override.active_prompt_preset_id is not None
+        or user_override.delegate_cognition_to_clerk is not None
     )
     return ProfileModelSettingsResponse(
         allow_user_model_overrides=settings.allow_user_model_overrides,
@@ -728,13 +735,16 @@ def get_profile_models(
         effective_actor_profile=eff_actor,
         effective_clerk_profile=eff_clerk,
         effective_working_memory_turns=eff_wm_turns,
+        effective_delegate_cognition_to_clerk=eff_delegate,
         user_actor_profile=user_override.actor_profile if user_override else None,
         user_clerk_profile=user_override.clerk_profile if user_override else None,
         user_working_memory_turns=user_override.working_memory_turns if user_override else None,
+        user_delegate_cognition_to_clerk=user_override.delegate_cognition_to_clerk if user_override else None,
         active_prompt_preset_id=user_override.active_prompt_preset_id if user_override else None,
         default_actor_profile=settings.actor_profile,
         default_clerk_profile=settings.clerk_profile,
         default_working_memory_turns=settings.memory_config.working_memory_turns,
+        default_delegate_cognition_to_clerk=settings.delegate_cognition_to_clerk,
     )
 
 
@@ -1134,6 +1144,7 @@ def update_settings(
     settings.memory_config = updated.memory_config
     settings.allow_offline_fallback = updated.allow_offline_fallback
     settings.allow_user_model_overrides = updated.allow_user_model_overrides
+    settings.delegate_cognition_to_clerk = updated.delegate_cognition_to_clerk
     persist_settings(settings)
     return settings
 
@@ -1166,7 +1177,7 @@ async def wizard_draft_world(
     seed: WorldWizardSeed,
     current_user: UserProfile = Depends(get_current_user),
 ) -> WorldWizardDraft:
-    eff_actor, _, _ = get_effective_user_model_settings(current_user.id)
+    eff_actor, *_ = get_effective_user_model_settings(current_user.id)
     effective_prompts = get_repo().resolve_effective_prompts(user_id=current_user.id)
     try:
         return await generate_world_draft(
@@ -1183,7 +1194,7 @@ async def wizard_reimagine_map(
     req: WorldMapReimagineRequest,
     current_user: UserProfile = Depends(get_current_user),
 ) -> WorldMapDraft:
-    eff_actor, _, _ = get_effective_user_model_settings(current_user.id)
+    eff_actor, *_ = get_effective_user_model_settings(current_user.id)
     effective_prompts = get_repo().resolve_effective_prompts(user_id=current_user.id)
     try:
         return await reimagine_world_map(
@@ -1269,7 +1280,7 @@ async def wizard_draft_character(
             world = repo.get_world(seed.world_id, owner_id=current_user.id)
         except KeyError:
             world = None
-    eff_actor, _, _ = get_effective_user_model_settings(current_user.id)
+    eff_actor, *_ = get_effective_user_model_settings(current_user.id)
     effective_prompts = repo.resolve_effective_prompts(user_id=current_user.id)
     try:
         return await generate_character_draft(
@@ -1622,7 +1633,7 @@ async def _execute_turn_stream_events(
     for loc in world.locations:
         known_entities.append(loc.name)
 
-    eff_actor, eff_clerk, eff_wm_turns = get_effective_user_model_settings(owner_id)
+    eff_actor, eff_clerk, eff_wm_turns, eff_delegate_cognition = get_effective_user_model_settings(owner_id)
     effective_prompts = repo.resolve_effective_prompts(user_id=owner_id, campaign_id=campaign.id)
 
     effective_user_message = req.user_message.strip()
@@ -1795,6 +1806,20 @@ async def _execute_turn_stream_events(
         },
     }
 
+    # Phase 2.5: Optional Clerk-Delegated Character Cognition
+    pregenerated_cognition: CognitionBlock | None = None
+    if eff_delegate_cognition and not is_narrator:
+        pregenerated_cognition = await generate_clerk_cognition(
+            user_message=effective_user_message,
+            character=character,
+            previous_state=prev_char_state,
+            active_location=active_location,
+            neighbors=neighbors,
+            recalled_items=recalled_items,
+            pre_turn=pre_turn,
+            profile=eff_clerk,
+        )
+
     # PHASE 2: 4-Zone KV-Cache-Preserving Context Assembly
     messages = assemble_four_zone_messages(
         world=world,
@@ -1817,6 +1842,7 @@ async def _execute_turn_stream_events(
         is_narrator=is_narrator,
         narrative_mode=req.narrative_mode if is_narrator else None,
         narrator_directive=req.narrator_directive if is_narrator else None,
+        established_cognition=pregenerated_cognition,
     )
 
     # PHASE 3: Guided Single-Pass <cognition> + Narrative Prose Streaming
@@ -1843,13 +1869,18 @@ async def _execute_turn_stream_events(
             ),
         )
         if is_narrator
-        else CognitionBlock(
-            recall="",
-            feeling=prev_char_state.mood_label,
-            valence=prev_char_state.valence,
-            arousal=prev_char_state.arousal,
-            want=prev_char_state.active_want,
-            plan=prev_char_state.active_plan,
+        else (
+            pregenerated_cognition
+            if pregenerated_cognition is not None
+            else CognitionBlock(
+                recall="",
+                feeling=prev_char_state.mood_label,
+                valence=prev_char_state.valence,
+                arousal=prev_char_state.arousal,
+                want=prev_char_state.active_want,
+                plan=prev_char_state.active_plan,
+                skipped=True,
+            )
         )
     )
     final_prose = ""
@@ -1867,6 +1898,7 @@ async def _execute_turn_stream_events(
         is_narrator=is_narrator,
         narrative_mode=req.narrative_mode if is_narrator else None,
         narrator_directive=req.narrator_directive if is_narrator else None,
+        pregenerated_cognition=pregenerated_cognition,
     ):
         if item["event"] == "actor_finished":
             final_cognition = CognitionBlock.model_validate(item["data"]["cognition"])

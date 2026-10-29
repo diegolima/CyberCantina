@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.config import settings
 from app.engine.world_clock import describe_world_timestamp
 from app.prompts import get_default_prompt, render_template
-from app.schemas.character import CharacterRecord, CharacterStateSnapshot
+from app.schemas.character import CharacterRecord, CharacterStateSnapshot, CognitionBlock
 from app.schemas.turn import (
     EpisodicChunkRecord,
     PreTurnAnalysis,
@@ -105,6 +105,7 @@ def build_zone4_ephemeral_tail_frame(
     is_narrator: bool = False,
     narrative_mode: str | None = None,
     narrator_directive: str | None = None,
+    established_cognition: CognitionBlock | None = None,
 ) -> str:
     """Zone 4: Dynamic turn-specific context injected at the tail of the prompt."""
     exits_text = "\n".join(
@@ -233,6 +234,21 @@ def build_zone4_ephemeral_tail_frame(
         )
         user_tail = f"User Action / Dialogue:\n{user_message}"
 
+    established_cognition_section = ""
+    if established_cognition and not is_narrator:
+        established_cognition_section = (
+            f"\n  <character_active_cognition character=\"{character.name}\">\n"
+            f"    <recall>\n{established_cognition.recall}\n    </recall>\n"
+            f"    <feeling valence=\"{established_cognition.valence:+.2f}\" arousal=\"{established_cognition.arousal:.2f}\">{established_cognition.feeling}</feeling>\n"
+            f"    <want>{established_cognition.want}</want>\n"
+            f"    <plan>\n{established_cognition.plan}\n    </plan>\n"
+            f"  </character_active_cognition>\n"
+            f"  <actor_directive>\n"
+            f"    CRITICAL: Your character's internal thoughts and immediate plan for this turn have already been established above in <character_active_cognition>.\n"
+            f"    Do NOT output <cognition> blocks. Output ONLY immersive, in-character narrative prose embodying this feeling and executing this plan.\n"
+            f"  </actor_directive>"
+        )
+
     return (
         "<scene_context>\n"
         f"  <world_clock>{describe_world_timestamp(world_snapshot.world_timestamp)}</world_clock>\n"
@@ -249,7 +265,8 @@ def build_zone4_ephemeral_tail_frame(
         f"    Spatial Intent: {pre_turn.spatial_intent}"
         f"{f' ({pre_turn.target_location_hint})' if pre_turn.target_location_hint else ''}\n"
         f"  </auxiliary_prompt_analysis>{rng_section}\n"
-        f"{mind_state_section}\n"
+        f"{mind_state_section}"
+        f"{established_cognition_section}\n"
         "</scene_context>\n\n"
         f"{user_tail}"
     )
@@ -273,6 +290,7 @@ def assemble_four_zone_messages(
     is_narrator: bool = False,
     narrative_mode: str | None = None,
     narrator_directive: str | None = None,
+    established_cognition: CognitionBlock | None = None,
 ) -> list[dict[str, str]]:
     """Construct the complete 4-Zone OpenAI messages array for the Main Actor Model."""
     zone1_prompt = (
@@ -347,6 +365,7 @@ def assemble_four_zone_messages(
         is_narrator=is_narrator,
         narrative_mode=narrative_mode,
         narrator_directive=narrator_directive,
+        established_cognition=established_cognition,
     )
     messages.append({"role": "user", "content": zone4_content})
     return messages

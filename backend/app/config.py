@@ -117,6 +117,10 @@ class AppSettings(BaseModel):
         default=False,
         description="When True, users can customize their own Actor and Clerk models in their Profile.",
     )
+    delegate_cognition_to_clerk: bool = Field(
+        default=False,
+        description="When True, the analytical Clerk model generates character cognition (<cognition> block) before the Actor writes narrative prose.",
+    )
 
 
 def load_initial_settings() -> AppSettings:

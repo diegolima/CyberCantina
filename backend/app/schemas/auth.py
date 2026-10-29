@@ -135,6 +135,7 @@ class UserModelSettingsPayload(BaseModel):
     clerk_profile: ModelProfile | None = None
     working_memory_turns: int | None = Field(default=None, ge=4, le=64)
     active_prompt_preset_id: str | None = None
+    delegate_cognition_to_clerk: bool | None = None
 
 
 class ProfileModelSettingsResponse(BaseModel):
@@ -143,10 +144,13 @@ class ProfileModelSettingsResponse(BaseModel):
     effective_actor_profile: ModelProfile
     effective_clerk_profile: ModelProfile
     effective_working_memory_turns: int
+    effective_delegate_cognition_to_clerk: bool = False
     user_actor_profile: ModelProfile | None = None
     user_clerk_profile: ModelProfile | None = None
     user_working_memory_turns: int | None = None
+    user_delegate_cognition_to_clerk: bool | None = None
     active_prompt_preset_id: str | None = None
     default_actor_profile: ModelProfile
     default_clerk_profile: ModelProfile
     default_working_memory_turns: int
+    default_delegate_cognition_to_clerk: bool = False

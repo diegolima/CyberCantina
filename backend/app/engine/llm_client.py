@@ -334,16 +334,21 @@ class LLMClient:
         *,
         profile: ModelProfile | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
+        required_properties: list[str] | None = None,
     ) -> T:
         """Call Ollama with native JSON Schema grammar enforcement and validate into a Pydantic model."""
         active_profile = profile or settings.clerk_profile
         effective_max_tokens = max(max_tokens or active_profile.max_tokens, 2048)
         json_schema = schema_cls.model_json_schema()
+        if required_properties is not None:
+            json_schema["required"] = required_properties
         try:
             raw = await self.complete_text(
                 messages,
                 profile=active_profile,
                 max_tokens=effective_max_tokens,
+                temperature=temperature,
                 json_mode=True,
                 json_schema=json_schema,
             )
@@ -366,6 +371,7 @@ class LLMClient:
                 [*messages, schema_hint_msg],
                 profile=active_profile,
                 max_tokens=max(effective_max_tokens, 4096),
+                temperature=temperature,
                 json_mode=True,
                 json_schema=None,
             )
