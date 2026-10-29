@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   BookOpen,
   Brain,
@@ -56,6 +56,18 @@ const ClickToEditField: React.FC<ClickToEditFieldProps> = ({
   placeholder = "Click to edit...",
 }) => {
   const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    if (!editing) {
+      setDraft(value);
+    }
+  }, [value, editing]);
+
+  const handleCommit = () => {
+    setEditing(false);
+    onChange(draft);
+  };
 
   return (
     <div className="field-group">
@@ -66,28 +78,47 @@ const ClickToEditField: React.FC<ClickToEditFieldProps> = ({
             className="field-textarea"
             rows={rows}
             autoFocus
-            value={value}
+            value={draft}
             placeholder={placeholder}
-            onChange={(e) => onChange(e.target.value)}
-            onBlur={() => setEditing(false)}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              onChange(e.target.value);
+            }}
+            onBlur={handleCommit}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setDraft(value);
+                setEditing(false);
+              }
+            }}
           />
         ) : (
           <input
             className="field-input"
             autoFocus
-            value={value}
+            value={draft}
             placeholder={placeholder}
-            onChange={(e) => onChange(e.target.value)}
-            onBlur={() => setEditing(false)}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              onChange(e.target.value);
+            }}
+            onBlur={handleCommit}
             onKeyDown={(e) => {
-              if (e.key === "Enter") setEditing(false);
+              if (e.key === "Enter") handleCommit();
+              if (e.key === "Escape") {
+                setDraft(value);
+                setEditing(false);
+              }
             }}
           />
         )
       ) : (
         <div
           className="editable-field-box"
-          onClick={() => setEditing(true)}
+          onClick={() => {
+            setDraft(value);
+            setEditing(true);
+          }}
           title="Click to edit field"
         >
           <span className="editable-field-hint">
@@ -703,6 +734,7 @@ export const CharacterInspectorModal: React.FC<
                       <ClickToEditField
                         label="Trigger Keywords (comma-separated)"
                         value={shard.keywords.join(", ")}
+                        placeholder="e.g. dragon, betrayal, upper spire"
                         onChange={(val) => {
                           const next = [...memoryShards];
                           next[idx] = {
@@ -1759,6 +1791,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                       <ClickToEditField
                         label="Entity Trigger Tags (comma-separated)"
                         value={lore.entity_tags.join(", ")}
+                        placeholder="e.g. faction, capital, elder"
                         onChange={(val) => {
                           const next = [...loreNodes];
                           next[idx] = {

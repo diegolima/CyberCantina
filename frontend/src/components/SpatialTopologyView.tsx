@@ -16,6 +16,7 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { CompassDirection, LocationEdge, LocationNode } from "../types";
+import { CommaSeparatedInput } from "./CommaSeparatedInput";
 
 export const COMPASS_ORDER: CompassDirection[] = [
   "N",
@@ -1120,17 +1121,14 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
               <label style={{ fontSize: "0.72rem" }}>
                 Environmental Tags (comma-separated)
               </label>
-              <input
+              <CommaSeparatedInput
                 className="field-input"
-                value={selectedLocation.environmental_tags.join(", ")}
+                value={selectedLocation.environmental_tags}
                 placeholder="e.g. dim, noisy, neon, smoke"
-                onChange={(e) =>
+                onChange={(tags) =>
                   onUpdateLocation({
                     ...selectedLocation,
-                    environmental_tags: e.target.value
-                      .split(",")
-                      .map((t) => t.trim())
-                      .filter(Boolean),
+                    environmental_tags: tags,
                   })
                 }
               />

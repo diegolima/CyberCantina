@@ -22,6 +22,7 @@ import {
   MemoryShard,
   WorldRecord,
 } from "../../types";
+import { CommaSeparatedInput } from "../CommaSeparatedInput";
 
 interface CampaignCharacterModalProps {
   character: CharacterRecord;
@@ -748,18 +749,15 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
 
                       <div className="field-group">
                         <label>Trigger Keywords (comma-separated)</label>
-                        <input
-                          type="text"
+                        <CommaSeparatedInput
                           className="field-input"
-                          value={shard.keywords.join(", ")}
-                          onChange={(e) => {
+                          value={shard.keywords}
+                          placeholder="e.g. dragon, betrayal, upper spire"
+                          onChange={(newKeywords) => {
                             const next = [...memoryShards];
                             next[idx] = {
                               ...next[idx],
-                              keywords: e.target.value
-                                .split(",")
-                                .map((k) => k.trim())
-                                .filter(Boolean),
+                              keywords: newKeywords,
                             };
                             setMemoryShards(next);
                             setIsMemoriesDirty(true);
