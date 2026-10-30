@@ -891,6 +891,7 @@ def test_admin_and_user_model_settings_and_overrides(
             "timeout_seconds": 120.0,
         },
         "working_memory_turns": 14,
+        "max_scene_flags": 6,
     }
     blocked_put = client.put("/api/profile/models", headers=bob_headers, json=bob_override_payload)
     assert blocked_put.status_code == 403
@@ -910,19 +911,23 @@ def test_admin_and_user_model_settings_and_overrides(
     assert bob_updated["effective_actor_profile"]["model"] == "qwen2.5:7b"
     assert bob_updated["effective_clerk_profile"]["model"] == "mistral:latest"
     assert bob_updated["effective_working_memory_turns"] == 14
+    assert bob_updated["effective_max_scene_flags"] == 6
+    assert bob_updated["user_max_scene_flags"] == 6
     assert bob_updated["default_actor_profile"]["model"] == "llama3.2:3b"
 
     # 9. Effective settings resolution helper check
-    eff_bob_actor, eff_bob_clerk, eff_bob_wm, *_ = main_module.get_effective_user_model_settings(bob_id)
+    eff_bob_actor, eff_bob_clerk, eff_bob_wm, eff_bob_del, eff_bob_flags = main_module.get_effective_user_model_settings(bob_id)
     assert eff_bob_actor.model == "qwen2.5:7b"
     assert eff_bob_clerk.model == "mistral:latest"
     assert eff_bob_wm == 14
+    assert eff_bob_flags == 6
 
     # Admin without overrides still resolves global defaults
-    eff_admin_actor, eff_admin_clerk, eff_admin_wm, *_ = main_module.get_effective_user_model_settings(admin_id)
+    eff_admin_actor, eff_admin_clerk, eff_admin_wm, eff_admin_del, eff_admin_flags = main_module.get_effective_user_model_settings(admin_id)
     assert eff_admin_actor.model == "llama3.2:3b"
     assert eff_admin_clerk.model == "llama3.1:8b"
     assert eff_admin_wm == settings.memory_config.working_memory_turns
+    assert eff_admin_flags == settings.memory_config.max_scene_flags
 
     # 10. Bob resets overrides back to defaults
     del_override = client.delete("/api/profile/models", headers=bob_headers)
@@ -931,7 +936,10 @@ def test_admin_and_user_model_settings_and_overrides(
     assert bob_reverted["has_override"] is False
     assert bob_reverted["effective_actor_profile"]["model"] == "llama3.2:3b"
     assert bob_reverted["effective_clerk_profile"]["model"] == "llama3.1:8b"
+    assert bob_reverted["effective_max_scene_flags"] == settings.memory_config.max_scene_flags
+    assert bob_reverted["user_max_scene_flags"] is None
 
-    eff_bob_reverted_actor, *_ = main_module.get_effective_user_model_settings(bob_id)
+    eff_bob_reverted_actor, _, _, _, eff_bob_reverted_flags = main_module.get_effective_user_model_settings(bob_id)
     assert eff_bob_reverted_actor.model == "llama3.2:3b"
+    assert eff_bob_reverted_flags == settings.memory_config.max_scene_flags
 

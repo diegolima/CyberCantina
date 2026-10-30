@@ -206,7 +206,7 @@ export const App: React.FC = () => {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [profileInitialTab, setProfileInitialTab] = useState<
-    "identity" | "account" | "models"
+    "identity" | "account" | "preferences" | "models" | "prompts" | "behavior"
   >("identity");
   const [adminInitialTab, setAdminInitialTab] = useState<"users" | "models">(
     "users"

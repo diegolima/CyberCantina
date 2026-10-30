@@ -78,6 +78,12 @@ class MemoryTierConfig(BaseModel):
             "are compacted into a single permanent memory."
         ),
     )
+    max_scene_flags: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Maximum number of active scene flags kept in world snapshots via sliding FIFO.",
+    )
 
 
 class AppSettings(BaseModel):

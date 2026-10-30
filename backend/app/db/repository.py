@@ -178,6 +178,10 @@ class CantinaRepository:
                 conn.execute(
                     "ALTER TABLE user_model_settings ADD COLUMN delegate_cognition_to_clerk INTEGER NULL"
                 )
+            if "max_scene_flags" not in ums_cols:
+                conn.execute(
+                    "ALTER TABLE user_model_settings ADD COLUMN max_scene_flags INTEGER NULL"
+                )
 
             # Seed / ensure built-in prompt presets
             now_iso = utc_now_iso()
@@ -801,7 +805,7 @@ class CantinaRepository:
         conn = self._connect()
         try:
             row = conn.execute(
-                "SELECT actor_profile_json, clerk_profile_json, working_memory_turns, active_prompt_preset_id, delegate_cognition_to_clerk FROM user_model_settings WHERE user_id = ?",
+                "SELECT actor_profile_json, clerk_profile_json, working_memory_turns, active_prompt_preset_id, delegate_cognition_to_clerk, max_scene_flags FROM user_model_settings WHERE user_id = ?",
                 (user_id,),
             ).fetchone()
             if not row:
@@ -827,6 +831,7 @@ class CantinaRepository:
                 working_memory_turns=row["working_memory_turns"],
                 active_prompt_preset_id=row["active_prompt_preset_id"],
                 delegate_cognition_to_clerk=del_cog,
+                max_scene_flags=row["max_scene_flags"],
             )
         finally:
             conn.close()
@@ -855,17 +860,18 @@ class CantinaRepository:
             )
             conn.execute(
                 """
-                INSERT INTO user_model_settings (user_id, actor_profile_json, clerk_profile_json, working_memory_turns, active_prompt_preset_id, delegate_cognition_to_clerk, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO user_model_settings (user_id, actor_profile_json, clerk_profile_json, working_memory_turns, active_prompt_preset_id, delegate_cognition_to_clerk, max_scene_flags, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     actor_profile_json = excluded.actor_profile_json,
                     clerk_profile_json = excluded.clerk_profile_json,
                     working_memory_turns = excluded.working_memory_turns,
                     active_prompt_preset_id = excluded.active_prompt_preset_id,
                     delegate_cognition_to_clerk = excluded.delegate_cognition_to_clerk,
+                    max_scene_flags = excluded.max_scene_flags,
                     updated_at = excluded.updated_at
                 """,
-                (user_id, actor_json, clerk_json, payload.working_memory_turns, payload.active_prompt_preset_id, del_cog_val, now),
+                (user_id, actor_json, clerk_json, payload.working_memory_turns, payload.active_prompt_preset_id, del_cog_val, payload.max_scene_flags, now),
             )
             conn.commit()
             return payload
@@ -4023,14 +4029,7 @@ class CantinaRepository:
         except KeyError:
             pass
 
-        new_flags: list[str] = []
-        for f in leaf_turn.world_snapshot.scene_flags:
-            if old_loc_name and f.strip().lower() == f"at {old_loc_name.lower()}":
-                continue
-            new_flags.append(f)
-        at_target = f"At {target_loc.name}"
-        if all(f.strip().lower() != at_target.lower() for f in new_flags):
-            new_flags.append(at_target)
+        new_flags: list[str] = [f"At {target_loc.name}"]
 
         conn = self._connect()
         try:

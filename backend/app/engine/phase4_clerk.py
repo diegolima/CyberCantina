@@ -46,8 +46,10 @@ def merge_scene_flags(
     existing_flags: list[str],
     updated_flags: list[str],
     removed_flags: list[str] | None = None,
+    max_flags: int = 10,
 ) -> list[str]:
-    """Merge new scene/inventory/world flags into existing_flags without overwriting prior flags."""
+    """Merge new scene/inventory/world flags into existing_flags without overwriting prior flags,
+    applying removals and maintaining a sliding FIFO window of at most max_flags."""
     remove_set = {f.strip().lower() for f in (removed_flags or []) if f.strip()}
     additions: list[str] = []
     for raw in updated_flags:
@@ -75,6 +77,9 @@ def merge_scene_flags(
         if f_low not in remove_set and f_low not in seen_lower:
             merged.append(flag)
             seen_lower.add(f_low)
+
+    if max_flags > 0 and len(merged) > max_flags:
+        merged = merged[-max_flags:]
 
     return merged
 
@@ -898,6 +903,7 @@ async def run_phase4_post_turn_clerk(
     profile: ModelProfile | None = None,
     working_memory_turns: int | None = None,
     ephemeral_lifespan_turns: int | None = None,
+    max_scene_flags: int | None = None,
     post_turn_prompt_template: str | None = None,
     summary_prompt_template: str | None = None,
 ) -> tuple[TurnNodeRecord, list[EpisodicChunkRecord]]:
@@ -1054,17 +1060,31 @@ async def run_phase4_post_turn_clerk(
         new_location_id = created_loc.id
         delta.target_location_id = created_loc.id
 
-    # 2. Advance World Clock & Merge Scene Flags (preserving previous flags unless removed)
+    # 2. Advance World Clock & Merge Scene Flags (maintain only new location marker on transition; sliding FIFO otherwise)
     new_timestamp = resolve_turn_timestamp(
         current_timestamp,
         delta.elapsed_minutes,
         delta.new_world_timestamp,
     )
-    merged_flags = merge_scene_flags(
-        completed_turn.world_snapshot.scene_flags,
-        delta.scene_flags_updated,
-        delta.scene_flags_removed,
-    )
+    location_changed = new_location_id != active_location.id
+    if location_changed:
+        try:
+            new_loc_name = repo.get_location(new_location_id).name
+        except Exception:
+            new_loc_name = ""
+        merged_flags = [f"At {new_loc_name}"] if new_loc_name else []
+    else:
+        eff_max_flags = (
+            max_scene_flags
+            if max_scene_flags is not None
+            else getattr(settings.memory_config, "max_scene_flags", 10)
+        )
+        merged_flags = merge_scene_flags(
+            completed_turn.world_snapshot.scene_flags,
+            delta.scene_flags_updated,
+            delta.scene_flags_removed,
+            max_flags=eff_max_flags,
+        )
     updated_world_snapshot = WorldStateSnapshot(
         turn_id=completed_turn.id,
         world_timestamp=new_timestamp,

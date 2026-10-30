@@ -385,6 +385,7 @@ export interface AppSettings {
     episodic_chunk_size: number;
     rag_top_k: number;
     ephemeral_memory_lifespan_turns?: number;
+    max_scene_flags?: number;
   };
   allow_offline_fallback: boolean;
   allow_user_model_overrides: boolean;
@@ -457,6 +458,7 @@ export interface UserModelSettingsPayload {
   working_memory_turns?: number | null;
   active_prompt_preset_id?: string | null;
   delegate_cognition_to_clerk?: boolean | null;
+  max_scene_flags?: number | null;
 }
 
 export interface ProfileModelSettingsResponse {
@@ -466,15 +468,18 @@ export interface ProfileModelSettingsResponse {
   effective_clerk_profile: ModelProfile;
   effective_working_memory_turns: number;
   effective_delegate_cognition_to_clerk: boolean;
+  effective_max_scene_flags?: number;
   user_actor_profile?: ModelProfile | null;
   user_clerk_profile?: ModelProfile | null;
   user_working_memory_turns?: number | null;
   user_delegate_cognition_to_clerk?: boolean | null;
+  user_max_scene_flags?: number | null;
   active_prompt_preset_id?: string | null;
   default_actor_profile: ModelProfile;
   default_clerk_profile: ModelProfile;
   default_working_memory_turns: number;
   default_delegate_cognition_to_clerk: boolean;
+  default_max_scene_flags?: number;
 }
 
 export interface PromptVariableDoc {

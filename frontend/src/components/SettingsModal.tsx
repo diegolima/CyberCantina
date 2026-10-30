@@ -279,7 +279,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="sidebar-label" style={{ color: "var(--accent-emerald)", marginTop: 6 }}>
             3. Semantic Vector Store & 3-Tier Context Window
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10 }}>
             <div className="field-group">
               <label>Embedding Engine</label>
               <select
@@ -333,6 +333,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     memory_config: {
                       ...form.memory_config,
                       episodic_chunk_size: Number(e.target.value),
+                    },
+                  })
+                }
+              />
+            </div>
+            <div className="field-group">
+              <label>Max Scene Flags (FIFO)</label>
+              <input
+                type="number"
+                min={1}
+                max={50}
+                className="field-input"
+                value={form.memory_config.max_scene_flags ?? 10}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    memory_config: {
+                      ...form.memory_config,
+                      max_scene_flags: Number(e.target.value) || 10,
                     },
                   })
                 }

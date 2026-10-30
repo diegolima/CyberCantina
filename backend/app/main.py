@@ -682,8 +682,8 @@ def delete_my_account(
 
 def get_effective_user_model_settings(
     user_id: str | None,
-) -> tuple[ModelProfile, ModelProfile, int, bool]:
-    """Resolve effective (actor_profile, clerk_profile, working_memory_turns, delegate_cognition_to_clerk) for a user.
+) -> tuple[ModelProfile, ModelProfile, int, bool, int]:
+    """Resolve effective (actor_profile, clerk_profile, working_memory_turns, delegate_cognition_to_clerk, max_scene_flags) for a user.
 
     If overrides are enabled in system settings and the user has saved custom settings,
     those take precedence. Otherwise, defaults from AppSettings are returned.
@@ -692,13 +692,14 @@ def get_effective_user_model_settings(
     default_clerk = settings.clerk_profile
     default_wm_turns = settings.memory_config.working_memory_turns
     default_delegate = settings.delegate_cognition_to_clerk
+    default_max_flags = settings.memory_config.max_scene_flags
 
     if not settings.allow_user_model_overrides or not user_id:
-        return default_actor, default_clerk, default_wm_turns, default_delegate
+        return default_actor, default_clerk, default_wm_turns, default_delegate, default_max_flags
 
     user_settings = get_repo().get_user_model_settings(user_id)
     if not user_settings:
-        return default_actor, default_clerk, default_wm_turns, default_delegate
+        return default_actor, default_clerk, default_wm_turns, default_delegate, default_max_flags
 
     effective_actor = user_settings.actor_profile or default_actor
     effective_clerk = user_settings.clerk_profile or default_clerk
@@ -712,7 +713,12 @@ def get_effective_user_model_settings(
         if user_settings.delegate_cognition_to_clerk is not None
         else default_delegate
     )
-    return effective_actor, effective_clerk, effective_wm_turns, effective_delegate
+    effective_max_flags = (
+        user_settings.max_scene_flags
+        if user_settings.max_scene_flags is not None
+        else default_max_flags
+    )
+    return effective_actor, effective_clerk, effective_wm_turns, effective_delegate, effective_max_flags
 
 
 @app.get("/api/profile/models", response_model=ProfileModelSettingsResponse)
@@ -721,13 +727,14 @@ def get_profile_models(
 ) -> ProfileModelSettingsResponse:
     repo = get_repo()
     user_override = repo.get_user_model_settings(current_user.id)
-    eff_actor, eff_clerk, eff_wm_turns, eff_delegate = get_effective_user_model_settings(current_user.id)
+    eff_actor, eff_clerk, eff_wm_turns, eff_delegate, eff_max_flags = get_effective_user_model_settings(current_user.id)
     has_override = user_override is not None and (
         user_override.actor_profile is not None
         or user_override.clerk_profile is not None
         or user_override.working_memory_turns is not None
         or user_override.active_prompt_preset_id is not None
         or user_override.delegate_cognition_to_clerk is not None
+        or user_override.max_scene_flags is not None
     )
     return ProfileModelSettingsResponse(
         allow_user_model_overrides=settings.allow_user_model_overrides,
@@ -736,15 +743,18 @@ def get_profile_models(
         effective_clerk_profile=eff_clerk,
         effective_working_memory_turns=eff_wm_turns,
         effective_delegate_cognition_to_clerk=eff_delegate,
+        effective_max_scene_flags=eff_max_flags,
         user_actor_profile=user_override.actor_profile if user_override else None,
         user_clerk_profile=user_override.clerk_profile if user_override else None,
         user_working_memory_turns=user_override.working_memory_turns if user_override else None,
         user_delegate_cognition_to_clerk=user_override.delegate_cognition_to_clerk if user_override else None,
+        user_max_scene_flags=user_override.max_scene_flags if user_override else None,
         active_prompt_preset_id=user_override.active_prompt_preset_id if user_override else None,
         default_actor_profile=settings.actor_profile,
         default_clerk_profile=settings.clerk_profile,
         default_working_memory_turns=settings.memory_config.working_memory_turns,
         default_delegate_cognition_to_clerk=settings.delegate_cognition_to_clerk,
+        default_max_scene_flags=settings.memory_config.max_scene_flags,
     )
 
 
@@ -1633,7 +1643,7 @@ async def _execute_turn_stream_events(
     for loc in world.locations:
         known_entities.append(loc.name)
 
-    eff_actor, eff_clerk, eff_wm_turns, eff_delegate_cognition = get_effective_user_model_settings(owner_id)
+    eff_actor, eff_clerk, eff_wm_turns, eff_delegate_cognition, eff_max_flags = get_effective_user_model_settings(owner_id)
     effective_prompts = repo.resolve_effective_prompts(user_id=owner_id, campaign_id=campaign.id)
 
     effective_user_message = req.user_message.strip()
@@ -1958,6 +1968,7 @@ async def _execute_turn_stream_events(
         present_characters=present_characters,
         profile=eff_clerk,
         working_memory_turns=eff_wm_turns,
+        max_scene_flags=eff_max_flags,
         post_turn_prompt_template=effective_prompts.get("clerk_post_turn_system"),
         summary_prompt_template=effective_prompts.get("clerk_episodic_summary_system"),
     )

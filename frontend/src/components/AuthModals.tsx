@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
+  Activity,
   AlertTriangle,
   Check,
   Copy,
@@ -13,6 +14,7 @@ import {
   Search,
   Server,
   Shield,
+  Sliders,
   Trash2,
   User,
   UserCog,
@@ -599,7 +601,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 interface ProfileModalProps {
   user: UserProfile;
   singleUserMode: boolean;
-  initialTab?: "identity" | "account" | "models" | "prompts";
+  initialTab?: "identity" | "account" | "preferences" | "models" | "prompts" | "behavior";
+  initialSubTab?: "behavior" | "prompts" | "models";
   onClose: () => void;
   onUserUpdated: (updated: UserProfile, singleUserMode?: boolean) => void;
   onAccountReset: () => Promise<void>;
@@ -610,18 +613,37 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   user,
   singleUserMode,
   initialTab,
+  initialSubTab,
   onClose,
   onUserUpdated,
   onAccountReset,
   onAccountDeleted,
 }) => {
-  const [activeTab, setActiveTab] = useState<"identity" | "account" | "models" | "prompts">(
-    initialTab ?? "identity"
-  );
+  const getInitialTab = (): "identity" | "account" | "preferences" => {
+    if (initialTab === "account") return "account";
+    if (
+      initialTab === "preferences" ||
+      initialTab === "models" ||
+      initialTab === "prompts" ||
+      initialTab === "behavior"
+    ) {
+      return "preferences";
+    }
+    return "identity";
+  };
+
+  const getInitialPrefTab = (): "behavior" | "prompts" | "models" => {
+    if (initialTab === "models" || initialSubTab === "models") return "models";
+    if (initialTab === "prompts" || initialSubTab === "prompts") return "prompts";
+    return "behavior";
+  };
+
+  const [activeTab, setActiveTab] = useState<"identity" | "account" | "preferences">(getInitialTab);
+  const [activePrefTab, setActivePrefTab] = useState<"behavior" | "prompts" | "models">(getInitialPrefTab);
   const [displayName, setDisplayName] = useState(user.display_name);
   const [savingName, setSavingName] = useState(false);
 
-  // Per-User Model Overrides state
+  // Per-User Model & Behavior Overrides state
   const [modelSettings, setModelSettings] =
     useState<ProfileModelSettingsResponse | null>(null);
   const [modelLoading, setModelLoading] = useState(false);
@@ -641,6 +663,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   const [userDelegateCognition, setUserDelegateCognition] = useState<boolean>(false);
 
   const [userWmTurns, setUserWmTurns] = useState<number>(10);
+  const [userMaxSceneFlags, setUserMaxSceneFlags] = useState<number>(10);
 
   // Password change state
   const [currentPasswordForPwd, setCurrentPasswordForPwd] = useState("");
@@ -711,6 +734,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       setUserWmTurns(
         data.user_working_memory_turns ?? data.default_working_memory_turns
       );
+      setUserMaxSceneFlags(
+        data.user_max_scene_flags ?? data.default_max_scene_flags ?? 10
+      );
 
       const activeDelegate =
         data.user_delegate_cognition_to_clerk ??
@@ -719,7 +745,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 
       probeOllama(activeActor.base_url);
     } catch (err: any) {
-      setErrorMsg(err?.message || "Failed to load profile models.");
+      setErrorMsg(err?.message || "Failed to load preferences.");
     } finally {
       setModelLoading(false);
     }
@@ -751,12 +777,13 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
         },
         working_memory_turns: userWmTurns,
         delegate_cognition_to_clerk: userDelegateCognition,
+        max_scene_flags: userMaxSceneFlags,
       };
       const res = await api.updateProfileModels(payload);
       setModelSettings(res);
-      setStatusMsg("Per-user model overrides saved successfully.");
+      setStatusMsg("Preferences saved successfully.");
     } catch (err: any) {
-      setErrorMsg(err?.message || "Failed to save model overrides.");
+      setErrorMsg(err?.message || "Failed to save preferences.");
     } finally {
       setModelSaving(false);
     }
@@ -777,9 +804,10 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       setUserClerkTokens(res.default_clerk_profile.max_tokens);
       setUserWmTurns(res.default_working_memory_turns);
       setUserDelegateCognition(res.default_delegate_cognition_to_clerk);
-      setStatusMsg("Reverted to system default models.");
+      setUserMaxSceneFlags(res.default_max_scene_flags ?? 10);
+      setStatusMsg("Reverted to system default preferences.");
     } catch (err: any) {
-      setErrorMsg(err?.message || "Failed to reset model overrides.");
+      setErrorMsg(err?.message || "Failed to reset preferences.");
     } finally {
       setModelSaving(false);
     }
@@ -1027,11 +1055,11 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 
   return (
     <div className="modal-backdrop">
-      <div className="modal-panel" style={{ maxWidth: 600 }}>
+      <div className="modal-panel" style={{ maxWidth: 660 }}>
         <div className="modal-header">
           <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <User size={18} color="var(--accent-amber)" />
-            User Profile &amp; Security Credentials
+            User Profile &amp; Preferences
           </span>
           <button type="button" className="btn" onClick={onClose}>
             <X size={15} />
@@ -1063,25 +1091,15 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
           <button
             type="button"
             className={`modal-tab-btn ${
-              activeTab === "models" ? "active" : ""
+              activeTab === "preferences" ? "active" : ""
             }`}
-            onClick={() => setActiveTab("models")}
+            onClick={() => setActiveTab("preferences")}
           >
-            <Cpu size={14} />
-            Models
+            <Sliders size={14} />
+            Preferences
             {modelSettings && !modelSettings.allow_user_model_overrides && (
               <span className="modal-tab-badge">Locked</span>
             )}
-          </button>
-          <button
-            type="button"
-            className={`modal-tab-btn ${
-              activeTab === "prompts" ? "active" : ""
-            }`}
-            onClick={() => setActiveTab("prompts")}
-          >
-            <FileText size={14} />
-            Prompts & Presets
           </button>
         </div>
 
@@ -1900,9 +1918,56 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
             </>
           )}
 
-          {/* 3. Per-User Model Overrides */}
-          {activeTab === "models" && (
+          {/* 3. Preferences (Behavior, Prompts & Presets, Models) */}
+          {activeTab === "preferences" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {/* Secondary Sub-tab Navigation */}
+              <div
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  borderBottom: "1px solid var(--border-subtle)",
+                  paddingBottom: 10,
+                  marginBottom: 2,
+                }}
+              >
+                <button
+                  type="button"
+                  className={`btn btn-sm ${
+                    activePrefTab === "behavior" ? "btn-amber" : ""
+                  }`}
+                  onClick={() => setActivePrefTab("behavior")}
+                >
+                  <Activity size={13} />
+                  Behavior
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${
+                    activePrefTab === "prompts" ? "btn-amber" : ""
+                  }`}
+                  onClick={() => setActivePrefTab("prompts")}
+                >
+                  <FileText size={13} />
+                  Prompts &amp; Presets
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${
+                    activePrefTab === "models" ? "btn-amber" : ""
+                  }`}
+                  onClick={() => setActivePrefTab("models")}
+                >
+                  <Cpu size={13} />
+                  Models
+                  {modelSettings && !modelSettings.allow_user_model_overrides && (
+                    <span className="modal-tab-badge" style={{ marginLeft: 6 }}>
+                      Locked
+                    </span>
+                  )}
+                </button>
+              </div>
+
               {modelLoading && (
                 <div
                   style={{
@@ -1912,9 +1977,207 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                     fontSize: "0.85rem",
                   }}
                 >
-                  Loading model configuration...
+                  Loading preferences...
                 </div>
               )}
+
+              {/* Behavior Sub-tab */}
+              {!modelLoading && activePrefTab === "behavior" && (
+                <form
+                  onSubmit={handleSaveModelOverrides}
+                  style={{ display: "flex", flexDirection: "column", gap: 14 }}
+                >
+                  {modelSettings && !modelSettings.allow_user_model_overrides && (
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "10px 14px",
+                        background: "rgba(245, 158, 11, 0.1)",
+                        border: "1px solid rgba(245, 158, 11, 0.3)",
+                        borderRadius: 6,
+                        color: "var(--accent-amber)",
+                        fontSize: "0.82rem",
+                      }}
+                    >
+                      <Lock size={16} style={{ flexShrink: 0 }} />
+                      <span>
+                        <strong>Preferences Overrides Disabled:</strong> The system
+                        administrator has configured global defaults. Custom preferences
+                        are currently locked.
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="form-group">
+                    <label className="form-label">
+                      Max Active Scene Flags (Sliding FIFO Cap)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={50}
+                      className="form-input"
+                      value={userMaxSceneFlags}
+                      disabled={!modelSettings?.allow_user_model_overrides}
+                      onChange={(e) =>
+                        setUserMaxSceneFlags(parseInt(e.target.value, 10) || 10)
+                      }
+                    />
+                    <span
+                      style={{
+                        fontSize: "0.72rem",
+                        color: "var(--text-muted)",
+                      }}
+                    >
+                      Maximum number of active scene flags kept in world snapshots via sliding FIFO. Drops older flags as new ones are added (System Default: {modelSettings?.default_max_scene_flags ?? 10}).
+                    </span>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">
+                      Zone 3 Working Memory Turns (N)
+                    </label>
+                    <input
+                      type="number"
+                      min={4}
+                      max={64}
+                      className="form-input"
+                      value={userWmTurns}
+                      disabled={!modelSettings?.allow_user_model_overrides}
+                      onChange={(e) =>
+                        setUserWmTurns(parseInt(e.target.value, 10) || 12)
+                      }
+                    />
+                    <span
+                      style={{
+                        fontSize: "0.72rem",
+                        color: "var(--text-muted)",
+                      }}
+                    >
+                      Number of verbatim recent turns in active context before
+                      episodic compression (System Default:{" "}
+                      {modelSettings?.default_working_memory_turns ?? 12}).
+                    </span>
+                  </div>
+
+                  <div
+                    style={{
+                      padding: "12px 14px",
+                      background: "rgba(255, 255, 255, 0.03)",
+                      borderRadius: 6,
+                      border: "1px solid var(--border-subtle)",
+                    }}
+                  >
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: 10,
+                        cursor: modelSettings?.allow_user_model_overrides
+                          ? "pointer"
+                          : "default",
+                        fontSize: "0.82rem",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        style={{ marginTop: 2 }}
+                        disabled={!modelSettings?.allow_user_model_overrides}
+                        checked={userDelegateCognition}
+                        onChange={(e) =>
+                          setUserDelegateCognition(e.target.checked)
+                        }
+                      />
+                      <span>
+                        <strong>
+                          Delegate Character Cognition to Clerk Model
+                        </strong>
+                        <span
+                          style={{
+                            display: "block",
+                            fontSize: "0.74rem",
+                            color: "var(--text-secondary)",
+                            marginTop: 2,
+                          }}
+                        >
+                          When enabled, the Clerk model generates the 4-step
+                          &lt;cognition&gt; block (Recall, Feeling, Want, Plan)
+                          and injects it as context for the Primary Actor model.
+                          Recommended if using prose-only fine-tuned models.
+                          (System Default: {modelSettings?.default_delegate_cognition_to_clerk ? "Enabled" : "Disabled"})
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+
+                  {modelSettings?.allow_user_model_overrides && (
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        marginTop: 4,
+                      }}
+                    >
+                      {modelSettings.has_override ? (
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={handleResetModelOverrides}
+                          disabled={modelSaving}
+                        >
+                          Reset to Defaults
+                        </button>
+                      ) : (
+                        <div />
+                      )}
+
+                      <button
+                        type="submit"
+                        className="btn btn-amber"
+                        disabled={modelSaving}
+                      >
+                        <Check size={14} />
+                        <span>
+                          {modelSaving ? "Saving..." : "Save Preferences"}
+                        </span>
+                      </button>
+                    </div>
+                  )}
+                </form>
+              )}
+
+              {/* Prompts & Presets Sub-tab */}
+              {!modelLoading && activePrefTab === "prompts" && (
+                <PromptPresetsManager
+                  activePresetId={modelSettings?.active_prompt_preset_id}
+                  onActivePresetChanged={async (presetId) => {
+                    const payload: UserModelSettingsPayload = {
+                      ...(modelSettings?.user_actor_profile
+                        ? { actor_profile: modelSettings.user_actor_profile }
+                        : {}),
+                      ...(modelSettings?.user_clerk_profile
+                        ? { clerk_profile: modelSettings.user_clerk_profile }
+                        : {}),
+                      working_memory_turns:
+                        modelSettings?.user_working_memory_turns ?? null,
+                      active_prompt_preset_id: presetId,
+                      delegate_cognition_to_clerk:
+                        modelSettings?.user_delegate_cognition_to_clerk ?? null,
+                      max_scene_flags:
+                        modelSettings?.user_max_scene_flags ?? null,
+                    };
+                    const updated = await api.updateProfileModels(payload);
+                    setModelSettings(updated);
+                  }}
+                />
+              )}
+
+              {/* Models Sub-tab */}
+              {!modelLoading && activePrefTab === "models" && (
+                <div>
 
               {!modelLoading &&
                 modelSettings &&
@@ -2357,90 +2620,6 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                       </div>
                     </div>
 
-                    {/* Working Memory Window */}
-                    <div
-                      style={{
-                        background: "var(--bg-card)",
-                        border: "1px solid var(--border-subtle)",
-                        borderRadius: 8,
-                        padding: 14,
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 8,
-                      }}
-                    >
-                      <label className="form-label">
-                        Zone 3 Working Memory Turns (N)
-                      </label>
-                      <input
-                        type="number"
-                        min={4}
-                        max={64}
-                        className="form-input"
-                        value={userWmTurns}
-                        onChange={(e) =>
-                          setUserWmTurns(parseInt(e.target.value, 10))
-                        }
-                      />
-                      <span
-                        style={{
-                          fontSize: "0.72rem",
-                          color: "var(--text-muted)",
-                        }}
-                      >
-                        Number of verbatim recent turns in active context before
-                        episodic compression (Default:{" "}
-                        {modelSettings.default_working_memory_turns}).
-                      </span>
-                    </div>
-
-                    <div
-                      style={{
-                        marginTop: 10,
-                        padding: "10px 14px",
-                        background: "rgba(255, 255, 255, 0.03)",
-                        borderRadius: 6,
-                        border: "1px solid var(--border-subtle)",
-                      }}
-                    >
-                      <label
-                        style={{
-                          display: "flex",
-                          alignItems: "flex-start",
-                          gap: 10,
-                          cursor: "pointer",
-                          fontSize: "0.82rem",
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          style={{ marginTop: 2 }}
-                          checked={userDelegateCognition}
-                          onChange={(e) =>
-                            setUserDelegateCognition(e.target.checked)
-                          }
-                        />
-                        <span>
-                          <strong>
-                            Delegate Character Cognition to Clerk Model
-                          </strong>
-                          <span
-                            style={{
-                              display: "block",
-                              fontSize: "0.74rem",
-                              color: "var(--text-secondary)",
-                              marginTop: 2,
-                            }}
-                          >
-                            When enabled, the Clerk model generates the 4-step
-                            &lt;cognition&gt; block (Recall, Feeling, Want, Plan)
-                            and injects it as context for the Primary Actor model.
-                            Recommended if using prose-only fine-tuned models.
-                          </span>
-                        </span>
-                      </label>
-                    </div>
-
                     <div
                       style={{
                         display: "flex",
@@ -2477,31 +2656,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                     </div>
                   </form>
                 )}
+                </div>
+              )}
             </div>
-          )}
-
-          {/* Prompts & Presets Tab */}
-          {activeTab === "prompts" && (
-            <PromptPresetsManager
-              activePresetId={modelSettings?.active_prompt_preset_id}
-              onActivePresetChanged={async (presetId) => {
-                const payload: UserModelSettingsPayload = {
-                  ...(modelSettings?.user_actor_profile
-                    ? { actor_profile: modelSettings.user_actor_profile }
-                    : {}),
-                  ...(modelSettings?.user_clerk_profile
-                    ? { clerk_profile: modelSettings.user_clerk_profile }
-                    : {}),
-                  working_memory_turns:
-                    modelSettings?.user_working_memory_turns ?? null,
-                  active_prompt_preset_id: presetId,
-                  delegate_cognition_to_clerk:
-                    modelSettings?.user_delegate_cognition_to_clerk ?? null,
-                };
-                const updated = await api.updateProfileModels(payload);
-                setModelSettings(updated);
-              }}
-            />
           )}
         </div>
       </div>
@@ -3886,7 +4043,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                     <div
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "1fr 1fr 1fr",
+                        gridTemplateColumns: "1fr 1fr 1fr 1fr",
                         gap: 10,
                       }}
                     >
@@ -3965,6 +4122,33 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                                   e.target.value,
                                   10
                                 ),
+                              },
+                            })
+                          }
+                        />
+                      </div>
+
+                      <div className="form-group">
+                        <label className="form-label">
+                          Max Scene Flags (FIFO)
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={50}
+                          className="form-input"
+                          value={
+                            appSettingsForm.memory_config.max_scene_flags ?? 10
+                          }
+                          onChange={(e) =>
+                            setAppSettingsForm({
+                              ...appSettingsForm,
+                              memory_config: {
+                                ...appSettingsForm.memory_config,
+                                max_scene_flags: parseInt(
+                                  e.target.value,
+                                  10
+                                ) || 10,
                               },
                             })
                           }

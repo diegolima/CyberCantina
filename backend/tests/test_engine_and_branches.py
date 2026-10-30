@@ -614,7 +614,8 @@ async def test_character_and_world_silent_versioning(
 async def test_scene_flags_merge_and_zone4_rendering(
     temp_repo: CantinaRepository,
 ) -> None:
-    """Verify Fix D: scene_flags merge incrementally without overwriting, and render in Zone 4 with relationship_notes."""
+    """Verify scene_flags maintain only the new location marker on location transition,
+    apply sliding FIFO cap, and render in Zone 4 with relationship_notes."""
     assert merge_scene_flags(
         ["Scene Opening", "Door Locked"],
         ["Alarm Armed", "-Door Locked", "Scene Opening"],
@@ -625,7 +626,23 @@ async def test_scene_flags_merge_and_zone4_rendering(
         removed_flags=["temp buff"],
     ) == ["Scene Opening", "Keycard Acquired"]
 
-    # Execute a turn that moves to Backroom Ripperdoc Bay -> should add a flag while preserving 'Scene Opening'
+    # Test sliding FIFO cap with default 10 and custom max_flags
+    fifo_flags = merge_scene_flags(
+        [f"flag_{i}" for i in range(8)],
+        ["flag_8", "flag_9", "flag_10"],
+        max_flags=10,
+    )
+    assert fifo_flags == [f"flag_{i}" for i in range(1, 11)]
+    assert len(fifo_flags) == 10
+
+    custom_fifo = merge_scene_flags(
+        ["f1", "f2", "f3", "f4"],
+        ["f5", "f6"],
+        max_flags=3,
+    )
+    assert custom_fifo == ["f4", "f5", "f6"]
+
+    # Execute a turn that moves to Backroom Ripperdoc Bay -> location transition maintains ONLY the new location marker
     req = TurnSubmitRequest(
         user_message="Let's head into the Backroom Ripperdoc Bay right now.",
     )
@@ -634,8 +651,8 @@ async def test_scene_flags_merge_and_zone4_rendering(
 
     bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
     flags = bundle.current_world_snapshot.scene_flags
-    assert "Scene Opening" in flags
-    assert any("Backroom Ripperdoc Bay" in f for f in flags)
+    assert flags == ["At Backroom Ripperdoc Bay"]
+    assert "Scene Opening" not in flags
 
     world = temp_repo.get_world(bundle.campaign.world_id)
     char = temp_repo.get_character(bundle.campaign.character_id)
@@ -652,7 +669,8 @@ async def test_scene_flags_merge_and_zone4_rendering(
     )
     zone4_tail = msgs[-1]["content"]
     assert "<scene_flags>" in zone4_tail
-    assert "Scene Opening" in zone4_tail
+    assert "At Backroom Ripperdoc Bay" in zone4_tail
+    assert "Scene Opening" not in zone4_tail
     assert "Relationship Notes:" in zone4_tail
     assert "Acquaintance / Uncertain trust" in zone4_tail
 
@@ -1760,3 +1778,47 @@ async def test_clerk_ephemeral_memory_branch_isolation_promotion_and_40_turn_com
     shards_rewound = bundle_rewound.character_records[kira_id].memory_shards
     assert len([s for s in shards_rewound if s.origin == "clerk_ephemeral"]) == 2
     assert not any(s.origin == "compacted" for s in shards_rewound)
+
+
+async def test_scene_flags_fifo_cap_and_teleport_reset(
+    temp_repo: CantinaRepository,
+) -> None:
+    """Verify max_scene_flags configuration affects FIFO cap and admin location change maintains only new location marker."""
+    import json
+    from app.config import settings
+
+    camp = temp_repo.get_campaign("camp_neon_rust_default")
+    leaf = temp_repo.get_turn_node(camp.active_leaf_turn_id)
+    # Give leaf 15 flags
+    conn = temp_repo._connect()
+    try:
+        conn.execute(
+            "UPDATE world_state_snapshots SET scene_flags_json = ? WHERE turn_id = ?",
+            (json.dumps([f"flag_{i}" for i in range(15)]), leaf.id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Teleport to another location -> must maintain only the new location marker
+    world = temp_repo.get_world(camp.world_id)
+    other_loc = next(loc for loc in world.locations if loc.id != leaf.world_snapshot.active_location_id)
+    temp_repo.override_campaign_location(camp.id, other_loc.id)
+
+    updated_bundle = temp_repo.get_campaign_state_bundle(camp.id)
+    assert updated_bundle.current_world_snapshot.scene_flags == [f"At {other_loc.name}"]
+
+    # Test settings configuration
+    old_max = settings.memory_config.max_scene_flags
+    try:
+        settings.memory_config.max_scene_flags = 5
+        trimmed = merge_scene_flags(
+            [f"flag_{i}" for i in range(8)],
+            ["new_flag_1", "new_flag_2"],
+            max_flags=settings.memory_config.max_scene_flags,
+        )
+        assert len(trimmed) == 5
+        assert trimmed == ["flag_5", "flag_6", "flag_7", "new_flag_1", "new_flag_2"]
+    finally:
+        settings.memory_config.max_scene_flags = old_max
+
