@@ -211,6 +211,20 @@ class LinkedLocationCreateRequest(BaseModel):
     environmental_tags: list[str] = []
 
 
+class CampaignEdgeCreateRequest(BaseModel):
+    from_location_id: str
+    to_location_id: str
+    direction_label: str | None = None
+    compass_direction: str = "N"
+    travel_minutes: int = 1
+    bidirectional: bool = True
+
+
+class CampaignEdgeDistanceUpdateRequest(BaseModel):
+    travel_minutes: int
+    update_reciprocal: bool = True
+
+
 class CharacterCommitRequest(BaseModel):
     draft: CharacterWizardDraft
     world_id: str | None = None
@@ -1178,10 +1192,11 @@ def list_worlds(
 @app.get("/api/worlds/{world_id}", response_model=WorldRecord)
 def get_world(
     world_id: str,
+    base_only: bool = True,
     current_user: UserProfile = Depends(get_current_user),
 ) -> WorldRecord:
     try:
-        return get_repo().get_world(world_id, owner_id=current_user.id)
+        return get_repo().get_world(world_id, base_only=base_only, owner_id=current_user.id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -1461,6 +1476,73 @@ def create_campaign_linked_location(
             environmental_tags=req.environmental_tags,
             compass_direction=req.compass_direction,
             travel_minutes=req.travel_minutes,
+            owner_id=current_user.id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/campaigns/{campaign_id}/edges", response_model=CampaignStateBundle)
+def connect_campaign_locations(
+    campaign_id: str,
+    req: CampaignEdgeCreateRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Connect two existing map locations on the campaign's active timeline."""
+    try:
+        return get_repo().connect_campaign_locations(
+            campaign_id,
+            from_location_id=req.from_location_id,
+            to_location_id=req.to_location_id,
+            direction_label=req.direction_label,
+            compass_direction=req.compass_direction,
+            travel_minutes=req.travel_minutes,
+            bidirectional=req.bidirectional,
+            owner_id=current_user.id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/api/campaigns/{campaign_id}/edges/{edge_id}", response_model=CampaignStateBundle)
+def update_campaign_edge_distance(
+    campaign_id: str,
+    edge_id: str,
+    req: CampaignEdgeDistanceUpdateRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Update distance (travel_minutes) of an existing edge on the active timeline."""
+    try:
+        return get_repo().update_campaign_edge_distance(
+            campaign_id,
+            edge_id=edge_id,
+            travel_minutes=req.travel_minutes,
+            update_reciprocal=req.update_reciprocal,
+            owner_id=current_user.id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/campaigns/{campaign_id}/edges/{edge_id}", response_model=CampaignStateBundle)
+def remove_campaign_edge(
+    campaign_id: str,
+    edge_id: str,
+    remove_reciprocal: bool = True,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Remove a link on the active timeline, ensuring each location retains at least one connection."""
+    try:
+        return get_repo().remove_campaign_edge(
+            campaign_id,
+            edge_id=edge_id,
+            remove_reciprocal=remove_reciprocal,
             owner_id=current_user.id,
         )
     except KeyError as exc:

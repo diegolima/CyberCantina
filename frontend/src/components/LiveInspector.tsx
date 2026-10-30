@@ -75,6 +75,19 @@ interface LiveInspectorProps {
     description: string;
     environmental_tags: string[];
   }) => Promise<string | void>;
+  onAddEdge?: (payload: {
+    from_location_id: string;
+    to_location_id: string;
+    direction_label?: string;
+    compass_direction: CompassDirection;
+    travel_minutes: number;
+    bidirectional?: boolean;
+  }) => Promise<void> | void;
+  onDeleteEdge?: (edgeId: string) => Promise<void> | void;
+  onUpdateEdgeDistance?: (payload: {
+    edgeId: string;
+    travel_minutes: number;
+  }) => Promise<void> | void;
   onToggleItemEquip?: (payload: {
     item: string;
     action: "equip" | "unequip" | "remove" | "add";
@@ -97,6 +110,9 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   pendingLocationOverrideId,
   onOverrideLocation,
   onCreateLinkedLocation,
+  onAddEdge,
+  onDeleteEdge,
+  onUpdateEdgeDistance,
   onToggleItemEquip,
   onUpdateCampaignMemories,
   worlds = [],
@@ -624,6 +640,9 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
               onOverrideLocation={handleOverrideClick}
               isOverriding={isOverriding}
               onCreateLinkedLocation={onCreateLinkedLocation}
+              onAddEdge={onAddEdge}
+              onDeleteEdge={onDeleteEdge}
+              onUpdateEdgeDistance={onUpdateEdgeDistance}
             />
           </div>
         </div>

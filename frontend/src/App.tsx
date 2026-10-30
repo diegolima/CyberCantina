@@ -48,6 +48,7 @@ import {
   CampaignStateBundle,
   CharacterRecord,
   CognitionBlock,
+  CompassDirection,
   MemoryShard,
   NarrativeMode,
   PreTurnAnalysis,
@@ -734,6 +735,45 @@ export const App: React.FC = () => {
     return updated.visible_locations.find((l) => l.name === payload.name && !prevIds.has(l.id))?.id;
   };
 
+  const handleConnectLocations = async (payload: {
+    from_location_id: string;
+    to_location_id: string;
+    direction_label?: string;
+    compass_direction: CompassDirection;
+    travel_minutes: number;
+    bidirectional?: boolean;
+  }) => {
+    if (!bundle || isStreaming) return;
+    const updated = await api.connectCampaignLocations(bundle.campaign.id, payload);
+    setBundle(updated);
+    const updatedWorld = await api.getWorld(updated.campaign.world_id);
+    setCampaignWorld(updatedWorld);
+  };
+
+  const handleDeleteCampaignEdge = async (edgeId: string) => {
+    if (!bundle || isStreaming) return;
+    const updated = await api.removeCampaignEdge(bundle.campaign.id, edgeId, true);
+    setBundle(updated);
+    const updatedWorld = await api.getWorld(updated.campaign.world_id);
+    setCampaignWorld(updatedWorld);
+  };
+
+  const handleUpdateCampaignEdgeDistance = async (payload: {
+    edgeId: string;
+    travel_minutes: number;
+  }) => {
+    if (!bundle || isStreaming) return;
+    const updated = await api.updateCampaignEdgeDistance(
+      bundle.campaign.id,
+      payload.edgeId,
+      payload.travel_minutes,
+      true
+    );
+    setBundle(updated);
+    const updatedWorld = await api.getWorld(updated.campaign.world_id);
+    setCampaignWorld(updatedWorld);
+  };
+
   const handleCheckoutTurn = async (turnId: string) => {
     if (!bundle || isStreaming) return;
     setPendingLocationOverrideId(null);
@@ -1191,6 +1231,9 @@ export const App: React.FC = () => {
           pendingLocationOverrideId={pendingLocationOverrideId}
           onOverrideLocation={handleOverrideLocation}
           onCreateLinkedLocation={handleCreateLinkedLocation}
+          onAddEdge={handleConnectLocations}
+          onDeleteEdge={handleDeleteCampaignEdge}
+          onUpdateEdgeDistance={handleUpdateCampaignEdgeDistance}
           onToggleItemEquip={handleToggleItemEquip}
           onUpdateCampaignMemories={handleUpdateCampaignMemories}
           worlds={worlds}

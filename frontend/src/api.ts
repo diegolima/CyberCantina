@@ -648,6 +648,48 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  connectCampaignLocations: (
+    campaignId: string,
+    payload: {
+      from_location_id: string;
+      to_location_id: string;
+      direction_label?: string;
+      compass_direction: string;
+      travel_minutes: number;
+      bidirectional?: boolean;
+    }
+  ) =>
+    fetchJson<CampaignStateBundle>(`${API_BASE}/campaigns/${campaignId}/edges`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateCampaignEdgeDistance: (
+    campaignId: string,
+    edgeId: string,
+    travelMinutes: number,
+    updateReciprocal: boolean = true
+  ) =>
+    fetchJson<CampaignStateBundle>(
+      `${API_BASE}/campaigns/${campaignId}/edges/${edgeId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          travel_minutes: travelMinutes,
+          update_reciprocal: updateReciprocal,
+        }),
+      }
+    ),
+  removeCampaignEdge: (
+    campaignId: string,
+    edgeId: string,
+    removeReciprocal: boolean = true
+  ) =>
+    fetchJson<CampaignStateBundle>(
+      `${API_BASE}/campaigns/${campaignId}/edges/${edgeId}?remove_reciprocal=${removeReciprocal}`,
+      {
+        method: "DELETE",
+      }
+    ),
   deleteLastTurn: (campaignId: string) =>
     fetchJson<CampaignStateBundle>(
       `${API_BASE}/campaigns/${campaignId}/turns/last`,

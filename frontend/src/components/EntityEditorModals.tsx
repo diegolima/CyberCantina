@@ -1310,14 +1310,79 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   };
 
   const handleDeleteEdge = (edgeId: string) => {
-    setEdges((prev) => prev.filter((e) => e.id !== edgeId));
+    const target = edges.find((e) => e.id === edgeId);
+    if (!target) return;
+    const startId =
+      locations.find((l) => l.is_starting_location)?.id ?? locations[0]?.id;
+    if (!startId) return;
+
+    const remaining = edges.filter(
+      (e) =>
+        e.id !== edgeId &&
+        !(
+          e.from_location_id === target.to_location_id &&
+          e.to_location_id === target.from_location_id
+        )
+    );
+
+    const adj = new Map<string, Set<string>>();
+    for (const e of remaining) {
+      if (!adj.has(e.from_location_id)) adj.set(e.from_location_id, new Set());
+      if (!adj.has(e.to_location_id)) adj.set(e.to_location_id, new Set());
+      adj.get(e.from_location_id)!.add(e.to_location_id);
+      adj.get(e.to_location_id)!.add(e.from_location_id);
+    }
+
+    const reachable = new Set<string>([startId]);
+    const queue = [startId];
+    while (queue.length > 0) {
+      const curr = queue.shift()!;
+      for (const nextId of adj.get(curr) ?? []) {
+        if (!reachable.has(nextId)) {
+          reachable.add(nextId);
+          queue.push(nextId);
+        }
+      }
+    }
+
+    if (
+      !reachable.has(target.from_location_id) ||
+      !reachable.has(target.to_location_id)
+    ) {
+      return;
+    }
+
+    setEdges(remaining);
+    markDirty();
+  };
+
+  const handleUpdateEdgeDistance = (payload: {
+    edgeId: string;
+    travel_minutes: number;
+  }) => {
+    const target = edges.find((e) => e.id === payload.edgeId);
+    if (!target) return;
+    setEdges((prev) =>
+      prev.map((e) => {
+        if (e.id === payload.edgeId) {
+          return { ...e, travel_minutes: payload.travel_minutes };
+        }
+        if (
+          e.from_location_id === target.to_location_id &&
+          e.to_location_id === target.from_location_id
+        ) {
+          return { ...e, travel_minutes: payload.travel_minutes };
+        }
+        return e;
+      })
+    );
     markDirty();
   };
 
   const handleAddEdge = (payload: {
     from_location_id: string;
     to_location_id: string;
-    direction_label: string;
+    direction_label?: string;
     compass_direction: CompassDirection;
     travel_minutes: number;
     bidirectional?: boolean;
@@ -1328,7 +1393,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
       world_id: world.id,
       from_location_id: payload.from_location_id,
       to_location_id: payload.to_location_id,
-      direction_label: payload.direction_label,
+      direction_label: payload.direction_label || "Passage",
       compass_direction: payload.compass_direction,
       travel_minutes: payload.travel_minutes,
       is_locked_or_hidden: false,
@@ -1661,6 +1726,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 onSetStartingLocation={handleSetStartingLocation}
                 onAddEdge={handleAddEdge}
                 onDeleteEdge={handleDeleteEdge}
+                onUpdateEdgeDistance={handleUpdateEdgeDistance}
                 onCreateLinkedLocation={handleCreateLinkedLocation}
               />
             )}

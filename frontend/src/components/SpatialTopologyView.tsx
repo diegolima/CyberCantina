@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Check,
   Compass,
   Crosshair,
   GitBranch,
@@ -7,6 +8,7 @@ import {
   Lock,
   MapPin,
   Navigation,
+  Pencil,
   Plus,
   Sparkles,
   Star,
@@ -244,12 +246,16 @@ export interface SpatialTopologyViewProps {
   onAddEdge?: (payload: {
     from_location_id: string;
     to_location_id: string;
-    direction_label: string;
+    direction_label?: string;
     compass_direction: CompassDirection;
     travel_minutes: number;
     bidirectional?: boolean;
-  }) => void;
-  onDeleteEdge?: (edgeId: string) => void;
+  }) => Promise<void> | void;
+  onDeleteEdge?: (edgeId: string) => Promise<void> | void;
+  onUpdateEdgeDistance?: (payload: {
+    edgeId: string;
+    travel_minutes: number;
+  }) => Promise<void> | void;
 
   // Link Creation (supported in both modes)
   onCreateLinkedLocation?: (payload: {
@@ -282,6 +288,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   onSetStartingLocation,
   onAddEdge,
   onDeleteEdge,
+  onUpdateEdgeDistance,
   onCreateLinkedLocation,
   onOverrideLocation,
   isOverriding = false,
@@ -312,12 +319,22 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   const [linkError, setLinkError] = useState<string | null>(null);
   const [isCreatingLink, setIsCreatingLink] = useState(false);
 
-  // "Connect Existing Location" form state (Editor mode)
+  // "Connect Existing Location" form state
   const [showConnectForm, setShowConnectForm] = useState(false);
   const [connectTargetId, setConnectTargetId] = useState<string>("");
   const [connectDirection, setConnectDirection] = useState<CompassDirection>("N");
   const [connectMinutes, setConnectMinutes] = useState("2");
   const [connectBidirectional, setConnectBidirectional] = useState(true);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+
+  // Distance editing state
+  const [editingEdgeId, setEditingEdgeId] = useState<string | null>(null);
+  const [editMinutes, setEditMinutes] = useState<string>("1");
+  const [isUpdatingDistance, setIsUpdatingDistance] = useState(false);
+
+  // Removing edge state
+  const [isRemovingEdgeId, setIsRemovingEdgeId] = useState<string | null>(null);
 
   // Keep selectedLocId valid if locations list changes
   useEffect(() => {
@@ -461,35 +478,124 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   };
 
   const openConnectForm = () => {
-    const availableTargets = locations.filter(
-      (l) => l.id !== selectedLocation?.id
+    const connectedDestIds = new Set(
+      edges
+        .filter((e) => e.from_location_id === selectedLocation?.id)
+        .map((e) => e.to_location_id)
     );
-    setConnectTargetId(availableTargets[0]?.id || "");
+    const availableTargets = locations.filter(
+      (l) => l.id !== selectedLocation?.id && !connectedDestIds.has(l.id)
+    );
+    setConnectTargetId(
+      availableTargets[0]?.id ||
+      locations.find((l) => l.id !== selectedLocation?.id)?.id ||
+      ""
+    );
     const firstFreeSlot =
       COMPASS_ORDER.find((d) => !occupiedDirections.has(d)) ?? "N";
     setConnectDirection(firstFreeSlot);
     setConnectMinutes("2");
     setConnectBidirectional(true);
+    setConnectError(null);
     setShowConnectForm(true);
     setShowLinkForm(false);
   };
 
-  const submitConnectForm = () => {
-    if (!onAddEdge || !selectedLocation || !connectTargetId) return;
+  const submitConnectForm = async () => {
+    if (!onAddEdge || !selectedLocation || !connectTargetId || isConnecting) return;
+    setConnectError(null);
     const minutes = Math.max(
       1,
       Math.min(240, parseInt(connectMinutes, 10) || 1)
     );
     const targetLoc = locMap.get(connectTargetId);
-    onAddEdge({
-      from_location_id: selectedLocation.id,
-      to_location_id: connectTargetId,
-      direction_label: `Passage to ${targetLoc?.name || "adjoining sector"}`,
-      compass_direction: connectDirection,
-      travel_minutes: minutes,
-      bidirectional: connectBidirectional,
-    });
-    setShowConnectForm(false);
+    try {
+      setIsConnecting(true);
+      await onAddEdge({
+        from_location_id: selectedLocation.id,
+        to_location_id: connectTargetId,
+        direction_label: `Passage to ${targetLoc?.name || "adjoining sector"}`,
+        compass_direction: connectDirection,
+        travel_minutes: minutes,
+        bidirectional: connectBidirectional,
+      });
+      setShowConnectForm(false);
+    } catch (err: any) {
+      setConnectError(err?.message || "Failed to connect locations");
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
+  // Check if removing an edge would create isolated islands (both endpoints must retain a path to the starting hub)
+  const canRemoveEdge = (edge: LocationEdge): boolean => {
+    const startId =
+      locations.find((l) => l.is_starting_location)?.id ?? locations[0]?.id;
+    if (!startId) return false;
+
+    const edgesToRemove = new Set<string>([edge.id]);
+    for (const e of edges) {
+      if (
+        e.from_location_id === edge.to_location_id &&
+        e.to_location_id === edge.from_location_id
+      ) {
+        edgesToRemove.add(e.id);
+      }
+    }
+
+    const remaining = edges.filter((e) => !edgesToRemove.has(e.id));
+    if (remaining.length === 0) return false;
+
+    const adj = new Map<string, Set<string>>();
+    for (const e of remaining) {
+      if (!adj.has(e.from_location_id)) adj.set(e.from_location_id, new Set());
+      if (!adj.has(e.to_location_id)) adj.set(e.to_location_id, new Set());
+      adj.get(e.from_location_id)!.add(e.to_location_id);
+      adj.get(e.to_location_id)!.add(e.from_location_id);
+    }
+
+    const reachable = new Set<string>([startId]);
+    const queue = [startId];
+    while (queue.length > 0) {
+      const curr = queue.shift()!;
+      for (const nextId of adj.get(curr) ?? []) {
+        if (!reachable.has(nextId)) {
+          reachable.add(nextId);
+          queue.push(nextId);
+        }
+      }
+    }
+
+    return (
+      reachable.has(edge.from_location_id) && reachable.has(edge.to_location_id)
+    );
+  };
+
+  const handleSaveDistance = async (edgeId: string) => {
+    if (!onUpdateEdgeDistance || isUpdatingDistance) return;
+    const mins = Math.max(1, Math.min(240, parseInt(editMinutes, 10) || 1));
+    try {
+      setIsUpdatingDistance(true);
+      await onUpdateEdgeDistance({ edgeId, travel_minutes: mins });
+      setEditingEdgeId(null);
+    } catch (err) {
+      console.error("Failed to update edge distance:", err);
+    } finally {
+      setIsUpdatingDistance(false);
+    }
+  };
+
+  const handleDeleteExit = async (edge: LocationEdge) => {
+    if (!onDeleteEdge || isRemovingEdgeId) return;
+    if (!canRemoveEdge(edge)) return;
+    try {
+      setIsRemovingEdgeId(edge.id);
+      await onDeleteEdge(edge.id);
+    } catch (err) {
+      console.error("Failed to remove exit:", err);
+    } finally {
+      setIsRemovingEdgeId(null);
+    }
   };
 
   if (!selectedLocation && locations.length === 0) {
@@ -1163,23 +1269,23 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
           {onCreateLinkedLocation && (
             <div>
               {!showLinkForm && !showConnectForm ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  <button
-                    type="button"
-                    className="btn"
-                    style={{
-                      width: "100%",
-                      justifyContent: "center",
-                      padding: "7px 12px",
-                      fontSize: "0.78rem",
-                    }}
-                    onClick={() => openLinkForm(false)}
-                  >
-                    <Link2 size={13} />
-                    Create Link from {selectedLocation.name}
-                  </button>
+                mode === "editor" ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{
+                        width: "100%",
+                        justifyContent: "center",
+                        padding: "7px 12px",
+                        fontSize: "0.78rem",
+                      }}
+                      onClick={() => openLinkForm(false)}
+                    >
+                      <Link2 size={13} />
+                      Create Link from {selectedLocation.name}
+                    </button>
 
-                  {mode === "editor" && (
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
                       <button
                         type="button"
@@ -1214,8 +1320,60 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                         </button>
                       )}
                     </div>
-                  )}
-                </div>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {locations.length >= 2 && onAddEdge ? (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          style={{
+                            justifyContent: "center",
+                            padding: "6px 8px",
+                            fontSize: "0.74rem",
+                          }}
+                          onClick={() => openLinkForm(false)}
+                          title="Explore and map a new adjacent room"
+                        >
+                          <Link2 size={12} />
+                          + New Room
+                        </button>
+
+                        <button
+                          type="button"
+                          className="btn btn-cyan"
+                          style={{
+                            justifyContent: "center",
+                            padding: "6px 8px",
+                            fontSize: "0.74rem",
+                          }}
+                          onClick={openConnectForm}
+                          title="Connect this room to an existing location"
+                        >
+                          <Plus size={12} />
+                          + Connect Room
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        style={{
+                          width: "100%",
+                          justifyContent: "center",
+                          padding: "7px 12px",
+                          fontSize: "0.78rem",
+                        }}
+                        onClick={() => openLinkForm(false)}
+                        title="Explore and map an adjacent room"
+                      >
+                        <Link2 size={13} />
+                        Create Link from {selectedLocation.name}
+                      </button>
+                    )}
+                  </div>
+                )
               ) : showLinkForm ? (
                 /* Link Creation Form */
                 <div
@@ -1386,11 +1544,21 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                   >
                     {locations
                       .filter((l) => l.id !== selectedLocation.id)
-                      .map((l) => (
-                        <option key={l.id} value={l.id}>
-                          {l.name} {l.is_hub ? "(Hub)" : ""}
-                        </option>
-                      ))}
+                      .map((l) => {
+                        const isAlreadyConnected = selectedLocExits.some(
+                          (ex) => ex.dest.id === l.id
+                        );
+                        return (
+                          <option
+                            key={l.id}
+                            value={l.id}
+                            disabled={isAlreadyConnected}
+                          >
+                            {l.name} {l.is_hub ? "(Hub)" : ""}{" "}
+                            {isAlreadyConnected ? "(already connected)" : ""}
+                          </option>
+                        );
+                      })}
                   </select>
 
                   <div style={{ display: "flex", gap: 6 }}>
@@ -1449,6 +1617,12 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                     Create reciprocal return exit automatically
                   </label>
 
+                  {connectError && (
+                    <div style={{ fontSize: "0.72rem", color: "#fda4af" }}>
+                      {connectError}
+                    </div>
+                  )}
+
                   <div
                     style={{
                       display: "flex",
@@ -1461,6 +1635,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                       className="btn"
                       style={{ padding: "3px 10px", fontSize: "0.74rem" }}
                       onClick={() => setShowConnectForm(false)}
+                      disabled={isConnecting}
                     >
                       Cancel
                     </button>
@@ -1469,9 +1644,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                       className="btn btn-cyan"
                       style={{ padding: "3px 10px", fontSize: "0.74rem" }}
                       onClick={submitConnectForm}
-                      disabled={!connectTargetId}
+                      disabled={!connectTargetId || isConnecting}
                     >
-                      Add Connection
+                      {isConnecting ? "Connecting..." : "Add Connection"}
                     </button>
                   </div>
                 </div>
@@ -1543,28 +1718,118 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                           gap: 6,
                         }}
                       >
-                        <span
-                          style={{
-                            color: "var(--text-muted)",
-                            fontSize: "0.7rem",
-                          }}
-                        >
-                          {edge.travel_minutes}m
-                        </span>
-                        {mode === "editor" && onDeleteEdge && (
-                          <button
-                            type="button"
-                            className="item-remove-btn"
-                            style={{ padding: 2 }}
-                            title="Remove this exit connection"
+                        {editingEdgeId === edge.id ? (
+                          <div
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 3,
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <input
+                              type="number"
+                              min={1}
+                              max={240}
+                              value={editMinutes}
+                              onChange={(e) => setEditMinutes(e.target.value)}
+                              style={{
+                                width: 44,
+                                padding: "1px 3px",
+                                fontSize: "0.7rem",
+                                background: "var(--bg-input, #0f172a)",
+                                border: "1px solid var(--accent-cyan, #06b6d4)",
+                                borderRadius: 3,
+                                color: "#e2e8f0",
+                                textAlign: "center",
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  handleSaveDistance(edge.id);
+                                } else if (e.key === "Escape") {
+                                  setEditingEdgeId(null);
+                                }
+                              }}
+                              autoFocus
+                              disabled={isUpdatingDistance}
+                            />
+                            <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>m</span>
+                            <button
+                              type="button"
+                              className="btn btn-cyan"
+                              style={{ padding: "1px 5px", fontSize: "0.68rem" }}
+                              onClick={() => handleSaveDistance(edge.id)}
+                              disabled={isUpdatingDistance}
+                              title="Save distance"
+                            >
+                              <Check size={10} />
+                            </button>
+                            <button
+                              type="button"
+                              className="btn"
+                              style={{ padding: "1px 4px", fontSize: "0.68rem" }}
+                              onClick={() => setEditingEdgeId(null)}
+                              disabled={isUpdatingDistance}
+                              title="Cancel"
+                            >
+                              <X size={10} />
+                            </button>
+                          </div>
+                        ) : (
+                          <span
+                            style={{
+                              color: onUpdateEdgeDistance ? "#38bdf8" : "var(--text-muted)",
+                              fontSize: "0.7rem",
+                              cursor: onUpdateEdgeDistance ? "pointer" : "default",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 3,
+                              padding: "1px 4px",
+                              borderRadius: 3,
+                              background: onUpdateEdgeDistance ? "rgba(56, 189, 248, 0.08)" : "transparent",
+                              border: onUpdateEdgeDistance ? "1px dashed rgba(56, 189, 248, 0.3)" : "none",
+                            }}
+                            title={onUpdateEdgeDistance ? "Click to edit distance / travel minutes" : undefined}
                             onClick={(e) => {
-                              e.stopPropagation();
-                              onDeleteEdge(edge.id);
+                              if (onUpdateEdgeDistance) {
+                                e.stopPropagation();
+                                setEditingEdgeId(edge.id);
+                                setEditMinutes(String(edge.travel_minutes));
+                              }
                             }}
                           >
-                            <Trash2 size={11} />
-                          </button>
+                            {edge.travel_minutes}m
+                            {onUpdateEdgeDistance && <Pencil size={9} style={{ opacity: 0.7 }} />}
+                          </span>
                         )}
+
+                        {onDeleteEdge && (() => {
+                          const canRemove = canRemoveEdge(edge);
+                          return (
+                            <button
+                              type="button"
+                              className="item-remove-btn"
+                              style={{
+                                padding: 2,
+                                opacity: canRemove ? 1 : 0.3,
+                                cursor: canRemove ? "pointer" : "not-allowed",
+                              }}
+                              title={
+                                canRemove
+                                  ? "Remove this exit connection"
+                                  : "Cannot remove: both locations must retain a valid path to the starting hub"
+                              }
+                              disabled={!canRemove || isRemovingEdgeId === edge.id}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteExit(edge);
+                              }}
+                            >
+                              <Trash2 size={11} />
+                            </button>
+                          );
+                        })()}
                       </div>
                     </div>
                     <div
