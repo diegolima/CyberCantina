@@ -241,6 +241,12 @@ def ensure_default_seed(
             "Diagnostic medical penlight",
             "Concealed Vespera trauma med-injector",
         ],
+        tags=["medic", "cyberpunk", "ally", "ripperdoc"],
+        creator="CyberCantina Team",
+        creator_notes=(
+            "Kira works best when the user is cautious but honest. She reacts poorly to empty threats "
+            "or corporate arrogance, but will take genuine risks for wounded runners."
+        ),
         voice_anchors=[
             VoiceAnchor(
                 context="Calm / Dry Banter",

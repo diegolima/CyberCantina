@@ -177,6 +177,48 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
             </form>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div className="field-group">
+                  <label>Creator / Author (Metadata)</label>
+                  <input
+                    className="field-input"
+                    placeholder="Author name, handle, or contact"
+                    value={draft.creator ?? ""}
+                    onChange={(e) => setDraft({ ...draft, creator: e.target.value })}
+                  />
+                </div>
+                <div className="field-group">
+                  <label>Tags (Comma-separated)</label>
+                  <input
+                    className="field-input"
+                    placeholder="e.g. cyberpunk, courier, infiltrator"
+                    value={(draft.tags ?? []).join(", ")}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        tags: e.target.value
+                          .split(",")
+                          .map((s) => s.trim().replace(/^#/, ""))
+                          .filter(Boolean),
+                      })
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="field-group">
+                <label>Creator Notes (Built-in guidance; viewable in User Notes)</label>
+                <textarea
+                  className="field-textarea"
+                  rows={2}
+                  placeholder="Author notes, recommended settings, or guidance..."
+                  value={draft.creator_notes ?? ""}
+                  onChange={(e) =>
+                    setDraft({ ...draft, creator_notes: e.target.value })
+                  }
+                />
+              </div>
+
               <div className="field-group">
                 <label>Physical Appearance (Zone 1 Immutable Anatomy & Features)</label>
                 <textarea

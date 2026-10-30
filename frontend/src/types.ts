@@ -60,12 +60,26 @@ export interface CharacterWizardDraft {
   voice_anchors: VoiceAnchor[];
   baseline_psyche: BaselinePsyche;
   memory_shards: MemoryShard[];
+  tags?: string[];
+  creator?: string;
+  creator_notes?: string;
 }
 
 export interface CharacterRecord extends CharacterWizardDraft {
   id: string;
   world_id?: string | null;
   pending_deletion?: boolean;
+  version: number;
+  tags: string[];
+  creator: string;
+  creator_notes: string;
+  created_at: string;
+}
+
+export interface CharacterVersionSummary {
+  id: string;
+  character_id: string;
+  version: number;
   created_at: string;
 }
 
@@ -532,6 +546,8 @@ export interface UserNote {
   content: string;
   tags: string[];
   is_starred: boolean;
+  is_character_note?: boolean;
+  character_id?: string;
   created_at: string;
   updated_at: string;
 }

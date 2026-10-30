@@ -12,6 +12,8 @@ class UserNoteRecord(BaseModel):
     content: str = ""
     tags: list[str] = Field(default_factory=list)
     is_starred: bool = False
+    is_character_note: bool = False
+    character_id: str | None = None
     created_at: str
     updated_at: str
 

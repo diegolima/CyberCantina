@@ -141,6 +141,18 @@ class CharacterWizardDraft(BaseModel):
     voice_anchors: list[VoiceAnchor] = Field(default_factory=list)
     baseline_psyche: BaselinePsyche
     memory_shards: list[MemoryShard] = Field(default_factory=list)
+    tags: list[str] = Field(
+        default_factory=list,
+        description="Optional categorization tags for filtering, grouping, and card export.",
+    )
+    creator: str = Field(
+        default="",
+        description="Optional author name, handle, or contact string for card export and SillyTavern compatibility.",
+    )
+    creator_notes: str = Field(
+        default="",
+        description="Optional built-in usage/roleplay guidance or scenario notes from the creator.",
+    )
 
 
 class CharacterRecord(CharacterWizardDraft):
@@ -149,6 +161,19 @@ class CharacterRecord(CharacterWizardDraft):
     id: str
     world_id: str | None = None
     pending_deletion: bool = False
+    version: int = Field(
+        default=1,
+        description="Monotonically increasing version counter.",
+    )
+    created_at: str
+
+
+class CharacterVersionSummary(BaseModel):
+    """Version metadata entry for historical inspection."""
+
+    id: str
+    character_id: str
+    version: int
     created_at: str
 
 

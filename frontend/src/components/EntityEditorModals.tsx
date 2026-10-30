@@ -8,6 +8,7 @@ import {
   Edit3,
   Globe,
   HeartPulse,
+  History,
   Package,
   Plus,
   Sparkles,
@@ -19,6 +20,7 @@ import {
 import { api } from "../api";
 import {
   CharacterRecord,
+  CharacterVersionSummary,
   CompassDirection,
   LocationEdge,
   LocationEdgeDraft,
@@ -45,6 +47,7 @@ interface ClickToEditFieldProps {
   multiline?: boolean;
   rows?: number;
   placeholder?: string;
+  readOnly?: boolean;
 }
 
 const ClickToEditField: React.FC<ClickToEditFieldProps> = ({
@@ -54,6 +57,7 @@ const ClickToEditField: React.FC<ClickToEditFieldProps> = ({
   multiline = false,
   rows = 3,
   placeholder = "Click to edit...",
+  readOnly = false,
 }) => {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -72,7 +76,7 @@ const ClickToEditField: React.FC<ClickToEditFieldProps> = ({
   return (
     <div className="field-group">
       {label && <label>{label}</label>}
-      {editing ? (
+      {editing && !readOnly ? (
         multiline ? (
           <textarea
             className="field-textarea"
@@ -114,16 +118,21 @@ const ClickToEditField: React.FC<ClickToEditFieldProps> = ({
         )
       ) : (
         <div
-          className="editable-field-box"
+          className={`editable-field-box ${readOnly ? "read-only" : ""}`}
           onClick={() => {
-            setDraft(value);
-            setEditing(true);
+            if (!readOnly) {
+              setDraft(value);
+              setEditing(true);
+            }
           }}
-          title="Click to edit field"
+          style={readOnly ? { cursor: "default" } : undefined}
+          title={readOnly ? undefined : "Click to edit field"}
         >
-          <span className="editable-field-hint">
-            <Edit3 size={11} /> Click to edit
-          </span>
+          {!readOnly && (
+            <span className="editable-field-hint">
+              <Edit3 size={11} /> Click to edit
+            </span>
+          )}
           {value && value.trim().length > 0 ? (
             value
           ) : (
@@ -180,9 +189,94 @@ export const CharacterInspectorModal: React.FC<
     character.memory_shards.map((m) => ({ ...m, keywords: [...m.keywords] }))
   );
 
+  const [tags, setTags] = useState<string[]>(character.tags ?? []);
+  const [tagInput, setTagInput] = useState<string>((character.tags ?? []).join(", "));
+  const [creator, setCreator] = useState<string>(character.creator ?? "");
+  const [creatorNotes, setCreatorNotes] = useState<string>(character.creator_notes ?? "");
+  const [version, setVersion] = useState<number>(character.version ?? 1);
+
+  // Version history state
+  const [versions, setVersions] = useState<CharacterVersionSummary[]>([]);
+  const [selectedVersion, setSelectedVersion] = useState<number>(character.version ?? 1);
+  const [viewingHistory, setViewingHistory] = useState<boolean>(false);
+  const [historicalData, setHistoricalData] = useState<CharacterRecord | null>(null);
+  const [loadingVersion, setLoadingVersion] = useState<boolean>(false);
+
   const [isDirty, setIsDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.listCharacterVersions(character.id)
+      .then((res) => {
+        setVersions(res);
+      })
+      .catch((err) => console.warn("Failed to load versions", err));
+  }, [character.id]);
+
+  const handleSelectVersion = async (targetVer: number) => {
+    if (targetVer === version) {
+      setViewingHistory(false);
+      setSelectedVersion(version);
+      setHistoricalData(null);
+      setName(character.name);
+      setTagline(character.tagline);
+      setWorldId(character.world_id ?? "");
+      setPhysicalAppearance(character.physical_appearance ?? "");
+      setCorePersona(character.core_persona);
+      setInitialMessage(character.initial_message ?? "");
+      setEquipped([...(character.equipped ?? [])]);
+      setInventory([...(character.inventory ?? [])]);
+      setBaselinePsyche({ ...character.baseline_psyche });
+      setVoiceAnchors(character.voice_anchors.map((v) => ({ ...v })));
+      setMemoryShards(character.memory_shards.map((m) => ({ ...m, keywords: [...m.keywords] })));
+      setTags(character.tags ?? []);
+      setTagInput((character.tags ?? []).join(", "));
+      setCreator(character.creator ?? "");
+      setCreatorNotes(character.creator_notes ?? "");
+      return;
+    }
+
+    setLoadingVersion(true);
+    setError(null);
+    try {
+      const snap = await api.getCharacterVersion(character.id, targetVer);
+      setHistoricalData(snap);
+      setSelectedVersion(targetVer);
+      setViewingHistory(true);
+      setName(snap.name);
+      setTagline(snap.tagline);
+      setWorldId(snap.world_id ?? "");
+      setPhysicalAppearance(snap.physical_appearance ?? "");
+      setCorePersona(snap.core_persona);
+      setInitialMessage(snap.initial_message ?? "");
+      setEquipped([...(snap.equipped ?? [])]);
+      setInventory([...(snap.inventory ?? [])]);
+      setBaselinePsyche({ ...snap.baseline_psyche });
+      setVoiceAnchors(snap.voice_anchors.map((v) => ({ ...v })));
+      setMemoryShards(snap.memory_shards.map((m) => ({ ...m, keywords: [...m.keywords] })));
+      setTags(snap.tags ?? []);
+      setTagInput((snap.tags ?? []).join(", "));
+      setCreator(snap.creator ?? "");
+      setCreatorNotes(snap.creator_notes ?? "");
+    } catch (err) {
+      setError(`Failed to fetch version ${targetVer}: ${String(err)}`);
+    } finally {
+      setLoadingVersion(false);
+    }
+  };
+
+  const handleExitHistory = () => {
+    handleSelectVersion(version);
+  };
+
+  const handleRestoreHistoricalVersion = () => {
+    if (!historicalData) return;
+    setViewingHistory(false);
+    setSelectedVersion(version);
+    setHistoricalData(null);
+    markDirty();
+  };
 
   const markDirty = () => {
     if (!isDirty) setIsDirty(true);
@@ -203,8 +297,15 @@ export const CharacterInspectorModal: React.FC<
         voice_anchors: voiceAnchors,
         baseline_psyche: baselinePsyche,
         memory_shards: memoryShards,
+        tags: tags,
+        creator: creator.trim(),
+        creator_notes: creatorNotes.trim(),
         world_id: worldId || null,
       });
+      setVersion(updated.version);
+      setSelectedVersion(updated.version);
+      setIsDirty(false);
+      api.listCharacterVersions(character.id).then(setVersions).catch(() => {});
       onSaved(updated);
     } catch (err) {
       setError(String(err));
@@ -221,14 +322,92 @@ export const CharacterInspectorModal: React.FC<
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
-          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <Users size={18} color="var(--accent-amber)" />
-            Character Sheet
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Users size={18} color="var(--accent-amber)" />
+              Character Sheet
+            </span>
+            <span
+              style={{
+                fontSize: "0.72rem",
+                background: "rgba(245, 158, 11, 0.15)",
+                color: "var(--accent-amber)",
+                padding: "2px 7px",
+                borderRadius: 4,
+                fontWeight: 600,
+              }}
+            >
+              v{viewingHistory && historicalData ? historicalData.version : version}
+            </span>
+            {versions.length > 1 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                <History size={13} color="var(--text-muted)" />
+                <select
+                  className="field-select"
+                  style={{
+                    padding: "2px 8px",
+                    fontSize: "0.72rem",
+                    height: "auto",
+                    width: "auto",
+                  }}
+                  value={selectedVersion}
+                  disabled={loadingVersion}
+                  onChange={(e) => handleSelectVersion(Number(e.target.value))}
+                >
+                  {versions.map((v) => (
+                    <option key={v.version} value={v.version}>
+                      v{v.version} {v.version === version ? "(Current)" : `(${new Date(v.created_at).toLocaleDateString()})`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
           <button type="button" className="btn" onClick={onClose}>
             <X size={15} />
           </button>
         </div>
+
+        {viewingHistory && historicalData && (
+          <div
+            style={{
+              background: "rgba(59, 130, 246, 0.12)",
+              border: "1px solid rgba(59, 130, 246, 0.3)",
+              margin: "12px 16px 0",
+              padding: "8px 12px",
+              borderRadius: 6,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              fontSize: "0.78rem",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <History size={15} color="#60a5fa" />
+              <span>
+                Viewing historical <strong>Version {historicalData.version}</strong> (Read Only)
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                className="btn"
+                style={{ fontSize: "0.72rem", padding: "3px 8px" }}
+                onClick={handleExitHistory}
+              >
+                Back to Current (v{version})
+              </button>
+              <button
+                type="button"
+                className="btn btn-amber"
+                style={{ fontSize: "0.72rem", padding: "3px 8px" }}
+                onClick={handleRestoreHistoricalVersion}
+              >
+                Restore as Latest
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="modal-tabs" role="tablist">
           <button
@@ -308,6 +487,7 @@ export const CharacterInspectorModal: React.FC<
               <ClickToEditField
                 label="Character Name"
                 value={name}
+                readOnly={viewingHistory}
                 onChange={(val) => {
                   setName(val);
                   markDirty();
@@ -318,6 +498,7 @@ export const CharacterInspectorModal: React.FC<
                 <select
                   className="field-select"
                   value={worldId}
+                  disabled={viewingHistory}
                   onChange={(e) => {
                     setWorldId(e.target.value);
                     markDirty();
@@ -336,8 +517,70 @@ export const CharacterInspectorModal: React.FC<
             <ClickToEditField
               label="Evocative Tagline"
               value={tagline}
+              readOnly={viewingHistory}
               onChange={(val) => {
                 setTagline(val);
+                markDirty();
+              }}
+            />
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 12,
+              }}
+            >
+              <ClickToEditField
+                label="Creator / Author"
+                placeholder="Author name, handle, or contact (for card export & SillyTavern)"
+                value={creator}
+                readOnly={viewingHistory}
+                onChange={(val) => {
+                  setCreator(val);
+                  markDirty();
+                }}
+              />
+              <div className="field-group">
+                <label>Character Tags (Comma-separated)</label>
+                {viewingHistory ? (
+                  <div className="editable-field-box read-only" style={{ cursor: "default" }}>
+                    {tags.length > 0 ? (
+                      tags.map((t) => `#${t}`).join(", ")
+                    ) : (
+                      <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>
+                        No tags
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <input
+                    className="field-input"
+                    placeholder="e.g. cyberpunk, medic, ally"
+                    value={tagInput}
+                    onChange={(e) => {
+                      setTagInput(e.target.value);
+                      const parsed = e.target.value
+                        .split(",")
+                        .map((s) => s.trim().replace(/^#/, ""))
+                        .filter(Boolean);
+                      setTags(parsed);
+                      markDirty();
+                    }}
+                  />
+                )}
+              </div>
+            </div>
+
+            <ClickToEditField
+              label="Creator Notes (Built-in usage notes; viewable & searchable under User Notes)"
+              value={creatorNotes}
+              readOnly={viewingHistory}
+              multiline
+              rows={3}
+              placeholder="Add roleplay guidance, scenario hints, or recommended model settings..."
+              onChange={(val) => {
+                setCreatorNotes(val);
                 markDirty();
               }}
             />
@@ -345,6 +588,7 @@ export const CharacterInspectorModal: React.FC<
             <ClickToEditField
               label="Physical Appearance (Zone 1 Static Anatomy & Features — Excludes Clothing/Items)"
               value={physicalAppearance}
+              readOnly={viewingHistory}
               multiline
               rows={3}
               placeholder="Describe build, facial features, hair, eyes, scars, or cyberware..."
@@ -357,6 +601,7 @@ export const CharacterInspectorModal: React.FC<
             <ClickToEditField
               label="Initial Message (Turn 0 Opening Scene Prose)"
               value={initialMessage}
+              readOnly={viewingHistory}
               multiline
               rows={4}
               placeholder="Opening scene narrative and dialogue when starting a campaign..."
@@ -378,6 +623,7 @@ export const CharacterInspectorModal: React.FC<
             <ClickToEditField
               label="Core Persona (Zone 1 Static Demeanor, Psychology & Speech Habits)"
               value={corePersona}
+              readOnly={viewingHistory}
               multiline
               rows={5}
               onChange={(val) => {
@@ -416,6 +662,7 @@ export const CharacterInspectorModal: React.FC<
                 <ClickToEditField
                   label="Baseline Mood Label"
                   value={baselinePsyche.mood_label}
+                  readOnly={viewingHistory}
                   onChange={(val) => {
                     setBaselinePsyche({ ...baselinePsyche, mood_label: val });
                     markDirty();
@@ -428,6 +675,7 @@ export const CharacterInspectorModal: React.FC<
                     step="0.1"
                     min="-1"
                     max="1"
+                    disabled={viewingHistory}
                     className="field-input"
                     value={baselinePsyche.valence}
                     onChange={(e) => {
@@ -449,6 +697,7 @@ export const CharacterInspectorModal: React.FC<
                     step="0.1"
                     min="0"
                     max="1"
+                    disabled={viewingHistory}
                     className="field-input"
                     value={baselinePsyche.arousal}
                     onChange={(e) => {
@@ -475,6 +724,7 @@ export const CharacterInspectorModal: React.FC<
                 <ClickToEditField
                   label="Core Long-Term Drive"
                   value={baselinePsyche.core_drive}
+                  readOnly={viewingHistory}
                   multiline
                   rows={2}
                   onChange={(val) => {
@@ -485,6 +735,7 @@ export const CharacterInspectorModal: React.FC<
                 <ClickToEditField
                   label="Core Fear"
                   value={baselinePsyche.core_fear}
+                  readOnly={viewingHistory}
                   multiline
                   rows={2}
                   onChange={(val) => {
@@ -504,6 +755,7 @@ export const CharacterInspectorModal: React.FC<
                 <ClickToEditField
                   label="Default Scene Want"
                   value={baselinePsyche.default_want}
+                  readOnly={viewingHistory}
                   multiline
                   rows={2}
                   onChange={(val) => {
@@ -514,6 +766,7 @@ export const CharacterInspectorModal: React.FC<
                 <ClickToEditField
                   label="Default Action Plan"
                   value={baselinePsyche.default_plan}
+                  readOnly={viewingHistory}
                   multiline
                   rows={2}
                   onChange={(val) => {
@@ -546,20 +799,22 @@ export const CharacterInspectorModal: React.FC<
                 <span className="sidebar-label">
                   Voice & Dialogue Anchors ({voiceAnchors.length})
                 </span>
-                <button
-                  type="button"
-                  className="btn"
-                  style={{ padding: "3px 8px", fontSize: "0.72rem" }}
-                  onClick={() => {
-                    setVoiceAnchors([
-                      ...voiceAnchors,
-                      { context: "New Context", snippet: "Sample dialogue..." },
-                    ]);
-                    markDirty();
-                  }}
-                >
-                  <Plus size={12} /> Add Anchor
-                </button>
+                {!viewingHistory && (
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ padding: "3px 8px", fontSize: "0.72rem" }}
+                    onClick={() => {
+                      setVoiceAnchors([
+                        ...voiceAnchors,
+                        { context: "New Context", snippet: "Sample dialogue..." },
+                      ]);
+                      markDirty();
+                    }}
+                  >
+                    <Plus size={12} /> Add Anchor
+                  </button>
+                )}
               </div>
 
               {voiceAnchors.length === 0 ? (
@@ -598,6 +853,7 @@ export const CharacterInspectorModal: React.FC<
                         <ClickToEditField
                           label="Context"
                           value={va.context}
+                          readOnly={viewingHistory}
                           onChange={(val) => {
                             const next = [...voiceAnchors];
                             next[idx] = { ...next[idx], context: val };
@@ -606,24 +862,27 @@ export const CharacterInspectorModal: React.FC<
                           }}
                         />
                       </div>
-                      <button
-                        type="button"
-                        className="item-remove-btn"
-                        style={{ marginTop: 22 }}
-                        onClick={() => {
-                          setVoiceAnchors(
-                            voiceAnchors.filter((_, i) => i !== idx)
-                          );
-                          markDirty();
-                        }}
-                        title="Remove voice anchor"
-                      >
-                        <Trash2 size={13} />
-                      </button>
+                      {!viewingHistory && (
+                        <button
+                          type="button"
+                          className="item-remove-btn"
+                          style={{ marginTop: 22 }}
+                          onClick={() => {
+                            setVoiceAnchors(
+                              voiceAnchors.filter((_, i) => i !== idx)
+                            );
+                            markDirty();
+                          }}
+                          title="Remove voice anchor"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
                     </div>
                     <ClickToEditField
                       label="Sample Dialogue & Action Snippet"
                       value={va.snippet}
+                      readOnly={viewingHistory}
                       multiline
                       rows={2}
                       onChange={(val) => {
@@ -668,25 +927,27 @@ export const CharacterInspectorModal: React.FC<
                 <span className="sidebar-label">
                   Backstory Memory Shards — Hybrid GraphRAG ({memoryShards.length})
                 </span>
-                <button
-                  type="button"
-                  className="btn"
-                  style={{ padding: "3px 8px", fontSize: "0.72rem" }}
-                  onClick={() => {
-                    setMemoryShards([
-                      ...memoryShards,
-                      {
-                        title: "New Backstory Memory",
-                        content: "Describe a key memory or secret...",
-                        keywords: [],
-                        emotional_weight: 0.7,
-                      },
-                    ]);
-                    markDirty();
-                  }}
-                >
-                  <Plus size={12} /> Add Memory Shard
-                </button>
+                {!viewingHistory && (
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ padding: "3px 8px", fontSize: "0.72rem" }}
+                    onClick={() => {
+                      setMemoryShards([
+                        ...memoryShards,
+                        {
+                          title: "New Backstory Memory",
+                          content: "Describe a key memory or secret...",
+                          keywords: [],
+                          emotional_weight: 0.7,
+                        },
+                      ]);
+                      markDirty();
+                    }}
+                  >
+                    <Plus size={12} /> Add Memory Shard
+                  </button>
+                )}
               </div>
 
               {memoryShards.length === 0 ? (
@@ -716,7 +977,7 @@ export const CharacterInspectorModal: React.FC<
                     <div
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "1fr 1fr auto",
+                        gridTemplateColumns: viewingHistory ? "1fr 1fr" : "1fr 1fr auto",
                         gap: 8,
                         alignItems: "start",
                       }}
@@ -724,6 +985,7 @@ export const CharacterInspectorModal: React.FC<
                       <ClickToEditField
                         label="Shard Title"
                         value={shard.title}
+                        readOnly={viewingHistory}
                         onChange={(val) => {
                           const next = [...memoryShards];
                           next[idx] = { ...next[idx], title: val };
@@ -735,6 +997,7 @@ export const CharacterInspectorModal: React.FC<
                         label="Trigger Keywords (comma-separated)"
                         value={shard.keywords.join(", ")}
                         placeholder="e.g. dragon, betrayal, upper spire"
+                        readOnly={viewingHistory}
                         onChange={(val) => {
                           const next = [...memoryShards];
                           next[idx] = {
@@ -748,25 +1011,28 @@ export const CharacterInspectorModal: React.FC<
                           markDirty();
                         }}
                       />
-                      <button
-                        type="button"
-                        className="item-remove-btn"
-                        style={{ marginTop: 22 }}
-                        onClick={() => {
-                          setMemoryShards(
-                            memoryShards.filter((_, i) => i !== idx)
-                          );
-                          markDirty();
-                        }}
-                        title="Remove memory shard"
-                      >
-                        <Trash2 size={13} />
-                      </button>
+                      {!viewingHistory && (
+                        <button
+                          type="button"
+                          className="item-remove-btn"
+                          style={{ marginTop: 22 }}
+                          onClick={() => {
+                            setMemoryShards(
+                              memoryShards.filter((_, i) => i !== idx)
+                            );
+                            markDirty();
+                          }}
+                          title="Remove memory shard"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
                     </div>
 
                     <ClickToEditField
                       label="Memory Content"
                       value={shard.content}
+                      readOnly={viewingHistory}
                       multiline
                       rows={2}
                       onChange={(val) => {
@@ -812,17 +1078,19 @@ export const CharacterInspectorModal: React.FC<
                 <span className="sidebar-label">
                   Equipped Attire &amp; Gear ({equipped.length})
                 </span>
-                <button
-                  type="button"
-                  className="btn"
-                  style={{ padding: "3px 8px", fontSize: "0.72rem" }}
-                  onClick={() => {
-                    setEquipped([...equipped, "New equipped attire"]);
-                    markDirty();
-                  }}
-                >
-                  <Plus size={12} /> Add Equipped
-                </button>
+                {!viewingHistory && (
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ padding: "3px 8px", fontSize: "0.72rem" }}
+                    onClick={() => {
+                      setEquipped([...equipped, "New equipped attire"]);
+                      markDirty();
+                    }}
+                  >
+                    <Plus size={12} /> Add Equipped
+                  </button>
+                )}
               </div>
 
               {equipped.length === 0 ? (
@@ -842,13 +1110,14 @@ export const CharacterInspectorModal: React.FC<
                       key={idx}
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "1fr auto",
+                        gridTemplateColumns: viewingHistory ? "1fr" : "1fr auto",
                         gap: 8,
                         alignItems: "center",
                       }}
                     >
                       <ClickToEditField
                         value={item}
+                        readOnly={viewingHistory}
                         placeholder="e.g. Weathered leather duster"
                         onChange={(val) => {
                           const next = [...equipped];
@@ -857,17 +1126,19 @@ export const CharacterInspectorModal: React.FC<
                           markDirty();
                         }}
                       />
-                      <button
-                        type="button"
-                        className="item-remove-btn"
-                        onClick={() => {
-                          setEquipped(equipped.filter((_, i) => i !== idx));
-                          markDirty();
-                        }}
-                        title="Remove equipped item"
-                      >
-                        <Trash2 size={13} />
-                      </button>
+                      {!viewingHistory && (
+                        <button
+                          type="button"
+                          className="item-remove-btn"
+                          onClick={() => {
+                            setEquipped(equipped.filter((_, i) => i !== idx));
+                            markDirty();
+                          }}
+                          title="Remove equipped item"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -896,17 +1167,19 @@ export const CharacterInspectorModal: React.FC<
                 <span className="sidebar-label">
                   Carried Inventory &amp; Objects ({inventory.length})
                 </span>
-                <button
-                  type="button"
-                  className="btn"
-                  style={{ padding: "3px 8px", fontSize: "0.72rem" }}
-                  onClick={() => {
-                    setInventory([...inventory, "New carried item"]);
-                    markDirty();
-                  }}
-                >
-                  <Plus size={12} /> Add Item
-                </button>
+                {!viewingHistory && (
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ padding: "3px 8px", fontSize: "0.72rem" }}
+                    onClick={() => {
+                      setInventory([...inventory, "New carried item"]);
+                      markDirty();
+                    }}
+                  >
+                    <Plus size={12} /> Add Item
+                  </button>
+                )}
               </div>
 
               {inventory.length === 0 ? (
@@ -926,13 +1199,14 @@ export const CharacterInspectorModal: React.FC<
                       key={idx}
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "1fr auto",
+                        gridTemplateColumns: viewingHistory ? "1fr" : "1fr auto",
                         gap: 8,
                         alignItems: "center",
                       }}
                     >
                       <ClickToEditField
                         value={item}
+                        readOnly={viewingHistory}
                         placeholder="e.g. Diagnostic scanner or Keycard"
                         onChange={(val) => {
                           const next = [...inventory];
@@ -941,17 +1215,19 @@ export const CharacterInspectorModal: React.FC<
                           markDirty();
                         }}
                       />
-                      <button
-                        type="button"
-                        className="item-remove-btn"
-                        onClick={() => {
-                          setInventory(inventory.filter((_, i) => i !== idx));
-                          markDirty();
-                        }}
-                        title="Remove item"
-                      >
-                        <Trash2 size={13} />
-                      </button>
+                      {!viewingHistory && (
+                        <button
+                          type="button"
+                          className="item-remove-btn"
+                          onClick={() => {
+                            setInventory(inventory.filter((_, i) => i !== idx));
+                            markDirty();
+                          }}
+                          title="Remove item"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -964,15 +1240,17 @@ export const CharacterInspectorModal: React.FC<
 
         <div className="modal-footer">
           <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
-            {isDirty
-              ? "Unsaved edits ready. Saving preserves existing campaigns via silent versioning."
+            {viewingHistory
+              ? `Viewing historical Version ${selectedVersion} (Read-Only). Use "Restore as Latest" at top to revert.`
+              : isDirty
+              ? "Unsaved edits ready. Saving increments character version."
               : "Click any field above to edit."}
           </div>
           <div style={{ display: "flex", gap: 10 }}>
             <button type="button" className="btn" onClick={onClose}>
               {isDirty ? "Cancel" : "Close"}
             </button>
-            {isDirty && (
+            {!viewingHistory && isDirty && (
               <button
                 type="button"
                 className="btn btn-amber"

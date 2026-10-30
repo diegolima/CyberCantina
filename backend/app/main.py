@@ -83,6 +83,7 @@ from app.schemas.character import (
     CharacterRecord,
     CharacterStateSnapshot,
     CharacterUpdatePayload,
+    CharacterVersionSummary,
     CharacterWizardDraft,
     CharacterWizardSeed,
     CognitionBlock,
@@ -1293,6 +1294,39 @@ def get_character(
 ) -> CharacterRecord:
     try:
         return get_repo().get_character(character_id, owner_id=current_user.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get(
+    "/api/characters/{character_id}/versions",
+    response_model=list[CharacterVersionSummary],
+)
+def list_character_versions(
+    character_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> list[CharacterVersionSummary]:
+    try:
+        return get_repo().list_character_versions(
+            character_id, owner_id=current_user.id
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get(
+    "/api/characters/{character_id}/versions/{version}",
+    response_model=CharacterRecord,
+)
+def get_character_version(
+    character_id: str,
+    version: int,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CharacterRecord:
+    try:
+        return get_repo().get_character_version(
+            character_id, version, owner_id=current_user.id
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

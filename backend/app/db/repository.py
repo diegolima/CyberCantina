@@ -32,11 +32,18 @@ from app.schemas.character import (
     CharacterRecord,
     CharacterStateSnapshot,
     CharacterUpdatePayload,
+    CharacterVersionSummary,
     CharacterWizardDraft,
     CognitionBlock,
     MemoryShard,
     VoiceAnchor,
 )
+
+
+def slugify_tag(text: str) -> str:
+    """Normalize tag string to lowercase kebab-case matching frontend slugifyTag."""
+    cleaned = re.sub(r"[^\w\s-]", "", text.strip().lower())
+    return re.sub(r"\s+", "-", cleaned)
 from app.schemas.turn import (
     CampaignRecord,
     CampaignStateBundle,
@@ -119,9 +126,82 @@ class CantinaRepository:
                 conn.execute(
                     "ALTER TABLE characters ADD COLUMN owner_id TEXT NULL REFERENCES users(id) ON DELETE CASCADE"
                 )
+            if "tags_json" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "creator" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN creator TEXT NOT NULL DEFAULT ''"
+                )
+            if "creator_notes" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN creator_notes TEXT NOT NULL DEFAULT ''"
+                )
+            if "version" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN version INTEGER NOT NULL DEFAULT 1"
+                )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_characters_owner ON characters(owner_id)"
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS character_versions (
+                    id TEXT PRIMARY KEY,
+                    character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+                    version INTEGER NOT NULL,
+                    data_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE (character_id, version)
+                );
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_char_versions_char ON character_versions(character_id, version DESC)"
+            )
+
+            # Backfill version 1 snapshot for existing characters if missing
+            unversioned_chars = conn.execute(
+                """
+                SELECT c.* FROM characters c
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM character_versions cv WHERE cv.character_id = c.id
+                )
+                """
+            ).fetchall()
+            for r in unversioned_chars:
+                c_id = r["id"]
+                r_keys = r.keys()
+                shards = json.loads(r["memory_shards_json"] if "memory_shards_json" in r_keys else "[]")
+                char_data = {
+                    "id": c_id,
+                    "world_id": r["world_id"],
+                    "name": r["name"],
+                    "tagline": r["tagline"],
+                    "physical_appearance": r["physical_appearance"] if "physical_appearance" in r_keys else "",
+                    "core_persona": r["core_persona"],
+                    "initial_message": r["initial_message"] if "initial_message" in r_keys else "",
+                    "equipped": json.loads(r["equipped_json"] if "equipped_json" in r_keys else "[]"),
+                    "inventory": json.loads(r["inventory_json"] if "inventory_json" in r_keys else "[]"),
+                    "voice_anchors": json.loads(r["voice_anchors_json"] if "voice_anchors_json" in r_keys else "[]"),
+                    "baseline_psyche": json.loads(r["baseline_psyche_json"]),
+                    "memory_shards": shards,
+                    "tags": json.loads(r["tags_json"]) if "tags_json" in r_keys and r["tags_json"] else [],
+                    "creator": r["creator"] if "creator" in r_keys and r["creator"] else "",
+                    "creator_notes": r["creator_notes"] if "creator_notes" in r_keys and r["creator_notes"] else "",
+                    "version": r["version"] if "version" in r_keys and r["version"] is not None else 1,
+                    "pending_deletion": bool(r["pending_deletion"]) if "pending_deletion" in r_keys else False,
+                    "created_at": r["created_at"],
+                }
+                cver_id = f"cver_{c_id}_{char_data['version']}"
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO character_versions (id, character_id, version, data_json, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (cver_id, c_id, char_data["version"], json.dumps(char_data), r["created_at"]),
+                )
 
             camp_cols = {
                 r["name"]
@@ -2189,6 +2269,9 @@ class CantinaRepository:
         """Persist a CharacterWizardDraft and embed its backstory shards into the VectorStore."""
         c_id = character_id or f"char_{uuid.uuid4().hex[:10]}"
         now = utc_now_iso()
+        clean_tags = [slugify_tag(t) for t in draft.tags if t and t.strip()]
+        creator_str = draft.creator.strip()
+        creator_notes_str = draft.creator_notes.strip()
         conn = self._connect()
         try:
             conn.execute(
@@ -2196,9 +2279,10 @@ class CantinaRepository:
                 INSERT INTO characters (
                     id, owner_id, world_id, name, tagline, physical_appearance, core_persona,
                     initial_message, equipped_json, inventory_json, voice_anchors_json,
-                    baseline_psyche_json, memory_shards_json, created_at
+                    baseline_psyche_json, memory_shards_json, tags_json, creator, creator_notes,
+                    version, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
                 """,
                 (
                     c_id,
@@ -2214,8 +2298,39 @@ class CantinaRepository:
                     json.dumps([v.model_dump() for v in draft.voice_anchors]),
                     draft.baseline_psyche.model_dump_json(),
                     json.dumps([m.model_dump() for m in draft.memory_shards]),
+                    json.dumps(clean_tags),
+                    creator_str,
+                    creator_notes_str,
                     now,
                 ),
+            )
+
+            version_snapshot = {
+                "id": c_id,
+                "world_id": world_id,
+                "name": draft.name,
+                "tagline": draft.tagline,
+                "physical_appearance": draft.physical_appearance,
+                "core_persona": draft.core_persona,
+                "initial_message": draft.initial_message,
+                "equipped": list(draft.equipped),
+                "inventory": list(draft.inventory),
+                "voice_anchors": [v.model_dump() for v in draft.voice_anchors],
+                "baseline_psyche": json.loads(draft.baseline_psyche.model_dump_json()),
+                "memory_shards": [m.model_dump() for m in draft.memory_shards],
+                "tags": clean_tags,
+                "creator": creator_str,
+                "creator_notes": creator_notes_str,
+                "version": 1,
+                "pending_deletion": False,
+                "created_at": now,
+            }
+            conn.execute(
+                """
+                INSERT INTO character_versions (id, character_id, version, data_json, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (f"cver_{c_id}_1", c_id, 1, json.dumps(version_snapshot), now),
             )
 
             for idx, shard in enumerate(draft.memory_shards):
@@ -2378,6 +2493,10 @@ class CantinaRepository:
             ],
             baseline_psyche=BaselinePsyche.model_validate_json(row["baseline_psyche_json"]),
             memory_shards=parsed_shards,
+            tags=json.loads(row["tags_json"] or "[]") if "tags_json" in row_keys and row["tags_json"] else [],
+            creator=row["creator"] if "creator" in row_keys and row["creator"] else "",
+            creator_notes=row["creator_notes"] if "creator_notes" in row_keys and row["creator_notes"] else "",
+            version=row["version"] if "version" in row_keys and row["version"] is not None else 1,
             pending_deletion=bool(row["pending_deletion"]) if "pending_deletion" in row_keys else False,
             created_at=row["created_at"],
         )
@@ -2591,6 +2710,11 @@ class CantinaRepository:
             voice_json = json.dumps([v.model_dump() for v in payload.voice_anchors])
             psyche_json = payload.baseline_psyche.model_dump_json()
             shards_json = json.dumps([m.model_dump() for m in payload.memory_shards])
+            clean_tags = [slugify_tag(t) for t in payload.tags if t and t.strip()]
+            tags_json = json.dumps(clean_tags)
+            creator_str = payload.creator.strip()
+            creator_notes_str = payload.creator_notes.strip()
+            new_version = orig.version + 1
 
             if campaigns_using == 0:
                 # In-place update (zero active campaigns reference this character)
@@ -2600,7 +2724,8 @@ class CantinaRepository:
                     UPDATE characters
                     SET world_id = ?, name = ?, tagline = ?, physical_appearance = ?,
                         core_persona = ?, initial_message = ?, equipped_json = ?, inventory_json = ?,
-                        voice_anchors_json = ?, baseline_psyche_json = ?, memory_shards_json = ?
+                        voice_anchors_json = ?, baseline_psyche_json = ?, memory_shards_json = ?,
+                        tags_json = ?, creator = ?, creator_notes = ?, version = ?
                     WHERE id = ?
                     """,
                     (
@@ -2615,12 +2740,44 @@ class CantinaRepository:
                         voice_json,
                         psyche_json,
                         shards_json,
+                        tags_json,
+                        creator_str,
+                        creator_notes_str,
+                        new_version,
                         target_char_id,
                     ),
                 )
                 conn.execute(
                     "DELETE FROM vector_entries WHERE character_id = ? AND source_type = 'character_shard'",
                     (target_char_id,),
+                )
+
+                version_snapshot = {
+                    "id": target_char_id,
+                    "world_id": target_world_id,
+                    "name": payload.name,
+                    "tagline": payload.tagline,
+                    "physical_appearance": payload.physical_appearance,
+                    "core_persona": payload.core_persona,
+                    "initial_message": payload.initial_message,
+                    "equipped": list(payload.equipped),
+                    "inventory": list(payload.inventory),
+                    "voice_anchors": [v.model_dump() for v in payload.voice_anchors],
+                    "baseline_psyche": json.loads(payload.baseline_psyche.model_dump_json()),
+                    "memory_shards": [m.model_dump() for m in payload.memory_shards],
+                    "tags": clean_tags,
+                    "creator": creator_str,
+                    "creator_notes": creator_notes_str,
+                    "version": new_version,
+                    "pending_deletion": False,
+                    "created_at": now,
+                }
+                conn.execute(
+                    """
+                    INSERT INTO character_versions (id, character_id, version, data_json, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (f"cver_{target_char_id}_{new_version}", target_char_id, new_version, json.dumps(version_snapshot), now),
                 )
             else:
                 # Silent Copy-on-Write fork: freeze old character for running campaigns & mark pending_deletion = 1
@@ -2635,9 +2792,10 @@ class CantinaRepository:
                         id, owner_id, world_id, name, tagline, physical_appearance, core_persona,
                         initial_message, equipped_json, inventory_json, voice_anchors_json,
                         baseline_psyche_json, memory_shards_json,
+                        tags_json, creator, creator_notes, version,
                         pending_deletion, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
                     """,
                     (
                         target_char_id,
@@ -2653,8 +2811,54 @@ class CantinaRepository:
                         voice_json,
                         psyche_json,
                         shards_json,
+                        tags_json,
+                        creator_str,
+                        creator_notes_str,
+                        new_version,
                         now,
                     ),
+                )
+
+                # Copy previous version snapshots into target_char_id so historical versions are accessible
+                old_vers = conn.execute(
+                    "SELECT version, data_json, created_at FROM character_versions WHERE character_id = ? ORDER BY version ASC",
+                    (character_id,),
+                ).fetchall()
+                for ov in old_vers:
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO character_versions (id, character_id, version, data_json, created_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (f"cver_{target_char_id}_{ov['version']}", target_char_id, ov["version"], ov["data_json"], ov["created_at"]),
+                    )
+
+                version_snapshot = {
+                    "id": target_char_id,
+                    "world_id": target_world_id,
+                    "name": payload.name,
+                    "tagline": payload.tagline,
+                    "physical_appearance": payload.physical_appearance,
+                    "core_persona": payload.core_persona,
+                    "initial_message": payload.initial_message,
+                    "equipped": list(payload.equipped),
+                    "inventory": list(payload.inventory),
+                    "voice_anchors": [v.model_dump() for v in payload.voice_anchors],
+                    "baseline_psyche": json.loads(payload.baseline_psyche.model_dump_json()),
+                    "memory_shards": [m.model_dump() for m in payload.memory_shards],
+                    "tags": clean_tags,
+                    "creator": creator_str,
+                    "creator_notes": creator_notes_str,
+                    "version": new_version,
+                    "pending_deletion": False,
+                    "created_at": now,
+                }
+                conn.execute(
+                    """
+                    INSERT INTO character_versions (id, character_id, version, data_json, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (f"cver_{target_char_id}_{new_version}", target_char_id, new_version, json.dumps(version_snapshot), now),
                 )
 
             for idx, shard in enumerate(payload.memory_shards):
@@ -2724,6 +2928,56 @@ class CantinaRepository:
             shard_embeddings=shard_embeddings,
             owner_id=owner_id,
         )
+
+    def list_character_versions(
+        self, character_id: str, owner_id: str | None = None
+    ) -> list[CharacterVersionSummary]:
+        """Return a list of all historical versions for the specified character, newest first."""
+        self.get_character(character_id, owner_id=owner_id)
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, character_id, version, created_at
+                FROM character_versions
+                WHERE character_id = ?
+                ORDER BY version DESC
+                """,
+                (character_id,),
+            ).fetchall()
+            return [
+                CharacterVersionSummary(
+                    id=r["id"],
+                    character_id=r["character_id"],
+                    version=r["version"],
+                    created_at=r["created_at"],
+                )
+                for r in rows
+            ]
+        finally:
+            conn.close()
+
+    def get_character_version(
+        self, character_id: str, version: int, owner_id: str | None = None
+    ) -> CharacterRecord:
+        """Return the complete CharacterRecord reconstructed from historical snapshot."""
+        self.get_character(character_id, owner_id=owner_id)
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT data_json
+                FROM character_versions
+                WHERE character_id = ? AND version = ?
+                """,
+                (character_id, version),
+            ).fetchone()
+            if not row:
+                raise KeyError(f"Version {version} for character '{character_id}' not found")
+            data = json.loads(row["data_json"])
+            return CharacterRecord.model_validate(data)
+        finally:
+            conn.close()
 
     def mark_character_pending_deletion(
         self, character_id: str, owner_id: str | None = None
@@ -4667,7 +4921,7 @@ class CantinaRepository:
         )
 
     def list_user_notes(self, owner_id: str) -> list[UserNoteRecord]:
-        """List all notes belonging to the specified owner, ordered by is_starred DESC, updated_at DESC."""
+        """List all notes belonging to the specified owner, including federated character creator notes."""
         conn = self._connect()
         try:
             rows = conn.execute(
@@ -4679,12 +4933,103 @@ class CantinaRepository:
                 """,
                 (owner_id,),
             ).fetchall()
-            return [self._row_to_user_note(r) for r in rows]
+            user_notes = [self._row_to_user_note(r) for r in rows]
+
+            # Model A: Federated virtual notes for characters with creator_notes
+            char_rows = conn.execute(
+                """
+                SELECT id, name, creator_notes, tags_json, created_at
+                FROM characters
+                WHERE (owner_id = ? OR owner_id IS NULL)
+                  AND creator_notes != ''
+                  AND pending_deletion = 0
+                ORDER BY created_at DESC
+                """,
+                (owner_id,),
+            ).fetchall()
+
+            virtual_notes: list[UserNoteRecord] = []
+            for cr in char_rows:
+                c_id = cr["id"]
+                c_name = cr["name"]
+                c_notes = cr["creator_notes"]
+                char_tags = [
+                    slugify_tag(t)
+                    for t in (json.loads(cr["tags_json"] or "[]"))
+                    if t and t.strip()
+                ]
+                norm_char_name = slugify_tag(c_name)
+                note_tags = [norm_char_name, "creator-notes"]
+                for t in char_tags:
+                    if t not in note_tags:
+                        note_tags.append(t)
+
+                virtual_notes.append(
+                    UserNoteRecord(
+                        id=f"char_note_{c_id}",
+                        owner_id=owner_id,
+                        title=f"{c_name} — Creator Notes",
+                        content=c_notes,
+                        tags=note_tags,
+                        is_starred=False,
+                        is_character_note=True,
+                        character_id=c_id,
+                        created_at=cr["created_at"],
+                        updated_at=cr["created_at"],
+                    )
+                )
+
+            combined = user_notes + virtual_notes
+            return sorted(
+                combined,
+                key=lambda n: (1 if n.is_starred else 0, n.updated_at),
+                reverse=True,
+            )
         finally:
             conn.close()
 
     def get_user_note(self, note_id: str, owner_id: str) -> UserNoteRecord | None:
-        """Fetch a specific note if it belongs to the owner."""
+        """Fetch a specific note if it belongs to the owner, supporting virtual character creator notes."""
+        if note_id.startswith("char_note_"):
+            char_id = note_id[len("char_note_") :]
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """
+                    SELECT id, name, creator_notes, tags_json, created_at
+                    FROM characters
+                    WHERE id = ? AND (owner_id = ? OR owner_id IS NULL) AND pending_deletion = 0
+                    """,
+                    (char_id, owner_id),
+                ).fetchone()
+                if not row or not row["creator_notes"]:
+                    return None
+                c_name = row["name"]
+                char_tags = [
+                    slugify_tag(t)
+                    for t in (json.loads(row["tags_json"] or "[]"))
+                    if t and t.strip()
+                ]
+                norm_char_name = slugify_tag(c_name)
+                note_tags = [norm_char_name, "creator-notes"]
+                for t in char_tags:
+                    if t not in note_tags:
+                        note_tags.append(t)
+                return UserNoteRecord(
+                    id=note_id,
+                    owner_id=owner_id,
+                    title=f"{c_name} — Creator Notes",
+                    content=row["creator_notes"],
+                    tags=note_tags,
+                    is_starred=False,
+                    is_character_note=True,
+                    character_id=char_id,
+                    created_at=row["created_at"],
+                    updated_at=row["created_at"],
+                )
+            finally:
+                conn.close()
+
         conn = self._connect()
         try:
             row = conn.execute(
@@ -4755,7 +5100,27 @@ class CantinaRepository:
         tags: list[str] | None = None,
         is_starred: bool | None = None,
     ) -> UserNoteRecord | None:
-        """Update an existing note belonging to the owner."""
+        """Update an existing note belonging to the owner, supporting virtual character creator notes."""
+        if note_id.startswith("char_note_"):
+            char_id = note_id[len("char_note_") :]
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT id, creator_notes FROM characters WHERE id = ? AND (owner_id = ? OR owner_id IS NULL) AND pending_deletion = 0",
+                    (char_id, owner_id),
+                ).fetchone()
+                if not row:
+                    return None
+                new_content = row["creator_notes"] if content is None else content
+                conn.execute(
+                    "UPDATE characters SET creator_notes = ? WHERE id = ?",
+                    (new_content, char_id),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return self.get_user_note(note_id, owner_id)
+
         existing = self.get_user_note(note_id, owner_id)
         if not existing:
             return None
@@ -4804,6 +5169,19 @@ class CantinaRepository:
 
     def delete_user_note(self, note_id: str, owner_id: str) -> bool:
         """Delete an existing note belonging to the owner. Returns True if deleted, False if not found."""
+        if note_id.startswith("char_note_"):
+            char_id = note_id[len("char_note_") :]
+            conn = self._connect()
+            try:
+                cursor = conn.execute(
+                    "UPDATE characters SET creator_notes = '' WHERE id = ? AND (owner_id = ? OR owner_id IS NULL)",
+                    (char_id, owner_id),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+            finally:
+                conn.close()
+
         conn = self._connect()
         try:
             cursor = conn.execute(

@@ -834,13 +834,18 @@ export const App: React.FC = () => {
           title="Characters"
           icon={<Users size={14} color="var(--accent-amber)" />}
           items={characters}
-          searchPlaceholder="Search characters..."
+          searchPlaceholder="Search characters, tags, creators..."
           onNewClick={() => setShowCharWizard(true)}
           newButtonTitle="Create a new Character with AI Wizard"
-          filterFn={(char, q) =>
-            char.name.toLowerCase().includes(q) ||
-            char.tagline.toLowerCase().includes(q)
-          }
+          filterFn={(char, q) => {
+            const query = q.trim().toLowerCase().replace(/^#/, "");
+            return Boolean(
+              char.name.toLowerCase().includes(query) ||
+              char.tagline.toLowerCase().includes(query) ||
+              (char.tags && char.tags.some((t) => t.toLowerCase().includes(query))) ||
+              (char.creator && char.creator.toLowerCase().includes(query))
+            );
+          }}
           renderItem={(char) => (
             <div
               key={char.id}
@@ -859,8 +864,22 @@ export const App: React.FC = () => {
                 <X size={13} />
               </button>
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontWeight: 600, fontSize: "0.81rem" }}>
-                  {char.name}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
+                  <span style={{ fontWeight: 600, fontSize: "0.81rem" }}>
+                    {char.name}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: "0.65rem",
+                      color: "var(--accent-amber)",
+                      background: "rgba(245, 158, 11, 0.12)",
+                      padding: "1px 4px",
+                      borderRadius: 3,
+                      flexShrink: 0,
+                    }}
+                  >
+                    v{char.version ?? 1}
+                  </span>
                 </div>
                 <div
                   style={{
@@ -873,6 +892,37 @@ export const App: React.FC = () => {
                 >
                   {char.tagline}
                 </div>
+                {char.tags && char.tags.length > 0 && (
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 4,
+                      marginTop: 3,
+                      overflow: "hidden",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {char.tags.slice(0, 3).map((t) => (
+                      <span
+                        key={t}
+                        style={{
+                          fontSize: "0.62rem",
+                          color: "var(--accent-cyan)",
+                          background: "rgba(6, 182, 212, 0.1)",
+                          padding: "0 4px",
+                          borderRadius: 2,
+                        }}
+                      >
+                        #{t}
+                      </span>
+                    ))}
+                    {char.tags.length > 3 && (
+                      <span style={{ fontSize: "0.62rem", color: "var(--text-muted)" }}>
+                        +{char.tags.length - 3}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}

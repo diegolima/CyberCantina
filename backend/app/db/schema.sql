@@ -127,8 +127,23 @@ CREATE TABLE IF NOT EXISTS characters (
     baseline_psyche_json TEXT NOT NULL,
     memory_shards_json TEXT NOT NULL DEFAULT '[]',
     pending_deletion INTEGER NOT NULL DEFAULT 0,
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    creator TEXT NOT NULL DEFAULT '',
+    creator_notes TEXT NOT NULL DEFAULT '',
+    version INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS character_versions (
+    id TEXT PRIMARY KEY,
+    character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    data_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (character_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_char_versions_char ON character_versions(character_id, version DESC);
 
 CREATE TABLE IF NOT EXISTS campaigns (
     id TEXT PRIMARY KEY,

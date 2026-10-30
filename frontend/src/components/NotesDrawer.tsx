@@ -13,6 +13,7 @@ import {
   StickyNote,
   Tag,
   Trash2,
+  User,
   X,
 } from "lucide-react";
 import { UserNote } from "../types";
@@ -237,6 +238,26 @@ export const NotesFlyout: React.FC<NotesFlyoutProps> = ({
                       <Star size={13} fill={note.is_starred ? "var(--accent-amber)" : "none"} />
                     </button>
                     <span className="notes-card-title">{displayTitle}</span>
+                    {note.is_character_note && (
+                      <span
+                        style={{
+                          fontSize: "0.62rem",
+                          background: "rgba(59, 130, 246, 0.15)",
+                          color: "#60a5fa",
+                          padding: "1px 5px",
+                          borderRadius: 3,
+                          marginLeft: 4,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 3,
+                          fontWeight: 500,
+                          flexShrink: 0,
+                        }}
+                        title="Built-in character creator note"
+                      >
+                        <User size={9} /> Character Note
+                      </span>
+                    )}
                   </div>
 
                   {/* 1-Click Copy Button */}
@@ -627,6 +648,25 @@ export const NotesModal: React.FC<NotesModalProps> = ({
                           <Star size={13} fill={note.is_starred ? "var(--accent-amber)" : "none"} />
                         </button>
                         <span className="notes-master-item-title">{displayTitle}</span>
+                        {note.is_character_note && (
+                          <span
+                            style={{
+                              fontSize: "0.62rem",
+                              background: "rgba(59, 130, 246, 0.15)",
+                              color: "#60a5fa",
+                              padding: "1px 5px",
+                              borderRadius: 3,
+                              marginLeft: 4,
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 2,
+                              fontWeight: 500,
+                              flexShrink: 0,
+                            }}
+                          >
+                            <User size={8} /> Char Note
+                          </span>
+                        )}
                       </div>
 
                       <div className="notes-master-item-meta">
@@ -724,6 +764,28 @@ export const NotesModal: React.FC<NotesModalProps> = ({
                 )}
               </div>
             </div>
+
+            {notes.find((n) => n.id === selectedNoteId)?.is_character_note && (
+              <div
+                style={{
+                  fontSize: "0.74rem",
+                  color: "#60a5fa",
+                  background: "rgba(59, 130, 246, 0.12)",
+                  border: "1px solid rgba(59, 130, 246, 0.25)",
+                  padding: "6px 10px",
+                  borderRadius: 6,
+                  margin: "8px 0",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                <User size={13} />
+                <span>
+                  This note is linked to a character's Creator Notes. Edits sync directly with the character sheet.
+                </span>
+              </div>
+            )}
 
             {/* Smart Suggestions Bar: Campaign, World, Character */}
             {suggestedContextBadges.length > 0 && (

@@ -13,6 +13,7 @@ from app.schemas.character import (
     VoiceAnchor,
 )
 from app.schemas.world import WorldRecord
+from app.db.repository import slugify_tag
 
 
 def _fallback_character_expansion(
@@ -129,6 +130,9 @@ def _fallback_character_expansion(
                 emotional_weight=0.75,
             ),
         ],
+        tags=[slugify_tag(kw) for kw in seed.personality_keywords if kw.strip()],
+        creator="",
+        creator_notes=seed.rough_notes.strip() if seed.rough_notes else "",
     )
 
 

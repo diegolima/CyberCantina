@@ -6,6 +6,7 @@ import {
   CampaignRecord,
   CampaignStateBundle,
   CharacterRecord,
+  CharacterVersionSummary,
   CharacterWizardDraft,
   CharacterWizardSeed,
   CognitionBlock,
@@ -545,6 +546,14 @@ export const api = {
   listCharacters: () => fetchJson<CharacterRecord[]>(`${API_BASE}/characters`),
   getCharacter: (characterId: string) =>
     fetchJson<CharacterRecord>(`${API_BASE}/characters/${characterId}`),
+  listCharacterVersions: (characterId: string) =>
+    fetchJson<CharacterVersionSummary[]>(
+      `${API_BASE}/characters/${characterId}/versions`
+    ),
+  getCharacterVersion: (characterId: string, version: number) =>
+    fetchJson<CharacterRecord>(
+      `${API_BASE}/characters/${characterId}/versions/${version}`
+    ),
   draftCharacter: (seed: CharacterWizardSeed) =>
     fetchJson<CharacterWizardDraft>(`${API_BASE}/wizards/character/draft`, {
       method: "POST",
