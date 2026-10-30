@@ -298,3 +298,99 @@ async def test_narrator_swipe_auto_detection_when_standard_mode_sent(temp_repo: 
     assert t2["id"] != t1["id"]
 
 
+async def test_narrator_turn_preserves_character_emotional_anchor(
+    temp_repo: CantinaRepository,
+) -> None:
+    """Verify that narrator turns do NOT overwrite NPC emotional state and that following turns anchor to the last non-narrator turn."""
+    from app.engine.phase2_context import resolve_character_previous_state
+
+    camp_id = "camp_neon_rust_default"
+    bundle_init = temp_repo.get_campaign_state_bundle(camp_id)
+    char = temp_repo.get_character(bundle_init.campaign.character_id)
+
+    # 1. Player speaks to character -> Turn 1
+    t1_events = []
+    async for packet in _execute_turn_stream_events(
+        campaign_id=camp_id,
+        req=TurnSubmitRequest(
+            user_message="Keep your voice down, we're being watched.",
+            narrative_mode="standard",
+        ),
+    ):
+        t1_events.append(packet)
+
+    bundle_t1 = temp_repo.get_campaign_state_bundle(camp_id)
+    t1_turn = bundle_t1.active_branch_turns[-1]
+    t1_char_state = t1_turn.character_states[char.id]
+    assert t1_turn.actor_id != "__narrator__"
+    assert t1_char_state.mood_label != "Objective / Detached"
+
+    # 2. Narrator turn 1: Describe scene -> Turn 2
+    t2_events = []
+    async for packet in _execute_turn_stream_events(
+        campaign_id=camp_id,
+        req=TurnSubmitRequest(
+            user_message="",
+            narrative_mode="describe",
+        ),
+    ):
+        t2_events.append(packet)
+
+    bundle_t2 = temp_repo.get_campaign_state_bundle(camp_id)
+    t2_turn = bundle_t2.active_branch_turns[-1]
+    assert t2_turn.actor_id == "__narrator__"
+    # Ensure Phase 4 Clerk preserved character's emotional state on the narrator turn
+    t2_char_state = t2_turn.character_states[char.id]
+    assert t2_char_state.mood_label == t1_char_state.mood_label
+    assert t2_char_state.valence == t1_char_state.valence
+    assert t2_char_state.arousal == t1_char_state.arousal
+    assert t2_char_state.mood_label != "Objective / Detached"
+
+    # 3. Narrator turn 2: Advance time 10 minutes -> Turn 3
+    t3_events = []
+    async for packet in _execute_turn_stream_events(
+        campaign_id=camp_id,
+        req=TurnSubmitRequest(
+            user_message="",
+            narrative_mode="advance",
+            duration_minutes=10,
+        ),
+    ):
+        t3_events.append(packet)
+
+    bundle_t3 = temp_repo.get_campaign_state_bundle(camp_id)
+    t3_turn = bundle_t3.active_branch_turns[-1]
+    assert t3_turn.actor_id == "__narrator__"
+    t3_char_state = t3_turn.character_states[char.id]
+    assert t3_char_state.mood_label == t1_char_state.mood_label
+    assert t3_char_state.valence == t1_char_state.valence
+    assert t3_char_state.arousal == t1_char_state.arousal
+
+    # 4. Verify resolve_character_previous_state walks backwards past consecutive narrator turns to find Turn 1
+    resolved_prev = resolve_character_previous_state(
+        bundle_t3.active_branch_turns,
+        char,
+        bundle_t3.active_location.id,
+    )
+    assert resolved_prev.mood_label == t1_char_state.mood_label
+    assert resolved_prev.valence == t1_char_state.valence
+    assert resolved_prev.arousal == t1_char_state.arousal
+
+    # 5. Player speaks to character -> Turn 4: Verify NPC resumes from Turn 1's emotional anchor
+    t4_events = []
+    async for packet in _execute_turn_stream_events(
+        campaign_id=camp_id,
+        req=TurnSubmitRequest(
+            user_message="Are they still behind us?",
+            narrative_mode="standard",
+        ),
+    ):
+        t4_events.append(packet)
+
+    bundle_t4 = temp_repo.get_campaign_state_bundle(camp_id)
+    t4_turn = bundle_t4.active_branch_turns[-1]
+    assert t4_turn.actor_id == char.id
+    assert t4_turn.character_state.mood_label != "Objective / Detached"
+
+
+

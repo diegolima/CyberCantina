@@ -42,7 +42,11 @@ from app.engine.llm_client import (
     query_ollama_status,
 )
 from app.engine.phase1_pre import run_phase1_pre_analysis
-from app.engine.phase2_context import assemble_four_zone_messages, was_character_present_on_turn
+from app.engine.phase2_context import (
+    assemble_four_zone_messages,
+    resolve_character_previous_state,
+    was_character_present_on_turn,
+)
 from app.engine.phase3_actor import generate_clerk_cognition, stream_phase3_actor
 from app.engine.phase4_clerk import run_phase4_post_turn_clerk
 from app.prompts import FACTORY_DEFAULT_PROMPTS, PROMPTS_METADATA
@@ -1752,9 +1756,10 @@ async def _execute_turn_stream_events(
         )
         character = primary_character
         actor_id = "__narrator__"
-        prev_char_state = parent_turn.character_states.get(
-            primary_character.id,
-            parent_turn.character_state,
+        prev_char_state = resolve_character_previous_state(
+            branch_turns,
+            primary_character,
+            active_location.id,
         )
     else:
         pre_turn = await run_phase1_pre_analysis(
@@ -1776,21 +1781,10 @@ async def _execute_turn_stream_events(
             else None
         ) or present_characters[0]
         actor_id = character.id
-        prev_char_state = parent_turn.character_states.get(
-            character.id,
-            CharacterStateSnapshot(
-                turn_id=parent_turn.id,
-                character_id=character.id,
-                current_location_id=active_location.id,
-                mood_label=character.baseline_psyche.mood_label,
-                valence=character.baseline_psyche.valence,
-                arousal=character.baseline_psyche.arousal,
-                active_want=character.baseline_psyche.default_want,
-                active_plan=character.baseline_psyche.default_plan,
-                relationship_notes={"user": "Acquaintance / Uncertain trust"},
-                equipped=list(character.equipped),
-                inventory=list(character.inventory),
-            ),
+        prev_char_state = resolve_character_previous_state(
+            branch_turns,
+            character,
+            active_location.id,
         )
 
     # Hybrid GraphRAG Memory Retrieval (filtered by valid_turn_ids & character room presence)

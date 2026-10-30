@@ -90,6 +90,82 @@ def was_character_present_on_turn(turn: TurnNodeRecord, character_id: str) -> bo
     return False
 
 
+def resolve_character_previous_state(
+    branch_turns: list[TurnNodeRecord],
+    character: CharacterRecord,
+    fallback_location_id: str,
+) -> CharacterStateSnapshot:
+    """Resolve a character's state before the current turn, anchoring emotional state to the last non-narrator turn."""
+    if not branch_turns:
+        return CharacterStateSnapshot(
+            turn_id="turn_root",
+            character_id=character.id,
+            current_location_id=fallback_location_id,
+            mood_label=character.baseline_psyche.mood_label,
+            valence=character.baseline_psyche.valence,
+            arousal=character.baseline_psyche.arousal,
+            active_want=character.baseline_psyche.default_want,
+            active_plan=character.baseline_psyche.default_plan,
+            relationship_notes={"user": "Acquaintance / Uncertain trust"},
+            equipped=list(character.equipped),
+            inventory=list(character.inventory),
+        )
+
+    parent_turn = branch_turns[-1]
+    current_state = parent_turn.character_states.get(
+        character.id,
+        parent_turn.character_state if parent_turn.character_state.character_id == character.id else None,
+    )
+    if current_state is None:
+        current_state = CharacterStateSnapshot(
+            turn_id=parent_turn.id,
+            character_id=character.id,
+            current_location_id=fallback_location_id,
+            mood_label=character.baseline_psyche.mood_label,
+            valence=character.baseline_psyche.valence,
+            arousal=character.baseline_psyche.arousal,
+            active_want=character.baseline_psyche.default_want,
+            active_plan=character.baseline_psyche.default_plan,
+            relationship_notes={"user": "Acquaintance / Uncertain trust"},
+            equipped=list(character.equipped),
+            inventory=list(character.inventory),
+        )
+
+    # If the parent turn was a narrator turn or holds a detached narrator placeholder mood,
+    # walk backwards along branch_turns to recover the authentic emotional state from the last non-narrator turn.
+    if parent_turn.actor_id == "__narrator__" or current_state.mood_label == "Objective / Detached":
+        for turn in reversed(branch_turns):
+            if turn.actor_id == "__narrator__":
+                continue
+            hist_state = turn.character_states.get(
+                character.id,
+                turn.character_state if turn.character_state.character_id == character.id else None,
+            )
+            if hist_state and hist_state.mood_label != "Objective / Detached":
+                return current_state.model_copy(
+                    update={
+                        "mood_label": hist_state.mood_label,
+                        "valence": hist_state.valence,
+                        "arousal": hist_state.arousal,
+                        "active_want": hist_state.active_want,
+                        "active_plan": hist_state.active_plan,
+                    }
+                )
+
+        # Fallback to baseline psyche if no non-narrator turn had custom emotion
+        return current_state.model_copy(
+            update={
+                "mood_label": character.baseline_psyche.mood_label,
+                "valence": character.baseline_psyche.valence,
+                "arousal": character.baseline_psyche.arousal,
+                "active_want": character.baseline_psyche.default_want,
+                "active_plan": character.baseline_psyche.default_plan,
+            }
+        )
+
+    return current_state
+
+
 def build_zone4_ephemeral_tail_frame(
     *,
     user_message: str,
@@ -230,6 +306,7 @@ def build_zone4_ephemeral_tail_frame(
             f"    Relationship Notes: {rel_notes_text}\n"
             f"    Equipped / Worn: {equipped_text}\n"
             f"    Carried Inventory: {inventory_text}\n"
+            f"    Emotional Anchor: Evolve valence and arousal gradually from this previous baseline (typically ±0.05 to ±0.20), reserving large swings for dramatic turning points or acute shocks.\n"
             f"  </character_previous_mind_state>"
         )
         user_tail = f"User Action / Dialogue:\n{user_message}"
@@ -350,7 +427,11 @@ def assemble_four_zone_messages(
 
     # Zone 4: Ephemeral Turn Frame + latest user message at the very tail
     leaf_turn = branch_turns[-1]
-    char_state = leaf_turn.character_states.get(character.id, leaf_turn.character_state)
+    char_state = resolve_character_previous_state(branch_turns, character, active_location.id)
+    resolved_all_states = {
+        c.id: resolve_character_previous_state(branch_turns, c, active_location.id)
+        for c in (present_characters or [character])
+    }
     zone4_content = build_zone4_ephemeral_tail_frame(
         user_message=user_message,
         character=character,
@@ -361,7 +442,7 @@ def assemble_four_zone_messages(
         recalled_items=recalled_items,
         pre_turn=pre_turn,
         present_characters=present_characters,
-        all_character_states=leaf_turn.character_states,
+        all_character_states=resolved_all_states,
         is_narrator=is_narrator,
         narrative_mode=narrative_mode,
         narrator_directive=narrator_directive,

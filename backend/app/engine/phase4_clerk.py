@@ -1125,15 +1125,36 @@ async def run_phase4_post_turn_clerk(
         delta.inventory_removed,
     )
 
+    is_narrator_turn = completed_turn.actor_id == "__narrator__"
     updated_char_state = CharacterStateSnapshot(
         turn_id=completed_turn.id,
         character_id=character.id,
         current_location_id=actor_new_location_id,
-        mood_label=completed_turn.cognition.feeling[:80] or completed_turn.character_state.mood_label,
-        valence=completed_turn.cognition.valence,
-        arousal=completed_turn.cognition.arousal,
-        active_want=completed_turn.cognition.want or completed_turn.character_state.active_want,
-        active_plan=completed_turn.cognition.plan or completed_turn.character_state.active_plan,
+        mood_label=(
+            completed_turn.character_state.mood_label
+            if is_narrator_turn
+            else (completed_turn.cognition.feeling[:80] or completed_turn.character_state.mood_label)
+        ),
+        valence=(
+            completed_turn.character_state.valence
+            if is_narrator_turn
+            else completed_turn.cognition.valence
+        ),
+        arousal=(
+            completed_turn.character_state.arousal
+            if is_narrator_turn
+            else completed_turn.cognition.arousal
+        ),
+        active_want=(
+            completed_turn.character_state.active_want
+            if is_narrator_turn
+            else (completed_turn.cognition.want or completed_turn.character_state.active_want)
+        ),
+        active_plan=(
+            completed_turn.character_state.active_plan
+            if is_narrator_turn
+            else (completed_turn.cognition.plan or completed_turn.character_state.active_plan)
+        ),
         relationship_notes=rel_notes,
         equipped=updated_equipped,
         inventory=merged_inventory,
