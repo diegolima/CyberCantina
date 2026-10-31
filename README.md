@@ -38,3 +38,10 @@ npm run dev
 ```
 
 Open `http://localhost:5173` to launch the CyberCantina Roleplay Studio. Configure your OpenAI-compatible endpoints (Ollama, `llama.cpp`, vLLM, LM Studio, OpenRouter, etc.) in the **Model Settings** panel, or use the built-in **Heuristic / Mock Offline Fallback** to test the full 4-phase pipeline without an active LLM server.
+
+## License
+
+This project is licensed under the **GNU Affero General Public License v3.0 or later** ([AGPL-3.0-or-later](LICENSE)).
+
+Commercial use is permitted under the terms of the AGPLv3: anyone who distributes or runs CyberCantina over a network must provide the complete source code, including all modifications and customizations.
+

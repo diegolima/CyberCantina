@@ -6,6 +6,12 @@ build-backend = "setuptools.build_meta"
 name = "cybercantina-backend"
 version = "0.1.0"
 description = "Agentic AI Roleplay Framework with 4-Phase Cognition, Branch-Safe Spatial Graph, and 3-Tier Memory"
+license = { text = "AGPL-3.0-or-later" }
+classifiers = [
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+]
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110.0",
