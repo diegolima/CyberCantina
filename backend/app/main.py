@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 import re
 import uuid
 from collections.abc import AsyncIterator
@@ -180,9 +181,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+allowed_origins_env = os.environ.get("CYBERCANTINA_ALLOWED_ORIGINS")
+if allowed_origins_env:
+    cors_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+else:
+    cors_origins = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://testserver",
+    ]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -803,6 +818,17 @@ def update_profile_models(
             detail="Per-user model overrides are currently disabled by the system administrator.",
         )
     repo = get_repo()
+    if payload.active_prompt_preset_id:
+        preset = repo.get_prompt_preset(payload.active_prompt_preset_id)
+        if not preset or (
+            not preset.is_builtin
+            and preset.owner_id
+            and preset.owner_id != current_user.id
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Preset '{payload.active_prompt_preset_id}' not found or access denied.",
+            )
     repo.save_user_model_settings(current_user.id, payload)
     return get_profile_models(current_user=current_user)
 
@@ -827,11 +853,11 @@ class SetCampaignPresetRequest(BaseModel):
 
 @app.get("/api/prompts/defaults", response_model=PromptDefaultsResponse)
 def get_prompt_defaults(
-    current_user: UserProfile | None = Depends(get_optional_user),
+    current_user: UserProfile = Depends(get_current_user),
 ) -> PromptDefaultsResponse:
     """Return factory defaults, template documentation/variables, and available presets."""
     repo = get_repo()
-    presets = repo.list_prompt_presets(user_id=current_user.id if current_user else None)
+    presets = repo.list_prompt_presets(user_id=current_user.id)
     return PromptDefaultsResponse(
         presets=presets,
         defaults=dict(FACTORY_DEFAULT_PROMPTS),
@@ -841,22 +867,28 @@ def get_prompt_defaults(
 
 @app.get("/api/prompts/presets", response_model=list[PromptPresetRecord])
 def list_prompt_presets(
-    current_user: UserProfile | None = Depends(get_optional_user),
+    current_user: UserProfile = Depends(get_current_user),
 ) -> list[PromptPresetRecord]:
     """List all presets accessible to the current user (built-in + owned)."""
     repo = get_repo()
-    return repo.list_prompt_presets(user_id=current_user.id if current_user else None)
+    return repo.list_prompt_presets(user_id=current_user.id)
 
 
 @app.get("/api/prompts/presets/{preset_id}", response_model=PromptPresetRecord)
 def get_prompt_preset(
     preset_id: str,
-    current_user: UserProfile | None = Depends(get_optional_user),
+    current_user: UserProfile = Depends(get_current_user),
 ) -> PromptPresetRecord:
     """Fetch details of a single prompt preset."""
     repo = get_repo()
     preset = repo.get_prompt_preset(preset_id)
     if not preset:
+        raise HTTPException(status_code=404, detail=f"Preset '{preset_id}' not found")
+    if (
+        not preset.is_builtin
+        and preset.owner_id
+        and preset.owner_id != current_user.id
+    ):
         raise HTTPException(status_code=404, detail=f"Preset '{preset_id}' not found")
     return preset
 
@@ -871,8 +903,16 @@ def create_prompt_preset(
     base_prompts: dict[str, str] = {}
     if payload.base_preset_id:
         base = repo.get_prompt_preset(payload.base_preset_id)
-        if base:
-            base_prompts = dict(base.prompts)
+        if not base or (
+            not base.is_builtin
+            and base.owner_id
+            and base.owner_id != current_user.id
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Base preset '{payload.base_preset_id}' not found or access denied.",
+            )
+        base_prompts = dict(base.prompts)
     if payload.prompts:
         base_prompts.update(payload.prompts)
 
@@ -899,7 +939,7 @@ def update_prompt_preset(
             name=payload.name,
             description=payload.description,
             prompts=payload.prompts,
-            user_id=current_user.id if current_user.role != "admin" else None,
+            user_id=current_user.id,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -919,7 +959,7 @@ def delete_prompt_preset(
     try:
         deleted = repo.delete_prompt_preset(
             preset_id,
-            user_id=current_user.id if current_user.role != "admin" else None,
+            user_id=current_user.id,
         )
         if not deleted:
             raise HTTPException(status_code=404, detail=f"Preset '{preset_id}' not found")
@@ -940,7 +980,7 @@ def reset_prompt_preset(
     try:
         return repo.reset_prompt_preset(
             preset_id,
-            user_id=current_user.id if current_user.role != "admin" else None,
+            user_id=current_user.id,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -956,11 +996,22 @@ def set_campaign_prompt_preset(
 ) -> CampaignRecord:
     """Assign or clear an active prompt preset on a specific campaign."""
     repo = get_repo()
+    if payload.preset_id:
+        preset = repo.get_prompt_preset(payload.preset_id)
+        if not preset or (
+            not preset.is_builtin
+            and preset.owner_id
+            and preset.owner_id != current_user.id
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Preset '{payload.preset_id}' not found or access denied.",
+            )
     try:
         return repo.set_campaign_prompt_preset(
             campaign_id,
             payload.preset_id,
-            owner_id=current_user.id if current_user.role != "admin" else None,
+            owner_id=current_user.id,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1166,8 +1217,26 @@ def health_check() -> dict[str, str]:
 
 
 @app.get("/api/ollama/status", response_model=OllamaStatusResponse)
-async def get_ollama_status(base_url: str | None = None) -> OllamaStatusResponse:
-    return await query_ollama_status(base_url)
+async def get_ollama_status(
+    base_url: str | None = None,
+    current_user: UserProfile = Depends(get_current_user),
+) -> OllamaStatusResponse:
+    target_url = base_url
+    if base_url:
+        eff_actor, eff_clerk, *_ = get_effective_user_model_settings(current_user.id)
+        allowed_urls = {
+            settings.actor_profile.base_url,
+            settings.clerk_profile.base_url,
+            settings.embedding_profile.base_url,
+            eff_actor.base_url,
+            eff_clerk.base_url,
+        }
+        if current_user.role != "admin" and base_url not in allowed_urls:
+            raise HTTPException(
+                status_code=403,
+                detail="Administrator privileges required to probe custom Ollama endpoints.",
+            )
+    return await query_ollama_status(target_url)
 
 
 @app.get("/api/settings", response_model=AppSettings)
@@ -1376,7 +1445,19 @@ async def wizard_commit_character(
     req: CharacterCommitRequest,
     current_user: UserProfile = Depends(get_current_user),
 ) -> CharacterRecord:
-    return await get_repo().acreate_character_from_draft(
+    repo = get_repo()
+    if req.world_id:
+        try:
+            repo.get_world(
+                req.world_id,
+                owner_id=current_user.id,
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"World '{req.world_id}' not found or access denied.",
+            ) from exc
+    return await repo.acreate_character_from_draft(
         req.draft, world_id=req.world_id, owner_id=current_user.id
     )
 
@@ -1388,8 +1469,20 @@ async def update_character(
     current_user: UserProfile = Depends(get_current_user),
 ) -> CharacterRecord:
     """Update a character in-place if unused, or silently fork a new version if used by campaigns."""
+    repo = get_repo()
+    if payload.world_id:
+        try:
+            repo.get_world(
+                payload.world_id,
+                owner_id=current_user.id,
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"World '{payload.world_id}' not found or access denied.",
+            ) from exc
     try:
-        return await get_repo().aupdate_character(
+        return await repo.aupdate_character(
             character_id, payload, owner_id=current_user.id
         )
     except KeyError as exc:
@@ -1470,15 +1563,25 @@ def _process_and_save_image(
 
 
 @app.get("/api/media/characters/{character_id}/{category}/{filename}")
-def get_character_media(character_id: str, category: str, filename: str) -> FileResponse:
+def get_character_media(
+    character_id: str,
+    category: str,
+    filename: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> FileResponse:
     """Serve a cached static character portrait or photo album image."""
     target = _safe_resolve_media_path(character_id, category, filename)
     if not target.is_file():
         raise HTTPException(status_code=404, detail="Media asset not found.")
+
+    repo = get_repo()
+    if not repo.user_can_access_character(current_user.id, character_id):
+        raise HTTPException(status_code=404, detail="Media asset not found.")
+
     return FileResponse(
         target,
         media_type="image/webp",
-        headers={"Cache-Control": "public, max-age=86400"},
+        headers={"Cache-Control": "private, max-age=86400"},
     )
 
 
@@ -1861,8 +1964,19 @@ async def update_campaign_character_memories(
     current_user: UserProfile = Depends(get_current_user),
 ) -> CampaignStateBundle:
     """Update campaign-scoped memory shards for a character (applies from next turn onwards)."""
+    repo = get_repo()
     try:
-        return await get_repo().aupdate_campaign_character_memories(
+        campaign = repo.get_campaign(
+            campaign_id,
+            owner_id=current_user.id,
+        )
+        participants = campaign.participant_character_ids or [campaign.character_id]
+        if character_id != campaign.character_id and character_id not in participants:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Character '{character_id}' is not a participant in campaign '{campaign_id}'.",
+            )
+        return await repo.aupdate_campaign_character_memories(
             campaign_id,
             character_id,
             memory_shards=req.memory_shards,

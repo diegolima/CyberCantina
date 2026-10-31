@@ -825,7 +825,19 @@ class CantinaRepository:
                 )
                 conn.execute("DELETE FROM campaigns WHERE id = ?", (c_id,))
 
-            # 2. Delete user characters and associated shard vectors
+            # 2. Delete user characters, associated shard vectors, and disk media
+            char_rows = conn.execute(
+                "SELECT id FROM characters WHERE owner_id = ?", (user_id,)
+            ).fetchall()
+            for cr in char_rows:
+                c_id = cr["id"]
+                try:
+                    c_media = Path(self.media_dir) / "characters" / c_id
+                    if c_media.exists():
+                        shutil.rmtree(c_media, ignore_errors=True)
+                except Exception:
+                    pass
+
             conn.execute(
                 """
                 DELETE FROM vector_entries
@@ -878,11 +890,12 @@ class CantinaRepository:
         """Permanently delete a user account, credentials, passkeys, sessions, and all their user data."""
         # Ensure user exists (raises KeyError if not found)
         self.get_user_by_id(user_id)
-        # 1. Wipe all user characters, worlds, and campaigns
+        # 1. Wipe all user characters, worlds, campaigns, notes, and media
         self.reset_user_data(user_id)
-        # 2. Remove sessions, passkeys, user model overrides, and user account record
+        # 2. Remove prompt presets, sessions, passkeys, user model overrides, and user account record
         conn = self._connect()
         try:
+            conn.execute("DELETE FROM prompt_presets WHERE owner_id = ?", (user_id,))
             conn.execute("DELETE FROM user_model_settings WHERE user_id = ?", (user_id,))
             conn.execute("DELETE FROM user_sessions WHERE user_id = ?", (user_id,))
             conn.execute("DELETE FROM user_passkeys WHERE user_id = ?", (user_id,))
@@ -2447,6 +2460,33 @@ class CantinaRepository:
         ):
             return False
         return True
+
+    def user_can_access_character(self, user_id: str, character_id: str) -> bool:
+        """Check whether a user has legitimate access to a character.
+
+        Access is granted if:
+        1. The user owns the character (characters.owner_id == user_id)
+        2. The character is the primary character of a campaign owned by the user (campaigns.character_id == character_id)
+        3. The character is a participant in a campaign owned by the user (campaign_characters.character_id == character_id)
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT 1 FROM characters WHERE id = ? AND owner_id = ?
+                UNION
+                SELECT 1 FROM campaigns WHERE character_id = ? AND owner_id = ?
+                UNION
+                SELECT 1 FROM campaign_characters cc
+                JOIN campaigns c ON cc.campaign_id = c.id
+                WHERE cc.character_id = ? AND c.owner_id = ?
+                LIMIT 1
+                """,
+                (character_id, user_id, character_id, user_id, character_id, user_id),
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
 
     def get_character(
         self,
