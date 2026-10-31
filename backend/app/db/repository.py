@@ -120,6 +120,10 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+STAGED_CHARACTER_OWNERSHIP_TTL_SECONDS = 3600  # 1 hour for uncommitted character drafts
+WEBAUTHN_CHALLENGE_TTL_SECONDS = 300  # 5 minutes
+
+
 class CantinaRepository:
     """Data access layer with native turn-tree and spatial graph traversal."""
 
@@ -127,7 +131,6 @@ class CantinaRepository:
         self.db_path = db_path
         self.media_dir = media_dir or str(Path(db_path).resolve().parent / "data" / "media")
         self.vector_store = VectorStore(db_path)
-        self._staged_character_owners: dict[str, str] = {}
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=10.0)
@@ -1189,6 +1192,7 @@ class CantinaRepository:
         friendly_name: str = "",
         replace_credential_id: str | None = None,
         created_at_epoch: float | None = None,
+        ttl_seconds: int = WEBAUTHN_CHALLENGE_TTL_SECONDS,
     ) -> None:
         """Persist a WebAuthn challenge into SQLite so any worker can verify it."""
         now_epoch = created_at_epoch if created_at_epoch is not None else datetime.now(timezone.utc).timestamp()
@@ -1196,7 +1200,7 @@ class CantinaRepository:
         try:
             conn.execute(
                 "DELETE FROM webauthn_challenges WHERE created_at_epoch < ?",
-                (now_epoch - 300,),
+                (now_epoch - ttl_seconds,),
             )
             conn.execute(
                 """
@@ -1219,27 +1223,29 @@ class CantinaRepository:
         finally:
             conn.close()
 
-    def pop_webauthn_challenge(self, challenge_id: str) -> dict[str, Any] | None:
-        """Atomically pop and delete a WebAuthn challenge from SQLite."""
+    def pop_webauthn_challenge(
+        self, challenge_id: str, ttl_seconds: int = WEBAUTHN_CHALLENGE_TTL_SECONDS
+    ) -> dict[str, Any] | None:
+        """Atomically pop (single-use) a non-expired WebAuthn challenge from SQLite."""
         now_epoch = datetime.now(timezone.utc).timestamp()
         conn = self._connect()
         try:
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 "DELETE FROM webauthn_challenges WHERE created_at_epoch < ?",
-                (now_epoch - 300,),
+                (now_epoch - ttl_seconds,),
             )
             row = conn.execute(
                 "SELECT * FROM webauthn_challenges WHERE challenge_id = ?",
                 (challenge_id,),
             ).fetchone()
-            if not row:
-                return None
-            conn.execute(
-                "DELETE FROM webauthn_challenges WHERE challenge_id = ?",
-                (challenge_id,),
-            )
+            if row:
+                conn.execute(
+                    "DELETE FROM webauthn_challenges WHERE challenge_id = ?",
+                    (challenge_id,),
+                )
             conn.commit()
-            return dict(row)
+            return dict(row) if row else None
         finally:
             conn.close()
 
@@ -2529,7 +2535,6 @@ class CantinaRepository:
         finally:
             conn.close()
 
-        self._staged_character_owners.pop(c_id, None)
         return self.get_character(c_id)
 
     async def acreate_character_from_draft(
@@ -2608,10 +2613,10 @@ class CantinaRepository:
         return True
 
     def stage_character_media_ownership(self, user_id: str, character_id: str) -> None:
-        """Register temporary media ownership for an uncommitted character draft."""
-        self._staged_character_owners[character_id] = user_id
+        """Register temporary media ownership for an uncommitted character draft (expires after a TTL)."""
         conn = self._connect()
         try:
+            self._prune_expired_staged_ownership(conn)
             conn.execute(
                 """
                 INSERT OR REPLACE INTO staged_character_ownership (character_id, user_id, created_at)
@@ -2623,6 +2628,17 @@ class CantinaRepository:
         finally:
             conn.close()
 
+    @staticmethod
+    def _staged_ownership_cutoff_iso() -> str:
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=STAGED_CHARACTER_OWNERSHIP_TTL_SECONDS)
+        return cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _prune_expired_staged_ownership(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            "DELETE FROM staged_character_ownership WHERE created_at < ?",
+            (self._staged_ownership_cutoff_iso(),),
+        )
+
     def user_can_access_character(self, user_id: str, character_id: str) -> bool:
         """Check whether a user has legitimate access to a character.
 
@@ -2632,8 +2648,7 @@ class CantinaRepository:
         3. The character is a participant in a campaign owned by the user (campaign_characters.character_id == character_id)
         4. The user is currently staging an uncommitted draft with pre-assigned media assets
         """
-        if self._staged_character_owners.get(character_id) == user_id:
-            return True
+        staged_cutoff = self._staged_ownership_cutoff_iso()
         conn = self._connect()
         try:
             row = conn.execute(
@@ -2646,10 +2661,16 @@ class CantinaRepository:
                 JOIN campaigns c ON cc.campaign_id = c.id
                 WHERE cc.character_id = ? AND c.owner_id = ?
                 UNION
-                SELECT 1 FROM staged_character_ownership WHERE character_id = ? AND user_id = ?
+                SELECT 1 FROM staged_character_ownership
+                WHERE character_id = ? AND user_id = ? AND created_at >= ?
                 LIMIT 1
                 """,
-                (character_id, user_id, character_id, user_id, character_id, user_id, character_id, user_id),
+                (
+                    character_id, user_id,
+                    character_id, user_id,
+                    character_id, user_id,
+                    character_id, user_id, staged_cutoff,
+                ),
             ).fetchone()
             return row is not None
         finally:

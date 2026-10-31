@@ -47,7 +47,11 @@ def run_entity_pruner() -> dict[str, list[str]]:
 def get_effective_user_model_settings(
     user_id: str | None,
 ) -> tuple[ModelProfile, ModelProfile, int, bool, int]:
-    """Resolve effective (actor_profile, clerk_profile, working_memory_turns, delegate_cognition_to_clerk, max_scene_flags) for a user."""
+    """Resolve effective (actor_profile, clerk_profile, working_memory_turns, delegate_cognition_to_clerk, max_scene_flags) for a user.
+
+    If overrides are enabled in system settings and the user has saved custom settings,
+    those take precedence. Otherwise, defaults from AppSettings are returned.
+    """
     default_actor = settings.actor_profile
     default_clerk = settings.clerk_profile
     default_wm_turns = settings.memory_config.working_memory_turns
@@ -159,4 +163,4 @@ def process_and_save_image(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Image processing failed: {exc}") from exc
+        raise HTTPException(status_code=400, detail=f"Invalid image format: {exc}") from exc

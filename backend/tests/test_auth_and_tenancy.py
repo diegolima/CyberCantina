@@ -32,8 +32,6 @@ def auth_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestCl
     repo.init_db()
     ensure_default_seed(repo)
 
-    auth_module._PENDING_CHALLENGES.clear()
-
     client = TestClient(main_module.app)
     return client, repo
 

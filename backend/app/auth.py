@@ -90,19 +90,38 @@ class PendingWebAuthnChallenge:
     created_at_epoch: float
 
 
-# In-memory ephemeral store for pending WebAuthn registration/authentication challenges
-_PENDING_CHALLENGES: dict[str, PendingWebAuthnChallenge] = {}
+def _store_challenge(pending: PendingWebAuthnChallenge) -> None:
+    """Persist a pending challenge to SQLite (single source of truth shared by all workers)."""
+    CantinaRepository(settings.db_path).save_webauthn_challenge(
+        challenge_id=pending.challenge_id,
+        challenge_bytes=pending.challenge_bytes,
+        rp_id=pending.rp_id,
+        origin=pending.origin,
+        user_id=pending.user_id,
+        friendly_name=pending.friendly_name,
+        replace_credential_id=pending.replace_credential_id,
+        created_at_epoch=pending.created_at_epoch,
+        ttl_seconds=CHALLENGE_TTL_SECONDS,
+    )
 
 
-def _prune_expired_challenges() -> None:
-    now = time.time()
-    expired = [
-        cid
-        for cid, ch in _PENDING_CHALLENGES.items()
-        if now - ch.created_at_epoch > CHALLENGE_TTL_SECONDS
-    ]
-    for cid in expired:
-        _PENDING_CHALLENGES.pop(cid, None)
+def _consume_challenge(challenge_id: str) -> PendingWebAuthnChallenge | None:
+    """Atomically fetch and delete a pending challenge (single use). Returns None if missing or expired."""
+    row = CantinaRepository(settings.db_path).pop_webauthn_challenge(
+        challenge_id, ttl_seconds=CHALLENGE_TTL_SECONDS
+    )
+    if not row:
+        return None
+    return PendingWebAuthnChallenge(
+        challenge_id=row["challenge_id"],
+        challenge_bytes=row["challenge_bytes"],
+        rp_id=row["rp_id"],
+        origin=row["origin"],
+        user_id=row["user_id"],
+        friendly_name=row["friendly_name"],
+        replace_credential_id=row["replace_credential_id"],
+        created_at_epoch=row["created_at_epoch"],
+    )
 
 
 def resolve_rp_id_and_origin(request: Request) -> tuple[str, str]:
@@ -128,8 +147,6 @@ def create_passkey_registration_challenge(
     replace_credential_id: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Create WebAuthn PublicKeyCredentialCreationOptions and store challenge."""
-    _prune_expired_challenges()
-
     exclude_creds: list[PublicKeyCredentialDescriptor] = []
     for pk in user.passkeys:
         if replace_credential_id and pk.id == replace_credential_id:
@@ -166,21 +183,7 @@ def create_passkey_registration_challenge(
         replace_credential_id=replace_credential_id,
         created_at_epoch=time.time(),
     )
-    _PENDING_CHALLENGES[challenge_id] = pending
-    try:
-        repo = CantinaRepository(settings.db_path)
-        repo.save_webauthn_challenge(
-            challenge_id=challenge_id,
-            challenge_bytes=options.challenge,
-            rp_id=rp_id,
-            origin=origin,
-            user_id=user.id,
-            friendly_name=friendly_name.strip() or "Passkey",
-            replace_credential_id=replace_credential_id,
-            created_at_epoch=pending.created_at_epoch,
-        )
-    except Exception:
-        pass
+    _store_challenge(pending)
 
     return challenge_id, options_to_json_dict(options)
 
@@ -191,25 +194,7 @@ def verify_passkey_registration(
     credential_payload: dict[str, Any],
 ) -> tuple[PendingWebAuthnChallenge, str, bytes, int, str, list[str]]:
     """Verify WebAuthn registration response and return (challenge, cred_id_b64, pubkey, sign_count, aaguid, transports)."""
-    _prune_expired_challenges()
-    pending = _PENDING_CHALLENGES.pop(challenge_id, None)
-    if not pending:
-        try:
-            repo = CantinaRepository(settings.db_path)
-            row = repo.pop_webauthn_challenge(challenge_id)
-            if row:
-                pending = PendingWebAuthnChallenge(
-                    challenge_id=row["challenge_id"],
-                    challenge_bytes=row["challenge_bytes"],
-                    rp_id=row["rp_id"],
-                    origin=row["origin"],
-                    user_id=row["user_id"],
-                    friendly_name=row["friendly_name"],
-                    replace_credential_id=row["replace_credential_id"],
-                    created_at_epoch=row["created_at_epoch"],
-                )
-        except Exception:
-            pass
+    pending = _consume_challenge(challenge_id)
     if not pending or not pending.user_id:
         raise ValueError("Passkey registration challenge expired or invalid")
 
@@ -245,8 +230,6 @@ def create_passkey_authentication_challenge(
     user_id: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Create WebAuthn PublicKeyCredentialRequestOptions and store challenge."""
-    _prune_expired_challenges()
-
     allow_creds: list[PublicKeyCredentialDescriptor] | None = None
     if allowed_credential_ids:
         allow_creds = []
@@ -275,21 +258,7 @@ def create_passkey_authentication_challenge(
         replace_credential_id=None,
         created_at_epoch=time.time(),
     )
-    _PENDING_CHALLENGES[challenge_id] = pending
-    try:
-        repo = CantinaRepository(settings.db_path)
-        repo.save_webauthn_challenge(
-            challenge_id=challenge_id,
-            challenge_bytes=options.challenge,
-            rp_id=rp_id,
-            origin=origin,
-            user_id=user_id,
-            friendly_name="",
-            replace_credential_id=None,
-            created_at_epoch=pending.created_at_epoch,
-        )
-    except Exception:
-        pass
+    _store_challenge(pending)
 
     return challenge_id, options_to_json_dict(options)
 
@@ -302,25 +271,7 @@ def verify_passkey_authentication(
     credential_current_sign_count: int,
 ) -> int:
     """Verify WebAuthn assertion signature and return the updated sign_count."""
-    _prune_expired_challenges()
-    pending = _PENDING_CHALLENGES.pop(challenge_id, None)
-    if not pending:
-        try:
-            repo = CantinaRepository(settings.db_path)
-            row = repo.pop_webauthn_challenge(challenge_id)
-            if row:
-                pending = PendingWebAuthnChallenge(
-                    challenge_id=row["challenge_id"],
-                    challenge_bytes=row["challenge_bytes"],
-                    rp_id=row["rp_id"],
-                    origin=row["origin"],
-                    user_id=row["user_id"],
-                    friendly_name=row["friendly_name"],
-                    replace_credential_id=row["replace_credential_id"],
-                    created_at_epoch=row["created_at_epoch"],
-                )
-        except Exception:
-            pass
+    pending = _consume_challenge(challenge_id)
     if not pending:
         raise ValueError("Passkey login challenge expired or invalid")
 
