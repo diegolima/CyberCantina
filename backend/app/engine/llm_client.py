@@ -90,10 +90,10 @@ async def query_ollama_status(base_url: str | None = None) -> OllamaStatusRespon
     tags_url = f"{root_url}/api/tags"
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(tags_url)
-            resp.raise_for_status()
-            payload = resp.json()
+        client = await llm_client.get_http_client(timeout=5.0)
+        resp = await client.get(tags_url, timeout=5.0)
+        resp.raise_for_status()
+        payload = resp.json()
     except Exception as exc:
         return OllamaStatusResponse(
             reachable=False,
@@ -204,6 +204,24 @@ async def auto_configure_ollama_models() -> OllamaStatusResponse:
 class LLMClient:
     """Async client supporting both native Ollama (/api/chat) and OpenAI-compatible (/v1/chat/completions)."""
 
+    def __init__(self) -> None:
+        self._client: httpx.AsyncClient | None = None
+
+    async def get_http_client(self, timeout: float | None = None) -> httpx.AsyncClient:
+        """Return a persistent AsyncClient connection pool, recreating if closed."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
+                timeout=timeout or 120.0,
+            )
+        return self._client
+
+    async def close(self) -> None:
+        """Gracefully close the HTTP client connection pool on app shutdown."""
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
+
     async def complete_text(
         self,
         messages: list[dict[str, str]],
@@ -239,93 +257,93 @@ class LLMClient:
         elif json_mode:
             ollama_payload["format"] = "json"
 
-        async with httpx.AsyncClient(timeout=active_profile.timeout_seconds) as client:
-            try:
-                resp = await client.post(ollama_chat_url, json=ollama_payload)
-                if resp.status_code == 400:
-                    # Fallback if model or older Ollama server does not accept `think: False`
-                    retry_payload = {k: v for k, v in ollama_payload.items() if k != "think"}
-                    retry_payload["options"] = {
+        client = await self.get_http_client(timeout=active_profile.timeout_seconds)
+        try:
+            resp = await client.post(ollama_chat_url, json=ollama_payload, timeout=active_profile.timeout_seconds)
+            if resp.status_code == 400:
+                # Fallback if model or older Ollama server does not accept `think: False`
+                retry_payload = {k: v for k, v in ollama_payload.items() if k != "think"}
+                retry_payload["options"] = {
+                    "temperature": temp,
+                    "num_predict": max(max_tok * 3, 4096),
+                }
+                resp = await client.post(ollama_chat_url, json=retry_payload, timeout=active_profile.timeout_seconds)
+
+            if resp.status_code == 200:
+                data = resp.json()
+                msg = data.get("message") or {}
+                content = (msg.get("content") or "").strip()
+                if content:
+                    return content
+
+                # If `format: json_schema` or token budget produced empty content on /api/chat,
+                # retry with plain `format: "json"` and expanded token budget before giving up.
+                if json_schema is not None or data.get("done_reason") == "length":
+                    fallback_payload = dict(ollama_payload)
+                    if json_schema is not None:
+                        fallback_payload["format"] = "json"
+                    fallback_payload["options"] = {
                         "temperature": temp,
                         "num_predict": max(max_tok * 3, 4096),
                     }
-                    resp = await client.post(ollama_chat_url, json=retry_payload)
+                    retry_resp = await client.post(ollama_chat_url, json=fallback_payload, timeout=active_profile.timeout_seconds)
+                    if retry_resp.status_code == 200:
+                        retry_data = retry_resp.json()
+                        retry_msg = retry_data.get("message") or {}
+                        retry_content = (retry_msg.get("content") or "").strip()
+                        if retry_content:
+                            return retry_content
+                        thinking_fallback = (retry_msg.get("thinking") or "").strip()
+                        if thinking_fallback and "{" in thinking_fallback:
+                            return thinking_fallback
 
-                if resp.status_code == 200:
-                    data = resp.json()
-                    msg = data.get("message") or {}
-                    content = (msg.get("content") or "").strip()
-                    if content:
-                        return content
+                thinking_text = (msg.get("thinking") or "").strip()
+                if thinking_text and "{" in thinking_text:
+                    return thinking_text
+            elif resp.status_code == 404:
+                # Could be model not found in Ollama OR non-Ollama OpenAI server
+                err_body = resp.text
+                if "model" in err_body.lower() and "not found" in err_body.lower():
+                    raise RuntimeError(
+                        f"Ollama model '{active_profile.model}' is not installed. "
+                        f"Run `ollama pull {active_profile.model}` or select an installed model in Settings."
+                    )
+        except RuntimeError:
+            raise
+        except httpx.HTTPError:
+            # Fall through to OpenAI-compatible /v1/chat/completions endpoint
+            pass
 
-                    # If `format: json_schema` or token budget produced empty content on /api/chat,
-                    # retry with plain `format: "json"` and expanded token budget before giving up.
-                    if json_schema is not None or data.get("done_reason") == "length":
-                        fallback_payload = dict(ollama_payload)
-                        if json_schema is not None:
-                            fallback_payload["format"] = "json"
-                        fallback_payload["options"] = {
-                            "temperature": temp,
-                            "num_predict": max(max_tok * 3, 4096),
-                        }
-                        retry_resp = await client.post(ollama_chat_url, json=fallback_payload)
-                        if retry_resp.status_code == 200:
-                            retry_data = retry_resp.json()
-                            retry_msg = retry_data.get("message") or {}
-                            retry_content = (retry_msg.get("content") or "").strip()
-                            if retry_content:
-                                return retry_content
-                            thinking_fallback = (retry_msg.get("thinking") or "").strip()
-                            if thinking_fallback and "{" in thinking_fallback:
-                                return thinking_fallback
+        # 2. OpenAI-compatible /v1/chat/completions endpoint
+        v1_url = f"{get_openai_v1_url(active_profile.base_url)}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {active_profile.api_key}",
+            "Content-Type": "application/json",
+        }
+        oai_payload: dict[str, Any] = {
+            "model": active_profile.model,
+            "messages": messages,
+            "temperature": temp,
+            "max_tokens": max_tok,
+            "stream": False,
+        }
+        if json_mode or json_schema is not None:
+            oai_payload["response_format"] = {"type": "json_object"}
 
-                    thinking_text = (msg.get("thinking") or "").strip()
-                    if thinking_text and "{" in thinking_text:
-                        return thinking_text
-                elif resp.status_code == 404:
-                    # Could be model not found in Ollama OR non-Ollama OpenAI server
-                    err_body = resp.text
-                    if "model" in err_body.lower() and "not found" in err_body.lower():
-                        raise RuntimeError(
-                            f"Ollama model '{active_profile.model}' is not installed. "
-                            f"Run `ollama pull {active_profile.model}` or select an installed model in Settings."
-                        )
-            except RuntimeError:
-                raise
-            except httpx.HTTPError:
-                # Fall through to OpenAI-compatible /v1/chat/completions endpoint
-                pass
-
-            # 2. OpenAI-compatible /v1/chat/completions endpoint
-            v1_url = f"{get_openai_v1_url(active_profile.base_url)}/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {active_profile.api_key}",
-                "Content-Type": "application/json",
-            }
-            oai_payload: dict[str, Any] = {
-                "model": active_profile.model,
-                "messages": messages,
-                "temperature": temp,
-                "max_tokens": max_tok,
-                "stream": False,
-            }
-            if json_mode or json_schema is not None:
-                oai_payload["response_format"] = {"type": "json_object"}
-
-            resp = await client.post(v1_url, headers=headers, json=oai_payload)
-            if resp.status_code == 404 and "model" in resp.text.lower():
-                raise RuntimeError(
-                    f"Model '{active_profile.model}' not found at {v1_url}: {resp.text}"
-                )
-            resp.raise_for_status()
-            data = resp.json()
-            choice_msg = data["choices"][0]["message"]
-            return (
-                choice_msg.get("content")
-                or choice_msg.get("reasoning_content")
-                or choice_msg.get("reasoning")
-                or ""
+        resp = await client.post(v1_url, headers=headers, json=oai_payload, timeout=active_profile.timeout_seconds)
+        if resp.status_code == 404 and "model" in resp.text.lower():
+            raise RuntimeError(
+                f"Model '{active_profile.model}' not found at {v1_url}: {resp.text}"
             )
+        resp.raise_for_status()
+        data = resp.json()
+        choice_msg = data["choices"][0]["message"]
+        return (
+            choice_msg.get("content")
+            or choice_msg.get("reasoning_content")
+            or choice_msg.get("reasoning")
+            or ""
+        )
 
     async def complete_structured(
         self,
@@ -400,11 +418,39 @@ class LLMClient:
             },
         }
 
-        async with httpx.AsyncClient(timeout=active_profile.timeout_seconds) as client:
-            # Prefer native Ollama streaming on /api/chat
-            try:
-                need_retry_without_think = False
-                async with client.stream("POST", ollama_chat_url, json=ollama_payload) as resp:
+        client = await self.get_http_client(timeout=active_profile.timeout_seconds)
+        # Prefer native Ollama streaming on /api/chat
+        try:
+            need_retry_without_think = False
+            async with client.stream("POST", ollama_chat_url, json=ollama_payload, timeout=active_profile.timeout_seconds) as resp:
+                if resp.status_code == 200:
+                    async for line in resp.aiter_lines():
+                        if not line.strip():
+                            continue
+                        try:
+                            chunk = json.loads(line)
+                            delta = chunk.get("message", {}).get("content")
+                            if delta:
+                                yield delta
+                            if chunk.get("done"):
+                                return
+                        except json.JSONDecodeError:
+                            continue
+                    return
+                elif resp.status_code == 400:
+                    need_retry_without_think = True
+                elif resp.status_code == 404:
+                    err_bytes = await resp.aread()
+                    err_text = err_bytes.decode("utf-8", errors="ignore")
+                    if "model" in err_text.lower() and "not found" in err_text.lower():
+                        raise RuntimeError(
+                            f"Ollama model '{active_profile.model}' is not installed. "
+                            f"Run `ollama pull {active_profile.model}` or select an installed model in Settings."
+                        )
+
+            if need_retry_without_think:
+                retry_stream_payload = {k: v for k, v in ollama_payload.items() if k != "think"}
+                async with client.stream("POST", ollama_chat_url, json=retry_stream_payload, timeout=active_profile.timeout_seconds) as resp:
                     if resp.status_code == 200:
                         async for line in resp.aiter_lines():
                             if not line.strip():
@@ -419,69 +465,41 @@ class LLMClient:
                             except json.JSONDecodeError:
                                 continue
                         return
-                    elif resp.status_code == 400:
-                        need_retry_without_think = True
-                    elif resp.status_code == 404:
-                        err_bytes = await resp.aread()
-                        err_text = err_bytes.decode("utf-8", errors="ignore")
-                        if "model" in err_text.lower() and "not found" in err_text.lower():
-                            raise RuntimeError(
-                                f"Ollama model '{active_profile.model}' is not installed. "
-                                f"Run `ollama pull {active_profile.model}` or select an installed model in Settings."
-                            )
+        except RuntimeError:
+            raise
+        except httpx.HTTPError:
+            pass
 
-                if need_retry_without_think:
-                    retry_stream_payload = {k: v for k, v in ollama_payload.items() if k != "think"}
-                    async with client.stream("POST", ollama_chat_url, json=retry_stream_payload) as resp:
-                        if resp.status_code == 200:
-                            async for line in resp.aiter_lines():
-                                if not line.strip():
-                                    continue
-                                try:
-                                    chunk = json.loads(line)
-                                    delta = chunk.get("message", {}).get("content")
-                                    if delta:
-                                        yield delta
-                                    if chunk.get("done"):
-                                        return
-                                except json.JSONDecodeError:
-                                    continue
-                            return
-            except RuntimeError:
-                raise
-            except httpx.HTTPError:
-                pass
-
-            # Fallback to OpenAI-compatible SSE streaming (/v1/chat/completions)
-            v1_url = f"{get_openai_v1_url(active_profile.base_url)}/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {active_profile.api_key}",
-                "Content-Type": "application/json",
-            }
-            oai_payload: dict[str, Any] = {
-                "model": active_profile.model,
-                "messages": messages,
-                "temperature": active_profile.temperature,
-                "max_tokens": active_profile.max_tokens,
-                "stream": True,
-            }
-            async with client.stream("POST", v1_url, headers=headers, json=oai_payload) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    data_str = line[len("data:") :].strip()
-                    if data_str == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data_str)
-                        choices = chunk.get("choices", [])
-                        if choices:
-                            delta = choices[0].get("delta", {}).get("content")
-                            if delta:
-                                yield delta
-                    except json.JSONDecodeError:
-                        continue
+        # Fallback to OpenAI-compatible SSE streaming (/v1/chat/completions)
+        v1_url = f"{get_openai_v1_url(active_profile.base_url)}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {active_profile.api_key}",
+            "Content-Type": "application/json",
+        }
+        oai_payload: dict[str, Any] = {
+            "model": active_profile.model,
+            "messages": messages,
+            "temperature": active_profile.temperature,
+            "max_tokens": active_profile.max_tokens,
+            "stream": True,
+        }
+        async with client.stream("POST", v1_url, headers=headers, json=oai_payload, timeout=active_profile.timeout_seconds) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                data_str = line[len("data:") :].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                    choices = chunk.get("choices", [])
+                    if choices:
+                        delta = choices[0].get("delta", {}).get("content")
+                        if delta:
+                            yield delta
+                except json.JSONDecodeError:
+                    continue
 
 
 llm_client = LLMClient()

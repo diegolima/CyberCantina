@@ -566,27 +566,24 @@ export const api = {
       method: "POST",
       body: JSON.stringify(seed),
     }),
-  importSillyTavernCard: async (
+  importSillyTavernCard: (
     file: File,
     autoGenerateWorld: boolean = true,
     worldId?: string | null
-  ): Promise<SillyTavernImportResponse> => {
+  ) => {
     const formData = new FormData();
     formData.append("file", file);
     formData.append("auto_generate_world", String(autoGenerateWorld));
     if (worldId) {
       formData.append("world_id", worldId);
     }
-    const res = await fetch(`${API_BASE}/wizards/character/import-sillytavern`, {
-      method: "POST",
-      credentials: "include",
-      body: formData,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: res.statusText }));
-      throw new Error(err.detail || "Failed to import SillyTavern card");
-    }
-    return res.json();
+    return fetchJson<SillyTavernImportResponse>(
+      `${API_BASE}/wizards/character/import-sillytavern`,
+      {
+        method: "POST",
+        body: formData,
+      }
+    );
   },
   commitCharacter: (
     draft: CharacterWizardDraft,

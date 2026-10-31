@@ -1,4 +1,7 @@
 PRAGMA foreign_keys = ON;
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
+PRAGMA busy_timeout = 5000;
 
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
@@ -260,4 +263,23 @@ CREATE TABLE IF NOT EXISTS user_notes (
 CREATE INDEX IF NOT EXISTS idx_user_notes_owner ON user_notes(owner_id);
 CREATE INDEX IF NOT EXISTS idx_user_notes_starred ON user_notes(owner_id, is_starred);
 CREATE INDEX IF NOT EXISTS idx_user_notes_updated ON user_notes(owner_id, updated_at);
+
+CREATE TABLE IF NOT EXISTS staged_character_ownership (
+    character_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_staged_char_user ON staged_character_ownership(user_id);
+
+CREATE TABLE IF NOT EXISTS webauthn_challenges (
+    challenge_id TEXT PRIMARY KEY,
+    challenge_bytes BLOB NOT NULL,
+    rp_id TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    user_id TEXT NULL REFERENCES users(id) ON DELETE CASCADE,
+    friendly_name TEXT NOT NULL DEFAULT '',
+    replace_credential_id TEXT NULL,
+    created_at_epoch REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_epoch ON webauthn_challenges(created_at_epoch);
 

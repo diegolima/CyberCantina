@@ -98,7 +98,7 @@ def import_client(temp_repo: CantinaRepository, monkeypatch: pytest.MonkeyPatch,
     temp_repo.claim_unowned_entities(user.id)
     user_profile = temp_repo.get_user_by_id(user.id)
 
-    monkeypatch.setattr(main_module, "get_repo", lambda: temp_repo)
+    # Fresh repository instances created per-request in production now correctly resolve staged ownership via SQLite
     main_module.app.dependency_overrides[main_module.get_current_user] = lambda: user_profile
 
     client = TestClient(main_module.app)

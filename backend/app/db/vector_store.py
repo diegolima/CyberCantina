@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -124,62 +125,20 @@ def combine_entry_text(title: str, content: str, keywords: list[str] | None = No
 def embed_text_sync(text: str) -> np.ndarray:
     """Synchronous embedding helper respecting the active EmbeddingProfile."""
     profile = settings.embedding_profile
-    dims = profile.dimensions
+    if profile.mode == "local_hash":
+        return compute_local_hash_embedding(text, dims=profile.dimensions)
 
-    if profile.mode == "openai_compat":
-        try:
-            base = profile.base_url.rstrip("/")
-            root_url = base[: -len("/v1")].rstrip("/") if base.endswith("/v1") else base
-            v1_url = base if base.endswith("/v1") else f"{base}/v1"
-            headers = {"Authorization": f"Bearer {profile.api_key}"}
-            with httpx.Client(timeout=15.0) as client:
-                ollama_resp = client.post(
-                    f"{root_url}/api/embed",
-                    json={"model": profile.model, "input": text},
-                )
-                if ollama_resp.status_code == 200:
-                    data = ollama_resp.json()
-                    embeddings = data.get("embeddings") or []
-                    if embeddings:
-                        arr = np.asarray(embeddings[0], dtype=np.float32)
-                        norm = float(np.linalg.norm(arr))
-                        if norm > 1e-8:
-                            arr /= norm
-                        return arr
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
 
-                resp = client.post(
-                    f"{v1_url}/embeddings",
-                    headers=headers,
-                    json={"model": profile.model, "input": text},
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                raw = data["data"][0]["embedding"]
-                arr = np.asarray(raw, dtype=np.float32)
-                norm = float(np.linalg.norm(arr))
-                if norm > 1e-8:
-                    arr /= norm
-                return arr
-        except Exception:
-            return compute_local_hash_embedding(text, dims=dims)
+    if loop and loop.is_running():
+        import concurrent.futures
 
-    if profile.mode == "fastembed":
-        global _FASTEMBED_MODEL
-        try:
-            if _FASTEMBED_MODEL is None:
-                from fastembed import TextEmbedding  # type: ignore
-
-                _FASTEMBED_MODEL = TextEmbedding()
-            emb_list = list(_FASTEMBED_MODEL.embed([text]))
-            arr = np.asarray(emb_list[0], dtype=np.float32)
-            norm = float(np.linalg.norm(arr))
-            if norm > 1e-8:
-                arr /= norm
-            return arr
-        except Exception:
-            return compute_local_hash_embedding(text, dims=dims)
-
-    return compute_local_hash_embedding(text, dims=dims)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(lambda: asyncio.run(embed_text(text))).result()
+    return asyncio.run(embed_text(text))
 
 
 class VectorStore:

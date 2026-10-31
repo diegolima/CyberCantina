@@ -130,9 +130,12 @@ class CantinaRepository:
         self._staged_character_owners: dict[str, str] = {}
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON;")
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA synchronous = NORMAL;")
+        conn.execute("PRAGMA busy_timeout = 5000;")
         return conn
 
     def init_db(self) -> None:
@@ -563,6 +566,37 @@ class CantinaRepository:
                 FROM character_states cs
                 JOIN turn_nodes t ON t.id = cs.turn_id
                 """
+            )
+
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS staged_character_ownership (
+                    character_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_staged_char_user ON staged_character_ownership(user_id)"
+            )
+
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS webauthn_challenges (
+                    challenge_id TEXT PRIMARY KEY,
+                    challenge_bytes BLOB NOT NULL,
+                    rp_id TEXT NOT NULL,
+                    origin TEXT NOT NULL,
+                    user_id TEXT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    friendly_name TEXT NOT NULL DEFAULT '',
+                    replace_credential_id TEXT NULL,
+                    created_at_epoch REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_epoch ON webauthn_challenges(created_at_epoch)"
             )
             conn.commit()
         finally:
@@ -1141,6 +1175,71 @@ class CantinaRepository:
             if cur.rowcount == 0:
                 raise KeyError(f"Passkey '{credential_id}' not found")
             conn.commit()
+        finally:
+            conn.close()
+
+    def save_webauthn_challenge(
+        self,
+        *,
+        challenge_id: str,
+        challenge_bytes: bytes,
+        rp_id: str,
+        origin: str,
+        user_id: str | None = None,
+        friendly_name: str = "",
+        replace_credential_id: str | None = None,
+        created_at_epoch: float | None = None,
+    ) -> None:
+        """Persist a WebAuthn challenge into SQLite so any worker can verify it."""
+        now_epoch = created_at_epoch if created_at_epoch is not None else datetime.now(timezone.utc).timestamp()
+        conn = self._connect()
+        try:
+            conn.execute(
+                "DELETE FROM webauthn_challenges WHERE created_at_epoch < ?",
+                (now_epoch - 300,),
+            )
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO webauthn_challenges
+                (challenge_id, challenge_bytes, rp_id, origin, user_id, friendly_name, replace_credential_id, created_at_epoch)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    challenge_id,
+                    challenge_bytes,
+                    rp_id,
+                    origin,
+                    user_id,
+                    friendly_name,
+                    replace_credential_id,
+                    now_epoch,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def pop_webauthn_challenge(self, challenge_id: str) -> dict[str, Any] | None:
+        """Atomically pop and delete a WebAuthn challenge from SQLite."""
+        now_epoch = datetime.now(timezone.utc).timestamp()
+        conn = self._connect()
+        try:
+            conn.execute(
+                "DELETE FROM webauthn_challenges WHERE created_at_epoch < ?",
+                (now_epoch - 300,),
+            )
+            row = conn.execute(
+                "SELECT * FROM webauthn_challenges WHERE challenge_id = ?",
+                (challenge_id,),
+            ).fetchone()
+            if not row:
+                return None
+            conn.execute(
+                "DELETE FROM webauthn_challenges WHERE challenge_id = ?",
+                (challenge_id,),
+            )
+            conn.commit()
+            return dict(row)
         finally:
             conn.close()
 
@@ -2425,6 +2524,7 @@ class CantinaRepository:
                     conn=conn,
                 )
 
+            conn.execute("DELETE FROM staged_character_ownership WHERE character_id = ?", (c_id,))
             conn.commit()
         finally:
             conn.close()
@@ -2510,6 +2610,18 @@ class CantinaRepository:
     def stage_character_media_ownership(self, user_id: str, character_id: str) -> None:
         """Register temporary media ownership for an uncommitted character draft."""
         self._staged_character_owners[character_id] = user_id
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO staged_character_ownership (character_id, user_id, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (character_id, user_id, utc_now_iso()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     def user_can_access_character(self, user_id: str, character_id: str) -> bool:
         """Check whether a user has legitimate access to a character.
@@ -2533,9 +2645,11 @@ class CantinaRepository:
                 SELECT 1 FROM campaign_characters cc
                 JOIN campaigns c ON cc.campaign_id = c.id
                 WHERE cc.character_id = ? AND c.owner_id = ?
+                UNION
+                SELECT 1 FROM staged_character_ownership WHERE character_id = ? AND user_id = ?
                 LIMIT 1
                 """,
-                (character_id, user_id, character_id, user_id, character_id, user_id),
+                (character_id, user_id, character_id, user_id, character_id, user_id, character_id, user_id),
             ).fetchone()
             return row is not None
         finally:
