@@ -20,6 +20,7 @@ import {
   PromptPresetRecord,
   PromptPresetUpdatePayload,
   RecalledMemoryItem,
+  SillyTavernImportResponse,
   TurnNodeRecord,
   TurnSubmitOptions,
   UpdateNotePayload,
@@ -565,10 +566,40 @@ export const api = {
       method: "POST",
       body: JSON.stringify(seed),
     }),
-  commitCharacter: (draft: CharacterWizardDraft, worldId?: string | null) =>
+  importSillyTavernCard: async (
+    file: File,
+    autoGenerateWorld: boolean = true,
+    worldId?: string | null
+  ): Promise<SillyTavernImportResponse> => {
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("auto_generate_world", String(autoGenerateWorld));
+    if (worldId) {
+      formData.append("world_id", worldId);
+    }
+    const res = await fetch(`${API_BASE}/wizards/character/import-sillytavern`, {
+      method: "POST",
+      credentials: "include",
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Failed to import SillyTavern card");
+    }
+    return res.json();
+  },
+  commitCharacter: (
+    draft: CharacterWizardDraft,
+    worldId?: string | null,
+    characterId?: string | null
+  ) =>
     fetchJson<CharacterRecord>(`${API_BASE}/wizards/character/commit`, {
       method: "POST",
-      body: JSON.stringify({ draft, world_id: worldId ?? null }),
+      body: JSON.stringify({
+        draft,
+        world_id: worldId ?? null,
+        character_id: characterId ?? null,
+      }),
     }),
   updateCharacter: (
     characterId: string,

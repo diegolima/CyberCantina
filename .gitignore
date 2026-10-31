@@ -5,6 +5,8 @@
 *.sqlite
 *.sqlite3
 backend/cybercantina.db
+backend/data/
+data/
 
 # User Configuration & API Keys
 backend/cantina_settings.json

@@ -203,6 +203,11 @@ async def generate_character_draft(
                     new_inv.append(it)
             draft.equipped = new_eq or fallback.equipped
             draft.inventory = new_inv or fallback.inventory
+
+        # Media assets must strictly be managed by user uploads or the media pipeline, not LLM
+        draft.portraits = {}
+        draft.gallery = []
+
         return draft
     except Exception:
         if not settings.allow_offline_fallback:

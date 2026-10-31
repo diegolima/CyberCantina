@@ -1454,11 +1454,15 @@ export const App: React.FC = () => {
           onClose={() => setShowCharWizard(false)}
           onCreated={async (createdChar, launchWorldId) => {
             setShowCharWizard(false);
-            const cList = await api.listCharacters();
+            const [cList, wList] = await Promise.all([
+              api.listCharacters(),
+              api.listWorlds(),
+            ]);
             setCharacters(cList);
+            setWorlds(wList);
             setActiveCharacter(createdChar);
             const targetWorld =
-              worlds.find((w) => w.id === launchWorldId) ?? worlds[0];
+              wList.find((w) => w.id === launchWorldId) ?? wList[0];
             if (targetWorld) {
               const newBundle = await api.createCampaign({
                 name: `${createdChar.name} in ${targetWorld.name}`,

@@ -84,6 +84,12 @@ export interface CharacterWizardDraft {
   gallery?: GalleryImage[];
 }
 
+export interface SillyTavernImportResponse {
+  draft: CharacterWizardDraft;
+  preassigned_character_id: string;
+  auto_generated_world?: WorldWizardDraft | null;
+}
+
 export interface CharacterRecord extends CharacterWizardDraft {
   id: string;
   world_id?: string | null;

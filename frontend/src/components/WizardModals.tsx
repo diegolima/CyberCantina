@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Sparkles, Globe, UserPlus, X, Check, Plus, Trash2 } from "lucide-react";
+import { Sparkles, Globe, UserPlus, X, Check, Plus, Trash2, Upload } from "lucide-react";
 import { api } from "../api";
 import {
   CharacterRecord,
@@ -26,6 +26,7 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
   onClose,
   onCreated,
 }) => {
+  const [tab, setTab] = useState<"seed" | "import">("seed");
   const [name, setName] = useState("Soren Kael");
   const [archetype, setArchetype] = useState(
     "Rogue corporate courier with an encrypted memory vault"
@@ -38,6 +39,13 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
     "Fled an ambush in the upper spire; carries a locked bio-drive."
   );
   const [worldId, setWorldId] = useState(defaultWorldId);
+
+  // SillyTavern Import State
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [autoGenWorld, setAutoGenWorld] = useState(true);
+  const [preassignedCharId, setPreassignedCharId] = useState<string | null>(null);
+  const [importedWorldDraft, setImportedWorldDraft] = useState<WorldWizardDraft | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   const [draft, setDraft] = useState<CharacterWizardDraft | null>(null);
   const [loading, setLoading] = useState(false);
@@ -60,6 +68,32 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
         world_id: worldId || null,
       });
       setDraft(res);
+      setPreassignedCharId(null);
+      setImportedWorldDraft(null);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleImportCard = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!importFile) {
+      setError("Please select or drop a SillyTavern .png or .json character card.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const res = await api.importSillyTavernCard(
+        importFile,
+        autoGenWorld,
+        worldId || null
+      );
+      setDraft(res.draft);
+      setPreassignedCharId(res.preassigned_character_id);
+      setImportedWorldDraft(res.auto_generated_world ?? null);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -71,8 +105,22 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
     if (!draft) return;
     setLoading(true);
     try {
-      const created = await api.commitCharacter(draft, worldId);
-      onCreated(created, worldId);
+      if (importedWorldDraft) {
+        const createdWorld = await api.commitWorld(importedWorldDraft);
+        const created = await api.commitCharacter(
+          draft,
+          createdWorld.id,
+          preassignedCharId
+        );
+        onCreated(created, createdWorld.id);
+      } else {
+        const created = await api.commitCharacter(
+          draft,
+          worldId,
+          preassignedCharId
+        );
+        onCreated(created, worldId);
+      }
     } catch (err) {
       setError(String(err));
     } finally {
@@ -101,82 +149,293 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
           )}
 
           {!draft ? (
-            <form onSubmit={handleGenerateDraft} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <div className="field-group">
-                <label>Target World Setting</label>
-                <select
-                  className="field-select"
-                  value={worldId}
-                  onChange={(e) => setWorldId(e.target.value)}
+            <>
+              {/* Mode Selection Tabs */}
+              <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                <button
+                  type="button"
+                  className={`btn ${tab === "seed" ? "btn-amber" : ""}`}
+                  style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                  onClick={() => {
+                    setTab("seed");
+                    setError("");
+                  }}
                 >
-                  <option value="">Standalone (No specific world)</option>
-                  {worlds.map((w) => (
-                    <option key={w.id} value={w.id}>
-                      {w.name} ({w.global_rules.genre})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="field-group">
-                <label>Character Name</label>
-                <input
-                  className="field-input"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  required
-                />
-              </div>
-
-              <div className="field-group">
-                <label>Archetype / High Concept</label>
-                <input
-                  className="field-input"
-                  value={archetype}
-                  onChange={(e) => setArchetype(e.target.value)}
-                  required
-                />
-              </div>
-
-              <div className="field-group">
-                <label>Role in Story</label>
-                <input
-                  className="field-input"
-                  value={roleInStory}
-                  onChange={(e) => setRoleInStory(e.target.value)}
-                />
-              </div>
-
-              <div className="field-group">
-                <label>Personality Keywords (comma-separated)</label>
-                <input
-                  className="field-input"
-                  value={keywords}
-                  onChange={(e) => setKeywords(e.target.value)}
-                />
-              </div>
-
-              <div className="field-group">
-                <label>Rough Notes, Secrets, or Backstory Ideas</label>
-                <textarea
-                  className="field-textarea"
-                  value={roughNotes}
-                  onChange={(e) => setRoughNotes(e.target.value)}
-                />
-              </div>
-
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 6 }}>
-                <button type="button" className="btn" onClick={onClose}>
-                  Cancel
+                  <Sparkles size={14} />
+                  Create from Concept Seed
                 </button>
-                <button type="submit" className="btn btn-amber" disabled={loading}>
-                  <Sparkles size={15} />
-                  {loading ? "AI Expanding Character..." : "Expand & Optimize with AI"}
+                <button
+                  type="button"
+                  className={`btn ${tab === "import" ? "btn-amber" : ""}`}
+                  style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                  onClick={() => {
+                    setTab("import");
+                    setError("");
+                  }}
+                >
+                  <Upload size={14} />
+                  Import SillyTavern Card (.png / .json)
                 </button>
               </div>
-            </form>
+
+              {tab === "seed" ? (
+                <form onSubmit={handleGenerateDraft} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div className="field-group">
+                    <label>Target World Setting</label>
+                    <select
+                      className="field-select"
+                      value={worldId}
+                      onChange={(e) => setWorldId(e.target.value)}
+                    >
+                      <option value="">Standalone (No specific world)</option>
+                      {worlds.map((w) => (
+                        <option key={w.id} value={w.id}>
+                          {w.name} ({w.global_rules.genre})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="field-group">
+                    <label>Character Name</label>
+                    <input
+                      className="field-input"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      required
+                    />
+                  </div>
+
+                  <div className="field-group">
+                    <label>Archetype / High Concept</label>
+                    <input
+                      className="field-input"
+                      value={archetype}
+                      onChange={(e) => setArchetype(e.target.value)}
+                      required
+                    />
+                  </div>
+
+                  <div className="field-group">
+                    <label>Role in Story</label>
+                    <input
+                      className="field-input"
+                      value={roleInStory}
+                      onChange={(e) => setRoleInStory(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="field-group">
+                    <label>Personality Keywords (comma-separated)</label>
+                    <input
+                      className="field-input"
+                      value={keywords}
+                      onChange={(e) => setKeywords(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="field-group">
+                    <label>Rough Notes, Secrets, or Backstory Ideas</label>
+                    <textarea
+                      className="field-textarea"
+                      value={roughNotes}
+                      onChange={(e) => setRoughNotes(e.target.value)}
+                    />
+                  </div>
+
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 6 }}>
+                    <button type="button" className="btn" onClick={onClose}>
+                      Cancel
+                    </button>
+                    <button type="submit" className="btn btn-amber" disabled={loading}>
+                      <Sparkles size={15} />
+                      {loading ? "AI Expanding Character..." : "Expand & Optimize with AI"}
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <form onSubmit={handleImportCard} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  {/* Dropzone */}
+                  <div
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setIsDragging(true);
+                    }}
+                    onDragLeave={() => setIsDragging(false)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setIsDragging(false);
+                      const file = e.dataTransfer.files?.[0];
+                      if (file) {
+                        setImportFile(file);
+                        setError("");
+                      }
+                    }}
+                    style={{
+                      border: isDragging ? "2px dashed var(--accent-amber)" : "2px dashed var(--border-subtle)",
+                      borderRadius: 8,
+                      padding: "24px 16px",
+                      textAlign: "center",
+                      background: isDragging ? "rgba(245, 158, 11, 0.05)" : "var(--bg-card)",
+                      cursor: "pointer",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      gap: 8,
+                      transition: "border-color 0.15s, background-color 0.15s",
+                    }}
+                    onClick={() => {
+                      const input = document.getElementById("st-card-file-input");
+                      input?.click();
+                    }}
+                  >
+                    <input
+                      id="st-card-file-input"
+                      type="file"
+                      accept=".png,.json,image/png,application/json"
+                      style={{ display: "none" }}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          setImportFile(file);
+                          setError("");
+                        }
+                      }}
+                    />
+                    <Upload size={28} style={{ color: "var(--accent-amber)" }} />
+                    <div style={{ fontWeight: 500, fontSize: "0.9rem" }}>
+                      {importFile ? (
+                        <span style={{ color: "var(--accent-cyan)" }}>
+                          Selected: {importFile.name} ({(importFile.size / 1024).toFixed(1)} KB)
+                        </span>
+                      ) : (
+                        "Drop SillyTavern Card (.png or .json) here, or click to browse"
+                      )}
+                    </div>
+                    <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                      Supports Card Spec V2 & V1. PNGs with embedded chunks extract portraits and gallery artwork automatically.
+                    </div>
+                  </div>
+
+                  {/* World Option Selection */}
+                  <div
+                    style={{
+                      background: "var(--bg-card)",
+                      border: "1px solid var(--border-subtle)",
+                      borderRadius: 8,
+                      padding: 12,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 10,
+                    }}
+                  >
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: "0.85rem", fontWeight: 500 }}>
+                      <input
+                        type="checkbox"
+                        checked={autoGenWorld}
+                        onChange={(e) => setAutoGenWorld(e.target.checked)}
+                      />
+                      <span>Auto-generate matching world from card setting (Recommended)</span>
+                    </label>
+                    <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", marginLeft: 24 }}>
+                      Synthesizes a 5-room spatial setting with compass edges and lore matching the character's scenario and greeting.
+                    </div>
+
+                    {!autoGenWorld && (
+                      <div className="field-group" style={{ marginTop: 4 }}>
+                        <label>Target World Setting</label>
+                        <select
+                          className="field-select"
+                          value={worldId}
+                          onChange={(e) => setWorldId(e.target.value)}
+                        >
+                          <option value="">Standalone (No specific world)</option>
+                          {worlds.map((w) => (
+                            <option key={w.id} value={w.id}>
+                              {w.name} ({w.global_rules.genre})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 6 }}>
+                    <button type="button" className="btn" onClick={onClose}>
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="btn btn-amber"
+                      disabled={loading || !importFile}
+                    >
+                      <Sparkles size={15} />
+                      {loading ? "Importing & Distilling Character..." : "Import & Distill with AI"}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {/* Media Preview Banner if Portrait Present */}
+              {draft.portraits?.default && (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 14,
+                    padding: "10px 14px",
+                    background: "var(--bg-card)",
+                    border: "1px solid var(--border-subtle)",
+                    borderRadius: 8,
+                  }}
+                >
+                  <img
+                    src={draft.portraits.default}
+                    alt={draft.name}
+                    style={{
+                      width: 60,
+                      height: 60,
+                      borderRadius: 8,
+                      objectFit: "cover",
+                      border: "1px solid var(--border-subtle)",
+                    }}
+                  />
+                  <div>
+                    <div style={{ fontWeight: 600, color: "var(--accent-amber)", fontSize: "0.95rem" }}>
+                      {draft.name}
+                    </div>
+                    <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
+                      {draft.tagline}
+                    </div>
+                    {draft.gallery && draft.gallery.length > 0 && (
+                      <div style={{ fontSize: "0.74rem", color: "var(--accent-cyan)", marginTop: 2 }}>
+                        Photo album initialized with {draft.gallery.length} artwork asset(s)
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Auto-Generated World Notice */}
+              {importedWorldDraft && (
+                <div
+                  style={{
+                    padding: "10px 14px",
+                    background: "rgba(56, 189, 248, 0.08)",
+                    border: "1px solid var(--accent-cyan)",
+                    borderRadius: 8,
+                    fontSize: "0.82rem",
+                  }}
+                >
+                  <strong style={{ color: "var(--accent-cyan)" }}>Auto-Generated World: </strong>
+                  <span>
+                    "{importedWorldDraft.name}" ({importedWorldDraft.locations.length} interconnected locations) will be launched with this character.
+                  </span>
+                </div>
+              )}
+
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 <div className="field-group">
                   <label>Creator / Author (Metadata)</label>
@@ -450,8 +709,16 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
               </div>
 
               <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
-                <button type="button" className="btn" onClick={() => setDraft(null)}>
-                  ← Back to Seed
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    setDraft(null);
+                    setPreassignedCharId(null);
+                    setImportedWorldDraft(null);
+                  }}
+                >
+                  ← Back
                 </button>
                 <button
                   type="button"

@@ -12,6 +12,7 @@ PROMPT_KEY_CLERK_POST_TURN = "clerk_post_turn_system"
 PROMPT_KEY_WIZARD_WORLD = "wizard_world_system"
 PROMPT_KEY_WIZARD_CHARACTER = "wizard_character_system"
 PROMPT_KEY_WIZARD_MAP_REIMAGINE = "wizard_map_reimagine_system"
+PROMPT_KEY_WIZARD_CHARACTER_IMPORT_ST = "wizard_character_sillytavern_system"
 
 ALL_PROMPT_KEYS = [
     PROMPT_KEY_ACTOR_ZONE1,
@@ -22,6 +23,7 @@ ALL_PROMPT_KEYS = [
     PROMPT_KEY_WIZARD_WORLD,
     PROMPT_KEY_WIZARD_CHARACTER,
     PROMPT_KEY_WIZARD_MAP_REIMAGINE,
+    PROMPT_KEY_WIZARD_CHARACTER_IMPORT_ST,
 ]
 
 DEFAULT_ACTOR_ZONE1_SYSTEM = (
@@ -171,6 +173,32 @@ DEFAULT_WIZARD_CHARACTER_SYSTEM = (
     "core_fear, default_want, and default_plan.\n"
     "8. memory_shards: Break the character's backstory into 4 atomic, self-contained memory shards with "
     "entity keywords so they can be retrieved via semantic RAG only when relevant.\n"
+    "9. portraits & gallery: Do NOT invent or populate portraits or gallery—leave them as empty dict and empty list.\n"
+    "Return ONLY valid JSON matching CharacterWizardDraft."
+)
+
+DEFAULT_WIZARD_CHARACTER_SILLYTAVERN_SYSTEM = (
+    "You are an expert AI Roleplay Character Architect and Card Ingestion Specialist.\n"
+    "Your task is to ingest an unstructured SillyTavern character card (often containing large text blobs, "
+    "W++ definitions, or mixed dialogue examples) and deconstruct it into a rich, structured CharacterWizardDraft JSON object.\n\n"
+    "Guidelines for Deconstruction & Cognitive RPG Optimization:\n"
+    "1. physical_appearance: Dedicated 50-100 word description of the character's permanent anatomical features "
+    "(age, build, facial features, eye color, hair, scars, permanent cyberware or bodily traits). "
+    "Strictly exclude temporary clothing, armor, or carried weapons—those belong in equipped or inventory.\n"
+    "2. core_persona: High-density 150-250 word persona block covering core psychology, demeanor, "
+    "speech cadence, psychological habits, and behavioral boundaries for Zone 1 Static Prefix.\n"
+    "3. initial_message: Turn 0 opening scene prose with actions in *italics* and spoken dialogue in \"quotes\". "
+    "Use the card's first message / greeting as the primary base, ensuring {{char}} is replaced with their name and {{user}} with 'you'.\n"
+    "4. equipped: 2-4 starting worn clothing, armor, holstered sidearms, or equipped cyberware mentioned in appearance or description.\n"
+    "5. inventory: 2-4 carried tools, personal objects, keys, badges, or concealed items.\n"
+    "6. voice_anchors: 2-3 distinct dialogue and physical action anchors ('Calm / Banter', 'Guarded / Conflict', 'Vulnerable / Urgent') "
+    "demonstrating exact speech cadence and mannerisms (actions in *italics*, dialogue in \"quotes\").\n"
+    "7. baseline_psyche: Define realistic initial valence (-1.0 to 1.0) and arousal (0.0 to 1.0), mood_label, "
+    "core_drive, core_fear, default_want (immediate Turn 0 scene intent), and default_plan (tactical next step).\n"
+    "8. memory_shards: Slice the card's backstory and lore into 3-6 atomic, self-contained memory shards (each with title, "
+    "content, keywords, and emotional_weight) so they can be retrieved via semantic vector RAG during roleplay.\n"
+    "9. creator, tags, creator_notes: Preserve any provided creator, cleaned tags, and creator notes.\n"
+    "10. portraits & gallery: Do NOT invent or populate portraits or gallery—leave them as empty dict and empty list.\n"
     "Return ONLY valid JSON matching CharacterWizardDraft."
 )
 
@@ -213,6 +241,7 @@ FACTORY_DEFAULT_PROMPTS: dict[str, str] = {
     PROMPT_KEY_WIZARD_WORLD: DEFAULT_WIZARD_WORLD_SYSTEM,
     PROMPT_KEY_WIZARD_CHARACTER: DEFAULT_WIZARD_CHARACTER_SYSTEM,
     PROMPT_KEY_WIZARD_MAP_REIMAGINE: DEFAULT_WIZARD_MAP_REIMAGINE_SYSTEM,
+    PROMPT_KEY_WIZARD_CHARACTER_IMPORT_ST: DEFAULT_WIZARD_CHARACTER_SILLYTAVERN_SYSTEM,
 }
 
 # --- Preset 2: Novelistic & Descriptive ---
@@ -415,5 +444,12 @@ PROMPTS_METADATA = [
             {"name": "location_count", "description": "Number of locations requested"},
         ],
         "required_tags": ["WorldMapDraft"],
+    },
+    {
+        "key": PROMPT_KEY_WIZARD_CHARACTER_IMPORT_ST,
+        "title": "SillyTavern Card Ingestion Wizard",
+        "description": "System prompt used when deconstructing unstructured SillyTavern character cards into cognitive RPG character drafts.",
+        "available_variables": [],
+        "required_tags": ["CharacterWizardDraft"],
     },
 ]

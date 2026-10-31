@@ -38,8 +38,49 @@ from app.schemas.character import (
     CognitionBlock,
     GalleryImage,
     MemoryShard,
+    VALID_EMOTIONS,
     VoiceAnchor,
 )
+
+
+def _sanitize_character_media(
+    portraits: dict[str, str] | None, gallery: list[GalleryImage] | None
+) -> tuple[dict[str, str], list[GalleryImage]]:
+    """Filter out hallucinated LLM keys and ensure only valid emotion keys and media URLs persist."""
+    clean_portraits: dict[str, str] = {}
+    if portraits and isinstance(portraits, dict):
+        for emotion, url in portraits.items():
+            clean_emotion = str(emotion).strip().lower()
+            if clean_emotion in VALID_EMOTIONS and isinstance(url, str):
+                u = url.strip()
+                if (
+                    u.startswith("/api/media/")
+                    or u.startswith("http://")
+                    or u.startswith("https://")
+                ):
+                    clean_portraits[clean_emotion] = u
+
+    clean_gallery: list[GalleryImage] = []
+    if gallery and isinstance(gallery, list):
+        for img in gallery:
+            if isinstance(img, GalleryImage) and isinstance(img.url, str):
+                u = img.url.strip()
+                if (
+                    u.startswith("/api/media/")
+                    or u.startswith("http://")
+                    or u.startswith("https://")
+                ):
+                    clean_gallery.append(img)
+            elif isinstance(img, dict) and isinstance(img.get("url"), str):
+                u = str(img["url"]).strip()
+                if (
+                    u.startswith("/api/media/")
+                    or u.startswith("http://")
+                    or u.startswith("https://")
+                ):
+                    clean_gallery.append(GalleryImage(**img))
+
+    return clean_portraits, clean_gallery
 
 
 def slugify_tag(text: str) -> str:
@@ -86,6 +127,7 @@ class CantinaRepository:
         self.db_path = db_path
         self.media_dir = media_dir or str(Path(db_path).resolve().parent / "data" / "media")
         self.vector_store = VectorStore(db_path)
+        self._staged_character_owners: dict[str, str] = {}
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -2296,8 +2338,11 @@ class CantinaRepository:
         clean_tags = [slugify_tag(t) for t in draft.tags if t and t.strip()]
         creator_str = draft.creator.strip()
         creator_notes_str = draft.creator_notes.strip()
-        portraits_json = json.dumps(draft.portraits if draft.portraits else {})
-        gallery_json = json.dumps([img.model_dump() for img in draft.gallery])
+        clean_portraits, clean_gallery = _sanitize_character_media(
+            draft.portraits, draft.gallery
+        )
+        portraits_json = json.dumps(clean_portraits)
+        gallery_json = json.dumps([img.model_dump() for img in clean_gallery])
         conn = self._connect()
         try:
             conn.execute(
@@ -2384,6 +2429,7 @@ class CantinaRepository:
         finally:
             conn.close()
 
+        self._staged_character_owners.pop(c_id, None)
         return self.get_character(c_id)
 
     async def acreate_character_from_draft(
@@ -2461,6 +2507,10 @@ class CantinaRepository:
             return False
         return True
 
+    def stage_character_media_ownership(self, user_id: str, character_id: str) -> None:
+        """Register temporary media ownership for an uncommitted character draft."""
+        self._staged_character_owners[character_id] = user_id
+
     def user_can_access_character(self, user_id: str, character_id: str) -> bool:
         """Check whether a user has legitimate access to a character.
 
@@ -2468,7 +2518,10 @@ class CantinaRepository:
         1. The user owns the character (characters.owner_id == user_id)
         2. The character is the primary character of a campaign owned by the user (campaigns.character_id == character_id)
         3. The character is a participant in a campaign owned by the user (campaign_characters.character_id == character_id)
+        4. The user is currently staging an uncommitted draft with pre-assigned media assets
         """
+        if self._staged_character_owners.get(character_id) == user_id:
+            return True
         conn = self._connect()
         try:
             row = conn.execute(
@@ -2776,8 +2829,9 @@ class CantinaRepository:
             creator_notes_str = payload.creator_notes.strip()
             portraits_dict = payload.portraits if payload.portraits else orig.portraits
             gallery_list = payload.gallery if payload.gallery else orig.gallery
-            portraits_json = json.dumps(portraits_dict)
-            gallery_json = json.dumps([img.model_dump() for img in gallery_list])
+            clean_p, clean_g = _sanitize_character_media(portraits_dict, gallery_list)
+            portraits_json = json.dumps(clean_p)
+            gallery_json = json.dumps([img.model_dump() for img in clean_g])
             new_version = orig.version + 1
 
             if campaigns_using == 0:

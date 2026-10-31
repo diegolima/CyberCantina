@@ -129,6 +129,11 @@ from app.schemas.world import (
     WorldWizardSeed,
 )
 from app.wizards.character_wizard import generate_character_draft
+from app.wizards.sillytavern_distiller import (
+    distill_sillytavern_card,
+    synthesize_world_seed_from_sillytavern,
+)
+from app.wizards.sillytavern_parser import extract_card_from_bytes
 from app.wizards.world_wizard import generate_world_draft, reimagine_world_map
 
 
@@ -259,6 +264,13 @@ class CampaignEdgeDistanceUpdateRequest(BaseModel):
 class CharacterCommitRequest(BaseModel):
     draft: CharacterWizardDraft
     world_id: str | None = None
+    character_id: str | None = None
+
+
+class SillyTavernImportResponse(BaseModel):
+    draft: CharacterWizardDraft
+    preassigned_character_id: str
+    auto_generated_world: WorldWizardDraft | None = None
 
 
 def _issue_session_response(
@@ -1440,6 +1452,101 @@ async def wizard_draft_character(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+@app.post(
+    "/api/wizards/character/import-sillytavern",
+    response_model=SillyTavernImportResponse,
+)
+async def wizard_import_sillytavern_card(
+    file: UploadFile = File(...),
+    auto_generate_world: bool = Form(True),
+    world_id: str | None = Form(None),
+    current_user: UserProfile = Depends(get_current_user),
+) -> SillyTavernImportResponse:
+    repo = get_repo()
+    eff_actor, *_ = get_effective_user_model_settings(current_user.id)
+    effective_prompts = repo.resolve_effective_prompts(user_id=current_user.id)
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    try:
+        pkg = extract_card_from_bytes(file_bytes, filename=file.filename or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    preassigned_id = f"char_{uuid.uuid4().hex[:10]}"
+    repo.stage_character_media_ownership(current_user.id, preassigned_id)
+
+    target_world: WorldRecord | None = None
+    if world_id and world_id.strip():
+        try:
+            target_world = repo.get_world(world_id.strip(), owner_id=current_user.id)
+        except KeyError:
+            pass
+
+    try:
+        draft = await distill_sillytavern_card(
+            pkg.card,
+            world=target_world,
+            profile=eff_actor,
+            prompt_template=effective_prompts.get("wizard_character_sillytavern_system"),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Card distillation failed: {exc}") from exc
+
+    # If raw PNG artwork is available, process and stage default portrait and gallery image
+    if pkg.image_bytes:
+        try:
+            portrait_suffix = uuid.uuid4().hex[:8]
+            portrait_filename = f"default_{portrait_suffix}.webp"
+            portrait_path = _safe_resolve_media_path(
+                preassigned_id, "portraits", portrait_filename
+            )
+            _process_and_save_image(
+                pkg.image_bytes, portrait_path, square_crop=True, max_size=512
+            )
+            draft.portraits["default"] = (
+                f"/api/media/characters/{preassigned_id}/portraits/{portrait_filename}"
+            )
+
+            gallery_id = f"img_{uuid.uuid4().hex[:10]}"
+            gallery_filename = f"{gallery_id}.webp"
+            gallery_path = _safe_resolve_media_path(
+                preassigned_id, "gallery", gallery_filename
+            )
+            _process_and_save_image(
+                pkg.image_bytes, gallery_path, square_crop=False, max_size=1920
+            )
+            gallery_item = GalleryImage(
+                id=gallery_id,
+                url=f"/api/media/characters/{preassigned_id}/gallery/{gallery_filename}",
+                caption="Original Card Artwork",
+                created_at=utc_now_iso(),
+            )
+            draft.gallery = [gallery_item]
+        except Exception:
+            pass
+
+    auto_world_draft: WorldWizardDraft | None = None
+    if auto_generate_world:
+        try:
+            world_seed = synthesize_world_seed_from_sillytavern(pkg.card)
+            auto_world_draft = await generate_world_draft(
+                world_seed,
+                profile=eff_actor,
+                prompt_template=effective_prompts.get("wizard_world_system"),
+            )
+        except Exception:
+            pass
+
+    return SillyTavernImportResponse(
+        draft=draft,
+        preassigned_character_id=preassigned_id,
+        auto_generated_world=auto_world_draft,
+    )
+
+
 @app.post("/api/wizards/character/commit", response_model=CharacterRecord)
 async def wizard_commit_character(
     req: CharacterCommitRequest,
@@ -1458,7 +1565,10 @@ async def wizard_commit_character(
                 detail=f"World '{req.world_id}' not found or access denied.",
             ) from exc
     return await repo.acreate_character_from_draft(
-        req.draft, world_id=req.world_id, owner_id=current_user.id
+        req.draft,
+        world_id=req.world_id,
+        character_id=req.character_id,
+        owner_id=current_user.id,
     )
 
 
