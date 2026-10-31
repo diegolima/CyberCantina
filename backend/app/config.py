@@ -95,6 +95,12 @@ class AppSettings(BaseModel):
             str(Path(__file__).resolve().parent.parent / "cybercantina.db"),
         )
     )
+    media_dir: str = Field(
+        default_factory=lambda: os.environ.get(
+            "CYBERCANTINA_MEDIA_DIR",
+            str(Path(__file__).resolve().parent.parent / "data" / "media"),
+        )
+    )
     actor_profile: ModelProfile = Field(
         default_factory=lambda: ModelProfile(
             base_url=os.environ.get("ACTOR_BASE_URL", "http://localhost:11434/v1"),
@@ -135,23 +141,29 @@ def load_initial_settings() -> AppSettings:
         "CYBERCANTINA_DB_PATH",
         str(Path(__file__).resolve().parent.parent / "cybercantina.db"),
     )
+    default_media_dir = os.environ.get(
+        "CYBERCANTINA_MEDIA_DIR",
+        str(Path(__file__).resolve().parent.parent / "data" / "media"),
+    )
     if SETTINGS_FILE_PATH.exists():
         try:
             raw = json.loads(SETTINGS_FILE_PATH.read_text(encoding="utf-8"))
             raw.pop("db_path", None)
+            raw.pop("media_dir", None)
             loaded = AppSettings.model_validate(raw)
             loaded.db_path = default_db_path
+            loaded.media_dir = default_media_dir
             return loaded
         except Exception:
             pass
-    return AppSettings(db_path=default_db_path)
+    return AppSettings(db_path=default_db_path, media_dir=default_media_dir)
 
 
 def persist_settings(current: AppSettings) -> None:
     """Persist runtime settings to cantina_settings.json."""
     try:
         SETTINGS_FILE_PATH.write_text(
-            current.model_dump_json(exclude={"db_path"}, indent=2),
+            current.model_dump_json(exclude={"db_path", "media_dir"}, indent=2),
             encoding="utf-8",
         )
     except Exception:

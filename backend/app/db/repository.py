@@ -9,6 +9,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import shutil
 
 import numpy as np
 
@@ -35,6 +36,7 @@ from app.schemas.character import (
     CharacterVersionSummary,
     CharacterWizardDraft,
     CognitionBlock,
+    GalleryImage,
     MemoryShard,
     VoiceAnchor,
 )
@@ -80,8 +82,9 @@ def utc_now_iso() -> str:
 class CantinaRepository:
     """Data access layer with native turn-tree and spatial graph traversal."""
 
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, media_dir: str | None = None) -> None:
         self.db_path = db_path
+        self.media_dir = media_dir or str(Path(db_path).resolve().parent / "data" / "media")
         self.vector_store = VectorStore(db_path)
 
     def _connect(self) -> sqlite3.Connection:
@@ -137,6 +140,14 @@ class CantinaRepository:
             if "creator_notes" not in char_cols:
                 conn.execute(
                     "ALTER TABLE characters ADD COLUMN creator_notes TEXT NOT NULL DEFAULT ''"
+                )
+            if "portraits_json" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN portraits_json TEXT NOT NULL DEFAULT '{}'"
+                )
+            if "gallery_json" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN gallery_json TEXT NOT NULL DEFAULT '[]'"
                 )
             if "version" not in char_cols:
                 conn.execute(
@@ -2272,6 +2283,8 @@ class CantinaRepository:
         clean_tags = [slugify_tag(t) for t in draft.tags if t and t.strip()]
         creator_str = draft.creator.strip()
         creator_notes_str = draft.creator_notes.strip()
+        portraits_json = json.dumps(draft.portraits if draft.portraits else {})
+        gallery_json = json.dumps([img.model_dump() for img in draft.gallery])
         conn = self._connect()
         try:
             conn.execute(
@@ -2280,9 +2293,9 @@ class CantinaRepository:
                     id, owner_id, world_id, name, tagline, physical_appearance, core_persona,
                     initial_message, equipped_json, inventory_json, voice_anchors_json,
                     baseline_psyche_json, memory_shards_json, tags_json, creator, creator_notes,
-                    version, created_at
+                    portraits_json, gallery_json, version, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
                 """,
                 (
                     c_id,
@@ -2301,6 +2314,8 @@ class CantinaRepository:
                     json.dumps(clean_tags),
                     creator_str,
                     creator_notes_str,
+                    portraits_json,
+                    gallery_json,
                     now,
                 ),
             )
@@ -2496,6 +2511,11 @@ class CantinaRepository:
             tags=json.loads(row["tags_json"] or "[]") if "tags_json" in row_keys and row["tags_json"] else [],
             creator=row["creator"] if "creator" in row_keys and row["creator"] else "",
             creator_notes=row["creator_notes"] if "creator_notes" in row_keys and row["creator_notes"] else "",
+            portraits=json.loads(row["portraits_json"] or "{}") if "portraits_json" in row_keys and row["portraits_json"] else {},
+            gallery=[
+                GalleryImage.model_validate(img)
+                for img in json.loads(row["gallery_json"] or "[]")
+            ] if "gallery_json" in row_keys and row["gallery_json"] else [],
             version=row["version"] if "version" in row_keys and row["version"] is not None else 1,
             pending_deletion=bool(row["pending_deletion"]) if "pending_deletion" in row_keys else False,
             created_at=row["created_at"],
@@ -2714,6 +2734,10 @@ class CantinaRepository:
             tags_json = json.dumps(clean_tags)
             creator_str = payload.creator.strip()
             creator_notes_str = payload.creator_notes.strip()
+            portraits_dict = payload.portraits if payload.portraits else orig.portraits
+            gallery_list = payload.gallery if payload.gallery else orig.gallery
+            portraits_json = json.dumps(portraits_dict)
+            gallery_json = json.dumps([img.model_dump() for img in gallery_list])
             new_version = orig.version + 1
 
             if campaigns_using == 0:
@@ -2725,7 +2749,8 @@ class CantinaRepository:
                     SET world_id = ?, name = ?, tagline = ?, physical_appearance = ?,
                         core_persona = ?, initial_message = ?, equipped_json = ?, inventory_json = ?,
                         voice_anchors_json = ?, baseline_psyche_json = ?, memory_shards_json = ?,
-                        tags_json = ?, creator = ?, creator_notes = ?, version = ?
+                        tags_json = ?, creator = ?, creator_notes = ?,
+                        portraits_json = ?, gallery_json = ?, version = ?
                     WHERE id = ?
                     """,
                     (
@@ -2743,6 +2768,8 @@ class CantinaRepository:
                         tags_json,
                         creator_str,
                         creator_notes_str,
+                        portraits_json,
+                        gallery_json,
                         new_version,
                         target_char_id,
                     ),
@@ -2792,10 +2819,11 @@ class CantinaRepository:
                         id, owner_id, world_id, name, tagline, physical_appearance, core_persona,
                         initial_message, equipped_json, inventory_json, voice_anchors_json,
                         baseline_psyche_json, memory_shards_json,
-                        tags_json, creator, creator_notes, version,
+                        tags_json, creator, creator_notes,
+                        portraits_json, gallery_json, version,
                         pending_deletion, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
                     """,
                     (
                         target_char_id,
@@ -2814,10 +2842,21 @@ class CantinaRepository:
                         tags_json,
                         creator_str,
                         creator_notes_str,
+                        portraits_json,
+                        gallery_json,
                         new_version,
                         now,
                     ),
                 )
+
+                # Copy media assets on disk if present
+                try:
+                    old_media = Path(self.media_dir) / "characters" / character_id
+                    new_media = Path(self.media_dir) / "characters" / target_char_id
+                    if old_media.exists() and not new_media.exists():
+                        shutil.copytree(old_media, new_media)
+                except Exception:
+                    pass
 
                 # Copy previous version snapshots into target_char_id so historical versions are accessible
                 old_vers = conn.execute(
@@ -2961,7 +3000,7 @@ class CantinaRepository:
         self, character_id: str, version: int, owner_id: str | None = None
     ) -> CharacterRecord:
         """Return the complete CharacterRecord reconstructed from historical snapshot."""
-        self.get_character(character_id, owner_id=owner_id)
+        current_char = self.get_character(character_id, owner_id=owner_id)
         conn = self._connect()
         try:
             row = conn.execute(
@@ -2975,9 +3014,44 @@ class CantinaRepository:
             if not row:
                 raise KeyError(f"Version {version} for character '{character_id}' not found")
             data = json.loads(row["data_json"])
+            # Keep media assets static to the character
+            data["portraits"] = current_char.portraits
+            data["gallery"] = [img.model_dump() for img in current_char.gallery]
             return CharacterRecord.model_validate(data)
         finally:
             conn.close()
+
+    def update_character_portraits(
+        self, character_id: str, portraits: dict[str, str], owner_id: str | None = None
+    ) -> CharacterRecord:
+        """Update character portraits without bumping version."""
+        self.get_character(character_id, owner_id=owner_id)
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE characters SET portraits_json = ? WHERE id = ?",
+                (json.dumps(portraits), character_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return self.get_character(character_id, owner_id=owner_id)
+
+    def update_character_gallery(
+        self, character_id: str, gallery: list[GalleryImage], owner_id: str | None = None
+    ) -> CharacterRecord:
+        """Update character gallery list without bumping version."""
+        self.get_character(character_id, owner_id=owner_id)
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE characters SET gallery_json = ? WHERE id = ?",
+                (json.dumps([img.model_dump() for img in gallery]), character_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return self.get_character(character_id, owner_id=owner_id)
 
     def mark_character_pending_deletion(
         self, character_id: str, owner_id: str | None = None
@@ -3053,6 +3127,12 @@ class CantinaRepository:
                 )
                 conn.execute("DELETE FROM characters WHERE id = ?", (c_id,))
                 pruned_ids.append(c_id)
+                try:
+                    c_media = Path(self.media_dir) / "characters" / c_id
+                    if c_media.exists():
+                        shutil.rmtree(c_media, ignore_errors=True)
+                except Exception:
+                    pass
 
             if pruned_ids:
                 conn.commit()

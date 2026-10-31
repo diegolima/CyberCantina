@@ -63,10 +63,14 @@ export function setStoredSessionToken(token: string | null): void {
   }
 }
 
-function buildAuthHeaders(extra?: HeadersInit): Record<string, string> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+function buildAuthHeaders(
+  extra?: HeadersInit,
+  isFormData: boolean = false
+): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (!isFormData) {
+    headers["Content-Type"] = "application/json";
+  }
   const token = getStoredSessionToken();
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
@@ -100,10 +104,12 @@ function parseApiErrorText(status: number, errText: string): string {
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const isFormData =
+    typeof FormData !== "undefined" && init?.body instanceof FormData;
   const res = await fetch(url, {
     ...init,
     credentials: "include",
-    headers: buildAuthHeaders(init?.headers),
+    headers: buildAuthHeaders(init?.headers, isFormData),
   });
   if (!res.ok) {
     const errText = await res.text();
@@ -580,6 +586,53 @@ export const api = {
     }>(`${API_BASE}/characters/${characterId}`, {
       method: "DELETE",
     }),
+  uploadCharacterPortrait: (
+    characterId: string,
+    emotion: string,
+    file: File | Blob
+  ) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return fetchJson<CharacterRecord>(
+      `${API_BASE}/characters/${characterId}/portraits/${emotion}`,
+      {
+        method: "POST",
+        body: formData,
+      }
+    );
+  },
+  deleteCharacterPortrait: (characterId: string, emotion: string) =>
+    fetchJson<CharacterRecord>(
+      `${API_BASE}/characters/${characterId}/portraits/${emotion}`,
+      {
+        method: "DELETE",
+      }
+    ),
+  uploadCharacterGalleryImage: (
+    characterId: string,
+    file: File | Blob,
+    caption?: string
+  ) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    if (caption) {
+      formData.append("caption", caption);
+    }
+    return fetchJson<CharacterRecord>(
+      `${API_BASE}/characters/${characterId}/gallery`,
+      {
+        method: "POST",
+        body: formData,
+      }
+    );
+  },
+  deleteCharacterGalleryImage: (characterId: string, imageId: string) =>
+    fetchJson<CharacterRecord>(
+      `${API_BASE}/characters/${characterId}/gallery/${imageId}`,
+      {
+        method: "DELETE",
+      }
+    ),
 
   listCampaigns: () => fetchJson<CampaignRecord[]>(`${API_BASE}/campaigns`),
   createCampaign: (payload: {

@@ -82,6 +82,27 @@ class MemoryShard(BaseModel):
     )
 
 
+VALID_EMOTIONS = (
+    "default",
+    "happy",
+    "sad",
+    "afraid",
+    "angry",
+    "disgusted",
+    "surprised",
+    "contempt",
+)
+
+
+class GalleryImage(BaseModel):
+    """Photo album asset item for a character."""
+
+    id: str = Field(description="Unique identifier for the gallery image.")
+    url: str = Field(description="URL or endpoint path to retrieve the image.")
+    caption: str = Field(default="", description="Optional caption or title for the image.")
+    created_at: str = Field(description="ISO 8601 timestamp when the image was uploaded.")
+
+
 class CharacterWizardSeed(BaseModel):
     """User-provided basic inputs for the 1.1 Character Creation Wizard."""
 
@@ -152,6 +173,14 @@ class CharacterWizardDraft(BaseModel):
     creator_notes: str = Field(
         default="",
         description="Optional built-in usage/roleplay guidance or scenario notes from the creator.",
+    )
+    portraits: dict[str, str] = Field(
+        default_factory=dict,
+        description="Map of emotional expression (e.g. 'default', 'happy') to media asset URL.",
+    )
+    gallery: list[GalleryImage] = Field(
+        default_factory=list,
+        description="List of uploaded photo album image assets.",
     )
 
 

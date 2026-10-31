@@ -3,16 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import re
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from PIL import Image
 from pydantic import BaseModel
 
 from app.auth import (
@@ -34,7 +47,7 @@ from app.auth import (
     verify_password,
 )
 from app.config import AppSettings, ModelProfile, persist_settings, settings
-from app.db.repository import CantinaRepository
+from app.db.repository import CantinaRepository, utc_now_iso
 from app.db.seed import ensure_default_seed
 from app.engine.llm_client import (
     OllamaStatusResponse,
@@ -87,6 +100,8 @@ from app.schemas.character import (
     CharacterWizardDraft,
     CharacterWizardSeed,
     CognitionBlock,
+    GalleryImage,
+    VALID_EMOTIONS,
 )
 from app.schemas.prompt import (
     PromptDefaultsResponse,
@@ -117,7 +132,7 @@ from app.wizards.world_wizard import generate_world_draft, reimagine_world_map
 
 
 def get_repo() -> CantinaRepository:
-    return CantinaRepository(settings.db_path)
+    return CantinaRepository(settings.db_path, media_dir=settings.media_dir)
 
 
 def run_entity_pruner() -> dict[str, list[str]]:
@@ -1397,6 +1412,220 @@ def delete_character(
         return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# ------------------------------------------------------------------
+# Character Media (Portraits & Photo Album)
+# ------------------------------------------------------------------
+
+
+def _safe_resolve_media_path(character_id: str, category: str, filename: str) -> Path:
+    """Safely validate and resolve a media file path to prevent directory traversal."""
+    if category not in ("portraits", "gallery"):
+        raise HTTPException(status_code=400, detail="Invalid media category.")
+    if not re.match(r"^[a-zA-Z0-9_-]+$", character_id):
+        raise HTTPException(status_code=400, detail="Invalid character ID.")
+    if not re.match(r"^[a-zA-Z0-9_.-]+$", filename) or filename.startswith("."):
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+
+    base = Path(settings.media_dir).resolve()
+    target = (base / "characters" / character_id / category / filename).resolve()
+    if not target.is_relative_to(base):
+        raise HTTPException(status_code=403, detail="Path traversal forbidden.")
+    return target
+
+
+def _process_and_save_image(
+    file_bytes: bytes, target_path: Path, square_crop: bool = False, max_size: int = 512
+) -> None:
+    """Validate, format-normalize to WebP, optionally square-crop, and write to disk."""
+    if len(file_bytes) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image exceeds 20MB limit.")
+    try:
+        with Image.open(io.BytesIO(file_bytes)) as img:
+            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                img = img.convert("RGBA")
+            else:
+                img = img.convert("RGB")
+
+            if square_crop:
+                w, h = img.size
+                min_dim = min(w, h)
+                left = (w - min_dim) // 2
+                top = (h - min_dim) // 2
+                img = img.crop((left, top, left + min_dim, top + min_dim))
+                if min_dim > max_size:
+                    img = img.resize((max_size, max_size), Image.Resampling.LANCZOS)
+            else:
+                w, h = img.size
+                if w > max_size or h > max_size:
+                    img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            img.save(target_path, format="WEBP", quality=85)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid image format: {exc}") from exc
+
+
+@app.get("/api/media/characters/{character_id}/{category}/{filename}")
+def get_character_media(character_id: str, category: str, filename: str) -> FileResponse:
+    """Serve a cached static character portrait or photo album image."""
+    target = _safe_resolve_media_path(character_id, category, filename)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Media asset not found.")
+    return FileResponse(
+        target,
+        media_type="image/webp",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@app.post("/api/characters/{character_id}/portraits/{emotion}", response_model=CharacterRecord)
+async def upload_character_portrait(
+    character_id: str,
+    emotion: str,
+    file: UploadFile = File(...),
+    current_user: UserProfile = Depends(get_current_user),
+) -> CharacterRecord:
+    """Upload and square-crop a character portrait for a specific emotional expression."""
+    clean_emotion = emotion.strip().lower()
+    if clean_emotion not in VALID_EMOTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid emotion '{emotion}'. Must be one of: {', '.join(VALID_EMOTIONS)}.",
+        )
+
+    repo = get_repo()
+    try:
+        char = repo.get_character(character_id, owner_id=current_user.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Empty upload payload.")
+
+    file_suffix = uuid.uuid4().hex[:8]
+    filename = f"{clean_emotion}_{file_suffix}.webp"
+    target_path = _safe_resolve_media_path(character_id, "portraits", filename)
+
+    # Delete existing portrait file for this emotion if present
+    old_url = char.portraits.get(clean_emotion)
+    if old_url:
+        old_name = Path(old_url).name
+        try:
+            old_path = _safe_resolve_media_path(character_id, "portraits", old_name)
+            if old_path.is_file():
+                old_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    _process_and_save_image(file_bytes, target_path, square_crop=True, max_size=512)
+
+    new_portraits = dict(char.portraits)
+    new_portraits[clean_emotion] = f"/api/media/characters/{character_id}/portraits/{filename}"
+    return repo.update_character_portraits(character_id, new_portraits, owner_id=current_user.id)
+
+
+@app.delete("/api/characters/{character_id}/portraits/{emotion}", response_model=CharacterRecord)
+def delete_character_portrait(
+    character_id: str,
+    emotion: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CharacterRecord:
+    """Delete a character portrait slot and clean up the image on disk."""
+    clean_emotion = emotion.strip().lower()
+    if clean_emotion not in VALID_EMOTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid emotion '{emotion}'. Must be one of: {', '.join(VALID_EMOTIONS)}.",
+        )
+
+    repo = get_repo()
+    try:
+        char = repo.get_character(character_id, owner_id=current_user.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if clean_emotion in char.portraits:
+        old_url = char.portraits[clean_emotion]
+        if old_url:
+            old_name = Path(old_url).name
+            try:
+                old_path = _safe_resolve_media_path(character_id, "portraits", old_name)
+                if old_path.is_file():
+                    old_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        new_portraits = {k: v for k, v in char.portraits.items() if k != clean_emotion}
+        return repo.update_character_portraits(character_id, new_portraits, owner_id=current_user.id)
+
+    return char
+
+
+@app.post("/api/characters/{character_id}/gallery", response_model=CharacterRecord)
+async def upload_character_gallery_image(
+    character_id: str,
+    file: UploadFile = File(...),
+    caption: str = Form(""),
+    current_user: UserProfile = Depends(get_current_user),
+) -> CharacterRecord:
+    """Upload an image to the character's photo album."""
+    repo = get_repo()
+    try:
+        char = repo.get_character(character_id, owner_id=current_user.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Empty upload payload.")
+
+    img_id = f"img_{uuid.uuid4().hex[:10]}"
+    filename = f"{img_id}.webp"
+    target_path = _safe_resolve_media_path(character_id, "gallery", filename)
+
+    _process_and_save_image(file_bytes, target_path, square_crop=False, max_size=1920)
+
+    item = GalleryImage(
+        id=img_id,
+        url=f"/api/media/characters/{character_id}/gallery/{filename}",
+        caption=caption.strip(),
+        created_at=utc_now_iso(),
+    )
+    new_gallery = list(char.gallery) + [item]
+    return repo.update_character_gallery(character_id, new_gallery, owner_id=current_user.id)
+
+
+@app.delete("/api/characters/{character_id}/gallery/{image_id}", response_model=CharacterRecord)
+def delete_character_gallery_image(
+    character_id: str,
+    image_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CharacterRecord:
+    """Remove a photo from the character's photo album and delete the file on disk."""
+    repo = get_repo()
+    try:
+        char = repo.get_character(character_id, owner_id=current_user.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    matching_item = next((it for it in char.gallery if it.id == image_id), None)
+    if not matching_item:
+        raise HTTPException(status_code=404, detail=f"Gallery image '{image_id}' not found.")
+
+    old_name = Path(matching_item.url).name
+    try:
+        old_path = _safe_resolve_media_path(character_id, "gallery", old_name)
+        if old_path.is_file():
+            old_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    new_gallery = [it for it in char.gallery if it.id != image_id]
+    return repo.update_character_gallery(character_id, new_gallery, owner_id=current_user.id)
 
 
 # ------------------------------------------------------------------

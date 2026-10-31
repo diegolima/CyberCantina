@@ -49,6 +49,23 @@ export interface CharacterWizardSeed {
   world_id?: string | null;
 }
 
+export type BasicEmotion =
+  | "default"
+  | "happy"
+  | "sad"
+  | "afraid"
+  | "angry"
+  | "disgusted"
+  | "surprised"
+  | "contempt";
+
+export interface GalleryImage {
+  id: string;
+  url: string;
+  caption?: string;
+  created_at: string;
+}
+
 export interface CharacterWizardDraft {
   name: string;
   tagline: string;
@@ -63,6 +80,8 @@ export interface CharacterWizardDraft {
   tags?: string[];
   creator?: string;
   creator_notes?: string;
+  portraits?: Record<string, string>;
+  gallery?: GalleryImage[];
 }
 
 export interface CharacterRecord extends CharacterWizardDraft {
@@ -73,6 +92,8 @@ export interface CharacterRecord extends CharacterWizardDraft {
   tags: string[];
   creator: string;
   creator_notes: string;
+  portraits: Record<string, string>;
+  gallery: GalleryImage[];
   created_at: string;
 }
 
