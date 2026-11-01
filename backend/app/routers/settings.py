@@ -7,7 +7,11 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import get_current_user, require_admin
 from app.config import AppSettings, persist_settings, settings
-from app.dependencies import get_effective_user_model_settings, get_repo
+from app.dependencies import (
+    get_effective_agent_dispatch_mode,
+    get_effective_user_model_settings,
+    get_repo,
+)
 from app.engine.llm_client import OllamaStatusResponse, query_ollama_status
 from app.schemas.auth import (
     ProfileModelSettingsResponse,
@@ -66,6 +70,7 @@ def update_settings(
     settings.allow_offline_fallback = updated.allow_offline_fallback
     settings.allow_user_model_overrides = updated.allow_user_model_overrides
     settings.delegate_cognition_to_clerk = updated.delegate_cognition_to_clerk
+    settings.agent_dispatch_mode = updated.agent_dispatch_mode
     persist_settings(settings)
     logger.info("Updated global app settings")
     return settings
@@ -78,6 +83,7 @@ def get_profile_models(
     repo = get_repo()
     user_override = repo.get_user_model_settings(current_user.id)
     eff_actor, eff_clerk, eff_wm_turns, eff_delegate, eff_max_flags = get_effective_user_model_settings(current_user.id)
+    eff_dispatch = get_effective_agent_dispatch_mode(current_user.id)
     has_override = user_override is not None and (
         user_override.actor_profile is not None
         or user_override.clerk_profile is not None
@@ -85,6 +91,7 @@ def get_profile_models(
         or user_override.active_prompt_preset_id is not None
         or user_override.delegate_cognition_to_clerk is not None
         or user_override.max_scene_flags is not None
+        or user_override.agent_dispatch_mode is not None
     )
     return ProfileModelSettingsResponse(
         allow_user_model_overrides=settings.allow_user_model_overrides,
@@ -94,17 +101,20 @@ def get_profile_models(
         effective_working_memory_turns=eff_wm_turns,
         effective_delegate_cognition_to_clerk=eff_delegate,
         effective_max_scene_flags=eff_max_flags,
+        effective_agent_dispatch_mode=eff_dispatch,
         user_actor_profile=user_override.actor_profile if user_override else None,
         user_clerk_profile=user_override.clerk_profile if user_override else None,
         user_working_memory_turns=user_override.working_memory_turns if user_override else None,
         user_delegate_cognition_to_clerk=user_override.delegate_cognition_to_clerk if user_override else None,
         user_max_scene_flags=user_override.max_scene_flags if user_override else None,
+        user_agent_dispatch_mode=user_override.agent_dispatch_mode if user_override else None,
         active_prompt_preset_id=user_override.active_prompt_preset_id if user_override else None,
         default_actor_profile=settings.actor_profile,
         default_clerk_profile=settings.clerk_profile,
         default_working_memory_turns=settings.memory_config.working_memory_turns,
         default_delegate_cognition_to_clerk=settings.delegate_cognition_to_clerk,
         default_max_scene_flags=settings.memory_config.max_scene_flags,
+        default_agent_dispatch_mode=settings.agent_dispatch_mode,
     )
 
 

@@ -9,6 +9,8 @@ PROMPT_KEY_NARRATOR_ZONE1 = "narrator_zone1_system"
 PROMPT_KEY_CLERK_PRE_TURN = "clerk_pre_turn_system"
 PROMPT_KEY_CLERK_SUMMARY = "clerk_episodic_summary_system"
 PROMPT_KEY_CLERK_POST_TURN = "clerk_post_turn_system"
+PROMPT_KEY_CHARACTER_POST_TURN = "character_post_turn_system"
+PROMPT_KEY_CLERK_ARBITRATION = "clerk_arbitration_system"
 PROMPT_KEY_WIZARD_WORLD = "wizard_world_system"
 PROMPT_KEY_WIZARD_CHARACTER = "wizard_character_system"
 PROMPT_KEY_WIZARD_MAP_REIMAGINE = "wizard_map_reimagine_system"
@@ -20,6 +22,8 @@ ALL_PROMPT_KEYS = [
     PROMPT_KEY_CLERK_PRE_TURN,
     PROMPT_KEY_CLERK_SUMMARY,
     PROMPT_KEY_CLERK_POST_TURN,
+    PROMPT_KEY_CHARACTER_POST_TURN,
+    PROMPT_KEY_CLERK_ARBITRATION,
     PROMPT_KEY_WIZARD_WORLD,
     PROMPT_KEY_WIZARD_CHARACTER,
     PROMPT_KEY_WIZARD_MAP_REIMAGINE,
@@ -94,8 +98,11 @@ DEFAULT_CLERK_MEMORY_COMPACTION_SYSTEM = (
 )
 
 DEFAULT_CLERK_POST_TURN_SYSTEM = (
-    "You are the Post-Turn State & Memory Clerk for an AI roleplay engine.\n"
-    "Inspect the completed turn and output a JSON object matching PostTurnStateDelta:\n"
+    "You are the Global Post-Turn World Clerk for an AI roleplay engine.\n"
+    "Your responsibility is strictly GLOBAL world state (in-world clock, player/scene spatial transitions, "
+    "macro plot events, and environmental scene flags). Per-character mood, stances, inventory, and personal "
+    "memories are handled separately by dedicated Character State Agents.\n\n"
+    "Inspect the completed turn and output a JSON object matching WorldPostTurnDelta:\n"
     "- elapsed_minutes (int 0-1440): narrative minutes that passed during this turn. Typical "
     "dialogue/action turns take 1-10 minutes; travel adds the exit's travel time.\n"
     "- new_world_timestamp (string 'YYYY-MM-DD HH:MM' or null): the absolute in-world time at the "
@@ -105,27 +112,58 @@ DEFAULT_CLERK_POST_TURN_SYSTEM = (
     "later\" -> current time + 3 days. Compute it from the Current In-Game Time; it must never be "
     "earlier than the current time (roll the date forward when the stated hour has already "
     "passed today). When set, it overrides elapsed_minutes. Otherwise use null.\n"
-    "- transition_type ('stay' | 'move_existing' | 'improvise_new')\n"
-    "- target_location_id (if transition_type == 'move_existing', must match one of the neighbor IDs)\n"
-    "- improvised_location (if transition_type == 'improvise_new', object with name, summary, description, environmental_tags, entry_direction_label, return_direction_label, compass_direction ['N'|'NE'|'E'|'SE'|'S'|'SW'|'W'|'NW'], travel_minutes)\n"
+    "- transition_type ('stay' | 'move_existing' | 'improvise_new'): tracks whether the active scene "
+    "(the player's vantage point) stayed in the current location, moved to a known exit, or entered an unmapped area.\n"
+    "- target_location_id (if transition_type == 'move_existing', must match one of the Known Exits IDs; else null)\n"
+    "- improvised_location (if transition_type == 'improvise_new', object with name, summary, description, environmental_tags, entry_direction_label, return_direction_label, compass_direction ['N'|'NE'|'E'|'SE'|'S'|'SW'|'W'|'NW'], travel_minutes; else null)\n"
     "- notable_event_summary (1-sentence objective summary if a significant macro plot or world-state event occurred, else null)\n"
     "- scene_flags_updated (list of strings, default []): Add flags ONLY for persistent, active scene-wide "
     "environmental or tactical conditions (e.g. 'Power Failure', 'Hostile Standoff', 'Heavy Rain', 'Alarms Blaring', 'Cover Blown', 'Stealth Mode'). "
-    "Do NOT record one-off micro-actions, character gestures, banter, or dice roll outcomes (e.g. do NOT add 'looked around', 'sipped drink', 'perception success', 'drew gun')—those belong in narrative prose or notable_event_summary. "
-    "Do NOT record private emotions or bond shifts—those belong in character_memories or relationship_shift_note.\n"
-    "- scene_flags_removed (list of strings, default []): Actively review Current Scene Flags and list any flags that are no longer true, have concluded, or have been resolved (e.g. remove 'Hostile Standoff' when diplomacy succeeds, remove 'Stealth Mode' when detected).\n"
-    "- inventory_added (list of items newly picked up, acquired, or crafted by {character_name} this turn; ignore momentary scene furniture/props not kept)\n"
-    "- inventory_removed (list of items dropped, given away, consumed, or lost by {character_name} this turn; match names from Equipped / Worn or Carried Inventory)\n"
-    "- relationship_shift_note (string or null)\n"
-    "- character_memories (list of ExtractedCharacterMemory objects, default []): Evaluate ONLY characters listed in "
-    "Characters Present in Scene. Extract a memory ONLY when a character experiences a profound personal moment "
-    "falling into one of 5 categories: 'trauma', 'bonding', 'betrayal', 'revelation', or 'vow'. "
-    "Routine banter, ordinary actions, or continuing an already-recorded conversation MUST produce []. "
-    "Each item requires: character_id (matching a present character ID), title (3-6 words), content (strictly 1-2 "
-    "synthesized sentences capturing the trigger and personal takeaway), significance ('trauma'|'bonding'|'betrayal'|'revelation'|'vow'), "
-    "keywords (2-5 trigger terms), emotional_weight (0.75-1.0), and supersedes_memory_id (if this turn refines or "
-    "concludes an ongoing scene already captured in a recent ephemeral memory listed under Existing Character Memories, "
-    "set to that memory's id instead of creating a duplicate; otherwise null)."
+    "Do NOT record one-off micro-actions, character gestures, banter, dice outcomes, or private character emotions.\n"
+    "- scene_flags_removed (list of strings, default []): Actively review Current Scene Flags and list any flags that are no longer true, have concluded, or have been resolved."
+)
+
+DEFAULT_CHARACTER_POST_TURN_SYSTEM = (
+    "You are the dedicated Psychological, Relational & Inventory State Agent for {character_name} (id='{character_id}').\n"
+    "Focus your attention exclusively on how the completed turn affected {character_name}—whether {character_name} "
+    "was the primary speaker or a co-present witness in the room.\n\n"
+    "Output ONLY a valid JSON object matching CharacterAgentDelta:\n"
+    "- mood_label (string): Strictly a crisp 2-4 word evocative mood description capturing {character_name}'s "
+    "affective state at the end of this turn (e.g. 'Guarded, razor-sharp focus', 'Wary flicker of hope', 'Cold, simmering resentment'). Do NOT write a full sentence.\n"
+    "- valence_delta (float -0.60 to +0.60): Signed shift from {character_name}'s Pre-Turn Valence. Emotion has inertia: "
+    "routine exchanges drift by ±0.00 to ±0.15; reserve swings of ±0.30 or more strictly for acute shocks, betrayals, or breakthroughs.\n"
+    "- arousal_delta (float -0.60 to +0.60): Signed shift from {character_name}'s Pre-Turn Arousal following the same inertia rule.\n"
+    "- updated_want (string or null): If the turn shifted {character_name}'s immediate scene objective, provide a 1-sentence goal; else null.\n"
+    "- stance_updates (object mapping target ID -> 1 short sentence, default {}): Update ONLY targets whose standing in "
+    "{character_name}'s eyes meaningfully shifted or crystallized this turn. Use key 'user' for the player and exact character IDs "
+    "from Co-Present Characters for fellow NPCs. Each value MUST be 1 concise sentence describing how {character_name} views that person.\n"
+    "- items_equipped (list of strings, default []): Clothing, armor, or weapons {character_name} newly put on, drew, or wielded this turn.\n"
+    "- items_unequipped (list of strings, default []): Equipped items {character_name} holstered, stowed, or tucked back into carried inventory (not dropped).\n"
+    "- items_obtained (list of strings, default []): Objects {character_name} newly picked up, received, or pocketed into carried inventory. "
+    "Claim an item ONLY if the prose clearly establishes {character_name} took physical possession of it (ignore background props).\n"
+    "- items_removed (list of strings, default []): Items from Equipped or Carried Inventory that {character_name} dropped, handed over to someone else, consumed, or lost.\n"
+    "- location_transition ('stay_here' | 'follow_player' | 'move_to_neighbor'):\n"
+    "  * 'stay_here': {character_name} remained in the current location (including if the player left alone).\n"
+    "  * 'follow_player': {character_name} moved together with the player into a new location.\n"
+    "  * 'move_to_neighbor': {character_name} departed independently into a Known Exit while the scene stayed put (set target_location_id).\n"
+    "- target_location_id (string or null): Neighbor location ID ONLY when location_transition == 'move_to_neighbor'; else null.\n"
+    "- new_memories (list of ExtractedCharacterMemory objects, default []): Extract ONLY when {character_name} personally experienced "
+    "a profound moment in one of 5 categories: 'trauma', 'bonding', 'betrayal', 'revelation', or 'vow'. Ordinary banter or routine "
+    "actions MUST produce []. Set character_id='{character_id}', title (3-6 words), content (1-2 concise sentences from {character_name}'s "
+    "perspective), significance, keywords (2-5 terms), emotional_weight (0.75-1.0), and supersedes_memory_id (matching an ID in "
+    "Existing Memories if refining an ongoing recent scene, else null)."
+)
+
+DEFAULT_CLERK_ARBITRATION_SYSTEM = (
+    "You are the Authoritative Continuity & Inventory Referee for an AI roleplay engine.\n"
+    "Multiple Character State Agents have made conflicting claims over one or more physical items during the same turn "
+    "(either two characters both claiming to acquire the same item, or one character claiming an item held by another who did not relinquish it).\n\n"
+    "Read the User Message, Mechanics/Dice Outcome (if any), and Narrative Prose carefully, and output ONLY a JSON object "
+    "matching InventoryArbitrationResult with key 'decisions' (list of objects with keys):\n"
+    "- item_name (string): The contested item name.\n"
+    "- winner_id (string): Exact character_id of the single character who holds physical custody at the END of the prose, "
+    "'user' if the player holds it, or 'none' if the item remained unclaimed in the environment or the grab attempt failed.\n"
+    "- rationale (string): 1 brief sentence citing the prose or roll outcome."
 )
 
 DEFAULT_WIZARD_WORLD_SYSTEM = (
@@ -238,6 +276,8 @@ FACTORY_DEFAULT_PROMPTS: dict[str, str] = {
     PROMPT_KEY_CLERK_PRE_TURN: DEFAULT_CLERK_PRE_TURN_SYSTEM,
     PROMPT_KEY_CLERK_SUMMARY: DEFAULT_CLERK_EPISODIC_SUMMARY_SYSTEM,
     PROMPT_KEY_CLERK_POST_TURN: DEFAULT_CLERK_POST_TURN_SYSTEM,
+    PROMPT_KEY_CHARACTER_POST_TURN: DEFAULT_CHARACTER_POST_TURN_SYSTEM,
+    PROMPT_KEY_CLERK_ARBITRATION: DEFAULT_CLERK_ARBITRATION_SYSTEM,
     PROMPT_KEY_WIZARD_WORLD: DEFAULT_WIZARD_WORLD_SYSTEM,
     PROMPT_KEY_WIZARD_CHARACTER: DEFAULT_WIZARD_CHARACTER_SYSTEM,
     PROMPT_KEY_WIZARD_MAP_REIMAGINE: DEFAULT_WIZARD_MAP_REIMAGINE_SYSTEM,
@@ -408,15 +448,39 @@ PROMPTS_METADATA = [
     },
     {
         "key": PROMPT_KEY_CLERK_POST_TURN,
-        "title": "Post-Turn State Clerk",
+        "title": "Global Post-Turn World Clerk",
         "description": (
-            "Advances the world clock, mutates scene flags, detects acquired/dropped inventory items, "
-            "and handles spatial transitions or improvised locations."
+            "Advances the world clock, mutates global environmental/tactical scene flags, "
+            "records macro plot events, and handles spatial transitions or improvised locations."
         ),
         "available_variables": [
             {"name": "character_name", "description": "The active character's name"},
         ],
-        "required_tags": ["PostTurnStateDelta"],
+        "required_tags": ["WorldPostTurnDelta"],
+    },
+    {
+        "key": PROMPT_KEY_CHARACTER_POST_TURN,
+        "title": "Post-Turn Character State Agent",
+        "description": (
+            "Updates an individual present character's 2-4 word mood, valence/arousal drift, "
+            "directed stances toward the player and co-present NPCs, equipped/carried inventory, "
+            "independent room movement, and personal memories."
+        ),
+        "available_variables": [
+            {"name": "character_name", "description": "Name of the character being evaluated"},
+            {"name": "character_id", "description": "Stable ID of the character being evaluated"},
+        ],
+        "required_tags": ["CharacterAgentDelta"],
+    },
+    {
+        "key": PROMPT_KEY_CLERK_ARBITRATION,
+        "title": "Clerk Inventory Dispute Arbitrator",
+        "description": (
+            "Referees contested item claims when two Character State Agents claim the same item "
+            "or claim an item held by another character without relinquishment."
+        ),
+        "available_variables": [],
+        "required_tags": ["InventoryArbitrationResult"],
     },
     {
         "key": PROMPT_KEY_WIZARD_WORLD,

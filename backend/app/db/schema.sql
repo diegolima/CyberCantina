@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS user_model_settings (
     active_prompt_preset_id TEXT NULL REFERENCES prompt_presets(id) ON DELETE SET NULL,
     delegate_cognition_to_clerk INTEGER NULL,
     max_scene_flags INTEGER NULL,
+    agent_dispatch_mode TEXT NULL,
     updated_at TEXT NOT NULL
 );
 

@@ -35,6 +35,7 @@ interface CampaignCharacterModalProps {
   elsewhereLocationName?: string;
   campaignId: string;
   worlds?: WorldRecord[];
+  characterNameMap?: Record<string, string>;
   onClose: () => void;
   onItemAction: (payload: {
     item: string;
@@ -83,6 +84,7 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
   elsewhereLocationName,
   campaignId: _campaignId,
   worlds = [],
+  characterNameMap = {},
   onClose,
   onItemAction,
   onSaveMemories,
@@ -1340,23 +1342,29 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {relationships.map(([target, note]) => (
-                    <div
-                      key={target}
-                      style={{
-                        background: "var(--bg-panel)",
-                        border: "1px solid var(--border-subtle)",
-                        borderRadius: 6,
-                        padding: "8px 10px",
-                        fontSize: "0.78rem",
-                      }}
-                    >
-                      <strong style={{ color: "#c4b5fd", textTransform: "capitalize" }}>
-                        {target}:
-                      </strong>{" "}
-                      <span>{note}</span>
-                    </div>
-                  ))}
+                  {relationships.map(([target, note]) => {
+                    const displayTarget =
+                      target === "user"
+                        ? "Player"
+                        : characterNameMap[target] || target;
+                    return (
+                      <div
+                        key={target}
+                        style={{
+                          background: "var(--bg-panel)",
+                          border: "1px solid var(--border-subtle)",
+                          borderRadius: 6,
+                          padding: "8px 10px",
+                          fontSize: "0.78rem",
+                        }}
+                      >
+                        <strong style={{ color: "#c4b5fd" }}>
+                          {displayTarget}:
+                        </strong>{" "}
+                        <span>{note}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

@@ -178,6 +178,7 @@ def build_zone4_ephemeral_tail_frame(
     pre_turn: PreTurnAnalysis,
     present_characters: list[CharacterRecord] | None = None,
     all_character_states: dict[str, CharacterStateSnapshot] | None = None,
+    character_name_map: dict[str, str] | None = None,
     is_narrator: bool = False,
     narrative_mode: str | None = None,
     narrator_directive: str | None = None,
@@ -212,8 +213,14 @@ def build_zone4_ephemeral_tail_frame(
         if world_snapshot.scene_flags
         else "None"
     )
+    name_lookup_local = dict(character_name_map or {})
+    for pc in present_characters or []:
+        name_lookup_local.setdefault(pc.id, pc.name)
     rel_notes_text = (
-        "; ".join(f"{k}: {v}" for k, v in character_state.relationship_notes.items())
+        "; ".join(
+            f"{name_lookup_local.get(k, k)}: {v}"
+            for k, v in character_state.relationship_notes.items()
+        )
         if character_state.relationship_notes
         else "None"
     )
@@ -443,6 +450,7 @@ def assemble_four_zone_messages(
         pre_turn=pre_turn,
         present_characters=present_characters,
         all_character_states=resolved_all_states,
+        character_name_map=name_lookup,
         is_narrator=is_narrator,
         narrative_mode=narrative_mode,
         narrator_directive=narrator_directive,

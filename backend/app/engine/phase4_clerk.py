@@ -9,9 +9,16 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.config import ModelProfile, settings
+from app.config import AgentDispatchMode, ModelProfile, settings
 from app.db.repository import CantinaRepository
+from app.engine.character_agent import (
+    apply_character_inventory_delta,
+    arbitrate_inventory_disputes,
+    detect_inventory_disputes,
+    run_character_post_turn_agent,
+)
 from app.engine.llm_client import llm_client
+from app.engine.phase2_context import resolve_character_previous_state
 from app.prompts import (
     DEFAULT_CLERK_MEMORY_COMPACTION_SYSTEM,
     get_default_prompt,
@@ -31,12 +38,14 @@ from app.schemas.character import (
     MemoryShard,
 )
 from app.schemas.turn import (
+    CharacterAgentDelta,
     EpisodicChunkRecord,
     ExtractedCharacterMemory,
     ImprovisedLocationSpec,
     PostTurnStateDelta,
     PreTurnAnalysis,
     TurnNodeRecord,
+    WorldPostTurnDelta,
     WorldStateSnapshot,
 )
 from app.schemas.world import LocationNode, NeighborLocationView, normalize_compass_direction
@@ -890,6 +899,45 @@ async def summarize_turn_chunk(
     return f"Turns {start_d}–{end_d} summary: " + " | ".join(snippets[:4])
 
 
+def heuristic_world_post_turn_delta(
+    *,
+    user_message: str,
+    raw_prose: str,
+    pre_turn: PreTurnAnalysis,
+    active_location: LocationNode,
+    neighbors: list[NeighborLocationView],
+    current_timestamp: str | None = None,
+) -> WorldPostTurnDelta:
+    """Deterministic fallback global world state extractor (clock, spatial graph, scene flags)."""
+    legacy = _heuristic_spatial_and_inventory_delta(
+        user_message=user_message,
+        raw_prose=raw_prose,
+        pre_turn=pre_turn,
+        active_location=active_location,
+        neighbors=neighbors,
+        current_inventory=None,
+    )
+    new_ts: str | None = None
+    elapsed = legacy.elapsed_minutes
+    if current_timestamp is not None:
+        hint_minutes = extract_time_hint_minutes(user_message, current_timestamp)
+        if hint_minutes is not None and hint_minutes > 0:
+            if parse_world_timestamp(current_timestamp) is not None:
+                new_ts = advance_world_timestamp(current_timestamp, hint_minutes)
+            elapsed = min(hint_minutes, 1440)
+
+    return WorldPostTurnDelta(
+        elapsed_minutes=elapsed,
+        new_world_timestamp=new_ts,
+        transition_type=legacy.transition_type,
+        target_location_id=legacy.target_location_id,
+        improvised_location=legacy.improvised_location,
+        notable_event_summary=legacy.notable_event_summary,
+        scene_flags_updated=legacy.scene_flags_updated,
+        scene_flags_removed=legacy.scene_flags_removed,
+    )
+
+
 async def run_phase4_post_turn_clerk(
     *,
     repo: CantinaRepository,
@@ -900,45 +948,53 @@ async def run_phase4_post_turn_clerk(
     active_location: LocationNode,
     neighbors: list[NeighborLocationView],
     present_characters: list[CharacterRecord] | None = None,
+    all_participants: list[CharacterRecord] | None = None,
     profile: ModelProfile | None = None,
+    dispatch_mode: AgentDispatchMode | None = None,
     working_memory_turns: int | None = None,
     ephemeral_lifespan_turns: int | None = None,
     max_scene_flags: int | None = None,
     post_turn_prompt_template: str | None = None,
+    character_post_turn_prompt_template: str | None = None,
+    arbitration_prompt_template: str | None = None,
     summary_prompt_template: str | None = None,
 ) -> tuple[TurnNodeRecord, list[EpisodicChunkRecord]]:
-    """Run Phase 4 Clerk to advance the clock, mutate the Spatial Graph, extract per-character memories, and compress Episodic Memory."""
+    """Run Global Post-Turn World Clerk + Per-Character State Agents with Two-Tier Item Dispute Arbitration."""
     clerk_prof = profile or settings.clerk_profile
+    eff_dispatch: AgentDispatchMode = dispatch_mode or settings.agent_dispatch_mode
+    is_narrator_turn = completed_turn.actor_id == "__narrator__"
+
     scene_characters = (
         [c for c in present_characters if c.id != "__narrator__"]
         if present_characters is not None
         else ([character] if character.id != "__narrator__" else [])
     )
+    if character.id != "__narrator__" and all(c.id != character.id for c in scene_characters):
+        scene_characters = [character, *scene_characters]
+
+    known_participants = list(all_participants or scene_characters)
+    for ch in scene_characters:
+        if all(p.id != ch.id for p in known_participants):
+            known_participants.append(ch)
 
     branch_turns = repo.get_branch_turn_chain(completed_turn.id)
     valid_turn_ids = {t.id for t in branch_turns}
+    prior_branch_turns = branch_turns[:-1] if branch_turns and branch_turns[-1].id == completed_turn.id else branch_turns
+
+    # Resolve strict pre-turn baselines for every present character to prevent double-applying speaker cognition
+    prev_states_by_char: dict[str, CharacterStateSnapshot] = {
+        ch.id: resolve_character_previous_state(prior_branch_turns, ch, active_location.id)
+        for ch in scene_characters
+    }
 
     raw_shards_by_char: dict[str, list[MemoryShard]] = {}
-    present_chars_lines: list[str] = []
-    existing_memories_lines: list[str] = []
+    active_shards_by_char: dict[str, list[MemoryShard]] = {}
     for ch in scene_characters:
         raw_shards = repo.get_raw_campaign_character_memories(campaign_id, ch.id)
         raw_shards_by_char[ch.id] = raw_shards
-        present_chars_lines.append(f"- id='{ch.id}': {ch.name} ({ch.tagline})")
-        active_shards = [
+        active_shards_by_char[ch.id] = [
             s for s in raw_shards if repo._is_shard_active_on_branch(s, valid_turn_ids)
         ]
-        if active_shards:
-            for s in active_shards[-6:]:
-                existing_memories_lines.append(
-                    f"- [{ch.name} | id='{s.id}' | {s.origin}{f'/{s.significance}' if s.significance else ''}] "
-                    f"{s.title}: {s.content}"
-                )
-        else:
-            existing_memories_lines.append(f"- [{ch.name}]: None")
-
-    present_chars_str = "\n".join(present_chars_lines) or "None"
-    existing_memories_str = "\n".join(existing_memories_lines) or "None"
 
     neighbor_options = "\n".join(
         f"- [{n.compass_direction or 'N'}] id='{n.destination.id}': {n.destination.name} (via {n.direction_label}, {n.travel_minutes}m)"
@@ -949,67 +1005,47 @@ async def run_phase4_post_turn_clerk(
         if completed_turn.world_snapshot.scene_flags
         else "None"
     )
-    equipped_str = (
-        ", ".join(completed_turn.character_state.equipped)
-        if completed_turn.character_state.equipped
-        else "None"
-    )
-    existing_inventory_str = (
-        ", ".join(completed_turn.character_state.inventory)
-        if completed_turn.character_state.inventory
-        else "None"
-    )
 
     current_timestamp = completed_turn.world_snapshot.world_timestamp
     current_time_str = describe_world_timestamp(current_timestamp)
+    speaker_label = "Narrator" if is_narrator_turn else character.name
 
-    system_prompt = render_template(
+    world_system_prompt = render_template(
         post_turn_prompt_template or get_default_prompt("clerk_post_turn_system"),
         character_name=character.name,
     )
-    user_prompt = (
+    world_user_prompt = (
         f"Current In-Game Time (start of this turn): {current_time_str}\n"
         f"Current Location: {active_location.name} (id='{active_location.id}')\n"
         f"Current Scene Flags: {existing_flags_str}\n"
-        f"Characters Present in Scene:\n{present_chars_str}\n"
-        f"Existing Character Memories (do NOT duplicate these):\n{existing_memories_str}\n"
-        f"{character.name} Equipped / Worn: {equipped_str}\n"
-        f"{character.name} Carried Inventory: {existing_inventory_str}\n"
         f"Known Exits:\n{neighbor_options}\n\n"
         f"User Message: {completed_turn.user_message}\n"
-        f"{character.name} Cognition Plan: {completed_turn.cognition.plan}\n"
-        f"{character.name} Response:\n{completed_turn.raw_prose}"
+        f"{speaker_label} Response:\n{completed_turn.raw_prose}"
     )
 
-    async def _compute_delta() -> PostTurnStateDelta:
+    async def _compute_world_delta() -> WorldPostTurnDelta:
         try:
             return await llm_client.complete_structured(
                 [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
+                    {"role": "system", "content": world_system_prompt},
+                    {"role": "user", "content": world_user_prompt},
                 ],
-                PostTurnStateDelta,
+                WorldPostTurnDelta,
                 profile=clerk_prof,
             )
         except Exception:
             if not settings.allow_offline_fallback:
                 raise
-            return heuristic_post_turn_delta(
+            return heuristic_world_post_turn_delta(
                 user_message=completed_turn.user_message,
                 raw_prose=completed_turn.raw_prose,
                 pre_turn=completed_turn.pre_turn,
                 active_location=active_location,
                 neighbors=neighbors,
-                current_inventory=[
-                    *(completed_turn.character_state.equipped or []),
-                    *(completed_turn.character_state.inventory or []),
-                ],
                 current_timestamp=current_timestamp,
-                present_characters=scene_characters,
-                active_character=character,
             )
 
-    # Check Rolling Episodic Compression threshold upfront so delta extraction and chunk summarization run concurrently
+    # Check Rolling Episodic Compression threshold upfront
     existing_chunks = repo.get_branch_episodic_chunks(campaign_id, valid_turn_ids)
     max_summarized_depth = max((c.end_turn_depth for c in existing_chunks), default=0)
 
@@ -1025,46 +1061,118 @@ async def run_phase4_post_turn_clerk(
         if needs_chunk_summary
         else []
     )
-    char_name_map = {c.id: c.name for c in scene_characters}
+    char_name_map = {c.id: c.name for c in known_participants}
     char_name_map[character.id] = character.name
 
-    if needs_chunk_summary:
-        summarize_coro = summarize_turn_chunk(
-            chunk_slice,
-            character,
-            profile=clerk_prof,
-            prompt_template=summary_prompt_template,
-            character_name_map=char_name_map,
-        )
-        delta, summary_text = await asyncio.gather(
-            _compute_delta(),
-            summarize_coro,
-        )
+    char_deltas: dict[str, CharacterAgentDelta] = {}
+    summary_text: str | None = None
+
+    if is_narrator_turn:
+        # Narrator fast-path: preserve character emotional anchors; update global world state & episodic chunks only
+        if needs_chunk_summary:
+            summarize_coro = summarize_turn_chunk(
+                chunk_slice,
+                character,
+                profile=clerk_prof,
+                prompt_template=summary_prompt_template,
+                character_name_map=char_name_map,
+            )
+            if eff_dispatch == "parallel":
+                world_delta, summary_text = await asyncio.gather(_compute_world_delta(), summarize_coro)
+            else:
+                world_delta = await _compute_world_delta()
+                summary_text = await summarize_coro
+        else:
+            world_delta = await _compute_world_delta()
+    elif eff_dispatch == "parallel":
+        char_coros = [
+            run_character_post_turn_agent(
+                character=ch,
+                prev_state=prev_states_by_char[ch.id],
+                completed_turn=completed_turn,
+                active_location=active_location,
+                neighbors=neighbors,
+                present_characters=scene_characters,
+                all_participants=known_participants,
+                active_shards=active_shards_by_char.get(ch.id, []),
+                profile=clerk_prof,
+                prompt_template=character_post_turn_prompt_template,
+                extracted_memories_fn=_extract_heuristic_character_memories,
+            )
+            for ch in scene_characters
+        ]
+        if needs_chunk_summary:
+            summarize_coro = summarize_turn_chunk(
+                chunk_slice,
+                character,
+                profile=clerk_prof,
+                prompt_template=summary_prompt_template,
+                character_name_map=char_name_map,
+            )
+            gathered = await asyncio.gather(
+                _compute_world_delta(),
+                summarize_coro,
+                *char_coros,
+            )
+            world_delta = gathered[0]
+            summary_text = gathered[1]
+            for ch, c_delta in zip(scene_characters, gathered[2:]):
+                char_deltas[ch.id] = c_delta
+        else:
+            gathered = await asyncio.gather(
+                _compute_world_delta(),
+                *char_coros,
+            )
+            world_delta = gathered[0]
+            for ch, c_delta in zip(scene_characters, gathered[1:]):
+                char_deltas[ch.id] = c_delta
     else:
-        delta = await _compute_delta()
-        summary_text = None
+        # Sequential dispatch: strictly 1 LLM request in-flight at a time for single-GPU local servers
+        world_delta = await _compute_world_delta()
+        if needs_chunk_summary:
+            summary_text = await summarize_turn_chunk(
+                chunk_slice,
+                character,
+                profile=clerk_prof,
+                prompt_template=summary_prompt_template,
+                character_name_map=char_name_map,
+            )
+        for ch in scene_characters:
+            char_deltas[ch.id] = await run_character_post_turn_agent(
+                character=ch,
+                prev_state=prev_states_by_char[ch.id],
+                completed_turn=completed_turn,
+                active_location=active_location,
+                neighbors=neighbors,
+                present_characters=scene_characters,
+                all_participants=known_participants,
+                active_shards=active_shards_by_char.get(ch.id, []),
+                profile=clerk_prof,
+                prompt_template=character_post_turn_prompt_template,
+                extracted_memories_fn=_extract_heuristic_character_memories,
+            )
 
     # 1. Resolve new active location (stay, move_existing, or improvise_new)
     new_location_id = active_location.id
     valid_neighbor_ids = {n.destination.id for n in neighbors}
-    if delta.transition_type == "move_existing" and delta.target_location_id in valid_neighbor_ids:
-        new_location_id = delta.target_location_id  # type: ignore[assignment]
-    elif delta.transition_type == "improvise_new" and delta.improvised_location is not None:
+    if world_delta.transition_type == "move_existing" and world_delta.target_location_id in valid_neighbor_ids:
+        new_location_id = world_delta.target_location_id  # type: ignore[assignment]
+    elif world_delta.transition_type == "improvise_new" and world_delta.improvised_location is not None:
         created_loc = repo.add_improvised_location(
             world_id=world_id,
             from_location_id=active_location.id,
             created_at_turn_id=completed_turn.id,
-            spec=delta.improvised_location,
+            spec=world_delta.improvised_location,
             valid_turn_ids=valid_turn_ids,
         )
         new_location_id = created_loc.id
-        delta.target_location_id = created_loc.id
+        world_delta.target_location_id = created_loc.id
 
-    # 2. Advance World Clock & Merge Scene Flags (maintain only new location marker on transition; sliding FIFO otherwise)
+    # 2. Advance World Clock & Merge Scene Flags
     new_timestamp = resolve_turn_timestamp(
         current_timestamp,
-        delta.elapsed_minutes,
-        delta.new_world_timestamp,
+        world_delta.elapsed_minutes,
+        world_delta.new_world_timestamp,
     )
     location_changed = new_location_id != active_location.id
     if location_changed:
@@ -1081,8 +1189,8 @@ async def run_phase4_post_turn_clerk(
         )
         merged_flags = merge_scene_flags(
             completed_turn.world_snapshot.scene_flags,
-            delta.scene_flags_updated,
-            delta.scene_flags_removed,
+            world_delta.scene_flags_updated,
+            world_delta.scene_flags_removed,
             max_flags=eff_max_flags,
         )
     updated_world_snapshot = WorldStateSnapshot(
@@ -1092,77 +1200,102 @@ async def run_phase4_post_turn_clerk(
         scene_flags=merged_flags,
     )
 
-    # 3. Update Character State Snapshot from Phase 3 Cognition + Phase 4 Delta
-    rel_notes = dict(completed_turn.character_state.relationship_notes)
-    if delta.relationship_shift_note:
-        rel_notes["user"] = delta.relationship_shift_note
+    # 3. Two-Tier Inventory Contention Detection & Conditional Clerk Arbitration
+    arbitration_notes: list[str] = []
+    if not is_narrator_turn and char_deltas:
+        disputes = detect_inventory_disputes(
+            scene_characters=scene_characters,
+            prev_states_by_char=prev_states_by_char,
+            character_deltas=char_deltas,
+        )
+        if disputes:
+            char_deltas, arbitration_notes = await arbitrate_inventory_disputes(
+                disputes=disputes,
+                scene_characters=scene_characters,
+                character_deltas=char_deltas,
+                completed_turn=completed_turn,
+                profile=clerk_prof,
+                prompt_template=arbitration_prompt_template,
+            )
 
-    # Determine whether the active speaker moved with the user or stayed behind (if user moved alone)
-    msg_lower = completed_turn.user_message.lower()
-    user_moved_alone = bool(
-        new_location_id != active_location.id
-        and re.search(r"\b(alone|by myself|without you|slip out alone|leave .+ behind)\b", msg_lower)
-    )
-    actor_new_location_id = active_location.id if user_moved_alone else new_location_id
+    # 4. Reconcile CharacterStateSnapshots for all present characters
+    updated_states_by_char: dict[str, CharacterStateSnapshot] = {}
+    if is_narrator_turn:
+        for ch in scene_characters:
+            prev_st = prev_states_by_char[ch.id]
+            updated_states_by_char[ch.id] = CharacterStateSnapshot(
+                turn_id=completed_turn.id,
+                character_id=ch.id,
+                current_location_id=new_location_id,
+                mood_label=prev_st.mood_label,
+                valence=prev_st.valence,
+                arousal=prev_st.arousal,
+                active_want=prev_st.active_want,
+                active_plan=prev_st.active_plan,
+                relationship_notes=dict(prev_st.relationship_notes),
+                equipped=list(prev_st.equipped),
+                inventory=list(prev_st.inventory),
+            )
+    else:
+        for ch in scene_characters:
+            prev_st = prev_states_by_char[ch.id]
+            c_delta = char_deltas[ch.id]
 
-    rem_queries: set[str] = set()
-    for raw_rem in delta.inventory_removed or []:
-        cleaned = raw_rem.strip()
-        if cleaned:
-            rem_queries.add(cleaned.lower())
-            norm = _normalize_inventory_item(cleaned)
-            if norm:
-                rem_queries.add(norm)
+            # Resolve independent character spatial location
+            if (
+                c_delta.location_transition == "move_to_neighbor"
+                and c_delta.target_location_id in valid_neighbor_ids
+            ):
+                char_loc_id = c_delta.target_location_id  # type: ignore[assignment]
+            elif c_delta.location_transition == "follow_player":
+                char_loc_id = new_location_id
+            else:
+                char_loc_id = active_location.id
 
-    updated_equipped = [
-        item for item in (completed_turn.character_state.equipped or [])
-        if not _matches_inventory_removal(item, rem_queries)
+            new_val = round(max(-1.0, min(1.0, prev_st.valence + c_delta.valence_delta)), 2)
+            new_ar = round(max(0.0, min(1.0, prev_st.arousal + c_delta.arousal_delta)), 2)
+
+            if c_delta.updated_want and c_delta.updated_want.strip():
+                new_want = c_delta.updated_want.strip()
+            elif ch.id == completed_turn.actor_id and completed_turn.cognition.want:
+                new_want = completed_turn.cognition.want
+            else:
+                new_want = prev_st.active_want
+
+            if ch.id == completed_turn.actor_id and completed_turn.cognition.plan:
+                new_plan = completed_turn.cognition.plan
+            else:
+                new_plan = prev_st.active_plan
+
+            merged_rel = {**prev_st.relationship_notes, **c_delta.stance_updates}
+            new_equipped, new_inventory = apply_character_inventory_delta(
+                existing_equipped=prev_st.equipped,
+                existing_inventory=prev_st.inventory,
+                delta=c_delta,
+            )
+
+            updated_states_by_char[ch.id] = CharacterStateSnapshot(
+                turn_id=completed_turn.id,
+                character_id=ch.id,
+                current_location_id=char_loc_id,
+                mood_label=c_delta.mood_label,
+                valence=new_val,
+                arousal=new_ar,
+                active_want=new_want,
+                active_plan=new_plan,
+                relationship_notes=merged_rel,
+                equipped=new_equipped,
+                inventory=new_inventory,
+            )
+
+    # 5. Process per-character personal memories (ephemeral extraction + deduplication + 40-turn compaction)
+    all_extracted_memories = [
+        mem
+        for ch in scene_characters
+        for mem in (char_deltas[ch.id].new_memories if ch.id in char_deltas else [])
     ]
-
-    merged_inventory = merge_inventory(
-        completed_turn.character_state.inventory,
-        delta.inventory_added,
-        delta.inventory_removed,
-    )
-
-    is_narrator_turn = completed_turn.actor_id == "__narrator__"
-    updated_char_state = CharacterStateSnapshot(
-        turn_id=completed_turn.id,
-        character_id=character.id,
-        current_location_id=actor_new_location_id,
-        mood_label=(
-            completed_turn.character_state.mood_label
-            if is_narrator_turn
-            else (completed_turn.cognition.feeling[:80] or completed_turn.character_state.mood_label)
-        ),
-        valence=(
-            completed_turn.character_state.valence
-            if is_narrator_turn
-            else completed_turn.cognition.valence
-        ),
-        arousal=(
-            completed_turn.character_state.arousal
-            if is_narrator_turn
-            else completed_turn.cognition.arousal
-        ),
-        active_want=(
-            completed_turn.character_state.active_want
-            if is_narrator_turn
-            else (completed_turn.cognition.want or completed_turn.character_state.active_want)
-        ),
-        active_plan=(
-            completed_turn.character_state.active_plan
-            if is_narrator_turn
-            else (completed_turn.cognition.plan or completed_turn.character_state.active_plan)
-        ),
-        relationship_notes=rel_notes,
-        equipped=updated_equipped,
-        inventory=merged_inventory,
-    )
-
-    # 4. Process per-character personal memories (ephemeral extraction + deduplication + 40-turn compaction)
     modified_char_ids = apply_extracted_character_memories(
-        extracted_memories=delta.character_memories,
+        extracted_memories=all_extracted_memories,
         present_characters=scene_characters,
         default_character=character,
         raw_shards_by_char=raw_shards_by_char,
@@ -1175,6 +1308,7 @@ async def run_phase4_post_turn_clerk(
         if ephemeral_lifespan_turns is not None
         else settings.memory_config.ephemeral_memory_lifespan_turns
     )
+    compaction_jobs: list[tuple[CharacterRecord, list[int], list[MemoryShard]]] = []
     for ch in scene_characters:
         char_shards = raw_shards_by_char.get(ch.id, [])
         aged_indices: list[int] = []
@@ -1188,11 +1322,25 @@ async def run_phase4_post_turn_clerk(
             ):
                 aged_indices.append(idx)
                 aged_shards.append(s)
-
         if aged_shards:
-            compacted_spec = await compact_character_memories(
-                aged_shards, ch, profile=clerk_prof
+            compaction_jobs.append((ch, aged_indices, aged_shards))
+
+    if compaction_jobs:
+        if eff_dispatch == "parallel" and len(compaction_jobs) > 1:
+            compacted_specs = await asyncio.gather(
+                *(
+                    compact_character_memories(aged_s, ch, profile=clerk_prof)
+                    for ch, _idxs, aged_s in compaction_jobs
+                )
             )
+        else:
+            compacted_specs = [
+                await compact_character_memories(aged_s, ch, profile=clerk_prof)
+                for ch, _idxs, aged_s in compaction_jobs
+            ]
+
+        for (ch, aged_indices, _aged_shards), compacted_spec in zip(compaction_jobs, compacted_specs):
+            char_shards = raw_shards_by_char.get(ch.id, [])
             for idx in aged_indices:
                 char_shards[idx] = char_shards[idx].model_copy(
                     update={"superseded_at_turn_id": completed_turn.id}
@@ -1215,16 +1363,52 @@ async def run_phase4_post_turn_clerk(
             raw_shards_by_char[ch.id] = char_shards
             modified_char_ids.add(ch.id)
 
-    updated_turn = repo.update_turn_post_clerk(
-        turn_id=completed_turn.id,
-        post_turn=delta,
-        updated_world_snapshot=updated_world_snapshot,
-        updated_character_state=updated_char_state,
+    # Assemble composite PostTurnStateDelta (preserving legacy top-level fields + per-character audit map)
+    speaker_delta = char_deltas.get(character.id)
+    composite_post_turn = PostTurnStateDelta(
+        elapsed_minutes=world_delta.elapsed_minutes,
+        new_world_timestamp=world_delta.new_world_timestamp,
+        transition_type=world_delta.transition_type,
+        target_location_id=world_delta.target_location_id,
+        improvised_location=world_delta.improvised_location,
+        notable_event_summary=world_delta.notable_event_summary,
+        scene_flags_updated=world_delta.scene_flags_updated,
+        scene_flags_removed=world_delta.scene_flags_removed,
+        inventory_added=(
+            [*speaker_delta.items_equipped, *speaker_delta.items_obtained]
+            if speaker_delta is not None
+            else []
+        ),
+        inventory_removed=(
+            list(speaker_delta.items_removed) if speaker_delta is not None else []
+        ),
+        relationship_shift_note=(
+            speaker_delta.stance_updates.get("user") if speaker_delta is not None else None
+        ),
+        character_memories=all_extracted_memories,
+        character_deltas=char_deltas,
+        arbitration_notes=arbitration_notes,
     )
 
-    # 5. Asynchronously embed and index notable atomic event, episodic chunk, and updated character memories
+    primary_char_state = updated_states_by_char.get(
+        character.id,
+        completed_turn.character_state,
+    )
+    extra_char_states = [
+        st for cid, st in updated_states_by_char.items() if cid != primary_char_state.character_id
+    ]
+
+    updated_turn = repo.update_turn_post_clerk(
+        turn_id=completed_turn.id,
+        post_turn=composite_post_turn,
+        updated_world_snapshot=updated_world_snapshot,
+        updated_character_state=primary_char_state,
+        extra_character_states=extra_char_states,
+    )
+
+    # 6. Asynchronously embed and index notable atomic event, episodic chunk, and updated character memories
     async_tasks = []
-    if delta.notable_event_summary:
+    if world_delta.notable_event_summary:
         async_tasks.append(
             repo.vector_store.aupsert_entry(
                 entry_id=f"event_{completed_turn.id}",
@@ -1234,7 +1418,7 @@ async def run_phase4_post_turn_clerk(
                 campaign_id=campaign_id,
                 anchor_turn_id=completed_turn.id,
                 title=f"Turn {completed_turn.depth_index} Event ({new_timestamp})",
-                content=delta.notable_event_summary,
+                content=world_delta.notable_event_summary,
                 keywords=completed_turn.pre_turn.mentioned_entities,
             )
         )
@@ -1263,7 +1447,10 @@ async def run_phase4_post_turn_clerk(
         )
 
     if async_tasks:
-        results = await asyncio.gather(*async_tasks)
+        if eff_dispatch == "parallel":
+            results = await asyncio.gather(*async_tasks)
+        else:
+            results = [await t for t in async_tasks]
         for res in results:
             if isinstance(res, EpisodicChunkRecord):
                 existing_chunks.append(res)

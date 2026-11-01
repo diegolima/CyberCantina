@@ -15,7 +15,7 @@ from app.auth import (
     SESSION_IDLE_TIMEOUT_SECONDS,
     generate_session_token,
 )
-from app.config import ModelProfile, settings
+from app.config import AgentDispatchMode, ModelProfile, settings
 from app.db.repository import CantinaRepository
 from app.schemas.auth import AuthSessionResponse, UserProfile
 
@@ -83,6 +83,17 @@ def get_effective_user_model_settings(
         else default_max_flags
     )
     return effective_actor, effective_clerk, effective_wm_turns, effective_delegate, effective_max_flags
+
+
+def get_effective_agent_dispatch_mode(user_id: str | None) -> AgentDispatchMode:
+    """Resolve effective agent_dispatch_mode ('sequential' or 'parallel') for a user."""
+    default_mode = settings.agent_dispatch_mode
+    if not settings.allow_user_model_overrides or not user_id:
+        return default_mode
+    user_settings = get_repo().get_user_model_settings(user_id)
+    if user_settings and user_settings.agent_dispatch_mode in ("sequential", "parallel"):
+        return user_settings.agent_dispatch_mode
+    return default_mode
 
 
 def issue_session_response(

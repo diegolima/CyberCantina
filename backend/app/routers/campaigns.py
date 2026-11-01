@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from app.auth import get_current_user
 from app.config import settings
 from app.dependencies import (
+    get_effective_agent_dispatch_mode,
     get_effective_user_model_settings,
     get_repo,
     run_entity_pruner,
@@ -472,6 +473,7 @@ async def _execute_turn_stream_events(
         known_entities.append(loc.name)
 
     eff_actor, eff_clerk, eff_wm_turns, eff_delegate_cognition, eff_max_flags = get_effective_user_model_settings(owner_id)
+    eff_dispatch_mode = get_effective_agent_dispatch_mode(owner_id)
     effective_prompts = repo.resolve_effective_prompts(user_id=owner_id, campaign_id=campaign.id)
 
     effective_user_message = req.user_message.strip()
@@ -774,7 +776,7 @@ async def _execute_turn_stream_events(
 
     yield {"event": "turn_saved", "data": saved_turn.model_dump()}
 
-    # PHASE 4: Post-Turn Clerk (Clock, Spatial Graph Transitions, Per-Character Memories, Episodic Summarizer)
+    # PHASE 4: Post-Turn Global Clerk + Per-Character State Agents & Arbitration
     updated_turn, _chunks = await run_phase4_post_turn_clerk(
         repo=repo,
         campaign_id=campaign.id,
@@ -784,10 +786,14 @@ async def _execute_turn_stream_events(
         active_location=active_location,
         neighbors=neighbors,
         present_characters=present_characters,
+        all_participants=participants,
         profile=eff_clerk,
+        dispatch_mode=eff_dispatch_mode,
         working_memory_turns=eff_wm_turns,
         max_scene_flags=eff_max_flags,
         post_turn_prompt_template=effective_prompts.get("clerk_post_turn_system"),
+        character_post_turn_prompt_template=effective_prompts.get("character_post_turn_system"),
+        arbitration_prompt_template=effective_prompts.get("clerk_arbitration_system"),
         summary_prompt_template=effective_prompts.get("clerk_episodic_summary_system"),
     )
     bundle = repo.get_campaign_state_bundle(campaign.id)

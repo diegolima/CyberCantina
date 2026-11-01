@@ -314,6 +314,23 @@ export interface ExtractedCharacterMemory {
   supersedes_memory_id?: string | null;
 }
 
+export type AgentDispatchMode = "sequential" | "parallel";
+
+export interface CharacterAgentDelta {
+  mood_label: string;
+  valence_delta: number;
+  arousal_delta: number;
+  updated_want?: string | null;
+  stance_updates: Record<string, string>;
+  items_equipped: string[];
+  items_unequipped: string[];
+  items_obtained: string[];
+  items_removed: string[];
+  location_transition: "stay_here" | "follow_player" | "move_to_neighbor";
+  target_location_id?: string | null;
+  new_memories: ExtractedCharacterMemory[];
+}
+
 export interface PostTurnStateDelta {
   elapsed_minutes: number;
   new_world_timestamp?: string | null;
@@ -326,6 +343,8 @@ export interface PostTurnStateDelta {
   inventory_removed?: string[];
   relationship_shift_note?: string | null;
   character_memories?: ExtractedCharacterMemory[];
+  character_deltas?: Record<string, CharacterAgentDelta>;
+  arbitration_notes?: string[];
 }
 
 export type NarrativeMode =
@@ -431,6 +450,7 @@ export interface AppSettings {
   allow_offline_fallback: boolean;
   allow_user_model_overrides: boolean;
   delegate_cognition_to_clerk: boolean;
+  agent_dispatch_mode?: AgentDispatchMode;
 }
 
 export interface OllamaModelInfo {
@@ -500,6 +520,7 @@ export interface UserModelSettingsPayload {
   active_prompt_preset_id?: string | null;
   delegate_cognition_to_clerk?: boolean | null;
   max_scene_flags?: number | null;
+  agent_dispatch_mode?: AgentDispatchMode | null;
 }
 
 export interface ProfileModelSettingsResponse {
@@ -510,17 +531,20 @@ export interface ProfileModelSettingsResponse {
   effective_working_memory_turns: number;
   effective_delegate_cognition_to_clerk: boolean;
   effective_max_scene_flags?: number;
+  effective_agent_dispatch_mode?: AgentDispatchMode;
   user_actor_profile?: ModelProfile | null;
   user_clerk_profile?: ModelProfile | null;
   user_working_memory_turns?: number | null;
   user_delegate_cognition_to_clerk?: boolean | null;
   user_max_scene_flags?: number | null;
+  user_agent_dispatch_mode?: AgentDispatchMode | null;
   active_prompt_preset_id?: string | null;
   default_actor_profile: ModelProfile;
   default_clerk_profile: ModelProfile;
   default_working_memory_turns: number;
   default_delegate_cognition_to_clerk: boolean;
   default_max_scene_flags?: number;
+  default_agent_dispatch_mode?: AgentDispatchMode;
 }
 
 export interface PromptVariableDoc {

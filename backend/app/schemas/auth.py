@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.config import ModelProfile
+from app.config import AgentDispatchMode, ModelProfile
 
 UserRole = Literal["user", "admin"]
 
@@ -137,6 +137,7 @@ class UserModelSettingsPayload(BaseModel):
     active_prompt_preset_id: str | None = None
     delegate_cognition_to_clerk: bool | None = None
     max_scene_flags: int | None = Field(default=None, ge=1, le=50)
+    agent_dispatch_mode: AgentDispatchMode | None = None
 
 
 class ProfileModelSettingsResponse(BaseModel):
@@ -147,14 +148,17 @@ class ProfileModelSettingsResponse(BaseModel):
     effective_working_memory_turns: int
     effective_delegate_cognition_to_clerk: bool = False
     effective_max_scene_flags: int = 10
+    effective_agent_dispatch_mode: AgentDispatchMode = "sequential"
     user_actor_profile: ModelProfile | None = None
     user_clerk_profile: ModelProfile | None = None
     user_working_memory_turns: int | None = None
     user_delegate_cognition_to_clerk: bool | None = None
     user_max_scene_flags: int | None = None
+    user_agent_dispatch_mode: AgentDispatchMode | None = None
     active_prompt_preset_id: str | None = None
     default_actor_profile: ModelProfile
     default_clerk_profile: ModelProfile
     default_working_memory_turns: int
     default_delegate_cognition_to_clerk: bool = False
     default_max_scene_flags: int = 10
+    default_agent_dispatch_mode: AgentDispatchMode = "sequential"

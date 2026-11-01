@@ -276,6 +276,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </label>
           </div>
 
+          <div className="field-group" style={{ marginTop: 8 }}>
+            <label>Character Agent Dispatch Mode</label>
+            <select
+              className="field-select"
+              value={form.agent_dispatch_mode ?? "sequential"}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  agent_dispatch_mode: e.target.value as "sequential" | "parallel",
+                })
+              }
+            >
+              <option value="sequential">Sequential — One-at-a-Time (Recommended for Single Local GPU / Ollama)</option>
+              <option value="parallel">Parallel — Concurrent asyncio.gather (Cloud APIs / Multi-Slot vLLM)</option>
+            </select>
+          </div>
+
           <div className="sidebar-label" style={{ color: "var(--accent-emerald)", marginTop: 6 }}>
             3. Semantic Vector Store & 3-Tier Context Window
           </div>

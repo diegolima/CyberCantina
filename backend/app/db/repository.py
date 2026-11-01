@@ -301,6 +301,9 @@ class CantinaRepository:
                     clerk_profile_json TEXT NULL,
                     working_memory_turns INTEGER NULL,
                     active_prompt_preset_id TEXT NULL REFERENCES prompt_presets(id) ON DELETE SET NULL,
+                    delegate_cognition_to_clerk INTEGER NULL,
+                    max_scene_flags INTEGER NULL,
+                    agent_dispatch_mode TEXT NULL,
                     updated_at TEXT NOT NULL
                 )
                 """
@@ -320,6 +323,10 @@ class CantinaRepository:
             if "max_scene_flags" not in ums_cols:
                 conn.execute(
                     "ALTER TABLE user_model_settings ADD COLUMN max_scene_flags INTEGER NULL"
+                )
+            if "agent_dispatch_mode" not in ums_cols:
+                conn.execute(
+                    "ALTER TABLE user_model_settings ADD COLUMN agent_dispatch_mode TEXT NULL"
                 )
 
             # Seed / ensure built-in prompt presets
@@ -988,7 +995,7 @@ class CantinaRepository:
         conn = self._connect()
         try:
             row = conn.execute(
-                "SELECT actor_profile_json, clerk_profile_json, working_memory_turns, active_prompt_preset_id, delegate_cognition_to_clerk, max_scene_flags FROM user_model_settings WHERE user_id = ?",
+                "SELECT actor_profile_json, clerk_profile_json, working_memory_turns, active_prompt_preset_id, delegate_cognition_to_clerk, max_scene_flags, agent_dispatch_mode FROM user_model_settings WHERE user_id = ?",
                 (user_id,),
             ).fetchone()
             if not row:
@@ -1008,6 +1015,14 @@ class CantinaRepository:
                 if row["delegate_cognition_to_clerk"] is not None
                 else None
             )
+            raw_dispatch = (
+                row["agent_dispatch_mode"]
+                if "agent_dispatch_mode" in row.keys()
+                else None
+            )
+            dispatch_mode = (
+                raw_dispatch if raw_dispatch in ("sequential", "parallel") else None
+            )
             return UserModelSettingsPayload(
                 actor_profile=actor,
                 clerk_profile=clerk,
@@ -1015,6 +1030,7 @@ class CantinaRepository:
                 active_prompt_preset_id=row["active_prompt_preset_id"],
                 delegate_cognition_to_clerk=del_cog,
                 max_scene_flags=row["max_scene_flags"],
+                agent_dispatch_mode=dispatch_mode,
             )
         finally:
             conn.close()
@@ -1043,8 +1059,8 @@ class CantinaRepository:
             )
             conn.execute(
                 """
-                INSERT INTO user_model_settings (user_id, actor_profile_json, clerk_profile_json, working_memory_turns, active_prompt_preset_id, delegate_cognition_to_clerk, max_scene_flags, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO user_model_settings (user_id, actor_profile_json, clerk_profile_json, working_memory_turns, active_prompt_preset_id, delegate_cognition_to_clerk, max_scene_flags, agent_dispatch_mode, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     actor_profile_json = excluded.actor_profile_json,
                     clerk_profile_json = excluded.clerk_profile_json,
@@ -1052,9 +1068,10 @@ class CantinaRepository:
                     active_prompt_preset_id = excluded.active_prompt_preset_id,
                     delegate_cognition_to_clerk = excluded.delegate_cognition_to_clerk,
                     max_scene_flags = excluded.max_scene_flags,
+                    agent_dispatch_mode = excluded.agent_dispatch_mode,
                     updated_at = excluded.updated_at
                 """,
-                (user_id, actor_json, clerk_json, payload.working_memory_turns, payload.active_prompt_preset_id, del_cog_val, payload.max_scene_flags, now),
+                (user_id, actor_json, clerk_json, payload.working_memory_turns, payload.active_prompt_preset_id, del_cog_val, payload.max_scene_flags, payload.agent_dispatch_mode, now),
             )
             conn.commit()
             return payload
@@ -4149,12 +4166,26 @@ class CantinaRepository:
             for st in [updated_character_state, *(extra_character_states or [])]:
                 conn.execute(
                     """
-                    UPDATE character_states
-                    SET current_location_id = ?, mood_label = ?, valence = ?, arousal = ?,
-                        active_want = ?, active_plan = ?, relationship_notes_json = ?, equipped_json = ?, inventory_json = ?
-                    WHERE turn_id = ? AND character_id = ?
+                    INSERT INTO character_states (
+                        turn_id, character_id, current_location_id, mood_label,
+                        valence, arousal, active_want, active_plan,
+                        relationship_notes_json, equipped_json, inventory_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(turn_id, character_id) DO UPDATE SET
+                        current_location_id = excluded.current_location_id,
+                        mood_label = excluded.mood_label,
+                        valence = excluded.valence,
+                        arousal = excluded.arousal,
+                        active_want = excluded.active_want,
+                        active_plan = excluded.active_plan,
+                        relationship_notes_json = excluded.relationship_notes_json,
+                        equipped_json = excluded.equipped_json,
+                        inventory_json = excluded.inventory_json
                     """,
                     (
+                        turn_id,
+                        st.character_id,
                         st.current_location_id,
                         st.mood_label,
                         st.valence,
@@ -4164,8 +4195,6 @@ class CantinaRepository:
                         json.dumps(st.relationship_notes),
                         json.dumps(st.equipped),
                         json.dumps(st.inventory),
-                        turn_id,
-                        st.character_id,
                     ),
                 )
             conn.commit()

@@ -93,6 +93,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 
   const [userWmTurns, setUserWmTurns] = useState<number>(10);
   const [userMaxSceneFlags, setUserMaxSceneFlags] = useState<number>(10);
+  const [userAgentDispatchMode, setUserAgentDispatchMode] = useState<"sequential" | "parallel">("sequential");
 
   // Password change state
   const [currentPasswordForPwd, setCurrentPasswordForPwd] = useState("");
@@ -171,6 +172,11 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
         data.user_delegate_cognition_to_clerk ??
         data.default_delegate_cognition_to_clerk;
       setUserDelegateCognition(activeDelegate);
+      setUserAgentDispatchMode(
+        data.user_agent_dispatch_mode ??
+          data.default_agent_dispatch_mode ??
+          "sequential"
+      );
 
       probeOllama(activeActor.base_url);
     } catch (err: any) {
@@ -207,6 +213,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
         working_memory_turns: userWmTurns,
         delegate_cognition_to_clerk: userDelegateCognition,
         max_scene_flags: userMaxSceneFlags,
+        agent_dispatch_mode: userAgentDispatchMode,
       };
       const res = await api.updateProfileModels(payload);
       setModelSettings(res);
@@ -234,6 +241,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       setUserWmTurns(res.default_working_memory_turns);
       setUserDelegateCognition(res.default_delegate_cognition_to_clerk);
       setUserMaxSceneFlags(res.default_max_scene_flags ?? 10);
+      setUserAgentDispatchMode(res.default_agent_dispatch_mode ?? "sequential");
       setStatusMsg("Reverted to system default preferences.");
     } catch (err: any) {
       setErrorMsg(err?.message || "Failed to reset preferences.");
@@ -1541,6 +1549,40 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                     </label>
                   </div>
 
+                  <div
+                    style={{
+                      padding: "12px 14px",
+                      background: "rgba(255, 255, 255, 0.03)",
+                      borderRadius: 6,
+                      border: "1px solid var(--border-subtle)",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 6,
+                    }}
+                  >
+                    <label style={{ fontSize: "0.82rem", fontWeight: 600 }}>
+                      Character Agent Dispatch Mode{" "}
+                      <span style={{ fontWeight: 400, fontSize: "0.74rem", color: "var(--text-secondary)" }}>
+                        (System Default: {modelSettings?.default_agent_dispatch_mode ?? "sequential"})
+                      </span>
+                    </label>
+                    <select
+                      className="field-select"
+                      disabled={!modelSettings?.allow_user_model_overrides}
+                      value={userAgentDispatchMode}
+                      onChange={(e) =>
+                        setUserAgentDispatchMode(e.target.value as "sequential" | "parallel")
+                      }
+                    >
+                      <option value="sequential">
+                        Sequential — One-at-a-Time (Single Local GPU / Ollama)
+                      </option>
+                      <option value="parallel">
+                        Parallel — Concurrent Dispatch (Cloud APIs / Multi-Slot vLLM)
+                      </option>
+                    </select>
+                  </div>
+
                   {modelSettings?.allow_user_model_overrides && (
                     <div
                       style={{
@@ -1597,6 +1639,8 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                         modelSettings?.user_delegate_cognition_to_clerk ?? null,
                       max_scene_flags:
                         modelSettings?.user_max_scene_flags ?? null,
+                      agent_dispatch_mode:
+                        modelSettings?.user_agent_dispatch_mode ?? null,
                     };
                     const updated = await api.updateProfileModels(payload);
                     setModelSettings(updated);

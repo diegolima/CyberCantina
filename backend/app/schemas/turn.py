@@ -180,8 +180,184 @@ class ExtractedCharacterMemory(BaseModel):
         return "revelation"
 
 
+class WorldPostTurnDelta(BaseModel):
+    """Global world-state output produced by the Post-Turn World Clerk (clock, space, flags, macro events)."""
+
+    elapsed_minutes: int = Field(
+        default=2,
+        ge=0,
+        le=1440,
+        description="Narrative time elapsed during this turn in minutes.",
+    )
+    new_world_timestamp: str | None = Field(
+        default=None,
+        description=(
+            "Absolute in-world time ('YYYY-MM-DD HH:MM') at the END of this turn, set only when the "
+            "turn states or clearly implies a specific time or a time skip (e.g. 'it's 5am', "
+            "'they slept until morning', 'three days later'). Overrides elapsed_minutes."
+        ),
+    )
+    transition_type: Literal["stay", "move_existing", "improvise_new"] = "stay"
+    target_location_id: str | None = None
+    improvised_location: ImprovisedLocationSpec | None = None
+    notable_event_summary: str | None = Field(
+        default=None,
+        description="1-sentence objective summary if a significant macro plot or world-state event transpired.",
+    )
+    scene_flags_updated: list[str] = Field(default_factory=list)
+    scene_flags_removed: list[str] = Field(default_factory=list)
+
+    @field_validator("elapsed_minutes", mode="before")
+    @classmethod
+    def _clamp_elapsed_minutes(cls, v: Any) -> int:
+        try:
+            return max(0, min(1440, int(round(float(v)))))
+        except (TypeError, ValueError):
+            return 2
+
+
+CharacterLocationTransition = Literal["stay_here", "follow_player", "move_to_neighbor"]
+
+
+class CharacterAgentDelta(BaseModel):
+    """Per-character post-turn state mutation proposal emitted by a Character State Agent."""
+
+    mood_label: str = Field(
+        default="Observant and composed",
+        description="2-4 word evocative mood description capturing the character's current affective state.",
+    )
+    valence_delta: float = Field(
+        default=0.0,
+        ge=-1.0,
+        le=1.0,
+        description="Signed change in emotional valence relative to pre-turn baseline (typically -0.20 to +0.20).",
+    )
+    arousal_delta: float = Field(
+        default=0.0,
+        ge=-1.0,
+        le=1.0,
+        description="Signed change in emotional arousal/intensity relative to pre-turn baseline (typically -0.20 to +0.20).",
+    )
+    updated_want: str | None = Field(
+        default=None,
+        description="Optional refreshed 1-sentence immediate goal if the scene shifted what this character wants.",
+    )
+    stance_updates: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Sparse 'target: stance' pairs for entities whose standing shifted this turn "
+            "(use 'user' for the player and character ID or name for other characters; each stance is 1 short sentence)."
+        ),
+    )
+    items_equipped: list[str] = Field(
+        default_factory=list,
+        description="Items or clothing newly put on, worn, drawn, or wielded by this character this turn.",
+    )
+    items_unequipped: list[str] = Field(
+        default_factory=list,
+        description="Previously equipped items stowed, holstered, or tucked back into carried inventory (not dropped).",
+    )
+    items_obtained: list[str] = Field(
+        default_factory=list,
+        description="Items newly picked up, received, or pocketed into carried inventory by this character.",
+    )
+    items_removed: list[str] = Field(
+        default_factory=list,
+        description="Items dropped, handed over to someone else, stripped off and left behind, or consumed.",
+    )
+    location_transition: CharacterLocationTransition = Field(
+        default="stay_here",
+        description=(
+            "'stay_here' if staying in the starting room, 'follow_player' if moving together with the player "
+            "to the new active scene location, or 'move_to_neighbor' if departing independently to an adjacent exit."
+        ),
+    )
+    target_location_id: str | None = Field(
+        default=None,
+        description="Destination neighbor location ID when location_transition == 'move_to_neighbor'.",
+    )
+    new_memories: list[ExtractedCharacterMemory] = Field(
+        default_factory=list,
+        description=(
+            "Transformative personal memories ('trauma', 'bonding', 'betrayal', 'revelation', 'vow') "
+            "formed by THIS character on this turn. Empty list on ordinary turns."
+        ),
+    )
+
+    @field_validator("valence_delta", "arousal_delta", mode="before")
+    @classmethod
+    def _clamp_affect_delta(cls, v: Any) -> float:
+        try:
+            return round(max(-1.0, min(1.0, float(v))), 2)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @field_validator("stance_updates", mode="before")
+    @classmethod
+    def _coerce_stance_updates(cls, v: Any) -> dict[str, str]:
+        if isinstance(v, dict):
+            return {
+                str(k).strip(): str(val).strip()
+                for k, val in v.items()
+                if str(k).strip() and val is not None and str(val).strip()
+            }
+        if isinstance(v, list):
+            out: dict[str, str] = {}
+            for entry in v:
+                if isinstance(entry, str) and ":" in entry:
+                    target, stance = entry.split(":", 1)
+                    if target.strip() and stance.strip():
+                        out[target.strip()] = stance.strip()
+                elif isinstance(entry, dict):
+                    target = str(
+                        entry.get("character")
+                        or entry.get("target")
+                        or entry.get("id")
+                        or ""
+                    ).strip()
+                    stance = str(
+                        entry.get("stance") or entry.get("note") or entry.get("view") or ""
+                    ).strip()
+                    if target and stance:
+                        out[target] = stance
+            return out
+        return {}
+
+    @field_validator("location_transition", mode="before")
+    @classmethod
+    def _coerce_location_transition(cls, v: Any) -> CharacterLocationTransition:
+        if isinstance(v, str):
+            low = v.strip().lower()
+            if low in ("stay_here", "follow_player", "move_to_neighbor"):
+                return low  # type: ignore[return-value]
+            if "follow" in low or "with_player" in low or "accompany" in low:
+                return "follow_player"
+            if "neighbor" in low or "depart" in low or "leave" in low or "move" in low:
+                return "move_to_neighbor"
+        return "stay_here"
+
+
+class DisputedItemDecision(BaseModel):
+    """Single item custody ruling issued by the Clerk Arbitrator."""
+
+    item_name: str = Field(description="Name of the contested item.")
+    winner_id: str = Field(
+        description="Winning character_id who holds the item at the end of the turn, 'user' if the player holds it, or 'none' if nobody acquired it."
+    )
+    rationale: str = Field(
+        default="",
+        description="Brief 1-sentence justification grounded in the narrative prose and dice outcome.",
+    )
+
+
+class InventoryArbitrationResult(BaseModel):
+    """Clerk arbitration output resolving contested item claims across Character Agents."""
+
+    decisions: list[DisputedItemDecision] = Field(default_factory=list)
+
+
 class PostTurnStateDelta(BaseModel):
-    """Phase 4 output produced by the Async Post-Turn Clerk."""
+    """Composite post-turn state record combining Global World Clerk output and reconciled Character Agent deltas."""
 
     elapsed_minutes: int = Field(
         default=2,
@@ -208,11 +384,11 @@ class PostTurnStateDelta(BaseModel):
     scene_flags_removed: list[str] = Field(default_factory=list)
     inventory_added: list[str] = Field(
         default_factory=list,
-        description="Items or clothing newly put on, picked up, or acquired by the character this turn.",
+        description="Items or clothing newly put on, picked up, or acquired by the active character this turn.",
     )
     inventory_removed: list[str] = Field(
         default_factory=list,
-        description="Items or clothing taken off, dropped, given away, or consumed by the character this turn.",
+        description="Items or clothing taken off, dropped, given away, or consumed by the active character this turn.",
     )
     relationship_shift_note: str | None = None
     character_memories: list[ExtractedCharacterMemory] = Field(
@@ -221,6 +397,14 @@ class PostTurnStateDelta(BaseModel):
             "Significant personal memories (trauma, bonding, betrayal, revelation, vow) formed "
             "this turn by characters present in the scene. Empty list on ordinary turns."
         ),
+    )
+    character_deltas: dict[str, CharacterAgentDelta] = Field(
+        default_factory=dict,
+        description="Per-character post-turn deltas indexed by character_id.",
+    )
+    arbitration_notes: list[str] = Field(
+        default_factory=list,
+        description="Audit log of Clerk arbitration rulings if item disputes occurred this turn.",
     )
 
 

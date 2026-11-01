@@ -1652,6 +1652,55 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                     </p>
                   </div>
 
+                  {/* Character Agent Dispatch Mode */}
+                  <div
+                    style={{
+                      background: "var(--bg-card)",
+                      border: "1px solid var(--border-subtle)",
+                      borderRadius: 8,
+                      padding: 14,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 6,
+                    }}
+                  >
+                    <label
+                      style={{
+                        fontWeight: 600,
+                        fontSize: "0.86rem",
+                        color: "var(--text-primary)",
+                      }}
+                    >
+                      Character Agent Dispatch Mode
+                    </label>
+                    <select
+                      className="field-select"
+                      value={appSettingsForm.agent_dispatch_mode ?? "sequential"}
+                      onChange={(e) =>
+                        setAppSettingsForm({
+                          ...appSettingsForm,
+                          agent_dispatch_mode: e.target.value as "sequential" | "parallel",
+                        })
+                      }
+                    >
+                      <option value="sequential">
+                        Sequential — One Agent at a Time (Recommended for Single Local GPU / Ollama)
+                      </option>
+                      <option value="parallel">
+                        Parallel — Concurrent Dispatch (Cloud APIs / Multi-Slot vLLM)
+                      </option>
+                    </select>
+                    <p
+                      style={{
+                        fontSize: "0.76rem",
+                        color: "var(--text-secondary)",
+                        margin: 0,
+                      }}
+                    >
+                      Controls whether per-character state agents execute one-by-one (avoiding queue timeouts on single-GPU setups) or concurrently via asyncio.gather.
+                    </p>
+                  </div>
+
                   <div
                     style={{
                       display: "flex",

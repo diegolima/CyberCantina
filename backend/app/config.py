@@ -11,6 +11,8 @@ from pydantic import BaseModel, Field
 
 SETTINGS_FILE_PATH = Path(__file__).resolve().parent.parent / "cantina_settings.json"
 
+AgentDispatchMode = Literal["sequential", "parallel"]
+
 
 class ModelProfile(BaseModel):
     """Ollama / OpenAI-compatible endpoint profile for Actor or Auxiliary Clerk roles."""
@@ -132,6 +134,14 @@ class AppSettings(BaseModel):
     delegate_cognition_to_clerk: bool = Field(
         default=False,
         description="When True, the analytical Clerk model generates character cognition (<cognition> block) before the Actor writes narrative prose.",
+    )
+    agent_dispatch_mode: AgentDispatchMode = Field(
+        default="sequential",
+        description=(
+            "Execution mode for per-character agents: 'sequential' runs one agent at a time "
+            "(safe for single-GPU local servers like Ollama), while 'parallel' dispatches "
+            "agents concurrently via asyncio.gather (fast on cloud APIs or multi-slot vLLM)."
+        ),
     )
 
 

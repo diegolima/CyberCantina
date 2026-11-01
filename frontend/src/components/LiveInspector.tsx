@@ -675,6 +675,9 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
           elsewhereLocationName={sheetRow.elsewhereLocationName}
           campaignId={bundle.campaign.id}
           worlds={worlds}
+          characterNameMap={Object.fromEntries(
+            characterRows.map((r) => [r.record.id, r.record.name])
+          )}
           onClose={() => setSheetCharacterId(null)}
           onItemAction={onToggleItemEquip || (() => {})}
           onSaveMemories={async (cid, shards) => {
