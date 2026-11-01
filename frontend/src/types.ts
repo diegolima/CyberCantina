@@ -331,11 +331,42 @@ export interface CharacterAgentDelta {
   new_memories: ExtractedCharacterMemory[];
 }
 
+export interface ImprovisedLocationSpec {
+  name: string;
+  description: string;
+  direction_label: string;
+  compass_direction: CompassDirection;
+  travel_minutes: number;
+  environmental_tags: string[];
+}
+
+export interface WorldPostTurnDelta {
+  elapsed_minutes: number;
+  new_world_timestamp?: string | null;
+  transition_type: "stay" | "move_existing" | "improvise_new";
+  target_location_id?: string | null;
+  improvised_location?: ImprovisedLocationSpec | null;
+  notable_event_summary?: string | null;
+  scene_flags_updated: string[];
+  scene_flags_removed: string[];
+}
+
+export interface ArbitrationRulingRecord {
+  item_name: string;
+  reason: "multi_claim" | "unrelinquished_transfer";
+  claimant_ids: string[];
+  prior_holder_id?: string | null;
+  winner_id: string;
+  winner_label: string;
+  rationale: string;
+}
+
 export interface PostTurnStateDelta {
   elapsed_minutes: number;
   new_world_timestamp?: string | null;
   transition_type: "stay" | "move_existing" | "improvise_new";
   target_location_id?: string | null;
+  improvised_location?: ImprovisedLocationSpec | null;
   notable_event_summary?: string | null;
   scene_flags_updated: string[];
   scene_flags_removed?: string[];
@@ -344,7 +375,38 @@ export interface PostTurnStateDelta {
   relationship_shift_note?: string | null;
   character_memories?: ExtractedCharacterMemory[];
   character_deltas?: Record<string, CharacterAgentDelta>;
+  character_names?: Record<string, string>;
   arbitration_notes?: string[];
+  arbitration_rulings?: ArbitrationRulingRecord[];
+  compacted_character_ids?: string[];
+}
+
+export type Phase4AgentKind = "world_clerk" | "character";
+
+export type Phase4PillStatus =
+  | "queued"
+  | "running"
+  | "arbitrating"
+  | "completed"
+  | "failed";
+
+export interface Phase4AgentProgressItem {
+  agentKey: string; // "clerk" | character_id
+  kind: Phase4AgentKind;
+  label: string; // "clerk" | character_name
+  status: Phase4PillStatus;
+  reconciled: boolean;
+  provisionalWorldDelta?: WorldPostTurnDelta | null;
+  provisionalCharacterDelta?: CharacterAgentDelta | null;
+  error?: string | null;
+}
+
+export interface Phase4TurnProgress {
+  turnId: string;
+  dispatchMode: AgentDispatchMode;
+  isComplete: boolean;
+  orderedAgentKeys: string[];
+  agents: Record<string, Phase4AgentProgressItem>;
 }
 
 export type NarrativeMode =

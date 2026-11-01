@@ -14,6 +14,7 @@ from app.db.repository import CantinaRepository
 from app.engine.character_agent import (
     apply_character_inventory_delta,
     arbitrate_inventory_disputes,
+    arbitrate_inventory_disputes_detailed,
     detect_inventory_disputes,
     run_character_post_turn_agent,
 )
@@ -38,10 +39,14 @@ from app.schemas.character import (
     MemoryShard,
 )
 from app.schemas.turn import (
+    ArbitrationRulingRecord,
     CharacterAgentDelta,
     EpisodicChunkRecord,
     ExtractedCharacterMemory,
     ImprovisedLocationSpec,
+    Phase4ProgressCallback,
+    Phase4ProgressEvent,
+    Phase4RosterEntry,
     PostTurnStateDelta,
     PreTurnAnalysis,
     TurnNodeRecord,
@@ -958,6 +963,7 @@ async def run_phase4_post_turn_clerk(
     character_post_turn_prompt_template: str | None = None,
     arbitration_prompt_template: str | None = None,
     summary_prompt_template: str | None = None,
+    on_progress: Phase4ProgressCallback | None = None,
 ) -> tuple[TurnNodeRecord, list[EpisodicChunkRecord]]:
     """Run Global Post-Turn World Clerk + Per-Character State Agents with Two-Tier Item Dispute Arbitration."""
     clerk_prof = profile or settings.clerk_profile
@@ -976,6 +982,22 @@ async def run_phase4_post_turn_clerk(
     for ch in scene_characters:
         if all(p.id != ch.id for p in known_participants):
             known_participants.append(ch)
+
+    # Announce Phase 4 Roster upfront
+    roster = [Phase4RosterEntry(agent_key="clerk", kind="world_clerk", label="clerk")]
+    if not is_narrator_turn:
+        for ch in scene_characters:
+            roster.append(Phase4RosterEntry(agent_key=ch.id, kind="character", label=ch.name))
+
+    if on_progress:
+        await on_progress(
+            Phase4ProgressEvent(
+                event="phase4_start",
+                turn_id=completed_turn.id,
+                dispatch_mode=eff_dispatch,
+                roster=roster,
+            )
+        )
 
     branch_turns = repo.get_branch_turn_chain(completed_turn.id)
     valid_turn_ids = {t.id for t in branch_turns}
@@ -1024,8 +1046,18 @@ async def run_phase4_post_turn_clerk(
     )
 
     async def _compute_world_delta() -> WorldPostTurnDelta:
+        if on_progress:
+            await on_progress(
+                Phase4ProgressEvent(
+                    event="phase4_agent_start",
+                    turn_id=completed_turn.id,
+                    agent_key="clerk",
+                    kind="world_clerk",
+                    label="clerk",
+                )
+            )
         try:
-            return await llm_client.complete_structured(
+            w_delta = await llm_client.complete_structured(
                 [
                     {"role": "system", "content": world_system_prompt},
                     {"role": "user", "content": world_user_prompt},
@@ -1033,10 +1065,21 @@ async def run_phase4_post_turn_clerk(
                 WorldPostTurnDelta,
                 profile=clerk_prof,
             )
-        except Exception:
+        except Exception as exc:
             if not settings.allow_offline_fallback:
+                if on_progress:
+                    await on_progress(
+                        Phase4ProgressEvent(
+                            event="phase4_agent_error",
+                            turn_id=completed_turn.id,
+                            agent_key="clerk",
+                            kind="world_clerk",
+                            label="clerk",
+                            error=str(exc),
+                        )
+                    )
                 raise
-            return heuristic_world_post_turn_delta(
+            w_delta = heuristic_world_post_turn_delta(
                 user_message=completed_turn.user_message,
                 raw_prose=completed_turn.raw_prose,
                 pre_turn=completed_turn.pre_turn,
@@ -1044,6 +1087,69 @@ async def run_phase4_post_turn_clerk(
                 neighbors=neighbors,
                 current_timestamp=current_timestamp,
             )
+        if on_progress:
+            await on_progress(
+                Phase4ProgressEvent(
+                    event="phase4_agent_complete",
+                    turn_id=completed_turn.id,
+                    agent_key="clerk",
+                    kind="world_clerk",
+                    label="clerk",
+                    world_delta=w_delta,
+                )
+            )
+        return w_delta
+
+    async def _run_single_char_agent(ch: CharacterRecord) -> tuple[str, CharacterAgentDelta]:
+        if on_progress:
+            await on_progress(
+                Phase4ProgressEvent(
+                    event="phase4_agent_start",
+                    turn_id=completed_turn.id,
+                    agent_key=ch.id,
+                    kind="character",
+                    label=ch.name,
+                )
+            )
+        try:
+            c_delta = await run_character_post_turn_agent(
+                character=ch,
+                prev_state=prev_states_by_char[ch.id],
+                completed_turn=completed_turn,
+                active_location=active_location,
+                neighbors=neighbors,
+                present_characters=scene_characters,
+                all_participants=known_participants,
+                active_shards=active_shards_by_char.get(ch.id, []),
+                profile=clerk_prof,
+                prompt_template=character_post_turn_prompt_template,
+                extracted_memories_fn=_extract_heuristic_character_memories,
+            )
+            if on_progress:
+                await on_progress(
+                    Phase4ProgressEvent(
+                        event="phase4_agent_complete",
+                        turn_id=completed_turn.id,
+                        agent_key=ch.id,
+                        kind="character",
+                        label=ch.name,
+                        character_delta=c_delta,
+                    )
+                )
+            return ch.id, c_delta
+        except Exception as exc:
+            if on_progress:
+                await on_progress(
+                    Phase4ProgressEvent(
+                        event="phase4_agent_error",
+                        turn_id=completed_turn.id,
+                        agent_key=ch.id,
+                        kind="character",
+                        label=ch.name,
+                        error=str(exc),
+                    )
+                )
+            raise
 
     # Check Rolling Episodic Compression threshold upfront
     existing_chunks = repo.get_branch_episodic_chunks(campaign_id, valid_turn_ids)
@@ -1085,22 +1191,7 @@ async def run_phase4_post_turn_clerk(
         else:
             world_delta = await _compute_world_delta()
     elif eff_dispatch == "parallel":
-        char_coros = [
-            run_character_post_turn_agent(
-                character=ch,
-                prev_state=prev_states_by_char[ch.id],
-                completed_turn=completed_turn,
-                active_location=active_location,
-                neighbors=neighbors,
-                present_characters=scene_characters,
-                all_participants=known_participants,
-                active_shards=active_shards_by_char.get(ch.id, []),
-                profile=clerk_prof,
-                prompt_template=character_post_turn_prompt_template,
-                extracted_memories_fn=_extract_heuristic_character_memories,
-            )
-            for ch in scene_characters
-        ]
+        char_tasks = [_run_single_char_agent(ch) for ch in scene_characters]
         if needs_chunk_summary:
             summarize_coro = summarize_turn_chunk(
                 chunk_slice,
@@ -1112,23 +1203,27 @@ async def run_phase4_post_turn_clerk(
             gathered = await asyncio.gather(
                 _compute_world_delta(),
                 summarize_coro,
-                *char_coros,
+                *char_tasks,
             )
             world_delta = gathered[0]
             summary_text = gathered[1]
-            for ch, c_delta in zip(scene_characters, gathered[2:]):
-                char_deltas[ch.id] = c_delta
+            for cid, c_delta in gathered[2:]:
+                char_deltas[cid] = c_delta
         else:
             gathered = await asyncio.gather(
                 _compute_world_delta(),
-                *char_coros,
+                *char_tasks,
             )
             world_delta = gathered[0]
-            for ch, c_delta in zip(scene_characters, gathered[1:]):
-                char_deltas[ch.id] = c_delta
+            for cid, c_delta in gathered[1:]:
+                char_deltas[cid] = c_delta
     else:
-        # Sequential dispatch: strictly 1 LLM request in-flight at a time for single-GPU local servers
+        # Sequential dispatch: strictly 1 LLM request in-flight at a time for single-GPU local servers.
+        # Run World Clerk first, then character agents, then summarization.
         world_delta = await _compute_world_delta()
+        for ch in scene_characters:
+            cid, c_delta = await _run_single_char_agent(ch)
+            char_deltas[cid] = c_delta
         if needs_chunk_summary:
             summary_text = await summarize_turn_chunk(
                 chunk_slice,
@@ -1136,20 +1231,6 @@ async def run_phase4_post_turn_clerk(
                 profile=clerk_prof,
                 prompt_template=summary_prompt_template,
                 character_name_map=char_name_map,
-            )
-        for ch in scene_characters:
-            char_deltas[ch.id] = await run_character_post_turn_agent(
-                character=ch,
-                prev_state=prev_states_by_char[ch.id],
-                completed_turn=completed_turn,
-                active_location=active_location,
-                neighbors=neighbors,
-                present_characters=scene_characters,
-                all_participants=known_participants,
-                active_shards=active_shards_by_char.get(ch.id, []),
-                profile=clerk_prof,
-                prompt_template=character_post_turn_prompt_template,
-                extracted_memories_fn=_extract_heuristic_character_memories,
             )
 
     # 1. Resolve new active location (stay, move_existing, or improvise_new)
@@ -1202,6 +1283,7 @@ async def run_phase4_post_turn_clerk(
 
     # 3. Two-Tier Inventory Contention Detection & Conditional Clerk Arbitration
     arbitration_notes: list[str] = []
+    arbitration_rulings: list[ArbitrationRulingRecord] = []
     if not is_narrator_turn and char_deltas:
         disputes = detect_inventory_disputes(
             scene_characters=scene_characters,
@@ -1209,7 +1291,18 @@ async def run_phase4_post_turn_clerk(
             character_deltas=char_deltas,
         )
         if disputes:
-            char_deltas, arbitration_notes = await arbitrate_inventory_disputes(
+            contested_keys = list({cid for d in disputes for cid in d.claimant_ids})
+            if "clerk" not in contested_keys:
+                contested_keys.append("clerk")
+            if on_progress:
+                await on_progress(
+                    Phase4ProgressEvent(
+                        event="phase4_arbitration_start",
+                        turn_id=completed_turn.id,
+                        contested_agent_keys=contested_keys,
+                    )
+                )
+            char_deltas, arbitration_notes, arbitration_rulings = await arbitrate_inventory_disputes_detailed(
                 disputes=disputes,
                 scene_characters=scene_characters,
                 character_deltas=char_deltas,
@@ -1388,6 +1481,9 @@ async def run_phase4_post_turn_clerk(
         character_memories=all_extracted_memories,
         character_deltas=char_deltas,
         arbitration_notes=arbitration_notes,
+        character_names={ch.id: ch.name for ch in scene_characters},
+        arbitration_rulings=arbitration_rulings,
+        compacted_character_ids=[ch.id for ch, _idxs, _aged in compaction_jobs],
     )
 
     primary_char_state = updated_states_by_char.get(

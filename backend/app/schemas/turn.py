@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Awaitable, Callable, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -350,6 +350,18 @@ class DisputedItemDecision(BaseModel):
     )
 
 
+class ArbitrationRulingRecord(BaseModel):
+    """Structured audit record for a contested item custody decision."""
+
+    item_name: str
+    reason: Literal["multi_claim", "unrelinquished_transfer"]
+    claimant_ids: list[str] = Field(default_factory=list)
+    prior_holder_id: str | None = None
+    winner_id: str  # character_id, 'user', or 'none'
+    winner_label: str
+    rationale: str = ""
+
+
 class InventoryArbitrationResult(BaseModel):
     """Clerk arbitration output resolving contested item claims across Character Agents."""
 
@@ -406,6 +418,50 @@ class PostTurnStateDelta(BaseModel):
         default_factory=list,
         description="Audit log of Clerk arbitration rulings if item disputes occurred this turn.",
     )
+    character_names: dict[str, str] = Field(
+        default_factory=dict,
+        description="Snapshot map of character_id -> display name for all agents that ran on this turn.",
+    )
+    arbitration_rulings: list[ArbitrationRulingRecord] = Field(
+        default_factory=list,
+        description="Structured item custody rulings linking winners, losing claimants, and prior holders.",
+    )
+    compacted_character_ids: list[str] = Field(
+        default_factory=list,
+        description="Character IDs whose aged ephemeral memories were consolidated into a compacted shard this turn.",
+    )
+
+
+Phase4AgentKind = Literal["world_clerk", "character"]
+
+
+class Phase4RosterEntry(BaseModel):
+    agent_key: str  # "clerk" for Global World Clerk, or character.id
+    kind: Phase4AgentKind
+    label: str      # "clerk" or character.name
+
+
+class Phase4ProgressEvent(BaseModel):
+    event: Literal[
+        "phase4_start",
+        "phase4_agent_start",
+        "phase4_agent_complete",
+        "phase4_agent_error",
+        "phase4_arbitration_start",
+    ]
+    turn_id: str
+    dispatch_mode: str | None = None
+    roster: list[Phase4RosterEntry] | None = None
+    agent_key: str | None = None
+    kind: Phase4AgentKind | None = None
+    label: str | None = None
+    world_delta: WorldPostTurnDelta | None = None
+    character_delta: CharacterAgentDelta | None = None
+    contested_agent_keys: list[str] | None = None
+    error: str | None = None
+
+
+Phase4ProgressCallback = Callable[[Phase4ProgressEvent], Awaitable[None]]
 
 
 class EpisodicChunkRecord(BaseModel):

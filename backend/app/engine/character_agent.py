@@ -17,6 +17,7 @@ from app.schemas.character import (
     MemoryShard,
 )
 from app.schemas.turn import (
+    ArbitrationRulingRecord,
     CharacterAgentDelta,
     ExtractedCharacterMemory,
     InventoryArbitrationResult,
@@ -574,7 +575,7 @@ def _heuristic_arbitrate_case(
     return first_id, f"Awarded {case.display_name} to {first_name}."
 
 
-async def arbitrate_inventory_disputes(
+async def arbitrate_inventory_disputes_detailed(
     *,
     disputes: list[ContestedItemCase],
     scene_characters: list[CharacterRecord],
@@ -582,10 +583,10 @@ async def arbitrate_inventory_disputes(
     completed_turn: TurnNodeRecord,
     profile: ModelProfile | None = None,
     prompt_template: str | None = None,
-) -> tuple[dict[str, CharacterAgentDelta], list[str]]:
-    """Tier 2 Clerk Arbitrator: resolve contested item custody and mutate character_deltas in-place safely."""
+) -> tuple[dict[str, CharacterAgentDelta], list[str], list[ArbitrationRulingRecord]]:
+    """Tier 2 Clerk Arbitrator: resolve contested item custody and return reconciled deltas, audit notes, and structured rulings."""
     if not disputes:
-        return character_deltas, []
+        return character_deltas, [], []
 
     chars_by_id = {c.id: c for c in scene_characters}
     clerk_prof = profile or settings.clerk_profile
@@ -654,6 +655,7 @@ async def arbitrate_inventory_disputes(
 
     reconciled = {cid: delta.model_copy(deep=True) for cid, delta in character_deltas.items()}
     audit_notes: list[str] = []
+    rulings: list[ArbitrationRulingRecord] = []
 
     for case in disputes:
         if case.norm_key in rulings_by_norm:
@@ -707,7 +709,39 @@ async def arbitrate_inventory_disputes(
         )
         note = f"[{case.display_name}] Custody -> {winner_label}" + (f": {rationale}" if rationale else "")
         audit_notes.append(note)
+        rulings.append(
+            ArbitrationRulingRecord(
+                item_name=case.display_name,
+                reason=case.reason,
+                claimant_ids=list(case.claimant_ids),
+                prior_holder_id=case.prior_holder_id,
+                winner_id=winner_id,
+                winner_label=winner_label,
+                rationale=rationale or "",
+            )
+        )
 
+    return reconciled, audit_notes, rulings
+
+
+async def arbitrate_inventory_disputes(
+    *,
+    disputes: list[ContestedItemCase],
+    scene_characters: list[CharacterRecord],
+    character_deltas: dict[str, CharacterAgentDelta],
+    completed_turn: TurnNodeRecord,
+    profile: ModelProfile | None = None,
+    prompt_template: str | None = None,
+) -> tuple[dict[str, CharacterAgentDelta], list[str]]:
+    """Tier 2 Clerk Arbitrator: resolve contested item custody and mutate character_deltas in-place safely."""
+    reconciled, audit_notes, _ = await arbitrate_inventory_disputes_detailed(
+        disputes=disputes,
+        scene_characters=scene_characters,
+        character_deltas=character_deltas,
+        completed_turn=completed_turn,
+        profile=profile,
+        prompt_template=prompt_template,
+    )
     return reconciled, audit_notes
 
 

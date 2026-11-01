@@ -1272,3 +1272,130 @@ async def test_narrator_turn_emotional_anchor_and_branch_rewind_safety(
     assert rewound.character_states[viktor.id].current_location_id == main_bar.id
     assert rewound.character_states[viktor.id].mood_label == bundle0.character_states[viktor.id].mood_label
     assert set(rewound.present_character_ids) == {kira.id, viktor.id}
+
+
+@pytest.mark.asyncio
+async def test_phase4_agent_progress_events_and_audit_ruling_metadata(
+    temp_repo, monkeypatch
+):
+    """Verify that Phase 4 emits visual progress events (roster, agent start/complete, arbitration) and persists character_names and arbitration_rulings."""
+    kira = temp_repo.get_character("char_kira_vance")
+    viktor, _ = _create_extra_characters(temp_repo)
+    world = temp_repo.get_world("world_neon_rust")
+    main_bar = next(loc for loc in world.locations if loc.is_starting_location)
+
+    camp = temp_repo.create_campaign(
+        name="Audit Ops",
+        world_id=world.id,
+        character_id=kira.id,
+        character_ids=[kira.id, viktor.id],
+        character_locations={kira.id: main_bar.id, viktor.id: main_bar.id},
+    )
+
+    bundle0 = temp_repo.get_campaign_state_bundle(camp.id)
+
+    # Mock LLM to return world delta, character deltas with a dispute, and arbitration decision
+    async def mock_llm(messages, response_model, **kwargs):
+        if response_model is WorldPostTurnDelta:
+            return WorldPostTurnDelta(
+                elapsed_minutes=5,
+                transition_type="stay",
+                notable_event_summary="Data vault breached.",
+                scene_flags_updated=["Alarm Blaring"],
+            )
+        if response_model is CharacterAgentDelta:
+            user_prompt = messages[1]["content"]
+            if kira.name in user_prompt:
+                return CharacterAgentDelta(
+                    mood_label="Focused and agile",
+                    valence_delta=0.1,
+                    arousal_delta=0.2,
+                    updated_want="Extract the cipher drive.",
+                    items_obtained=["Cipher Drive"],
+                )
+            return CharacterAgentDelta(
+                mood_label="Frantic and alarmed",
+                valence_delta=-0.3,
+                arousal_delta=0.4,
+                updated_want="Prevent the cipher theft.",
+                items_obtained=["Cipher Drive"],
+            )
+        if response_model is InventoryArbitrationResult:
+            return InventoryArbitrationResult(
+                decisions=[
+                    DisputedItemDecision(
+                        item_name="Cipher Drive",
+                        winner_id=kira.id,
+                        rationale="Kira snatched the drive first from the console.",
+                    )
+                ]
+            )
+        raise AssertionError(f"Unexpected response_model: {response_model}")
+
+    monkeypatch.setattr(llm_client, "complete_structured", mock_llm)
+
+    events: list[Phase4ProgressEvent] = []
+
+    async def progress_listener(ev: Phase4ProgressEvent):
+        events.append(ev)
+
+    turn1 = temp_repo.save_turn_node(
+        turn_id="turn_progress_1",
+        campaign_id=camp.id,
+        parent_turn_id=bundle0.active_branch_turns[-1].id,
+        depth_index=1,
+        user_message="I signal Kira to grab the drive.",
+        actor_id=kira.id,
+        raw_prose="*Kira snatches the cipher drive as Viktor lunges for it.*",
+        cognition=CognitionBlock(feeling="Determined", valence=0.2, arousal=0.7),
+        pre_turn=PreTurnAnalysis(spatial_intent="stay"),
+        world_snapshot=bundle0.current_world_snapshot.model_copy(update={"turn_id": "turn_progress_1"}),
+        character_state=bundle0.current_character_state.model_copy(update={"turn_id": "turn_progress_1"}),
+        extra_character_states=[
+            bundle0.character_states[viktor.id].model_copy(update={"turn_id": "turn_progress_1"})
+        ],
+        recalled_items=[],
+    )
+
+    updated_turn, _ = await run_phase4_post_turn_clerk(
+        repo=temp_repo,
+        campaign_id=camp.id,
+        world_id=world.id,
+        character=kira,
+        completed_turn=turn1,
+        active_location=main_bar,
+        neighbors=[],
+        present_characters=[kira, viktor],
+        all_participants=[kira, viktor],
+        on_progress=progress_listener,
+    )
+
+    # 1. Verify progress event stream
+    event_names = [e.event for e in events]
+    assert "phase4_start" in event_names
+    assert "phase4_agent_start" in event_names
+    assert "phase4_agent_complete" in event_names
+    assert "phase4_arbitration_start" in event_names
+
+    start_ev = next(e for e in events if e.event == "phase4_start")
+    roster_keys = [r.agent_key for r in start_ev.roster]
+    assert roster_keys == ["clerk", kira.id, viktor.id]
+
+    completed_agent_keys = [e.agent_key for e in events if e.event == "phase4_agent_complete"]
+    assert set(completed_agent_keys) == {"clerk", kira.id, viktor.id}
+
+    # 2. Verify PostTurnStateDelta metadata
+    assert updated_turn.post_turn is not None
+    assert updated_turn.post_turn.character_names == {kira.id: kira.name, viktor.id: viktor.name}
+    assert len(updated_turn.post_turn.arbitration_rulings) == 1
+    ruling = updated_turn.post_turn.arbitration_rulings[0]
+    assert ruling.item_name == "Cipher Drive"
+    assert ruling.winner_id == kira.id
+    assert ruling.winner_label == kira.name
+    assert "snatched the drive" in ruling.rationale
+    assert set(ruling.claimant_ids) == {kira.id, viktor.id}
+
+    # 3. Verify winner holds item in state, loser does not
+    bundle1 = temp_repo.get_campaign_state_bundle(camp.id)
+    assert "Cipher Drive" in bundle1.character_states[kira.id].inventory
+    assert "Cipher Drive" not in bundle1.character_states[viktor.id].inventory

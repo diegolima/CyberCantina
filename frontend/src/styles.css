@@ -2170,3 +2170,169 @@ body {
 }
 
 
+
+/* ------------------------------------------------------------------ */
+/* Phase 4 Clerk & Character Agent Pills & Mutation Modal Styles      */
+/* ------------------------------------------------------------------ */
+
+.agent-pills-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.agent-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.69rem;
+  font-weight: 500;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  cursor: pointer;
+  line-height: 1.3;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.agent-pill:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.agent-pill--clerk {
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.4);
+  color: var(--accent-amber);
+}
+
+.agent-pill--clerk:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.18);
+  border-color: var(--accent-amber);
+}
+
+.agent-pill--character {
+  background: rgba(6, 182, 212, 0.08);
+  border-color: rgba(6, 182, 212, 0.35);
+  color: var(--accent-cyan);
+}
+
+.agent-pill--character:hover:not(:disabled) {
+  background: rgba(6, 182, 212, 0.18);
+  border-color: var(--accent-cyan);
+}
+
+.agent-pill--queued {
+  opacity: 0.55;
+  border-style: dashed;
+  cursor: default;
+}
+
+.agent-pill--running {
+  cursor: default;
+  animation: agent-pill-shimmer 1.6s ease-in-out infinite;
+}
+
+.agent-pill--clerk.agent-pill--running {
+  background: rgba(245, 158, 11, 0.2);
+  border-color: var(--accent-amber);
+}
+
+.agent-pill--character.agent-pill--running {
+  background: rgba(6, 182, 212, 0.2);
+  border-color: var(--accent-cyan);
+}
+
+.agent-pill--arbitrating {
+  cursor: pointer;
+  animation: agent-pill-arbitrate 1.2s ease-in-out infinite;
+  background: rgba(245, 158, 11, 0.25);
+  border-color: var(--accent-amber);
+  color: var(--accent-amber);
+}
+
+.agent-pill--noop {
+  opacity: 0.72;
+}
+
+.agent-pill--failed {
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.agent-pill-count {
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  line-height: 1.2;
+}
+
+.badge-clerk-pill {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: var(--accent-amber);
+  line-height: 1.2;
+}
+
+.agent-modal-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.agent-modal-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 0.73rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.agent-modal-card-body {
+  padding: 10px 12px;
+}
+
+@keyframes agent-pill-shimmer {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(6, 182, 212, 0);
+    opacity: 0.85;
+  }
+  50% {
+    box-shadow: 0 0 8px 1px rgba(6, 182, 212, 0.4);
+    opacity: 1;
+  }
+}
+
+@keyframes agent-pill-arbitrate {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+  }
+  50% {
+    box-shadow: 0 0 10px 2px rgba(245, 158, 11, 0.5);
+  }
+}
+
+.spin-slow {
+  animation: spin 2.5s linear infinite;
+}
+
+.pulse-fast {
+  animation: agent-pill-arbitrate 0.8s ease-in-out infinite;
+}

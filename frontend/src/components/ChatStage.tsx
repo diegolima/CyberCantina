@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import {
   AlertTriangle,
+  Bot,
   Brain,
   ChevronDown,
   ChevronRight,
@@ -10,6 +11,7 @@ import {
   Edit3,
   Eye,
   GitBranch,
+  Globe,
   MapPin,
   RefreshCw,
   Send,
@@ -22,10 +24,15 @@ import {
   CharacterRecord,
   CognitionBlock,
   NarrativeMode,
+  Phase4TurnProgress,
   PreTurnAnalysis,
   RecalledMemoryItem,
   TurnNodeRecord,
 } from "../types";
+import {
+  ActiveAgentModalTarget,
+  AgentChangesModal,
+} from "./inspector/AgentChangesModal";
 
 interface LiveStreamState {
   userMessage: string;
@@ -41,6 +48,8 @@ interface ChatStageProps {
   bundle: CampaignStateBundle;
   character: CharacterRecord;
   isStreaming: boolean;
+  isPhase4Running?: boolean;
+  phase4ProgressByTurn?: Record<string, Phase4TurnProgress>;
   liveStream: LiveStreamState | null;
   streamError?: string | null;
   onOpenSettings?: () => void;
@@ -70,6 +79,8 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   bundle,
   character,
   isStreaming,
+  isPhase4Running = false,
+  phase4ProgressByTurn = {},
   liveStream,
   streamError,
   onOpenSettings,
@@ -77,6 +88,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   onCheckoutTurn,
   onDeleteLastTurn,
 }) => {
+  const isBusy = isStreaming || isPhase4Running;
   const [inputText, setInputText] = useState("");
   const [diceOverride, setDiceOverride] = useState<string>("");
   const [openCognitionIds, setOpenCognitionIds] = useState<Record<string, boolean>>({});
@@ -88,6 +100,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const [isDurationPickerOpen, setIsDurationPickerOpen] = useState(false);
   const [isCustomDirectiveOpen, setIsCustomDirectiveOpen] = useState(false);
   const [customDirectiveText, setCustomDirectiveText] = useState("");
+  const [activeAgentModal, setActiveAgentModal] = useState<ActiveAgentModalTarget | null>(null);
 
   const lastBranchTurn =
     bundle.active_branch_turns[bundle.active_branch_turns.length - 1];
@@ -160,7 +173,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
 
   const handleSendCustomDirective = () => {
     const trimmed = customDirectiveText.trim();
-    if (!trimmed || isStreaming) return;
+    if (!trimmed || isBusy) return;
     onSendTurn({
       userMessage: trimmed,
       narrativeMode: "custom",
@@ -173,7 +186,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
     const raw = inputText.trim();
-    if (!raw || isStreaming) return;
+    if (!raw || isBusy) return;
 
     // Check for slash command shortcuts
     if (raw.startsWith("/")) {
@@ -298,7 +311,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   };
 
   const handleSwipeRegenerate = (turn: TurnNodeRecord) => {
-    if (isStreaming || isDeletingTurn || !turn.parent_turn_id) return;
+    if (isBusy || isDeletingTurn || !turn.parent_turn_id) return;
     const narratorOpts = inferNarratorTurnOptions(turn);
     if (narratorOpts.isNarrator) {
       onSendTurn({
@@ -318,7 +331,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   };
 
   const handleStartEdit = (turn: TurnNodeRecord) => {
-    if (isStreaming || isDeletingTurn || !turn.parent_turn_id) return;
+    if (isBusy || isDeletingTurn || !turn.parent_turn_id) return;
     setEditingTurnId(turn.id);
     setEditMessageText(turn.user_message);
   };
@@ -330,7 +343,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
 
   const handleCommitEdit = (turn: TurnNodeRecord) => {
     const trimmed = editMessageText.trim();
-    if (!trimmed || isStreaming || isDeletingTurn || !turn.parent_turn_id) return;
+    if (!trimmed || isBusy || isDeletingTurn || !turn.parent_turn_id) return;
     const parsedDice = diceOverride ? parseInt(diceOverride, 10) : null;
     setEditingTurnId(null);
     setEditMessageText("");
@@ -356,7 +369,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   };
 
   const handleDeleteLast = async () => {
-    if (isStreaming || isDeletingTurn || !onDeleteLastTurn) return;
+    if (isBusy || isDeletingTurn || !onDeleteLastTurn) return;
     setIsDeletingTurn(true);
     try {
       setEditingTurnId(null);
@@ -373,6 +386,107 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     if (!siblingsByParent[key]) siblingsByParent[key] = [];
     siblingsByParent[key].push(node);
   }
+
+  const renderAgentPills = (t: TurnNodeRecord) => {
+    const progress = phase4ProgressByTurn[t.id];
+    let agentKeys: string[] = [];
+
+    if (progress && progress.orderedAgentKeys && progress.orderedAgentKeys.length > 0) {
+      agentKeys = progress.orderedAgentKeys;
+    } else if (t.post_turn) {
+      agentKeys = ["clerk", ...Object.keys(t.post_turn.character_deltas || {})];
+    } else if (progress && Object.keys(progress.agents).length > 0) {
+      agentKeys = Object.keys(progress.agents);
+    }
+
+    if (agentKeys.length === 0) return null;
+
+    return agentKeys.map((agentKey) => {
+      const isClerkPill = agentKey === "clerk";
+      const progressItem = progress?.agents[agentKey];
+      const status = progressItem?.status ?? (t.post_turn ? "completed" : "queued");
+
+      const label = isClerkPill
+        ? "clerk"
+        : t.post_turn?.character_names?.[agentKey] ||
+          bundle.character_records?.[agentKey]?.name ||
+          progressItem?.label ||
+          "Agent";
+
+      let mutations = 0;
+      if (isClerkPill) {
+        const pt = t.post_turn || progressItem?.provisionalWorldDelta;
+        if (pt) {
+          if ((pt.elapsed_minutes ?? 0) > 0) mutations += 1;
+          if (pt.transition_type && pt.transition_type !== "stay") mutations += 1;
+          mutations += pt.scene_flags_updated?.length || 0;
+          mutations += pt.scene_flags_removed?.length || 0;
+          if (pt.notable_event_summary) mutations += 1;
+        }
+      } else {
+        const cd =
+          t.post_turn?.character_deltas?.[agentKey] ||
+          progressItem?.provisionalCharacterDelta;
+        if (cd) {
+          if (cd.updated_want) mutations += 1;
+          if (cd.valence_delta !== 0) mutations += 1;
+          if (cd.arousal_delta !== 0) mutations += 1;
+          mutations += Object.keys(cd.stance_updates || {}).length;
+          mutations += cd.items_equipped?.length || 0;
+          mutations += cd.items_unequipped?.length || 0;
+          mutations += cd.items_obtained?.length || 0;
+          mutations += cd.items_removed?.length || 0;
+          if (cd.location_transition && cd.location_transition !== "stay_here") mutations += 1;
+          mutations += cd.new_memories?.length || 0;
+        }
+      }
+
+      const isNoop = status === "completed" && mutations === 0;
+      const canClick =
+        status === "completed" ||
+        status === "arbitrating" ||
+        Boolean(
+          progressItem?.provisionalCharacterDelta ||
+            progressItem?.provisionalWorldDelta ||
+            t.post_turn
+        );
+
+      const statusClass = `agent-pill--${status}`;
+      const roleClass = isClerkPill ? "agent-pill--clerk" : "agent-pill--character";
+      const noopClass = isNoop ? "agent-pill--noop" : "";
+
+      return (
+        <button
+          key={agentKey}
+          type="button"
+          className={`agent-pill ${roleClass} ${statusClass} ${noopClass}`}
+          disabled={!canClick}
+          title={
+            status === "queued"
+              ? `${label}: Queued for Phase 4 evaluation...`
+              : status === "running"
+              ? `${label}: Actively evaluating scene mutations...`
+              : status === "arbitrating"
+              ? `${label}: Contested item dispute arbitration in progress...`
+              : `${label}: Click to inspect ${mutations} state change${
+                  mutations === 1 ? "" : "s"
+                }`
+          }
+          onClick={() => setActiveAgentModal({ turnId: t.id, agentKey })}
+        >
+          {status === "running" && <RefreshCw size={10} className="spin-slow" />}
+          {status === "arbitrating" && <Sparkles size={10} className="pulse-fast" />}
+          {status === "queued" && <Clock size={10} style={{ opacity: 0.6 }} />}
+          {(status === "completed" || status === "failed") &&
+            (isClerkPill ? <Globe size={10} /> : <Bot size={10} />)}
+          <span>{label}</span>
+          {status === "completed" && mutations > 0 && (
+            <span className="agent-pill-count">{mutations}</span>
+          )}
+        </button>
+      );
+    });
+  };
 
   return (
     <main className="chat-stage">
@@ -741,95 +855,113 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               {/* Narrative Prose */}
               <div className="prose-body">{renderFormattedProse(turn.raw_prose)}</div>
 
-              {/* Turn Footer: Clock, Post-Turn Delta, Swipe/Regenerate, Sibling Branches */}
+              {/* Turn Footer: Clock, Post-Turn Delta, Phase 4 Agent Mutation Pills, Swipe/Regenerate */}
               <div
                 style={{
                   display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
+                  flexDirection: "column",
+                  gap: 8,
                   borderTop: "1px solid var(--border-subtle)",
                   paddingTop: 8,
                   fontSize: "0.74rem",
                   color: "var(--text-muted)",
                 }}
               >
-                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                  <span>Turn #{turn.depth_index}</span>
-                  <span>• {turn.world_snapshot.world_timestamp}</span>
-                  {turn.post_turn?.notable_event_summary && (
-                    <span style={{ color: "var(--accent-amber)" }}>
-                      ★ {turn.post_turn.notable_event_summary}
-                    </span>
-                  )}
-                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    gap: 8,
+                  }}
+                >
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <span>Turn #{turn.depth_index}</span>
+                    <span>• {turn.world_snapshot.world_timestamp}</span>
+                    {turn.post_turn?.notable_event_summary && (
+                      <span style={{ color: "var(--accent-amber)" }}>
+                        ★ {turn.post_turn.notable_event_summary}
+                      </span>
+                    )}
 
-                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  {siblings.length > 1 && (
-                    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                      <GitBranch size={12} color="var(--accent-cyan)" />
-                      {siblings.map((sib, idx) => (
-                        <button
-                          key={sib.id}
-                          type="button"
-                          className="btn"
-                          style={{
-                            padding: "2px 7px",
-                            fontSize: "0.7rem",
-                            borderColor:
-                              sib.id === turn.id
-                                ? "var(--accent-amber)"
-                                : "var(--border-subtle)",
-                          }}
-                          title={`Swipe v${idx + 1}: ${sib.user_message}`}
-                          onClick={() => onCheckoutTurn(sib.id)}
-                        >
-                          v{idx + 1}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                    {/* Phase 4 Clerk & Character Agent Badges ("Pills") */}
+                    {!isRoot && (
+                      <div className="agent-pills-row">
+                        {renderAgentPills(turn)}
+                      </div>
+                    )}
+                  </div>
 
-                  {isLastTurn && (
-                    <button
-                      type="button"
-                      className="btn"
-                      style={{ padding: "3px 8px", fontSize: "0.72rem" }}
-                      disabled={isStreaming || isDeletingTurn}
-                      onClick={() => handleStartEdit(turn)}
-                      title="Edit last message and generate a new swipe"
-                    >
-                      <Edit3 size={12} />
-                      Edit
-                    </button>
-                  )}
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    {siblings.length > 1 && (
+                      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                        <GitBranch size={12} color="var(--accent-cyan)" />
+                        {siblings.map((sib, idx) => (
+                          <button
+                            key={sib.id}
+                            type="button"
+                            className="btn"
+                            style={{
+                              padding: "2px 7px",
+                              fontSize: "0.7rem",
+                              borderColor:
+                                sib.id === turn.id
+                                  ? "var(--accent-amber)"
+                                  : "var(--border-subtle)",
+                            }}
+                            title={`Swipe v${idx + 1}: ${sib.user_message}`}
+                            disabled={isBusy}
+                            onClick={() => onCheckoutTurn(sib.id)}
+                          >
+                            v{idx + 1}
+                          </button>
+                        ))}
+                      </div>
+                    )}
 
-                  {!isRoot && (
-                    <button
-                      type="button"
-                      className="btn"
-                      style={{ padding: "3px 8px", fontSize: "0.72rem" }}
-                      disabled={isStreaming || isDeletingTurn}
-                      onClick={() => handleSwipeRegenerate(turn)}
-                      title="Swipe / Regenerate this turn from its parent state snapshot"
-                    >
-                      <RefreshCw size={12} />
-                      Swipe
-                    </button>
-                  )}
+                    {isLastTurn && (
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{ padding: "3px 8px", fontSize: "0.72rem" }}
+                        disabled={isBusy || isDeletingTurn}
+                        onClick={() => handleStartEdit(turn)}
+                        title="Edit last message and generate a new swipe"
+                      >
+                        <Edit3 size={12} />
+                        Edit
+                      </button>
+                    )}
 
-                  {isLastTurn && onDeleteLastTurn && (
-                    <button
-                      type="button"
-                      className="btn btn-danger"
-                      style={{ padding: "3px 8px", fontSize: "0.72rem" }}
-                      disabled={isStreaming || isDeletingTurn}
-                      onClick={handleDeleteLast}
-                      title="Delete last message and all generated swipes"
-                    >
-                      <Trash2 size={12} />
-                      Delete
-                    </button>
-                  )}
+                    {!isRoot && (
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{ padding: "3px 8px", fontSize: "0.72rem" }}
+                        disabled={isBusy || isDeletingTurn}
+                        onClick={() => handleSwipeRegenerate(turn)}
+                        title="Swipe / Regenerate this turn from its parent state snapshot"
+                      >
+                        <RefreshCw size={12} />
+                        Swipe
+                      </button>
+                    )}
+
+                    {isLastTurn && onDeleteLastTurn && (
+                      <button
+                        type="button"
+                        className="btn btn-danger"
+                        style={{ padding: "3px 8px", fontSize: "0.72rem" }}
+                        disabled={isBusy || isDeletingTurn}
+                        onClick={handleDeleteLast}
+                        title="Delete last message and all generated swipes"
+                      >
+                        <Trash2 size={12} />
+                        Delete
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -1192,7 +1324,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                 value={customDirectiveText}
                 onChange={(e) => setCustomDirectiveText(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && customDirectiveText.trim() && !isStreaming) {
+                  if (e.key === "Enter" && customDirectiveText.trim() && !isBusy) {
                     e.preventDefault();
                     handleSendCustomDirective();
                   } else if (e.key === "Escape") {
@@ -1204,7 +1336,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                 type="button"
                 className="btn btn-amber"
                 style={{ padding: "3px 14px", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 5 }}
-                disabled={isStreaming || !customDirectiveText.trim()}
+                disabled={isBusy || !customDirectiveText.trim()}
                 onClick={handleSendCustomDirective}
               >
                 <Send size={12} />
@@ -1231,13 +1363,23 @@ export const ChatStage: React.FC<ChatStageProps> = ({
             type="submit"
             className="btn btn-amber"
             style={{ padding: "0 18px" }}
-            disabled={isStreaming || !inputText.trim()}
+            disabled={isBusy || !inputText.trim()}
           >
             <Send size={16} />
             Send
           </button>
         </div>
       </form>
+
+      {/* Phase 4 Clerk & Character Agent Changes Modal */}
+      {activeAgentModal && (
+        <AgentChangesModal
+          target={activeAgentModal}
+          bundle={bundle}
+          turnProgress={phase4ProgressByTurn[activeAgentModal.turnId]}
+          onClose={() => setActiveAgentModal(null)}
+        />
+      )}
     </main>
   );
 };

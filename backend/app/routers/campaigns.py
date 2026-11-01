@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import dataclass
 import json
 import logging
 import re
@@ -41,6 +43,7 @@ from app.schemas.turn import (
     CampaignRecord,
     CampaignStateBundle,
     MechanicsTrigger,
+    Phase4ProgressEvent,
     PreTurnAnalysis,
     TurnSubmitRequest,
     WorldStateSnapshot,
@@ -388,6 +391,25 @@ def delete_campaign_turn(
 # ------------------------------------------------------------------
 # 4-Phase Turn Execution Pipeline (SSE Stream & Sync REST)
 # ------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamPacketItem:
+    event: str
+    data: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamErrorItem:
+    exception: BaseException
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamDoneSentinel:
+    pass
+
+
+_Phase4QueueItem = _StreamPacketItem | _StreamErrorItem | _StreamDoneSentinel
 
 
 async def _execute_turn_stream_events(
@@ -777,33 +799,61 @@ async def _execute_turn_stream_events(
     yield {"event": "turn_saved", "data": saved_turn.model_dump()}
 
     # PHASE 4: Post-Turn Global Clerk + Per-Character State Agents & Arbitration
-    updated_turn, _chunks = await run_phase4_post_turn_clerk(
-        repo=repo,
-        campaign_id=campaign.id,
-        world_id=world.id,
-        character=character,
-        completed_turn=saved_turn,
-        active_location=active_location,
-        neighbors=neighbors,
-        present_characters=present_characters,
-        all_participants=participants,
-        profile=eff_clerk,
-        dispatch_mode=eff_dispatch_mode,
-        working_memory_turns=eff_wm_turns,
-        max_scene_flags=eff_max_flags,
-        post_turn_prompt_template=effective_prompts.get("clerk_post_turn_system"),
-        character_post_turn_prompt_template=effective_prompts.get("character_post_turn_system"),
-        arbitration_prompt_template=effective_prompts.get("clerk_arbitration_system"),
-        summary_prompt_template=effective_prompts.get("clerk_episodic_summary_system"),
-    )
-    bundle = repo.get_campaign_state_bundle(campaign.id)
-    yield {
-        "event": "phase4_complete",
-        "data": {
-            "turn": updated_turn.model_dump(),
-            "state_bundle": bundle.model_dump(),
-        },
-    }
+    p4_queue: asyncio.Queue[_Phase4QueueItem] = asyncio.Queue()
+
+    async def _progress_cb(ev: Phase4ProgressEvent) -> None:
+        await p4_queue.put(_StreamPacketItem(event=ev.event, data=ev.model_dump()))
+
+    async def _run_phase4_worker() -> None:
+        try:
+            updated_turn, _chunks = await run_phase4_post_turn_clerk(
+                repo=repo,
+                campaign_id=campaign.id,
+                world_id=world.id,
+                character=character,
+                completed_turn=saved_turn,
+                active_location=active_location,
+                neighbors=neighbors,
+                present_characters=present_characters,
+                all_participants=participants,
+                profile=eff_clerk,
+                dispatch_mode=eff_dispatch_mode,
+                working_memory_turns=eff_wm_turns,
+                max_scene_flags=eff_max_flags,
+                post_turn_prompt_template=effective_prompts.get("clerk_post_turn_system"),
+                character_post_turn_prompt_template=effective_prompts.get("character_post_turn_system"),
+                arbitration_prompt_template=effective_prompts.get("clerk_arbitration_system"),
+                summary_prompt_template=effective_prompts.get("clerk_episodic_summary_system"),
+                on_progress=_progress_cb,
+            )
+            bundle = repo.get_campaign_state_bundle(campaign.id)
+            await p4_queue.put(
+                _StreamPacketItem(
+                    event="phase4_complete",
+                    data={
+                        "turn": updated_turn.model_dump(),
+                        "state_bundle": bundle.model_dump(),
+                    },
+                )
+            )
+        except BaseException as exc:
+            await p4_queue.put(_StreamErrorItem(exception=exc))
+        finally:
+            await p4_queue.put(_StreamDoneSentinel())
+
+    worker_task = asyncio.create_task(_run_phase4_worker())
+    try:
+        while True:
+            item = await p4_queue.get()
+            if isinstance(item, _StreamDoneSentinel):
+                break
+            if isinstance(item, _StreamErrorItem):
+                raise item.exception
+            yield {"event": item.event, "data": item.data}
+    finally:
+        # Shield worker so client disconnect cannot abort SQLite transaction mid-commit
+        if not worker_task.done():
+            await asyncio.shield(worker_task)
 
 
 @router.post("/api/campaigns/{campaign_id}/turns/stream")

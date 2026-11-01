@@ -1,10 +1,12 @@
 import {
   AdminResetPasswordResponse,
+  AgentDispatchMode,
   AppSettings,
   AuthSessionResponse,
   AuthStatusResponse,
   CampaignRecord,
   CampaignStateBundle,
+  CharacterAgentDelta,
   CharacterRecord,
   CharacterVersionSummary,
   CharacterWizardDraft,
@@ -13,6 +15,7 @@ import {
   CreateNotePayload,
   MemoryShard,
   OllamaStatusResponse,
+  Phase4AgentKind,
   PreTurnAnalysis,
   ProfileModelSettingsResponse,
   PromptDefaultsResponse,
@@ -28,6 +31,7 @@ import {
   UserNote,
   UserProfile,
   UserRole,
+  WorldPostTurnDelta,
   WorldMapDraft,
   WorldMapReimagineRequest,
   WorldRecord,
@@ -789,6 +793,23 @@ export const api = {
     ),
 };
 
+export interface Phase4ProgressEventPayload {
+  turn_id: string;
+  dispatch_mode?: AgentDispatchMode | null;
+  roster?: Array<{
+    agent_key: string;
+    kind: Phase4AgentKind;
+    label: string;
+  }> | null;
+  agent_key?: string | null;
+  kind?: Phase4AgentKind | null;
+  label?: string | null;
+  world_delta?: WorldPostTurnDelta | null;
+  character_delta?: CharacterAgentDelta | null;
+  contested_agent_keys?: string[] | null;
+  error?: string | null;
+}
+
 export interface TurnStreamCallbacks {
   onPhase1Complete?: (data: {
     pre_turn: PreTurnAnalysis;
@@ -798,6 +819,11 @@ export interface TurnStreamCallbacks {
   onCognitionComplete?: (cognition: CognitionBlock) => void;
   onProseDelta?: (delta: string) => void;
   onTurnSaved?: (turn: TurnNodeRecord) => void;
+  onPhase4Start?: (data: Phase4ProgressEventPayload) => void;
+  onPhase4AgentStart?: (data: Phase4ProgressEventPayload) => void;
+  onPhase4AgentComplete?: (data: Phase4ProgressEventPayload) => void;
+  onPhase4AgentError?: (data: Phase4ProgressEventPayload) => void;
+  onPhase4ArbitrationStart?: (data: Phase4ProgressEventPayload) => void;
   onPhase4Complete?: (data: {
     turn: TurnNodeRecord;
     state_bundle: CampaignStateBundle;
@@ -808,13 +834,15 @@ export interface TurnStreamCallbacks {
 export async function streamCampaignTurn(
   campaignId: string,
   payload: TurnSubmitOptions,
-  callbacks: TurnStreamCallbacks
+  callbacks: TurnStreamCallbacks,
+  signal?: AbortSignal
 ): Promise<void> {
   const response = await fetch(`${API_BASE}/campaigns/${campaignId}/turns/stream`, {
     method: "POST",
     credentials: "include",
     headers: buildAuthHeaders(),
     body: JSON.stringify(payload),
+    signal,
   });
 
   if (!response.ok || !response.body) {
@@ -866,6 +894,21 @@ export async function streamCampaignTurn(
           break;
         case "turn_saved":
           callbacks.onTurnSaved?.(parsed);
+          break;
+        case "phase4_start":
+          callbacks.onPhase4Start?.(parsed);
+          break;
+        case "phase4_agent_start":
+          callbacks.onPhase4AgentStart?.(parsed);
+          break;
+        case "phase4_agent_complete":
+          callbacks.onPhase4AgentComplete?.(parsed);
+          break;
+        case "phase4_agent_error":
+          callbacks.onPhase4AgentError?.(parsed);
+          break;
+        case "phase4_arbitration_start":
+          callbacks.onPhase4ArbitrationStart?.(parsed);
           break;
         case "phase4_complete":
           callbacks.onPhase4Complete?.(parsed);

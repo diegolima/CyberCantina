@@ -51,6 +51,8 @@ import {
   CompassDirection,
   MemoryShard,
   NarrativeMode,
+  Phase4AgentProgressItem,
+  Phase4TurnProgress,
   PreTurnAnalysis,
   RecalledMemoryItem,
   UserNote,
@@ -330,6 +332,10 @@ export const App: React.FC = () => {
   const [isDeleting, setIsDeleting] = useState(false);
 
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isPhase4Running, setIsPhase4Running] = useState(false);
+  const [phase4ProgressByTurn, setPhase4ProgressByTurn] = useState<
+    Record<string, Phase4TurnProgress>
+  >({});
   const [streamError, setStreamError] = useState<string | null>(null);
   const [pendingLocationOverrideId, setPendingLocationOverrideId] = useState<
     string | null
@@ -656,8 +662,159 @@ export const App: React.FC = () => {
             });
             setLiveStream(null);
             setIsStreaming(false);
+            setIsPhase4Running(true);
+          },
+          onPhase4Start: (data) => {
+            setIsPhase4Running(true);
+            setPhase4ProgressByTurn((prev) => {
+              const rosterAgents: Record<string, Phase4AgentProgressItem> = {};
+              const orderedKeys: string[] = [];
+              for (const entry of data.roster || []) {
+                orderedKeys.push(entry.agent_key);
+                rosterAgents[entry.agent_key] = {
+                  agentKey: entry.agent_key,
+                  kind: entry.kind,
+                  label: entry.label,
+                  status: "queued",
+                  reconciled: false,
+                };
+              }
+              return {
+                ...prev,
+                [data.turn_id]: {
+                  turnId: data.turn_id,
+                  dispatchMode: data.dispatch_mode || "parallel",
+                  isComplete: false,
+                  orderedAgentKeys: orderedKeys,
+                  agents: rosterAgents,
+                },
+              };
+            });
+          },
+          onPhase4AgentStart: (data) => {
+            if (!data.agent_key) return;
+            setPhase4ProgressByTurn((prev) => {
+              const current = prev[data.turn_id];
+              if (!current) return prev;
+              const agent = current.agents[data.agent_key!];
+              return {
+                ...prev,
+                [data.turn_id]: {
+                  ...current,
+                  agents: {
+                    ...current.agents,
+                    [data.agent_key!]: {
+                      ...(agent || {
+                        agentKey: data.agent_key!,
+                        kind: data.kind || "character",
+                        label: data.label || data.agent_key!,
+                        reconciled: false,
+                      }),
+                      status: "running",
+                    },
+                  },
+                },
+              };
+            });
+          },
+          onPhase4AgentComplete: (data) => {
+            if (!data.agent_key) return;
+            setPhase4ProgressByTurn((prev) => {
+              const current = prev[data.turn_id];
+              if (!current) return prev;
+              const agent = current.agents[data.agent_key!];
+              return {
+                ...prev,
+                [data.turn_id]: {
+                  ...current,
+                  agents: {
+                    ...current.agents,
+                    [data.agent_key!]: {
+                      ...(agent || {
+                        agentKey: data.agent_key!,
+                        kind: data.kind || "character",
+                        label: data.label || data.agent_key!,
+                        reconciled: false,
+                      }),
+                      status: "completed",
+                      reconciled: false,
+                      provisionalWorldDelta: data.world_delta ?? agent?.provisionalWorldDelta,
+                      provisionalCharacterDelta: data.character_delta ?? agent?.provisionalCharacterDelta,
+                    },
+                  },
+                },
+              };
+            });
+          },
+          onPhase4AgentError: (data) => {
+            if (!data.agent_key) return;
+            setPhase4ProgressByTurn((prev) => {
+              const current = prev[data.turn_id];
+              if (!current) return prev;
+              const agent = current.agents[data.agent_key!];
+              return {
+                ...prev,
+                [data.turn_id]: {
+                  ...current,
+                  agents: {
+                    ...current.agents,
+                    [data.agent_key!]: {
+                      ...(agent || {
+                        agentKey: data.agent_key!,
+                        kind: data.kind || "character",
+                        label: data.label || data.agent_key!,
+                        reconciled: false,
+                      }),
+                      status: "failed",
+                      error: data.error,
+                    },
+                  },
+                },
+              };
+            });
+          },
+          onPhase4ArbitrationStart: (data) => {
+            setPhase4ProgressByTurn((prev) => {
+              const current = prev[data.turn_id];
+              if (!current) return prev;
+              const contested = new Set(data.contested_agent_keys || []);
+              const updatedAgents = { ...current.agents };
+              for (const [key, item] of Object.entries(updatedAgents)) {
+                if (contested.has(key)) {
+                  updatedAgents[key] = { ...item, status: "arbitrating" };
+                }
+              }
+              return {
+                ...prev,
+                [data.turn_id]: {
+                  ...current,
+                  agents: updatedAgents,
+                },
+              };
+            });
           },
           onPhase4Complete: async (data) => {
+            setIsPhase4Running(false);
+            setPhase4ProgressByTurn((prev) => {
+              const current = prev[data.turn.id];
+              if (!current) return prev;
+              const markedAgents: Record<string, Phase4AgentProgressItem> = {};
+              for (const [key, item] of Object.entries(current.agents)) {
+                markedAgents[key] = {
+                  ...item,
+                  status: item.status === "failed" ? "failed" : "completed",
+                  reconciled: true,
+                };
+              }
+              return {
+                ...prev,
+                [data.turn.id]: {
+                  ...current,
+                  isComplete: true,
+                  agents: markedAgents,
+                },
+              };
+            });
             setPendingLocationOverrideId(null);
             setBundle(data.state_bundle);
             const updatedWorld = await api.getWorld(
@@ -674,12 +831,13 @@ export const App: React.FC = () => {
       setStreamError(String(err));
     } finally {
       setIsStreaming(false);
+      setIsPhase4Running(false);
       setLiveStream(null);
     }
   };
 
   const handleOverrideLocation = async (locationId: string) => {
-    if (!bundle || isStreaming) return;
+    if (!bundle || isStreaming || isPhase4Running) return;
     const updated = await api.overrideLocation(bundle.campaign.id, locationId);
     setBundle(updated);
     setPendingLocationOverrideId(locationId);
@@ -691,7 +849,7 @@ export const App: React.FC = () => {
     target?: "equipped" | "inventory";
     character_id?: string;
   }) => {
-    if (!bundle || isStreaming) return;
+    if (!bundle || isStreaming || isPhase4Running) return;
     try {
       const updated = await api.toggleItemEquip(bundle.campaign.id, payload);
       setBundle(updated);
@@ -704,7 +862,7 @@ export const App: React.FC = () => {
     characterId: string,
     memoryShards: MemoryShard[]
   ) => {
-    if (!bundle || isStreaming) return;
+    if (!bundle || isStreaming || isPhase4Running) return;
     try {
       const updated = await api.updateCampaignCharacterMemories(
         bundle.campaign.id,
@@ -726,7 +884,7 @@ export const App: React.FC = () => {
     description: string;
     environmental_tags: string[];
   }): Promise<string | void> => {
-    if (!bundle || isStreaming) return;
+    if (!bundle || isStreaming || isPhase4Running) return;
     const prevIds = new Set(bundle.visible_locations.map((l) => l.id));
     const updated = await api.createLinkedLocation(bundle.campaign.id, payload);
     setBundle(updated);
@@ -743,7 +901,7 @@ export const App: React.FC = () => {
     travel_minutes: number;
     bidirectional?: boolean;
   }) => {
-    if (!bundle || isStreaming) return;
+    if (!bundle || isStreaming || isPhase4Running) return;
     const updated = await api.connectCampaignLocations(bundle.campaign.id, payload);
     setBundle(updated);
     const updatedWorld = await api.getWorld(updated.campaign.world_id);
@@ -751,7 +909,7 @@ export const App: React.FC = () => {
   };
 
   const handleDeleteCampaignEdge = async (edgeId: string) => {
-    if (!bundle || isStreaming) return;
+    if (!bundle || isStreaming || isPhase4Running) return;
     const updated = await api.removeCampaignEdge(bundle.campaign.id, edgeId, true);
     setBundle(updated);
     const updatedWorld = await api.getWorld(updated.campaign.world_id);
@@ -762,7 +920,7 @@ export const App: React.FC = () => {
     edgeId: string;
     travel_minutes: number;
   }) => {
-    if (!bundle || isStreaming) return;
+    if (!bundle || isStreaming || isPhase4Running) return;
     const updated = await api.updateCampaignEdgeDistance(
       bundle.campaign.id,
       payload.edgeId,
@@ -775,14 +933,14 @@ export const App: React.FC = () => {
   };
 
   const handleCheckoutTurn = async (turnId: string) => {
-    if (!bundle || isStreaming) return;
+    if (!bundle || isStreaming || isPhase4Running) return;
     setPendingLocationOverrideId(null);
     const updated = await api.checkoutBranch(bundle.campaign.id, turnId);
     setBundle(updated);
   };
 
   const handleDeleteLastTurn = async () => {
-    if (!bundle || isStreaming) return;
+    if (!bundle || isStreaming || isPhase4Running) return;
     setStreamError(null);
     setPendingLocationOverrideId(null);
     const updated = await api.deleteLastTurn(bundle.campaign.id);
@@ -1224,6 +1382,8 @@ export const App: React.FC = () => {
           bundle={bundle}
           character={campaignCharacter}
           isStreaming={isStreaming}
+          isPhase4Running={isPhase4Running}
+          phase4ProgressByTurn={phase4ProgressByTurn}
           liveStream={liveStream}
           streamError={streamError}
           onOpenSettings={handleOpenModelSettings}
