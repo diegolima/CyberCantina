@@ -7,6 +7,7 @@ from typing import Any
 PROMPT_KEY_ACTOR_ZONE1 = "actor_zone1_system"
 PROMPT_KEY_NARRATOR_ZONE1 = "narrator_zone1_system"
 PROMPT_KEY_CLERK_PRE_TURN = "clerk_pre_turn_system"
+PROMPT_KEY_CHARACTER_COGNITION = "character_cognition_system"
 PROMPT_KEY_CLERK_SUMMARY = "clerk_episodic_summary_system"
 PROMPT_KEY_CLERK_POST_TURN = "clerk_post_turn_system"
 PROMPT_KEY_CHARACTER_POST_TURN = "character_post_turn_system"
@@ -20,6 +21,7 @@ ALL_PROMPT_KEYS = [
     PROMPT_KEY_ACTOR_ZONE1,
     PROMPT_KEY_NARRATOR_ZONE1,
     PROMPT_KEY_CLERK_PRE_TURN,
+    PROMPT_KEY_CHARACTER_COGNITION,
     PROMPT_KEY_CLERK_SUMMARY,
     PROMPT_KEY_CLERK_POST_TURN,
     PROMPT_KEY_CHARACTER_POST_TURN,
@@ -78,6 +80,36 @@ DEFAULT_CLERK_PRE_TURN_SYSTEM = (
     "- speaker_order (ordered list of character ids from Characters Present in Room)\n"
     "- mechanics_check: {requires_roll (bool), action_description (str), skill_or_approach (str), difficulty_class (int 5-20), relevant_modifier (int -3 to +3)}\n"
     "Set requires_roll=true ONLY if the user attempts a risky or uncertain physical/social/technical action."
+)
+
+DEFAULT_CHARACTER_COGNITION_SYSTEM = (
+    "You are the subconscious cognitive agent for {character_name} (id='{character_id}') in an interactive narrative.\n"
+    "Your responsibility is exclusively to formulate {character_name}'s private thoughts, feelings, scene desire, "
+    "and tactical plan for this turn before narrative prose is written.\n\n"
+    "=== WORLD SETTING: {world_name} ===\n"
+    "Genre & Tone: {genre} — {tone}\n"
+    "Overview: {setting_overview}\n"
+    "World Rules: {tech_or_magic_rules}\n\n"
+    "=== CHARACTER IDENTITY: {character_name} ===\n"
+    "Tagline: {tagline}\n"
+    "{appearance_section}"
+    "Persona: {core_persona}\n"
+    "Core Drive: {core_drive}\n"
+    "Core Fear: {core_fear}\n\n"
+    "=== COGNITIVE PROTOCOL ===\n"
+    "Analyze the situation, the user's action, and any co-present character actions or cues.\n"
+    "You MUST output a single <cognition> XML block following this exact 4-step cognitive flow:\n"
+    "<cognition>\n"
+    "  <recall>\n"
+    "  - 1-3 concise, high-salience bullet points of relevant history, lore, or recent events directly impacting this moment from {character_name}'s perspective.\n"
+    "  </recall>\n"
+    "  <feeling valence=\"0.0\" arousal=\"0.5\">1 short sentence capturing {character_name}'s primary emotional state and why (valence -1.0 to +1.0, arousal 0.0 to 1.0; anchor to previous state from <character_previous_mind_state> and transition gradually, reserving sharp swings for genuine shocks or critical turns).</feeling>\n"
+    "  <want>1 singular sentence defining {character_name}'s immediate objective in this scene.</want>\n"
+    "  <plan>\n"
+    "  - 2-3 brief sequential bullet points outlining {character_name}'s physical action, spoken dialogue, and observational focus for this turn.\n"
+    "  </plan>\n"
+    "</cognition>\n"
+    "Output ONLY the <cognition> block. Do NOT write narrative prose or speak on behalf of others."
 )
 
 DEFAULT_CLERK_EPISODIC_SUMMARY_SYSTEM = (
@@ -274,6 +306,7 @@ FACTORY_DEFAULT_PROMPTS: dict[str, str] = {
     PROMPT_KEY_ACTOR_ZONE1: DEFAULT_ACTOR_ZONE1_SYSTEM,
     PROMPT_KEY_NARRATOR_ZONE1: DEFAULT_NARRATOR_ZONE1_SYSTEM,
     PROMPT_KEY_CLERK_PRE_TURN: DEFAULT_CLERK_PRE_TURN_SYSTEM,
+    PROMPT_KEY_CHARACTER_COGNITION: DEFAULT_CHARACTER_COGNITION_SYSTEM,
     PROMPT_KEY_CLERK_SUMMARY: DEFAULT_CLERK_EPISODIC_SUMMARY_SYSTEM,
     PROMPT_KEY_CLERK_POST_TURN: DEFAULT_CLERK_POST_TURN_SYSTEM,
     PROMPT_KEY_CHARACTER_POST_TURN: DEFAULT_CHARACTER_POST_TURN_SYSTEM,
@@ -435,6 +468,29 @@ PROMPTS_METADATA = [
         ),
         "available_variables": [],
         "required_tags": ["PreTurnAnalysis"],
+    },
+    {
+        "key": PROMPT_KEY_CHARACTER_COGNITION,
+        "title": "Character Subconscious Cognition Agent",
+        "description": (
+            "Formulates an individual character's private 4-step cognition block "
+            "(recall, feeling, want, plan) before narrative prose is written."
+        ),
+        "available_variables": [
+            {"name": "character_name", "description": "The active character's name"},
+            {"name": "character_id", "description": "The active character's ID"},
+            {"name": "world_name", "description": "Name of the active world"},
+            {"name": "genre", "description": "Genre label"},
+            {"name": "tone", "description": "Tone directive"},
+            {"name": "setting_overview", "description": "World overview"},
+            {"name": "tech_or_magic_rules", "description": "Core world rules"},
+            {"name": "tagline", "description": "Character short tagline"},
+            {"name": "appearance_section", "description": "Formatted physical appearance"},
+            {"name": "core_persona", "description": "Core persona sheet"},
+            {"name": "core_drive", "description": "Core drive"},
+            {"name": "core_fear", "description": "Core fear"},
+        ],
+        "required_tags": ["<cognition>", "</cognition>"],
     },
     {
         "key": PROMPT_KEY_CLERK_SUMMARY,

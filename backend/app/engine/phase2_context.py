@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
 from app.config import settings
 from app.engine.world_clock import describe_world_timestamp
 from app.prompts import get_default_prompt, render_template
@@ -63,6 +65,78 @@ def build_zone1_static_system_prompt(
         core_fear=character.baseline_psyche.core_fear,
         voice_lines=voice_lines,
     )
+
+
+def build_zone1_ensemble_system_prompt(
+    world: WorldRecord,
+    present_characters: list[CharacterRecord],
+    prompt_template: str | None = None,
+) -> str:
+    """Zone 1: Static prefix for multi-character ensemble prose generation.
+    If len(present_characters) == 1: uses standard build_zone1_static_system_prompt.
+    If len > 1: sorts characters by canonical id to maximize KV-cache reuse,
+    rendering an ensemble cast sheet with persona, drive, fear, and voice anchors.
+    """
+    if len(present_characters) <= 1:
+        single_char = present_characters[0] if present_characters else None
+        if single_char is None:
+            return build_zone1_narrator_system_prompt(world, prompt_template=prompt_template)
+        return build_zone1_static_system_prompt(world, single_char, prompt_template=prompt_template)
+
+    # Multi-character ensemble: sort strictly by canonical id
+    sorted_cast = sorted(present_characters, key=lambda c: c.id)
+    cast_sections: list[str] = []
+    for c in sorted_cast:
+        v_lines = "\n".join(f"  - [{v.context}]: {v.snippet}" for v in c.voice_anchors) or "  - None"
+        app_text = f"  Physical Appearance: {c.physical_appearance}\n" if c.physical_appearance.strip() else ""
+        cast_sections.append(
+            f"=== CHARACTER: {c.name} (id='{c.id}') ===\n"
+            f"Tagline: {c.tagline}\n"
+            f"{app_text}"
+            f"Persona: {c.core_persona}\n"
+            f"Drive: {c.baseline_psyche.core_drive} | Fear: {c.baseline_psyche.core_fear}\n"
+            f"Voice & Mannerism Anchors:\n{v_lines}"
+        )
+    ensemble_cast_text = "\n\n".join(cast_sections)
+
+    return (
+        f"You are the narrative ensemble writer in an interactive story.\n\n"
+        f"=== WORLD SETTING: {world.name} ===\n"
+        f"Genre & Tone: {world.global_rules.genre} — {world.global_rules.tone}\n"
+        f"Overview: {world.global_rules.setting_overview}\n"
+        f"World Rules: {world.global_rules.tech_or_magic_rules}\n\n"
+        f"=== CAST PRESENT IN ROOM ===\n"
+        f"{ensemble_cast_text}\n\n"
+        f"=== NARRATIVE PROTOCOL ===\n"
+        f"Write rich, immersive, multi-character narrative prose capturing physical actions (*italics*) "
+        f"and spoken dialogue (\"quotes\") for the present characters. "
+        f"Honor each character's voice anchors, active thoughts, feelings, and tactical plans provided in the turn context. "
+        f"Do NOT output <cognition> blocks. Never speak or act on behalf of the user."
+    )
+
+
+@dataclass(frozen=True)
+class TurnContextBundle:
+    """Consolidated turn context payload resolved during Phase 2."""
+
+    world: WorldRecord
+    branch_turns: list[TurnNodeRecord]
+    leaf_turn: TurnNodeRecord
+    active_location: LocationNode
+    neighbors: list[NeighborLocationView]
+    present_characters: list[CharacterRecord]
+    pre_turn: PreTurnAnalysis
+    user_message: str
+    episodic_chunks: list[EpisodicChunkRecord]
+    shared_scene_items: list[RecalledMemoryItem]
+    per_character_recalled_items: dict[str, list[RecalledMemoryItem]]
+    all_character_states: dict[str, CharacterStateSnapshot]
+    character_name_map: dict[str, str]
+    is_narrator: bool = False
+    narrative_mode: str | None = None
+    narrator_directive: str | None = None
+    working_memory_turns: int | None = None
+    actor_system_prompt_template: str | None = None
 
 
 def build_zone2_episodic_summary(chunks: list[EpisodicChunkRecord]) -> str | None:
@@ -166,6 +240,77 @@ def resolve_character_previous_state(
     return current_state
 
 
+async def resolve_phase2_turn_context(
+    *,
+    repo: Any,
+    campaign_id: str,
+    world: WorldRecord,
+    branch_turns: list[TurnNodeRecord],
+    pre_turn: PreTurnAnalysis,
+    user_message: str,
+    active_location: LocationNode,
+    neighbors: list[NeighborLocationView],
+    present_characters: list[CharacterRecord],
+    character_name_map: dict[str, str],
+    episodic_chunks: list[EpisodicChunkRecord],
+    is_narrator: bool = False,
+    narrative_mode: str | None = None,
+    narrator_directive: str | None = None,
+    working_memory_turns: int | None = None,
+    actor_system_prompt_template: str | None = None,
+    rag_top_k: int = 5,
+) -> TurnContextBundle:
+    """Phase 2: Scoped RAG & Context Resolution.
+    Computes query embeddings once and partitions memory items between shared scene items
+    and strictly epistemically-isolated per-character items.
+    """
+    valid_branch_turn_ids = {t.id for t in branch_turns}
+    character_witnessed_turn_ids = {
+        c.id: {t.id for t in branch_turns if was_character_present_on_turn(t, c.id)}
+        for c in present_characters
+    }
+    char_ids = [c.id for c in present_characters]
+
+    recall_bundle = await repo.vector_store.search_memories_for_characters(
+        queries=pre_turn.memory_search_queries,
+        mentioned_entities=pre_turn.mentioned_entities,
+        world_id=world.id,
+        character_ids=char_ids,
+        campaign_id=campaign_id,
+        valid_branch_turn_ids=valid_branch_turn_ids,
+        character_witnessed_turn_ids=character_witnessed_turn_ids,
+        top_k=rag_top_k,
+    )
+
+    all_character_states = {
+        c.id: resolve_character_previous_state(branch_turns, c, active_location.id)
+        for c in present_characters
+    }
+
+    leaf_turn = branch_turns[-1]
+
+    return TurnContextBundle(
+        world=world,
+        branch_turns=branch_turns,
+        leaf_turn=leaf_turn,
+        active_location=active_location,
+        neighbors=neighbors,
+        present_characters=present_characters,
+        pre_turn=pre_turn,
+        user_message=user_message,
+        episodic_chunks=episodic_chunks,
+        shared_scene_items=recall_bundle.shared_scene_items,
+        per_character_recalled_items=recall_bundle.by_character,
+        all_character_states=all_character_states,
+        character_name_map=character_name_map,
+        is_narrator=is_narrator,
+        narrative_mode=narrative_mode,
+        narrator_directive=narrator_directive,
+        working_memory_turns=working_memory_turns,
+        actor_system_prompt_template=actor_system_prompt_template,
+    )
+
+
 def build_zone4_ephemeral_tail_frame(
     *,
     user_message: str,
@@ -183,6 +328,7 @@ def build_zone4_ephemeral_tail_frame(
     narrative_mode: str | None = None,
     narrator_directive: str | None = None,
     established_cognition: CognitionBlock | None = None,
+    established_cognitions: dict[str, CognitionBlock] | None = None,
 ) -> str:
     """Zone 4: Dynamic turn-specific context injected at the tail of the prompt."""
     exits_text = "\n".join(
@@ -319,19 +465,49 @@ def build_zone4_ephemeral_tail_frame(
         user_tail = f"User Action / Dialogue:\n{user_message}"
 
     established_cognition_section = ""
-    if established_cognition and not is_narrator:
-        established_cognition_section = (
-            f"\n  <character_active_cognition character=\"{character.name}\">\n"
-            f"    <recall>\n{established_cognition.recall}\n    </recall>\n"
-            f"    <feeling valence=\"{established_cognition.valence:+.2f}\" arousal=\"{established_cognition.arousal:.2f}\">{established_cognition.feeling}</feeling>\n"
-            f"    <want>{established_cognition.want}</want>\n"
-            f"    <plan>\n{established_cognition.plan}\n    </plan>\n"
-            f"  </character_active_cognition>\n"
-            f"  <actor_directive>\n"
-            f"    CRITICAL: Your character's internal thoughts and immediate plan for this turn have already been established above in <character_active_cognition>.\n"
-            f"    Do NOT output <cognition> blocks. Output ONLY immersive, in-character narrative prose embodying this feeling and executing this plan.\n"
-            f"  </actor_directive>"
-        )
+    if not is_narrator:
+        if established_cognitions:
+            cog_blocks: list[str] = []
+            present_chars = present_characters or [character]
+            primary_id = pre_turn.active_speaker_id or character.id
+            ordered_chars = sorted(
+                present_chars,
+                key=lambda c: (0 if c.id == primary_id else 1, c.id),
+            )
+            for pc in ordered_chars:
+                cog = established_cognitions.get(pc.id)
+                if not cog or cog.skipped:
+                    continue
+                role_label = "primary_speaker" if pc.id == primary_id else "co_present"
+                cog_blocks.append(
+                    f"  <character_active_cognition character=\"{pc.name}\" character_id=\"{pc.id}\" role=\"{role_label}\">\n"
+                    f"    <feeling valence=\"{cog.valence:+.2f}\" arousal=\"{cog.arousal:.2f}\">{cog.feeling}</feeling>\n"
+                    f"    <want>{cog.want}</want>\n"
+                    f"    <plan>\n{cog.plan}\n    </plan>\n"
+                    f"  </character_active_cognition>"
+                )
+            if cog_blocks:
+                established_cognition_section = (
+                    "\n"
+                    + "\n".join(cog_blocks)
+                    + "\n  <actor_directive>\n"
+                    "    CRITICAL: Internal thoughts, emotional feelings, and tactical plans for the characters have already been established above in <character_active_cognition>.\n"
+                    "    Do NOT output <cognition> blocks. Output ONLY immersive, in-character narrative prose executing these plans.\n"
+                    "  </actor_directive>"
+                )
+        elif established_cognition:
+            established_cognition_section = (
+                f"\n  <character_active_cognition character=\"{character.name}\">\n"
+                f"    <recall>\n{established_cognition.recall}\n    </recall>\n"
+                f"    <feeling valence=\"{established_cognition.valence:+.2f}\" arousal=\"{established_cognition.arousal:.2f}\">{established_cognition.feeling}</feeling>\n"
+                f"    <want>{established_cognition.want}</want>\n"
+                f"    <plan>\n{established_cognition.plan}\n    </plan>\n"
+                f"  </character_active_cognition>\n"
+                f"  <actor_directive>\n"
+                f"    CRITICAL: Your character's internal thoughts and immediate plan for this turn have already been established above in <character_active_cognition>.\n"
+                f"    Do NOT output <cognition> blocks. Output ONLY immersive, in-character narrative prose embodying this feeling and executing this plan.\n"
+                f"  </actor_directive>"
+            )
 
     return (
         "<scene_context>\n"
@@ -375,15 +551,15 @@ def assemble_four_zone_messages(
     narrative_mode: str | None = None,
     narrator_directive: str | None = None,
     established_cognition: CognitionBlock | None = None,
+    established_cognitions: dict[str, CognitionBlock] | None = None,
 ) -> list[dict[str, str]]:
     """Construct the complete 4-Zone OpenAI messages array for the Main Actor Model."""
-    zone1_prompt = (
-        build_zone1_narrator_system_prompt(world, prompt_template=actor_system_prompt_template)
-        if is_narrator
-        else build_zone1_static_system_prompt(
-            world, character, prompt_template=actor_system_prompt_template
-        )
-    )
+    if is_narrator:
+        zone1_prompt = build_zone1_narrator_system_prompt(world, prompt_template=actor_system_prompt_template)
+    elif present_characters and len(present_characters) > 1:
+        zone1_prompt = build_zone1_ensemble_system_prompt(world, present_characters, prompt_template=actor_system_prompt_template)
+    else:
+        zone1_prompt = build_zone1_static_system_prompt(world, character, prompt_template=actor_system_prompt_template)
     messages: list[dict[str, str]] = [
         {
             "role": "system",
@@ -455,6 +631,7 @@ def assemble_four_zone_messages(
         narrative_mode=narrative_mode,
         narrator_directive=narrator_directive,
         established_cognition=established_cognition,
+        established_cognitions=established_cognitions,
     )
     messages.append({"role": "user", "content": zone4_content})
     return messages

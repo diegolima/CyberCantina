@@ -7,13 +7,23 @@ import hashlib
 import json
 import re
 import sqlite3
-from typing import Iterable
+from dataclasses import dataclass
+from typing import Iterable, Mapping
 
 import httpx
 import numpy as np
 
 from app.config import settings
 from app.schemas.turn import RecalledMemoryItem
+
+
+@dataclass(frozen=True)
+class ScopedMemoryRecallBundle:
+    """Scoped memory retrieval results partitioned between shared room items and private character memories."""
+
+    shared_scene_items: list[RecalledMemoryItem]
+    by_character: dict[str, list[RecalledMemoryItem]]
+
 
 _WORD_RE = re.compile(r"[a-z0-9_']+", re.IGNORECASE)
 _FASTEMBED_MODEL = None
@@ -365,3 +375,145 @@ class VectorStore:
 
         scored.sort(key=lambda item: item.score, reverse=True)
         return scored[:top_k]
+
+    async def search_memories_for_characters(
+        self,
+        *,
+        queries: list[str],
+        mentioned_entities: list[str],
+        world_id: str,
+        campaign_id: str,
+        character_ids: list[str],
+        valid_branch_turn_ids: Iterable[str],
+        present_turn_ids_by_char: Mapping[str, set[str]] | None = None,
+        character_witnessed_turn_ids: Mapping[str, set[str]] | None = None,
+        top_k: int = 4,
+    ) -> ScopedMemoryRecallBundle:
+        """
+        Embed queries once, query SQLite once across all present characters,
+        and partition memories strictly by character epistemic scope.
+        """
+        witnessed_by_char = (
+            present_turn_ids_by_char
+            if present_turn_ids_by_char is not None
+            else (character_witnessed_turn_ids or {})
+        )
+        valid_turns = set(valid_branch_turn_ids)
+        char_set = set(character_ids)
+        query_text = " ".join(q for q in queries if q.strip())
+        if not query_text and mentioned_entities:
+            query_text = " ".join(mentioned_entities)
+        if not query_text or not char_set:
+            return ScopedMemoryRecallBundle(
+                shared_scene_items=[],
+                by_character={cid: [] for cid in character_ids},
+            )
+
+        query_vec = await embed_text(query_text)
+        query_tokens = set(_tokenize(query_text))
+        entity_tokens = {e.lower().strip() for e in mentioned_entities if e.strip()}
+
+        conn = self._connect()
+        try:
+            placeholders = ",".join("?" for _ in char_set)
+            rows = conn.execute(
+                f"""
+                SELECT id, source_type, character_id, campaign_id, anchor_turn_id, superseded_at_turn_id,
+                       title, content, keywords_json, embedding_blob
+                FROM vector_entries
+                WHERE (world_id = ? AND source_type = 'lore')
+                   OR (source_type = 'character_shard' AND character_id IN ({placeholders}))
+                   OR (campaign_id = ? AND source_type = 'episodic_chunk')
+                """,
+                (world_id, *char_set, campaign_id),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        # Score all candidates once
+        scored_candidates: list[tuple[RecalledMemoryItem, sqlite3.Row]] = []
+        for row in rows:
+            anchor_turn = row["anchor_turn_id"]
+            superseded_turn = (
+                row["superseded_at_turn_id"]
+                if "superseded_at_turn_id" in row.keys()
+                else None
+            )
+            if anchor_turn is not None and anchor_turn not in valid_turns:
+                continue
+            if superseded_turn is not None and superseded_turn in valid_turns:
+                continue
+
+            vec = np.frombuffer(row["embedding_blob"], dtype=np.float32)
+            if vec.shape == query_vec.shape:
+                cosine_sim = float(np.dot(query_vec, vec))
+            else:
+                fallback_q = compute_local_hash_embedding(query_text, dims=vec.shape[0])
+                cosine_sim = float(np.dot(fallback_q, vec))
+
+            keywords: list[str] = json.loads(row["keywords_json"] or "[]")
+            kw_lower = {k.lower() for k in keywords}
+            doc_tokens = set(_tokenize(f"{row['title']} {row['content']}")) | kw_lower
+
+            entity_boost = 0.0
+            for ent in entity_tokens:
+                if ent in kw_lower or ent in row["title"].lower() or ent in row["content"].lower():
+                    entity_boost += 0.35
+
+            overlap_count = len(query_tokens & doc_tokens)
+            lexical_boost = min(0.25, overlap_count * 0.05)
+            total_score = round(cosine_sim + entity_boost + lexical_boost, 4)
+
+            item = RecalledMemoryItem(
+                id=row["id"],
+                source_type=row["source_type"],
+                title=row["title"],
+                content=row["content"],
+                score=total_score,
+            )
+            scored_candidates.append((item, row))
+
+        scored_candidates.sort(key=lambda pair: pair[0].score, reverse=True)
+
+        # 1. Shared scene items: world lore + episodic chunks witnessed by any character present in room
+        shared_scene_items: list[RecalledMemoryItem] = []
+        all_present_turn_ids = set().union(*witnessed_by_char.values()) if witnessed_by_char else set()
+
+        for item, row in scored_candidates:
+            stype = row["source_type"]
+            if stype == "lore":
+                shared_scene_items.append(item)
+            elif stype == "episodic_chunk":
+                anchor_turn = row["anchor_turn_id"]
+                if anchor_turn is None or anchor_turn in all_present_turn_ids:
+                    shared_scene_items.append(item)
+            if len(shared_scene_items) >= top_k:
+                break
+
+        # 2. Per-character items: strictly partitioned by character epistemic scope
+        by_char: dict[str, list[RecalledMemoryItem]] = {cid: [] for cid in character_ids}
+        for cid in character_ids:
+            char_witnessed_turns = witnessed_by_char.get(cid, set())
+            c_items: list[RecalledMemoryItem] = []
+            for item, row in scored_candidates:
+                stype = row["source_type"]
+                row_cid = row["character_id"]
+                row_camp = row["campaign_id"]
+                if stype == "lore":
+                    c_items.append(item)
+                elif stype == "character_shard":
+                    # Character shards belong strictly to this character (prefer campaign-attached if available)
+                    if row_cid == cid:
+                        c_items.append(item)
+                elif stype == "episodic_chunk":
+                    anchor_turn = row["anchor_turn_id"]
+                    if anchor_turn is None or anchor_turn in char_witnessed_turns or row_cid == cid:
+                        c_items.append(item)
+                if len(c_items) >= top_k:
+                    break
+            by_char[cid] = c_items
+
+        return ScopedMemoryRecallBundle(
+            shared_scene_items=shared_scene_items,
+            by_character=by_char,
+        )

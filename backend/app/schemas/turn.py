@@ -432,17 +432,61 @@ class PostTurnStateDelta(BaseModel):
     )
 
 
-Phase4AgentKind = Literal["world_clerk", "character"]
+CharacterSpotlightRole = Literal["primary_speaker", "co_present"]
 
 
-class Phase4RosterEntry(BaseModel):
+class Phase3RosterEntry(BaseModel):
+    """Single character entry in the Phase 3 Multi-Cognition execution roster."""
+
+    character_id: str
+    character_name: str
+    role: CharacterSpotlightRole
+
+
+class Phase3ProgressEvent(BaseModel):
+    """Real-time lifecycle event emitted over SSE during Phase 3 Multi-Cognition."""
+
+    event: Literal[
+        "phase3_start",
+        "phase3_agent_start",
+        "phase3_agent_complete",
+        "phase3_agent_error",
+        "phase3_complete",
+    ]
+    dispatch_mode: str | None = None
+    roster: list[Phase3RosterEntry] | None = None
+    character_id: str | None = None
+    character_name: str | None = None
+    role: CharacterSpotlightRole | None = None
+    cognition: CognitionBlock | None = None
+    cognitions: dict[str, CognitionBlock] | None = None
+    character_names: dict[str, str] | None = None
+    used_fallback: bool = False
+    error: str | None = None
+
+
+Phase3ProgressCallback = Callable[[Phase3ProgressEvent], Awaitable[None]]
+
+Phase5AgentKind = Literal["world_clerk", "character"]
+Phase4AgentKind = Phase5AgentKind
+
+
+class Phase5RosterEntry(BaseModel):
     agent_key: str  # "clerk" for Global World Clerk, or character.id
-    kind: Phase4AgentKind
+    kind: Phase5AgentKind
     label: str      # "clerk" or character.name
 
 
-class Phase4ProgressEvent(BaseModel):
+Phase4RosterEntry = Phase5RosterEntry
+
+
+class Phase5ProgressEvent(BaseModel):
     event: Literal[
+        "phase5_start",
+        "phase5_agent_start",
+        "phase5_agent_complete",
+        "phase5_agent_error",
+        "phase5_arbitration_start",
         "phase4_start",
         "phase4_agent_start",
         "phase4_agent_complete",
@@ -451,9 +495,9 @@ class Phase4ProgressEvent(BaseModel):
     ]
     turn_id: str
     dispatch_mode: str | None = None
-    roster: list[Phase4RosterEntry] | None = None
+    roster: list[Phase5RosterEntry] | None = None
     agent_key: str | None = None
-    kind: Phase4AgentKind | None = None
+    kind: Phase5AgentKind | None = None
     label: str | None = None
     world_delta: WorldPostTurnDelta | None = None
     character_delta: CharacterAgentDelta | None = None
@@ -461,7 +505,9 @@ class Phase4ProgressEvent(BaseModel):
     error: str | None = None
 
 
-Phase4ProgressCallback = Callable[[Phase4ProgressEvent], Awaitable[None]]
+Phase4ProgressEvent = Phase5ProgressEvent
+Phase5ProgressCallback = Callable[[Phase5ProgressEvent], Awaitable[None]]
+Phase4ProgressCallback = Phase5ProgressCallback
 
 
 class EpisodicChunkRecord(BaseModel):
@@ -487,6 +533,14 @@ class TurnNodeRecord(BaseModel):
     actor_id: str
     raw_prose: str
     cognition: CognitionBlock
+    cognitions: dict[str, CognitionBlock] = Field(
+        default_factory=dict,
+        description="Per-character Phase 3 CognitionBlocks keyed by character_id.",
+    )
+    cognition_character_names: dict[str, str] = Field(
+        default_factory=dict,
+        description="Display name lookup for characters in cognitions.",
+    )
     pre_turn: PreTurnAnalysis
     post_turn: PostTurnStateDelta | None = None
     world_snapshot: WorldStateSnapshot

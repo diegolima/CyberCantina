@@ -2336,3 +2336,40 @@ body {
 .pulse-fast {
   animation: agent-pill-arbitrate 0.8s ease-in-out infinite;
 }
+
+/* Cognition Multi-Character Tabs */
+.cognition-char-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.cognition-char-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.73rem;
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cognition-char-tab:hover {
+  background: rgba(139, 92, 246, 0.12);
+  border-color: rgba(139, 92, 246, 0.35);
+  color: #c4b5fd;
+}
+
+.cognition-char-tab--active {
+  background: rgba(139, 92, 246, 0.22);
+  border-color: var(--accent-violet);
+  color: #ddd6fe;
+  font-weight: 600;
+}

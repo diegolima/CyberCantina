@@ -15,7 +15,9 @@ import {
   CreateNotePayload,
   MemoryShard,
   OllamaStatusResponse,
+  Phase3ProgressEventPayload,
   Phase4AgentKind,
+  Phase5ProgressEventPayload,
   PreTurnAnalysis,
   ProfileModelSettingsResponse,
   PromptDefaultsResponse,
@@ -817,8 +819,22 @@ export interface TurnStreamCallbacks {
   }) => void;
   onCognitionDelta?: (rawBuffer: string) => void;
   onCognitionComplete?: (cognition: CognitionBlock) => void;
+  onPhase3Start?: (data: Phase3ProgressEventPayload) => void;
+  onPhase3AgentStart?: (data: Phase3ProgressEventPayload) => void;
+  onPhase3AgentComplete?: (data: Phase3ProgressEventPayload) => void;
+  onPhase3AgentError?: (data: Phase3ProgressEventPayload) => void;
+  onPhase3Complete?: (data: Phase3ProgressEventPayload) => void;
   onProseDelta?: (delta: string) => void;
   onTurnSaved?: (turn: TurnNodeRecord) => void;
+  onPhase5Start?: (data: Phase5ProgressEventPayload) => void;
+  onPhase5AgentStart?: (data: Phase5ProgressEventPayload) => void;
+  onPhase5AgentComplete?: (data: Phase5ProgressEventPayload) => void;
+  onPhase5AgentError?: (data: Phase5ProgressEventPayload) => void;
+  onPhase5ArbitrationStart?: (data: Phase5ProgressEventPayload) => void;
+  onPhase5Complete?: (data: {
+    turn: TurnNodeRecord;
+    state_bundle: CampaignStateBundle;
+  }) => void;
   onPhase4Start?: (data: Phase4ProgressEventPayload) => void;
   onPhase4AgentStart?: (data: Phase4ProgressEventPayload) => void;
   onPhase4AgentComplete?: (data: Phase4ProgressEventPayload) => void;
@@ -883,6 +899,21 @@ export async function streamCampaignTurn(
         case "phase1_complete":
           callbacks.onPhase1Complete?.(parsed);
           break;
+        case "phase3_start":
+          callbacks.onPhase3Start?.(parsed);
+          break;
+        case "phase3_agent_start":
+          callbacks.onPhase3AgentStart?.(parsed);
+          break;
+        case "phase3_agent_complete":
+          callbacks.onPhase3AgentComplete?.(parsed);
+          break;
+        case "phase3_agent_error":
+          callbacks.onPhase3AgentError?.(parsed);
+          break;
+        case "phase3_complete":
+          callbacks.onPhase3Complete?.(parsed);
+          break;
         case "cognition_delta":
           callbacks.onCognitionDelta?.(parsed.raw_buffer);
           break;
@@ -894,6 +925,30 @@ export async function streamCampaignTurn(
           break;
         case "turn_saved":
           callbacks.onTurnSaved?.(parsed);
+          break;
+        case "phase5_start":
+          callbacks.onPhase5Start?.(parsed);
+          callbacks.onPhase4Start?.(parsed);
+          break;
+        case "phase5_agent_start":
+          callbacks.onPhase5AgentStart?.(parsed);
+          callbacks.onPhase4AgentStart?.(parsed);
+          break;
+        case "phase5_agent_complete":
+          callbacks.onPhase5AgentComplete?.(parsed);
+          callbacks.onPhase4AgentComplete?.(parsed);
+          break;
+        case "phase5_agent_error":
+          callbacks.onPhase5AgentError?.(parsed);
+          callbacks.onPhase4AgentError?.(parsed);
+          break;
+        case "phase5_arbitration_start":
+          callbacks.onPhase5ArbitrationStart?.(parsed);
+          callbacks.onPhase4ArbitrationStart?.(parsed);
+          break;
+        case "phase5_complete":
+          callbacks.onPhase5Complete?.(parsed);
+          callbacks.onPhase4Complete?.(parsed);
           break;
         case "phase4_start":
           callbacks.onPhase4Start?.(parsed);

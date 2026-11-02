@@ -381,7 +381,8 @@ export interface PostTurnStateDelta {
   compacted_character_ids?: string[];
 }
 
-export type Phase4AgentKind = "world_clerk" | "character";
+export type Phase5AgentKind = "world_clerk" | "character";
+export type Phase4AgentKind = Phase5AgentKind;
 
 export type Phase4PillStatus =
   | "queued"
@@ -389,6 +390,87 @@ export type Phase4PillStatus =
   | "arbitrating"
   | "completed"
   | "failed";
+export type Phase5PillStatus = Phase4PillStatus;
+
+export interface Phase5RosterEntry {
+  agent_key: string;
+  kind: Phase5AgentKind;
+  label: string;
+}
+export type Phase4RosterEntry = Phase5RosterEntry;
+
+export interface Phase5ProgressEventPayload {
+  event:
+    | "phase5_start"
+    | "phase5_agent_start"
+    | "phase5_agent_complete"
+    | "phase5_agent_error"
+    | "phase5_arbitration_start"
+    | "phase5_complete"
+    | "phase4_start"
+    | "phase4_agent_start"
+    | "phase4_agent_complete"
+    | "phase4_agent_error"
+    | "phase4_arbitration_start"
+    | "phase4_complete";
+  turn_id: string;
+  dispatch_mode?: AgentDispatchMode;
+  roster?: Phase5RosterEntry[];
+  agent_key?: string;
+  kind?: Phase5AgentKind;
+  label?: string;
+  world_delta?: WorldPostTurnDelta | null;
+  character_delta?: CharacterAgentDelta | null;
+  contested_agent_keys?: string[];
+  error?: string;
+}
+export type Phase4ProgressEventPayload = Phase5ProgressEventPayload;
+
+export type CharacterSpotlightRole = "primary_speaker" | "co_present";
+
+export interface Phase3RosterEntry {
+  character_id: string;
+  character_name: string;
+  role: CharacterSpotlightRole;
+}
+
+export type Phase3PillStatus = "queued" | "thinking" | "completed" | "failed";
+
+export interface Phase3AgentProgressItem {
+  characterId: string;
+  characterName: string;
+  role: CharacterSpotlightRole;
+  status: Phase3PillStatus;
+  cognition?: CognitionBlock | null;
+  usedFallback?: boolean;
+  error?: string | null;
+}
+
+export interface Phase3TurnProgress {
+  dispatchMode: AgentDispatchMode;
+  isComplete: boolean;
+  orderedCharacterIds: string[];
+  agents: Record<string, Phase3AgentProgressItem>;
+}
+
+export interface Phase3ProgressEventPayload {
+  event:
+    | "phase3_start"
+    | "phase3_agent_start"
+    | "phase3_agent_complete"
+    | "phase3_agent_error"
+    | "phase3_complete";
+  dispatch_mode?: AgentDispatchMode;
+  roster?: Phase3RosterEntry[];
+  character_id?: string;
+  character_name?: string;
+  role?: CharacterSpotlightRole;
+  cognition?: CognitionBlock;
+  cognitions?: Record<string, CognitionBlock>;
+  character_names?: Record<string, string>;
+  used_fallback?: boolean;
+  error?: string;
+}
 
 export interface Phase4AgentProgressItem {
   agentKey: string; // "clerk" | character_id
@@ -408,6 +490,7 @@ export interface Phase4TurnProgress {
   orderedAgentKeys: string[];
   agents: Record<string, Phase4AgentProgressItem>;
 }
+export type Phase5TurnProgress = Phase4TurnProgress;
 
 export type NarrativeMode =
   | "standard"
@@ -446,6 +529,8 @@ export interface TurnNodeRecord {
   actor_id: string;
   raw_prose: string;
   cognition: CognitionBlock;
+  cognitions?: Record<string, CognitionBlock>;
+  cognition_character_names?: Record<string, string>;
   pre_turn: PreTurnAnalysis;
   post_turn?: PostTurnStateDelta | null;
   world_snapshot: WorldStateSnapshot;

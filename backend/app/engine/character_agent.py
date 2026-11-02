@@ -902,11 +902,16 @@ def heuristic_character_agent_delta(
     combined_lower = f"{user_msg}\n{raw_prose}".lower()
 
     # 1. Mood, Valence & Arousal (anchored strictly to prev_state)
-    if is_speaker and not completed_turn.cognition.skipped:
-        val_delta = round(completed_turn.cognition.valence - prev_state.valence, 2)
-        ar_delta = round(completed_turn.cognition.arousal - prev_state.arousal, 2)
-        mood = normalize_mood_label(completed_turn.cognition.feeling, fallback=prev_state.mood_label)
-        updated_want = completed_turn.cognition.want or None
+    char_cog = (
+        (completed_turn.cognitions or {}).get(character.id)
+        if hasattr(completed_turn, "cognitions") and completed_turn.cognitions
+        else (completed_turn.cognition if is_speaker else None)
+    )
+    if char_cog and not char_cog.skipped:
+        val_delta = round(char_cog.valence - prev_state.valence, 2)
+        ar_delta = round(char_cog.arousal - prev_state.arousal, 2)
+        mood = normalize_mood_label(char_cog.feeling, fallback=prev_state.mood_label)
+        updated_want = char_cog.want or None
     else:
         sentiment_low = pre_turn.user_sentiment.lower()
         if "betray" in combined_lower or "confrontational" in sentiment_low or "tense" in sentiment_low:
@@ -1079,14 +1084,19 @@ async def run_character_post_turn_agent(
     inventory_str = ", ".join(prev_state.inventory) if prev_state.inventory else "None"
 
     speaker_name = name_map.get(completed_turn.actor_id, character.name)
+    char_cog = (
+        (completed_turn.cognitions or {}).get(character.id)
+        if hasattr(completed_turn, "cognitions") and completed_turn.cognitions
+        else (completed_turn.cognition if is_speaker else None)
+    )
     cognition_context = ""
-    if is_speaker and not completed_turn.cognition.skipped:
+    if char_cog and not char_cog.skipped:
         cognition_context = (
             f"\n{character.name}'s Intra-Turn Cognition Impulse (at start of response):\n"
-            f"- Feeling Impulse: {completed_turn.cognition.feeling} "
-            f"(Impulse Valence: {completed_turn.cognition.valence:+.2f}, Impulse Arousal: {completed_turn.cognition.arousal:.2f})\n"
-            f"- Immediate Want: {completed_turn.cognition.want}\n"
-            f"- Planned Action: {completed_turn.cognition.plan}\n"
+            f"- Feeling Impulse: {char_cog.feeling} "
+            f"(Impulse Valence: {char_cog.valence:+.2f}, Impulse Arousal: {char_cog.arousal:.2f})\n"
+            f"- Immediate Want: {char_cog.want}\n"
+            f"- Planned Action: {char_cog.plan}\n"
             f"*(Note: Compute valence_delta and arousal_delta strictly relative to Pre-Turn Baseline below, NOT relative to Impulse.)*\n"
         )
 

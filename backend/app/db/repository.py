@@ -367,6 +367,15 @@ class CantinaRepository:
                     "ALTER TABLE characters ADD COLUMN inventory_json TEXT NOT NULL DEFAULT '[]'"
                 )
 
+            tn_cols = {
+                r["name"]
+                for r in conn.execute("PRAGMA table_info(turn_nodes)").fetchall()
+            }
+            if "cognitions_json" not in tn_cols:
+                conn.execute(
+                    "ALTER TABLE turn_nodes ADD COLUMN cognitions_json TEXT NULL"
+                )
+
             cs_cols = {
                 r["name"]
                 for r in conn.execute("PRAGMA table_info(character_states)").fetchall()
@@ -3537,6 +3546,19 @@ class CantinaRepository:
             for extra_char in extra_characters
         ]
 
+        root_cognitions = {character.id: root_cognition}
+        for extra_char in extra_characters:
+            if loc_map.get(extra_char.id, start_loc.id) == primary_loc_id:
+                root_cognitions[extra_char.id] = CognitionBlock(
+                    recall=f"Standing in {primary_loc.name}, observing.",
+                    feeling=extra_char.baseline_psyche.mood_label,
+                    valence=extra_char.baseline_psyche.valence,
+                    arousal=extra_char.baseline_psyche.arousal,
+                    want=extra_char.baseline_psyche.default_want,
+                    plan=extra_char.baseline_psyche.default_plan,
+                )
+        cognition_names = {character.id: character.name, **{c.id: c.name for c in extra_characters}}
+
         self.save_turn_node(
             turn_id=root_turn_id,
             campaign_id=camp_id,
@@ -3546,6 +3568,8 @@ class CantinaRepository:
             actor_id=character.id,
             raw_prose=root_prose,
             cognition=root_cognition,
+            cognitions=root_cognitions,
+            cognition_character_names=cognition_names,
             pre_turn=PreTurnAnalysis(
                 active_speaker_id=character.id,
                 speaker_order=[character.id] + [
@@ -4009,6 +4033,8 @@ class CantinaRepository:
         actor_id: str,
         raw_prose: str,
         cognition: CognitionBlock,
+        cognitions: dict[str, CognitionBlock] | None = None,
+        cognition_character_names: dict[str, str] | None = None,
         pre_turn: PreTurnAnalysis,
         world_snapshot: WorldStateSnapshot,
         character_state: CharacterStateSnapshot,
@@ -4018,16 +4044,23 @@ class CantinaRepository:
     ) -> TurnNodeRecord:
         """Persist a new turn node + snapshots and advance campaign active_leaf_turn_id."""
         now = utc_now_iso()
+        eff_cognitions = cognitions if cognitions is not None else (
+            {actor_id: cognition} if actor_id != "__narrator__" and not cognition.skipped else {}
+        )
+        cognitions_payload = {
+            "cognitions": {cid: c.model_dump() for cid, c in eff_cognitions.items()},
+            "character_names": cognition_character_names or {},
+        }
         conn = self._connect()
         try:
             conn.execute(
                 """
                 INSERT INTO turn_nodes (
                     id, campaign_id, parent_turn_id, depth_index, user_message,
-                    actor_id, raw_prose, cognition_json, pre_turn_json,
+                    actor_id, raw_prose, cognition_json, cognitions_json, pre_turn_json,
                     post_turn_json, recalled_items_json, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     turn_id,
@@ -4038,6 +4071,7 @@ class CantinaRepository:
                     actor_id,
                     raw_prose,
                     cognition.model_dump_json(),
+                    json.dumps(cognitions_payload),
                     pre_turn.model_dump_json(),
                     post_turn.model_dump_json() if post_turn else None,
                     json.dumps([item.model_dump() for item in recalled_items]),
@@ -5201,6 +5235,28 @@ class CantinaRepository:
     @staticmethod
     def _row_to_turn_node(r: sqlite3.Row) -> TurnNodeRecord:
         post_json = r["post_turn_json"]
+        base_cog = CognitionBlock.model_validate_json(r["cognition_json"])
+        cognitions_map: dict[str, CognitionBlock] = {}
+        cognition_names: dict[str, str] = {}
+        if "cognitions_json" in r.keys() and r["cognitions_json"]:
+            try:
+                parsed_cogs = json.loads(r["cognitions_json"])
+                if isinstance(parsed_cogs, dict) and "cognitions" in parsed_cogs:
+                    cognitions_map = {
+                        cid: CognitionBlock.model_validate(cdata)
+                        for cid, cdata in parsed_cogs["cognitions"].items()
+                    }
+                    cognition_names = dict(parsed_cogs.get("character_names") or {})
+                elif isinstance(parsed_cogs, dict):
+                    cognitions_map = {
+                        cid: CognitionBlock.model_validate(cdata)
+                        for cid, cdata in parsed_cogs.items()
+                    }
+            except Exception:
+                pass
+        if not cognitions_map and r["actor_id"] != "__narrator__" and not base_cog.skipped:
+            cognitions_map = {r["actor_id"]: base_cog}
+
         return TurnNodeRecord(
             id=r["id"],
             campaign_id=r["campaign_id"],
@@ -5209,7 +5265,9 @@ class CantinaRepository:
             user_message=r["user_message"],
             actor_id=r["actor_id"],
             raw_prose=r["raw_prose"],
-            cognition=CognitionBlock.model_validate_json(r["cognition_json"]),
+            cognition=base_cog,
+            cognitions=cognitions_map,
+            cognition_character_names=cognition_names,
             pre_turn=PreTurnAnalysis.model_validate_json(r["pre_turn_json"]),
             post_turn=PostTurnStateDelta.model_validate_json(post_json) if post_json else None,
             world_snapshot=WorldStateSnapshot(

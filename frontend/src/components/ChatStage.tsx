@@ -24,6 +24,7 @@ import {
   CharacterRecord,
   CognitionBlock,
   NarrativeMode,
+  Phase3TurnProgress,
   Phase4TurnProgress,
   PreTurnAnalysis,
   RecalledMemoryItem,
@@ -49,6 +50,7 @@ interface ChatStageProps {
   character: CharacterRecord;
   isStreaming: boolean;
   isPhase4Running?: boolean;
+  phase3Progress?: Phase3TurnProgress | null;
   phase4ProgressByTurn?: Record<string, Phase4TurnProgress>;
   liveStream: LiveStreamState | null;
   streamError?: string | null;
@@ -80,6 +82,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   character,
   isStreaming,
   isPhase4Running = false,
+  phase3Progress = null,
   phase4ProgressByTurn = {},
   liveStream,
   streamError,
@@ -93,6 +96,8 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const [diceOverride, setDiceOverride] = useState<string>("");
   const [openCognitionIds, setOpenCognitionIds] = useState<Record<string, boolean>>({});
   const [showRetainedIds, setShowRetainedIds] = useState<Record<string, boolean>>({});
+  const [selectedCognitionCharIdByTurn, setSelectedCognitionCharIdByTurn] = useState<Record<string, string>>({});
+  const [selectedLiveCognitionCharId, setSelectedLiveCognitionCharId] = useState<string | null>(null);
   const [openMemoryIds, setOpenMemoryIds] = useState<Record<string, boolean>>({});
   const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
   const [editMessageText, setEditMessageText] = useState("");
@@ -684,9 +689,31 @@ export const ChatStage: React.FC<ChatStageProps> = ({
 
               {/* Phase 3 Multi-Step <cognition> Drawer */}
               {(() => {
+                const isNarratorTurn =
+                  turn.user_message.startsWith("[NARRATOR DIRECTIVE]");
+                const hasMultiCognition = Boolean(
+                  turn.cognitions && Object.keys(turn.cognitions).length > 0
+                );
+                const charIds = hasMultiCognition
+                  ? Object.keys(turn.cognitions!)
+                  : [character.id];
+                const selectedCharId =
+                  selectedCognitionCharIdByTurn[turn.id] ??
+                  (charIds.includes(character.id) ? character.id : charIds[0]);
+                const activeCognition =
+                  (turn.cognitions && turn.cognitions[selectedCharId]) ||
+                  turn.cognition;
+                const activeCharName =
+                  (turn.cognition_character_names &&
+                    turn.cognition_character_names[selectedCharId]) ||
+                  bundle.character_records?.[selectedCharId]?.name ||
+                  (selectedCharId === character.id
+                    ? character.name
+                    : "Character");
+
                 const isSkipped =
                   !isNarratorTurn &&
-                  Boolean(turn.cognition.skipped || !turn.cognition.recall);
+                  Boolean(activeCognition.skipped || !activeCognition.recall);
                 const showRetained = Boolean(showRetainedIds[turn.id]);
 
                 return (
@@ -710,8 +737,10 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                         {isNarratorTurn
                           ? "Objective Scene Observation (Detached & Indifferent)"
                           : isSkipped
-                          ? `${character.name} Inner Cognition (Skipped by Model)`
-                          : `${character.name} Inner Cognition (Recall → Feel → Want → Plan)`}
+                          ? `${activeCharName} Inner Cognition (Skipped by Model)`
+                          : charIds.length > 1
+                          ? `${activeCharName} Inner Cognition (${charIds.length} Characters Evaluated)`
+                          : `${activeCharName} Inner Cognition (Recall → Feel → Want → Plan)`}
                       </span>
                       <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         {isSkipped ? (
@@ -727,9 +756,9 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                                 color: "var(--text-secondary)",
                               }}
                             >
-                              Valence {turn.cognition.valence >= 0 ? "+" : ""}
-                              {turn.cognition.valence.toFixed(2)} | Arousal{" "}
-                              {turn.cognition.arousal.toFixed(2)}
+                              Valence {activeCognition.valence >= 0 ? "+" : ""}
+                              {activeCognition.valence.toFixed(2)} | Arousal{" "}
+                              {activeCognition.arousal.toFixed(2)}
                             </span>
                           )
                         )}
@@ -737,117 +766,187 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                       </span>
                     </div>
 
-                    {cogOpen &&
-                      (isNarratorTurn ? (
-                        <div className="cognition-steps">
-                          <div className="cog-step">
-                            <div className="cog-step-label">Focus Area</div>
-                            <div>{turn.cognition.recall || bundle.active_location.name}</div>
+                    {cogOpen && (
+                      <>
+                        {charIds.length > 1 && (
+                          <div className="cognition-char-tabs">
+                            {charIds.map((cid) => {
+                              const isSelected = cid === selectedCharId;
+                              const cName =
+                                turn.cognition_character_names?.[cid] ||
+                                bundle.character_records?.[cid]?.name ||
+                                (cid === character.id ? character.name : cid);
+                              const cBlock = turn.cognitions?.[cid];
+                              const isPrimary = cid === character.id;
+                              return (
+                                <button
+                                  key={cid}
+                                  type="button"
+                                  className={`cognition-char-tab ${
+                                    isSelected ? "cognition-char-tab--active" : ""
+                                  }`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedCognitionCharIdByTurn((prev) => ({
+                                      ...prev,
+                                      [turn.id]: cid,
+                                    }));
+                                  }}
+                                  title={`View cognition for ${cName}${
+                                    isPrimary ? " (Primary Speaker)" : ""
+                                  }`}
+                                >
+                                  <Brain size={11} />
+                                  <span>{cName}</span>
+                                  {isPrimary && (
+                                    <span
+                                      style={{
+                                        fontSize: "0.62rem",
+                                        opacity: 0.75,
+                                      }}
+                                    >
+                                      (Speaker)
+                                    </span>
+                                  )}
+                                  {cBlock && (
+                                    <span
+                                      style={{
+                                        fontSize: "0.65rem",
+                                        opacity: 0.65,
+                                        marginLeft: 2,
+                                      }}
+                                    >
+                                      [{cBlock.valence >= 0 ? "+" : ""}
+                                      {cBlock.valence.toFixed(1)},{" "}
+                                      {cBlock.arousal.toFixed(1)}]
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
                           </div>
-                          <div className="cog-step">
-                            <div className="cog-step-label">Stance</div>
-                            <div>
-                              Impersonal, neutral, zero emotional puppeteering or helpful
-                              hints.
-                            </div>
-                          </div>
-                          <div className="cog-step">
-                            <div className="cog-step-label">Directorial Plan</div>
-                            <div>
-                              {turn.cognition.plan || "Sensory environmental description"}
-                            </div>
-                          </div>
-                        </div>
-                      ) : isSkipped ? (
-                        <div className="cognition-skipped-content">
-                          <div className="cognition-skipped-banner">
-                            <div className="cognition-skipped-banner-title">
-                              <AlertTriangle size={15} />
-                              <span>Cognitive Introspection Skipped</span>
-                            </div>
-                            <div className="cognition-skipped-banner-desc">
-                              The model bypassed the <code>&lt;cognition&gt;</code> block
-                              and generated narrative prose directly. Emotional stance and
-                              tactical intentions were retained from prior context to
-                              maintain continuity, but no new inner thoughts were generated
-                              for this turn.
-                            </div>
-                            <button
-                              type="button"
-                              className="cognition-retained-toggle"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                toggleRetained(turn.id);
-                              }}
-                            >
-                              {showRetained
-                                ? "Hide retained state values"
-                                : "Inspect retained state values"}
-                            </button>
-                          </div>
+                        )}
 
-                          {showRetained && (
-                            <div className="cognition-steps cognition-steps-retained">
-                              <div className="cog-step cog-step-muted">
-                                <div className="cog-step-label">
-                                  1. Memory Recall (Retained)
-                                </div>
-                                <div>{turn.cognition.recall || "None (Omitted)"}</div>
+                        {isNarratorTurn ? (
+                          <div className="cognition-steps">
+                            <div className="cog-step">
+                              <div className="cog-step-label">Focus Area</div>
+                              <div>
+                                {activeCognition.recall || bundle.active_location.name}
                               </div>
-                              <div className="cog-step cog-step-muted">
-                                <div className="cog-step-label">
-                                  2. Affect & Feeling (Retained)
-                                </div>
-                                <div>
-                                  {turn.cognition.feeling || "Unchanged"}
-                                  <div
-                                    style={{
-                                      fontSize: "0.7rem",
-                                      marginTop: 4,
-                                      color: "var(--text-secondary)",
-                                    }}
-                                  >
-                                    Valence: {turn.cognition.valence >= 0 ? "+" : ""}
-                                    {turn.cognition.valence.toFixed(2)} | Arousal:{" "}
-                                    {turn.cognition.arousal.toFixed(2)}
+                            </div>
+                            <div className="cog-step">
+                              <div className="cog-step-label">Stance</div>
+                              <div>
+                                Impersonal, neutral, zero emotional puppeteering or
+                                helpful hints.
+                              </div>
+                            </div>
+                            <div className="cog-step">
+                              <div className="cog-step-label">Directorial Plan</div>
+                              <div>
+                                {activeCognition.plan ||
+                                  "Sensory environmental description"}
+                              </div>
+                            </div>
+                          </div>
+                        ) : isSkipped ? (
+                          <div className="cognition-skipped-content">
+                            <div className="cognition-skipped-banner">
+                              <div className="cognition-skipped-banner-title">
+                                <AlertTriangle size={15} />
+                                <span>Cognitive Introspection Skipped</span>
+                              </div>
+                              <div className="cognition-skipped-banner-desc">
+                                The model bypassed the <code>&lt;cognition&gt;</code> block
+                                and generated narrative prose directly. Emotional stance
+                                and tactical intentions were retained from prior context to
+                                maintain continuity, but no new inner thoughts were
+                                generated for this turn.
+                              </div>
+                              <button
+                                type="button"
+                                className="cognition-retained-toggle"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleRetained(turn.id);
+                                }}
+                              >
+                                {showRetained
+                                  ? "Hide retained state values"
+                                  : "Inspect retained state values"}
+                              </button>
+                            </div>
+
+                            {showRetained && (
+                              <div className="cognition-steps cognition-steps-retained">
+                                <div className="cog-step cog-step-muted">
+                                  <div className="cog-step-label">
+                                    1. Memory Recall (Retained)
+                                  </div>
+                                  <div>
+                                    {activeCognition.recall || "None (Omitted)"}
                                   </div>
                                 </div>
-                              </div>
-                              <div className="cog-step cog-step-muted">
-                                <div className="cog-step-label">
-                                  3. Immediate Want (Retained)
+                                <div className="cog-step cog-step-muted">
+                                  <div className="cog-step-label">
+                                    2. Affect & Feeling (Retained)
+                                  </div>
+                                  <div>
+                                    {activeCognition.feeling || "Unchanged"}
+                                    <div
+                                      style={{
+                                        fontSize: "0.7rem",
+                                        marginTop: 4,
+                                        color: "var(--text-secondary)",
+                                      }}
+                                    >
+                                      Valence:{" "}
+                                      {activeCognition.valence >= 0 ? "+" : ""}
+                                      {activeCognition.valence.toFixed(2)} | Arousal:{" "}
+                                      {activeCognition.arousal.toFixed(2)}
+                                    </div>
+                                  </div>
                                 </div>
-                                <div>{turn.cognition.want || "Unchanged"}</div>
-                              </div>
-                              <div className="cog-step cog-step-muted">
-                                <div className="cog-step-label">
-                                  4. Tactical Plan (Retained)
+                                <div className="cog-step cog-step-muted">
+                                  <div className="cog-step-label">
+                                    3. Immediate Want (Retained)
+                                  </div>
+                                  <div>{activeCognition.want || "Unchanged"}</div>
                                 </div>
-                                <div>{turn.cognition.plan || "Unchanged"}</div>
+                                <div className="cog-step cog-step-muted">
+                                  <div className="cog-step-label">
+                                    4. Tactical Plan (Retained)
+                                  </div>
+                                  <div>{activeCognition.plan || "Unchanged"}</div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="cognition-steps">
+                            <div className="cog-step">
+                              <div className="cog-step-label">1. Memory Recall</div>
+                              <div>
+                                {activeCognition.recall || "Present in the moment."}
                               </div>
                             </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="cognition-steps">
-                          <div className="cog-step">
-                            <div className="cog-step-label">1. Memory Recall</div>
-                            <div>{turn.cognition.recall || "Present in the moment."}</div>
+                            <div className="cog-step">
+                              <div className="cog-step-label">2. Affect & Feeling</div>
+                              <div>{activeCognition.feeling}</div>
+                            </div>
+                            <div className="cog-step">
+                              <div className="cog-step-label">3. Immediate Want</div>
+                              <div>{activeCognition.want}</div>
+                            </div>
+                            <div className="cog-step">
+                              <div className="cog-step-label">4. Tactical Plan</div>
+                              <div>{activeCognition.plan}</div>
+                            </div>
                           </div>
-                          <div className="cog-step">
-                            <div className="cog-step-label">2. Affect & Feeling</div>
-                            <div>{turn.cognition.feeling}</div>
-                          </div>
-                          <div className="cog-step">
-                            <div className="cog-step-label">3. Immediate Want</div>
-                            <div>{turn.cognition.want}</div>
-                          </div>
-                          <div className="cog-step">
-                            <div className="cog-step-label">4. Tactical Plan</div>
-                            <div>{turn.cognition.plan}</div>
-                          </div>
-                        </div>
-                      ))}
+                        )}
+                      </>
+                    )}
                   </div>
                 );
               })()}
@@ -994,8 +1093,107 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               )}
             </div>
 
+            {phase3Progress &&
+              phase3Progress.orderedCharacterIds &&
+              phase3Progress.orderedCharacterIds.length > 0 && (
+                <div
+                  className="agent-pills-row"
+                  style={{
+                    marginTop: 8,
+                    marginBottom: 8,
+                    padding: "6px 10px",
+                    background: "rgba(255, 255, 255, 0.02)",
+                    borderRadius: 6,
+                    border: "1px solid var(--border-subtle)",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: "0.72rem",
+                      color: "var(--text-secondary)",
+                      fontWeight: 600,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 5,
+                    }}
+                  >
+                    <Brain size={12} color="var(--accent-violet)" />
+                    Phase 3 Multi-Cognition ({phase3Progress.dispatchMode}):
+                  </span>
+                  {phase3Progress.orderedCharacterIds.map((cid) => {
+                    const item = phase3Progress.agents[cid];
+                    if (!item) return null;
+                    const isSelected =
+                      (selectedLiveCognitionCharId ??
+                        phase3Progress.orderedCharacterIds[0]) === cid;
+                    const isThinking = item.status === "thinking";
+                    const isCompleted = item.status === "completed";
+                    const isFailed = item.status === "failed";
+                    const isQueued = item.status === "queued";
+                    return (
+                      <button
+                        key={cid}
+                        type="button"
+                        className={`agent-pill agent-pill--character ${
+                          isThinking ? "agent-pill--running" : ""
+                        } ${isQueued ? "agent-pill--queued" : ""} ${
+                          isSelected ? "cognition-char-tab--active" : ""
+                        }`}
+                        onClick={() => setSelectedLiveCognitionCharId(cid)}
+                        title={`${item.characterName} (${item.role}): ${item.status}`}
+                      >
+                        {isThinking && (
+                          <RefreshCw size={10} className="spin-slow" />
+                        )}
+                        {isQueued && (
+                          <Clock size={10} style={{ opacity: 0.6 }} />
+                        )}
+                        {isCompleted && <Brain size={10} />}
+                        {isFailed && <AlertTriangle size={10} />}
+                        <span>{item.characterName}</span>
+                        {item.role === "primary_speaker" && (
+                          <span
+                            style={{
+                              opacity: 0.7,
+                              fontSize: "0.62rem",
+                            }}
+                          >
+                            (Primary)
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
             {(() => {
-              const liveSkipped = Boolean(liveStream.cognitionParsed?.skipped);
+              const liveCharIds =
+                phase3Progress && phase3Progress.orderedCharacterIds.length > 0
+                  ? phase3Progress.orderedCharacterIds
+                  : [character.id];
+              const liveSelectedId =
+                selectedLiveCognitionCharId ??
+                (liveCharIds.includes(character.id)
+                  ? character.id
+                  : liveCharIds[0]);
+              const activeLiveAgent = phase3Progress?.agents[liveSelectedId];
+              const activeLiveCog =
+                activeLiveAgent?.cognition ??
+                (liveSelectedId === character.id
+                  ? liveStream.cognitionParsed
+                  : null);
+              const activeLiveName =
+                activeLiveAgent?.characterName ??
+                (liveSelectedId === character.id
+                  ? character.name
+                  : "Character");
+
+              const liveSkipped = Boolean(activeLiveCog?.skipped);
+              const isNarratorCue =
+                liveStream.cognitionParsed?.feeling === "Objective / Detached";
+              const isAgentThinking = activeLiveAgent?.status === "thinking";
+
               return (
                 <div
                   className={`cognition-box ${
@@ -1003,18 +1201,26 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                   }`}
                 >
                   <div className="cognition-header">
-                    <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      {liveStream.cognitionParsed?.feeling === "Objective / Detached" ? (
+                    <span
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                      }}
+                    >
+                      {isNarratorCue ? (
                         <Eye size={14} color="var(--accent-cyan)" />
                       ) : liveSkipped ? (
                         <AlertTriangle size={14} color="#f59e0b" />
                       ) : (
                         <Brain size={14} />
                       )}
-                      {liveStream.cognitionParsed?.feeling === "Objective / Detached"
+                      {isNarratorCue
                         ? "Objective Scene Observation (Detached & Indifferent)"
                         : liveSkipped
-                        ? `${character.name} Inner Cognition (Skipped by Model)`
+                        ? `${activeLiveName} Inner Cognition (Skipped by Model)`
+                        : liveCharIds.length > 1
+                        ? `${activeLiveName} Inner Cognition (Recall → Feel → Want → Plan)`
                         : "Streaming <cognition>..."}
                     </span>
                     {liveSkipped && (
@@ -1024,62 +1230,108 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                       </span>
                     )}
                   </div>
-                  {liveStream.cognitionParsed ? (
-                    liveStream.cognitionParsed.feeling === "Objective / Detached" ? (
+
+                  {liveCharIds.length > 1 && (
+                    <div className="cognition-char-tabs">
+                      {liveCharIds.map((cid) => {
+                        const isSelected = cid === liveSelectedId;
+                        const a = phase3Progress?.agents[cid];
+                        const cName = a?.characterName || cid;
+                        const isDone = a?.status === "completed";
+                        const isThinking = a?.status === "thinking";
+                        return (
+                          <button
+                            key={cid}
+                            type="button"
+                            className={`cognition-char-tab ${
+                              isSelected ? "cognition-char-tab--active" : ""
+                            }`}
+                            onClick={() => setSelectedLiveCognitionCharId(cid)}
+                          >
+                            {isThinking && (
+                              <RefreshCw size={10} className="spin-slow" />
+                            )}
+                            {isDone && <Brain size={11} />}
+                            <span>{cName}</span>
+                            {a?.role === "primary_speaker" && (
+                              <span
+                                style={{
+                                  fontSize: "0.62rem",
+                                  opacity: 0.75,
+                                }}
+                              >
+                                (Speaker)
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {activeLiveCog ? (
+                    isNarratorCue ? (
                       <div className="cognition-steps">
                         <div className="cog-step">
                           <div className="cog-step-label">Focus Area</div>
                           <div>
-                            {liveStream.cognitionParsed.recall ||
+                            {activeLiveCog.recall ||
                               bundle.active_location.name}
                           </div>
                         </div>
                         <div className="cog-step">
                           <div className="cog-step-label">Stance</div>
                           <div>
-                            Impersonal, neutral, no emotional puppeteering or helpful
-                            hints.
+                            Impersonal, neutral, no emotional puppeteering or
+                            helpful hints.
                           </div>
                         </div>
                         <div className="cog-step">
                           <div className="cog-step-label">Directorial Plan</div>
                           <div>
-                            {liveStream.cognitionParsed.plan ||
+                            {activeLiveCog.plan ||
                               "Sensory environmental description"}
                           </div>
                         </div>
                       </div>
                     ) : liveSkipped ? (
-                      <div className="cognition-skipped-banner" style={{ marginTop: 8 }}>
+                      <div
+                        className="cognition-skipped-banner"
+                        style={{ marginTop: 8 }}
+                      >
                         <div className="cognition-skipped-banner-title">
                           <AlertTriangle size={14} />
                           <span>Introspection Skipped</span>
                         </div>
                         <div className="cognition-skipped-banner-desc">
-                          The model bypassed the <code>&lt;cognition&gt;</code> block and
-                          is streaming narrative prose directly. Prior emotional state is
-                          preserved for continuity.
+                          The model bypassed the <code>&lt;cognition&gt;</code>{" "}
+                          block and is streaming narrative prose directly. Prior
+                          emotional state is preserved for continuity.
                         </div>
                       </div>
                     ) : (
                       <div className="cognition-steps">
                         <div className="cog-step">
                           <div className="cog-step-label">1. Memory Recall</div>
-                          <div>{liveStream.cognitionParsed.recall}</div>
+                          <div>
+                            {activeLiveCog.recall || "Present in the moment."}
+                          </div>
                         </div>
                         <div className="cog-step">
-                          <div className="cog-step-label">2. Affect & Feeling</div>
+                          <div className="cog-step-label">
+                            2. Affect & Feeling
+                          </div>
                           <div>
-                            {liveStream.cognitionParsed.feeling || "Calibrating..."}
+                            {activeLiveCog.feeling || "Calibrating..."}
                           </div>
                         </div>
                         <div className="cog-step">
                           <div className="cog-step-label">3. Immediate Want</div>
-                          <div>{liveStream.cognitionParsed.want}</div>
+                          <div>{activeLiveCog.want}</div>
                         </div>
                         <div className="cog-step">
                           <div className="cog-step-label">4. Tactical Plan</div>
-                          <div>{liveStream.cognitionParsed.plan}</div>
+                          <div>{activeLiveCog.plan}</div>
                         </div>
                       </div>
                     )
@@ -1092,8 +1344,10 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                         color: "#c4b5fd",
                       }}
                     >
-                      {liveStream.cognitionRaw ||
-                        "Analyzing scene & recalling memories..."}
+                      {isAgentThinking
+                        ? `${activeLiveName} is evaluating memories & intentions...`
+                        : liveStream.cognitionRaw ||
+                          "Analyzing scene & recalling memories..."}
                     </pre>
                   )}
                 </div>

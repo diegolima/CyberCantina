@@ -27,9 +27,13 @@ from app.engine.phase1_pre import run_phase1_pre_analysis
 from app.engine.phase2_context import (
     assemble_four_zone_messages,
     resolve_character_previous_state,
+    resolve_phase2_turn_context,
     was_character_present_on_turn,
 )
 from app.engine.phase3_actor import generate_clerk_cognition, stream_phase3_actor
+from app.engine.phase3_cognition import run_phase3_multi_cognition
+from app.engine.phase4_prose import stream_phase4_prose
+from app.engine.phase5_clerk import run_phase5_post_turn_clerk
 from app.engine.phase4_clerk import run_phase4_post_turn_clerk
 from app.schemas.auth import UserProfile
 from app.schemas.character import (
@@ -43,7 +47,9 @@ from app.schemas.turn import (
     CampaignRecord,
     CampaignStateBundle,
     MechanicsTrigger,
+    Phase3ProgressEvent,
     Phase4ProgressEvent,
+    Phase5ProgressEvent,
     PreTurnAnalysis,
     TurnSubmitRequest,
     WorldStateSnapshot,
@@ -409,7 +415,9 @@ class _StreamDoneSentinel:
     pass
 
 
-_Phase4QueueItem = _StreamPacketItem | _StreamErrorItem | _StreamDoneSentinel
+_PhaseQueueItem = _StreamPacketItem | _StreamErrorItem | _StreamDoneSentinel
+_Phase4QueueItem = _PhaseQueueItem
+_Phase5QueueItem = _PhaseQueueItem
 
 
 async def _execute_turn_stream_events(
@@ -635,19 +643,33 @@ async def _execute_turn_stream_events(
             active_location.id,
         )
 
-    # Hybrid GraphRAG Memory Retrieval (filtered by valid_turn_ids & character room presence)
-    character_present_turn_ids = {
-        t.id for t in branch_turns if was_character_present_on_turn(t, character.id)
-    }
-    recalled_items = await repo.vector_store.search_memories(
-        queries=pre_turn.memory_search_queries,
-        mentioned_entities=pre_turn.mentioned_entities,
-        world_id=world.id,
-        character_id=character.id,
+    # PHASE 2: Scoped RAG & Context Resolution
+    context_bundle = await resolve_phase2_turn_context(
+        repo=repo,
         campaign_id=campaign.id,
-        valid_branch_turn_ids=valid_turn_ids,
-        character_present_turn_ids=character_present_turn_ids,
-        top_k=settings.memory_config.rag_top_k,
+        world=world,
+        branch_turns=branch_turns,
+        pre_turn=pre_turn,
+        user_message=effective_user_message,
+        active_location=active_location,
+        neighbors=neighbors,
+        present_characters=present_characters,
+        character_name_map={c.id: c.name for c in participants},
+        episodic_chunks=episodic_chunks,
+        is_narrator=is_narrator,
+        narrative_mode=req.narrative_mode if is_narrator else None,
+        narrator_directive=req.narrator_directive if is_narrator else None,
+        working_memory_turns=eff_wm_turns,
+        actor_system_prompt_template=(
+            effective_prompts.get("narrator_zone1_system")
+            if is_narrator
+            else effective_prompts.get("actor_zone1_system")
+        ),
+        rag_top_k=settings.memory_config.rag_top_k,
+    )
+
+    recalled_items = list(context_bundle.shared_scene_items) + list(
+        context_bundle.per_character_recalled_items.get(character.id, [])
     )
 
     yield {
@@ -658,21 +680,45 @@ async def _execute_turn_stream_events(
         },
     }
 
-    # Phase 2.5: Optional Clerk-Delegated Character Cognition
-    pregenerated_cognition: CognitionBlock | None = None
-    if eff_delegate_cognition and not is_narrator:
-        pregenerated_cognition = await generate_clerk_cognition(
-            user_message=effective_user_message,
-            character=character,
-            previous_state=prev_char_state,
-            active_location=active_location,
-            neighbors=neighbors,
-            recalled_items=recalled_items,
-            pre_turn=pre_turn,
-            profile=eff_clerk,
-        )
+    # PHASE 3: Per-Character Multi-Cognition Swarm
+    p3_queue: asyncio.Queue[_PhaseQueueItem] = asyncio.Queue()
 
-    # PHASE 2: 4-Zone KV-Cache-Preserving Context Assembly
+    async def _phase3_progress_cb(ev: Phase3ProgressEvent) -> None:
+        await p3_queue.put(_StreamPacketItem(event=ev.event, data=ev.model_dump()))
+
+    async def _run_phase3_worker() -> None:
+        try:
+            cogs = await run_phase3_multi_cognition(
+                context=context_bundle,
+                profile=eff_clerk,
+                dispatch_mode=eff_dispatch_mode,
+                cognition_system_template=effective_prompts.get("character_cognition_system"),
+                on_progress=_phase3_progress_cb,
+            )
+            await p3_queue.put(_StreamPacketItem(event="_p3_internal_done", data={"cognitions": cogs}))
+        except BaseException as exc:
+            await p3_queue.put(_StreamErrorItem(exception=exc))
+        finally:
+            await p3_queue.put(_StreamDoneSentinel())
+
+    p3_task = asyncio.create_task(_run_phase3_worker())
+    established_cognitions: dict[str, CognitionBlock] = {}
+    try:
+        while True:
+            item = await p3_queue.get()
+            if isinstance(item, _StreamDoneSentinel):
+                break
+            if isinstance(item, _StreamErrorItem):
+                raise item.exception
+            if item.event == "_p3_internal_done":
+                established_cognitions = item.data["cognitions"]
+            else:
+                yield {"event": item.event, "data": item.data}
+    finally:
+        if not p3_task.done():
+            await asyncio.shield(p3_task)
+
+    # PHASE 4: Narrative Prose Generation & Streaming
     messages = assemble_four_zone_messages(
         world=world,
         character=character,
@@ -694,50 +740,26 @@ async def _execute_turn_stream_events(
         is_narrator=is_narrator,
         narrative_mode=req.narrative_mode if is_narrator else None,
         narrator_directive=req.narrator_directive if is_narrator else None,
-        established_cognition=pregenerated_cognition,
+        established_cognitions=established_cognitions,
     )
 
-    # PHASE 3: Guided Single-Pass <cognition> + Narrative Prose Streaming
-    final_cognition = (
-        CognitionBlock(
+    primary_cognition = (
+        established_cognitions.get(character.id)
+        if not is_narrator and character.id in established_cognitions
+        else CognitionBlock(
             recall=f"Observing {active_location.name}",
-            feeling="Objective / Detached",
-            valence=0.0,
-            arousal=0.0,
-            want="Depict environment and world state neutrally",
-            plan=req.narrator_directive
-            or (
-                "Describe scene environment"
-                if req.narrative_mode == "describe"
-                else (
-                    "Depict unexpected complication"
-                    if req.narrative_mode == "complication"
-                    else (
-                        "Detail subtle perceptual clues"
-                        if req.narrative_mode == "perception"
-                        else "Depict passage of time"
-                    )
-                )
-            ),
-        )
-        if is_narrator
-        else (
-            pregenerated_cognition
-            if pregenerated_cognition is not None
-            else CognitionBlock(
-                recall="",
-                feeling=prev_char_state.mood_label,
-                valence=prev_char_state.valence,
-                arousal=prev_char_state.arousal,
-                want=prev_char_state.active_want,
-                plan=prev_char_state.active_plan,
-                skipped=True,
-            )
+            feeling="Objective / Detached" if is_narrator else prev_char_state.mood_label,
+            valence=0.0 if is_narrator else prev_char_state.valence,
+            arousal=0.0 if is_narrator else prev_char_state.arousal,
+            want="Depict environment and world state neutrally" if is_narrator else prev_char_state.active_want,
+            plan=req.narrator_directive or "Describe scene" if is_narrator else prev_char_state.active_plan,
+            skipped=is_narrator,
         )
     )
+    final_cognition = primary_cognition
     final_prose = ""
 
-    async for item in stream_phase3_actor(
+    async for item in stream_phase4_prose(
         messages=messages,
         user_message=effective_user_message,
         character=character,
@@ -746,11 +768,13 @@ async def _execute_turn_stream_events(
         neighbors=neighbors,
         recalled_items=recalled_items,
         pre_turn=pre_turn,
+        present_characters=present_characters,
+        all_character_states=context_bundle.all_character_states,
+        established_cognitions=established_cognitions,
         profile=eff_actor,
         is_narrator=is_narrator,
         narrative_mode=req.narrative_mode if is_narrator else None,
         narrator_directive=req.narrator_directive if is_narrator else None,
-        pregenerated_cognition=pregenerated_cognition,
     ):
         if item["event"] == "actor_finished":
             final_cognition = CognitionBlock.model_validate(item["data"]["cognition"])
@@ -758,7 +782,7 @@ async def _execute_turn_stream_events(
         else:
             yield item
 
-    # Persist initial Turn Node prior to Phase 4 Clerk
+    # Persist initial Turn Node prior to Phase 5 Post-Turn Clerk
     new_turn_id = f"turn_{uuid.uuid4().hex[:10]}"
     new_depth = parent_turn.depth_index + 1
     initial_world_snapshot = WorldStateSnapshot(
@@ -781,6 +805,13 @@ async def _execute_turn_stream_events(
         inventory=list(prev_char_state.inventory),
     )
 
+    # Seed all participant character states so UI doesn't drop co-present character state
+    extra_character_states = [
+        context_bundle.all_character_states[p.id].model_copy(update={"turn_id": new_turn_id})
+        for p in participants
+        if p.id != character.id and p.id in context_bundle.all_character_states
+    ]
+
     saved_turn = repo.save_turn_node(
         turn_id=new_turn_id,
         campaign_id=campaign.id,
@@ -790,23 +821,32 @@ async def _execute_turn_stream_events(
         actor_id=actor_id,
         raw_prose=final_prose,
         cognition=final_cognition,
+        cognitions=established_cognitions,
+        cognition_character_names={c.id: c.name for c in participants},
         pre_turn=pre_turn,
         world_snapshot=initial_world_snapshot,
         character_state=initial_char_state,
+        extra_character_states=extra_character_states,
         recalled_items=recalled_items,
     )
 
     yield {"event": "turn_saved", "data": saved_turn.model_dump()}
 
-    # PHASE 4: Post-Turn Global Clerk + Per-Character State Agents & Arbitration
-    p4_queue: asyncio.Queue[_Phase4QueueItem] = asyncio.Queue()
+    # PHASE 5: Post-Turn Global Clerk + Per-Character State Agents & Arbitration
+    p5_queue: asyncio.Queue[_PhaseQueueItem] = asyncio.Queue()
 
-    async def _progress_cb(ev: Phase4ProgressEvent) -> None:
-        await p4_queue.put(_StreamPacketItem(event=ev.event, data=ev.model_dump()))
+    async def _phase5_progress_cb(ev: Phase5ProgressEvent) -> None:
+        await p5_queue.put(_StreamPacketItem(event=ev.event, data=ev.model_dump()))
+        # If event starts with phase5_, also send phase4_ alias for legacy SSE listeners
+        if ev.event.startswith("phase5_"):
+            legacy_ev = "phase4_" + ev.event[len("phase5_"):]
+            legacy_data = dict(ev.model_dump())
+            legacy_data["event"] = legacy_ev
+            await p5_queue.put(_StreamPacketItem(event=legacy_ev, data=legacy_data))
 
-    async def _run_phase4_worker() -> None:
+    async def _run_phase5_worker() -> None:
         try:
-            updated_turn, _chunks = await run_phase4_post_turn_clerk(
+            updated_turn, _chunks = await run_phase5_post_turn_clerk(
                 repo=repo,
                 campaign_id=campaign.id,
                 world_id=world.id,
@@ -824,27 +864,25 @@ async def _execute_turn_stream_events(
                 character_post_turn_prompt_template=effective_prompts.get("character_post_turn_system"),
                 arbitration_prompt_template=effective_prompts.get("clerk_arbitration_system"),
                 summary_prompt_template=effective_prompts.get("clerk_episodic_summary_system"),
-                on_progress=_progress_cb,
+                on_progress=_phase5_progress_cb,
             )
             bundle = repo.get_campaign_state_bundle(campaign.id)
-            await p4_queue.put(
-                _StreamPacketItem(
-                    event="phase4_complete",
-                    data={
-                        "turn": updated_turn.model_dump(),
-                        "state_bundle": bundle.model_dump(),
-                    },
-                )
-            )
+            # Emit both phase5_complete and legacy phase4_complete
+            complete_payload = {
+                "turn": updated_turn.model_dump(),
+                "state_bundle": bundle.model_dump(),
+            }
+            await p5_queue.put(_StreamPacketItem(event="phase5_complete", data=complete_payload))
+            await p5_queue.put(_StreamPacketItem(event="phase4_complete", data=complete_payload))
         except BaseException as exc:
-            await p4_queue.put(_StreamErrorItem(exception=exc))
+            await p5_queue.put(_StreamErrorItem(exception=exc))
         finally:
-            await p4_queue.put(_StreamDoneSentinel())
+            await p5_queue.put(_StreamDoneSentinel())
 
-    worker_task = asyncio.create_task(_run_phase4_worker())
+    worker_task = asyncio.create_task(_run_phase5_worker())
     try:
         while True:
-            item = await p4_queue.get()
+            item = await p5_queue.get()
             if isinstance(item, _StreamDoneSentinel):
                 break
             if isinstance(item, _StreamErrorItem):
@@ -900,7 +938,7 @@ async def submit_campaign_turn_sync(
         async for packet in _execute_turn_stream_events(
             campaign_id, req, owner_id=current_user.id
         ):
-            if packet["event"] == "phase4_complete":
+            if packet["event"] in ("phase5_complete", "phase4_complete"):
                 final_bundle = packet["data"]["state_bundle"]
         if final_bundle is not None:
             return CampaignStateBundle.model_validate(final_bundle)

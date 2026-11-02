@@ -51,6 +51,8 @@ import {
   CompassDirection,
   MemoryShard,
   NarrativeMode,
+  Phase3AgentProgressItem,
+  Phase3TurnProgress,
   Phase4AgentProgressItem,
   Phase4TurnProgress,
   PreTurnAnalysis,
@@ -332,6 +334,7 @@ export const App: React.FC = () => {
   const [isDeleting, setIsDeleting] = useState(false);
 
   const [isStreaming, setIsStreaming] = useState(false);
+  const [phase3Progress, setPhase3Progress] = useState<Phase3TurnProgress | null>(null);
   const [isPhase4Running, setIsPhase4Running] = useState(false);
   const [phase4ProgressByTurn, setPhase4ProgressByTurn] = useState<
     Record<string, Phase4TurnProgress>
@@ -577,6 +580,7 @@ export const App: React.FC = () => {
     if (!bundle) return;
     setIsStreaming(true);
     setStreamError(null);
+    setPhase3Progress(null);
     setLiveStream({
       userMessage: opts.userMessage,
       preTurn: null,
@@ -610,7 +614,111 @@ export const App: React.FC = () => {
                     ...prev,
                     preTurn: data.pre_turn,
                     recalledItems: data.recalled_items,
-                    phaseStatus: "Phase 3: Streaming <cognition> & Narrative...",
+                    phaseStatus: "Phase 2: Scoped RAG & Context Resolved...",
+                  }
+                : null
+            );
+          },
+          onPhase3Start: (data) => {
+            const rosterAgents: Record<string, Phase3AgentProgressItem> = {};
+            const orderedIds: string[] = [];
+            for (const entry of data.roster || []) {
+              orderedIds.push(entry.character_id);
+              rosterAgents[entry.character_id] = {
+                characterId: entry.character_id,
+                characterName: entry.character_name,
+                role: entry.role,
+                status: "queued",
+              };
+            }
+            setPhase3Progress({
+              dispatchMode: data.dispatch_mode || "sequential",
+              isComplete: false,
+              orderedCharacterIds: orderedIds,
+              agents: rosterAgents,
+            });
+            setLiveStream((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    phaseStatus: `Phase 3: Multi-Cognition Swarm (${data.dispatch_mode || "sequential"})...`,
+                  }
+                : null
+            );
+          },
+          onPhase3AgentStart: (data) => {
+            if (!data.character_id) return;
+            setPhase3Progress((prev) => {
+              if (!prev) return prev;
+              const agent = prev.agents[data.character_id!];
+              return {
+                ...prev,
+                agents: {
+                  ...prev.agents,
+                  [data.character_id!]: {
+                    ...(agent || {
+                      characterId: data.character_id!,
+                      characterName: data.character_name || data.character_id!,
+                      role: data.role || "co_present",
+                    }),
+                    status: "thinking",
+                  },
+                },
+              };
+            });
+          },
+          onPhase3AgentComplete: (data) => {
+            if (!data.character_id) return;
+            setPhase3Progress((prev) => {
+              if (!prev) return prev;
+              const agent = prev.agents[data.character_id!];
+              return {
+                ...prev,
+                agents: {
+                  ...prev.agents,
+                  [data.character_id!]: {
+                    ...(agent || {
+                      characterId: data.character_id!,
+                      characterName: data.character_name || data.character_id!,
+                      role: data.role || "co_present",
+                    }),
+                    status: "completed",
+                    cognition: data.cognition,
+                    usedFallback: data.used_fallback,
+                  },
+                },
+              };
+            });
+          },
+          onPhase3AgentError: (data) => {
+            if (!data.character_id) return;
+            setPhase3Progress((prev) => {
+              if (!prev) return prev;
+              const agent = prev.agents[data.character_id!];
+              return {
+                ...prev,
+                agents: {
+                  ...prev.agents,
+                  [data.character_id!]: {
+                    ...(agent || {
+                      characterId: data.character_id!,
+                      characterName: data.character_name || data.character_id!,
+                      role: data.role || "co_present",
+                    }),
+                    status: "failed",
+                    error: data.error,
+                  },
+                },
+              };
+            });
+          },
+          onPhase3Complete: (_data) => {
+            setPhase3Progress((prev) => (prev ? { ...prev, isComplete: true } : null));
+            setLiveStream((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    phaseStatus: "Phase 4: Streaming Narrative Prose...",
                   }
                 : null
             );
@@ -661,6 +769,7 @@ export const App: React.FC = () => {
               };
             });
             setLiveStream(null);
+            setPhase3Progress(null);
             setIsStreaming(false);
             setIsPhase4Running(true);
           },
@@ -832,6 +941,7 @@ export const App: React.FC = () => {
     } finally {
       setIsStreaming(false);
       setIsPhase4Running(false);
+      setPhase3Progress(null);
       setLiveStream(null);
     }
   };
@@ -1383,6 +1493,7 @@ export const App: React.FC = () => {
           character={campaignCharacter}
           isStreaming={isStreaming}
           isPhase4Running={isPhase4Running}
+          phase3Progress={phase3Progress}
           phase4ProgressByTurn={phase4ProgressByTurn}
           liveStream={liveStream}
           streamError={streamError}

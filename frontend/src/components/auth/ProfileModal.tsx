@@ -1499,55 +1499,6 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                     </span>
                   </div>
 
-                  <div
-                    style={{
-                      padding: "12px 14px",
-                      background: "rgba(255, 255, 255, 0.03)",
-                      borderRadius: 6,
-                      border: "1px solid var(--border-subtle)",
-                    }}
-                  >
-                    <label
-                      style={{
-                        display: "flex",
-                        alignItems: "flex-start",
-                        gap: 10,
-                        cursor: modelSettings?.allow_user_model_overrides
-                          ? "pointer"
-                          : "default",
-                        fontSize: "0.82rem",
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        style={{ marginTop: 2 }}
-                        disabled={!modelSettings?.allow_user_model_overrides}
-                        checked={userDelegateCognition}
-                        onChange={(e) =>
-                          setUserDelegateCognition(e.target.checked)
-                        }
-                      />
-                      <span>
-                        <strong>
-                          Delegate Character Cognition to Clerk Model
-                        </strong>
-                        <span
-                          style={{
-                            display: "block",
-                            fontSize: "0.74rem",
-                            color: "var(--text-secondary)",
-                            marginTop: 2,
-                          }}
-                        >
-                          When enabled, the Clerk model generates the 4-step
-                          &lt;cognition&gt; block (Recall, Feeling, Want, Plan)
-                          and injects it as context for the Primary Actor model.
-                          Recommended if using prose-only fine-tuned models.
-                          (System Default: {modelSettings?.default_delegate_cognition_to_clerk ? "Enabled" : "Disabled"})
-                        </span>
-                      </span>
-                    </label>
-                  </div>
 
                   <div
                     style={{

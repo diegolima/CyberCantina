@@ -1591,66 +1591,6 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                     </p>
                   </div>
 
-                  {/* Delegate Character Cognition to Clerk Model */}
-                  <div
-                    style={{
-                      background: appSettingsForm.delegate_cognition_to_clerk
-                        ? "rgba(16, 185, 129, 0.08)"
-                        : "var(--bg-card)",
-                      border: `1px solid ${
-                        appSettingsForm.delegate_cognition_to_clerk
-                          ? "rgba(16, 185, 129, 0.35)"
-                          : "var(--border-subtle)"
-                      }`,
-                      borderRadius: 8,
-                      padding: 14,
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 6,
-                    }}
-                  >
-                    <label
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        cursor: "pointer",
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={appSettingsForm.delegate_cognition_to_clerk || false}
-                        onChange={(e) =>
-                          setAppSettingsForm({
-                            ...appSettingsForm,
-                            delegate_cognition_to_clerk: e.target.checked,
-                          })
-                        }
-                        style={{ width: 16, height: 16 }}
-                      />
-                      <span
-                        style={{
-                          fontWeight: 600,
-                          fontSize: "0.86rem",
-                          color: appSettingsForm.delegate_cognition_to_clerk
-                            ? "#6ee7b7"
-                            : "var(--text-primary)",
-                        }}
-                      >
-                        Delegate Character Cognition to Clerk Model
-                      </span>
-                    </label>
-                    <p
-                      style={{
-                        fontSize: "0.76rem",
-                        color: "var(--text-secondary)",
-                        margin: 0,
-                        paddingLeft: 26,
-                      }}
-                    >
-                      When enabled, the analytical Clerk model generates the 4-step &lt;cognition&gt; block (Recall, Feeling, Want, Plan) and injects it as context for the Primary Actor model. Ideal for prose-only fine-tuned models that struggle with XML generation.
-                    </p>
-                  </div>
 
                   {/* Character Agent Dispatch Mode */}
                   <div

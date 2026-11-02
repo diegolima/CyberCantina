@@ -191,6 +191,7 @@ CREATE TABLE IF NOT EXISTS turn_nodes (
     actor_id TEXT NOT NULL,
     raw_prose TEXT NOT NULL,
     cognition_json TEXT NOT NULL,
+    cognitions_json TEXT NULL,
     pre_turn_json TEXT NOT NULL,
     post_turn_json TEXT NULL,
     recalled_items_json TEXT NOT NULL DEFAULT '[]',
