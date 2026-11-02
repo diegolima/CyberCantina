@@ -252,6 +252,29 @@ export interface WorldMapReimagineRequest {
   location_count?: number;
 }
 
+export type CanonicalOutcomeTier =
+  | "Critical Failure"
+  | "Failure with Consequences"
+  | "Simple Failure"
+  | "Clean Success"
+  | "Critical Success";
+
+export type LegacyOutcomeTier = "Failure with Consequence" | "Partial Success";
+
+export type OutcomeTier = CanonicalOutcomeTier | LegacyOutcomeTier;
+
+export type CheckRole = "active_attempt" | "contested_reaction" | "scene_hazard" | "co_present_bystander";
+
+export interface CharacterCheckSpec {
+  character_id: string;
+  requires_roll: boolean;
+  check_role: CheckRole;
+  action_description: string;
+  skill_or_approach: string;
+  difficulty_class: number;
+  relevant_modifier: number;
+}
+
 export interface MechanicsTrigger {
   requires_roll: boolean;
   action_description: string;
@@ -261,18 +284,18 @@ export interface MechanicsTrigger {
 }
 
 export interface DiceRollResult {
+  character_id?: string | null;
+  character_name?: string | null;
+  check_role?: CheckRole;
+  is_manual_override?: boolean;
   action_description: string;
   skill_or_approach: string;
   d20_raw: number;
   modifier: number;
   total: number;
   difficulty_class: number;
-  outcome_tier:
-    | "Critical Failure"
-    | "Failure with Consequence"
-    | "Partial Success"
-    | "Clean Success"
-    | "Critical Success";
+  outcome_tier: OutcomeTier;
+  plan_directive?: string;
   narrative_directive: string;
 }
 
@@ -286,6 +309,8 @@ export interface PreTurnAnalysis {
   active_speaker_id?: string | null;
   speaker_order?: string[];
   mechanics_check: MechanicsTrigger;
+  character_checks?: CharacterCheckSpec[];
+  character_rolls?: Record<string, DiceRollResult>;
   resolved_roll?: DiceRollResult | null;
 }
 

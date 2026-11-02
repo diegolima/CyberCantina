@@ -8,8 +8,16 @@ import re
 from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
 from app.prompts import get_default_prompt, render_template
-from app.schemas.character import CharacterRecord
-from app.schemas.turn import DiceRollResult, MechanicsTrigger, PreTurnAnalysis
+from app.schemas.character import CharacterRecord, CharacterStateSnapshot
+from app.schemas.turn import (
+    CanonicalOutcomeTier,
+    CharacterCheckSpec,
+    CheckRole,
+    DiceRollResult,
+    MechanicsTrigger,
+    PreTurnAnalysis,
+    PreTurnLLMOutput,
+)
 from app.schemas.world import LocationNode, NeighborLocationView
 
 _RISKY_ACTION_PATTERNS: list[tuple[re.Pattern[str], str, int]] = [
@@ -48,46 +56,146 @@ _VULNERABLE_WORDS = {"bleeding", "hurt", "help", "scared", "dying", "wound", "so
 _SARCASTIC_WORDS = {"sure", "right", "whatever", "charming", "relax", "calm down"}
 
 
+def classify_outcome_tier(
+    d20_raw: int,
+    total: int,
+    difficulty_class: int,
+) -> CanonicalOutcomeTier:
+    """Classify roll into 5 canonical tiers with strict natural roll precedence:
+    1. d20_raw == 1  -> Critical Failure
+    2. d20_raw == 20 -> Critical Success
+    3. margin = total - difficulty_class:
+       - margin <= -6        -> Critical Failure
+       - -5 <= margin <= -3  -> Failure with Consequences
+       - -2 <= margin <= -1  -> Simple Failure
+       -  0 <= margin <=  4  -> Clean Success
+       - margin >= 5         -> Critical Success
+    """
+    if d20_raw == 1:
+        return "Critical Failure"
+    if d20_raw == 20:
+        return "Critical Success"
+    margin = total - difficulty_class
+    if margin <= -6:
+        return "Critical Failure"
+    if margin <= -3:
+        return "Failure with Consequences"
+    if margin < 0:
+        return "Simple Failure"
+    if margin < 5:
+        return "Clean Success"
+    return "Critical Success"
+
+
+def build_tier_directives(
+    outcome_tier: CanonicalOutcomeTier,
+    action_description: str,
+    check_role: CheckRole = "active_attempt",
+    character_name: str | None = None,
+) -> tuple[str, str]:
+    """Return (plan_directive, narrative_directive) calibrated to check_role and outcome tier."""
+    name_prefix = f"{character_name}: " if character_name else ""
+    desc = action_description or "action"
+
+    if check_role == "contested_reaction":
+        if outcome_tier == "Critical Failure":
+            plan = "Your defense/resistance completely collapses. Your counter-maneuver backfires with severe consequences, exposing you to critical danger, loss, or injury."
+            narr = f"{name_prefix}Defense/reaction ({desc}) completely backfires and fails catastrophically with severe, immediate fallout."
+        elif outcome_tier == "Failure with Consequences":
+            plan = "You fail to hold ground or resist cleanly. You suffer moderate setback, strain, or disadvantage, though not catastrophic."
+            narr = f"{name_prefix}Defense/reaction ({desc}) fails to hold, drawing moderate complications or resistance."
+        elif outcome_tier == "Simple Failure":
+            plan = "You fail to achieve the intended counter or defensive edge, but there are no immediate aggravations or extra penalties."
+            narr = f"{name_prefix}Defense/reaction ({desc}) simply does not succeed, but without immediate aggravation."
+        elif outcome_tier == "Clean Success":
+            plan = "You successfully defend, resist, or hold your ground cleanly as intended."
+            narr = f"{name_prefix}Defense/reaction ({desc}) succeeds cleanly as intended."
+        else:  # Critical Success
+            plan = "You anticipate and deflect the challenge with exceptional precision, decisively turning the tables and seizing the upper hand."
+            narr = f"{name_prefix}Defense/reaction ({desc}) succeeds with exceptional flair, outperforming expectations and gaining a decisive advantage."
+    elif check_role == "scene_hazard":
+        if outcome_tier == "Critical Failure":
+            plan = "The environmental hazard overwhelms you. Your reaction backfires into an immediate crisis, damage, or equipment failure."
+            narr = f"{name_prefix}Reaction to hazard ({desc}) backfires catastrophically with severe consequences."
+        elif outcome_tier == "Failure with Consequences":
+            plan = "You fail to fully evade or mitigate the hazard, incurring moderate damage, delay, or complication."
+            narr = f"{name_prefix}Reaction to hazard ({desc}) fails to mitigate the hazard, incurring moderate consequences."
+        elif outcome_tier == "Simple Failure":
+            plan = "You fail to overcome or bypass the hazard, but suffer no immediate escalation or extra damage."
+            narr = f"{name_prefix}Reaction to hazard ({desc}) fails without immediate aggravation."
+        elif outcome_tier == "Clean Success":
+            plan = "You successfully withstand, avoid, or navigate the hazard cleanly."
+            narr = f"{name_prefix}Reaction to hazard ({desc}) succeeds cleanly as intended."
+        else:  # Critical Success
+            plan = "You masterfully exploit the hazard or navigate it flawlessly, discovering a hidden route or tactical asset."
+            narr = f"{name_prefix}Reaction to hazard ({desc}) outperforms expectations, turning the hazard into a tactical advantage."
+    elif check_role == "co_present_bystander":
+        if outcome_tier == "Critical Failure":
+            plan = "You misread the situation entirely or stumble into danger, worsening the crisis or drawing hostile focus."
+            narr = f"{name_prefix}Observation/presence ({desc}) backfires into an unexpected complication or crisis."
+        elif outcome_tier == "Failure with Consequences":
+            plan = "You are caught off-guard or drawn into the commotion with moderate complications."
+            narr = f"{name_prefix}Presence ({desc}) draws moderate complications or unwanted attention."
+        elif outcome_tier == "Simple Failure":
+            plan = "You are momentarily distracted or fail to grasp the developing action, but suffer no immediate penalty."
+            narr = f"{name_prefix}Presence ({desc}) yields no immediate advantage or penalty."
+        elif outcome_tier == "Clean Success":
+            plan = "You maintain calm awareness and remain composed as intended."
+            narr = f"{name_prefix}Presence ({desc}) maintains steady awareness and positioning."
+        else:  # Critical Success
+            plan = "You read the scene with exceptional clarity, outperforming expectations and gaining key tactical insight."
+            narr = f"{name_prefix}Presence ({desc}) provides exceptional foresight, outperforming expectations."
+    else:  # active_attempt
+        if outcome_tier == "Critical Failure":
+            plan = "Your planned action backfires with severe consequences. You fail completely and create an immediate crisis, dangerous escalation, or costly setback. Adapt your plan to crisis control."
+            narr = f"{name_prefix}The attempt ({desc}) fails badly and backfires with severe, immediate consequences, crisis, or costly setback."
+        elif outcome_tier == "Failure with Consequences":
+            plan = "You fail to achieve what you attempted, incurring moderate resistance, complications, or secondary costs. Adapt your plan to handle the setback."
+            narr = f"{name_prefix}The attempt ({desc}) fails to achieve its objective and introduces moderate consequences, complications, or heightened resistance."
+        elif outcome_tier == "Simple Failure":
+            plan = "You fail to achieve what you attempted, but there are no immediate aggravations or extra penalties (the attempt simply does not work). Plan your next response accordingly."
+            narr = f"{name_prefix}The attempt ({desc}) cleanly fails to achieve what was attempted; no immediate aggravations, complications, or penalties."
+        elif outcome_tier == "Clean Success":
+            plan = "You successfully achieve what you are attempting cleanly as intended. Plan your dialogue and action to capitalize on this success."
+            narr = f"{name_prefix}The attempt ({desc}) succeeds cleanly and effectively as intended."
+        else:  # Critical Success
+            plan = "You succeed beyond expectations, outperforming what you attempted and securing an extra tactical advantage, discovery, or opening."
+            narr = f"{name_prefix}The attempt ({desc}) succeeds exceptionally, outperforming expectations and securing a distinct tactical or narrative advantage."
+
+    return plan, narr
+
+
 def resolve_dice_check(
-    trigger: MechanicsTrigger,
+    trigger: MechanicsTrigger | CharacterCheckSpec,
     manual_override: int | None = None,
+    *,
+    character_id: str | None = None,
+    character_name: str | None = None,
+    check_role: CheckRole = "active_attempt",
+    rng: random.Random | None = None,
 ) -> DiceRollResult:
-    """Execute a native d20 check and translate it into a narrative directive."""
-    d20_raw = manual_override if manual_override is not None else random.randint(1, 20)
+    """Execute a native d20 check and translate it into plan and narrative directives."""
+    r = rng or random
+    d20_raw = manual_override if manual_override is not None else r.randint(1, 20)
     total = d20_raw + trigger.relevant_modifier
     dc = trigger.difficulty_class
 
-    if d20_raw == 1 or total <= dc - 6:
-        outcome_tier = "Critical Failure"
-        directive = (
-            f"The attempt ({trigger.action_description}) fails badly. Introduce an immediate "
-            "complication, escalation, or costly setback."
-        )
-    elif d20_raw == 20 or total >= dc + 5:
-        outcome_tier = "Critical Success"
-        directive = (
-            f"The attempt ({trigger.action_description}) succeeds with exceptional precision "
-            "and yields an extra advantage or revelation."
-        )
-    elif total >= dc:
-        outcome_tier = "Clean Success"
-        directive = (
-            f"The attempt ({trigger.action_description}) succeeds cleanly as intended."
-        )
-    elif total >= dc - 2:
-        outcome_tier = "Partial Success"
-        directive = (
-            f"The attempt ({trigger.action_description}) partially succeeds, but comes with a "
-            "complication, hesitation, or partial cost."
-        )
-    else:
-        outcome_tier = "Failure with Consequence"
-        directive = (
-            f"The attempt ({trigger.action_description}) fails to achieve its goal, drawing "
-            "suspicion or resistance."
-        )
+    role = getattr(trigger, "check_role", check_role)
+    char_id = getattr(trigger, "character_id", character_id)
+
+    outcome_tier = classify_outcome_tier(d20_raw, total, dc)
+    plan_directive, narrative_directive = build_tier_directives(
+        outcome_tier,
+        trigger.action_description,
+        check_role=role,
+        character_name=character_name,
+    )
 
     return DiceRollResult(
+        character_id=char_id,
+        character_name=character_name,
+        check_role=role,
+        is_manual_override=manual_override is not None,
         action_description=trigger.action_description,
         skill_or_approach=trigger.skill_or_approach,
         d20_raw=d20_raw,
@@ -95,8 +203,106 @@ def resolve_dice_check(
         total=total,
         difficulty_class=dc,
         outcome_tier=outcome_tier,
-        narrative_directive=directive,
+        plan_directive=plan_directive,
+        narrative_directive=narrative_directive,
     )
+
+
+def resolve_character_dice_checks(
+    present_characters: list[CharacterRecord],
+    *,
+    character_checks: list[CharacterCheckSpec],
+    fallback_trigger: MechanicsTrigger,
+    user_message: str,
+    manual_override: int | None = None,
+    active_speaker_id: str | None = None,
+    rng: random.Random | None = None,
+) -> dict[str, DiceRollResult]:
+    """Resolve individual d20 checks for characters present in active location."""
+    results: dict[str, DiceRollResult] = {}
+    spec_by_char = {c.character_id: c for c in character_checks}
+    chars_by_id = {c.id: c for c in present_characters}
+
+    if manual_override is not None:
+        # All present characters adopt the user's manual dice roll value
+        for char in present_characters:
+            spec = spec_by_char.get(char.id)
+            if spec and spec.requires_roll:
+                results[char.id] = resolve_dice_check(
+                    spec,
+                    manual_override=manual_override,
+                    character_id=char.id,
+                    character_name=char.name,
+                    rng=rng,
+                )
+            elif spec:
+                forced_spec = spec.model_copy(
+                    update={
+                        "requires_roll": True,
+                        "action_description": spec.action_description or f"Action check: {user_message[:50]}",
+                    }
+                )
+                results[char.id] = resolve_dice_check(
+                    forced_spec,
+                    manual_override=manual_override,
+                    character_id=char.id,
+                    character_name=char.name,
+                    rng=rng,
+                )
+            else:
+                synth_spec = CharacterCheckSpec(
+                    character_id=char.id,
+                    requires_roll=True,
+                    check_role="active_attempt",
+                    action_description=fallback_trigger.action_description or f"Action check: {user_message[:50]}",
+                    skill_or_approach=fallback_trigger.skill_or_approach,
+                    difficulty_class=fallback_trigger.difficulty_class,
+                    relevant_modifier=fallback_trigger.relevant_modifier,
+                )
+                results[char.id] = resolve_dice_check(
+                    synth_spec,
+                    manual_override=manual_override,
+                    character_id=char.id,
+                    character_name=char.name,
+                    rng=rng,
+                )
+        return results
+
+    # Standard (manual_override is None): Roll individually ONLY for involved characters; skip uninvolved bystanders
+    for char in present_characters:
+        spec = spec_by_char.get(char.id)
+        if spec and spec.requires_roll:
+            results[char.id] = resolve_dice_check(
+                spec,
+                manual_override=None,
+                character_id=char.id,
+                character_name=char.name,
+                rng=rng,
+            )
+
+    # If character_checks was empty or didn't flag anyone, but fallback_trigger requested roll:
+    if not results and fallback_trigger.requires_roll:
+        target_char_id = active_speaker_id or (present_characters[0].id if present_characters else None)
+        if target_char_id and target_char_id in chars_by_id:
+            char = chars_by_id[target_char_id]
+            synth_spec = CharacterCheckSpec(
+                character_id=char.id,
+                requires_roll=True,
+                check_role="active_attempt",
+                action_description=fallback_trigger.action_description or f"Attempt: {user_message[:50]}",
+                skill_or_approach=fallback_trigger.skill_or_approach,
+                difficulty_class=fallback_trigger.difficulty_class,
+                relevant_modifier=fallback_trigger.relevant_modifier,
+            )
+            results[char.id] = resolve_dice_check(
+                synth_spec,
+                manual_override=None,
+                character_id=char.id,
+                character_name=char.name,
+                rng=rng,
+            )
+
+    return results
 
 
 def select_speaker_order(
@@ -160,6 +366,8 @@ def heuristic_pre_turn_analysis(
     known_entities: list[str],
     present_characters: list[CharacterRecord] | None = None,
     previous_speaker_id: str | None = None,
+    manual_dice_override: int | None = None,
+    rng: random.Random | None = None,
 ) -> PreTurnAnalysis:
     """Fast deterministic analyzer used as fallback when no auxiliary LLM server is reachable."""
     msg_lower = user_message.lower()
@@ -223,12 +431,31 @@ def heuristic_pre_turn_analysis(
         queries.append(" ".join(mentioned))
 
     # 6. Multi-character speaker orchestration among characters in active_location
+    room_chars = present_characters or []
     speaker_order = select_speaker_order(
         user_message,
-        present_characters or [],
+        room_chars,
         previous_speaker_id=previous_speaker_id,
     )
     active_speaker_id = speaker_order[0] if speaker_order else None
+
+    # Resolve rolls
+    character_rolls = resolve_character_dice_checks(
+        room_chars,
+        character_checks=[],
+        fallback_trigger=mechanics,
+        user_message=user_message,
+        manual_override=manual_dice_override,
+        active_speaker_id=active_speaker_id,
+        rng=rng,
+    )
+    resolved_roll = None
+    if character_rolls:
+        resolved_roll = (
+            character_rolls.get(active_speaker_id)
+            or (character_rolls.get(room_chars[0].id) if room_chars else None)
+            or next(iter(character_rolls.values()))
+        )
 
     return PreTurnAnalysis(
         user_sentiment=sentiment,
@@ -240,6 +467,8 @@ def heuristic_pre_turn_analysis(
         active_speaker_id=active_speaker_id,
         speaker_order=speaker_order,
         mechanics_check=mechanics,
+        character_rolls=character_rolls,
+        resolved_roll=resolved_roll,
     )
 
 
@@ -253,8 +482,10 @@ async def run_phase1_pre_analysis(
     manual_dice_override: int | None = None,
     present_characters: list[CharacterRecord] | None = None,
     previous_speaker_id: str | None = None,
+    character_states: dict[str, CharacterStateSnapshot] | None = None,
     profile: ModelProfile | None = None,
     prompt_template: str | None = None,
+    rng: random.Random | None = None,
 ) -> PreTurnAnalysis:
     """Execute Phase 1 Pre-Turn Analysis via the Auxiliary Clerk (with offline fallback) and resolve RNG."""
     room_chars = present_characters if present_characters else [character]
@@ -268,9 +499,17 @@ async def run_phase1_pre_analysis(
     neighbor_desc = ", ".join(
         f"{n.destination.name} (via {n.direction_label})" for n in neighbors
     ) or "None"
-    present_desc = "\n".join(
-        f"- id='{c.id}': {c.name} ({c.tagline})" for c in room_chars
-    )
+
+    present_desc_lines: list[str] = []
+    for c in room_chars:
+        c_st = (character_states or {}).get(c.id)
+        eq = c_st.equipped if c_st is not None else c.equipped
+        inv = c_st.inventory if c_st is not None else c.inventory
+        gear_str = f" | Equipped: {', '.join(eq)}" if eq else ""
+        if inv:
+            gear_str += f" | Carried: {', '.join(inv)}"
+        present_desc_lines.append(f"- id='{c.id}': {c.name} ({c.tagline}){gear_str}")
+    present_desc = "\n".join(present_desc_lines)
 
     system_prompt = render_template(
         prompt_template or get_default_prompt("clerk_pre_turn_system")
@@ -286,14 +525,15 @@ async def run_phase1_pre_analysis(
 
     clerk_prof = profile or settings.clerk_profile
     try:
-        analysis = await llm_client.complete_structured(
+        raw_output = await llm_client.complete_structured(
             [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            PreTurnAnalysis,
+            PreTurnLLMOutput,
             profile=clerk_prof,
         )
+        analysis = PreTurnAnalysis(**raw_output.model_dump())
     except Exception:
         if not settings.allow_offline_fallback:
             raise
@@ -304,6 +544,8 @@ async def run_phase1_pre_analysis(
             known_entities=known_entities,
             present_characters=room_chars,
             previous_speaker_id=previous_speaker_id,
+            manual_dice_override=manual_dice_override,
+            rng=rng,
         )
 
     # Ensure active_speaker_id and speaker_order only reference characters actually present in active_location
@@ -322,18 +564,22 @@ async def run_phase1_pre_analysis(
     if not analysis.memory_search_queries:
         analysis.memory_search_queries = [user_message]
 
-    if analysis.mechanics_check.requires_roll or manual_dice_override is not None:
-        if not analysis.mechanics_check.requires_roll and manual_dice_override is not None:
-            analysis.mechanics_check = MechanicsTrigger(
-                requires_roll=True,
-                action_description=f"Action check on: {user_message[:60]}",
-                skill_or_approach="Direct Action",
-                difficulty_class=12,
-                relevant_modifier=1,
-            )
-        analysis.resolved_roll = resolve_dice_check(
-            analysis.mechanics_check,
-            manual_override=manual_dice_override,
+    # Resolve per-character checks with individual rolls and manual override adoption
+    character_rolls = resolve_character_dice_checks(
+        room_chars,
+        character_checks=analysis.character_checks,
+        fallback_trigger=analysis.mechanics_check,
+        user_message=user_message,
+        manual_override=manual_dice_override,
+        active_speaker_id=analysis.active_speaker_id,
+        rng=rng,
+    )
+    analysis.character_rolls = character_rolls
+    if character_rolls:
+        analysis.resolved_roll = (
+            character_rolls.get(analysis.active_speaker_id)
+            or (character_rolls.get(character.id) if character.id in character_rolls else None)
+            or next(iter(character_rolls.values()))
         )
 
     return analysis

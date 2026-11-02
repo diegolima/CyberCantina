@@ -23,6 +23,7 @@ import {
   CampaignStateBundle,
   CharacterRecord,
   CognitionBlock,
+  DiceRollResult,
   NarrativeMode,
   Phase3TurnProgress,
   Phase4TurnProgress,
@@ -30,6 +31,25 @@ import {
   RecalledMemoryItem,
   TurnNodeRecord,
 } from "../types";
+
+function getTierBadgeClass(tier?: string): string {
+  switch (tier) {
+    case "Critical Success":
+      return "badge-dice-crit-success";
+    case "Clean Success":
+      return "badge-dice-clean-success";
+    case "Simple Failure":
+    case "Partial Success":
+      return "badge-dice-simple-failure";
+    case "Failure with Consequences":
+    case "Failure with Consequence":
+      return "badge-dice-consequence-failure";
+    case "Critical Failure":
+      return "badge-dice-crit-failure";
+    default:
+      return "";
+  }
+}
 import {
   ActiveAgentModalTarget,
   AgentChangesModal,
@@ -528,7 +548,6 @@ export const ChatStage: React.FC<ChatStageProps> = ({
           const cogOpen = openCognitionIds[turn.id] ?? (turn.depth_index === bundle.active_branch_turns.length - 1);
           const memOpen = openMemoryIds[turn.id] ?? false;
           const siblings = siblingsByParent[turn.parent_turn_id ?? "ROOT"] || [];
-          const roll = turn.pre_turn.resolved_roll;
 
           return (
             <div key={turn.id} className={`turn-card ${isNarratorTurn ? "narrator-turn-card" : ""}`}>
@@ -638,14 +657,46 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                     </span>
                   )}
 
-                  {roll && (
-                    <span className="badge badge-dice" title={roll.narrative_directive}>
-                      <Dices size={13} />
-                      {roll.skill_or_approach}: d20({roll.d20_raw})
-                      {roll.modifier >= 0 ? `+${roll.modifier}` : roll.modifier} ={" "}
-                      {roll.total} vs DC {roll.difficulty_class} [{roll.outcome_tier}]
-                    </span>
-                  )}
+                  {(() => {
+                    const charRolls = turn.pre_turn.character_rolls;
+                    const rollsToRender: Array<{ id: string; roll: DiceRollResult }> = [];
+                    if (charRolls && Object.keys(charRolls).length > 0) {
+                      const speakerOrder = turn.pre_turn.speaker_order || [];
+                      const orderedIds = [
+                        ...speakerOrder.filter((id) => id in charRolls),
+                        ...Object.keys(charRolls).filter((id) => !speakerOrder.includes(id)),
+                      ];
+                      for (const cid of orderedIds) {
+                        rollsToRender.push({ id: cid, roll: charRolls[cid] });
+                      }
+                    } else if (turn.pre_turn.resolved_roll) {
+                      rollsToRender.push({
+                        id: turn.pre_turn.resolved_roll.character_id || "default",
+                        roll: turn.pre_turn.resolved_roll,
+                      });
+                    }
+
+                    return rollsToRender.map(({ id, roll: r }) => {
+                      const charName =
+                        r.character_name ||
+                        (id !== "default" && turn.cognition_character_names?.[id]) ||
+                        (id !== "default" && bundle.character_records?.[id]?.name) ||
+                        (id === character.id ? character.name : null);
+                      const label = charName && charName !== "Narrator" ? `${charName}: ` : "";
+                      return (
+                        <span
+                          key={id}
+                          className={`badge badge-dice ${getTierBadgeClass(r.outcome_tier)}`}
+                          title={r.narrative_directive}
+                        >
+                          <Dices size={13} />
+                          {label}{r.skill_or_approach}: d20({r.d20_raw})
+                          {r.modifier >= 0 ? `+${r.modifier}` : r.modifier} ={" "}
+                          {r.total} vs DC {r.difficulty_class} [{r.outcome_tier}]
+                        </span>
+                      );
+                    });
+                  })()}
 
                   {turn.recalled_items.length > 0 && (
                     <button
@@ -826,6 +877,59 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                             })}
                           </div>
                         )}
+
+                        {(() => {
+                          const charRoll =
+                            turn.pre_turn?.character_rolls?.[selectedCharId] ??
+                            (selectedCharId === character.id ? turn.pre_turn?.resolved_roll : undefined);
+                          if (!charRoll) return null;
+                          return (
+                            <div
+                              className={`cognition-roll-banner ${getTierBadgeClass(charRoll.outcome_tier)}`}
+                              style={{
+                                margin: "6px 12px 10px",
+                                padding: "8px 12px",
+                                borderRadius: 6,
+                                border: "1px solid",
+                                fontSize: "0.75rem",
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: 4,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  gap: 8,
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 6,
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  <Dices size={13} />
+                                  {charRoll.skill_or_approach}: {charRoll.outcome_tier}
+                                </span>
+                                <span style={{ opacity: 0.85, fontSize: "0.72rem" }}>
+                                  Rolled {charRoll.total} (d20: {charRoll.d20_raw}
+                                  {charRoll.modifier >= 0 ? `+${charRoll.modifier}` : charRoll.modifier}) vs DC{" "}
+                                  {charRoll.difficulty_class}
+                                </span>
+                              </div>
+                              {charRoll.plan_directive && (
+                                <div style={{ fontSize: "0.72rem", opacity: 0.9 }}>
+                                  <strong>Plan Directive:</strong> {charRoll.plan_directive}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
 
                         {isNarratorTurn ? (
                           <div className="cognition-steps">
@@ -1083,14 +1187,43 @@ export const ChatStage: React.FC<ChatStageProps> = ({
             )}
             <div className="meta-strip">
               <span className="badge badge-dice">{liveStream.phaseStatus}</span>
-              {liveStream.preTurn?.resolved_roll && (
-                <span className="badge badge-dice">
-                  <Dices size={13} />
-                  Rolled {liveStream.preTurn.resolved_roll.total} vs DC{" "}
-                  {liveStream.preTurn.resolved_roll.difficulty_class} [
-                  {liveStream.preTurn.resolved_roll.outcome_tier}]
-                </span>
-              )}
+              {(() => {
+                const charRolls = liveStream.preTurn?.character_rolls;
+                if (charRolls && Object.keys(charRolls).length > 0) {
+                  return Object.entries(charRolls).map(([cid, r]) => {
+                    const charName =
+                      r.character_name ||
+                      bundle.character_records?.[cid]?.name ||
+                      (cid === character.id ? character.name : null);
+                    const label = charName && charName !== "Narrator" ? `${charName}: ` : "";
+                    return (
+                      <span
+                        key={cid}
+                        className={`badge badge-dice ${getTierBadgeClass(r.outcome_tier)}`}
+                        title={r.narrative_directive}
+                      >
+                        <Dices size={13} />
+                        {label}{r.skill_or_approach}: d20({r.d20_raw})
+                        {r.modifier >= 0 ? `+${r.modifier}` : r.modifier} ={" "}
+                        {r.total} vs DC {r.difficulty_class} [{r.outcome_tier}]
+                      </span>
+                    );
+                  });
+                }
+                if (liveStream.preTurn?.resolved_roll) {
+                  const r = liveStream.preTurn.resolved_roll;
+                  return (
+                    <span
+                      className={`badge badge-dice ${getTierBadgeClass(r.outcome_tier)}`}
+                      title={r.narrative_directive}
+                    >
+                      <Dices size={13} />
+                      Rolled {r.total} vs DC {r.difficulty_class} [{r.outcome_tier}]
+                    </span>
+                  );
+                }
+                return null;
+              })()}
             </div>
 
             {phase3Progress &&

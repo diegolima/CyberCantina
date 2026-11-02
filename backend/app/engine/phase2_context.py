@@ -111,6 +111,12 @@ def build_zone1_ensemble_system_prompt(
         f"Write rich, immersive, multi-character narrative prose capturing physical actions (*italics*) "
         f"and spoken dialogue (\"quotes\") for the present characters. "
         f"Honor each character's voice anchors, active thoughts, feelings, and tactical plans provided in the turn context. "
+        f"When characters act under a dice check, strictly enforce the mechanical outcome tier in narrative prose:\n"
+        f"- Critical Failure: The action catastrophically backfires with severe consequences. Never narrate success.\n"
+        f"- Failure with Consequences: The attempt fails with noticeable resistance or secondary complications.\n"
+        f"- Simple Failure: The attempt cleanly fails without piling on extra disasters.\n"
+        f"- Clean Success: The attempt succeeds smoothly as intended.\n"
+        f"- Critical Success: The attempt succeeds with outstanding flair and extra advantage.\n"
         f"Do NOT output <cognition> blocks. Never speak or act on behalf of the user."
     )
 
@@ -342,8 +348,31 @@ def build_zone4_ephemeral_tail_frame(
         for m in recalled_items
     ) or "  - No specific background lore triggered this turn."
 
+    name_lookup_local = dict(character_name_map or {})
+    for pc in present_characters or []:
+        name_lookup_local.setdefault(pc.id, pc.name)
+
     rng_section = ""
-    if pre_turn.resolved_roll is not None:
+    if pre_turn.character_rolls:
+        roll_lines = []
+        for cid, r in pre_turn.character_rolls.items():
+            name_label = r.character_name or name_lookup_local.get(cid, cid)
+            roll_lines.append(
+                f"    <character_roll character=\"{name_label}\" character_id=\"{cid}\">\n"
+                f"      Action: {r.action_description} ({r.skill_or_approach}, role: {r.check_role})\n"
+                f"      Roll: d20({r.d20_raw}) + {r.modifier} = {r.total} vs DC {r.difficulty_class} -> [{r.outcome_tier}]\n"
+                f"      Directive: {r.narrative_directive}\n"
+                f"    </character_roll>"
+            )
+        rng_section = (
+            f"\n  <mechanics_outcome>\n"
+            + "\n".join(roll_lines)
+            + "\n    <mechanics_guidance>\n"
+            "      Enforce each character's outcome tier strictly in dialogue and action. If co-present characters rolled opposing outcomes, higher tiers take precedence over contested objectives (Critical Success > Clean Success > Simple Failure > Failure with Consequences > Critical Failure).\n"
+            "    </mechanics_guidance>\n"
+            f"  </mechanics_outcome>"
+        )
+    elif pre_turn.resolved_roll is not None:
         r = pre_turn.resolved_roll
         rng_section = (
             f"\n  <mechanics_outcome>\n"
@@ -359,9 +388,6 @@ def build_zone4_ephemeral_tail_frame(
         if world_snapshot.scene_flags
         else "None"
     )
-    name_lookup_local = dict(character_name_map or {})
-    for pc in present_characters or []:
-        name_lookup_local.setdefault(pc.id, pc.name)
     rel_notes_text = (
         "; ".join(
             f"{name_lookup_local.get(k, k)}: {v}"
@@ -450,6 +476,16 @@ def build_zone4_ephemeral_tail_frame(
         )
         user_tail = f"Director / Narrator Request:\n{user_message}"
     else:
+        char_roll_for_anchor = pre_turn.character_rolls.get(character.id) or (
+            pre_turn.resolved_roll
+            if pre_turn.resolved_roll and pre_turn.resolved_roll.character_id in (None, character.id)
+            else None
+        )
+        if char_roll_for_anchor and char_roll_for_anchor.outcome_tier in ("Critical Failure", "Critical Success"):
+            anchor_line = f"    Emotional Anchor: This turn resulted in a [{char_roll_for_anchor.outcome_tier}]! You are explicitly permitted a sharp immediate emotional shift from this previous baseline.\n"
+        else:
+            anchor_line = "    Emotional Anchor: Evolve valence and arousal gradually from this previous baseline (typically ±0.05 to ±0.20), reserving large swings for dramatic turning points or acute shocks.\n"
+
         mind_state_section = (
             f"  <character_previous_mind_state character=\"{character.name}\">\n"
             f"    Previous Mood: {character_state.mood_label} "
@@ -459,7 +495,7 @@ def build_zone4_ephemeral_tail_frame(
             f"    Relationship Notes: {rel_notes_text}\n"
             f"    Equipped / Worn: {equipped_text}\n"
             f"    Carried Inventory: {inventory_text}\n"
-            f"    Emotional Anchor: Evolve valence and arousal gradually from this previous baseline (typically ±0.05 to ±0.20), reserving large swings for dramatic turning points or acute shocks.\n"
+            f"{anchor_line}"
             f"  </character_previous_mind_state>"
         )
         user_tail = f"User Action / Dialogue:\n{user_message}"

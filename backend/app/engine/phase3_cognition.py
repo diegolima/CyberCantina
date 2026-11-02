@@ -19,6 +19,7 @@ from app.prompts.defaults import (
 from app.schemas.auth import ModelProfile
 from app.schemas.character import CharacterRecord, CharacterStateSnapshot, CognitionBlock
 from app.schemas.turn import (
+    CanonicalOutcomeTier,
     CharacterSpotlightRole,
     Phase3ProgressCallback,
     Phase3ProgressEvent,
@@ -137,6 +138,8 @@ class PriorCognitionCue:
     feeling_summary: str
     want_summary: str
     observable_action_hint: str
+    roll_outcome_tier: CanonicalOutcomeTier | None = None
+    observable_consequence_hint: str = ""
 
 
 def heuristic_character_cognition(
@@ -168,19 +171,62 @@ def heuristic_character_cognition(
     ]
     if prior_cues:
         for c in prior_cues[:2]:
-            recall_bullets.append(f"- Clocked {c.character_name}'s reaction.")
+            conseq_str = f" after {c.roll_outcome_tier}" if c.roll_outcome_tier else ""
+            recall_bullets.append(f"- Clocked {c.character_name}'s reaction{conseq_str}.")
 
-    plan_bullets = (
-        [
-            f"- Address the player directly regarding: {user_message[:60]}...",
-            f"- Hold ground and monitor room reactions.",
-        ]
-        if role == "primary_speaker"
-        else [
-            f"- React subtly from the periphery to the player's dialogue.",
-            f"- Maintain eye contact and observe next developments.",
-        ]
+    # Check for this character's specific roll
+    char_roll = pre_turn.character_rolls.get(character.id) or (
+        pre_turn.resolved_roll
+        if pre_turn.resolved_roll and pre_turn.resolved_roll.character_id in (None, character.id)
+        else None
     )
+
+    if char_roll:
+        if char_roll.outcome_tier == "Critical Failure":
+            new_valence = max(-1.0, min(1.0, round(previous_state.valence - 0.35, 2)))
+            new_arousal = max(0.0, min(1.0, round(previous_state.arousal + 0.35, 2)))
+            plan_bullets = [
+                f"- React to catastrophic backfire of '{char_roll.action_description}'.",
+                "- Scramble to contain the immediate danger and fallout.",
+            ]
+        elif char_roll.outcome_tier == "Failure with Consequences":
+            new_valence = max(-1.0, min(1.0, round(previous_state.valence - 0.15, 2)))
+            new_arousal = max(0.0, min(1.0, round(previous_state.arousal + 0.15, 2)))
+            plan_bullets = [
+                f"- Attempt at '{char_roll.action_description}' met with resistance.",
+                "- Regroup and brace for secondary complications.",
+            ]
+        elif char_roll.outcome_tier == "Simple Failure":
+            new_valence = max(-1.0, min(1.0, round(previous_state.valence - 0.05, 2)))
+            plan_bullets = [
+                f"- Notice '{char_roll.action_description}' failed to produce results.",
+                "- Reset stance without immediate overcommitment.",
+            ]
+        elif char_roll.outcome_tier == "Clean Success":
+            new_valence = max(-1.0, min(1.0, round(previous_state.valence + 0.15, 2)))
+            plan_bullets = [
+                f"- Execute '{char_roll.action_description}' cleanly.",
+                "- Capitalize on the intended opening.",
+            ]
+        else:  # Critical Success
+            new_valence = max(-1.0, min(1.0, round(previous_state.valence + 0.35, 2)))
+            new_arousal = max(0.0, min(1.0, round(previous_state.arousal + 0.20, 2)))
+            plan_bullets = [
+                f"- Capitalize on exceptional breakthrough from '{char_roll.action_description}'.",
+                "- Seize decisive initiative with unexpected advantage.",
+            ]
+    else:
+        plan_bullets = (
+            [
+                f"- Address the player directly regarding: {user_message[:60]}...",
+                f"- Hold ground and monitor room reactions.",
+            ]
+            if role == "primary_speaker"
+            else [
+                f"- React subtly from the periphery to the player's dialogue.",
+                f"- Maintain eye contact and observe next developments.",
+            ]
+        )
 
     cues_text = ""
     if prior_cues:
@@ -248,13 +294,26 @@ async def run_character_cognition_agent(
         for m in all_recalled
     ) or "  - No specific background lore triggered this turn."
 
+    char_roll = pre_turn.character_rolls.get(character.id) or (
+        pre_turn.resolved_roll
+        if pre_turn.resolved_roll and pre_turn.resolved_roll.character_id in (None, character.id)
+        else None
+    )
     roll_text = ""
-    if pre_turn.resolved_roll:
-        r = pre_turn.resolved_roll
+    if char_roll:
+        r = char_roll
+        directive_line = f"- Plan Directive: {r.plan_directive}\n" if r.plan_directive else f"- Directive: {r.narrative_directive}\n"
         roll_text = (
-            f"\nMechanics Check Outcome:\n"
-            f"Action: {r.action_description} ({r.skill_or_approach})\n"
-            f"Result: [{r.outcome_tier}] - {r.narrative_directive}\n"
+            f"\n=== MECHANICS CHECK OUTCOME FOR {character.name} ===\n"
+            f"- Action: {r.action_description} ({r.skill_or_approach}, Role: {r.check_role})\n"
+            f"- Result: [{r.outcome_tier}] (d20({r.d20_raw}) + {r.modifier} = {r.total} vs DC {r.difficulty_class})\n"
+            f"{directive_line}"
+            f"- CRITICAL RULE: Your tactical <plan> MUST strictly reflect this [{r.outcome_tier}]:\n"
+            f"  * Critical Failure: Your planned action backfires with severe consequences. Adapt your plan to handle the disaster.\n"
+            f"  * Failure with Consequences: Your attempt fails and creates complications/resistance.\n"
+            f"  * Simple Failure: Your attempt simply doesn't succeed; no immediate aggravations.\n"
+            f"  * Clean Success: You succeed cleanly as intended.\n"
+            f"  * Critical Success: You succeed beyond expectations, gaining an extra advantage/opening.\n"
         )
 
     rel_text = (
@@ -270,15 +329,23 @@ async def run_character_cognition_agent(
 
     prior_cues_section = ""
     if prior_cues:
-        cue_lines = [
-            f"  - {c.character_name}: Outward posture/mood: '{c.feeling_summary}'. Apparent aim: '{c.want_summary}'. Visible action: '{c.observable_action_hint}'"
-            for c in prior_cues
-        ]
+        cue_lines = []
+        for c in prior_cues:
+            roll_note = f" [Roll: {c.roll_outcome_tier}]" if c.roll_outcome_tier else ""
+            conseq_note = f" Fallout: '{c.observable_consequence_hint}'." if c.observable_consequence_hint else ""
+            cue_lines.append(
+                f"  - {c.character_name}: Outward posture: '{c.feeling_summary}'. Aim: '{c.want_summary}'. Action: '{c.observable_action_hint}'.{roll_note}{conseq_note}"
+            )
         prior_cues_section = (
             "\nObservable Co-Present Character Actions & Postures this turn:\n"
             + "\n".join(cue_lines)
             + "\n*(Note: You observe their outward behavior and stance, not their private subconscious memories.)*\n"
         )
+
+    if char_roll and char_roll.outcome_tier in ("Critical Failure", "Critical Success"):
+        anchor_guideline = f"*(Anchor guideline: This turn resulted in a [{char_roll.outcome_tier}]! You are explicitly permitted a sharp immediate emotional shift in valence and arousal from this previous baseline.)*"
+    else:
+        anchor_guideline = "*(Anchor guideline: evolve valence and arousal gradually from this previous baseline unless this turn brings a critical dramatic shock or danger.)*"
 
     user_prompt = (
         f"Character: {character.name} (id='{character.id}', Role in scene: {role})\n"
@@ -294,7 +361,7 @@ async def run_character_cognition_agent(
         f"- Relationship Notes: {rel_text}\n"
         f"- Equipped / Worn: {', '.join(previous_state.equipped) or 'None'}\n"
         f"- Carried Inventory: {', '.join(previous_state.inventory) or 'None'}\n"
-        f"*(Anchor guideline: evolve valence and arousal gradually from this previous baseline unless this turn brings a critical dramatic shock or danger.)*\n\n"
+        f"{anchor_guideline}\n\n"
         f"Environment ({active_location.name}):\n"
         f"- Atmosphere/Props: {', '.join(active_location.environmental_tags) or 'None'}\n\n"
         f"Co-Present Characters in Room:\n"
@@ -577,6 +644,13 @@ async def run_phase3_multi_cognition(
 
             first_plan_action = cog.plan.splitlines()[0] if cog.plan else "observing"
             first_plan_action = re.sub(r"^[-*•\d.)\s]+", "", first_plan_action).strip()
+
+            c_roll = context.pre_turn.character_rolls.get(char.id)
+            c_tier = c_roll.outcome_tier if c_roll else None
+            c_consequence = ""
+            if c_roll and len(cog.plan.splitlines()) > 1:
+                c_consequence = re.sub(r"^[-*•\d.)\s]+", "", cog.plan.splitlines()[1]).strip()
+
             prior_cues.append(
                 PriorCognitionCue(
                     character_id=char.id,
@@ -584,6 +658,8 @@ async def run_phase3_multi_cognition(
                     feeling_summary=cog.feeling,
                     want_summary=cog.want,
                     observable_action_hint=first_plan_action,
+                    roll_outcome_tier=c_tier,
+                    observable_consequence_hint=c_consequence,
                 )
             )
 

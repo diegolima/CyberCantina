@@ -510,6 +510,18 @@ def detect_inventory_disputes(
     return disputes
 
 
+def resolve_roll_for_character(
+    pre_turn: PreTurnAnalysis,
+    character_id: str,
+) -> DiceRollResult | None:
+    """Lookup character's specific roll, falling back to resolved_roll only on legacy turns."""
+    if pre_turn.character_rolls and character_id in pre_turn.character_rolls:
+        return pre_turn.character_rolls[character_id]
+    if pre_turn.resolved_roll is not None and pre_turn.resolved_roll.character_id in (None, character_id):
+        return pre_turn.resolved_roll
+    return None
+
+
 def _heuristic_arbitrate_case(
     case: ContestedItemCase,
     *,
@@ -517,18 +529,25 @@ def _heuristic_arbitrate_case(
     chars_by_id: dict[str, CharacterRecord],
 ) -> tuple[str, str]:
     """Deterministic fallback referee when offline: inspect roll outcome and prose custody cues."""
-    roll = completed_turn.pre_turn.resolved_roll
+    # Check claimants' individual rolls
+    failed_claimants: set[str] = set()
+    for cid in case.claimant_ids:
+        c_roll = resolve_roll_for_character(completed_turn.pre_turn, cid)
+        if c_roll is not None and "Failure" in c_roll.outcome_tier:
+            failed_claimants.add(cid)
+
     if (
         case.reason == "unrelinquished_transfer"
         and case.prior_holder_id
-        and roll is not None
-        and "Failure" in roll.outcome_tier
+        and case.prior_holder_id in chars_by_id
     ):
-        holder_name = chars_by_id[case.prior_holder_id].name if case.prior_holder_id in chars_by_id else case.prior_holder_id
-        return (
-            case.prior_holder_id,
-            f"Check resulted in {roll.outcome_tier}; {holder_name} retained custody of {case.display_name}.",
-        )
+        active_takers = [cid for cid in case.claimant_ids if cid != case.prior_holder_id]
+        if active_takers and all(cid in failed_claimants for cid in active_takers):
+            holder_name = chars_by_id[case.prior_holder_id].name
+            return (
+                case.prior_holder_id,
+                f"Check resulted in failure; {holder_name} retained custody of {case.display_name}.",
+            )
 
     prose = completed_turn.raw_prose or ""
     item_tokens = [w for w in re.findall(r"[a-z0-9]{4,}", case.norm_key) if w not in _GENERIC_ITEM_ADJECTIVES]
@@ -609,10 +628,15 @@ async def arbitrate_inventory_disputes_detailed(
             f"- Item '{d.display_name}' ({d.reason}): Claimants = [{claimant_desc}]{holder_note}"
         )
 
-    roll_info = "None"
-    if completed_turn.pre_turn.resolved_roll is not None:
+    roll_info_lines = []
+    if completed_turn.pre_turn.character_rolls:
+        for cid, r in completed_turn.pre_turn.character_rolls.items():
+            name = chars_by_id[cid].name if cid in chars_by_id else cid
+            roll_info_lines.append(f"{name}: {r.action_description} -> {r.outcome_tier} (rolled {r.total} vs DC {r.difficulty_class})")
+    elif completed_turn.pre_turn.resolved_roll is not None:
         r = completed_turn.pre_turn.resolved_roll
-        roll_info = f"{r.action_description} -> {r.outcome_tier} (rolled {r.total} vs DC {r.difficulty_class})"
+        roll_info_lines.append(f"{r.action_description} -> {r.outcome_tier} (rolled {r.total} vs DC {r.difficulty_class})")
+    roll_info = "\n".join(roll_info_lines) if roll_info_lines else "None"
 
     user_prompt = (
         f"Contested Items:\n" + "\n".join(dispute_lines) + "\n\n"
@@ -913,19 +937,42 @@ def heuristic_character_agent_delta(
         mood = normalize_mood_label(char_cog.feeling, fallback=prev_state.mood_label)
         updated_want = char_cog.want or None
     else:
-        sentiment_low = pre_turn.user_sentiment.lower()
-        if "betray" in combined_lower or "confrontational" in sentiment_low or "tense" in sentiment_low:
-            val_delta = -0.12
-            ar_delta = 0.15
-            mood = "Guarded, tense vigilance"
-        elif "vulnerable" in sentiment_low or "trust" in combined_lower or "saved" in combined_lower:
-            val_delta = 0.10
-            ar_delta = 0.06
-            mood = "Attentive, quiet concern"
+        char_roll = resolve_roll_for_character(pre_turn, character.id)
+        if char_roll:
+            if char_roll.outcome_tier == "Critical Failure":
+                val_delta = -0.35
+                ar_delta = 0.35
+                mood = "Shaken, critical setback"
+            elif char_roll.outcome_tier == "Failure with Consequences":
+                val_delta = -0.15
+                ar_delta = 0.15
+                mood = "Guarded, tense strain"
+            elif char_roll.outcome_tier == "Simple Failure":
+                val_delta = -0.05
+                ar_delta = 0.05
+                mood = "Wary, thwarted attempt"
+            elif char_roll.outcome_tier == "Clean Success":
+                val_delta = 0.15
+                ar_delta = -0.05
+                mood = "Confident, steady relief"
+            else:  # Critical Success
+                val_delta = 0.30
+                ar_delta = 0.15
+                mood = "Triumphant, sharp breakthrough"
         else:
-            val_delta = 0.02
-            ar_delta = 0.0
-            mood = normalize_mood_label(prev_state.mood_label, fallback="Observant and measured")
+            sentiment_low = pre_turn.user_sentiment.lower()
+            if "betray" in combined_lower or "confrontational" in sentiment_low or "tense" in sentiment_low:
+                val_delta = -0.12
+                ar_delta = 0.15
+                mood = "Guarded, tense vigilance"
+            elif "vulnerable" in sentiment_low or "trust" in combined_lower or "saved" in combined_lower:
+                val_delta = 0.10
+                ar_delta = 0.06
+                mood = "Attentive, quiet concern"
+            else:
+                val_delta = 0.02
+                ar_delta = 0.0
+                mood = normalize_mood_label(prev_state.mood_label, fallback="Observant and measured")
         updated_want = None
 
     # 2. Directed Stances (toward 'user' and co-present NPCs)
@@ -1100,8 +1147,11 @@ async def run_character_post_turn_agent(
             f"*(Note: Compute valence_delta and arousal_delta strictly relative to Pre-Turn Baseline below, NOT relative to Impulse.)*\n"
         )
 
+    char_roll = resolve_roll_for_character(completed_turn.pre_turn, character.id)
     roll_str = ""
-    if completed_turn.pre_turn.resolved_roll is not None:
+    if char_roll is not None:
+        roll_str = f"Personal Mechanics Outcome for {character.name}: {char_roll.action_description} -> [{char_roll.outcome_tier}] ({char_roll.narrative_directive})\n"
+    elif completed_turn.pre_turn.resolved_roll is not None and completed_turn.pre_turn.resolved_roll.character_id in (None, character.id):
         r = completed_turn.pre_turn.resolved_roll
         roll_str = f"Mechanics Outcome: {r.action_description} -> [{r.outcome_tier}] ({r.narrative_directive})\n"
 

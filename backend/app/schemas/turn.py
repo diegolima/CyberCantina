@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.character import (
     CharacterRecord,
@@ -21,6 +21,22 @@ from app.schemas.world import (
 )
 
 
+CanonicalOutcomeTier = Literal[
+    "Critical Failure",
+    "Failure with Consequences",
+    "Simple Failure",
+    "Clean Success",
+    "Critical Success",
+]
+
+CheckRole = Literal[
+    "active_attempt",
+    "contested_reaction",
+    "scene_hazard",
+    "co_present_bystander",
+]
+
+
 class MechanicsTrigger(BaseModel):
     """Auxiliary detection of an uncertain/risky action requiring an RNG check."""
 
@@ -31,27 +47,71 @@ class MechanicsTrigger(BaseModel):
     relevant_modifier: int = Field(default=0, ge=-5, le=8)
 
 
+class CharacterCheckSpec(BaseModel):
+    """JSON-Schema-safe per-character check specification emitted in a single Phase 1 pass."""
+
+    character_id: str = Field(
+        description="Exact character ID from Characters Present in Room."
+    )
+    requires_roll: bool = Field(
+        default=False,
+        description="True ONLY if this specific character attempts, resists, or is directly exposed to a risky action this turn.",
+    )
+    check_role: CheckRole = Field(
+        default="active_attempt",
+        description="Role in the check: 'active_attempt' (initiating action), 'contested_reaction' (defending/resisting), or 'scene_hazard' (reacting to hazard).",
+    )
+    action_description: str = Field(
+        default="",
+        description="Action or reaction phrased strictly from THIS character's perspective and agency.",
+    )
+    skill_or_approach: str = Field(
+        default="General",
+        description="Relevant skill or approach for this character.",
+    )
+    difficulty_class: int = Field(default=12, ge=5, le=25)
+    relevant_modifier: int = Field(
+        default=0,
+        ge=-5,
+        le=8,
+        description="Modifier derived from this character's archetype, tagline, and equipped/carried gear.",
+    )
+
+
 class DiceRollResult(BaseModel):
     """Resolved d20 check injected into Zone 4 so the Actor narrates the outcome."""
 
+    character_id: str | None = None
+    character_name: str | None = None
+    check_role: CheckRole = "active_attempt"
+    is_manual_override: bool = False
     action_description: str
     skill_or_approach: str
-    d20_raw: int
+    d20_raw: int = Field(ge=1, le=20)
     modifier: int
     total: int
     difficulty_class: int
-    outcome_tier: Literal[
-        "Critical Failure",
-        "Failure with Consequence",
-        "Partial Success",
-        "Clean Success",
-        "Critical Success",
-    ]
-    narrative_directive: str
+    outcome_tier: CanonicalOutcomeTier
+    plan_directive: str = Field(
+        default="",
+        description="Explicit instruction governing how the character's Phase 3 <plan> is affected.",
+    )
+    narrative_directive: str = Field(
+        description="Explicit instruction governing Phase 4 prose depiction and consequences."
+    )
+
+    @field_validator("outcome_tier", mode="before")
+    @classmethod
+    def _normalize_legacy_outcome_tier(cls, v: Any) -> Any:
+        if v == "Failure with Consequence":
+            return "Failure with Consequences"
+        if v == "Partial Success":
+            return "Simple Failure"
+        return v
 
 
-class PreTurnAnalysis(BaseModel):
-    """Phase 1 output produced by the Auxiliary Pre-Processor."""
+class PreTurnLLMOutput(BaseModel):
+    """Grammar-safe Phase 1 output produced by the Auxiliary Pre-Processor LLM."""
 
     user_sentiment: str = Field(
         default="neutral, attentive",
@@ -80,7 +140,23 @@ class PreTurnAnalysis(BaseModel):
         description="Ordered list of character IDs present at active_location who may speak or banter.",
     )
     mechanics_check: MechanicsTrigger = Field(default_factory=MechanicsTrigger)
+    character_checks: list[CharacterCheckSpec] = Field(default_factory=list)
+
+
+class PreTurnAnalysis(PreTurnLLMOutput):
+    """Hydrated Phase 1 pre-turn analysis with deterministic per-character RNG results."""
+
+    character_rolls: dict[str, DiceRollResult] = Field(default_factory=dict)
     resolved_roll: DiceRollResult | None = None
+
+    @model_validator(mode="after")
+    def _populate_resolved_roll(self) -> PreTurnAnalysis:
+        if self.resolved_roll is None and self.character_rolls:
+            if self.active_speaker_id and self.active_speaker_id in self.character_rolls:
+                self.resolved_roll = self.character_rolls[self.active_speaker_id]
+            else:
+                self.resolved_roll = next(iter(self.character_rolls.values()))
+        return self
 
 
 class RecalledMemoryItem(BaseModel):

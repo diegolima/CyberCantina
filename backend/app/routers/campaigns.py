@@ -23,7 +23,7 @@ from app.dependencies import (
     get_repo,
     run_entity_pruner,
 )
-from app.engine.phase1_pre import run_phase1_pre_analysis
+from app.engine.phase1_pre import resolve_dice_check, run_phase1_pre_analysis
 from app.engine.phase2_context import (
     assemble_four_zone_messages,
     resolve_character_previous_state,
@@ -46,6 +46,7 @@ from app.schemas.turn import (
     CampaignCharacterMemoriesUpdateRequest,
     CampaignRecord,
     CampaignStateBundle,
+    DiceRollResult,
     MechanicsTrigger,
     Phase3ProgressEvent,
     Phase4ProgressEvent,
@@ -599,6 +600,24 @@ async def _execute_turn_stream_events(
             )
             queries = [active_location.name] + ([req.narrator_directive] if req.narrator_directive else [])
 
+        narrator_roll = None
+        narrator_rolls: dict[str, DiceRollResult] = {}
+        if req.manual_dice_override is not None or req.narrative_mode == "perception":
+            synth_trig = MechanicsTrigger(
+                requires_roll=True,
+                action_description=req.narrator_directive or f"Narrator {req.narrative_mode} check",
+                skill_or_approach="Perception / Sensory" if req.narrative_mode == "perception" else "Director Mechanics",
+                difficulty_class=12,
+                relevant_modifier=0,
+            )
+            narrator_roll = resolve_dice_check(
+                synth_trig,
+                manual_override=req.manual_dice_override,
+                character_id="__narrator__",
+                character_name="Narrator",
+            )
+            narrator_rolls["__narrator__"] = narrator_roll
+
         pre_turn = PreTurnAnalysis(
             user_sentiment="objective, observational",
             subtext_interpretation=subtext,
@@ -607,8 +626,9 @@ async def _execute_turn_stream_events(
             spatial_intent="stay",
             active_speaker_id="__narrator__",
             speaker_order=["__narrator__"],
-            mechanics_check=MechanicsTrigger(requires_roll=False),
-            resolved_roll=None,
+            mechanics_check=MechanicsTrigger(requires_roll=narrator_roll is not None),
+            character_rolls=narrator_rolls,
+            resolved_roll=narrator_roll,
         )
         character = primary_character
         actor_id = "__narrator__"
@@ -618,6 +638,10 @@ async def _execute_turn_stream_events(
             active_location.id,
         )
     else:
+        char_states_for_p1 = {
+            c.id: resolve_character_previous_state(branch_turns, c, active_location.id)
+            for c in present_characters
+        }
         pre_turn = await run_phase1_pre_analysis(
             user_message=effective_user_message,
             character=present_characters[0],
@@ -627,6 +651,7 @@ async def _execute_turn_stream_events(
             manual_dice_override=req.manual_dice_override,
             present_characters=present_characters,
             previous_speaker_id=parent_turn.actor_id,
+            character_states=char_states_for_p1,
             profile=eff_clerk,
             prompt_template=effective_prompts.get("clerk_pre_turn_system"),
         )
@@ -806,11 +831,18 @@ async def _execute_turn_stream_events(
     )
 
     # Seed all participant character states so UI doesn't drop co-present character state
-    extra_character_states = [
-        context_bundle.all_character_states[p.id].model_copy(update={"turn_id": new_turn_id})
-        for p in participants
-        if p.id != character.id and p.id in context_bundle.all_character_states
-    ]
+    extra_character_states = []
+    for p in participants:
+        if p.id != character.id and p.id in context_bundle.all_character_states:
+            st = context_bundle.all_character_states[p.id].model_copy(update={"turn_id": new_turn_id})
+            cog = established_cognitions.get(p.id)
+            if cog and not cog.skipped and not is_narrator:
+                st.mood_label = (cog.feeling[:80] or st.mood_label)
+                st.valence = cog.valence
+                st.arousal = cog.arousal
+                st.active_want = cog.want or st.active_want
+                st.active_plan = cog.plan or st.active_plan
+            extra_character_states.append(st)
 
     saved_turn = repo.save_turn_node(
         turn_id=new_turn_id,

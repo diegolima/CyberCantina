@@ -829,13 +829,25 @@ def _heuristic_spatial_and_inventory_delta(
     elapsed = 3 if len(raw_prose) > 350 else 2
     notable = None
     flags_added: list[str] = []
-    if pre_turn.resolved_roll is not None:
+    if pre_turn.character_rolls:
+        notable_parts = []
+        for cid, r in pre_turn.character_rolls.items():
+            name = r.character_name or cid
+            notable_parts.append(
+                f"{name} attempted '{r.action_description}': {r.outcome_tier} ({r.total} vs DC {r.difficulty_class})."
+            )
+            if r.outcome_tier == "Critical Failure":
+                flags_added.append(f"Crisis: {r.action_description[:30]} Backfire")
+        if notable_parts:
+            notable = " ".join(notable_parts)
+    elif pre_turn.resolved_roll is not None:
         r = pre_turn.resolved_roll
         notable = (
             f"Attempted '{r.action_description}' ({r.skill_or_approach}) at {active_location.name}: "
             f"{r.outcome_tier} (rolled {r.total} vs DC {r.difficulty_class})."
         )
-        flags_added.append(f"{r.skill_or_approach}: {r.outcome_tier}")
+        if r.outcome_tier == "Critical Failure":
+            flags_added.append(f"Crisis: {r.action_description[:30]} Backfire")
 
     return PostTurnStateDelta(
         elapsed_minutes=elapsed,
@@ -1359,15 +1371,19 @@ async def run_phase5_post_turn_clerk(
             new_val = round(max(-1.0, min(1.0, prev_st.valence + c_delta.valence_delta)), 2)
             new_ar = round(max(0.0, min(1.0, prev_st.arousal + c_delta.arousal_delta)), 2)
 
+            char_cog = (completed_turn.cognitions or {}).get(ch.id) or (
+                completed_turn.cognition if ch.id == completed_turn.actor_id else None
+            )
+
             if c_delta.updated_want and c_delta.updated_want.strip():
                 new_want = c_delta.updated_want.strip()
-            elif ch.id == completed_turn.actor_id and completed_turn.cognition.want:
-                new_want = completed_turn.cognition.want
+            elif char_cog and char_cog.want and not char_cog.skipped:
+                new_want = char_cog.want
             else:
                 new_want = prev_st.active_want
 
-            if ch.id == completed_turn.actor_id and completed_turn.cognition.plan:
-                new_plan = completed_turn.cognition.plan
+            if char_cog and char_cog.plan and not char_cog.skipped:
+                new_plan = char_cog.plan
             else:
                 new_plan = prev_st.active_plan
 

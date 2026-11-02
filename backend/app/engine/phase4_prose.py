@@ -101,23 +101,41 @@ def build_offline_simulated_prose(
             f"forearm clicking into readiness as the unmapped threshold opens ahead.*\n\n"
             f"\"Stay behind my left shoulder. Nobody's cleared this section in months.\""
         )
-    elif pre_turn.resolved_roll is not None:
-        roll = pre_turn.resolved_roll
-        if "Success" in roll.outcome_tier:
+    elif pre_turn.character_rolls.get(character.id) is not None or pre_turn.resolved_roll is not None:
+        roll = pre_turn.character_rolls.get(character.id) or pre_turn.resolved_roll
+        assert roll is not None
+        tier = roll.outcome_tier
+        roll_tag = f"[{tier}: rolled {roll.total} vs DC {roll.difficulty_class}]"
+
+        if tier == "Critical Success":
             action_prose = (
-                f"*{character.name} watches the maneuver play out inside {active_location.name} "
-                f"[{roll.outcome_tier}: rolled {roll.total} vs DC {roll.difficulty_class}], "
-                f"a faint smirk tugging at the corner of her mouth.*\n\n"
-                f"\"Not bad. Most people who try that in here end up losing a finger—or their dignity. "
-                f"Alright, you've bought yourself some leverage. What's the next play?\""
+                f"*{character.name} executes the maneuver flawlessly inside {active_location.name} {roll_tag}, "
+                f"turning an ambitious play into an overwhelming breakthrough.*\n\n"
+                f"\"Flawless execution. We didn't just pull it off—we bought ourselves total leverage. Move before they catch on.\""
             )
-        else:
+        elif tier == "Clean Success":
             action_prose = (
-                f"*{character.name} winces slightly as the attempt unravels inside {active_location.name} "
-                f"[{roll.outcome_tier}: rolled {roll.total} vs DC {roll.difficulty_class}], "
-                f"instinctively shifting her stance to cover the blunder.*\n\n"
-                f"\"Messy. That was loud enough to alert half the block. We don't have time to dwell on it—"
-                f"recover your footing and let's adapt before someone comes looking.\""
+                f"*{character.name} watches the maneuver succeed cleanly inside {active_location.name} {roll_tag}, "
+                f"a measured nod of approval crossing her face.*\n\n"
+                f"\"Clean work. It went down exactly as planned. Let's keep this momentum going.\""
+            )
+        elif tier == "Simple Failure":
+            action_prose = (
+                f"*{character.name} pauses as the attempt falls flat inside {active_location.name} {roll_tag}, "
+                f"the mechanism or target remaining completely unmoved.*\n\n"
+                f"\"Didn't take. Nothing broke and nobody heard us, but that angle is dead. Let's rethink our approach.\""
+            )
+        elif tier == "Failure with Consequences":
+            action_prose = (
+                f"*{character.name} stiffens as the attempt goes sideways inside {active_location.name} {roll_tag}, "
+                f"drawing unwanted friction and resistance.*\n\n"
+                f"\"Messy. That didn't go through and it cost us our footing. Heads up—we have complications to manage.\""
+            )
+        else:  # Critical Failure
+            action_prose = (
+                f"*{character.name} recoils in alarm as the action catastrophically backfires inside {active_location.name} {roll_tag}, "
+                f"an immediate crisis detonating into the room.*\n\n"
+                f"\"Look out! That completely unraveled—everything's blowing back on us! Move, now!\""
             )
     else:
         exit_mention = (
