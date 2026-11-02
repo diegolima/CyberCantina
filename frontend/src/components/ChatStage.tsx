@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Bot,
@@ -12,7 +12,9 @@ import {
   Eye,
   GitBranch,
   Globe,
+  ListChecks,
   MapPin,
+  Plus,
   RefreshCw,
   Send,
   Sparkles,
@@ -21,8 +23,14 @@ import {
 } from "lucide-react";
 import {
   CampaignStateBundle,
+  CharacterChoiceOption,
+  CharacterChoiceSet,
   CharacterRecord,
+  ChoiceGate,
+  ChoicePreviewResponse,
   CognitionBlock,
+  DEFAULT_GATE_DC,
+  DiceMode,
   DiceRollResult,
   NarrativeMode,
   Phase3TurnProgress,
@@ -31,6 +39,11 @@ import {
   RecalledMemoryItem,
   TurnNodeRecord,
 } from "../types";
+import { api } from "../api";
+import {
+  isChoiceSlashCommand,
+  parseChoiceSlashCommand,
+} from "../utils/choiceCommand";
 
 function getTierBadgeClass(tier?: string): string {
   switch (tier) {
@@ -78,10 +91,12 @@ interface ChatStageProps {
   onSendTurn: (opts: {
     userMessage: string;
     parentTurnId?: string | null;
+    diceMode?: DiceMode;
     manualDiceOverride?: number | null;
     narrativeMode?: NarrativeMode;
     narratorDirective?: string | null;
     durationMinutes?: number | null;
+    characterChoices?: Record<string, CharacterChoiceSet>;
   }) => void;
   onCheckoutTurn: (turnId: string) => void;
   onDeleteLastTurn?: () => Promise<void> | void;
@@ -113,6 +128,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
 }) => {
   const isBusy = isStreaming || isPhase4Running;
   const [inputText, setInputText] = useState("");
+  const [diceMode, setDiceMode] = useState<DiceMode>("auto");
   const [diceOverride, setDiceOverride] = useState<string>("");
   const [openCognitionIds, setOpenCognitionIds] = useState<Record<string, boolean>>({});
   const [showRetainedIds, setShowRetainedIds] = useState<Record<string, boolean>>({});
@@ -121,11 +137,211 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const [openMemoryIds, setOpenMemoryIds] = useState<Record<string, boolean>>({});
   const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
   const [editMessageText, setEditMessageText] = useState("");
+  const [editDiceMode, setEditDiceMode] = useState<DiceMode>("auto");
+  const [editDiceOverride, setEditDiceOverride] = useState<string>("");
   const [isDeletingTurn, setIsDeletingTurn] = useState(false);
   const [isDurationPickerOpen, setIsDurationPickerOpen] = useState(false);
   const [isCustomDirectiveOpen, setIsCustomDirectiveOpen] = useState(false);
   const [customDirectiveText, setCustomDirectiveText] = useState("");
   const [activeAgentModal, setActiveAgentModal] = useState<ActiveAgentModalTarget | null>(null);
+
+  // Director Choices State
+  const [isChoicesDrawerOpen, setIsChoicesDrawerOpen] = useState(false);
+  const [stagedChoices, setStagedChoices] = useState<Record<string, CharacterChoiceSet>>({});
+  const [activeChoiceCharId, setActiveChoiceCharId] = useState<string>(character.id);
+  const [choicePreview, setChoicePreview] = useState<ChoicePreviewResponse | null>(null);
+  const [, setIsPreviewLoading] = useState(false);
+
+  const presentCharacters = useMemo(() => {
+    const rawIds =
+      bundle.present_character_ids && bundle.present_character_ids.length > 0
+        ? bundle.present_character_ids
+        : [character.id];
+    const uniqueIds = Array.from(new Set([character.id, ...rawIds]));
+    return uniqueIds.map((id) => {
+      const rec = bundle.character_records?.[id];
+      if (rec) return rec;
+      if (id === character.id) return character;
+      return { id, name: "Character" } as CharacterRecord;
+    });
+  }, [bundle.present_character_ids, bundle.character_records, character]);
+
+  useEffect(() => {
+    if (!presentCharacters.some((c) => c.id === activeChoiceCharId)) {
+      setActiveChoiceCharId(character.id);
+    }
+  }, [presentCharacters, activeChoiceCharId, character.id]);
+
+  const activeCharRecord = useMemo(() => {
+    return (
+      presentCharacters.find((c) => c.id === activeChoiceCharId) || character
+    );
+  }, [presentCharacters, activeChoiceCharId, character]);
+
+  const hasActiveGates = useMemo(() => {
+    return Object.values(stagedChoices).some((cs) =>
+      cs.options.some((opt) => opt.gate && opt.gate !== "any")
+    );
+  }, [stagedChoices]);
+
+  const totalStagedOptionsCount = useMemo(() => {
+    return Object.values(stagedChoices).reduce(
+      (acc, cs) => acc + (cs.options ? cs.options.length : 0),
+      0
+    );
+  }, [stagedChoices]);
+
+  // Decision D2: When gate choices are staged, promote disabled dice mode to auto
+  useEffect(() => {
+    if (hasActiveGates && diceMode === "disabled") {
+      setDiceMode("auto");
+    }
+  }, [hasActiveGates, diceMode]);
+
+  // Decision D4: Preview choice odds from backend
+  useEffect(() => {
+    const currentChoiceSet = stagedChoices[activeChoiceCharId];
+    if (
+      !currentChoiceSet ||
+      !currentChoiceSet.options ||
+      currentChoiceSet.options.length === 0
+    ) {
+      setChoicePreview(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    setIsPreviewLoading(true);
+
+    const parsedOverride =
+      diceMode === "forced" && diceOverride.trim() !== ""
+        ? parseInt(diceOverride.trim(), 10)
+        : null;
+
+    api
+      .previewChoices(
+        {
+          choice_set: {
+            character_id: currentChoiceSet.character_id || activeChoiceCharId,
+            options: (currentChoiceSet.options || []).map((o) => ({
+              id: o.id,
+              label: o.label || "",
+              gate: o.gate || "any",
+            })),
+            gate_difficulty_class:
+              currentChoiceSet.gate_difficulty_class ?? DEFAULT_GATE_DC,
+          },
+          dice_mode: diceMode,
+          manual_dice_override:
+            parsedOverride !== null && !isNaN(parsedOverride)
+              ? parsedOverride
+              : null,
+        },
+        controller.signal
+      )
+      .then((res) => {
+        setChoicePreview(res);
+        setIsPreviewLoading(false);
+      })
+      .catch((err) => {
+        if (err.name !== "AbortError") {
+          setIsPreviewLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [stagedChoices, activeChoiceCharId, diceMode, diceOverride]);
+
+  const handleAddOption = (charId: string) => {
+    setStagedChoices((prev) => {
+      const existing = prev[charId] || {
+        character_id: charId,
+        options: [],
+        gate_difficulty_class: DEFAULT_GATE_DC,
+      };
+      const newOpt: CharacterChoiceOption = {
+        id: `opt_${Date.now()}_${existing.options.length + 1}`,
+        label: "",
+        gate: "any",
+      };
+      return {
+        ...prev,
+        [charId]: {
+          ...existing,
+          options: [...existing.options, newOpt],
+        },
+      };
+    });
+  };
+
+  const handleUpdateOption = (
+    charId: string,
+    optId: string,
+    updates: Partial<CharacterChoiceOption>
+  ) => {
+    setStagedChoices((prev) => {
+      const existing = prev[charId];
+      if (!existing) return prev;
+      return {
+        ...prev,
+        [charId]: {
+          ...existing,
+          options: existing.options.map((opt) =>
+            opt.id === optId ? { ...opt, ...updates } : opt
+          ),
+        },
+      };
+    });
+  };
+
+  const handleRemoveOption = (charId: string, optId: string) => {
+    setStagedChoices((prev) => {
+      const existing = prev[charId];
+      if (!existing) return prev;
+      const remaining = existing.options.filter((opt) => opt.id !== optId);
+      if (remaining.length === 0) {
+        const copy = { ...prev };
+        delete copy[charId];
+        return copy;
+      }
+      return {
+        ...prev,
+        [charId]: {
+          ...existing,
+          options: remaining,
+        },
+      };
+    });
+  };
+
+  const handleSetDC = (charId: string, dc: number) => {
+    setStagedChoices((prev) => {
+      const existing = prev[charId] || {
+        character_id: charId,
+        options: [],
+        gate_difficulty_class: dc,
+      };
+      return {
+        ...prev,
+        [charId]: {
+          ...existing,
+          gate_difficulty_class: dc,
+        },
+      };
+    });
+  };
+
+  const handleClearCharChoices = (charId: string) => {
+    setStagedChoices((prev) => {
+      const copy = { ...prev };
+      delete copy[charId];
+      return copy;
+    });
+  };
+
+  const handleClearAllChoices = () => {
+    setStagedChoices({});
+  };
 
   const lastBranchTurn =
     bundle.active_branch_turns[bundle.active_branch_turns.length - 1];
@@ -133,8 +349,11 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   useEffect(() => {
     setEditingTurnId(null);
     setEditMessageText("");
+    setEditDiceMode("auto");
+    setEditDiceOverride("");
     setIsDurationPickerOpen(false);
     setIsCustomDirectiveOpen(false);
+    setIsChoicesDrawerOpen(false);
   }, [bundle.campaign.id, lastBranchTurn?.id]);
 
   const toggleCognition = (id: string) => {
@@ -165,6 +384,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     if (mode === "describe") {
       onSendTurn({
         userMessage: "[Describe the current scene]",
+        diceMode: "disabled",
         narrativeMode: "describe",
       });
     } else if (mode === "advance") {
@@ -173,6 +393,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         : directive || "wait for a few moments";
       onSendTurn({
         userMessage: `[Advance the story: ${durMsg}]`,
+        diceMode: "disabled",
         narrativeMode: "advance",
         narratorDirective: durMsg,
         durationMinutes: durationMinutes ?? null,
@@ -182,6 +403,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         userMessage: directive
           ? `[Introduce a complication: ${directive}]`
           : "[Introduce an unexpected complication or external event]",
+        diceMode: "disabled",
         narrativeMode: "complication",
         narratorDirective: directive || "An unexpected complication occurs",
       });
@@ -190,6 +412,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         userMessage: directive
           ? `[Perception check: ${directive}]`
           : "[Examine the scene for subtle details and lore]",
+        diceMode: "disabled",
         narrativeMode: "perception",
         narratorDirective: directive || "Check for subtle details and lore",
       });
@@ -201,6 +424,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     if (!trimmed || isBusy) return;
     onSendTurn({
       userMessage: trimmed,
+      diceMode: "disabled",
       narrativeMode: "custom",
       narratorDirective: trimmed,
     });
@@ -211,21 +435,45 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
     const raw = inputText.trim();
-    if (!raw || isBusy) return;
+    if ((!raw && totalStagedOptionsCount === 0) || isBusy) return;
 
     // Check for slash command shortcuts
     if (raw.startsWith("/")) {
+      if (isChoiceSlashCommand(raw)) {
+        const parsed = parseChoiceSlashCommand(raw, presentCharacters);
+        if (parsed && parsed.choiceSet.options.length > 0) {
+          const targetId = parsed.choiceSet.character_id;
+          setStagedChoices((prev) => ({
+            ...prev,
+            [targetId]: parsed.choiceSet,
+          }));
+          setActiveChoiceCharId(targetId);
+          setIsChoicesDrawerOpen(true);
+          setInputText("");
+          return;
+        } else if (parsed && parsed.matchedCharacter) {
+          setActiveChoiceCharId(parsed.matchedCharacter.id);
+          setIsChoicesDrawerOpen(true);
+          setInputText("");
+          return;
+        }
+      }
+
       const parts = raw.slice(1).split(/\s+/);
       const cmd = parts[0].toLowerCase();
       const arg = parts.slice(1).join(" ").trim();
 
       if (cmd === "look" || cmd === "scene" || cmd === "describe") {
         setInputText("");
+        setDiceMode("auto");
+        setDiceOverride("");
         handleInvokeNarrator("describe");
         return;
       }
       if (cmd === "wait" || cmd === "pass") {
         setInputText("");
+        setDiceMode("auto");
+        setDiceOverride("");
         let dur: number | undefined;
         if (arg.endsWith("m") || arg.endsWith("min") || arg.endsWith("minutes")) {
           dur = parseInt(arg, 10);
@@ -237,19 +485,26 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       }
       if (cmd === "event" || cmd === "complication") {
         setInputText("");
+        setDiceMode("auto");
+        setDiceOverride("");
         handleInvokeNarrator("complication", arg || undefined);
         return;
       }
       if (cmd === "perception" || cmd === "recall" || cmd === "check") {
         setInputText("");
+        setDiceMode("auto");
+        setDiceOverride("");
         handleInvokeNarrator("perception", arg || undefined);
         return;
       }
       if (cmd === "narrate" || cmd === "direct" || cmd === "custom") {
         setInputText("");
+        setDiceMode("auto");
+        setDiceOverride("");
         if (arg) {
           onSendTurn({
             userMessage: arg,
+            diceMode: "disabled",
             narrativeMode: "custom",
             narratorDirective: arg,
           });
@@ -260,14 +515,43 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       }
     }
 
-    const parsedDice = diceOverride ? parseInt(diceOverride, 10) : null;
+    let parsedDice: number | null = null;
+    if (diceMode === "forced" && diceOverride.trim() !== "") {
+      const val = parseInt(diceOverride.trim(), 10);
+      if (isNaN(val) || val < 1 || val > 20) {
+        return;
+      }
+      parsedDice = val;
+    }
+
+    let effectiveChoices: Record<string, CharacterChoiceSet> | undefined = undefined;
+    if (totalStagedOptionsCount > 0) {
+      const cleaned: Record<string, CharacterChoiceSet> = {};
+      for (const [cid, cs] of Object.entries(stagedChoices)) {
+        const validOpts = cs.options.filter((o) => o.label.trim().length > 0);
+        if (validOpts.length > 0) {
+          cleaned[cid] = {
+            ...cs,
+            options: validOpts,
+          };
+        }
+      }
+      if (Object.keys(cleaned).length > 0) {
+        effectiveChoices = cleaned;
+      }
+    }
+
     onSendTurn({
       userMessage: raw,
-      manualDiceOverride:
-        parsedDice && parsedDice >= 1 && parsedDice <= 20 ? parsedDice : null,
+      diceMode,
+      manualDiceOverride: diceMode === "forced" ? parsedDice : null,
+      characterChoices: effectiveChoices,
     });
     setInputText("");
+    setDiceMode("auto");
     setDiceOverride("");
+    setStagedChoices({});
+    setIsChoicesDrawerOpen(false);
   };
 
   const inferNarratorTurnOptions = (
@@ -342,6 +626,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       onSendTurn({
         userMessage: turn.user_message,
         parentTurnId: turn.parent_turn_id,
+        diceMode: "disabled",
         narrativeMode: narratorOpts.narrativeMode,
         narratorDirective: narratorOpts.narratorDirective,
         durationMinutes: narratorOpts.durationMinutes,
@@ -349,9 +634,19 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       return;
     }
 
+    const legacyForced = turn.pre_turn?.resolved_roll?.is_manual_override;
+    const savedMode: DiceMode =
+      turn.pre_turn?.dice_mode ?? (legacyForced ? "forced" : "auto");
+    const savedManual =
+      turn.pre_turn?.manual_dice_value ??
+      (legacyForced ? turn.pre_turn?.resolved_roll?.d20_raw ?? null : null);
+
     onSendTurn({
       userMessage: turn.user_message,
       parentTurnId: turn.parent_turn_id,
+      diceMode: savedMode,
+      manualDiceOverride: savedMode === "forced" ? savedManual : null,
+      characterChoices: turn.pre_turn?.character_choices,
     });
   };
 
@@ -359,25 +654,37 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     if (isBusy || isDeletingTurn || !turn.parent_turn_id) return;
     setEditingTurnId(turn.id);
     setEditMessageText(turn.user_message);
+    const legacyForced = turn.pre_turn?.resolved_roll?.is_manual_override;
+    const initialMode: DiceMode =
+      turn.pre_turn?.dice_mode ?? (legacyForced ? "forced" : "auto");
+    const initialVal =
+      turn.pre_turn?.manual_dice_value ??
+      (legacyForced ? turn.pre_turn?.resolved_roll?.d20_raw ?? null : null);
+    setEditDiceMode(initialMode);
+    setEditDiceOverride(initialVal != null ? String(initialVal) : "");
   };
 
   const handleCancelEdit = () => {
     setEditingTurnId(null);
     setEditMessageText("");
+    setEditDiceMode("auto");
+    setEditDiceOverride("");
   };
 
   const handleCommitEdit = (turn: TurnNodeRecord) => {
     const trimmed = editMessageText.trim();
     if (!trimmed || isBusy || isDeletingTurn || !turn.parent_turn_id) return;
-    const parsedDice = diceOverride ? parseInt(diceOverride, 10) : null;
-    setEditingTurnId(null);
-    setEditMessageText("");
 
     const narratorOpts = inferNarratorTurnOptions(turn, trimmed);
     if (narratorOpts.isNarrator) {
+      setEditingTurnId(null);
+      setEditMessageText("");
+      setEditDiceMode("auto");
+      setEditDiceOverride("");
       onSendTurn({
         userMessage: trimmed,
         parentTurnId: turn.parent_turn_id,
+        diceMode: "disabled",
         narrativeMode: narratorOpts.narrativeMode,
         narratorDirective: narratorOpts.narratorDirective || trimmed,
         durationMinutes: narratorOpts.durationMinutes,
@@ -385,11 +692,25 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       return;
     }
 
+    let parsedEditDice: number | null = null;
+    if (editDiceMode === "forced" && editDiceOverride.trim() !== "") {
+      const val = parseInt(editDiceOverride.trim(), 10);
+      if (isNaN(val) || val < 1 || val > 20) {
+        return;
+      }
+      parsedEditDice = val;
+    }
+
+    setEditingTurnId(null);
+    setEditMessageText("");
+    setEditDiceMode("auto");
+    setEditDiceOverride("");
     onSendTurn({
       userMessage: trimmed,
       parentTurnId: turn.parent_turn_id,
-      manualDiceOverride:
-        parsedDice && parsedDice >= 1 && parsedDice <= 20 ? parsedDice : null,
+      diceMode: editDiceMode,
+      manualDiceOverride: editDiceMode === "forced" ? parsedEditDice : null,
+      characterChoices: turn.pre_turn?.character_choices,
     });
   };
 
@@ -575,6 +896,48 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                       }}
                     />
                     <div className="user-bubble-edit-actions">
+                      {!isNarratorTurn && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginRight: "auto" }}>
+                          <button
+                            type="button"
+                            className={`btn btn-dice-toggle btn-dice-toggle--${editDiceMode}`}
+                            onClick={() => {
+                              setEditDiceMode((prev) => {
+                                if (prev === "auto") return "forced";
+                                if (prev === "forced") {
+                                  setEditDiceOverride("");
+                                  return "disabled";
+                                }
+                                return "auto";
+                              });
+                            }}
+                            title="Toggle dice roll mode (auto / forced / disabled)"
+                          >
+                            <Dices size={12} />
+                            <span>{editDiceMode}</span>
+                          </button>
+                          {editDiceMode === "forced" && (
+                            <input
+                              type="number"
+                              min={1}
+                              max={20}
+                              placeholder="random"
+                              value={editDiceOverride}
+                              onChange={(e) => setEditDiceOverride(e.target.value)}
+                              className={`field-input ${
+                                editDiceOverride.trim() !== "" &&
+                                (isNaN(parseInt(editDiceOverride, 10)) ||
+                                  parseInt(editDiceOverride, 10) < 1 ||
+                                  parseInt(editDiceOverride, 10) > 20)
+                                  ? "dice-input-invalid"
+                                  : ""
+                              }`}
+                              style={{ width: 68, padding: "2px 6px", fontSize: "0.72rem" }}
+                              title="Manual d20 value (1-20), or leave blank for forced random roll"
+                            />
+                          )}
+                        </div>
+                      )}
                       <button
                         type="button"
                         className="btn"
@@ -588,7 +951,15 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                         type="button"
                         className="btn btn-amber"
                         style={{ padding: "3px 10px", fontSize: "0.74rem" }}
-                        disabled={isStreaming || !editMessageText.trim()}
+                        disabled={
+                          isStreaming ||
+                          !editMessageText.trim() ||
+                          (editDiceMode === "forced" &&
+                            editDiceOverride.trim() !== "" &&
+                            (isNaN(parseInt(editDiceOverride, 10)) ||
+                              parseInt(editDiceOverride, 10) < 1 ||
+                              parseInt(editDiceOverride, 10) > 20))
+                        }
                         onClick={() => handleCommitEdit(turn)}
                       >
                         <RefreshCw size={12} />
@@ -624,6 +995,58 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                 ) : (
                   <div className="user-bubble">{turn.user_message}</div>
                 ))}
+
+              {/* Staged Director Choices Badge Strip */}
+              {!isRoot &&
+                turn.pre_turn?.character_choices &&
+                Object.keys(turn.pre_turn.character_choices).length > 0 && (
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 6,
+                      flexWrap: "wrap",
+                      margin: "4px 0 2px",
+                    }}
+                  >
+                    {Object.entries(turn.pre_turn.character_choices).map(
+                      ([cid, cSet]) => {
+                        const cName =
+                          turn.cognition_character_names?.[cid] ||
+                          bundle.character_records?.[cid]?.name ||
+                          (cid === character.id ? character.name : "Character");
+                        return (
+                          <span
+                            key={cid}
+                            className="badge"
+                            style={{
+                              background: "rgba(59, 130, 246, 0.12)",
+                              borderColor: "rgba(59, 130, 246, 0.35)",
+                              color: "#93c5fd",
+                              fontSize: "0.71rem",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                            }}
+                            title={cSet.options
+                              .map(
+                                (o) =>
+                                  `${o.label}${
+                                    o.gate && o.gate !== "any"
+                                      ? ` (${o.gate})`
+                                      : ""
+                                  }`
+                              )
+                              .join(" | ")}
+                          >
+                            <ListChecks size={11} />
+                            Director Choices ({cName}): {cSet.options.length}{" "}
+                            option{cSet.options.length === 1 ? "" : "s"}
+                          </span>
+                        );
+                      }
+                    )}
+                  </div>
+                )}
 
               {/* Phase 1 Auxiliary Pre-Turn & RAG Badges */}
               {!isRoot && (
@@ -927,6 +1350,165 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                                   <strong>Plan Directive:</strong> {charRoll.plan_directive}
                                 </div>
                               )}
+                            </div>
+                          );
+                        })()}
+
+                        {(() => {
+                          const choiceRes =
+                            turn.pre_turn?.choice_resolutions?.[selectedCharId];
+                          const choiceSet =
+                            turn.pre_turn?.character_choices?.[selectedCharId];
+                          const selectedChoice = activeCognition.selected_choice;
+                          const compliance = activeCognition.choice_compliance;
+                          const complianceNote =
+                            activeCognition.choice_compliance_note;
+
+                          if (!choiceRes && !choiceSet && !selectedChoice)
+                            return null;
+
+                          return (
+                            <div
+                              style={{
+                                margin: "6px 12px 10px",
+                                padding: "8px 12px",
+                                borderRadius: 6,
+                                border: "1px solid rgba(59, 130, 246, 0.35)",
+                                background: "rgba(59, 130, 246, 0.08)",
+                                fontSize: "0.75rem",
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: 6,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  gap: 8,
+                                  flexWrap: "wrap",
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 6,
+                                    fontWeight: 600,
+                                    color: "#93c5fd",
+                                  }}
+                                >
+                                  <ListChecks size={13} />
+                                  Director Choices Guidance
+                                </span>
+                                {compliance && (
+                                  <span
+                                    className={`choice-compliance-badge ${
+                                      compliance === "followed"
+                                        ? "choice-compliance-followed"
+                                        : compliance === "coerced"
+                                        ? "choice-compliance-coerced"
+                                        : "choice-compliance-fallback"
+                                    }`}
+                                    title={complianceNote || undefined}
+                                  >
+                                    {compliance === "followed" &&
+                                      "✓ Choice Adopted"}
+                                    {compliance === "coerced" &&
+                                      "⚡ Directorial Intervention"}
+                                    {compliance === "free_fallback" &&
+                                      "○ Gated Out — Decided Freely"}
+                                  </span>
+                                )}
+                              </div>
+
+                              {selectedChoice && (
+                                <div
+                                  style={{
+                                    fontSize: "0.74rem",
+                                    color: "var(--text-primary)",
+                                  }}
+                                >
+                                  <strong style={{ color: "#93c5fd" }}>
+                                    Selected Option:
+                                  </strong>{" "}
+                                  “{selectedChoice}”
+                                </div>
+                              )}
+
+                              {complianceNote && compliance === "coerced" && (
+                                <div
+                                  style={{
+                                    fontSize: "0.70rem",
+                                    color: "#fde047",
+                                    opacity: 0.9,
+                                    fontStyle: "italic",
+                                  }}
+                                >
+                                  Notice: {complianceNote}
+                                </div>
+                              )}
+
+                              {choiceRes &&
+                                choiceRes.options_evaluated &&
+                                choiceRes.options_evaluated.length > 0 && (
+                                  <div
+                                    style={{
+                                      display: "flex",
+                                      gap: 4,
+                                      flexWrap: "wrap",
+                                      marginTop: 2,
+                                    }}
+                                  >
+                                    {choiceRes.options_evaluated.map((opt) => {
+                                      const isChosen =
+                                        opt.label === selectedChoice;
+                                      const isEliminated =
+                                        opt.status === "eliminated";
+                                      return (
+                                        <span
+                                          key={opt.id}
+                                          style={{
+                                            fontSize: "0.69rem",
+                                            padding: "2px 6px",
+                                            borderRadius: 4,
+                                            border: "1px solid",
+                                            textDecoration: isEliminated
+                                              ? "line-through"
+                                              : "none",
+                                            opacity: isEliminated ? 0.5 : 1,
+                                            background: isChosen
+                                              ? "rgba(34, 197, 94, 0.2)"
+                                              : isEliminated
+                                              ? "rgba(239, 68, 68, 0.1)"
+                                              : "rgba(255, 255, 255, 0.05)",
+                                            borderColor: isChosen
+                                              ? "rgba(34, 197, 94, 0.5)"
+                                              : isEliminated
+                                              ? "rgba(239, 68, 68, 0.3)"
+                                              : "var(--border-subtle)",
+                                            color: isChosen
+                                              ? "#86efac"
+                                              : isEliminated
+                                              ? "var(--text-muted)"
+                                              : "var(--text-secondary)",
+                                          }}
+                                        >
+                                          {isChosen
+                                            ? "✓ "
+                                            : isEliminated
+                                            ? "✕ "
+                                            : ""}
+                                          {opt.label}
+                                          {opt.gate && opt.gate !== "any"
+                                            ? ` [${opt.gate}]`
+                                            : ""}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                )}
                             </div>
                           );
                         })()}
@@ -1584,6 +2166,43 @@ export const ChatStage: React.FC<ChatStageProps> = ({
 
           <div style={{ height: 14, width: 1, background: "var(--border-subtle)" }} />
 
+          {/* Director Character Choices Button */}
+          <button
+            type="button"
+            className={`btn narrator-quick-chip ${isChoicesDrawerOpen ? "active" : ""}`}
+            style={{
+              borderColor: totalStagedOptionsCount > 0 ? "rgba(59, 130, 246, 0.5)" : undefined,
+              background: totalStagedOptionsCount > 0 ? "rgba(59, 130, 246, 0.15)" : undefined,
+              color: totalStagedOptionsCount > 0 ? "#93c5fd" : undefined,
+            }}
+            onClick={() => {
+              setIsDurationPickerOpen(false);
+              setIsCustomDirectiveOpen(false);
+              setIsChoicesDrawerOpen((prev) => !prev);
+            }}
+            title="Present character choices to guide cognition [/choice]"
+          >
+            <ListChecks size={11} color={totalStagedOptionsCount > 0 ? "#93c5fd" : "var(--accent-blue)"} />
+            <span>Choices</span>
+            {totalStagedOptionsCount > 0 && (
+              <span
+                style={{
+                  fontSize: "0.64rem",
+                  background: "#3b82f6",
+                  color: "white",
+                  padding: "0 4px",
+                  borderRadius: 8,
+                  fontWeight: 700,
+                  marginLeft: 2,
+                }}
+              >
+                {totalStagedOptionsCount}
+              </span>
+            )}
+          </button>
+
+          <div style={{ height: 14, width: 1, background: "var(--border-subtle)" }} />
+
           <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
             Quick Exits:
           </span>
@@ -1605,18 +2224,51 @@ export const ChatStage: React.FC<ChatStageProps> = ({
           ))}
 
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
-            <Dices size={14} color="var(--accent-amber)" />
-            <input
-              type="number"
-              min={1}
-              max={20}
-              placeholder="d20 auto"
-              value={diceOverride}
-              onChange={(e) => setDiceOverride(e.target.value)}
-              className="field-input"
-              style={{ width: 86, padding: "3px 7px", fontSize: "0.74rem" }}
-              title="Optional manual d20 roll override (1-20)"
-            />
+            <button
+              type="button"
+              className={`btn btn-dice-toggle btn-dice-toggle--${diceMode}`}
+              onClick={() => {
+                setDiceMode((prev) => {
+                  if (prev === "auto") return "forced";
+                  if (prev === "forced") {
+                    setDiceOverride("");
+                    if (hasActiveGates) {
+                      return "auto";
+                    }
+                    return "disabled";
+                  }
+                  return "auto";
+                });
+              }}
+              title={
+                hasActiveGates
+                  ? "Dice Mode: Auto or Forced (Disabled locked while gate choices are active)"
+                  : "Dice Mode: Click to cycle between auto, forced, and disabled"
+              }
+            >
+              <Dices size={13} />
+              <span>{diceMode}</span>
+            </button>
+            {diceMode === "forced" && (
+              <input
+                type="number"
+                min={1}
+                max={20}
+                placeholder="random"
+                value={diceOverride}
+                onChange={(e) => setDiceOverride(e.target.value)}
+                className={`field-input ${
+                  diceOverride.trim() !== "" &&
+                  (isNaN(parseInt(diceOverride, 10)) ||
+                    parseInt(diceOverride, 10) < 1 ||
+                    parseInt(diceOverride, 10) > 20)
+                    ? "dice-input-invalid"
+                    : ""
+                }`}
+                style={{ width: 68, padding: "3px 7px", fontSize: "0.74rem" }}
+                title="Optional manual d20 roll override (1-20). Leave blank for random roll."
+              />
+            )}
           </div>
         </div>
 
@@ -1733,10 +2385,370 @@ export const ChatStage: React.FC<ChatStageProps> = ({
           </div>
         )}
 
+        {/* Director Guided Choices Drawer */}
+        {isChoicesDrawerOpen && (
+          <div className="choices-drawer-box">
+            <div className="choices-drawer-header">
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  color: "#93c5fd",
+                  fontWeight: 600,
+                  fontSize: "0.78rem",
+                }}
+              >
+                <ListChecks size={14} />
+                <span>Director Choices (Guide Character Cognition)</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {totalStagedOptionsCount > 0 && (
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{
+                      padding: "2px 8px",
+                      fontSize: "0.70rem",
+                      color: "var(--accent-rose)",
+                      border: "none",
+                    }}
+                    onClick={handleClearAllChoices}
+                  >
+                    Clear All
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ padding: "2px 6px", border: "none" }}
+                  onClick={() => setIsChoicesDrawerOpen(false)}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            </div>
+
+            {/* Character selection tabs */}
+            <div className="choices-char-tabs">
+              {presentCharacters.map((c) => {
+                const isSelected = c.id === activeChoiceCharId;
+                const optCount = stagedChoices[c.id]?.options?.length || 0;
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    className={`choices-char-tab ${
+                      isSelected ? "choices-char-tab--active" : ""
+                    }`}
+                    onClick={() => setActiveChoiceCharId(c.id)}
+                  >
+                    <span>{c.name}</span>
+                    {optCount > 0 && (
+                      <span
+                        style={{
+                          fontSize: "0.64rem",
+                          background: isSelected
+                            ? "#3b82f6"
+                            : "rgba(255,255,255,0.15)",
+                          color: "white",
+                          padding: "0 5px",
+                          borderRadius: 8,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {optCount}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* DC preset and input row for active character */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                flexWrap: "wrap",
+                fontSize: "0.74rem",
+              }}
+            >
+              <span
+                style={{
+                  color: "var(--text-muted)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                <Dices size={12} />
+                Gate DC:
+              </span>
+              {[
+                { label: "Easy 8", val: 8 },
+                { label: "Moderate 12", val: 12 },
+                { label: "Hard 15", val: 15 },
+                { label: "Very Hard 18", val: 18 },
+              ].map((preset) => {
+                const currentDC =
+                  stagedChoices[activeChoiceCharId]?.gate_difficulty_class ??
+                  DEFAULT_GATE_DC;
+                const isSelected = currentDC === preset.val;
+                return (
+                  <button
+                    key={preset.val}
+                    type="button"
+                    className="btn"
+                    style={{
+                      padding: "2px 7px",
+                      fontSize: "0.70rem",
+                      background: isSelected
+                        ? "rgba(59, 130, 246, 0.25)"
+                        : undefined,
+                      borderColor: isSelected
+                        ? "rgba(59, 130, 246, 0.6)"
+                        : undefined,
+                      color: isSelected ? "#93c5fd" : "var(--text-secondary)",
+                    }}
+                    onClick={() => handleSetDC(activeChoiceCharId, preset.val)}
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
+              <input
+                type="number"
+                min={1}
+                max={30}
+                value={
+                  stagedChoices[activeChoiceCharId]?.gate_difficulty_class ??
+                  DEFAULT_GATE_DC
+                }
+                onChange={(e) => {
+                  const num = parseInt(e.target.value, 10);
+                  if (!isNaN(num) && num >= 1 && num <= 30) {
+                    handleSetDC(activeChoiceCharId, num);
+                  }
+                }}
+                className="field-input"
+                style={{ width: 50, padding: "2px 6px", fontSize: "0.72rem" }}
+                title="Custom gate difficulty class (1-30)"
+              />
+              {stagedChoices[activeChoiceCharId]?.options?.length ? (
+                <button
+                  type="button"
+                  className="btn"
+                  style={{
+                    marginLeft: "auto",
+                    padding: "2px 7px",
+                    fontSize: "0.70rem",
+                    color: "var(--text-muted)",
+                  }}
+                  onClick={() => handleClearCharChoices(activeChoiceCharId)}
+                >
+                  Clear {activeCharRecord?.name || "character"} choices
+                </button>
+              ) : null}
+            </div>
+
+            {/* Options list for active character */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {(stagedChoices[activeChoiceCharId]?.options || []).map(
+                (opt, idx) => {
+                  const isGated = opt.gate && opt.gate !== "any";
+                  let oddsLabel: string | null = null;
+                  if (isGated && choicePreview?.gate_probabilities) {
+                    const prob =
+                      choicePreview.gate_probabilities[opt.gate as ChoiceGate];
+                    if (typeof prob === "number") {
+                      oddsLabel = `${Math.round(prob * 100)}%`;
+                    }
+                  }
+
+                  return (
+                    <div key={opt.id} className="choices-option-row">
+                      <span
+                        style={{
+                          fontSize: "0.72rem",
+                          color: "var(--text-muted)",
+                          width: 14,
+                        }}
+                      >
+                        {idx + 1}.
+                      </span>
+                      <input
+                        type="text"
+                        className="choices-option-input"
+                        placeholder="Choice label (e.g. Open the blast door, Back away slowly...)"
+                        value={opt.label}
+                        onChange={(e) =>
+                          handleUpdateOption(activeChoiceCharId, opt.id, {
+                            label: e.target.value,
+                          })
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            handleAddOption(activeChoiceCharId);
+                          }
+                        }}
+                      />
+                      <select
+                        className="choices-gate-select"
+                        value={opt.gate || "any"}
+                        onChange={(e) =>
+                          handleUpdateOption(activeChoiceCharId, opt.id, {
+                            gate: e.target.value as ChoiceGate,
+                          })
+                        }
+                      >
+                        <option value="any">Always Available (No Gate)</option>
+                        <option value="critical_success">
+                          Req: Critical Success (d20=20 or DC+10)
+                        </option>
+                        <option value="success_plus">
+                          Req: Success or better (DC met)
+                        </option>
+                        <option value="failure_minus">
+                          Req: Failure or worse (&lt; DC)
+                        </option>
+                        <option value="critical_failure">
+                          Req: Critical Failure (d20=1 or DC-10)
+                        </option>
+                      </select>
+
+                      {isGated && oddsLabel && (
+                        <span
+                          className="choices-odds-badge"
+                          style={{
+                            background: "rgba(59, 130, 246, 0.15)",
+                            border: "1px solid rgba(59, 130, 246, 0.4)",
+                            color: "#93c5fd",
+                          }}
+                          title={`Estimated odds under current DC (${
+                            stagedChoices[activeChoiceCharId]
+                              ?.gate_difficulty_class ?? DEFAULT_GATE_DC
+                          }) and dice mode`}
+                        >
+                          {oddsLabel} odds
+                        </span>
+                      )}
+
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{
+                          padding: "3px 6px",
+                          border: "none",
+                          color: "var(--accent-rose)",
+                        }}
+                        onClick={() =>
+                          handleRemoveOption(activeChoiceCharId, opt.id)
+                        }
+                        title="Remove option"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  );
+                }
+              )}
+            </div>
+
+            {/* Add option button & summary banner */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+                flexWrap: "wrap",
+              }}
+            >
+              <button
+                type="button"
+                className="btn"
+                style={{
+                  padding: "4px 12px",
+                  fontSize: "0.72rem",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 5,
+                }}
+                onClick={() => handleAddOption(activeChoiceCharId)}
+              >
+                <Plus size={12} />
+                <span>
+                  Add Choice for {activeCharRecord?.name || "Character"}
+                </span>
+              </button>
+
+              <span style={{ fontSize: "0.70rem", color: "var(--text-muted)" }}>
+                Tip: You can also type{" "}
+                <code>
+                  /choice {activeCharRecord?.name || "name"}: Opt 1 | Opt 2
+                  @crit
+                </code>
+              </span>
+            </div>
+
+            {/* Preview Summary Banner */}
+            {choicePreview &&
+              (stagedChoices[activeChoiceCharId]?.options?.length || 0) > 0 && (
+                <div className="choices-preview-summary">
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <Sparkles size={12} color="#93c5fd" />
+                    <span>
+                      Odds distribution for DC {choicePreview.difficulty_class} (
+                      {diceMode} dice):
+                    </span>
+                    {choicePreview.tier_probabilities &&
+                      Object.entries(choicePreview.tier_probabilities).map(
+                        ([tier, prob]) => (
+                          <span key={tier} style={{ opacity: 0.85 }}>
+                            {tier}: <strong>{Math.round(prob * 100)}%</strong>
+                          </span>
+                        )
+                      )}
+                  </div>
+                  <div>
+                    {stagedChoices[activeChoiceCharId]?.options.some(
+                      (o) => !o.gate || o.gate === "any"
+                    ) ? (
+                      <span style={{ color: "#86efac" }}>
+                        ✓ Always-available option present
+                      </span>
+                    ) : (
+                      <span
+                        style={{ color: "#fde047" }}
+                        title="If the roll misses all gated options, the character will decide freely without guidance."
+                      >
+                        ○ Free fallback if roll conditions fail
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+          </div>
+        )}
+
         <div className="composer-row">
           <textarea
             className="composer-input"
-            placeholder={`Write your action or dialogue to ${character.name}... (Or try /look, /wait 30m, /event, /perception, /narrate)`}
+            placeholder={
+              totalStagedOptionsCount > 0
+                ? "Optional user action / dialogue (Leave blank to let characters act on your staged choices)..."
+                : `Write your action or dialogue to ${character.name}... (Or try /choice, /look, /wait 30m, /narrate)`
+            }
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={(e) => {
@@ -1750,7 +2762,15 @@ export const ChatStage: React.FC<ChatStageProps> = ({
             type="submit"
             className="btn btn-amber"
             style={{ padding: "0 18px" }}
-            disabled={isBusy || !inputText.trim()}
+            disabled={
+              isBusy ||
+              (!inputText.trim() && totalStagedOptionsCount === 0) ||
+              (diceMode === "forced" &&
+                diceOverride.trim() !== "" &&
+                (isNaN(parseInt(diceOverride, 10)) ||
+                  parseInt(diceOverride, 10) < 1 ||
+                  parseInt(diceOverride, 10) > 20))
+            }
           >
             <Send size={16} />
             Send

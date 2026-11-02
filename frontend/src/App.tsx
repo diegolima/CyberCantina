@@ -46,9 +46,11 @@ import {
   AuthSessionResponse,
   CampaignRecord,
   CampaignStateBundle,
+  CharacterChoiceSet,
   CharacterRecord,
   CognitionBlock,
   CompassDirection,
+  DiceMode,
   MemoryShard,
   NarrativeMode,
   Phase3AgentProgressItem,
@@ -572,10 +574,12 @@ export const App: React.FC = () => {
   const handleSendTurn = async (opts: {
     userMessage: string;
     parentTurnId?: string | null;
+    diceMode?: DiceMode;
     manualDiceOverride?: number | null;
     narrativeMode?: NarrativeMode;
     narratorDirective?: string | null;
     durationMinutes?: number | null;
+    characterChoices?: Record<string, CharacterChoiceSet>;
   }) => {
     if (!bundle) return;
     setIsStreaming(true);
@@ -600,13 +604,21 @@ export const App: React.FC = () => {
         {
           user_message: opts.userMessage,
           parent_turn_id: opts.parentTurnId ?? bundle.campaign.active_leaf_turn_id,
+          dice_mode: opts.diceMode ?? "auto",
           manual_dice_override: opts.manualDiceOverride ?? null,
           override_location_id: pendingLocationOverrideId,
           narrative_mode: opts.narrativeMode,
           narrator_directive: opts.narratorDirective,
           duration_minutes: opts.durationMinutes,
+          character_choices: opts.characterChoices,
         },
         {
+          onChoicesAdjusted: (data) => {
+            console.warn(
+              "Director choices adjusted - dropped characters:",
+              data.dropped_character_ids
+            );
+          },
           onPhase1Complete: (data) => {
             setLiveStream((prev) =>
               prev

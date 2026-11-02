@@ -7,12 +7,15 @@ import {
   CampaignRecord,
   CampaignStateBundle,
   CharacterAgentDelta,
+  CharacterChoiceSet,
   CharacterRecord,
   CharacterVersionSummary,
   CharacterWizardDraft,
   CharacterWizardSeed,
+  ChoicePreviewResponse,
   CognitionBlock,
   CreateNotePayload,
+  DiceMode,
   MemoryShard,
   OllamaStatusResponse,
   Phase3ProgressEventPayload,
@@ -793,6 +796,20 @@ export const api = {
         method: "DELETE",
       }
     ),
+
+  previewChoices: (
+    req: {
+      choice_set: CharacterChoiceSet;
+      dice_mode?: DiceMode;
+      manual_dice_override?: number | null;
+    },
+    signal?: AbortSignal
+  ) =>
+    fetchJson<ChoicePreviewResponse>(`${API_BASE}/mechanics/choice-preview`, {
+      method: "POST",
+      body: JSON.stringify(req),
+      signal,
+    }),
 };
 
 export interface Phase4ProgressEventPayload {
@@ -813,6 +830,7 @@ export interface Phase4ProgressEventPayload {
 }
 
 export interface TurnStreamCallbacks {
+  onChoicesAdjusted?: (data: { dropped_character_ids: string[] }) => void;
   onPhase1Complete?: (data: {
     pre_turn: PreTurnAnalysis;
     recalled_items: RecalledMemoryItem[];
@@ -896,6 +914,9 @@ export async function streamCampaignTurn(
       const parsed = JSON.parse(dataJson);
 
       switch (eventName) {
+        case "choices_adjusted":
+          callbacks.onChoicesAdjusted?.(parsed);
+          break;
         case "phase1_complete":
           callbacks.onPhase1Complete?.(parsed);
           break;

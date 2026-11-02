@@ -229,6 +229,18 @@ class CognitionBlock(BaseModel):
         default="",
         description="What the character needs and wants in this immediate interaction (1 singular sentence).",
     )
+    selected_choice: str | None = Field(
+        default=None,
+        description="The choice selected from the Director options, or null if none.",
+    )
+    choice_compliance: Literal["complied", "coerced"] | None = Field(
+        default=None,
+        description="Compliance state of character choice execution.",
+    )
+    choice_compliance_note: str | None = Field(
+        default=None,
+        description="Human-readable reason for choice coercion, if any.",
+    )
     plan: str = Field(
         default="",
         description="What the character plans to do or say right now (2-3 sequential bullet points starting with '- ' on separate lines).",

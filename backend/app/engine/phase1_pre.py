@@ -12,7 +12,10 @@ from app.schemas.character import CharacterRecord, CharacterStateSnapshot
 from app.schemas.turn import (
     CanonicalOutcomeTier,
     CharacterCheckSpec,
+    CharacterChoiceSet,
     CheckRole,
+    ChoiceResolution,
+    DiceMode,
     DiceRollResult,
     MechanicsTrigger,
     PreTurnAnalysis,
@@ -214,89 +217,177 @@ def resolve_character_dice_checks(
     character_checks: list[CharacterCheckSpec],
     fallback_trigger: MechanicsTrigger,
     user_message: str,
+    dice_mode: DiceMode = "auto",
     manual_override: int | None = None,
     active_speaker_id: str | None = None,
     rng: random.Random | None = None,
+    gate_specs: Mapping[str, CharacterCheckSpec] | None = None,
 ) -> dict[str, DiceRollResult]:
     """Resolve individual d20 checks for characters present in active location."""
+    if dice_mode == "disabled":
+        return {}
+
+    if manual_override is not None:
+        dice_mode = "forced"
+
+    from app.engine.choices import build_gate_directives
+
     results: dict[str, DiceRollResult] = {}
     spec_by_char = {c.character_id: c for c in character_checks}
     chars_by_id = {c.id: c for c in present_characters}
+    effective_speaker_id = active_speaker_id or (present_characters[0].id if present_characters else None)
+    active_gate_specs = gate_specs or {}
 
-    if manual_override is not None:
-        # All present characters adopt the user's manual dice roll value
+    # 1. Resolve choice gate specs first (Decision D1: replaces character's roll)
+    for char in present_characters:
+        if char.id in active_gate_specs:
+            g_spec = active_gate_specs[char.id]
+            roll = resolve_dice_check(
+                g_spec,
+                manual_override=manual_override,
+                character_id=char.id,
+                character_name=char.name,
+                rng=rng,
+            )
+            roll.is_choice_gate = True
+            p_dir, n_dir = build_gate_directives(char.name, roll.outcome_tier)
+            roll.plan_directive = p_dir
+            roll.narrative_directive = n_dir
+            results[char.id] = roll
+
+    if dice_mode == "forced":
+        if manual_override is not None:
+            # Pinned forced roll: all present characters adopt manual_override
+            for char in present_characters:
+                if char.id in results:
+                    continue
+                spec = spec_by_char.get(char.id)
+                if spec and spec.requires_roll:
+                    results[char.id] = resolve_dice_check(
+                        spec,
+                        manual_override=manual_override,
+                        character_id=char.id,
+                        character_name=char.name,
+                        rng=rng,
+                    )
+                elif spec:
+                    forced_spec = spec.model_copy(
+                        update={
+                            "requires_roll": True,
+                            "action_description": spec.action_description or f"{char.name} acts under pressure",
+                        }
+                    )
+                    results[char.id] = resolve_dice_check(
+                        forced_spec,
+                        manual_override=manual_override,
+                        character_id=char.id,
+                        character_name=char.name,
+                        rng=rng,
+                    )
+                else:
+                    is_speaker = char.id == effective_speaker_id
+                    role: CheckRole = "active_attempt" if is_speaker else "co_present_bystander"
+                    desc = (
+                        fallback_trigger.action_description
+                        if is_speaker and fallback_trigger.action_description
+                        else (f"{char.name} acts under pressure" if is_speaker else f"{char.name} observes the situation")
+                    )
+                    mod = fallback_trigger.relevant_modifier if is_speaker else 0
+                    synth_spec = CharacterCheckSpec(
+                        character_id=char.id,
+                        requires_roll=True,
+                        check_role=role,
+                        action_description=desc,
+                        skill_or_approach=fallback_trigger.skill_or_approach if is_speaker else "Composure",
+                        difficulty_class=fallback_trigger.difficulty_class,
+                        relevant_modifier=mod,
+                    )
+                    results[char.id] = resolve_dice_check(
+                        synth_spec,
+                        manual_override=manual_override,
+                        character_id=char.id,
+                        character_name=char.name,
+                        rng=rng,
+                    )
+            return results
+
+        # Forced random roll: roll for any characters already flagged requires_roll=True
         for char in present_characters:
+            if char.id in results:
+                continue
             spec = spec_by_char.get(char.id)
             if spec and spec.requires_roll:
                 results[char.id] = resolve_dice_check(
                     spec,
-                    manual_override=manual_override,
+                    manual_override=None,
                     character_id=char.id,
                     character_name=char.name,
                     rng=rng,
                 )
-            elif spec:
+
+        # If nobody was flagged as requiring a roll, force a roll on the active speaker
+        if not results and effective_speaker_id and effective_speaker_id in chars_by_id:
+            char = chars_by_id[effective_speaker_id]
+            spec = spec_by_char.get(char.id)
+            if spec:
                 forced_spec = spec.model_copy(
                     update={
                         "requires_roll": True,
-                        "action_description": spec.action_description or f"Action check: {user_message[:50]}",
+                        "check_role": "active_attempt",
+                        "action_description": spec.action_description or f"{char.name} acts/responds in the scene",
                     }
                 )
-                results[char.id] = resolve_dice_check(
-                    forced_spec,
-                    manual_override=manual_override,
-                    character_id=char.id,
-                    character_name=char.name,
-                    rng=rng,
-                )
             else:
-                synth_spec = CharacterCheckSpec(
+                forced_spec = CharacterCheckSpec(
                     character_id=char.id,
                     requires_roll=True,
                     check_role="active_attempt",
-                    action_description=fallback_trigger.action_description or f"Action check: {user_message[:50]}",
-                    skill_or_approach=fallback_trigger.skill_or_approach,
+                    action_description=fallback_trigger.action_description or f"{char.name} acts/responds in the scene",
+                    skill_or_approach=fallback_trigger.skill_or_approach or "General",
                     difficulty_class=fallback_trigger.difficulty_class,
                     relevant_modifier=fallback_trigger.relevant_modifier,
                 )
-                results[char.id] = resolve_dice_check(
-                    synth_spec,
-                    manual_override=manual_override,
-                    character_id=char.id,
-                    character_name=char.name,
-                    rng=rng,
-                )
-        return results
-
-    # Standard (manual_override is None): Roll individually ONLY for involved characters; skip uninvolved bystanders
-    for char in present_characters:
-        spec = spec_by_char.get(char.id)
-        if spec and spec.requires_roll:
             results[char.id] = resolve_dice_check(
-                spec,
+                forced_spec,
                 manual_override=None,
                 character_id=char.id,
                 character_name=char.name,
                 rng=rng,
             )
 
-    # If character_checks was empty or didn't flag anyone, but fallback_trigger requested roll:
+        return results
+
+    # Standard "auto" mode:
+    # 1. Roll individually ONLY for involved characters; skip uninvolved bystanders
+    for char in present_characters:
+        if char.id in results:
+            continue
+        spec = spec_by_char.get(char.id)
+        if spec and spec.requires_roll:
+            results[char.id] = resolve_dice_check(
+                spec,
+                manual_override=manual_override,
+                character_id=char.id,
+                character_name=char.name,
+                rng=rng,
+            )
+
+    # 2. If character_checks was empty or didn't flag anyone, but fallback_trigger requested roll:
     if not results and fallback_trigger.requires_roll:
-        target_char_id = active_speaker_id or (present_characters[0].id if present_characters else None)
-        if target_char_id and target_char_id in chars_by_id:
-            char = chars_by_id[target_char_id]
+        if effective_speaker_id and effective_speaker_id in chars_by_id:
+            char = chars_by_id[effective_speaker_id]
             synth_spec = CharacterCheckSpec(
                 character_id=char.id,
                 requires_roll=True,
                 check_role="active_attempt",
-                action_description=fallback_trigger.action_description or f"Attempt: {user_message[:50]}",
+                action_description=fallback_trigger.action_description or f"{char.name} acts/responds in the scene",
                 skill_or_approach=fallback_trigger.skill_or_approach,
                 difficulty_class=fallback_trigger.difficulty_class,
                 relevant_modifier=fallback_trigger.relevant_modifier,
             )
             results[char.id] = resolve_dice_check(
                 synth_spec,
-                manual_override=None,
+                manual_override=manual_override,
                 character_id=char.id,
                 character_name=char.name,
                 rng=rng,
@@ -359,17 +450,15 @@ def select_speaker_order(
     return ids
 
 
-def heuristic_pre_turn_analysis(
+def _build_heuristic_llm_output(
     user_message: str,
     active_location: LocationNode,
     neighbors: list[NeighborLocationView],
     known_entities: list[str],
     present_characters: list[CharacterRecord] | None = None,
     previous_speaker_id: str | None = None,
-    manual_dice_override: int | None = None,
-    rng: random.Random | None = None,
-) -> PreTurnAnalysis:
-    """Fast deterministic analyzer used as fallback when no auxiliary LLM server is reachable."""
+) -> PreTurnLLMOutput:
+    """Deterministic extractor producing structured PreTurnLLMOutput without invoking RNG."""
     msg_lower = user_message.lower()
 
     # 1. Sentiment & subtext
@@ -439,25 +528,7 @@ def heuristic_pre_turn_analysis(
     )
     active_speaker_id = speaker_order[0] if speaker_order else None
 
-    # Resolve rolls
-    character_rolls = resolve_character_dice_checks(
-        room_chars,
-        character_checks=[],
-        fallback_trigger=mechanics,
-        user_message=user_message,
-        manual_override=manual_dice_override,
-        active_speaker_id=active_speaker_id,
-        rng=rng,
-    )
-    resolved_roll = None
-    if character_rolls:
-        resolved_roll = (
-            character_rolls.get(active_speaker_id)
-            or (character_rolls.get(room_chars[0].id) if room_chars else None)
-            or next(iter(character_rolls.values()))
-        )
-
-    return PreTurnAnalysis(
+    return PreTurnLLMOutput(
         user_sentiment=sentiment,
         subtext_interpretation=subtext,
         mentioned_entities=mentioned,
@@ -467,9 +538,50 @@ def heuristic_pre_turn_analysis(
         active_speaker_id=active_speaker_id,
         speaker_order=speaker_order,
         mechanics_check=mechanics,
-        character_rolls=character_rolls,
-        resolved_roll=resolved_roll,
+        character_checks=[],
     )
+
+
+def heuristic_pre_turn_analysis(
+    user_message: str,
+    active_location: LocationNode,
+    neighbors: list[NeighborLocationView],
+    known_entities: list[str],
+    present_characters: list[CharacterRecord] | None = None,
+    previous_speaker_id: str | None = None,
+    dice_mode: DiceMode = "auto",
+    manual_dice_override: int | None = None,
+    rng: random.Random | None = None,
+) -> PreTurnAnalysis:
+    """Fast deterministic analyzer used as fallback when no auxiliary LLM server is reachable."""
+    room_chars = present_characters or []
+    raw_llm = _build_heuristic_llm_output(
+        user_message=user_message,
+        active_location=active_location,
+        neighbors=neighbors,
+        known_entities=known_entities,
+        present_characters=room_chars,
+        previous_speaker_id=previous_speaker_id,
+    )
+
+    character_rolls = resolve_character_dice_checks(
+        room_chars,
+        character_checks=raw_llm.character_checks,
+        fallback_trigger=raw_llm.mechanics_check,
+        user_message=user_message,
+        dice_mode=dice_mode,
+        manual_override=manual_dice_override,
+        active_speaker_id=raw_llm.active_speaker_id,
+        rng=rng,
+    )
+
+    analysis = PreTurnAnalysis(
+        **raw_llm.model_dump(),
+        dice_mode=dice_mode,
+        manual_dice_value=manual_dice_override if dice_mode == "forced" else None,
+        character_rolls=character_rolls,
+    )
+    return analysis
 
 
 async def run_phase1_pre_analysis(
@@ -479,6 +591,7 @@ async def run_phase1_pre_analysis(
     active_location: LocationNode,
     neighbors: list[NeighborLocationView],
     known_entities: list[str],
+    dice_mode: DiceMode = "auto",
     manual_dice_override: int | None = None,
     present_characters: list[CharacterRecord] | None = None,
     previous_speaker_id: str | None = None,
@@ -486,8 +599,16 @@ async def run_phase1_pre_analysis(
     profile: ModelProfile | None = None,
     prompt_template: str | None = None,
     rng: random.Random | None = None,
+    character_choices: Mapping[str, CharacterChoiceSet] | None = None,
+    message_is_synthetic: bool = False,
 ) -> PreTurnAnalysis:
     """Execute Phase 1 Pre-Turn Analysis via the Auxiliary Clerk (with offline fallback) and resolve RNG."""
+    has_any_gates = any(cs.has_gates for cs in (character_choices or {}).values())
+    dice_mode_promoted = False
+    if dice_mode == "disabled" and has_any_gates:
+        dice_mode = "auto"
+        dice_mode_promoted = True
+
     room_chars = present_characters if present_characters else [character]
     room_char_ids = {c.id for c in room_chars}
     fallback_order = select_speaker_order(
@@ -511,6 +632,12 @@ async def run_phase1_pre_analysis(
         present_desc_lines.append(f"- id='{c.id}': {c.name} ({c.tagline}){gear_str}")
     present_desc = "\n".join(present_desc_lines)
 
+    mode_prompt_hint = ""
+    if dice_mode == "forced":
+        mode_prompt_hint = "\nNote: Dice mechanics are forced for this turn. Identify characters facing risk/action or assign an active attempt to the primary speaker."
+    elif dice_mode == "disabled":
+        mode_prompt_hint = "\nNote: Dice mechanics are disabled for this turn. Set character_checks=[] and mechanics_check.requires_roll=false."
+
     system_prompt = render_template(
         prompt_template or get_default_prompt("clerk_pre_turn_system")
     )
@@ -519,7 +646,7 @@ async def run_phase1_pre_analysis(
         f"Previous Turn Speaker ID: {previous_speaker_id or character.id}\n"
         f"Current Location: {active_location.name} ({active_location.summary})\n"
         f"Adjacent Exits: {neighbor_desc}\n"
-        f"Known Entities/Lore Keywords: {', '.join(known_entities[:30])}\n\n"
+        f"Known Entities/Lore Keywords: {', '.join(known_entities[:30])}\n{mode_prompt_hint}\n\n"
         f"User Message:\n{user_message}"
     )
 
@@ -537,16 +664,15 @@ async def run_phase1_pre_analysis(
     except Exception:
         if not settings.allow_offline_fallback:
             raise
-        analysis = heuristic_pre_turn_analysis(
+        raw_output = _build_heuristic_llm_output(
             user_message=user_message,
             active_location=active_location,
             neighbors=neighbors,
             known_entities=known_entities,
             present_characters=room_chars,
             previous_speaker_id=previous_speaker_id,
-            manual_dice_override=manual_dice_override,
-            rng=rng,
         )
+        analysis = PreTurnAnalysis(**raw_output.model_dump())
 
     # Ensure active_speaker_id and speaker_order only reference characters actually present in active_location
     valid_order = [cid for cid in analysis.speaker_order if cid in room_char_ids]
@@ -561,25 +687,72 @@ async def run_phase1_pre_analysis(
             cid for cid in valid_order if cid != analysis.active_speaker_id
         ]
 
+    # Speaker prioritization when prompt was synthesized from director choices
+    if message_is_synthetic and character_choices:
+        target_ids = [c.id for c in room_chars if c.id in character_choices]
+        if target_ids and analysis.active_speaker_id not in character_choices:
+            first_target = target_ids[0]
+            analysis.active_speaker_id = first_target
+            if first_target in analysis.speaker_order:
+                analysis.speaker_order = [first_target] + [
+                    cid for cid in analysis.speaker_order if cid != first_target
+                ]
+
     if not analysis.memory_search_queries:
         analysis.memory_search_queries = [user_message]
 
-    # Resolve per-character checks with individual rolls and manual override adoption
-    character_rolls = resolve_character_dice_checks(
-        room_chars,
-        character_checks=analysis.character_checks,
-        fallback_trigger=analysis.mechanics_check,
-        user_message=user_message,
-        manual_override=manual_dice_override,
-        active_speaker_id=analysis.active_speaker_id,
-        rng=rng,
-    )
-    analysis.character_rolls = character_rolls
-    if character_rolls:
-        analysis.resolved_roll = (
-            character_rolls.get(analysis.active_speaker_id)
-            or (character_rolls.get(character.id) if character.id in character_rolls else None)
-            or next(iter(character_rolls.values()))
+    # Build gate specs for characters with choices requiring a roll
+    gate_specs: dict[str, CharacterCheckSpec] = {}
+    if character_choices:
+        from app.engine.choices import build_gate_check_spec
+        for c in room_chars:
+            c_set = character_choices.get(c.id)
+            if c_set and c_set.has_gates:
+                gate_specs[c.id] = build_gate_check_spec(c, c_set)
+
+    # Resolve per-character checks with individual rolls and mode enforcement
+    analysis.dice_mode = dice_mode
+    analysis.manual_dice_value = manual_dice_override if dice_mode == "forced" else None
+
+    if dice_mode == "disabled":
+        analysis.character_rolls = {}
+        analysis.resolved_roll = None
+        analysis.mechanics_check.requires_roll = False
+        for c in analysis.character_checks:
+            c.requires_roll = False
+    else:
+        character_rolls = resolve_character_dice_checks(
+            room_chars,
+            character_checks=analysis.character_checks,
+            fallback_trigger=analysis.mechanics_check,
+            user_message=user_message,
+            dice_mode=dice_mode,
+            manual_override=manual_dice_override,
+            active_speaker_id=analysis.active_speaker_id,
+            rng=rng,
+            gate_specs=gate_specs,
         )
+        analysis.character_rolls = character_rolls
+        if character_rolls:
+            analysis.resolved_roll = (
+                character_rolls.get(analysis.active_speaker_id)
+                or (character_rolls.get(character.id) if character.id in character_rolls else None)
+                or next(iter(character_rolls.values()))
+            )
+        else:
+            analysis.resolved_roll = None
+
+    # Resolve Director Choice sets against outcomes and store in PreTurnAnalysis
+    if character_choices:
+        from app.engine.choices import resolve_choice_set
+        for c in room_chars:
+            c_set = character_choices.get(c.id)
+            if c_set:
+                c_roll = analysis.character_rolls.get(c.id)
+                c_tier = c_roll.outcome_tier if c_roll else None
+                analysis.choice_resolutions[c.id] = resolve_choice_set(c.id, c_set, c_tier)
+                analysis.character_choices[c.id] = c_set
+
+    analysis.dice_mode_promoted = dice_mode_promoted
 
     return analysis

@@ -23,7 +23,7 @@ from app.dependencies import (
     get_repo,
     run_entity_pruner,
 )
-from app.engine.phase1_pre import resolve_dice_check, run_phase1_pre_analysis
+from app.engine.phase1_pre import run_phase1_pre_analysis
 from app.engine.phase2_context import (
     assemble_four_zone_messages,
     resolve_character_previous_state,
@@ -46,7 +46,6 @@ from app.schemas.turn import (
     CampaignCharacterMemoriesUpdateRequest,
     CampaignRecord,
     CampaignStateBundle,
-    DiceRollResult,
     MechanicsTrigger,
     Phase3ProgressEvent,
     Phase4ProgressEvent,
@@ -509,6 +508,8 @@ async def _execute_turn_stream_events(
 
     effective_user_message = req.user_message.strip()
 
+    applied_choices = dict(req.character_choices)
+
     # Defense-in-depth: Auto-detect narrator mode if client omitted narrative_mode or swiped a narrator turn
     if req.narrative_mode == "standard" and effective_user_message:
         lower_msg = effective_user_message.lower()
@@ -546,8 +547,28 @@ async def _execute_turn_stream_events(
                 pass
 
     is_narrator = req.narrative_mode in ("describe", "advance", "complication", "perception", "custom")
+    if applied_choices and is_narrator:
+        raise HTTPException(
+            status_code=422,
+            detail="Director choices cannot be applied in narrator modes.",
+        )
+
+    from app.engine.choices import DIRECTOR_CONTINUE_MESSAGE, filter_choices_to_present
+
+    present_char_ids = {c.id for c in present_characters}
+    applied_choices, dropped_ids = filter_choices_to_present(applied_choices, present_char_ids)
+    if dropped_ids:
+        yield {
+            "event": "choices_adjusted",
+            "data": {"dropped_character_ids": dropped_ids},
+        }
+
+    message_is_synthetic = False
     if not effective_user_message:
-        if req.narrative_mode == "describe":
+        if applied_choices:
+            effective_user_message = DIRECTOR_CONTINUE_MESSAGE
+            message_is_synthetic = True
+        elif req.narrative_mode == "describe":
             effective_user_message = "[Describe the current scene]"
         elif req.narrative_mode == "advance":
             if req.duration_minutes:
@@ -600,24 +621,7 @@ async def _execute_turn_stream_events(
             )
             queries = [active_location.name] + ([req.narrator_directive] if req.narrator_directive else [])
 
-        narrator_roll = None
-        narrator_rolls: dict[str, DiceRollResult] = {}
-        if req.manual_dice_override is not None or req.narrative_mode == "perception":
-            synth_trig = MechanicsTrigger(
-                requires_roll=True,
-                action_description=req.narrator_directive or f"Narrator {req.narrative_mode} check",
-                skill_or_approach="Perception / Sensory" if req.narrative_mode == "perception" else "Director Mechanics",
-                difficulty_class=12,
-                relevant_modifier=0,
-            )
-            narrator_roll = resolve_dice_check(
-                synth_trig,
-                manual_override=req.manual_dice_override,
-                character_id="__narrator__",
-                character_name="Narrator",
-            )
-            narrator_rolls["__narrator__"] = narrator_roll
-
+        # In narrator mode, dice are never rolled under any circumstance
         pre_turn = PreTurnAnalysis(
             user_sentiment="objective, observational",
             subtext_interpretation=subtext,
@@ -626,9 +630,11 @@ async def _execute_turn_stream_events(
             spatial_intent="stay",
             active_speaker_id="__narrator__",
             speaker_order=["__narrator__"],
-            mechanics_check=MechanicsTrigger(requires_roll=narrator_roll is not None),
-            character_rolls=narrator_rolls,
-            resolved_roll=narrator_roll,
+            dice_mode="disabled",
+            manual_dice_value=None,
+            mechanics_check=MechanicsTrigger(requires_roll=False),
+            character_rolls={},
+            resolved_roll=None,
         )
         character = primary_character
         actor_id = "__narrator__"
@@ -648,12 +654,15 @@ async def _execute_turn_stream_events(
             active_location=active_location,
             neighbors=neighbors,
             known_entities=known_entities,
+            dice_mode=req.dice_mode,
             manual_dice_override=req.manual_dice_override,
             present_characters=present_characters,
             previous_speaker_id=parent_turn.actor_id,
             character_states=char_states_for_p1,
             profile=eff_clerk,
             prompt_template=effective_prompts.get("clerk_pre_turn_system"),
+            character_choices=applied_choices,
+            message_is_synthetic=message_is_synthetic,
         )
         # Resolve active speaker selected by Phase 1 from characters present in the room
         character = (

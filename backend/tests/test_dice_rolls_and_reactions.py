@@ -6,10 +6,12 @@ from app.schemas.turn import (
     CanonicalOutcomeTier,
     CheckRole,
     CharacterCheckSpec,
+    DiceMode,
     DiceRollResult,
     MechanicsTrigger,
     PreTurnAnalysis,
     TurnNodeRecord,
+    TurnSubmitRequest,
     WorldStateSnapshot,
 )
 from app.schemas.character import (
@@ -25,6 +27,7 @@ from app.engine.phase1_pre import (
     build_tier_directives,
     resolve_dice_check,
     resolve_character_dice_checks,
+    run_phase1_pre_analysis,
 )
 from app.engine.character_agent import (
     ContestedItemCase,
@@ -35,6 +38,7 @@ from app.engine.phase3_cognition import (
     heuristic_character_cognition,
 )
 from app.engine.phase5_clerk import run_phase5_post_turn_clerk
+from app.main import _execute_turn_stream_events
 
 
 def _make_dummy_character(cid: str, name: str) -> CharacterRecord:
@@ -601,3 +605,231 @@ def test_heuristic_character_cognition_incorporates_roll_tier():
     )
     assert cog_crit_succ.valence > 0.3  # Elation / surge
     assert "flawless" in cog_crit_succ.plan.lower() or "decisive" in cog_crit_succ.plan.lower()
+
+
+# =========================================================================
+# 8. Dice Mode Toggle & Narrator Dice Suppression
+# =========================================================================
+
+def test_dice_mode_disabled_suppresses_all_rolls():
+    """In disabled mode, rolls are NEVER performed even if actions are risky or flagged."""
+    alice = _make_dummy_character("alice", "Alice")
+    specs = [
+        CharacterCheckSpec(
+            character_id="alice",
+            character_name="Alice",
+            requires_roll=True,
+            action_description="Defusing a live bomb",
+            skill_or_approach="Demolitions",
+            difficulty_class=18,
+            relevant_modifier=2,
+            check_role="active_attempt",
+        )
+    ]
+    results = resolve_character_dice_checks(
+        [alice],
+        character_checks=specs,
+        fallback_trigger=MechanicsTrigger(requires_roll=True),
+        user_message="I defuse the bomb",
+        dice_mode="disabled",
+    )
+    assert results == {}
+
+
+def test_dice_mode_forced_random_guarantees_roll():
+    """In forced mode with no manual override, a random roll is guaranteed for the active character."""
+    alice = _make_dummy_character("alice", "Alice")
+    bob = _make_dummy_character("bob", "Bob")
+    # Neither flagged as requiring roll:
+    specs = [
+        CharacterCheckSpec(
+            character_id="alice",
+            character_name="Alice",
+            requires_roll=False,
+            action_description="Standing by",
+            skill_or_approach="Observation",
+            difficulty_class=10,
+            relevant_modifier=0,
+            check_role="active_attempt",
+        ),
+        CharacterCheckSpec(
+            character_id="bob",
+            character_name="Bob",
+            requires_roll=False,
+            action_description="Watching the door",
+            skill_or_approach="Observation",
+            difficulty_class=10,
+            relevant_modifier=0,
+            check_role="co_present_bystander",
+        ),
+    ]
+    results = resolve_character_dice_checks(
+        [alice, bob],
+        character_checks=specs,
+        fallback_trigger=MechanicsTrigger(requires_roll=False),
+        user_message="Alice looks around while Bob watches.",
+        dice_mode="forced",
+        manual_override=None,
+        active_speaker_id="alice",
+    )
+    # Alice (active speaker) must be forced to roll
+    assert "alice" in results
+    assert results["alice"].is_manual_override is False
+    assert 1 <= results["alice"].d20_raw <= 20
+    # Bystander Bob should not be rolled in forced random
+    assert "bob" not in results
+
+
+def test_dice_mode_forced_pinned_override():
+    """In forced mode with manual override value, all characters adopt it."""
+    alice = _make_dummy_character("alice", "Alice")
+    bob = _make_dummy_character("bob", "Bob")
+    specs = [
+        CharacterCheckSpec(
+            character_id="alice",
+            character_name="Alice",
+            requires_roll=True,
+            action_description="Negotiating terms",
+            skill_or_approach="Charm",
+            difficulty_class=15,
+            relevant_modifier=3,
+            check_role="active_attempt",
+        )
+    ]
+    results = resolve_character_dice_checks(
+        [alice, bob],
+        character_checks=specs,
+        fallback_trigger=MechanicsTrigger(requires_roll=False),
+        user_message="Alice negotiates while Bob listens.",
+        dice_mode="forced",
+        manual_override=18,
+        active_speaker_id="alice",
+    )
+    assert "alice" in results
+    assert results["alice"].d20_raw == 18
+    assert results["alice"].is_manual_override is True
+    assert results["alice"].modifier == 3
+
+    assert "bob" in results
+    assert results["bob"].d20_raw == 18
+    assert results["bob"].is_manual_override is True
+    assert results["bob"].check_role == "co_present_bystander"
+
+
+def test_turn_submit_request_dice_mode_reconciliation():
+    """TurnSubmitRequest reconciles manual override and disabled mode cleanly."""
+    # manual override promotes to forced
+    req1 = TurnSubmitRequest(user_message="Hello", manual_dice_override=12)
+    assert req1.dice_mode == "forced"
+    assert req1.manual_dice_override == 12
+
+    # disabled mode clears manual override
+    req2 = TurnSubmitRequest(user_message="Hello", dice_mode="disabled", manual_dice_override=12)
+    assert req2.dice_mode == "disabled"
+    assert req2.manual_dice_override is None
+
+    # default is auto
+    req3 = TurnSubmitRequest(user_message="Hello")
+    assert req3.dice_mode == "auto"
+    assert req3.manual_dice_override is None
+
+
+def test_pre_turn_analysis_legacy_deserialization_and_dice_mode_invariants():
+    """PreTurnAnalysis validates dice_mode invariants and deserializes legacy turns properly."""
+    # Deserializing legacy turn with manual override in resolved_roll
+    legacy_data = {
+        "user_sentiment": "neutral",
+        "subtext_interpretation": "action",
+        "mentioned_entities": [],
+        "memory_search_queries": [],
+        "spatial_intent": "stay",
+        "resolved_roll": {
+            "action_description": "legacy action",
+            "skill_or_approach": "test",
+            "d20_raw": 14,
+            "modifier": 0,
+            "total": 14,
+            "difficulty_class": 10,
+            "narrative_directive": "done",
+            "outcome_tier": "Clean Success",
+            "is_manual_override": True,
+        },
+    }
+    analysis = PreTurnAnalysis.model_validate(legacy_data)
+    assert analysis.dice_mode == "forced"
+    assert analysis.manual_dice_value == 14
+
+    # Disabled mode must enforce empty rolls
+    roll = DiceRollResult(
+        action_description="test",
+        skill_or_approach="test",
+        d20_raw=10,
+        modifier=0,
+        total=10,
+        difficulty_class=10,
+        narrative_directive="test",
+        outcome_tier="Clean Success",
+    )
+    analysis_disabled = PreTurnAnalysis(
+        user_sentiment="neutral",
+        subtext_interpretation="action",
+        mentioned_entities=[],
+        memory_search_queries=[],
+        spatial_intent="stay",
+        dice_mode="disabled",
+        resolved_roll=roll,
+        character_rolls={"c1": roll},
+    )
+    assert analysis_disabled.dice_mode == "disabled"
+    assert analysis_disabled.resolved_roll is None
+    assert analysis_disabled.character_rolls == {}
+    assert analysis_disabled.mechanics_check.requires_roll is False
+
+
+async def test_narrator_mode_never_rolls_dice_under_any_circumstance(temp_repo):
+    """In narrator mode, dice should NEVER be rolled under any circumstance."""
+    camp_id = "camp_neon_rust_default"
+
+    # 1. Narrator describe
+    events = []
+    async for packet in _execute_turn_stream_events(
+        campaign_id=camp_id,
+        req=TurnSubmitRequest(
+            user_message="",
+            narrative_mode="describe",
+            manual_dice_override=19,  # Even if an override were provided, narrator mode disables it
+        ),
+    ):
+        events.append(packet)
+
+    turn_saved_ev = next(e for e in events if e["event"] == "turn_saved")
+    saved_turn = turn_saved_ev["data"]
+    pre_turn = saved_turn["pre_turn"]
+
+    assert saved_turn["actor_id"] == "__narrator__"
+    assert pre_turn["dice_mode"] == "disabled"
+    assert pre_turn["resolved_roll"] is None
+    assert pre_turn.get("character_rolls") in (None, {})
+    assert pre_turn["mechanics_check"]["requires_roll"] is False
+
+    # 2. Narrator perception check
+    events_perc = []
+    async for packet in _execute_turn_stream_events(
+        campaign_id=camp_id,
+        req=TurnSubmitRequest(
+            user_message="Check for hidden bugs in the wiring",
+            narrative_mode="perception",
+            narrator_directive="Check for hidden bugs in the wiring",
+        ),
+    ):
+        events_perc.append(packet)
+
+    turn_saved_perc = next(e for e in events_perc if e["event"] == "turn_saved")
+    saved_turn_perc = turn_saved_perc["data"]
+    pre_turn_perc = saved_turn_perc["pre_turn"]
+
+    assert saved_turn_perc["actor_id"] == "__narrator__"
+    assert pre_turn_perc["dice_mode"] == "disabled"
+    assert pre_turn_perc["resolved_roll"] is None
+    assert pre_turn_perc.get("character_rolls") in (None, {})
+    assert pre_turn_perc["mechanics_check"]["requires_roll"] is False

@@ -21,6 +21,7 @@ from app.schemas.character import CharacterRecord, CharacterStateSnapshot, Cogni
 from app.schemas.turn import (
     CanonicalOutcomeTier,
     CharacterSpotlightRole,
+    ChoiceResolution,
     Phase3ProgressCallback,
     Phase3ProgressEvent,
     Phase3RosterEntry,
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 _RECALL_RE = re.compile(r"<recall>(.*?)</recall>", re.DOTALL | re.IGNORECASE)
 _FEELING_RE = re.compile(r"<feeling(?P<attrs>[^>]*)>(?P<text>.*?)</feeling>", re.DOTALL | re.IGNORECASE)
 _WANT_RE = re.compile(r"<want>(.*?)</want>", re.DOTALL | re.IGNORECASE)
+_SELECTED_CHOICE_RE = re.compile(r"<selected_choice>(.*?)</selected_choice>", re.DOTALL | re.IGNORECASE)
 _PLAN_RE = re.compile(r"<plan>(.*?)</plan>", re.DOTALL | re.IGNORECASE)
 _VALENCE_ATTR_RE = re.compile(r'valence=["\']([+-]?\d+(?:\.\d+)?)["\']', re.IGNORECASE)
 _AROUSAL_ATTR_RE = re.compile(r'arousal=["\']([+-]?\d+(?:\.\d+)?)["\']', re.IGNORECASE)
@@ -82,6 +84,8 @@ def parse_cognition_xml(
                 pass
 
     want = want_match.group(1).strip() if want_match else fallback_state.active_want
+    choice_match = _SELECTED_CHOICE_RE.search(cognition_xml)
+    selected_choice = choice_match.group(1).strip() if choice_match else None
     plan = plan_match.group(1).strip() if plan_match else fallback_state.active_plan
 
     return CognitionBlock(
@@ -90,6 +94,7 @@ def parse_cognition_xml(
         valence=round(valence, 2),
         arousal=round(arousal, 2),
         want=want,
+        selected_choice=selected_choice,
         plan=plan,
     )
 
@@ -150,6 +155,7 @@ def heuristic_character_cognition(
     pre_turn: PreTurnAnalysis,
     prior_cues: list[PriorCognitionCue] | None = None,
     role: CharacterSpotlightRole = "primary_speaker",
+    choice_resolution: ChoiceResolution | None = None,
 ) -> CognitionBlock:
     """Generate a deterministic, high-quality fallback CognitionBlock without LLM."""
     sentiment_lower = pre_turn.user_sentiment.lower()
@@ -234,7 +240,7 @@ def heuristic_character_cognition(
             f"observing {c.character_name}'s {c.feeling_summary}" for c in prior_cues
         )
 
-    return CognitionBlock(
+    cog = CognitionBlock(
         recall="\n".join(recall_bullets),
         feeling=f"{previous_state.mood_label}.{cues_text}",
         valence=new_valence,
@@ -243,6 +249,10 @@ def heuristic_character_cognition(
         plan="\n".join(plan_bullets),
         skipped=False,
     )
+    if choice_resolution:
+        from app.engine.choices import coerce_choice_compliance
+        cog = coerce_choice_compliance(cog, choice_resolution, previous_state)
+    return cog
 
 
 async def run_character_cognition_agent(
@@ -261,6 +271,7 @@ async def run_character_cognition_agent(
     prior_cues: list[PriorCognitionCue] | None = None,
     profile: ModelProfile | None = None,
     system_prompt_template: str | None = None,
+    choice_resolution: ChoiceResolution | None = None,
 ) -> CognitionBlock:
     """Execute a single character subconscious cognition agent turn."""
     template = system_prompt_template or get_default_prompt(
@@ -302,19 +313,26 @@ async def run_character_cognition_agent(
     roll_text = ""
     if char_roll:
         r = char_roll
-        directive_line = f"- Plan Directive: {r.plan_directive}\n" if r.plan_directive else f"- Directive: {r.narrative_directive}\n"
-        roll_text = (
-            f"\n=== MECHANICS CHECK OUTCOME FOR {character.name} ===\n"
-            f"- Action: {r.action_description} ({r.skill_or_approach}, Role: {r.check_role})\n"
-            f"- Result: [{r.outcome_tier}] (d20({r.d20_raw}) + {r.modifier} = {r.total} vs DC {r.difficulty_class})\n"
-            f"{directive_line}"
-            f"- CRITICAL RULE: Your tactical <plan> MUST strictly reflect this [{r.outcome_tier}]:\n"
-            f"  * Critical Failure: Your planned action backfires with severe consequences. Adapt your plan to handle the disaster.\n"
-            f"  * Failure with Consequences: Your attempt fails and creates complications/resistance.\n"
-            f"  * Simple Failure: Your attempt simply doesn't succeed; no immediate aggravations.\n"
-            f"  * Clean Success: You succeed cleanly as intended.\n"
-            f"  * Critical Success: You succeed beyond expectations, gaining an extra advantage/opening.\n"
-        )
+        if getattr(r, "is_choice_gate", False):
+            roll_text = (
+                f"\n=== MECHANICS CHECK OUTCOME FOR {character.name} ===\n"
+                f"- Decisive Moment: Resulted in [{r.outcome_tier}] (d20({r.d20_raw}) = {r.total} vs DC {r.difficulty_class})\n"
+                f"- Directive: {r.plan_directive}\n"
+            )
+        else:
+            directive_line = f"- Plan Directive: {r.plan_directive}\n" if r.plan_directive else f"- Directive: {r.narrative_directive}\n"
+            roll_text = (
+                f"\n=== MECHANICS CHECK OUTCOME FOR {character.name} ===\n"
+                f"- Action: {r.action_description} ({r.skill_or_approach}, Role: {r.check_role})\n"
+                f"- Result: [{r.outcome_tier}] (d20({r.d20_raw}) + {r.modifier} = {r.total} vs DC {r.difficulty_class})\n"
+                f"{directive_line}"
+                f"- CRITICAL RULE: Your tactical <plan> MUST strictly reflect this [{r.outcome_tier}]:\n"
+                f"  * Critical Failure: Your planned action backfires with severe consequences. Adapt your plan to handle the disaster.\n"
+                f"  * Failure with Consequences: Your attempt fails and creates complications/resistance.\n"
+                f"  * Simple Failure: Your attempt simply doesn't succeed; no immediate aggravations.\n"
+                f"  * Clean Success: You succeed cleanly as intended.\n"
+                f"  * Critical Success: You succeed beyond expectations, gaining an extra advantage/opening.\n"
+            )
 
     rel_text = (
         "; ".join(f"{k}: {v}" for k, v in previous_state.relationship_notes.items())
@@ -342,10 +360,15 @@ async def run_character_cognition_agent(
             + "\n*(Note: You observe their outward behavior and stance, not their private subconscious memories.)*\n"
         )
 
-    if char_roll and char_roll.outcome_tier in ("Critical Failure", "Critical Success"):
-        anchor_guideline = f"*(Anchor guideline: This turn resulted in a [{char_roll.outcome_tier}]! You are explicitly permitted a sharp immediate emotional shift in valence and arousal from this previous baseline.)*"
+    if (char_roll and char_roll.outcome_tier in ("Critical Failure", "Critical Success")) or choice_resolution:
+        anchor_guideline = f"*(Anchor guideline: This turn involves a critical outcome or direct choice constraint! You are explicitly permitted a sharp immediate emotional shift in valence and arousal from this previous baseline.)*"
     else:
         anchor_guideline = "*(Anchor guideline: evolve valence and arousal gradually from this previous baseline unless this turn brings a critical dramatic shock or danger.)*"
+
+    choice_directive_text = ""
+    if choice_resolution:
+        from app.engine.choices import render_choice_directive
+        choice_directive_text = render_choice_directive(choice_resolution, character.name) + "\n"
 
     user_prompt = (
         f"Character: {character.name} (id='{character.id}', Role in scene: {role})\n"
@@ -371,6 +394,7 @@ async def run_character_cognition_agent(
         f"- User Sentiment: {pre_turn.user_sentiment}\n"
         f"- Subtext Interpretation: {pre_turn.subtext_interpretation}\n"
         f"{roll_text}\n"
+        f"{choice_directive_text}"
         f"Recalled Scoped Memories & Lore:\n"
         f"{recalled_text}\n\n"
         f"User Action / Dialogue:\n"
@@ -387,6 +411,16 @@ async def run_character_cognition_agent(
     p3_mod = sys.modules.get("app.engine.phase3_actor")
     active_client = getattr(p3_mod, "llm_client", llm_client) if p3_mod else llm_client
 
+    from app.engine.choices import (
+        build_directed_cognition_schema,
+        build_undirected_cognition_schema,
+        coerce_choice_compliance,
+    )
+    if choice_resolution:
+        eff_schema = build_directed_cognition_schema(choice_resolution)
+    else:
+        eff_schema = build_undirected_cognition_schema()
+
     try:
         cog = await active_client.complete_structured(
             messages,
@@ -394,15 +428,8 @@ async def run_character_cognition_agent(
             profile=eff_profile,
             max_tokens=1024,
             temperature=0.7,
-            required_properties=[
-                "recall",
-                "feeling",
-                "valence",
-                "arousal",
-                "want",
-                "plan",
-                "skipped",
-            ],
+            required_properties=eff_schema.get("required"),
+            json_schema=eff_schema,
         )
 
         cog.recall = _format_cognition_bullets(cog.recall)
@@ -429,6 +456,9 @@ async def run_character_cognition_agent(
         if not cog.plan:
             cog.plan = previous_state.active_plan or "Listen and react to the user."
 
+        if choice_resolution:
+            cog = coerce_choice_compliance(cog, choice_resolution, previous_state)
+
         cog.skipped = False
         return cog
     except Exception as exc:
@@ -445,6 +475,7 @@ async def run_character_cognition_agent(
             pre_turn=pre_turn,
             prior_cues=prior_cues,
             role=role,
+            choice_resolution=choice_resolution,
         )
 
 
@@ -480,9 +511,12 @@ async def run_phase3_multi_cognition(
         return {}
 
     primary_id = context.pre_turn.active_speaker_id or context.present_characters[0].id
-    ordered_characters = sorted(
+    from app.engine.choices import cognition_dispatch_order
+    choice_target_ids = set(context.pre_turn.choice_resolutions.keys())
+    ordered_characters = cognition_dispatch_order(
         context.present_characters,
-        key=lambda c: (0 if c.id == primary_id else 1, c.id),
+        primary_id=primary_id,
+        choice_target_ids=choice_target_ids,
     )
     roster = [
         Phase3RosterEntry(
@@ -520,6 +554,7 @@ async def run_phase3_multi_cognition(
                         role=entry.role,
                     )
                 )
+            c_res = context.pre_turn.choice_resolutions.get(entry.character_id)
             try:
                 char_prev = context.all_character_states.get(
                     char.id
@@ -545,6 +580,7 @@ async def run_phase3_multi_cognition(
                     prior_cues=None,
                     profile=profile,
                     system_prompt_template=cognition_system_template,
+                    choice_resolution=c_res,
                 )
                 used_fallback = False
             except Exception as err:
@@ -560,6 +596,7 @@ async def run_phase3_multi_cognition(
                     previous_state=char_prev,
                     pre_turn=context.pre_turn,
                     role=entry.role,
+                    choice_resolution=c_res,
                 )
                 used_fallback = True
 
@@ -573,6 +610,8 @@ async def run_phase3_multi_cognition(
                         role=entry.role,
                         cognition=cog,
                         used_fallback=used_fallback,
+                        choice_compliance=cog.choice_compliance,
+                        choice_compliance_note=cog.choice_compliance_note,
                     )
                 )
             return entry.character_id, cog
@@ -596,6 +635,7 @@ async def run_phase3_multi_cognition(
                         role=entry.role,
                     )
                 )
+            c_res = context.pre_turn.choice_resolutions.get(entry.character_id)
             try:
                 char_prev = context.all_character_states.get(
                     char.id
@@ -621,6 +661,7 @@ async def run_phase3_multi_cognition(
                     prior_cues=list(prior_cues),
                     profile=profile,
                     system_prompt_template=cognition_system_template,
+                    choice_resolution=c_res,
                 )
                 used_fallback = False
             except Exception as err:
@@ -637,6 +678,7 @@ async def run_phase3_multi_cognition(
                     pre_turn=context.pre_turn,
                     prior_cues=list(prior_cues),
                     role=entry.role,
+                    choice_resolution=c_res,
                 )
                 used_fallback = True
 
@@ -673,6 +715,8 @@ async def run_phase3_multi_cognition(
                         role=entry.role,
                         cognition=cog,
                         used_fallback=used_fallback,
+                        choice_compliance=cog.choice_compliance,
+                        choice_compliance_note=cog.choice_compliance_note,
                     )
                 )
 

@@ -506,9 +506,12 @@ def build_zone4_ephemeral_tail_frame(
             cog_blocks: list[str] = []
             present_chars = present_characters or [character]
             primary_id = pre_turn.active_speaker_id or character.id
-            ordered_chars = sorted(
+            from app.engine.choices import cognition_dispatch_order
+            choice_target_ids = set(pre_turn.choice_resolutions.keys())
+            ordered_chars = cognition_dispatch_order(
                 present_chars,
-                key=lambda c: (0 if c.id == primary_id else 1, c.id),
+                primary_id=primary_id,
+                choice_target_ids=choice_target_ids,
             )
             for pc in ordered_chars:
                 cog = established_cognitions.get(pc.id)

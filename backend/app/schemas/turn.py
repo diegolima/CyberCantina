@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Literal
+from typing import Any, Awaitable, Callable, Final, Literal
+import re
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -35,6 +36,82 @@ CheckRole = Literal[
     "scene_hazard",
     "co_present_bystander",
 ]
+
+DiceMode = Literal[
+    "auto",
+    "forced",
+    "disabled",
+]
+
+ChoiceGate = Literal[
+    "any",
+    "critical_success",
+    "success_plus",
+    "failure_minus",
+    "critical_failure",
+]
+
+ChoiceStatus = Literal[
+    "mandatory",
+    "constrained",
+    "free_with_exclusions",
+]
+
+ChoiceComplianceOutcome = Literal[
+    "complied",
+    "coerced",
+]
+
+DEFAULT_GATE_DC: Final[int] = 12
+
+
+class CharacterChoiceOption(BaseModel):
+    """A single choice/possibility directed to a character."""
+
+    label: str = Field(min_length=1, max_length=80)
+    gate: ChoiceGate = "any"
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def _sanitize_label(cls, v: Any) -> str:
+        if v is None:
+            return ""
+        s = str(v).strip()
+        s = re.sub(r"\s+", " ", s)
+        s = re.sub(r"[<>]", "", s).strip()
+        return s
+
+
+class CharacterChoiceSet(BaseModel):
+    """Collection of options presented to a character, with an optional custom gate DC."""
+
+    options: list[CharacterChoiceOption] = Field(min_length=1, max_length=6)
+    gate_difficulty_class: int = Field(default=DEFAULT_GATE_DC, ge=5, le=25)
+
+    @model_validator(mode="after")
+    def _unique_labels_casefold(self) -> CharacterChoiceSet:
+        seen = set()
+        for opt in self.options:
+            norm = opt.label.casefold()
+            if norm in seen:
+                raise ValueError(f"Duplicate choice option label: '{opt.label}'")
+            seen.add(norm)
+        return self
+
+    @property
+    def has_gates(self) -> bool:
+        return any(opt.gate != "any" for opt in self.options)
+
+
+class ChoiceResolution(BaseModel):
+    """Unchangeable audit snapshot of what Phase 3 was told. Never recomputed on load."""
+
+    character_id: str
+    status: ChoiceStatus
+    gate_roll_tier: CanonicalOutcomeTier | None = None
+    allowed: list[str] = Field(default_factory=list)
+    excluded: list[str] = Field(default_factory=list)
+    ruleset_version: int = 1
 
 
 class MechanicsTrigger(BaseModel):
@@ -85,6 +162,7 @@ class DiceRollResult(BaseModel):
     character_name: str | None = None
     check_role: CheckRole = "active_attempt"
     is_manual_override: bool = False
+    is_choice_gate: bool = False
     action_description: str
     skill_or_approach: str
     d20_raw: int = Field(ge=1, le=20)
@@ -146,16 +224,68 @@ class PreTurnLLMOutput(BaseModel):
 class PreTurnAnalysis(PreTurnLLMOutput):
     """Hydrated Phase 1 pre-turn analysis with deterministic per-character RNG results."""
 
+    dice_mode: DiceMode = Field(
+        default="auto",
+        description="Effective RNG mode ('auto', 'forced', or 'disabled') applied to this turn.",
+    )
+    manual_dice_value: int | None = Field(
+        default=None,
+        ge=1,
+        le=20,
+        description="Pinned d20 value if user specified one in 'forced' mode; None when random or non-forced.",
+    )
     character_rolls: dict[str, DiceRollResult] = Field(default_factory=dict)
     resolved_roll: DiceRollResult | None = None
+    character_choices: dict[str, CharacterChoiceSet] = Field(default_factory=dict)
+    choice_resolutions: dict[str, ChoiceResolution] = Field(default_factory=dict)
+    dice_mode_promoted: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _backfill_legacy_dice_mode(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "dice_mode" not in data or data["dice_mode"] is None:
+                char_rolls = data.get("character_rolls") or {}
+                resolved = data.get("resolved_roll")
+                has_manual = False
+                manual_val = None
+                if isinstance(resolved, dict) and resolved.get("is_manual_override"):
+                    has_manual = True
+                    manual_val = resolved.get("d20_raw")
+                elif isinstance(char_rolls, dict):
+                    for r in char_rolls.values():
+                        if isinstance(r, dict) and r.get("is_manual_override"):
+                            has_manual = True
+                            manual_val = r.get("d20_raw")
+                            break
+                if has_manual:
+                    data["dice_mode"] = "forced"
+                    data["manual_dice_value"] = manual_val
+                else:
+                    data["dice_mode"] = "auto"
+        return data
 
     @model_validator(mode="after")
     def _populate_resolved_roll(self) -> PreTurnAnalysis:
+        if self.dice_mode == "disabled":
+            self.character_rolls = {}
+            self.resolved_roll = None
+            self.mechanics_check.requires_roll = False
+            for c in self.character_checks:
+                c.requires_roll = False
+            self.manual_dice_value = None
+            return self
+
+        if self.dice_mode != "forced":
+            self.manual_dice_value = None
+
         if self.resolved_roll is None and self.character_rolls:
             if self.active_speaker_id and self.active_speaker_id in self.character_rolls:
                 self.resolved_roll = self.character_rolls[self.active_speaker_id]
             else:
                 self.resolved_roll = next(iter(self.character_rolls.values()))
+        elif not self.character_rolls:
+            self.resolved_roll = None
         return self
 
 
@@ -538,6 +668,8 @@ class Phase3ProgressEvent(BaseModel):
     cognitions: dict[str, CognitionBlock] | None = None
     character_names: dict[str, str] | None = None
     used_fallback: bool = False
+    choice_compliance: ChoiceComplianceOutcome | None = None
+    choice_compliance_note: str | None = None
     error: str | None = None
 
 
@@ -674,11 +806,15 @@ class TurnSubmitRequest(BaseModel):
             "Pass an earlier turn ID to regenerate (swipe) or branch the timeline."
         ),
     )
+    dice_mode: DiceMode = Field(
+        default="auto",
+        description="RNG mechanics mode: 'auto' (LLM decides if roll needed), 'forced' (guarantees a roll), 'disabled' (roll never performed).",
+    )
     manual_dice_override: int | None = Field(
         default=None,
         ge=1,
         le=20,
-        description="Optional manual d20 roll value for testing or tabletop override.",
+        description="Optional manual d20 roll value (1-20), valid only when dice_mode is 'forced'.",
     )
     override_location_id: str | None = Field(
         default=None,
@@ -705,6 +841,10 @@ class TurnSubmitRequest(BaseModel):
         le=1440,
         description="Optional explicit minutes to advance the in-game clock when narrative_mode is 'advance'.",
     )
+    character_choices: dict[str, CharacterChoiceSet] = Field(
+        default_factory=dict,
+        description="Optional director choices keyed by character_id to guide Phase 3 planning.",
+    )
 
     @field_validator("user_message", mode="before")
     @classmethod
@@ -712,3 +852,15 @@ class TurnSubmitRequest(BaseModel):
         if v is None:
             return ""
         return str(v)
+
+    @model_validator(mode="after")
+    def _reconcile_dice_mode_and_override(self) -> TurnSubmitRequest:
+        if "dice_mode" not in self.model_fields_set and self.manual_dice_override is not None:
+            self.dice_mode = "forced"
+        if self.dice_mode != "forced":
+            self.manual_dice_override = None
+        if self.dice_mode == "disabled" and any(
+            cs.has_gates for cs in self.character_choices.values()
+        ):
+            self.dice_mode = "auto"
+        return self

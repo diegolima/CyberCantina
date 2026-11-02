@@ -24,6 +24,7 @@ from app.engine.llm_client import auto_configure_ollama_models, llm_client
 from app.routers.auth import router as auth_router
 from app.routers.campaigns import _execute_turn_stream_events, router as campaigns_router
 from app.routers.characters import router as characters_router
+from app.routers.mechanics import router as mechanics_router
 from app.routers.notes import router as notes_router
 from app.routers.prompts import router as prompts_router
 from app.routers.settings import router as settings_router
@@ -107,4 +108,5 @@ app.include_router(prompts_router)
 app.include_router(notes_router)
 app.include_router(worlds_router)
 app.include_router(characters_router)
+app.include_router(mechanics_router)
 app.include_router(campaigns_router)
