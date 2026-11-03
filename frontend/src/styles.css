@@ -552,6 +552,21 @@ body {
   color: var(--text-primary);
 }
 
+.choices-char-count {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  min-width: 34px;
+  text-align: right;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.choices-char-count--limit {
+  color: var(--accent-amber);
+  font-weight: 600;
+}
+
 .choices-gate-select {
   padding: 4px 8px;
   font-size: 0.74rem;

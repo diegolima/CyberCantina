@@ -375,6 +375,56 @@ def test_preview_choices_endpoint(monkeypatch: pytest.MonkeyPatch):
         assert typing_resp.status_code == 200
         typing_data = typing_resp.json()
         assert typing_data["gate_probabilities"]["critical_failure"] > 0
+
+        # Verify options exceeding 80 characters (such as reported 135 char input) are truncated without 422
+        long_text = (
+            "Realize that it's too quiet - the sound of rustling leaves and the fire crackling "
+            "remain, but there are no sounds of insects or birds"
+        )
+        assert len(long_text) > 80
+        long_payload = {
+            "choice_set": {
+                "character_id": "c_soren",
+                "options": [
+                    {"id": "opt_1", "label": long_text, "gate": "any"},
+                ],
+                "gate_difficulty_class": 12,
+            },
+            "dice_mode": "auto",
+        }
+        long_resp = client.post("/api/mechanics/choice-preview", json=long_payload)
+        assert long_resp.status_code == 200
     finally:
         main_module.app.dependency_overrides.pop(get_current_user, None)
+
+
+def test_choice_option_max_length_and_turn_submit_truncation():
+    """Verify that choice options sanitize and truncate labels to MAX_CHOICE_LABEL_LENGTH (80)."""
+    from app.schemas.turn import MAX_CHOICE_LABEL_LENGTH, TurnSubmitRequest
+    from app.schemas.mechanics import ChoicePreviewOption
+
+    long_input = (
+        "Realize that it's too quiet - the sound of rustling leaves and the fire crackling "
+        "remain, but there are no sounds of insects or birds"
+    )
+    assert len(long_input) > 80
+
+    opt = CharacterChoiceOption(label=long_input)
+    assert len(opt.label) == MAX_CHOICE_LABEL_LENGTH
+    assert opt.label == long_input[:MAX_CHOICE_LABEL_LENGTH]
+
+    preview_opt = ChoicePreviewOption(label=long_input)
+    assert len(preview_opt.label) == MAX_CHOICE_LABEL_LENGTH
+    assert preview_opt.label == long_input[:MAX_CHOICE_LABEL_LENGTH]
+
+    req = TurnSubmitRequest(
+        user_message="Look around",
+        character_choices={
+            "char_123": CharacterChoiceSet(
+                options=[CharacterChoiceOption(label=long_input)]
+            )
+        },
+    )
+    assert len(req.character_choices["char_123"].options[0].label) == 80
+
 

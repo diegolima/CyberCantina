@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.turn import (
     DEFAULT_GATE_DC,
+    MAX_CHOICE_LABEL_LENGTH,
+    MAX_CHOICE_OPTIONS,
     CanonicalOutcomeTier,
     CharacterChoiceSet,
     ChoiceGate,
@@ -18,7 +20,7 @@ from app.schemas.turn import (
 
 class ChoicePreviewOption(BaseModel):
     id: str = ""
-    label: str = Field(default="", max_length=80)
+    label: str = Field(default="", max_length=MAX_CHOICE_LABEL_LENGTH)
     gate: ChoiceGate = "any"
 
     @field_validator("label", mode="before")
@@ -29,12 +31,12 @@ class ChoicePreviewOption(BaseModel):
         s = str(v).strip()
         s = re.sub(r"\s+", " ", s)
         s = re.sub(r"[<>]", "", s).strip()
-        return s
+        return s[:MAX_CHOICE_LABEL_LENGTH]
 
 
 class ChoicePreviewSet(BaseModel):
     character_id: str = ""
-    options: list[ChoicePreviewOption] = Field(default_factory=list, max_length=10)
+    options: list[ChoicePreviewOption] = Field(default_factory=list, max_length=MAX_CHOICE_OPTIONS)
     gate_difficulty_class: int = Field(default=DEFAULT_GATE_DC, ge=1, le=30)
 
 

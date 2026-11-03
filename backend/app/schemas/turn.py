@@ -63,12 +63,14 @@ ChoiceComplianceOutcome = Literal[
 ]
 
 DEFAULT_GATE_DC: Final[int] = 12
+MAX_CHOICE_LABEL_LENGTH: Final[int] = 80
+MAX_CHOICE_OPTIONS: Final[int] = 6
 
 
 class CharacterChoiceOption(BaseModel):
     """A single choice/possibility directed to a character."""
 
-    label: str = Field(min_length=1, max_length=80)
+    label: str = Field(min_length=1, max_length=MAX_CHOICE_LABEL_LENGTH)
     gate: ChoiceGate = "any"
 
     @field_validator("label", mode="before")
@@ -79,14 +81,14 @@ class CharacterChoiceOption(BaseModel):
         s = str(v).strip()
         s = re.sub(r"\s+", " ", s)
         s = re.sub(r"[<>]", "", s).strip()
-        return s
+        return s[:MAX_CHOICE_LABEL_LENGTH]
 
 
 class CharacterChoiceSet(BaseModel):
     """Collection of options presented to a character, with an optional custom gate DC."""
 
-    options: list[CharacterChoiceOption] = Field(min_length=1, max_length=6)
-    gate_difficulty_class: int = Field(default=DEFAULT_GATE_DC, ge=5, le=25)
+    options: list[CharacterChoiceOption] = Field(min_length=1, max_length=MAX_CHOICE_OPTIONS)
+    gate_difficulty_class: int = Field(default=DEFAULT_GATE_DC, ge=1, le=30)
 
     @model_validator(mode="after")
     def _unique_labels_casefold(self) -> CharacterChoiceSet:

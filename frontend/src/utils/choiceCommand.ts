@@ -3,6 +3,8 @@ import {
   CharacterChoiceSet,
   ChoiceGate,
   DEFAULT_GATE_DC,
+  MAX_CHOICE_LABEL_LENGTH,
+  MAX_CHOICE_OPTIONS,
 } from "../types";
 
 export interface ParsedChoiceCommand {
@@ -138,9 +140,12 @@ export function parseChoiceSlashCommand(
     if (!label) continue;
     options.push({
       id: `opt_${Date.now()}_${optIndex++}`,
-      label,
+      label: label.slice(0, MAX_CHOICE_LABEL_LENGTH),
       gate,
     });
+    if (options.length >= MAX_CHOICE_OPTIONS) {
+      break;
+    }
   }
 
   const charId = matchedChar?.id || "unknown";

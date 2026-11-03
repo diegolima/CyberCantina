@@ -409,6 +409,8 @@ export type ChoiceStatus = "available" | "eliminated";
 export type ChoiceComplianceOutcome = "followed" | "coerced" | "free_fallback";
 
 export const DEFAULT_GATE_DC = 12;
+export const MAX_CHOICE_LABEL_LENGTH = 80;
+export const MAX_CHOICE_OPTIONS = 6;
 
 export interface CharacterChoiceOption {
   id: string;

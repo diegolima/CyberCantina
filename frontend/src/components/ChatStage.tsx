@@ -35,6 +35,8 @@ import {
   DEFAULT_GATE_DC,
   DiceMode,
   DiceRollResult,
+  MAX_CHOICE_LABEL_LENGTH,
+  MAX_CHOICE_OPTIONS,
   NarrativeMode,
   NeighborLocationView,
   Phase3TurnProgress,
@@ -259,6 +261,34 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     );
   }, [stagedChoices]);
 
+  const choiceSlashWarning = useMemo(() => {
+    if (!isChoiceSlashCommand(inputText)) return null;
+    const body = inputText.trim().replace(/^\/choices?\s*/i, "").trim();
+    const colonIdx = body.indexOf(":");
+    const optionsPart =
+      colonIdx !== -1
+        ? body.slice(colonIdx + 1).trim()
+        : body.includes("|")
+        ? body
+        : "";
+    if (!optionsPart) return null;
+    const segments = optionsPart.split("|");
+    const overLimit = segments
+      .map((s) =>
+        s
+          .replace(
+            /@(critfail|botch|crit(?:ical)?|success|pass|fail(?:ure)?|any)\b/i,
+            ""
+          )
+          .trim()
+      )
+      .filter((lbl) => lbl.length > MAX_CHOICE_LABEL_LENGTH);
+    if (overLimit.length > 0) {
+      return `Choice label exceeds ${MAX_CHOICE_LABEL_LENGTH} character limit (will be trimmed)`;
+    }
+    return null;
+  }, [inputText]);
+
   // Decision D2: When gate choices are staged, promote disabled dice mode to auto
   useEffect(() => {
     if (hasActiveGates && diceMode === "disabled") {
@@ -338,6 +368,9 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         options: [],
         gate_difficulty_class: DEFAULT_GATE_DC,
       };
+      if (existing.options.length >= MAX_CHOICE_OPTIONS) {
+        return prev;
+      }
       const newOpt: CharacterChoiceOption = {
         id: `opt_${Date.now()}_${existing.options.length + 1}`,
         label: "",
@@ -366,7 +399,17 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         [charId]: {
           ...existing,
           options: existing.options.map((opt) =>
-            opt.id === optId ? { ...opt, ...updates } : opt
+            opt.id === optId
+              ? {
+                  ...opt,
+                  ...updates,
+                  ...(updates.label !== undefined
+                    ? {
+                        label: updates.label.slice(0, MAX_CHOICE_LABEL_LENGTH),
+                      }
+                    : {}),
+                }
+              : opt
           ),
         },
       };
@@ -619,7 +662,13 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     if (totalStagedOptionsCount > 0) {
       const cleaned: Record<string, CharacterChoiceSet> = {};
       for (const [cid, cs] of Object.entries(stagedChoices)) {
-        const validOpts = cs.options.filter((o) => o.label.trim().length > 0);
+        const validOpts = cs.options
+          .filter((o) => o.label.trim().length > 0)
+          .slice(0, MAX_CHOICE_OPTIONS)
+          .map((o) => ({
+            ...o,
+            label: o.label.trim().slice(0, MAX_CHOICE_LABEL_LENGTH),
+          }));
         if (validOpts.length > 0) {
           cleaned[cid] = {
             ...cs,
@@ -2503,9 +2552,10 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                         className="choices-option-input"
                         placeholder="Choice label (e.g. Open the blast door, Back away slowly...)"
                         value={opt.label}
+                        maxLength={MAX_CHOICE_LABEL_LENGTH}
                         onChange={(e) =>
                           handleUpdateOption(activeChoiceCharId, opt.id, {
-                            label: e.target.value,
+                            label: e.target.value.slice(0, MAX_CHOICE_LABEL_LENGTH),
                           })
                         }
                         onKeyDown={(e) => {
@@ -2515,6 +2565,16 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                           }
                         }}
                       />
+                      <span
+                        className={`choices-char-count ${
+                          opt.label.length >= MAX_CHOICE_LABEL_LENGTH
+                            ? "choices-char-count--limit"
+                            : ""
+                        }`}
+                        title={`Character limit: ${opt.label.length}/${MAX_CHOICE_LABEL_LENGTH}`}
+                      >
+                        {opt.label.length}/{MAX_CHOICE_LABEL_LENGTH}
+                      </span>
                       <select
                         className="choices-gate-select"
                         value={opt.gate || "any"}
@@ -2597,11 +2657,24 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                   alignItems: "center",
                   gap: 5,
                 }}
+                disabled={
+                  (stagedChoices[activeChoiceCharId]?.options?.length || 0) >=
+                  MAX_CHOICE_OPTIONS
+                }
                 onClick={() => handleAddOption(activeChoiceCharId)}
+                title={
+                  (stagedChoices[activeChoiceCharId]?.options?.length || 0) >=
+                  MAX_CHOICE_OPTIONS
+                    ? `Maximum of ${MAX_CHOICE_OPTIONS} choices reached`
+                    : undefined
+                }
               >
                 <Plus size={12} />
                 <span>
                   Add Choice for {activeCharRecord?.name || "Character"}
+                  {stagedChoices[activeChoiceCharId]?.options?.length
+                    ? ` (${stagedChoices[activeChoiceCharId]?.options?.length}/${MAX_CHOICE_OPTIONS})`
+                    : ""}
                 </span>
               </button>
 
@@ -2699,6 +2772,24 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               />
             </div>
           </div>
+
+          {choiceSlashWarning && (
+            <div
+              style={{
+                padding: "5px 12px",
+                fontSize: "0.72rem",
+                color: "var(--accent-amber)",
+                background: "rgba(245, 158, 11, 0.08)",
+                borderTop: "1px solid rgba(245, 158, 11, 0.2)",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <AlertTriangle size={12} />
+              <span>{choiceSlashWarning}</span>
+            </div>
+          )}
 
           {/* Composer Footer Bar */}
           <div className="composer-footer">
