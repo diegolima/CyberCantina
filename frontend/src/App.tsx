@@ -1503,6 +1503,7 @@ export const App: React.FC = () => {
         <ChatStage
           bundle={bundle}
           character={campaignCharacter}
+          pendingLocationOverrideId={pendingLocationOverrideId}
           isStreaming={isStreaming}
           isPhase4Running={isPhase4Running}
           phase3Progress={phase3Progress}

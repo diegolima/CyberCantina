@@ -825,7 +825,6 @@ class TurnSubmitRequest(BaseModel):
         "describe",
         "advance",
         "complication",
-        "perception",
         "custom",
     ] = Field(
         default="standard",
@@ -845,6 +844,13 @@ class TurnSubmitRequest(BaseModel):
         default_factory=dict,
         description="Optional director choices keyed by character_id to guide Phase 3 planning.",
     )
+
+    @field_validator("narrative_mode", mode="before")
+    @classmethod
+    def _coerce_legacy_narrative_mode(cls, v: Any) -> Any:
+        if v == "perception":
+            return "custom"
+        return v
 
     @field_validator("user_message", mode="before")
     @classmethod

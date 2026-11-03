@@ -812,13 +812,13 @@ async def test_narrator_mode_never_rolls_dice_under_any_circumstance(temp_repo):
     assert pre_turn.get("character_rolls") in (None, {})
     assert pre_turn["mechanics_check"]["requires_roll"] is False
 
-    # 2. Narrator perception check
+    # 2. Narrator custom directive check
     events_perc = []
     async for packet in _execute_turn_stream_events(
         campaign_id=camp_id,
         req=TurnSubmitRequest(
             user_message="Check for hidden bugs in the wiring",
-            narrative_mode="perception",
+            narrative_mode="custom",
             narrator_directive="Check for hidden bugs in the wiring",
         ),
     ):

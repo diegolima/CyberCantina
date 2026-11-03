@@ -55,9 +55,14 @@ def build_offline_simulated_prose(
             else "No open corridors are immediately prominent."
         )
         if narrative_mode == "describe":
+            lore_note = (
+                f" Archival records mark: '{recalled_items[0].title}'."
+                if recalled_items
+                else ""
+            )
             return (
                 f"*{active_location.name} rests in quiet stasis beneath muted lighting. {active_location.description} "
-                f"Sensory markers: {env_tags_str}. {exit_desc}*"
+                f"Sensory markers: {env_tags_str}.{lore_note} {exit_desc}*"
             )
         elif narrative_mode == "advance":
             return (
@@ -69,16 +74,6 @@ def build_offline_simulated_prose(
             return (
                 f"*{active_location.name}: {comp_detail}. A burst of pale blue sparks arcs across the metal framework, "
                 f"tripping an auxiliary breaker. A low warning chime pulses three times through the ventilation.*"
-            )
-        elif narrative_mode == "perception":
-            lore_note = (
-                f" Faded industrial stenciling matches archival records: '{recalled_items[0].title}'."
-                if recalled_items
-                else ""
-            )
-            return (
-                f"*Careful inspection of {active_location.name} reveals subtle physical markers. "
-                f"Fine hairline fractures run along the deck plating near the bulkhead, and the air carries a faint ozone tang.{lore_note}*"
             )
         else:
             directive_note = narrator_directive or "The environment remains indifferent"

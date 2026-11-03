@@ -176,17 +176,17 @@ async def test_narrator_complication_mode(temp_repo: CantinaRepository) -> None:
     assert len(saved_turn["raw_prose"]) > 10
 
 
-async def test_narrator_perception_mode(temp_repo: CantinaRepository) -> None:
-    """Verify that 'perception' mode triggers environmental lore analysis and detached inspection."""
+async def test_narrator_legacy_perception_coerced_to_custom(temp_repo: CantinaRepository) -> None:
+    """Verify that legacy 'perception' input or cues are cleanly coerced to custom narrator mode."""
     camp_id = "camp_neon_rust_default"
 
     events = []
     async for packet in _execute_turn_stream_events(
         campaign_id=camp_id,
-        req=TurnSubmitRequest(
-            user_message="",
-            narrative_mode="perception",
-        ),
+        req=TurnSubmitRequest.model_validate({
+            "user_message": "[Perception check: inspect bulkhead conduits]",
+            "narrative_mode": "perception",
+        }),
     ):
         events.append(packet)
 
@@ -194,7 +194,6 @@ async def test_narrator_perception_mode(temp_repo: CantinaRepository) -> None:
     saved_turn = turn_saved_ev["data"]
 
     assert saved_turn["actor_id"] == "__narrator__"
-    assert "perception" in saved_turn["user_message"].lower() or "examine" in saved_turn["user_message"].lower()
     assert saved_turn["cognition"]["feeling"] == "Objective / Detached"
     assert len(saved_turn["raw_prose"]) > 10
 

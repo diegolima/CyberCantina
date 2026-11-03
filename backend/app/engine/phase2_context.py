@@ -436,8 +436,8 @@ def build_zone4_ephemeral_tail_frame(
     if is_narrator:
         if narrative_mode == "describe":
             default_dir = (
-                "Describe the immediate environment, lighting, acoustics, smells, and visible points of interest "
-                "with objective neutrality. Do not speak or decide for the user's character."
+                "Describe the immediate environment, lighting, acoustics, smells, visible points of interest, "
+                "and subtle observable details or lore markers with objective neutrality. Do not speak or decide for the user's character."
             )
         elif narrative_mode == "advance":
             default_dir = (
@@ -450,19 +450,13 @@ def build_zone4_ephemeral_tail_frame(
                 "an unannounced arrival, mechanical failure, alarm, or environmental hazard). "
                 "Do NOT force the protagonist's emotional or physical reaction; present the event as external fact."
             )
-        elif narrative_mode == "perception":
-            default_dir = (
-                "Detail subtle perceptual clues and environmental lore tied to this space. "
-                "Focus on what is physically observable: structural wear, hidden markings, faint odors, subtle vibrations, "
-                "or technological signatures from the recalled lore. Do not tell the protagonist how to feel."
-            )
         else:
             default_dir = (
                 "Follow the director guidance with strict objective detachment: "
                 f"{narrator_directive or 'Depict the scene objectively.'}"
             )
-        directive_text = narrator_directive if narrator_directive and narrative_mode not in ("describe", "complication", "perception") else default_dir
-        if narrator_directive and narrative_mode in ("complication", "perception"):
+        directive_text = narrator_directive if narrator_directive and narrative_mode not in ("describe", "complication") else default_dir
+        if narrator_directive and narrative_mode == "complication":
             directive_text += f" (Focus hint: {narrator_directive})"
         mind_state_section = (
             f"  <narrator_directive mode=\"{narrative_mode or 'custom'}\">\n"

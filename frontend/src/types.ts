@@ -593,8 +593,67 @@ export type NarrativeMode =
   | "describe"
   | "advance"
   | "complication"
-  | "perception"
   | "custom";
+
+export type ComposerPopoverId = "none" | "narrator" | "exits";
+export type ComposerTrayId = "none" | "pass_time" | "custom_directive" | "choices";
+
+export type EnrichFieldRole =
+  | "player_turn_prompt"
+  | "narrator_directive"
+  | "location_description"
+  | "character_persona"
+  | "lore_content";
+
+export type EnrichInstruction = "auto" | "polish" | "expand" | "concise";
+
+export type MagicContextRef =
+  | {
+      scope: "campaign_turn";
+      campaign_id: string;
+      parent_turn_id?: string | null;
+      override_location_id?: string | null;
+    }
+  | {
+      scope: "world_location";
+      world_id: string;
+      location_id?: string | null;
+    }
+  | {
+      scope: "character_field";
+      character_id: string;
+      world_id?: string | null;
+    };
+
+export interface PromptEnrichRequest {
+  field_role: EnrichFieldRole;
+  current_text: string;
+  instruction?: EnrichInstruction;
+  context_ref: MagicContextRef;
+  single_line?: boolean;
+  max_words?: number;
+}
+
+export interface PromptEnrichResponse {
+  enriched_text: string;
+  mode_applied: "generated" | "enriched";
+  model_used: string;
+}
+
+export type MagicWandStatus = "idle" | "enriching" | "applied" | "error";
+
+export interface UseMagicWandReturn {
+  status: MagicWandStatus;
+  error: string | null;
+  canEnrich: boolean;
+  canRevert: boolean;
+  isDirtyAfterApply: boolean;
+  triggerEnrich: (instruction?: EnrichInstruction) => Promise<void>;
+  cancelEnrich: () => void;
+  revert: () => void;
+  dismissUndo: () => void;
+  reset: () => void;
+}
 
 export interface TurnSubmitOptions {
   user_message: string;

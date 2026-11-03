@@ -529,10 +529,13 @@ async def _execute_turn_stream_events(
             if dir_match and not req.narrator_directive:
                 req.narrator_directive = dir_match.group(1).strip()
         elif lower_msg.startswith("[perception check") or lower_msg.startswith("[examine the scene"):
-            req.narrative_mode = "perception"
+            # Backwards-compatibility for historical swipes/edits: normalize legacy perception cues into custom directive
+            req.narrative_mode = "custom"
             dir_match = re.search(r"^\[perception check:\s*(.*?)\]$", effective_user_message, re.IGNORECASE)
-            if dir_match and not req.narrator_directive:
+            if dir_match:
                 req.narrator_directive = dir_match.group(1).strip()
+            else:
+                req.narrator_directive = effective_user_message.replace("[", "").replace("]", "").strip()
         elif req.parent_turn_id and campaign.active_leaf_turn_id:
             try:
                 active_leaf = repo.get_turn_node(campaign.active_leaf_turn_id)
@@ -546,7 +549,7 @@ async def _execute_turn_stream_events(
             except KeyError:
                 pass
 
-    is_narrator = req.narrative_mode in ("describe", "advance", "complication", "perception", "custom")
+    is_narrator = req.narrative_mode in ("describe", "advance", "complication", "custom")
     if applied_choices and is_narrator:
         raise HTTPException(
             status_code=422,
@@ -583,12 +586,6 @@ async def _execute_turn_stream_events(
                 if req.narrator_directive
                 else "[Introduce an unexpected complication or external event]"
             )
-        elif req.narrative_mode == "perception":
-            effective_user_message = (
-                f"[Perception check: {req.narrator_directive}]"
-                if req.narrator_directive
-                else "[Examine the scene for subtle details and lore]"
-            )
         elif req.narrative_mode == "custom":
             effective_user_message = req.narrator_directive or "[Director request]"
         else:
@@ -599,11 +596,6 @@ async def _execute_turn_stream_events(
         if req.narrative_mode == "complication":
             subtext = "Introduce an unexpected external complication or inciting incident"
             queries = [active_location.name, "hazard", "threat", "complication"] + (
-                [req.narrator_directive] if req.narrator_directive else []
-            )
-        elif req.narrative_mode == "perception":
-            subtext = "Analyze subtle perceptual markers, sensory nuances, and historical lore tied to this space"
-            queries = [active_location.name, active_location.summary] + (
                 [req.narrator_directive] if req.narrator_directive else []
             )
         elif req.narrative_mode == "advance":

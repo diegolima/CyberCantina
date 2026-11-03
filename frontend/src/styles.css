@@ -969,36 +969,317 @@ body {
   font-style: italic;
 }
 
-/* Composer */
+/* Modern Unified Composer Card */
 .composer-bar {
-  padding: 14px 22px;
+  padding: 12px 18px;
   border-top: 1px solid var(--border-subtle);
   background: var(--bg-panel);
   display: flex;
   flex-direction: column;
   gap: 8px;
+  position: relative;
 }
 
-.composer-row {
+.composer-card {
   display: flex;
-  gap: 10px;
-}
-
-.composer-input {
-  flex: 1;
+  flex-direction: column;
   background: var(--bg-deep);
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  padding: 10px 14px;
-  color: var(--text-primary);
-  font-size: 0.92rem;
-  resize: none;
-  min-height: 54px;
+  border-radius: 10px;
+  overflow: visible;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.composer-input:focus {
+.composer-card:focus-within {
+  border-color: rgba(245, 158, 11, 0.5);
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.25);
+}
+
+.composer-input-wrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 64px;
+}
+
+.composer-textarea {
+  flex: 1;
+  background: transparent;
+  border: none;
   outline: none;
+  padding: 12px 14px 28px 14px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  resize: none;
+  min-height: 64px;
+}
+
+.composer-wand-slot {
+  position: absolute;
+  bottom: 6px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 2;
+  pointer-events: auto;
+}
+
+/* Magic Wand Styles */
+.magic-wand-trigger-container {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.magic-wand-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  font-size: 0.70rem;
+  font-weight: 600;
+  border-radius: 5px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: var(--accent-amber);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.magic-wand-btn:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.2);
   border-color: var(--accent-amber);
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.25);
+}
+
+.magic-wand-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.magic-wand-active-bar,
+.magic-wand-revert-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid var(--border-subtle);
+  animation: fadeIn 0.12s ease-out;
+}
+
+.magic-wand-loading-badge,
+.magic-wand-applied-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.magic-wand-revert-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  border-radius: 4px;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+  cursor: pointer;
+}
+
+.magic-wand-revert-btn:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: #ef4444;
+}
+
+.magic-wand-cancel-btn,
+.magic-wand-dismiss-btn {
+  padding: 1px 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.magic-wand-cancel-btn:hover,
+.magic-wand-dismiss-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Composer Footer */
+.composer-footer {
+  padding: 6px 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.15);
+  border-bottom-left-radius: 9px;
+  border-bottom-right-radius: 9px;
+}
+
+.composer-footer-left,
+.composer-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.composer-popover-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.composer-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.composer-action-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.18);
+  color: var(--text-primary);
+}
+
+.composer-action-btn.active {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.45);
+  color: var(--accent-amber);
+}
+
+.composer-action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.composer-count-badge {
+  font-size: 0.63rem;
+  background: #3b82f6;
+  color: white;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-weight: 700;
+}
+
+/* Flyout Popover Menus */
+.composer-flyout-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 260px;
+  max-width: 380px;
+  background: rgba(15, 23, 42, 0.97);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  animation: fadeIn 0.12s ease-out;
+}
+
+.composer-flyout-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  margin-bottom: 2px;
+}
+
+.composer-flyout-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: all 0.12s ease;
+}
+
+.composer-flyout-item:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.composer-flyout-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.composer-flyout-item-text strong {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.composer-flyout-item-text span {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+.exit-compass-tag {
+  font-size: 0.64rem;
+  font-weight: 700;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgba(6, 182, 212, 0.15);
+  color: #67e8f9;
+  border: 1px solid rgba(6, 182, 212, 0.35);
+  white-space: nowrap;
+}
+
+.badge-locked {
+  margin-left: auto;
+  font-size: 0.62rem;
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  padding: 1px 4px;
+}
+
+.composer-send-btn {
+  padding: 4px 14px;
+  font-size: 0.78rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* Right Inspector Panel */

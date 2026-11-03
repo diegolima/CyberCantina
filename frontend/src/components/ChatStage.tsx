@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Bot,
@@ -13,6 +13,7 @@ import {
   GitBranch,
   Globe,
   ListChecks,
+  Lock,
   MapPin,
   Plus,
   RefreshCw,
@@ -29,10 +30,13 @@ import {
   ChoiceGate,
   ChoicePreviewResponse,
   CognitionBlock,
+  ComposerPopoverId,
+  ComposerTrayId,
   DEFAULT_GATE_DC,
   DiceMode,
   DiceRollResult,
   NarrativeMode,
+  NeighborLocationView,
   Phase3TurnProgress,
   Phase4TurnProgress,
   PreTurnAnalysis,
@@ -44,6 +48,8 @@ import {
   isChoiceSlashCommand,
   parseChoiceSlashCommand,
 } from "../utils/choiceCommand";
+import { useMagicWand } from "../hooks/useMagicWand";
+import { MagicWandButton } from "./MagicWandButton";
 
 function getTierBadgeClass(tier?: string): string {
   switch (tier) {
@@ -81,6 +87,7 @@ interface LiveStreamState {
 interface ChatStageProps {
   bundle: CampaignStateBundle;
   character: CharacterRecord;
+  pendingLocationOverrideId?: string | null;
   isStreaming: boolean;
   isPhase4Running?: boolean;
   phase3Progress?: Phase3TurnProgress | null;
@@ -115,6 +122,7 @@ function renderFormattedProse(text: string): React.ReactNode {
 export const ChatStage: React.FC<ChatStageProps> = ({
   bundle,
   character,
+  pendingLocationOverrideId,
   isStreaming,
   isPhase4Running = false,
   phase3Progress = null,
@@ -140,17 +148,77 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const [editDiceMode, setEditDiceMode] = useState<DiceMode>("auto");
   const [editDiceOverride, setEditDiceOverride] = useState<string>("");
   const [isDeletingTurn, setIsDeletingTurn] = useState(false);
-  const [isDurationPickerOpen, setIsDurationPickerOpen] = useState(false);
-  const [isCustomDirectiveOpen, setIsCustomDirectiveOpen] = useState(false);
   const [customDirectiveText, setCustomDirectiveText] = useState("");
   const [activeAgentModal, setActiveAgentModal] = useState<ActiveAgentModalTarget | null>(null);
 
+  // Consolidated Popover & Tray State
+  const [activePopover, setActivePopover] = useState<ComposerPopoverId>("none");
+  const [activeTray, setActiveTray] = useState<ComposerTrayId>("none");
+
+  // DOM Refs for focus management and outside click handling
+  const composerBarRef = useRef<HTMLFormElement | null>(null);
+  const narratorBtnRef = useRef<HTMLButtonElement | null>(null);
+  const exitsBtnRef = useRef<HTMLButtonElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
   // Director Choices State
-  const [isChoicesDrawerOpen, setIsChoicesDrawerOpen] = useState(false);
   const [stagedChoices, setStagedChoices] = useState<Record<string, CharacterChoiceSet>>({});
   const [activeChoiceCharId, setActiveChoiceCharId] = useState<string>(character.id);
   const [choicePreview, setChoicePreview] = useState<ChoicePreviewResponse | null>(null);
   const [, setIsPreviewLoading] = useState(false);
+
+  // Magic Wand Integration
+  const lastBranchTurn =
+    bundle.active_branch_turns[bundle.active_branch_turns.length - 1];
+  const wandContextKey = `${bundle.campaign.id}:${lastBranchTurn?.id ?? "root"}:${
+    pendingLocationOverrideId ?? bundle.active_location.id
+  }`;
+
+  const magicWand = useMagicWand({
+    fieldRole: "player_turn_prompt",
+    value: inputText,
+    onChange: setInputText,
+    contextRef: {
+      scope: "campaign_turn",
+      campaign_id: bundle.campaign.id,
+      parent_turn_id: lastBranchTurn?.id ?? null,
+      override_location_id: pendingLocationOverrideId ?? null,
+    },
+    contextKey: wandContextKey,
+    disabled: isBusy,
+    maxWords: 120,
+  });
+
+  // Global escape & outside click listener for popovers/drawers
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (activePopover === "none") return;
+      if (
+        composerBarRef.current &&
+        !composerBarRef.current.contains(e.target as Node)
+      ) {
+        setActivePopover("none");
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (activePopover !== "none") {
+          const prev = activePopover;
+          setActivePopover("none");
+          if (prev === "narrator" && narratorBtnRef.current) narratorBtnRef.current.focus();
+          if (prev === "exits" && exitsBtnRef.current) exitsBtnRef.current.focus();
+        } else if (activeTray !== "none") {
+          setActiveTray("none");
+        }
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [activePopover, activeTray]);
 
   const presentCharacters = useMemo(() => {
     const rawIds =
@@ -198,13 +266,18 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     }
   }, [hasActiveGates, diceMode]);
 
-  // Decision D4: Preview choice odds from backend
+  // Decision D4: Preview choice odds from backend (structured gate signature avoids churn)
+  const activeCharChoiceSet = stagedChoices[activeChoiceCharId];
+  const activeCharGateSignature = useMemo(() => {
+    if (!activeCharChoiceSet || !activeCharChoiceSet.options) return "";
+    return activeCharChoiceSet.options.map((o) => `${o.id}:${o.gate}`).join("|");
+  }, [activeCharChoiceSet]);
+
   useEffect(() => {
-    const currentChoiceSet = stagedChoices[activeChoiceCharId];
     if (
-      !currentChoiceSet ||
-      !currentChoiceSet.options ||
-      currentChoiceSet.options.length === 0
+      !activeCharChoiceSet ||
+      !activeCharChoiceSet.options ||
+      activeCharChoiceSet.options.length === 0
     ) {
       setChoicePreview(null);
       return;
@@ -222,14 +295,14 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       .previewChoices(
         {
           choice_set: {
-            character_id: currentChoiceSet.character_id || activeChoiceCharId,
-            options: (currentChoiceSet.options || []).map((o) => ({
+            character_id: activeCharChoiceSet.character_id || activeChoiceCharId,
+            options: (activeCharChoiceSet.options || []).map((o) => ({
               id: o.id,
               label: o.label || "",
               gate: o.gate || "any",
             })),
             gate_difficulty_class:
-              currentChoiceSet.gate_difficulty_class ?? DEFAULT_GATE_DC,
+              activeCharChoiceSet.gate_difficulty_class ?? DEFAULT_GATE_DC,
           },
           dice_mode: diceMode,
           manual_dice_override:
@@ -250,7 +323,13 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       });
 
     return () => controller.abort();
-  }, [stagedChoices, activeChoiceCharId, diceMode, diceOverride]);
+  }, [
+    activeChoiceCharId,
+    activeCharGateSignature,
+    activeCharChoiceSet?.gate_difficulty_class,
+    diceMode,
+    diceOverride,
+  ]);
 
   const handleAddOption = (charId: string) => {
     setStagedChoices((prev) => {
@@ -343,17 +422,15 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     setStagedChoices({});
   };
 
-  const lastBranchTurn =
-    bundle.active_branch_turns[bundle.active_branch_turns.length - 1];
-
   useEffect(() => {
     setEditingTurnId(null);
     setEditMessageText("");
     setEditDiceMode("auto");
     setEditDiceOverride("");
-    setIsDurationPickerOpen(false);
-    setIsCustomDirectiveOpen(false);
-    setIsChoicesDrawerOpen(false);
+    setActivePopover("none");
+    setActiveTray("none");
+    setStagedChoices({});
+    magicWand.reset();
   }, [bundle.campaign.id, lastBranchTurn?.id]);
 
   const toggleCognition = (id: string) => {
@@ -373,15 +450,16 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     directive?: string,
     durationMinutes?: number
   ) => {
-    setIsDurationPickerOpen(false);
-    setIsCustomDirectiveOpen(false);
+    setActivePopover("none");
+    setActiveTray("none");
 
     if (mode === "custom") {
-      setIsCustomDirectiveOpen(true);
+      setActiveTray("custom_directive");
       return;
     }
 
     if (mode === "describe") {
+      magicWand.reset();
       onSendTurn({
         userMessage: "[Describe the current scene]",
         diceMode: "disabled",
@@ -391,6 +469,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       const durMsg = durationMinutes
         ? `wait for ${durationMinutes} minutes`
         : directive || "wait for a few moments";
+      magicWand.reset();
       onSendTurn({
         userMessage: `[Advance the story: ${durMsg}]`,
         diceMode: "disabled",
@@ -399,6 +478,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         durationMinutes: durationMinutes ?? null,
       });
     } else if (mode === "complication") {
+      magicWand.reset();
       onSendTurn({
         userMessage: directive
           ? `[Introduce a complication: ${directive}]`
@@ -407,21 +487,33 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         narrativeMode: "complication",
         narratorDirective: directive || "An unexpected complication occurs",
       });
-    } else if (mode === "perception") {
-      onSendTurn({
-        userMessage: directive
-          ? `[Perception check: ${directive}]`
-          : "[Examine the scene for subtle details and lore]",
-        diceMode: "disabled",
-        narrativeMode: "perception",
-        narratorDirective: directive || "Check for subtle details and lore",
-      });
     }
+  };
+
+  const handleQuickExit = (nb: NeighborLocationView) => {
+    if (isBusy) return;
+    setActivePopover("none");
+    setActiveTray("none");
+    setInputText("");
+    setStagedChoices({});
+    magicWand.reset();
+
+    const forcedVal =
+      diceMode === "forced" && diceOverride.trim() !== ""
+        ? parseInt(diceOverride.trim(), 10)
+        : null;
+
+    onSendTurn({
+      userMessage: `Let's head through the ${nb.direction_label.toLowerCase()} into ${nb.destination.name}.`,
+      diceMode: diceMode === "forced" ? "forced" : (nb.is_locked_or_hidden ? "auto" : "disabled"),
+      manualDiceOverride: diceMode === "forced" && forcedVal && !isNaN(forcedVal) ? forcedVal : null,
+    });
   };
 
   const handleSendCustomDirective = () => {
     const trimmed = customDirectiveText.trim();
     if (!trimmed || isBusy) return;
+    magicWand.reset();
     onSendTurn({
       userMessage: trimmed,
       diceMode: "disabled",
@@ -429,7 +521,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       narratorDirective: trimmed,
     });
     setCustomDirectiveText("");
-    setIsCustomDirectiveOpen(false);
+    setActiveTray("none");
   };
 
   const handleSend = (e: React.FormEvent) => {
@@ -448,13 +540,15 @@ export const ChatStage: React.FC<ChatStageProps> = ({
             [targetId]: parsed.choiceSet,
           }));
           setActiveChoiceCharId(targetId);
-          setIsChoicesDrawerOpen(true);
+          setActiveTray("choices");
           setInputText("");
+          magicWand.reset();
           return;
         } else if (parsed && parsed.matchedCharacter) {
           setActiveChoiceCharId(parsed.matchedCharacter.id);
-          setIsChoicesDrawerOpen(true);
+          setActiveTray("choices");
           setInputText("");
+          magicWand.reset();
           return;
         }
       }
@@ -467,6 +561,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         setInputText("");
         setDiceMode("auto");
         setDiceOverride("");
+        magicWand.reset();
         handleInvokeNarrator("describe");
         return;
       }
@@ -474,6 +569,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         setInputText("");
         setDiceMode("auto");
         setDiceOverride("");
+        magicWand.reset();
         let dur: number | undefined;
         if (arg.endsWith("m") || arg.endsWith("min") || arg.endsWith("minutes")) {
           dur = parseInt(arg, 10);
@@ -487,20 +583,15 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         setInputText("");
         setDiceMode("auto");
         setDiceOverride("");
+        magicWand.reset();
         handleInvokeNarrator("complication", arg || undefined);
-        return;
-      }
-      if (cmd === "perception" || cmd === "recall" || cmd === "check") {
-        setInputText("");
-        setDiceMode("auto");
-        setDiceOverride("");
-        handleInvokeNarrator("perception", arg || undefined);
         return;
       }
       if (cmd === "narrate" || cmd === "direct" || cmd === "custom") {
         setInputText("");
         setDiceMode("auto");
         setDiceOverride("");
+        magicWand.reset();
         if (arg) {
           onSendTurn({
             userMessage: arg,
@@ -509,7 +600,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
             narratorDirective: arg,
           });
         } else {
-          setIsCustomDirectiveOpen(true);
+          setActiveTray("custom_directive");
         }
         return;
       }
@@ -551,7 +642,9 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     setDiceMode("auto");
     setDiceOverride("");
     setStagedChoices({});
-    setIsChoicesDrawerOpen(false);
+    setActiveTray("none");
+    setActivePopover("none");
+    magicWand.reset();
   };
 
   const inferNarratorTurnOptions = (
@@ -603,10 +696,12 @@ export const ChatStage: React.FC<ChatStageProps> = ({
 
     if (lower.includes("perception") || lower.includes("examine the scene")) {
       const dirMatch = msg.match(/^\[Perception check:\s*(.*?)\]$/i);
-      const directive = dirMatch ? dirMatch[1].trim() : undefined;
+      const directive = dirMatch
+        ? dirMatch[1].trim()
+        : msg.replace(/^\[|\]$/g, "").trim();
       return {
         isNarrator: true,
-        narrativeMode: "perception",
+        narrativeMode: "custom",
         narratorDirective: directive,
       };
     }
@@ -980,12 +1075,6 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                       <AlertTriangle size={12} color="var(--accent-rose)" />
                       <span>{turn.user_message.replace(/^\[|\]$/g, "")}</span>
                     </div>
-                  ) : turn.user_message.toLowerCase().includes("perception") ||
-                    turn.user_message.toLowerCase().includes("examine") ? (
-                    <div className="user-bubble user-bubble-narrator-perception">
-                      <Brain size={12} color="var(--accent-violet)" />
-                      <span>{turn.user_message.replace(/^\[|\]$/g, "")}</span>
-                    </div>
                   ) : (
                     <div className="user-bubble user-bubble-narrator-cue">
                       <Sparkles size={12} color="var(--accent-cyan)" />
@@ -1059,9 +1148,6 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                         ? "Narrator (Time Advance)"
                         : turn.user_message.toLowerCase().includes("complication")
                         ? "Narrator (Complication)"
-                        : turn.user_message.toLowerCase().includes("perception") ||
-                          turn.user_message.toLowerCase().includes("examine")
-                        ? "Narrator (Perception & Lore)"
                         : "Narrator (Objective Lens)"}
                     </span>
                   )}
@@ -2105,175 +2191,9 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       </div>
 
       {/* Quick Action Bar + Composer */}
-      <form className="composer-bar" onSubmit={handleSend}>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-          {/* Dedicated Narrator Action Chips */}
-          <button
-            type="button"
-            className="btn narrator-quick-chip"
-            onClick={() => handleInvokeNarrator("describe")}
-            title="Describe current scene [/look]"
-          >
-            <Eye size={11} color="var(--accent-cyan)" />
-            <span>Look Around</span>
-          </button>
-
-          <button
-            type="button"
-            className={`btn narrator-quick-chip ${isDurationPickerOpen ? "active" : ""}`}
-            onClick={() => {
-              setIsCustomDirectiveOpen(false);
-              setIsDurationPickerOpen((prev) => !prev);
-            }}
-            title="Advance in-game time [/wait]"
-          >
-            <Clock size={11} color="var(--accent-amber)" />
-            <span>Pass Time</span>
-          </button>
-
-          <button
-            type="button"
-            className="btn narrator-quick-chip"
-            onClick={() => handleInvokeNarrator("complication")}
-            title="Introduce external complication [/event]"
-          >
-            <AlertTriangle size={11} color="var(--accent-rose)" />
-            <span>Complication</span>
-          </button>
-
-          <button
-            type="button"
-            className="btn narrator-quick-chip"
-            onClick={() => handleInvokeNarrator("perception")}
-            title="Scrutinize details and lore [/perception]"
-          >
-            <Brain size={11} color="var(--accent-violet)" />
-            <span>Perception</span>
-          </button>
-
-          <button
-            type="button"
-            className={`btn narrator-quick-chip ${isCustomDirectiveOpen ? "active" : ""}`}
-            onClick={() => {
-              setIsDurationPickerOpen(false);
-              setIsCustomDirectiveOpen((prev) => !prev);
-            }}
-            title="Direct the neutral narrator with a custom prompt [/narrate]"
-          >
-            <Sparkles size={11} color="var(--accent-amber)" />
-            <span>Custom Narrator Directive</span>
-          </button>
-
-          <div style={{ height: 14, width: 1, background: "var(--border-subtle)" }} />
-
-          {/* Director Character Choices Button */}
-          <button
-            type="button"
-            className={`btn narrator-quick-chip ${isChoicesDrawerOpen ? "active" : ""}`}
-            style={{
-              borderColor: totalStagedOptionsCount > 0 ? "rgba(59, 130, 246, 0.5)" : undefined,
-              background: totalStagedOptionsCount > 0 ? "rgba(59, 130, 246, 0.15)" : undefined,
-              color: totalStagedOptionsCount > 0 ? "#93c5fd" : undefined,
-            }}
-            onClick={() => {
-              setIsDurationPickerOpen(false);
-              setIsCustomDirectiveOpen(false);
-              setIsChoicesDrawerOpen((prev) => !prev);
-            }}
-            title="Present character choices to guide cognition [/choice]"
-          >
-            <ListChecks size={11} color={totalStagedOptionsCount > 0 ? "#93c5fd" : "var(--accent-blue)"} />
-            <span>Choices</span>
-            {totalStagedOptionsCount > 0 && (
-              <span
-                style={{
-                  fontSize: "0.64rem",
-                  background: "#3b82f6",
-                  color: "white",
-                  padding: "0 4px",
-                  borderRadius: 8,
-                  fontWeight: 700,
-                  marginLeft: 2,
-                }}
-              >
-                {totalStagedOptionsCount}
-              </span>
-            )}
-          </button>
-
-          <div style={{ height: 14, width: 1, background: "var(--border-subtle)" }} />
-
-          <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
-            Quick Exits:
-          </span>
-          {bundle.neighbor_locations.map((nb) => (
-            <button
-              key={nb.edge_id}
-              type="button"
-              className="btn"
-              style={{ padding: "3px 8px", fontSize: "0.72rem" }}
-              onClick={() =>
-                setInputText(
-                  `Let's head through the ${nb.direction_label.toLowerCase()} into ${nb.destination.name}.`
-                )
-              }
-            >
-              <Compass size={11} color="var(--accent-cyan)" />
-              {nb.destination.name} ({nb.travel_minutes}m)
-            </button>
-          ))}
-
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
-            <button
-              type="button"
-              className={`btn btn-dice-toggle btn-dice-toggle--${diceMode}`}
-              onClick={() => {
-                setDiceMode((prev) => {
-                  if (prev === "auto") return "forced";
-                  if (prev === "forced") {
-                    setDiceOverride("");
-                    if (hasActiveGates) {
-                      return "auto";
-                    }
-                    return "disabled";
-                  }
-                  return "auto";
-                });
-              }}
-              title={
-                hasActiveGates
-                  ? "Dice Mode: Auto or Forced (Disabled locked while gate choices are active)"
-                  : "Dice Mode: Click to cycle between auto, forced, and disabled"
-              }
-            >
-              <Dices size={13} />
-              <span>{diceMode}</span>
-            </button>
-            {diceMode === "forced" && (
-              <input
-                type="number"
-                min={1}
-                max={20}
-                placeholder="random"
-                value={diceOverride}
-                onChange={(e) => setDiceOverride(e.target.value)}
-                className={`field-input ${
-                  diceOverride.trim() !== "" &&
-                  (isNaN(parseInt(diceOverride, 10)) ||
-                    parseInt(diceOverride, 10) < 1 ||
-                    parseInt(diceOverride, 10) > 20)
-                    ? "dice-input-invalid"
-                    : ""
-                }`}
-                style={{ width: 68, padding: "3px 7px", fontSize: "0.74rem" }}
-                title="Optional manual d20 roll override (1-20). Leave blank for random roll."
-              />
-            )}
-          </div>
-        </div>
-
+      <form ref={composerBarRef} className="composer-bar" onSubmit={handleSend}>
         {/* Quick Duration Picker Bar */}
-        {isDurationPickerOpen && (
+        {activeTray === "pass_time" && (
           <div className="narrator-duration-picker">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <span style={{ fontSize: "0.74rem", color: "var(--accent-amber)", fontWeight: 600, display: "flex", alignItems: "center", gap: 5 }}>
@@ -2284,7 +2204,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                 type="button"
                 className="btn"
                 style={{ padding: "1px 6px", border: "none" }}
-                onClick={() => setIsDurationPickerOpen(false)}
+                onClick={() => setActiveTray("none")}
               >
                 <X size={12} />
               </button>
@@ -2337,7 +2257,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         )}
 
         {/* Custom Director Directive Drawer */}
-        {isCustomDirectiveOpen && (
+        {activeTray === "custom_directive" && (
           <div className="narrator-directive-box">
             <div className="narrator-directive-header">
               <Sparkles size={13} color="var(--accent-amber)" />
@@ -2349,7 +2269,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                 type="button"
                 className="btn"
                 style={{ padding: "2px 6px", border: "none" }}
-                onClick={() => setIsCustomDirectiveOpen(false)}
+                onClick={() => setActiveTray("none")}
               >
                 <X size={12} />
               </button>
@@ -2367,7 +2287,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                     e.preventDefault();
                     handleSendCustomDirective();
                   } else if (e.key === "Escape") {
-                    setIsCustomDirectiveOpen(false);
+                    setActiveTray("none");
                   }
                 }}
               />
@@ -2386,7 +2306,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         )}
 
         {/* Director Guided Choices Drawer */}
-        {isChoicesDrawerOpen && (
+        {activeTray === "choices" && (
           <div className="choices-drawer-box">
             <div className="choices-drawer-header">
               <div
@@ -2422,7 +2342,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                   type="button"
                   className="btn"
                   style={{ padding: "2px 6px", border: "none" }}
-                  onClick={() => setIsChoicesDrawerOpen(false)}
+                  onClick={() => setActiveTray("none")}
                 >
                   <X size={12} />
                 </button>
@@ -2741,40 +2661,306 @@ export const ChatStage: React.FC<ChatStageProps> = ({
           </div>
         )}
 
-        <div className="composer-row">
-          <textarea
-            className="composer-input"
-            placeholder={
-              totalStagedOptionsCount > 0
-                ? "Optional user action / dialogue (Leave blank to let characters act on your staged choices)..."
-                : `Write your action or dialogue to ${character.name}... (Or try /choice, /look, /wait 30m, /narrate)`
-            }
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSend(e);
+        {/* Unified Modern Composer Card */}
+        <div className="composer-card">
+          <div className="composer-input-wrapper">
+            <textarea
+              ref={textareaRef}
+              className="composer-textarea"
+              placeholder={
+                totalStagedOptionsCount > 0
+                  ? "Optional user action / dialogue (Leave blank to let characters act on your staged choices)..."
+                  : `Write your action or dialogue to ${character.name}... (Or try /choice, /look, /wait 30m, /narrate)`
               }
-            }}
-          />
-          <button
-            type="submit"
-            className="btn btn-amber"
-            style={{ padding: "0 18px" }}
-            disabled={
-              isBusy ||
-              (!inputText.trim() && totalStagedOptionsCount === 0) ||
-              (diceMode === "forced" &&
-                diceOverride.trim() !== "" &&
-                (isNaN(parseInt(diceOverride, 10)) ||
-                  parseInt(diceOverride, 10) < 1 ||
-                  parseInt(diceOverride, 10) > 20))
-            }
-          >
-            <Send size={16} />
-            Send
-          </button>
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              onKeyDown={(e) => {
+                if (
+                  (e.altKey && e.shiftKey && (e.key === "E" || e.key === "e")) ||
+                  (e.ctrlKey && e.shiftKey && (e.key === "E" || e.key === "e"))
+                ) {
+                  e.preventDefault();
+                  if (magicWand.canEnrich) {
+                    magicWand.triggerEnrich("auto");
+                  }
+                  return;
+                }
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend(e);
+                }
+              }}
+            />
+            <div className="composer-wand-slot">
+              <MagicWandButton
+                wand={magicWand}
+                isInputEmpty={!inputText.trim()}
+                isSlashCommand={inputText.trim().startsWith("/")}
+              />
+            </div>
+          </div>
+
+          {/* Composer Footer Bar */}
+          <div className="composer-footer">
+            <div className="composer-footer-left">
+              {/* Narrator Dropdown Trigger & Popover */}
+              <div className="composer-popover-anchor">
+                <button
+                  ref={narratorBtnRef}
+                  type="button"
+                  aria-haspopup="menu"
+                  aria-expanded={activePopover === "narrator"}
+                  className={`btn composer-action-btn ${
+                    activePopover === "narrator" ? "active" : ""
+                  }`}
+                  onClick={() =>
+                    setActivePopover((prev) =>
+                      prev === "narrator" ? "none" : "narrator"
+                    )
+                  }
+                  title="Narrator actions (Look Around, Pass Time, Complication, Custom Directive)"
+                >
+                  <Eye size={12} color="var(--accent-cyan)" />
+                  <span>Narrator</span>
+                  <ChevronDown size={11} style={{ opacity: 0.7 }} />
+                </button>
+
+                {activePopover === "narrator" && (
+                  <div className="composer-flyout-menu" role="menu">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="composer-flyout-item"
+                      onClick={() => handleInvokeNarrator("describe")}
+                    >
+                      <Eye size={13} color="var(--accent-cyan)" />
+                      <div className="composer-flyout-item-text">
+                        <strong>Look Around</strong>
+                        <span>Sensory description of current scene [/look]</span>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="composer-flyout-item"
+                      onClick={() => {
+                        setActivePopover("none");
+                        setActiveTray("pass_time");
+                      }}
+                    >
+                      <Clock size={13} color="var(--accent-amber)" />
+                      <div className="composer-flyout-item-text">
+                        <strong>Pass Time...</strong>
+                        <span>Advance in-game clock without action [/wait]</span>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="composer-flyout-item"
+                      onClick={() => handleInvokeNarrator("complication")}
+                    >
+                      <AlertTriangle size={13} color="var(--accent-rose)" />
+                      <div className="composer-flyout-item-text">
+                        <strong>Complication</strong>
+                        <span>Introduce unexpected external event [/event]</span>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="composer-flyout-item"
+                      onClick={() => {
+                        setActivePopover("none");
+                        setActiveTray("custom_directive");
+                      }}
+                    >
+                      <Sparkles size={13} color="var(--accent-amber)" />
+                      <div className="composer-flyout-item-text">
+                        <strong>Custom Directive...</strong>
+                        <span>Direct narrator with custom guidance [/narrate]</span>
+                      </div>
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Quick Exits Dropdown Trigger & Popover */}
+              <div className="composer-popover-anchor">
+                <button
+                  ref={exitsBtnRef}
+                  type="button"
+                  aria-haspopup="menu"
+                  aria-expanded={activePopover === "exits"}
+                  className={`btn composer-action-btn ${
+                    activePopover === "exits" ? "active" : ""
+                  }`}
+                  disabled={bundle.neighbor_locations.length === 0}
+                  onClick={() =>
+                    setActivePopover((prev) =>
+                      prev === "exits" ? "none" : "exits"
+                    )
+                  }
+                  title="Immediate exits from this location"
+                >
+                  <Compass size={12} color="var(--accent-cyan)" />
+                  <span>Exits ({bundle.neighbor_locations.length})</span>
+                  <ChevronDown size={11} style={{ opacity: 0.7 }} />
+                </button>
+
+                {activePopover === "exits" &&
+                  bundle.neighbor_locations.length > 0 && (
+                    <div className="composer-flyout-menu exits-menu" role="menu">
+                      <div className="composer-flyout-header">
+                        <Compass size={11} />
+                        <span>Connected Paths (Click to Travel)</span>
+                      </div>
+                      {bundle.neighbor_locations.map((nb) => (
+                        <button
+                          key={nb.edge_id}
+                          type="button"
+                          role="menuitem"
+                          className="composer-flyout-item exit-item"
+                          disabled={isBusy}
+                          onClick={() => handleQuickExit(nb)}
+                        >
+                          <span className="exit-compass-tag">
+                            {nb.compass_direction || "PATH"}
+                          </span>
+                          <div className="composer-flyout-item-text">
+                            <strong>{nb.destination.name}</strong>
+                            <span>
+                              via {nb.direction_label} • {nb.travel_minutes}m
+                            </span>
+                          </div>
+                          {nb.is_locked_or_hidden && (
+                            <span
+                              className="badge badge-locked"
+                              title="Locked or hidden passage"
+                            >
+                              <Lock size={10} />
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+              </div>
+
+              {/* Director Choices Button */}
+              <button
+                type="button"
+                className={`btn composer-action-btn ${
+                  activeTray === "choices" ? "active" : ""
+                }`}
+                style={{
+                  borderColor:
+                    totalStagedOptionsCount > 0
+                      ? "rgba(59, 130, 246, 0.5)"
+                      : undefined,
+                  background:
+                    totalStagedOptionsCount > 0
+                      ? "rgba(59, 130, 246, 0.15)"
+                      : undefined,
+                  color: totalStagedOptionsCount > 0 ? "#93c5fd" : undefined,
+                }}
+                onClick={() => {
+                  setActivePopover("none");
+                  setActiveTray((prev) =>
+                    prev === "choices" ? "none" : "choices"
+                  );
+                }}
+                title="Present character choices to guide cognition [/choice]"
+              >
+                <ListChecks
+                  size={12}
+                  color={
+                    totalStagedOptionsCount > 0
+                      ? "#93c5fd"
+                      : "var(--accent-blue)"
+                  }
+                />
+                <span>Choices</span>
+                {totalStagedOptionsCount > 0 && (
+                  <span className="composer-count-badge">
+                    {totalStagedOptionsCount}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            <div className="composer-footer-right">
+              {/* Dice Mode Toggle & Override Input */}
+              <button
+                type="button"
+                className={`btn btn-dice-toggle btn-dice-toggle--${diceMode}`}
+                onClick={() => {
+                  setDiceMode((prev) => {
+                    if (prev === "auto") return "forced";
+                    if (prev === "forced") {
+                      setDiceOverride("");
+                      if (hasActiveGates) {
+                        return "auto";
+                      }
+                      return "disabled";
+                    }
+                    return "auto";
+                  });
+                }}
+                title={
+                  hasActiveGates
+                    ? "Dice Mode: Auto or Forced (Disabled locked while gate choices are active)"
+                    : "Dice Mode: Click to cycle between auto, forced, and disabled"
+                }
+              >
+                <Dices size={13} />
+                <span>{diceMode}</span>
+              </button>
+
+              {diceMode === "forced" && (
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  placeholder="rnd"
+                  value={diceOverride}
+                  onChange={(e) => setDiceOverride(e.target.value)}
+                  className={`field-input ${
+                    diceOverride.trim() !== "" &&
+                    (isNaN(parseInt(diceOverride, 10)) ||
+                      parseInt(diceOverride, 10) < 1 ||
+                      parseInt(diceOverride, 10) > 20)
+                      ? "dice-input-invalid"
+                      : ""
+                  }`}
+                  style={{
+                    width: 54,
+                    padding: "3px 6px",
+                    fontSize: "0.74rem",
+                  }}
+                  title="Manual d20 roll (1-20), or blank for forced random"
+                />
+              )}
+
+              {/* Send Button */}
+              <button
+                type="submit"
+                className="btn btn-amber composer-send-btn"
+                disabled={
+                  isBusy ||
+                  (!inputText.trim() && totalStagedOptionsCount === 0) ||
+                  (diceMode === "forced" &&
+                    diceOverride.trim() !== "" &&
+                    (isNaN(parseInt(diceOverride, 10)) ||
+                      parseInt(diceOverride, 10) < 1 ||
+                      parseInt(diceOverride, 10) > 20))
+                }
+              >
+                <Send size={14} />
+                <span>Send</span>
+              </button>
+            </div>
+          </div>
         </div>
       </form>
 

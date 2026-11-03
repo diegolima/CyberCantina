@@ -24,6 +24,8 @@ import {
   PreTurnAnalysis,
   ProfileModelSettingsResponse,
   PromptDefaultsResponse,
+  PromptEnrichRequest,
+  PromptEnrichResponse,
   PromptPresetCreatePayload,
   PromptPresetRecord,
   PromptPresetUpdatePayload,
@@ -516,6 +518,14 @@ export const api = {
         method: "DELETE",
       }
     ),
+
+  // AI Magic Wand Enrichment
+  enrichPrompt: (req: PromptEnrichRequest, signal?: AbortSignal) =>
+    fetchJson<PromptEnrichResponse>(`${API_BASE}/enrich`, {
+      method: "POST",
+      body: JSON.stringify(req),
+      signal,
+    }),
 
   getOllamaStatus: (baseUrl?: string) => {
     const q = baseUrl ? `?base_url=${encodeURIComponent(baseUrl)}` : "";
