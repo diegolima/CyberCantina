@@ -127,9 +127,9 @@ We welcome contributions across several active frontiers:
 2. **Advanced Memory Architectures:**
    - Graph-RAG integration linking character relations, lore, and episodic clusters.
    - Intelligent memory consolidation, dream/sleep reflection cycles, and memory decay.
-3. **Game Mechanics & TTRPG Toolsets:**
-   - Extensible rulesets: support for D&D 5e, Call of Cthulhu, Cyberpunk RED, or custom narrative dice engines.
-   - Skill trees, spellbooks, condition trackers (poison, fatigue, inspiration), and combat grids.
+3. **Extensible Simulation & Game Mechanics:**
+   - Modular resolution mechanics: configurable dice engines (d20, d100, dice pools, narrative tokens) and difficulty checks.
+   - Rich mechanics toolsets: progression systems, tactical state & condition tracking, inventory attributes, and conflict resolution systems.
 4. **Local Hardware Optimization:**
    - Direct integration with local runtime contexts (e.g., custom llama.cpp slot management, grammar-constrained sampling for XML/JSON blocks).
    - KV-cache state preservation across branches using native engine snapshotting.
@@ -141,14 +141,14 @@ We welcome contributions across several active frontiers:
 
 ## 5. Our Philosophy on Open Source & Community
 
-### Copyleft Sovereignty (AGPL-3.0-or-later)
-CyberCantina is licensed under the **GNU Affero General Public License v3.0 or later**. We believe narrative AI tools should belong to the community, not become walled-garden SaaS subscriptions that harvest personal interactions. Any network service using or modifying CyberCantina must share its improvements with the world.
+### Copyleft Sovereignty & Collaborative Reciprocity (AGPL-3.0-or-later)
+CyberCantina is licensed under the **GNU Affero General Public License v3.0 or later**. We fully embrace hosting providers and commercial operators deploying CyberCantina as a service—our copyleft requirement simply ensures reciprocity: anyone who distributes or runs a modified version over a network must share their improvements and source code with the community.
 
-### Respect for the User's Privacy & Data
-Roleplay and personal storytelling are deeply intimate. CyberCantina is **local-first**:
-- All chats, worlds, and characters reside locally on the user's machine.
-- Zero covert tracking, dark patterns, or forced telemetry. Any diagnostic data collection must remain strictly opt-in (default OFF), transparent, and restricted to non-identifying technical metrics—never users' stories, prompts, or personal data.
-- No cloud locks or walled gardens.
+### Respect for User Privacy & Data Sovereignty
+Roleplay and personal storytelling are deeply intimate. CyberCantina is designed around **local-first architecture and user sovereignty**:
+- **Full self-hosting sovereignty:** When self-hosted, all campaigns, worlds, and character states reside entirely on your own hardware without external dependencies.
+- **Zero upstream surveillance:** The core codebase contains no covert tracking, dark patterns, or forced telemetry.
+- **Strict opt-in diagnostics:** Any future diagnostic data collection in the upstream project must remain strictly opt-in (default OFF), transparent, and restricted to non-identifying technical metrics—never users' stories, prompts, or personal data.
 
 ### Engineering Rigor
 We value clean abstractions, explicit types, and automated testing over quick duct-tape hacks. If a feature touches the state pipeline, it should have a corresponding test suite verifying branch safety, cache behavior, and data integrity.

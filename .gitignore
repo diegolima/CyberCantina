@@ -41,3 +41,9 @@ Thumbs.db
 .idea/
 *.log
 *.swp
+
+# Personal Notes & TODO
+TODO.md
+TODO*.md
+todo.md
+todo*.md
