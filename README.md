@@ -1,20 +1,26 @@
 # CyberCantina
 
-**CyberCantina** is an agentic AI roleplay framework designed as a next-generation successor to SillyTavern. Instead of treating LLMs as stateless text-completion wrappers, CyberCantina orchestrates a **4-Phase Cognitive Turn Pipeline**, a **Branch-Safe Spatial & World State Graph**, **3-Tier Episodic + Vector Memory**, and **AI Creation Wizards**.
+**CyberCantina** is an agentic AI roleplay framework designed as a next-generation successor to SillyTavern. Instead of treating LLMs as stateless text-completion wrappers, CyberCantina orchestrates a **5-Phase Canonical Cognitive Turn Pipeline**, a **Branch-Safe Spatial & World State Graph**, **3-Tier Episodic + Vector Memory**, and **AI Creation Wizards**.
+
+📖 **Read our [Core Vision & Philosophy](VISION.md)** for an in-depth breakdown of our architectural tenets, KV-cache optimization strategy, multi-agent interiority model, and open-source roadmap.
 
 ## Core Architecture
 
-1. **AI Authoring Wizards (`1.1 Character` & `1.2 World Graph`)**
-   - **Character Wizard:** Expands brief character concepts into a static `core_persona`, `voice_anchors`, baseline psychological state (`valence`, `arousal`, `core_drive`, `core_fear`), and atomic `memory_shards` indexed directly into the semantic vector store.
-   - **World & Spatial Graph Wizard:** Generates world rules, custom/ISO calendars, lore entries, and an initial topology of interconnected `LocationNode` and `LocationEdge` objects.
-2. **Phase 1: Auxiliary Pre-Processor & Mechanics Engine (`phase1_pre.py`)**
+### Authoring Layer: AI Wizards
+- **Character Wizard (`1.1 Character`):** Expands brief character concepts into a static `core_persona`, `voice_anchors`, baseline psychological state (`valence`, `arousal`, `core_drive`, `core_fear`), and atomic `memory_shards` indexed directly into the semantic vector store.
+- **World & Spatial Graph Wizard (`1.2 World Graph`):** Generates world rules, custom/ISO calendars, lore entries, and an initial topology of interconnected `LocationNode` and `LocationEdge` objects.
+
+### Runtime Pipeline: 5-Phase Canonical Turn Execution
+1. **Phase 1: Auxiliary Pre-Processor & Mechanics Engine (`phase1_pre.py`)**
    - Analyzes user sentiment/subtext, extracts referenced entities, generates semantic RAG queries, detects spatial movement intent, and triggers native **d20 RNG / Dice Mechanics** when risky actions are attempted.
-3. **Phase 2: 4-Zone KV-Cache-Preserving Context Assembler (`phase2_context.py`)**
+2. **Phase 2: 4-Zone KV-Cache-Preserving Context Assembler (`phase2_context.py`)**
    - Keeps **Zone 1 (Static Prefix)** and **Zone 2 (Chunked Episodic Summaries)** strictly stable at the top of the prompt while injecting dynamic turn state (World Clock, 1-hop Spatial Neighbors, RAG memories, RNG results, and previous affect state) in **Zone 4 (Ephemeral Tail Frame)** to maximize KV-cache hit rates.
-4. **Phase 3: Single-Pass `<cognition>` + Narrative Stream (`phase3_actor.py`)**
-   - Guides the main model to emit a structured `<cognition>` block (`<recall>`, `<feeling>`, `<want>`, `<plan>`) immediately before narrative prose, streaming both over separate Server-Sent Event (SSE) channels in real time.
-5. **Phase 4: Async Post-Turn Clerk & Branch-Safe State Engine (`phase4_clerk.py`)**
-   - Runs asynchronously after generation to advance the **World Clock**, update character locations (or dynamically improvise and link newly discovered `LocationNode` rooms in the spatial graph), and compress overflowing working memory turns into **Episodic Chunks**.
+3. **Phase 3: Per-Character Multi-Cognition Swarm (`phase3_cognition.py`)**
+   - Runs independent, concurrent cognitive evaluations for present characters emitting structured `<cognition>` blocks (`<recall>`, `<feeling>`, `<want>`, `<plan>`) before dialogue or action takes place.
+4. **Phase 4: Narrative Prose Generation & Dual SSE Streaming (`phase4_prose.py`)**
+   - Synthesizes rich literary prose guided by established character cognitions and choices, streaming both interior thoughts and narrative prose over independent channels.
+5. **Phase 5: Async Post-Turn Clerk & State Engine (`phase5_clerk.py` & `character_agent.py`)**
+   - Runs asynchronously after generation to advance the **World Clock**, update character locations (or dynamically improvise and link newly discovered `LocationNode` rooms in the spatial graph), arbitrate inventory transactions, extract memory shards into vector storage, and compress overflowing working memory turns into **Episodic Chunks**.
    - Every state snapshot, improvised location, and episodic memory is indexed to the **Turn Tree**, so swiping (regenerating), rewinding, or branching rolls back world state and memories instantaneously without corruption.
 
 ## Quick Start
@@ -37,7 +43,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173` to launch the CyberCantina Roleplay Studio. Configure your OpenAI-compatible endpoints (Ollama, `llama.cpp`, vLLM, LM Studio, OpenRouter, etc.) in the **Model Settings** panel, or use the built-in **Heuristic / Mock Offline Fallback** to test the full 4-phase pipeline without an active LLM server.
+Open `http://localhost:5173` to launch the CyberCantina Roleplay Studio. Configure your OpenAI-compatible endpoints (Ollama, `llama.cpp`, vLLM, LM Studio, OpenRouter, etc.) in the **Model Settings** panel, or use the built-in **Heuristic / Mock Offline Fallback** to test the full 5-phase pipeline without an active LLM server.
 
 ## License
 
