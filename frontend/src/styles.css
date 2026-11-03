@@ -1652,6 +1652,10 @@ body {
   border-left-color: var(--accent-emerald);
 }
 
+.memory-item-location_lore {
+  border-left-color: var(--accent-cyan);
+}
+
 .memory-item-episodic_chunk {
   border-left-color: var(--accent-amber);
 }
@@ -2874,4 +2878,179 @@ body {
   border-color: var(--accent-violet);
   color: #ddd6fe;
   font-weight: 600;
+}
+
+/* Interactive Lore Trigger Keyword Chips (TagChipsInput) */
+.tag-chips-field-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.tag-chips-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border-subtle);
+  cursor: text;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.tag-chips-box--focused {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.15);
+}
+
+.tag-chips-box--amber.tag-chips-box--focused {
+  border-color: var(--accent-amber);
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.15);
+}
+
+.tag-chips-box--violet.tag-chips-box--focused {
+  border-color: var(--accent-violet);
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.18);
+}
+
+.tag-chips-box--invalid {
+  border-color: rgba(244, 63, 94, 0.65);
+  background: rgba(244, 63, 94, 0.04);
+}
+
+.tag-chips-box--disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.tag-chip-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 7px 2px 9px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.35;
+  background: rgba(6, 182, 212, 0.14);
+  border: 1px solid rgba(6, 182, 212, 0.35);
+  color: #a5f3fc;
+}
+
+.tag-chip-pill--amber {
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.38);
+  color: #fde68a;
+}
+
+.tag-chip-pill--violet {
+  background: rgba(139, 92, 246, 0.16);
+  border-color: rgba(139, 92, 246, 0.42);
+  color: #ddd6fe;
+}
+
+.tag-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 190px;
+}
+
+.tag-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.72;
+  cursor: pointer;
+  transition: background 0.12s ease, opacity 0.12s ease, color 0.12s ease;
+}
+
+.tag-chip-remove:hover {
+  opacity: 1;
+  background: rgba(244, 63, 94, 0.28);
+  color: #fecdd3;
+}
+
+.tag-chips-inline-input {
+  flex: 1 1 120px;
+  min-width: 90px;
+  border: none !important;
+  outline: none !important;
+  background: transparent !important;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  padding: 2px 2px !important;
+  box-shadow: none !important;
+}
+
+.tag-chips-inline-input::placeholder {
+  color: var(--text-muted);
+}
+
+.tag-chips-validation-hint {
+  font-size: 0.69rem;
+  color: #fda4af;
+}
+
+.tag-chips-helper-hint {
+  font-size: 0.69rem;
+  color: var(--text-muted);
+}
+
+/* Location Lore Badges & Cards */
+.lore-cat-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border: 1px solid rgba(6, 182, 212, 0.32);
+  background: rgba(6, 182, 212, 0.12);
+  color: #67e8f9;
+}
+
+.lore-cat-badge--secret {
+  border-color: rgba(244, 63, 94, 0.45);
+  background: rgba(244, 63, 94, 0.14);
+  color: #fda4af;
+}
+
+.lore-cat-badge--rumor {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.12);
+  color: #fcd34d;
+}
+
+.lore-cat-badge--faction {
+  border-color: rgba(139, 92, 246, 0.42);
+  background: rgba(139, 92, 246, 0.14);
+  color: #c4b5fd;
+}
+
+.lore-cat-badge--history {
+  border-color: rgba(16, 185, 129, 0.38);
+  background: rgba(16, 185, 129, 0.12);
+  color: #6ee7b7;
+}
+
+.lore-cat-badge--culture {
+  border-color: rgba(56, 189, 248, 0.38);
+  background: rgba(56, 189, 248, 0.12);
+  color: #7dd3fc;
 }

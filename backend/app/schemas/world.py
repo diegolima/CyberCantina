@@ -5,9 +5,133 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 CompassDirection = Literal["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+WorldLoreCategory = Literal["history", "culture", "faction", "rumor"]
+LocationLoreCategory = Literal["history", "culture", "faction", "rumor", "secret"]
+
+WORLD_LORE_CATEGORIES: tuple[WorldLoreCategory, ...] = (
+    "history",
+    "culture",
+    "faction",
+    "rumor",
+)
+LOCATION_LORE_CATEGORIES: tuple[LocationLoreCategory, ...] = (
+    "history",
+    "culture",
+    "faction",
+    "rumor",
+    "secret",
+)
+
+_FALLBACK_TAG_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "from",
+    "with",
+    "into",
+    "over",
+    "under",
+    "this",
+    "that",
+    "about",
+}
+
+
+def normalize_lore_category(
+    raw: Any,
+    *,
+    allow_secret: bool,
+    strict: bool = True,
+) -> str:
+    """Normalize and validate a lore category ('rumour' -> 'rumor')."""
+    if not isinstance(raw, str) or not raw.strip():
+        if strict:
+            raise ValueError("Lore category is required and cannot be empty.")
+        return "history"
+
+    cat = raw.strip().lower()
+    if cat == "rumour":
+        cat = "rumor"
+
+    allowed = set(LOCATION_LORE_CATEGORIES if allow_secret else WORLD_LORE_CATEGORIES)
+    if cat in allowed:
+        return cat
+
+    if not strict:
+        legacy_map = {
+            "item": "rumor",
+            "items": "rumor",
+            "rule": "culture",
+            "rules": "culture",
+            "law": "culture",
+            "factions": "faction",
+            "rumors": "rumor",
+            "rumours": "rumor",
+            "secret": "secret" if allow_secret else "rumor",
+            "secrets": "secret" if allow_secret else "rumor",
+        }
+        return legacy_map.get(cat, "history")
+
+    allowed_str = ", ".join(sorted(allowed))
+    raise ValueError(f"Invalid lore category '{raw}'. Allowed categories: {allowed_str}.")
+
+
+def synthesize_fallback_tags(title: str, content: str = "") -> list[str]:
+    """Deterministically extract 1-3 fallback keywords for legacy DB migration or LLM salvage."""
+    candidates = re.findall(r"[a-z0-9]{3,}", f"{title} {content}".lower())
+    seen: set[str] = set()
+    tags: list[str] = []
+    for tok in candidates:
+        if tok in _FALLBACK_TAG_STOPWORDS or tok in seen:
+            continue
+        seen.add(tok)
+        tags.append(tok[:64])
+        if len(tags) >= 3:
+            break
+    return tags or ["lore"]
+
+
+def normalize_and_validate_entity_tags(
+    raw_tags: Any,
+    *,
+    strict: bool = True,
+    fallback_title: str = "",
+    fallback_content: str = "",
+) -> list[str]:
+    """Trim, deduplicate case-insensitively, and enforce >= 1 non-empty trigger keyword."""
+    if not isinstance(raw_tags, list):
+        if strict:
+            raise ValueError("entity_tags must be a list of non-empty strings.")
+        raw_tags = []
+
+    cleaned: list[str] = []
+    seen_lower: set[str] = set()
+    for item in raw_tags:
+        if not isinstance(item, str):
+            if strict:
+                raise ValueError("Each entity tag must be a string.")
+            continue
+        # Collapse whitespace/newlines and cap individual tag length
+        tag = re.sub(r"\s+", " ", item).strip()[:64]
+        if not tag:
+            continue
+        low = tag.lower()
+        if low in seen_lower:
+            continue
+        seen_lower.add(low)
+        cleaned.append(tag)
+        if len(cleaned) >= 20:
+            break
+
+    if not cleaned:
+        if strict:
+            raise ValueError("Each lore entry must include at least 1 non-empty keyword.")
+        return synthesize_fallback_tags(fallback_title, fallback_content)
+
+    return cleaned
 
 COMPASS_DIRECTIONS: tuple[CompassDirection, ...] = (
     "N",
@@ -148,8 +272,88 @@ class WorldGlobalRules(BaseModel):
         return data
 
 
-class LocationNodeDraft(BaseModel):
-    """Draft location node for the Spatial Engine and World Wizard."""
+class BaseLoreNodeInput(BaseModel):
+    """Shared strict validation base for any user-submitted or persisted lore input."""
+
+    id: str | None = None
+    title: str = Field(..., min_length=1, max_length=120)
+    content: str = Field(..., min_length=1, max_length=2000)
+    entity_tags: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=20,
+        description="Keywords/names that link this lore node to mentions in dialogue (at least 1 required).",
+    )
+
+    @field_validator("title", "content", mode="before")
+    @classmethod
+    def _validate_non_empty_text(cls, v: Any) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("Lore title and content cannot be empty.")
+        return v.strip()
+
+    @field_validator("entity_tags", mode="before")
+    @classmethod
+    def _validate_entity_tags(cls, v: Any) -> list[str]:
+        return normalize_and_validate_entity_tags(v, strict=True)
+
+
+class WorldLoreNodeDraft(BaseLoreNodeInput):
+    """Strict world-level macro lore entry (history, culture, faction, rumor)."""
+
+    category: WorldLoreCategory
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _validate_world_category(cls, v: Any) -> str:
+        return normalize_lore_category(v, allow_secret=False, strict=True)
+
+
+LoreNodeDraft = WorldLoreNodeDraft
+
+
+class LocationLoreNodeDraft(BaseLoreNodeInput):
+    """Strict location-level lore entry (history, culture, faction, rumor, secret)."""
+
+    category: LocationLoreCategory
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _validate_location_category(cls, v: Any) -> str:
+        return normalize_lore_category(v, allow_secret=True, strict=True)
+
+
+class WizardLoreNodeLLMOutput(BaseModel):
+    """Lenient LLM-ingestion schema for World Wizard generation; salvages legacy categories & missing tags."""
+
+    title: str = Field(default="World Lore")
+    category: str = Field(default="faction", description="One of: history, culture, faction, rumor.")
+    content: str = Field(default="", description="Concise 2-4 sentence macro world lore entry.")
+    entity_tags: list[str] = Field(
+        default_factory=list,
+        description="At least 1-5 trigger keywords linking this lore entry to dialogue mentions.",
+    )
+
+    def to_strict_draft(self) -> WorldLoreNodeDraft:
+        clean_title = (self.title or "").strip()[:120] or "World Lore"
+        clean_content = (self.content or "").strip()[:2000] or clean_title
+        clean_cat = normalize_lore_category(self.category, allow_secret=False, strict=False)
+        clean_tags = normalize_and_validate_entity_tags(
+            self.entity_tags,
+            strict=False,
+            fallback_title=clean_title,
+            fallback_content=clean_content,
+        )
+        return WorldLoreNodeDraft(
+            title=clean_title,
+            category=clean_cat,  # type: ignore[arg-type]
+            content=clean_content,
+            entity_tags=clean_tags,
+        )
+
+
+class WizardLocationNodeLLMOutput(BaseModel):
+    """LLM-facing draft location node without lore_nodes so location lore is never autogenerated."""
 
     key: str = Field(description="Slug identifier used to wire edges during creation, e.g. 'main_bar'.")
     name: str = Field(description="Display name of the location, e.g. 'The Neon Rust Main Floor'.")
@@ -165,6 +369,41 @@ class LocationNodeDraft(BaseModel):
     )
     is_starting_location: bool = Field(default=False)
     is_hub: bool = Field(default=False)
+
+    def to_location_draft(self) -> "LocationNodeDraft":
+        return LocationNodeDraft(
+            key=self.key,
+            name=self.name,
+            summary=self.summary,
+            description=self.description,
+            environmental_tags=list(self.environmental_tags),
+            is_starting_location=self.is_starting_location,
+            is_hub=self.is_hub,
+            lore_nodes=[],
+        )
+
+
+class LocationNodeDraft(BaseModel):
+    """Draft location node for the Spatial Engine and World Wizard commit payload."""
+
+    key: str = Field(description="Slug identifier used to wire edges during creation, e.g. 'main_bar'.")
+    name: str = Field(description="Display name of the location, e.g. 'The Neon Rust Main Floor'.")
+    summary: str = Field(
+        description="1-sentence purpose/hook injected when this location is an adjacent exit."
+    )
+    description: str = Field(
+        description="3-5 sentences of rich sensory detail injected when characters are inside this location."
+    )
+    environmental_tags: list[str] = Field(
+        default_factory=list,
+        description="Ambient features, interactive props, lighting, or hazards.",
+    )
+    is_starting_location: bool = Field(default=False)
+    is_hub: bool = Field(default=False)
+    lore_nodes: list[LocationLoreNodeDraft] = Field(
+        default_factory=list,
+        description="User-authored location lore entries preserved across wizard review -> commit.",
+    )
 
 
 class LocationEdgeDraft(BaseModel):
@@ -188,18 +427,6 @@ class LocationEdgeDraft(BaseModel):
     bidirectional: bool = Field(default=True)
 
 
-class LoreNodeDraft(BaseModel):
-    """World lore entry (factions, history, items, local customs) indexed in Hybrid GraphRAG."""
-
-    title: str
-    category: Literal["faction", "history", "item", "culture", "rule", "rumor"] = "faction"
-    content: str = Field(description="Concise 2-4 sentence lore entry.")
-    entity_tags: list[str] = Field(
-        default_factory=list,
-        description="Keywords/names that link this lore node to mentions in dialogue.",
-    )
-
-
 class WorldWizardSeed(BaseModel):
     """User-provided basic inputs for the 1.2 World Creation Wizard."""
 
@@ -214,13 +441,13 @@ class WorldWizardSeed(BaseModel):
 
 
 class WorldWizardDraft(BaseModel):
-    """AI-expanded world package produced by the World Wizard."""
+    """AI-expanded world package produced by the World Wizard (strict on commit)."""
 
     name: str
     global_rules: WorldGlobalRules
     locations: list[LocationNodeDraft]
     edges: list[LocationEdgeDraft]
-    lore_nodes: list[LoreNodeDraft]
+    lore_nodes: list[WorldLoreNodeDraft]
 
 
 class WorldMapReimagineRequest(BaseModel):
@@ -243,6 +470,48 @@ class WorldMapDraft(BaseModel):
     edges: list[LocationEdgeDraft]
 
 
+class LoreNode(BaseModel):
+    """Persisted lore node (world-scoped when location_id is None, location-scoped when set)."""
+
+    id: str
+    world_id: str
+    location_id: str | None = None
+    campaign_id: str | None = None
+    title: str = Field(..., min_length=1, max_length=120)
+    category: LocationLoreCategory
+    content: str = Field(..., min_length=1, max_length=2000)
+    entity_tags: list[str] = Field(..., min_length=1, max_length=20)
+
+    @field_validator("title", "content", mode="before")
+    @classmethod
+    def _validate_text(cls, v: Any) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("Lore title and content cannot be empty.")
+        return v.strip()
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _validate_category(cls, v: Any) -> str:
+        return normalize_lore_category(v, allow_secret=True, strict=True)
+
+    @field_validator("entity_tags", mode="before")
+    @classmethod
+    def _validate_tags(cls, v: Any) -> list[str]:
+        return normalize_and_validate_entity_tags(v, strict=True)
+
+    @model_validator(mode="after")
+    def _enforce_scope_invariants(self) -> "LoreNode":
+        if self.location_id is None and self.category == "secret":
+            raise ValueError(
+                "Category 'secret' is only allowed on location lore entries, not world lore."
+            )
+        if self.campaign_id is not None and self.location_id is None:
+            raise ValueError(
+                "Campaign-scoped lore overrides must belong to a specific location."
+            )
+        return self
+
+
 class LocationNode(BaseModel):
     """Persisted spatial graph node."""
 
@@ -255,6 +524,29 @@ class LocationNode(BaseModel):
     environmental_tags: list[str] = Field(default_factory=list)
     is_starting_location: bool = False
     is_hub: bool = False
+    lore_nodes: list[LoreNode] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _bind_nested_location_lore(cls, data: Any) -> Any:
+        if isinstance(data, dict) and isinstance(data.get("lore_nodes"), list):
+            loc_id = data.get("id")
+            w_id = data.get("world_id") or ""
+            if loc_id:
+                bound: list[Any] = []
+                for idx, entry in enumerate(data["lore_nodes"]):
+                    if isinstance(entry, dict):
+                        patched = dict(entry)
+                        patched["location_id"] = patched.get("location_id") or loc_id
+                        patched["world_id"] = patched.get("world_id") or w_id
+                        patched["id"] = patched.get("id") or f"new_loc_lore_{idx}"
+                        bound.append(patched)
+                    elif isinstance(entry, LoreNode) and entry.location_id != loc_id:
+                        bound.append(entry.model_copy(update={"location_id": loc_id}))
+                    else:
+                        bound.append(entry)
+                data = {**data, "lore_nodes": bound}
+        return data
 
 
 class LocationEdge(BaseModel):
@@ -283,15 +575,15 @@ class NeighborLocationView(BaseModel):
     destination: LocationNode
 
 
-class LoreNode(BaseModel):
-    """Persisted world lore node."""
-
-    id: str
-    world_id: str
-    title: str
-    category: str
-    content: str
-    entity_tags: list[str] = Field(default_factory=list)
+def _enforce_world_level_lore_nodes(nodes: list[LoreNode]) -> list[LoreNode]:
+    for node in nodes:
+        if node.location_id is not None:
+            raise ValueError(
+                "World-level lore_nodes must not set location_id; attach location lore to LocationNode.lore_nodes."
+            )
+        if node.category == "secret":
+            raise ValueError("Category 'secret' is not allowed on world-level lore entries.")
+    return nodes
 
 
 class WorldRecord(BaseModel):
@@ -306,6 +598,11 @@ class WorldRecord(BaseModel):
     edges: list[LocationEdge] = Field(default_factory=list)
     lore_nodes: list[LoreNode] = Field(default_factory=list)
 
+    @field_validator("lore_nodes")
+    @classmethod
+    def _validate_world_lore(cls, v: list[LoreNode]) -> list[LoreNode]:
+        return _enforce_world_level_lore_nodes(v)
+
 
 class WorldUpdatePayload(BaseModel):
     """Payload for updating a world (in-place if unused, or silently forked if used by a campaign)."""
@@ -315,3 +612,14 @@ class WorldUpdatePayload(BaseModel):
     locations: list[LocationNode] = Field(default_factory=list)
     edges: list[LocationEdge] = Field(default_factory=list)
     lore_nodes: list[LoreNode] = Field(default_factory=list)
+
+    @field_validator("lore_nodes")
+    @classmethod
+    def _validate_world_lore(cls, v: list[LoreNode]) -> list[LoreNode]:
+        return _enforce_world_level_lore_nodes(v)
+
+
+class CampaignLocationLoreUpdatePayload(BaseModel):
+    """Atomic Copy-on-Write location lore replacement payload during an active campaign."""
+
+    lore_nodes: list[LocationLoreNodeDraft] = Field(default_factory=list)

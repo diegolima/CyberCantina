@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
+  AlertCircle,
   BookOpen,
   Brain,
   Check,
@@ -28,14 +29,18 @@ import {
   CharacterVersionSummary,
   CompassDirection,
   GalleryImage,
+  LOCATION_LORE_CATEGORIES,
   LocationEdge,
   LocationEdgeDraft,
+  LocationLoreCategory,
   LocationNode,
   LocationNodeDraft,
   LoreNode,
   MemoryShard,
   VoiceAnchor,
+  WORLD_LORE_CATEGORIES,
   WorldGlobalRules,
+  WorldLoreCategory,
   WorldRecord,
   WorldWizardDraft,
 } from "../types";
@@ -45,6 +50,7 @@ import {
   inferCompassDirection,
   pickCompassSlot,
 } from "./SpatialTopologyView";
+import { TagChipsInput, normalizeTagList } from "./TagChipsInput";
 
 interface ClickToEditFieldProps {
   label?: string;
@@ -1996,6 +2002,19 @@ export function mapDraftToNodesAndEdges(
       environmental_tags: [...(loc.environmental_tags ?? [])],
       is_starting_location: isStart,
       is_hub: Boolean(loc.is_hub),
+      lore_nodes: (loc.lore_nodes ?? []).map((ln, lIdx) => ({
+        id: ln.id || `draft_loc_lore_${idx}_${lIdx}`,
+        world_id: worldId,
+        location_id: id,
+        title: ln.title,
+        category: LOCATION_LORE_CATEGORIES.includes(
+          ln.category as LocationLoreCategory
+        )
+          ? (ln.category as LocationLoreCategory)
+          : "rumor",
+        content: ln.content,
+        entity_tags: [...(ln.entity_tags ?? [])],
+      })),
     };
   });
 
@@ -2073,10 +2092,12 @@ export function draftToWorldRecord(draft: WorldWizardDraft): WorldRecord {
   const { locations, edges } = mapDraftToNodesAndEdges(draft, draftWorldId);
 
   const lore_nodes: LoreNode[] = (draft.lore_nodes ?? []).map((lore, idx) => ({
-    id: `draft_lore_${idx}`,
+    id: lore.id || `draft_lore_${idx}`,
     world_id: draftWorldId,
     title: lore.title,
-    category: lore.category,
+    category: WORLD_LORE_CATEGORIES.includes(lore.category as WorldLoreCategory)
+      ? (lore.category as WorldLoreCategory)
+      : "faction",
     content: lore.content,
     entity_tags: [...(lore.entity_tags ?? [])],
   }));
@@ -2099,14 +2120,7 @@ export function worldStateToDraft(state: {
   edges: LocationEdge[];
   lore_nodes: LoreNode[];
 }): WorldWizardDraft {
-  const validCategories = new Set([
-    "faction",
-    "history",
-    "item",
-    "culture",
-    "rule",
-    "rumor",
-  ]);
+  const validCategories = new Set<string>(WORLD_LORE_CATEGORIES);
   const hasStart = state.locations.some((l) => l.is_starting_location);
   return {
     name: state.name.trim() || "Untitled World",
@@ -2122,6 +2136,17 @@ export function worldStateToDraft(state: {
         ? Boolean(loc.is_starting_location)
         : idx === 0,
       is_hub: Boolean(loc.is_hub),
+      lore_nodes: (loc.lore_nodes ?? []).map((ln) => ({
+        id: ln.id,
+        title: ln.title.trim(),
+        category: LOCATION_LORE_CATEGORIES.includes(
+          ln.category as LocationLoreCategory
+        )
+          ? (ln.category as LocationLoreCategory)
+          : "rumor",
+        content: ln.content.trim(),
+        entity_tags: ln.entity_tags,
+      })),
     })),
     edges: state.edges.map((edge) => ({
       from_key: edge.from_location_id,
@@ -2134,11 +2159,12 @@ export function worldStateToDraft(state: {
       bidirectional: false,
     })),
     lore_nodes: state.lore_nodes.map((lore) => ({
+      id: lore.id,
       title: lore.title.trim() || "Untitled Lore",
       category: (validCategories.has(lore.category)
         ? lore.category
-        : "faction") as WorldWizardDraft["lore_nodes"][number]["category"],
-      content: lore.content,
+        : "faction") as WorldLoreCategory,
+      content: lore.content.trim(),
       entity_tags: lore.entity_tags,
     })),
   };
@@ -2178,6 +2204,10 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
       .map((loc) => ({
         ...loc,
         environmental_tags: [...loc.environmental_tags],
+        lore_nodes: (loc.lore_nodes ?? []).map((ln) => ({
+          ...ln,
+          entity_tags: [...(ln.entity_tags ?? [])],
+        })),
       }))
   );
   const [edges, setEdges] = useState<LocationEdge[]>(
@@ -2188,9 +2218,17 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   const [loreNodes, setLoreNodes] = useState<LoreNode[]>(
     world.lore_nodes.map((lore) => ({
       ...lore,
+      category: WORLD_LORE_CATEGORIES.includes(
+        lore.category as WorldLoreCategory
+      )
+        ? (lore.category as WorldLoreCategory)
+        : "faction",
       entity_tags: [...lore.entity_tags],
     }))
   );
+  const [pendingWorldLoreTagDrafts, setPendingWorldLoreTagDrafts] = useState<
+    Record<string, string>
+  >({});
 
   const [isDirty, setIsDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -2427,19 +2465,124 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
     return newLocId;
   };
 
+  const invalidWorldLoreCount = loreNodes.filter((lore) => {
+    const pendingRaw = pendingWorldLoreTagDrafts[lore.id] || "";
+    const pendingParts = pendingRaw
+      .split(/[,;\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const effectiveTags = normalizeTagList(lore.entity_tags || [], pendingParts);
+    return (
+      !lore.title.trim() ||
+      !lore.content.trim() ||
+      !WORLD_LORE_CATEGORIES.includes(lore.category as WorldLoreCategory) ||
+      effectiveTags.length === 0
+    );
+  }).length;
+
+  const invalidLocationLoreCount = locations.reduce((acc, loc) => {
+    const locInvalid = (loc.lore_nodes ?? []).filter(
+      (ln) =>
+        !ln.title.trim() ||
+        !ln.content.trim() ||
+        !LOCATION_LORE_CATEGORIES.includes(
+          ln.category as LocationLoreCategory
+        ) ||
+        !ln.entity_tags ||
+        ln.entity_tags.length === 0
+    ).length;
+    return acc + locInvalid;
+  }, 0);
+
+  const locationsWithLoreCount = locations.reduce(
+    (acc, loc) => acc + (loc.lore_nodes?.length ?? 0),
+    0
+  );
+
   const handleSave = async () => {
     if (locations.length === 0) {
       setError("At least one location is required.");
       return;
     }
+
+    const flushedWorldLore: LoreNode[] = loreNodes.map((lore) => {
+      const pendingRaw = pendingWorldLoreTagDrafts[lore.id] || "";
+      const pendingParts = pendingRaw
+        .split(/[,;\n]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const effectiveTags = normalizeTagList(
+        lore.entity_tags || [],
+        pendingParts
+      );
+      return {
+        ...lore,
+        title: lore.title.trim(),
+        content: lore.content.trim(),
+        category: WORLD_LORE_CATEGORIES.includes(
+          lore.category as WorldLoreCategory
+        )
+          ? (lore.category as WorldLoreCategory)
+          : "faction",
+        entity_tags: effectiveTags,
+      };
+    });
+
+    for (let i = 0; i < flushedWorldLore.length; i++) {
+      const item = flushedWorldLore[i];
+      if (!item.title || !item.content || item.entity_tags.length === 0) {
+        setActiveTab("lore");
+        setError(
+          `World Lore entry #${i + 1} ("${
+            item.title || "Untitled"
+          }") must have a non-empty title, content, and at least 1 trigger keyword.`
+        );
+        return;
+      }
+    }
+
+    const sanitizedLocations: LocationNode[] = locations.map((loc) => ({
+      ...loc,
+      lore_nodes: (loc.lore_nodes ?? []).map((ln) => ({
+        ...ln,
+        title: ln.title.trim(),
+        content: ln.content.trim(),
+        category: LOCATION_LORE_CATEGORIES.includes(
+          ln.category as LocationLoreCategory
+        )
+          ? (ln.category as LocationLoreCategory)
+          : "rumor",
+        entity_tags: normalizeTagList(ln.entity_tags || [], []),
+      })),
+    }));
+
+    for (const loc of sanitizedLocations) {
+      for (let i = 0; i < (loc.lore_nodes ?? []).length; i++) {
+        const ln = loc.lore_nodes![i];
+        if (!ln.title || !ln.content || ln.entity_tags.length === 0) {
+          setActiveTab("map");
+          setError(
+            `Location "${loc.name}" Lore entry #${i + 1} ("${
+              ln.title || "Untitled"
+            }") must have a non-empty title, content, and at least 1 trigger keyword.`
+          );
+          return;
+        }
+      }
+    }
+
+    setLoreNodes(flushedWorldLore);
+    setLocations(sanitizedLocations);
+    setPendingWorldLoreTagDrafts({});
+
     setSaving(true);
     setError(null);
     const payload = {
       name: name.trim() || world.name,
       global_rules: globalRules,
-      locations,
+      locations: sanitizedLocations,
       edges,
-      lore_nodes: loreNodes,
+      lore_nodes: flushedWorldLore,
     };
     try {
       const updated =
@@ -2513,6 +2656,19 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             <Compass size={14} />
             <span>Map</span>
             <span className="modal-tab-badge">{locations.length}</span>
+            {invalidLocationLoreCount > 0 && (
+              <span
+                className="modal-tab-badge"
+                style={{
+                  background: "rgba(244, 63, 94, 0.22)",
+                  color: "#fda4af",
+                  border: "1px solid rgba(244, 63, 94, 0.5)",
+                }}
+                title={`${invalidLocationLoreCount} incomplete location lore entry/entries`}
+              >
+                !{invalidLocationLoreCount}
+              </span>
+            )}
           </button>
           <button
             type="button"
@@ -2524,6 +2680,19 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             <BookOpen size={14} />
             <span>Lore</span>
             <span className="modal-tab-badge">{loreNodes.length}</span>
+            {invalidWorldLoreCount > 0 && (
+              <span
+                className="modal-tab-badge"
+                style={{
+                  background: "rgba(244, 63, 94, 0.22)",
+                  color: "#fda4af",
+                  border: "1px solid rgba(244, 63, 94, 0.5)",
+                }}
+                title={`${invalidWorldLoreCount} incomplete world lore entry/entries`}
+              >
+                !{invalidWorldLoreCount}
+              </span>
+            )}
           </button>
         </div>
 
@@ -2725,7 +2894,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                   style={{ display: "flex", alignItems: "center", gap: 6 }}
                 >
                   <BookOpen size={13} color="var(--accent-violet)" />
-                  World Lore Nodes — Hybrid GraphRAG ({loreNodes.length})
+                  World Macro Lore — Factions, History, Culture &amp; Rumors ({loreNodes.length})
                 </span>
                 <button
                   type="button"
@@ -2739,7 +2908,8 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                         world_id: world.id,
                         title: "New Lore Entry",
                         category: "faction",
-                        content: "Describe faction, history, rule, or item...",
+                        content:
+                          "Describe a macro faction, historical event, cultural norm, or world rumor...",
                         entity_tags: [],
                       },
                     ]);
@@ -2758,113 +2928,150 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                     fontStyle: "italic",
                   }}
                 >
-                  No world lore nodes indexed. Add lore nodes to enrich GraphRAG retrieval with factions, history, and world rules.
+                  No world lore nodes indexed. Add macro lore for factions, history, culture, and rumors (attach room-specific lore &amp; secrets on the Map tab).
                 </div>
               ) : (
-                loreNodes.map((lore, idx) => (
-                  <div
-                    key={lore.id}
-                    style={{
-                      background: "var(--bg-panel)",
-                      border: "1px solid var(--border-subtle)",
-                      borderRadius: 6,
-                      padding: 10,
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 8,
-                    }}
-                  >
+                loreNodes.map((lore, idx) => {
+                  const pendingRaw = pendingWorldLoreTagDrafts[lore.id] || "";
+                  const hasTags =
+                    lore.entity_tags.length > 0 || Boolean(pendingRaw.trim());
+                  const isEntryInvalid =
+                    !lore.title.trim() || !lore.content.trim() || !hasTags;
+
+                  return (
                     <div
+                      key={lore.id}
                       style={{
-                        display: "grid",
-                        gridTemplateColumns: "1.2fr 130px 1.2fr auto",
+                        background: "var(--bg-panel)",
+                        border: isEntryInvalid
+                          ? "1px solid rgba(244, 63, 94, 0.55)"
+                          : "1px solid var(--border-subtle)",
+                        borderRadius: 6,
+                        padding: 10,
+                        display: "flex",
+                        flexDirection: "column",
                         gap: 8,
-                        alignItems: "start",
                       }}
                     >
-                      <ClickToEditField
-                        label="Lore Title"
-                        value={lore.title}
-                        onChange={(val) => {
-                          const next = [...loreNodes];
-                          next[idx] = { ...next[idx], title: val };
-                          setLoreNodes(next);
-                          markDirty();
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "1.1fr 130px 1.4fr auto",
+                          gap: 8,
+                          alignItems: "start",
                         }}
-                      />
-                      <div className="field-group">
-                        <label>Category</label>
-                        <select
-                          className="field-select"
-                          value={lore.category}
-                          onChange={(e) => {
+                      >
+                        <ClickToEditField
+                          label="Lore Title"
+                          value={lore.title}
+                          onChange={(val) => {
                             const next = [...loreNodes];
-                            next[idx] = {
-                              ...next[idx],
-                              category: e.target.value,
-                            };
+                            next[idx] = { ...next[idx], title: val };
                             setLoreNodes(next);
                             markDirty();
                           }}
+                        />
+                        <div className="field-group">
+                          <label>Category</label>
+                          <select
+                            className="field-select"
+                            value={lore.category}
+                            onChange={(e) => {
+                              const next = [...loreNodes];
+                              next[idx] = {
+                                ...next[idx],
+                                category: e.target.value as WorldLoreCategory,
+                              };
+                              setLoreNodes(next);
+                              markDirty();
+                            }}
+                          >
+                            {WORLD_LORE_CATEGORIES.map((cat) => (
+                              <option key={cat} value={cat}>
+                                {cat}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="field-group">
+                          <label>Trigger Keywords (min 1)</label>
+                          <TagChipsInput
+                            value={lore.entity_tags}
+                            accentVariant="violet"
+                            placeholder="Add keyword & press Enter..."
+                            onDraftChange={(draftStr) => {
+                              setPendingWorldLoreTagDrafts((prev) => ({
+                                ...prev,
+                                [lore.id]: draftStr,
+                              }));
+                            }}
+                            onChange={(nextTags) => {
+                              const next = [...loreNodes];
+                              next[idx] = {
+                                ...next[idx],
+                                entity_tags: nextTags,
+                              };
+                              setLoreNodes(next);
+                              markDirty();
+                            }}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          className="item-remove-btn"
+                          style={{ marginTop: 22 }}
+                          onClick={() => {
+                            setLoreNodes(loreNodes.filter((_, i) => i !== idx));
+                            setPendingWorldLoreTagDrafts((prev) => {
+                              const copy = { ...prev };
+                              delete copy[lore.id];
+                              return copy;
+                            });
+                            markDirty();
+                          }}
+                          title="Remove lore node"
                         >
-                          <option value="faction">faction</option>
-                          <option value="history">history</option>
-                          <option value="item">item</option>
-                          <option value="culture">culture</option>
-                          <option value="rule">rule</option>
-                          <option value="rumor">rumor</option>
-                        </select>
+                          <Trash2 size={13} />
+                        </button>
                       </div>
+
                       <ClickToEditField
-                        label="Entity Trigger Tags (comma-separated)"
-                        value={lore.entity_tags.join(", ")}
-                        placeholder="e.g. faction, capital, elder"
+                        label="Lore Content"
+                        value={lore.content}
+                        multiline
+                        rows={2}
                         onChange={(val) => {
                           const next = [...loreNodes];
-                          next[idx] = {
-                            ...next[idx],
-                            entity_tags: val
-                              .split(",")
-                              .map((t) => t.trim())
-                              .filter(Boolean),
-                          };
+                          next[idx] = { ...next[idx], content: val };
                           setLoreNodes(next);
                           markDirty();
                         }}
                       />
-                      <button
-                        type="button"
-                        className="item-remove-btn"
-                        style={{ marginTop: 22 }}
-                        onClick={() => {
-                          setLoreNodes(loreNodes.filter((_, i) => i !== idx));
-                          markDirty();
-                        }}
-                        title="Remove lore node"
-                      >
-                        <Trash2 size={13} />
-                      </button>
                     </div>
-
-                    <ClickToEditField
-                      label="Lore Content"
-                      value={lore.content}
-                      multiline
-                      rows={2}
-                      onChange={(val) => {
-                        const next = [...loreNodes];
-                        next[idx] = { ...next[idx], content: val };
-                        setLoreNodes(next);
-                        markDirty();
-                      }}
-                    />
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>
 
-          {error && <div style={{ color: "#fda4af" }}>{error}</div>}
+          {error && (
+            <div
+              style={{
+                color: "#fda4af",
+                background: "rgba(244, 63, 94, 0.1)",
+                border: "1px solid rgba(244, 63, 94, 0.35)",
+                borderRadius: 6,
+                padding: "8px 12px",
+                fontSize: "0.78rem",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <AlertCircle size={15} />
+              <span>{error}</span>
+            </div>
+          )}
         </div>
 
         <div className="modal-footer">
@@ -3041,8 +3248,25 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
               <div style={{ fontSize: "0.74rem", color: "var(--text-muted)" }}>
                 Note: Regenerating the map replaces current draft locations and
                 passages with the newly synthesized spatial topology. World
-                rules, overview, and lore entries remain intact.
+                rules, overview, and world-level lore entries remain intact.
               </div>
+
+              {locationsWithLoreCount > 0 && (
+                <div
+                  style={{
+                    fontSize: "0.75rem",
+                    color: "#fde68a",
+                    background: "rgba(245, 158, 11, 0.12)",
+                    border: "1px solid rgba(245, 158, 11, 0.4)",
+                    borderRadius: 6,
+                    padding: "8px 12px",
+                  }}
+                >
+                  <strong>Warning:</strong> Replacing the map will discard{" "}
+                  <strong>{locationsWithLoreCount}</strong> location-attached lore
+                  entry/entries on your current rooms.
+                </div>
+              )}
             </div>
 
             <div

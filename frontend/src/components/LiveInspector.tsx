@@ -20,6 +20,7 @@ import {
   CharacterRecord,
   CharacterStateSnapshot,
   CompassDirection,
+  LocationLoreNodeDraft,
   MemoryShard,
   NeighborLocationView,
   RecalledMemoryItem,
@@ -37,6 +38,7 @@ import {
 
 const RECALL_SOURCE_LABEL: Record<RecalledMemoryItem["source_type"], string> = {
   lore: "Lore",
+  location_lore: "Loc Lore",
   character_shard: "Shard",
   episodic_chunk: "Episode",
 };
@@ -98,6 +100,11 @@ interface LiveInspectorProps {
     characterId: string,
     memoryShards: MemoryShard[]
   ) => Promise<void>;
+  onSaveCampaignLocationLore?: (
+    locationId: string,
+    loreNodes: LocationLoreNodeDraft[]
+  ) => Promise<void> | void;
+  isMutatingLocked?: boolean;
   worlds?: WorldRecord[];
 }
 
@@ -115,6 +122,8 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   onUpdateEdgeDistance,
   onToggleItemEquip,
   onUpdateCampaignMemories,
+  onSaveCampaignLocationLore,
+  isMutatingLocked = false,
   worlds = [],
 }) => {
   const activeLoc = bundle.active_location;
@@ -201,6 +210,11 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   );
   const indexedCount =
     world.lore_nodes.length +
+    (bundle.visible_locations ?? []).reduce(
+      (n, loc) =>
+        n + (loc.lore_nodes ?? []).filter((l) => l.category !== "secret").length,
+      0
+    ) +
     indexedCharacters.reduce((n, c) => n + c.memory_shards.length, 0);
 
   const toggleRecall = (key: string) =>
@@ -643,6 +657,8 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
               onAddEdge={onAddEdge}
               onDeleteEdge={onDeleteEdge}
               onUpdateEdgeDistance={onUpdateEdgeDistance}
+              onSaveCampaignLocationLore={onSaveCampaignLocationLore}
+              isMutatingLocked={isMutatingLocked}
             />
           </div>
         </div>
@@ -812,6 +828,8 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
         <LoreIndexModal
           world={world}
           characters={indexedCharacters}
+          locations={bundle.visible_locations}
+          activeLocationId={activeLoc.id}
           recalledItems={recalledItems}
           onClose={() => setShowLoreIndex(false)}
         />

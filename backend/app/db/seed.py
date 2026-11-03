@@ -183,11 +183,11 @@ def ensure_default_seed(
                 entity_tags=["meridian", "heist", "lab", "crew", "survivor"],
             ),
             LoreNodeDraft(
-                title="Project Chimera Cortex Chip",
-                category="item",
+                title="Project Chimera Rumors",
+                category="rumor",
                 content=(
-                    "An experimental military-grade reflex and memory co-processor stolen during the Meridian Heist. "
-                    "It slowly burns out unshielded nervous systems unless calibrated every 72 hours."
+                    "Whispers across the Undercity claim an experimental military-grade reflex and memory "
+                    "program vanished during the Meridian Heist, burning out unshielded neural subjects."
                 ),
                 entity_tags=["chimera", "chip", "cortex", "implant", "prototype"],
             ),

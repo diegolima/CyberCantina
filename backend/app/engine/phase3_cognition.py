@@ -9,7 +9,11 @@ import re
 from typing import Any
 
 from app.config import settings
-from app.engine.phase2_context import TurnContextBundle, resolve_character_previous_state
+from app.engine.phase2_context import (
+    TurnContextBundle,
+    resolve_character_previous_state,
+    select_active_location_lore_for_turn,
+)
 from app.engine.llm_client import llm_client
 from app.prompts import get_default_prompt, render_template
 from app.prompts.defaults import (
@@ -106,7 +110,7 @@ def _format_cognition_bullets(text: str) -> str:
     t = re.sub(r"^[,\s\[]+", "", text).strip()
     t = re.sub(r"[\]\s]+$", "", t).strip()
     t = re.sub(
-        r"\[(EPISODIC_CHUNK|CHARACTER_SHARD|LORE)\]\s*",
+        r"\[(EPISODIC_CHUNK|CHARACTER_SHARD|LOCATION_LORE|LORE)\]\s*",
         "",
         t,
         flags=re.I,
@@ -272,6 +276,7 @@ async def run_character_cognition_agent(
     profile: ModelProfile | None = None,
     system_prompt_template: str | None = None,
     choice_resolution: ChoiceResolution | None = None,
+    narrator_directive: str | None = None,
 ) -> CognitionBlock:
     """Execute a single character subconscious cognition agent turn."""
     template = system_prompt_template or get_default_prompt(
@@ -298,8 +303,13 @@ async def run_character_cognition_agent(
         core_fear=character.baseline_psyche.core_fear,
     )
 
-    # Scoped recalled items: shared room items + character's isolated memories
-    all_recalled = list(shared_scene_items) + list(character_recalled_items)
+    # Scoped recalled items: shared room items + character's isolated memories (deduplicated by ID)
+    seen_recall_ids: set[str] = set()
+    all_recalled: list[RecalledMemoryItem] = []
+    for m in (*shared_scene_items, *character_recalled_items):
+        if m.id not in seen_recall_ids:
+            seen_recall_ids.add(m.id)
+            all_recalled.append(m)
     recalled_text = "\n".join(
         f"  - [{m.source_type.upper()}] {m.title}: {m.content}"
         for m in all_recalled
@@ -370,6 +380,20 @@ async def run_character_cognition_agent(
         from app.engine.choices import render_choice_directive
         choice_directive_text = render_choice_directive(choice_resolution, character.name) + "\n"
 
+    selected_local_lore = select_active_location_lore_for_turn(
+        active_location,
+        user_message=user_message,
+        pre_turn=pre_turn,
+        narrator_directive=narrator_directive,
+    )
+    local_lore_section = ""
+    if selected_local_lore:
+        loc_lore_lines = "\n".join(
+            f"  * [{'SECRET — DISCOVERED' if ln.category == 'secret' else ln.category.upper()}] {ln.title}: {ln.content}"
+            for ln in selected_local_lore
+        )
+        local_lore_section = f"- Local Facts & Rumors:\n{loc_lore_lines}\n"
+
     user_prompt = (
         f"Character: {character.name} (id='{character.id}', Role in scene: {role})\n"
         f"- Tagline: {character.tagline}\n"
@@ -386,7 +410,8 @@ async def run_character_cognition_agent(
         f"- Carried Inventory: {', '.join(previous_state.inventory) or 'None'}\n"
         f"{anchor_guideline}\n\n"
         f"Environment ({active_location.name}):\n"
-        f"- Atmosphere/Props: {', '.join(active_location.environmental_tags) or 'None'}\n\n"
+        f"- Atmosphere/Props: {', '.join(active_location.environmental_tags) or 'None'}\n"
+        f"{local_lore_section}\n"
         f"Co-Present Characters in Room:\n"
         f"{co_present_text}\n"
         f"{prior_cues_section}"
@@ -581,6 +606,7 @@ async def run_phase3_multi_cognition(
                     profile=profile,
                     system_prompt_template=cognition_system_template,
                     choice_resolution=c_res,
+                    narrator_directive=context.narrator_directive,
                 )
                 used_fallback = False
             except Exception as err:
@@ -662,6 +688,7 @@ async def run_phase3_multi_cognition(
                     profile=profile,
                     system_prompt_template=cognition_system_template,
                     choice_resolution=c_res,
+                    narrator_directive=context.narrator_directive,
                 )
                 used_fallback = False
             except Exception as err:

@@ -50,12 +50,18 @@ async def enrich_text(
         valid_turn_ids = {t.id for t in branch_turns}
         leaf_turn = branch_turns[-1]
 
-        world = repo.get_world(campaign.world_id, valid_turn_ids=valid_turn_ids)
+        world = repo.get_world(
+            campaign.world_id,
+            valid_turn_ids=valid_turn_ids,
+            campaign_id=campaign.id,
+        )
         target_loc_id = req.context_ref.override_location_id or leaf_turn.world_snapshot.active_location_id
         try:
-            active_loc = repo.get_location(target_loc_id)
+            active_loc = repo.get_location(target_loc_id, campaign_id=campaign.id)
         except KeyError:
-            active_loc = repo.get_location(leaf_turn.world_snapshot.active_location_id)
+            active_loc = repo.get_location(
+                leaf_turn.world_snapshot.active_location_id, campaign_id=campaign.id
+            )
 
         try:
             interlocutor = repo.get_character(campaign.character_id, campaign_id=campaign.id, valid_turn_ids=valid_turn_ids)
@@ -112,10 +118,17 @@ async def enrich_text(
             f"Setting overview: {world.global_rules.setting_overview}",
             f"Target Location: {loc_name}",
         ]
-        role_instruction = (
-            f"Write an atmospheric, sensory location description ({req.max_words} words max) "
-            f"grounded in the world's genre ({world.global_rules.genre}) and tone ({world.global_rules.tone})."
-        )
+        if req.field_role == "lore_content":
+            scope_target = f"specific location '{loc_name}'" if req.context_ref.location_id else f"macro world '{world.name}'"
+            role_instruction = (
+                f"Write a concise, evocative lore entry ({req.max_words} words max) for the {scope_target}, "
+                f"grounded in the world's genre ({world.global_rules.genre}) and tone ({world.global_rules.tone})."
+            )
+        else:
+            role_instruction = (
+                f"Write an atmospheric, sensory location description ({req.max_words} words max) "
+                f"grounded in the world's genre ({world.global_rules.genre}) and tone ({world.global_rules.tone})."
+            )
 
     elif req.context_ref.scope == "character_field":
         try:

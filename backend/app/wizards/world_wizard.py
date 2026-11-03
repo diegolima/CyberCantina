@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel
+
 from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
 from app.prompts import get_default_prompt, render_template
@@ -11,6 +13,8 @@ from app.schemas.world import (
     LocationEdgeDraft,
     LocationNodeDraft,
     LoreNodeDraft,
+    WizardLocationNodeLLMOutput,
+    WizardLoreNodeLLMOutput,
     WorldGlobalRules,
     WorldMapDraft,
     WorldMapReimagineRequest,
@@ -19,6 +23,38 @@ from app.schemas.world import (
     normalize_compass_direction,
     pick_available_compass_direction,
 )
+
+
+class _WizardWorldLLMOutput(BaseModel):
+    """LLM-only schema: omits location lore_nodes and normalizes world lore categories/tags."""
+
+    name: str
+    global_rules: WorldGlobalRules
+    locations: list[WizardLocationNodeLLMOutput]
+    edges: list[LocationEdgeDraft]
+    lore_nodes: list[WizardLoreNodeLLMOutput]
+
+    def to_strict_draft(self) -> WorldWizardDraft:
+        return WorldWizardDraft(
+            name=self.name,
+            global_rules=self.global_rules,
+            locations=[loc.to_location_draft() for loc in self.locations],
+            edges=list(self.edges),
+            lore_nodes=[lore.to_strict_draft() for lore in self.lore_nodes],
+        )
+
+
+class _WizardMapLLMOutput(BaseModel):
+    """LLM-only map reimagine schema: omits location lore_nodes."""
+
+    locations: list[WizardLocationNodeLLMOutput]
+    edges: list[LocationEdgeDraft]
+
+    def to_strict_draft(self) -> WorldMapDraft:
+        return WorldMapDraft(
+            locations=[loc.to_location_draft() for loc in self.locations],
+            edges=list(self.edges),
+        )
 
 
 def _normalize_topology(draft: Any) -> Any:
@@ -210,15 +246,23 @@ async def generate_world_draft(
 
     actor_prof = profile or settings.actor_profile
     try:
-        draft = await llm_client.complete_structured(
+        raw_draft = await llm_client.complete_structured(
             [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            WorldWizardDraft,
+            _WizardWorldLLMOutput,
             profile=actor_prof,
             max_tokens=4096,
         )
+        draft = (
+            raw_draft.to_strict_draft()
+            if isinstance(raw_draft, _WizardWorldLLMOutput)
+            else raw_draft
+        )
+        # Never autogenerate location lore on wizard-generated locations
+        for loc in draft.locations:
+            loc.lore_nodes = []
         if not draft.locations:
             return _fallback_world_expansion(seed)
         draft = _align_draft_rules_with_seed(draft, seed)
@@ -348,15 +392,22 @@ async def reimagine_world_map(
 
     actor_prof = profile or settings.actor_profile
     try:
-        draft = await llm_client.complete_structured(
+        raw_map = await llm_client.complete_structured(
             [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            WorldMapDraft,
+            _WizardMapLLMOutput,
             profile=actor_prof,
             max_tokens=4096,
         )
+        draft = (
+            raw_map.to_strict_draft()
+            if isinstance(raw_map, _WizardMapLLMOutput)
+            else raw_map
+        )
+        for loc in draft.locations:
+            loc.lore_nodes = []
         if not draft.locations:
             return _fallback_map_reimagine(req)
         return _normalize_topology(draft)

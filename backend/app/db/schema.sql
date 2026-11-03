@@ -105,17 +105,6 @@ CREATE TABLE IF NOT EXISTS location_edges (
 
 CREATE INDEX IF NOT EXISTS idx_location_edges_from ON location_edges(from_location_id);
 
-CREATE TABLE IF NOT EXISTS lore_nodes (
-    id TEXT PRIMARY KEY,
-    world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
-    title TEXT NOT NULL,
-    category TEXT NOT NULL,
-    content TEXT NOT NULL,
-    entity_tags_json TEXT NOT NULL DEFAULT '[]'
-);
-
-CREATE INDEX IF NOT EXISTS idx_lore_nodes_world ON lore_nodes(world_id);
-
 CREATE TABLE IF NOT EXISTS characters (
     id TEXT PRIMARY KEY,
     owner_id TEXT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -182,6 +171,37 @@ CREATE TABLE IF NOT EXISTS campaign_character_memories (
 
 CREATE INDEX IF NOT EXISTS idx_campaign_char_memories ON campaign_character_memories(campaign_id, character_id);
 
+CREATE TABLE IF NOT EXISTS lore_nodes (
+    id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+    location_id TEXT NULL REFERENCES location_nodes(id) ON DELETE CASCADE,
+    campaign_id TEXT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    title TEXT NOT NULL CHECK(length(trim(title)) >= 1),
+    category TEXT NOT NULL CHECK(
+        category IN ('history', 'culture', 'faction', 'rumor', 'secret')
+        AND (location_id IS NOT NULL OR category != 'secret')
+        AND (campaign_id IS NULL OR location_id IS NOT NULL)
+    ),
+    content TEXT NOT NULL CHECK(length(trim(content)) >= 1),
+    entity_tags_json TEXT NOT NULL CHECK(
+        json_valid(entity_tags_json)
+        AND json_type(entity_tags_json) = 'array'
+        AND json_array_length(entity_tags_json) >= 1
+        AND entity_tags_json NOT LIKE '%""%'
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_lore_nodes_world ON lore_nodes(world_id);
+CREATE INDEX IF NOT EXISTS idx_lore_nodes_world_scope ON lore_nodes(world_id, location_id, campaign_id);
+CREATE INDEX IF NOT EXISTS idx_lore_nodes_location_campaign ON lore_nodes(location_id, campaign_id);
+
+CREATE TABLE IF NOT EXISTS campaign_location_lore_overrides (
+    campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    location_id TEXT NOT NULL REFERENCES location_nodes(id) ON DELETE CASCADE,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (campaign_id, location_id)
+);
+
 CREATE TABLE IF NOT EXISTS turn_nodes (
     id TEXT PRIMARY KEY,
     campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
@@ -237,11 +257,12 @@ CREATE INDEX IF NOT EXISTS idx_episodic_chunks_campaign ON episodic_chunks(campa
 
 CREATE TABLE IF NOT EXISTS vector_entries (
     id TEXT PRIMARY KEY,
-    source_type TEXT NOT NULL, -- 'lore' | 'character_shard' | 'episodic_chunk'
+    source_type TEXT NOT NULL, -- 'lore' | 'location_lore' | 'character_shard' | 'episodic_chunk'
     world_id TEXT NULL,
+    location_id TEXT NULL,
     character_id TEXT NULL,
     campaign_id TEXT NULL,
-    anchor_turn_id TEXT NULL,  -- NULL for static lore/character shards; set for branch-bound episodic/clerk memories
+    anchor_turn_id TEXT NULL,  -- NULL for static lore/character shards; set for branch-bound episodic/clerk/location memories
     superseded_at_turn_id TEXT NULL, -- Turn ID where this entry was superseded or compacted on a branch
     title TEXT NOT NULL,
     content TEXT NOT NULL,
@@ -250,6 +271,7 @@ CREATE TABLE IF NOT EXISTS vector_entries (
 );
 
 CREATE INDEX IF NOT EXISTS idx_vector_entries_scope ON vector_entries(world_id, character_id, campaign_id);
+CREATE INDEX IF NOT EXISTS idx_vector_entries_location ON vector_entries(world_id, location_id, campaign_id);
 
 CREATE TABLE IF NOT EXISTS user_notes (
     id TEXT PRIMARY KEY,

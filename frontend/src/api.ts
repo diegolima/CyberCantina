@@ -16,6 +16,7 @@ import {
   CognitionBlock,
   CreateNotePayload,
   DiceMode,
+  LocationLoreNodeDraft,
   MemoryShard,
   OllamaStatusResponse,
   Phase3ProgressEventPayload,
@@ -740,6 +741,18 @@ export const api = {
       {
         method: "POST",
         body: JSON.stringify({ memory_shards: memoryShards }),
+      }
+    ),
+  updateCampaignLocationLore: (
+    campaignId: string,
+    locationId: string,
+    loreNodes: LocationLoreNodeDraft[]
+  ) =>
+    fetchJson<CampaignStateBundle>(
+      `${API_BASE}/campaigns/${campaignId}/locations/${locationId}/lore`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ lore_nodes: loreNodes }),
       }
     ),
   createLinkedLocation: (

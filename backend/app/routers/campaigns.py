@@ -51,9 +51,11 @@ from app.schemas.turn import (
     Phase4ProgressEvent,
     Phase5ProgressEvent,
     PreTurnAnalysis,
+    RecalledMemoryItem,
     TurnSubmitRequest,
     WorldStateSnapshot,
 )
+from app.schemas.world import CampaignLocationLoreUpdatePayload
 
 logger = logging.getLogger("cybercantina.routers.campaigns")
 router = APIRouter(tags=["campaigns"])
@@ -292,6 +294,30 @@ def remove_campaign_edge(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.put(
+    "/api/campaigns/{campaign_id}/locations/{location_id}/lore",
+    response_model=CampaignStateBundle,
+)
+async def update_campaign_location_lore(
+    campaign_id: str,
+    location_id: str,
+    req: CampaignLocationLoreUpdatePayload,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Update campaign-scoped Copy-on-Write lore entries for a visible location."""
+    try:
+        return await get_repo().aupdate_campaign_location_lore(
+            campaign_id,
+            location_id,
+            req.lore_nodes,
+            owner_id=current_user.id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/api/campaigns/{campaign_id}/location-override", response_model=CampaignStateBundle)
 def override_campaign_location(
     campaign_id: str,
@@ -437,7 +463,11 @@ async def _execute_turn_stream_events(
     valid_turn_ids = {t.id for t in branch_turns}
     parent_turn = branch_turns[-1]
 
-    world = repo.get_world(campaign.world_id, valid_turn_ids=valid_turn_ids)
+    world = repo.get_world(
+        campaign.world_id,
+        valid_turn_ids=valid_turn_ids,
+        campaign_id=campaign.id,
+    )
     primary_character = repo.get_character(
         campaign.character_id, campaign_id=campaign.id, valid_turn_ids=valid_turn_ids
     )
@@ -458,7 +488,9 @@ async def _execute_turn_stream_events(
 
     parent_active_loc_id = parent_turn.world_snapshot.active_location_id
     if req.override_location_id:
-        override_loc = repo.get_location(req.override_location_id)
+        override_loc = repo.get_location(
+            req.override_location_id, campaign_id=campaign.id
+        )
         if override_loc.world_id == world.id:
             active_location = override_loc
             if active_location.created_at_turn_id:
@@ -470,14 +502,19 @@ async def _execute_turn_stream_events(
             if parent_turn.character_state.current_location_id == parent_active_loc_id:
                 parent_turn.character_state.current_location_id = active_location.id
         else:
-            active_location = repo.get_location(parent_active_loc_id)
+            active_location = repo.get_location(
+                parent_active_loc_id, campaign_id=campaign.id
+            )
     else:
-        active_location = repo.get_location(parent_active_loc_id)
+        active_location = repo.get_location(
+            parent_active_loc_id, campaign_id=campaign.id
+        )
 
     neighbors = repo.get_neighbor_locations(
         world.id,
         active_location.id,
         valid_turn_ids=valid_turn_ids,
+        campaign_id=campaign.id,
     )
     episodic_chunks = repo.get_branch_episodic_chunks(campaign.id, valid_turn_ids)
 
@@ -491,16 +528,33 @@ async def _execute_turn_stream_events(
     if not present_characters:
         present_characters = [primary_character]
 
-    # Collect known entity tags from lore and present characters' shards for Phase 1
-    known_entities: list[str] = [c.name for c in present_characters]
+    # Collect prioritized, deduplicated known entity tags (excluding secret tags!) for Phase 1
+    raw_known_entities: list[str] = [c.name for c in present_characters]
+    for loc_lore in active_location.lore_nodes:
+        if loc_lore.category != "secret":
+            raw_known_entities.extend(loc_lore.entity_tags)
+    for loc in world.locations:
+        raw_known_entities.append(loc.name)
     for lore in world.lore_nodes:
-        known_entities.append(lore.title)
-        known_entities.extend(lore.entity_tags)
+        raw_known_entities.append(lore.title)
+        raw_known_entities.extend(lore.entity_tags)
     for c in present_characters:
         for shard in c.memory_shards:
-            known_entities.extend(shard.keywords)
+            raw_known_entities.extend(shard.keywords)
     for loc in world.locations:
-        known_entities.append(loc.name)
+        if loc.id == active_location.id:
+            continue
+        for loc_lore in loc.lore_nodes:
+            if loc_lore.category != "secret":
+                raw_known_entities.extend(loc_lore.entity_tags)
+
+    known_entities: list[str] = []
+    seen_known_lower: set[str] = set()
+    for ent in raw_known_entities:
+        cleaned_ent = ent.strip()
+        if cleaned_ent and cleaned_ent.lower() not in seen_known_lower:
+            seen_known_lower.add(cleaned_ent.lower())
+            known_entities.append(cleaned_ent)
 
     eff_actor, eff_clerk, eff_wm_turns, eff_delegate_cognition, eff_max_flags = get_effective_user_model_settings(owner_id)
     eff_dispatch_mode = get_effective_agent_dispatch_mode(owner_id)
@@ -694,9 +748,15 @@ async def _execute_turn_stream_events(
         rag_top_k=settings.memory_config.rag_top_k,
     )
 
-    recalled_items = list(context_bundle.shared_scene_items) + list(
-        context_bundle.per_character_recalled_items.get(character.id, [])
-    )
+    seen_recall_ids: set[str] = set()
+    recalled_items: list[RecalledMemoryItem] = []
+    for m in (
+        *context_bundle.shared_scene_items,
+        *context_bundle.per_character_recalled_items.get(character.id, []),
+    ):
+        if m.id not in seen_recall_ids:
+            seen_recall_ids.add(m.id)
+            recalled_items.append(m)
 
     yield {
         "event": "phase1_complete",

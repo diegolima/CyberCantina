@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
 from app.config import settings
 from app.engine.world_clock import describe_world_timestamp
@@ -15,7 +16,147 @@ from app.schemas.turn import (
     TurnNodeRecord,
     WorldStateSnapshot,
 )
-from app.schemas.world import LocationNode, NeighborLocationView, WorldRecord
+from app.schemas.world import LocationNode, LoreNode, NeighborLocationView, WorldRecord
+
+_WORD_TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
+_DISCOVERY_CHECK_STEMS = (
+    "search",
+    "investigat",
+    "inspect",
+    "examin",
+    "perceiv",
+    "percept",
+    "spot",
+    "notice",
+    "scan",
+    "hack",
+    "intrusion",
+    "decrypt",
+    "lockpick",
+    "pick",
+    "pry",
+    "sweep",
+    "snoop",
+    "uncover",
+    "find",
+    "look",
+    "listen",
+    "eavesdrop",
+    "sense",
+    "probe",
+    "check",
+)
+
+
+def _tag_matches_text(tag: str, text_lower: str) -> bool:
+    cleaned = tag.strip().lower()
+    if len(cleaned) < 2 or not text_lower:
+        return False
+    pattern = r"(?<![a-z0-9])" + re.escape(cleaned) + r"(?![a-z0-9])"
+    return bool(re.search(pattern, text_lower))
+
+
+def select_active_location_lore_for_turn(
+    active_location: LocationNode,
+    *,
+    user_message: str = "",
+    pre_turn: PreTurnAnalysis | None = None,
+    narrator_directive: str | None = None,
+    max_ambient_entries: int = 5,
+) -> list[LoreNode]:
+    """Select active-location lore for prompt injection with hard Python secret gating."""
+    if not active_location.lore_nodes:
+        return []
+
+    ambient_entries = [n for n in active_location.lore_nodes if n.category != "secret"]
+    secret_entries = [n for n in active_location.lore_nodes if n.category == "secret"]
+
+    mentioned = list(pre_turn.mentioned_entities) if pre_turn else []
+    queries = list(pre_turn.memory_search_queries) if pre_turn else []
+    combined_signal = " ".join(
+        part for part in [user_message, narrator_directive or "", *mentioned, *queries] if part
+    ).lower()
+    signal_tokens = set(_WORD_TOKEN_RE.findall(combined_signal))
+
+    scored_ambient: list[tuple[int, int, LoreNode]] = []
+    for idx, entry in enumerate(ambient_entries):
+        score = 0
+        for tag in entry.entity_tags:
+            if _tag_matches_text(tag, combined_signal):
+                score += 10
+        entry_tokens = set(
+            _WORD_TOKEN_RE.findall(
+                f"{entry.title} {' '.join(entry.entity_tags)} {entry.content}".lower()
+            )
+        )
+        score += len(signal_tokens & entry_tokens)
+        scored_ambient.append((score, -idx, entry))
+
+    scored_ambient.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    selected_ambient_set = {id(item[2]) for item in scored_ambient[: max(0, max_ambient_entries)]}
+    selected: list[LoreNode] = [
+        entry for entry in ambient_entries if id(entry) in selected_ambient_set
+    ]
+
+    if not secret_entries:
+        return selected
+
+    # Evaluate roll outcomes for hard secret gating
+    all_rolls = []
+    if pre_turn is not None:
+        if pre_turn.character_rolls:
+            all_rolls.extend(pre_turn.character_rolls.values())
+        elif pre_turn.resolved_roll is not None:
+            all_rolls.append(pre_turn.resolved_roll)
+
+    succeeding_rolls = [
+        r for r in all_rolls if r.outcome_tier in ("Clean Success", "Critical Success")
+    ]
+    has_only_failed_rolls = bool(all_rolls) and not succeeding_rolls
+
+    has_discovery_roll_success = False
+    roll_signal_lower = ""
+    if succeeding_rolls:
+        roll_signal_lower = " ".join(
+            f"{r.action_description} {r.skill_or_approach}" for r in succeeding_rolls
+        ).lower()
+        combined_roll_context = f"{roll_signal_lower} {(user_message or '').lower()}"
+        has_discovery_roll_success = any(
+            stem in combined_roll_context for stem in _DISCOVERY_CHECK_STEMS
+        )
+
+    user_and_mentioned_lower = " ".join(
+        part for part in [user_message, *mentioned] if part
+    ).lower()
+    directive_lower = (narrator_directive or "").lower()
+
+    for secret in secret_entries:
+        # Explicit narrator directive mentioning a secret tag always unlocks it for narrator scenes
+        if directive_lower and any(
+            _tag_matches_text(tag, directive_lower) for tag in secret.entity_tags
+        ):
+            selected.append(secret)
+            continue
+
+        # Never leak secrets on turns where a mechanical check occurred and failed
+        if has_only_failed_rolls:
+            continue
+
+        # Unlock on Clean/Critical Success discovery roll or roll matching secret tags
+        if succeeding_rolls:
+            if has_discovery_roll_success or any(
+                _tag_matches_text(tag, roll_signal_lower) for tag in secret.entity_tags
+            ):
+                selected.append(secret)
+                continue
+
+        # Unlock on direct uncontested keyword mention in player message / mentioned entities
+        if user_and_mentioned_lower and any(
+            _tag_matches_text(tag, user_and_mentioned_lower) for tag in secret.entity_tags
+        ):
+            selected.append(secret)
+
+    return selected
 
 
 def build_zone1_narrator_system_prompt(
@@ -286,6 +427,7 @@ async def resolve_phase2_turn_context(
         valid_branch_turn_ids=valid_branch_turn_ids,
         character_witnessed_turn_ids=character_witnessed_turn_ids,
         top_k=rag_top_k,
+        exclude_location_id=active_location.id,
     )
 
     all_character_states = {
@@ -542,13 +684,27 @@ def build_zone4_ephemeral_tail_frame(
                 f"  </actor_directive>"
             )
 
+    selected_local_lore = select_active_location_lore_for_turn(
+        active_location,
+        user_message=user_message,
+        pre_turn=pre_turn,
+        narrator_directive=narrator_directive,
+    )
+    local_lore_block = ""
+    if selected_local_lore:
+        local_lore_lines = "\n".join(
+            f"      - [{'SECRET — DISCOVERED' if ln.category == 'secret' else ln.category.upper()}] {ln.title}: {ln.content}"
+            for ln in selected_local_lore
+        )
+        local_lore_block = f"\n    <local_lore>\n{local_lore_lines}\n    </local_lore>"
+
     return (
         "<scene_context>\n"
         f"  <world_clock>{describe_world_timestamp(world_snapshot.world_timestamp)}</world_clock>\n"
         f"  <scene_flags>{scene_flags_text}</scene_flags>\n"
         f"  <active_location name=\"{active_location.name}\">\n"
         f"    {active_location.description}\n"
-        f"    Props & Atmosphere: {env_tags}\n"
+        f"    Props & Atmosphere: {env_tags}{local_lore_block}\n"
         f"  </active_location>{co_present_section}\n"
         f"  <connected_locations>\n{exits_text}\n  </connected_locations>\n"
         f"  <recalled_memories_and_lore>\n{memories_text}\n  </recalled_memories_and_lore>\n"

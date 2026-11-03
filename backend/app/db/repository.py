@@ -104,6 +104,7 @@ from app.schemas.world import (
     OPPOSITE_COMPASS,
     CompassDirection,
     LocationEdge,
+    LocationLoreNodeDraft,
     LocationNode,
     LoreNode,
     NeighborLocationView,
@@ -111,9 +112,49 @@ from app.schemas.world import (
     WorldRecord,
     WorldUpdatePayload,
     WorldWizardDraft,
+    normalize_and_validate_entity_tags,
     normalize_compass_direction,
+    normalize_lore_category,
     pick_available_compass_direction,
 )
+
+_EMBED_SEMAPHORE = asyncio.Semaphore(8)
+
+
+async def _compute_missing_embeddings(
+    items: list[tuple[tuple[str, str, str], str]],
+    existing_blobs: dict[tuple[str, str, str], bytes],
+) -> dict[tuple[str, str, str], np.ndarray]:
+    """Compute embeddings with bounded concurrency strictly for uncached (title, content, keywords_json) keys."""
+    unique_missing: dict[tuple[str, str, str], str] = {}
+    for cache_key, combined_text in items:
+        if cache_key not in existing_blobs and cache_key not in unique_missing:
+            unique_missing[cache_key] = combined_text
+    if not unique_missing:
+        return {}
+
+    async def _embed_one(key: tuple[str, str, str], text: str) -> tuple[tuple[str, str, str], np.ndarray]:
+        async with _EMBED_SEMAPHORE:
+            vec = await embed_text(text)
+            return key, vec
+
+    pairs = await asyncio.gather(*(_embed_one(k, txt) for k, txt in unique_missing.items()))
+    return dict(pairs)
+
+
+def _location_lore_vector_fields(
+    location_name: str, lore_title: str, entity_tags: list[str]
+) -> tuple[str, list[str]]:
+    """Build disambiguated vector title and keyword list including the location name."""
+    vec_title = f"{location_name} — {lore_title}"
+    seen_low: set[str] = set()
+    vec_keywords: list[str] = []
+    for kw in [location_name, *entity_tags]:
+        cleaned = kw.strip()
+        if cleaned and cleaned.lower() not in seen_low:
+            seen_low.add(cleaned.lower())
+            vec_keywords.append(cleaned)
+    return vec_title, vec_keywords
 
 
 def utc_now_iso() -> str:
@@ -141,12 +182,169 @@ class CantinaRepository:
         conn.execute("PRAGMA busy_timeout = 5000;")
         return conn
 
+    @staticmethod
+    def _migrate_lore_schema_and_legacy_rows(conn: sqlite3.Connection) -> None:
+        """Atomically upgrade legacy lore_nodes schema & sanitize pre-existing categories/tags."""
+        lore_ddl_row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='lore_nodes'"
+        ).fetchone()
+        if not lore_ddl_row:
+            return
+        ddl_sql = lore_ddl_row["sql"] or ""
+        if (
+            "campaign_id" in ddl_sql
+            and "location_id" in ddl_sql
+            and "json_array_length(entity_tags_json)" in ddl_sql
+        ):
+            return
+
+        existing_rows = conn.execute("SELECT * FROM lore_nodes").fetchall()
+        valid_world_ids = {
+            r["id"] for r in conn.execute("SELECT id FROM worlds").fetchall()
+        }
+        has_locs = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='location_nodes'"
+        ).fetchone()
+        valid_loc_ids = (
+            {r["id"] for r in conn.execute("SELECT id FROM location_nodes").fetchall()}
+            if has_locs
+            else set()
+        )
+        has_camps = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='campaigns'"
+        ).fetchone()
+        valid_camp_ids = (
+            {r["id"] for r in conn.execute("SELECT id FROM campaigns").fetchall()}
+            if has_camps
+            else set()
+        )
+        has_vec = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vector_entries'"
+        ).fetchone()
+        vec_cols = (
+            {
+                col["name"]
+                for col in conn.execute("PRAGMA table_info(vector_entries)").fetchall()
+            }
+            if has_vec
+            else set()
+        )
+
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = OFF;")
+        try:
+            conn.execute("BEGIN IMMEDIATE;")
+            conn.execute("DROP TABLE IF EXISTS lore_nodes_migrated;")
+            conn.execute(
+                """
+                CREATE TABLE lore_nodes_migrated (
+                    id TEXT PRIMARY KEY,
+                    world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+                    location_id TEXT NULL REFERENCES location_nodes(id) ON DELETE CASCADE,
+                    campaign_id TEXT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+                    title TEXT NOT NULL CHECK(length(trim(title)) >= 1),
+                    category TEXT NOT NULL CHECK(
+                        category IN ('history', 'culture', 'faction', 'rumor', 'secret')
+                        AND (location_id IS NOT NULL OR category != 'secret')
+                        AND (campaign_id IS NULL OR location_id IS NOT NULL)
+                    ),
+                    content TEXT NOT NULL CHECK(length(trim(content)) >= 1),
+                    entity_tags_json TEXT NOT NULL CHECK(
+                        json_valid(entity_tags_json)
+                        AND json_type(entity_tags_json) = 'array'
+                        AND json_array_length(entity_tags_json) >= 1
+                        AND entity_tags_json NOT LIKE '%""%'
+                    )
+                );
+                """
+            )
+            for r in existing_rows:
+                r_keys = r.keys()
+                w_id = r["world_id"]
+                if w_id not in valid_world_ids:
+                    continue
+                loc_id = r["location_id"] if "location_id" in r_keys else None
+                if loc_id and loc_id not in valid_loc_ids:
+                    continue
+                camp_id = r["campaign_id"] if "campaign_id" in r_keys else None
+                if camp_id and (not loc_id or camp_id not in valid_camp_ids):
+                    camp_id = None
+
+                clean_title = (r["title"] or "").strip()[:120] or "World Lore"
+                clean_content = (r["content"] or "").strip()[:2000] or clean_title
+                clean_cat = normalize_lore_category(
+                    r["category"], allow_secret=bool(loc_id), strict=False
+                )
+                try:
+                    parsed_tags = json.loads(r["entity_tags_json"] or "[]")
+                except Exception:
+                    parsed_tags = []
+                clean_tags = normalize_and_validate_entity_tags(
+                    parsed_tags,
+                    strict=False,
+                    fallback_title=clean_title,
+                    fallback_content=clean_content,
+                )
+                clean_tags_json = json.dumps(clean_tags)
+                conn.execute(
+                    """
+                    INSERT INTO lore_nodes_migrated (
+                        id, world_id, location_id, campaign_id, title, category, content, entity_tags_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        r["id"],
+                        w_id,
+                        loc_id,
+                        camp_id,
+                        clean_title,
+                        clean_cat,
+                        clean_content,
+                        clean_tags_json,
+                    ),
+                )
+                if has_vec:
+                    if "keywords_json" in vec_cols:
+                        conn.execute(
+                            "UPDATE vector_entries SET keywords_json = ?, title = ? WHERE id = ?",
+                            (clean_tags_json, clean_title, r["id"]),
+                        )
+                    elif "entity_tags_json" in vec_cols:
+                        conn.execute(
+                            "UPDATE vector_entries SET entity_tags_json = ?, title = ? WHERE id = ?",
+                            (clean_tags_json, clean_title, r["id"]),
+                        )
+
+            conn.execute("DROP TABLE lore_nodes;")
+            conn.execute("ALTER TABLE lore_nodes_migrated RENAME TO lore_nodes;")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON;")
+
     def init_db(self) -> None:
         """Execute schema.sql to initialize all tables, indexes, and idempotent migrations."""
         schema_path = Path(__file__).resolve().parent / "schema.sql"
         sql = schema_path.read_text(encoding="utf-8")
         conn = self._connect()
         try:
+            # Upgrade pre-existing lore_nodes and vector_entries before executescript creates new indexes
+            self._migrate_lore_schema_and_legacy_rows(conn)
+            vec_table_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vector_entries'"
+            ).fetchone()
+            if vec_table_exists:
+                existing_vec_cols = {
+                    r["name"]
+                    for r in conn.execute("PRAGMA table_info(vector_entries)").fetchall()
+                }
+                if "location_id" not in existing_vec_cols:
+                    conn.execute("ALTER TABLE vector_entries ADD COLUMN location_id TEXT NULL")
+                    conn.commit()
+
             conn.executescript(sql)
             # Idempotent migration for existing databases created before pending_deletion
             world_cols = {
@@ -1387,12 +1585,69 @@ class CantinaRepository:
     # Worlds & Spatial Graph
     # ------------------------------------------------------------------
 
+    def _resolve_location_lore_map(
+        self,
+        conn: sqlite3.Connection,
+        location_ids: list[str] | set[str],
+        campaign_id: str | None = None,
+    ) -> dict[str, list[LoreNode]]:
+        """Hydrate per-location LoreNodes with Copy-on-Write campaign override precedence."""
+        loc_list = [lid for lid in location_ids if lid]
+        if not loc_list:
+            return {}
+
+        placeholders = ",".join("?" for _ in loc_list)
+        overridden_loc_ids: set[str] = set()
+        if campaign_id:
+            ov_rows = conn.execute(
+                f"""
+                SELECT location_id FROM campaign_location_lore_overrides
+                WHERE campaign_id = ? AND location_id IN ({placeholders})
+                """,
+                [campaign_id, *loc_list],
+            ).fetchall()
+            overridden_loc_ids = {r["location_id"] for r in ov_rows}
+            lore_rows = conn.execute(
+                f"""
+                SELECT * FROM lore_nodes
+                WHERE location_id IN ({placeholders})
+                  AND (campaign_id IS NULL OR campaign_id = ?)
+                ORDER BY rowid ASC
+                """,
+                [*loc_list, campaign_id],
+            ).fetchall()
+        else:
+            lore_rows = conn.execute(
+                f"""
+                SELECT * FROM lore_nodes
+                WHERE location_id IN ({placeholders})
+                  AND campaign_id IS NULL
+                ORDER BY rowid ASC
+                """,
+                loc_list,
+            ).fetchall()
+
+        result: dict[str, list[LoreNode]] = {lid: [] for lid in loc_list}
+        for r in lore_rows:
+            lid = r["location_id"]
+            if not lid or lid not in result:
+                continue
+            r_camp = r["campaign_id"]
+            if lid in overridden_loc_ids:
+                if r_camp == campaign_id:
+                    result[lid].append(self._row_to_lore_node(r))
+            else:
+                if r_camp is None:
+                    result[lid].append(self._row_to_lore_node(r))
+        return result
+
     def create_world_from_draft(
         self,
         draft: WorldWizardDraft,
         world_id: str | None = None,
         lore_embeddings: list[np.ndarray] | None = None,
         owner_id: str | None = None,
+        precomputed_embeddings: dict[tuple[str, str, str], np.ndarray] | None = None,
     ) -> WorldRecord:
         """Persist a WorldWizardDraft (rules, initial locations, edges, lore) and index lore vectors."""
         w_id = world_id or f"world_{uuid.uuid4().hex[:10]}"
@@ -1430,6 +1685,47 @@ class CantinaRepository:
                         is_hub,
                     ),
                 )
+                for loc_lore in loc.lore_nodes:
+                    loc_lore_id = f"lore_{uuid.uuid4().hex[:10]}"
+                    loc_tags_json = json.dumps(loc_lore.entity_tags)
+                    conn.execute(
+                        """
+                        INSERT INTO lore_nodes (
+                            id, world_id, location_id, campaign_id, title, category, content, entity_tags_json
+                        )
+                        VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
+                        """,
+                        (
+                            loc_lore_id,
+                            w_id,
+                            loc_id,
+                            loc_lore.title,
+                            loc_lore.category,
+                            loc_lore.content,
+                            loc_tags_json,
+                        ),
+                    )
+                    if loc_lore.category != "secret":
+                        vec_title, vec_keywords = _location_lore_vector_fields(
+                            loc.name, loc_lore.title, loc_lore.entity_tags
+                        )
+                        vec_kw_json = json.dumps(vec_keywords)
+                        pre_loc_vec = (
+                            precomputed_embeddings.get((vec_title, loc_lore.content, vec_kw_json))
+                            if precomputed_embeddings
+                            else None
+                        )
+                        self.vector_store.upsert_entry(
+                            entry_id=loc_lore_id,
+                            source_type="location_lore",
+                            world_id=w_id,
+                            location_id=loc_id,
+                            title=vec_title,
+                            content=loc_lore.content,
+                            keywords=vec_keywords,
+                            embedding=pre_loc_vec,
+                            conn=conn,
+                        )
 
             occupied_from: dict[str, set[str]] = {}
             for edge in draft.edges:
@@ -1492,10 +1788,13 @@ class CantinaRepository:
 
             for idx, lore in enumerate(draft.lore_nodes):
                 lore_id = f"lore_{uuid.uuid4().hex[:10]}"
+                tags_json = json.dumps(lore.entity_tags)
                 conn.execute(
                     """
-                    INSERT INTO lore_nodes (id, world_id, title, category, content, entity_tags_json)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO lore_nodes (
+                        id, world_id, location_id, campaign_id, title, category, content, entity_tags_json
+                    )
+                    VALUES (?, ?, NULL, NULL, ?, ?, ?, ?)
                     """,
                     (
                         lore_id,
@@ -1503,13 +1802,17 @@ class CantinaRepository:
                         lore.title,
                         lore.category,
                         lore.content,
-                        json.dumps(lore.entity_tags),
+                        tags_json,
                     ),
                 )
                 precomputed = (
                     lore_embeddings[idx]
                     if lore_embeddings is not None and idx < len(lore_embeddings)
-                    else None
+                    else (
+                        precomputed_embeddings.get((lore.title, lore.content, tags_json))
+                        if precomputed_embeddings
+                        else None
+                    )
                 )
                 self.vector_store.upsert_entry(
                     entry_id=lore_id,
@@ -1534,24 +1837,36 @@ class CantinaRepository:
         world_id: str | None = None,
         owner_id: str | None = None,
     ) -> WorldRecord:
-        """Asynchronously pre-compute lore embeddings using embed_text and persist WorldWizardDraft."""
-        embeddings: list[np.ndarray] = []
-        if draft.lore_nodes:
-            embeddings = list(
-                await asyncio.gather(
-                    *(
-                        embed_text(
-                            combine_entry_text(lore.title, lore.content, lore.entity_tags)
-                        )
-                        for lore in draft.lore_nodes
-                    )
+        """Asynchronously pre-compute world & non-secret location lore embeddings and persist WorldWizardDraft."""
+        items_to_embed: list[tuple[tuple[str, str, str], str]] = []
+        for lore in draft.lore_nodes:
+            tags_json = json.dumps(lore.entity_tags)
+            items_to_embed.append(
+                (
+                    (lore.title, lore.content, tags_json),
+                    combine_entry_text(lore.title, lore.content, lore.entity_tags),
                 )
             )
+        for loc in draft.locations:
+            for loc_lore in loc.lore_nodes:
+                if loc_lore.category == "secret":
+                    continue
+                vec_title, vec_keywords = _location_lore_vector_fields(
+                    loc.name, loc_lore.title, loc_lore.entity_tags
+                )
+                vec_kw_json = json.dumps(vec_keywords)
+                items_to_embed.append(
+                    (
+                        (vec_title, loc_lore.content, vec_kw_json),
+                        combine_entry_text(vec_title, loc_lore.content, vec_keywords),
+                    )
+                )
+        precomputed = await _compute_missing_embeddings(items_to_embed, {})
         return self.create_world_from_draft(
             draft,
             world_id=world_id,
-            lore_embeddings=embeddings,
             owner_id=owner_id,
+            precomputed_embeddings=precomputed,
         )
 
     def list_worlds(
@@ -1591,6 +1906,7 @@ class CantinaRepository:
         valid_turn_ids: set[str] | None = None,
         base_only: bool = False,
         owner_id: str | None = None,
+        campaign_id: str | None = None,
     ) -> WorldRecord:
         conn = self._connect()
         try:
@@ -1611,19 +1927,32 @@ class CantinaRepository:
                 "SELECT * FROM location_edges WHERE world_id = ?", (world_id,)
             ).fetchall()
             lore_rows = conn.execute(
-                "SELECT * FROM lore_nodes WHERE world_id = ?", (world_id,)
+                """
+                SELECT * FROM lore_nodes
+                WHERE world_id = ? AND location_id IS NULL AND campaign_id IS NULL
+                ORDER BY rowid ASC
+                """,
+                (world_id,),
             ).fetchall()
+
+            locations: list[LocationNode] = []
+            for r in loc_rows:
+                c_turn = r["created_at_turn_id"]
+                if base_only and c_turn is not None:
+                    continue
+                if valid_turn_ids is not None and c_turn is not None and c_turn not in valid_turn_ids:
+                    continue
+                locations.append(self._row_to_location(r))
+
+            loc_lore_map = self._resolve_location_lore_map(
+                conn,
+                [loc.id for loc in locations],
+                campaign_id=None if base_only else campaign_id,
+            )
+            for loc in locations:
+                loc.lore_nodes = loc_lore_map.get(loc.id, [])
         finally:
             conn.close()
-
-        locations: list[LocationNode] = []
-        for r in loc_rows:
-            c_turn = r["created_at_turn_id"]
-            if base_only and c_turn is not None:
-                continue
-            if valid_turn_ids is not None and c_turn is not None and c_turn not in valid_turn_ids:
-                continue
-            locations.append(self._row_to_location(r))
 
         visible_loc_ids = {loc.id for loc in locations}
         edges: list[LocationEdge] = []
@@ -1643,17 +1972,7 @@ class CantinaRepository:
                 continue
             edges.append(self._row_to_edge(r))
 
-        lore_nodes = [
-            LoreNode(
-                id=r["id"],
-                world_id=r["world_id"],
-                title=r["title"],
-                category=r["category"],
-                content=r["content"],
-                entity_tags=json.loads(r["entity_tags_json"] or "[]"),
-            )
-            for r in lore_rows
-        ]
+        lore_nodes = [self._row_to_lore_node(r) for r in lore_rows]
 
         return WorldRecord(
             id=w_row["id"],
@@ -1672,6 +1991,7 @@ class CantinaRepository:
         payload: WorldUpdatePayload,
         lore_embeddings: dict[int, np.ndarray] | None = None,
         owner_id: str | None = None,
+        precomputed_embeddings: dict[tuple[str, str, str], np.ndarray] | None = None,
     ) -> WorldRecord:
         """Update a world in-place if unused, or silently fork a new Copy-on-Write version if used by campaigns."""
         orig = self.get_world(world_id, base_only=True, owner_id=owner_id)
@@ -1693,12 +2013,14 @@ class CantinaRepository:
             ).fetchone()
             campaigns_using = int(usage_row["cnt"]) if usage_row else 0
 
-            # Cache existing lore vector blobs so unchanged lore nodes don't re-run embeddings
+            # Cache existing world & location lore vector blobs so unchanged lore nodes don't re-run embeddings
             vec_rows = conn.execute(
                 """
                 SELECT title, content, keywords_json, embedding_blob
                 FROM vector_entries
-                WHERE world_id = ? AND source_type = 'lore'
+                WHERE world_id = ?
+                  AND source_type IN ('lore', 'location_lore')
+                  AND (campaign_id IS NULL OR campaign_id = '')
                 """,
                 (world_id,),
             ).fetchall()
@@ -1729,9 +2051,17 @@ class CantinaRepository:
                     "DELETE FROM location_nodes WHERE world_id = ? AND created_at_turn_id IS NULL",
                     (target_world_id,),
                 )
-                conn.execute("DELETE FROM lore_nodes WHERE world_id = ?", (target_world_id,))
                 conn.execute(
-                    "DELETE FROM vector_entries WHERE world_id = ? AND source_type = 'lore'",
+                    "DELETE FROM lore_nodes WHERE world_id = ? AND campaign_id IS NULL",
+                    (target_world_id,),
+                )
+                conn.execute(
+                    """
+                    DELETE FROM vector_entries
+                    WHERE world_id = ?
+                      AND source_type IN ('lore', 'location_lore')
+                      AND (campaign_id IS NULL OR campaign_id = '')
+                    """,
                     (target_world_id,),
                 )
 
@@ -1883,18 +2213,27 @@ class CantinaRepository:
                     (target_world_id, world_id),
                 )
 
-            # Insert lore nodes & vector entries (reusing existing embedding blobs when unchanged)
+            existing_taken_lore_ids = {
+                r["id"] for r in conn.execute("SELECT id FROM lore_nodes").fetchall()
+            }
+
+            # Insert world-level lore nodes & vector entries (reusing existing embedding blobs when unchanged)
             for idx, lore in enumerate(payload.lore_nodes):
-                lore_id = (
-                    lore.id
-                    if (campaigns_using == 0 and lore.id and not lore.id.startswith("new_"))
-                    else f"lore_{uuid.uuid4().hex[:10]}"
+                can_reuse_id = (
+                    campaigns_using == 0
+                    and bool(lore.id)
+                    and not lore.id.startswith("new_")
+                    and lore.id not in existing_taken_lore_ids
                 )
+                lore_id = lore.id if can_reuse_id else f"lore_{uuid.uuid4().hex[:10]}"
+                existing_taken_lore_ids.add(lore_id)
                 tags_json = json.dumps(lore.entity_tags)
                 conn.execute(
                     """
-                    INSERT INTO lore_nodes (id, world_id, title, category, content, entity_tags_json)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO lore_nodes (
+                        id, world_id, location_id, campaign_id, title, category, content, entity_tags_json
+                    )
+                    VALUES (?, ?, NULL, NULL, ?, ?, ?, ?)
                     """,
                     (lore_id, target_world_id, lore.title, lore.category, lore.content, tags_json),
                 )
@@ -1903,10 +2242,10 @@ class CantinaRepository:
                     conn.execute(
                         """
                         INSERT INTO vector_entries (
-                            id, source_type, world_id, character_id, campaign_id,
+                            id, source_type, world_id, location_id, character_id, campaign_id,
                             anchor_turn_id, title, content, keywords_json, embedding_blob
                         )
-                        VALUES (?, 'lore', ?, NULL, NULL, NULL, ?, ?, ?, ?)
+                        VALUES (?, 'lore', ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?)
                         """,
                         (
                             lore_id,
@@ -1918,7 +2257,15 @@ class CantinaRepository:
                         ),
                     )
                 else:
-                    precomputed = lore_embeddings.get(idx) if lore_embeddings else None
+                    precomputed = (
+                        lore_embeddings.get(idx)
+                        if lore_embeddings and idx in lore_embeddings
+                        else (
+                            precomputed_embeddings.get(blob_key)
+                            if precomputed_embeddings
+                            else None
+                        )
+                    )
                     self.vector_store.upsert_entry(
                         entry_id=lore_id,
                         source_type="lore",
@@ -1929,6 +2276,85 @@ class CantinaRepository:
                         embedding=precomputed,
                         conn=conn,
                     )
+
+            # Insert base location-level lore nodes & non-secret location_lore vectors
+            for loc in base_locations:
+                mapped_loc_id = loc_id_map.get(loc.id)
+                if not mapped_loc_id:
+                    continue
+                for loc_lore in loc.lore_nodes:
+                    can_reuse_loc_lore_id = (
+                        campaigns_using == 0
+                        and bool(loc_lore.id)
+                        and not loc_lore.id.startswith("new_")
+                        and loc_lore.id not in existing_taken_lore_ids
+                    )
+                    loc_lore_id = (
+                        loc_lore.id
+                        if can_reuse_loc_lore_id
+                        else f"lore_{uuid.uuid4().hex[:10]}"
+                    )
+                    existing_taken_lore_ids.add(loc_lore_id)
+                    loc_tags_json = json.dumps(loc_lore.entity_tags)
+                    conn.execute(
+                        """
+                        INSERT INTO lore_nodes (
+                            id, world_id, location_id, campaign_id, title, category, content, entity_tags_json
+                        )
+                        VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
+                        """,
+                        (
+                            loc_lore_id,
+                            target_world_id,
+                            mapped_loc_id,
+                            loc_lore.title,
+                            loc_lore.category,
+                            loc_lore.content,
+                            loc_tags_json,
+                        ),
+                    )
+                    if loc_lore.category != "secret":
+                        vec_title, vec_keywords = _location_lore_vector_fields(
+                            loc.name, loc_lore.title, loc_lore.entity_tags
+                        )
+                        vec_kw_json = json.dumps(vec_keywords)
+                        blob_key = (vec_title, loc_lore.content, vec_kw_json)
+                        if blob_key in existing_lore_blobs:
+                            conn.execute(
+                                """
+                                INSERT INTO vector_entries (
+                                    id, source_type, world_id, location_id, character_id, campaign_id,
+                                    anchor_turn_id, title, content, keywords_json, embedding_blob
+                                )
+                                VALUES (?, 'location_lore', ?, ?, NULL, NULL, NULL, ?, ?, ?, ?)
+                                """,
+                                (
+                                    loc_lore_id,
+                                    target_world_id,
+                                    mapped_loc_id,
+                                    vec_title,
+                                    loc_lore.content,
+                                    vec_kw_json,
+                                    existing_lore_blobs[blob_key],
+                                ),
+                            )
+                        else:
+                            pre_vec = (
+                                precomputed_embeddings.get(blob_key)
+                                if precomputed_embeddings
+                                else None
+                            )
+                            self.vector_store.upsert_entry(
+                                entry_id=loc_lore_id,
+                                source_type="location_lore",
+                                world_id=target_world_id,
+                                location_id=mapped_loc_id,
+                                title=vec_title,
+                                content=loc_lore.content,
+                                keywords=vec_keywords,
+                                embedding=pre_vec,
+                                conn=conn,
+                            )
 
             conn.commit()
         finally:
@@ -1942,20 +2368,62 @@ class CantinaRepository:
         payload: WorldUpdatePayload,
         owner_id: str | None = None,
     ) -> WorldRecord:
-        """Asynchronously pre-compute embeddings for new/modified lore nodes and update world."""
-        lore_embeddings: dict[int, np.ndarray] = {}
-        if payload.lore_nodes:
-            computed = await asyncio.gather(
-                *(
-                    embed_text(
-                        combine_entry_text(lore.title, lore.content, lore.entity_tags)
-                    )
-                    for lore in payload.lore_nodes
+        """Asynchronously pre-compute embeddings strictly for uncached world & non-secret location lore."""
+        # Validate world existence & ownership first before incurring embedding I/O
+        orig = self.get_world(world_id, base_only=True, owner_id=owner_id)
+        conn = self._connect()
+        try:
+            vec_rows = conn.execute(
+                """
+                SELECT title, content, keywords_json, embedding_blob
+                FROM vector_entries
+                WHERE world_id = ?
+                  AND source_type IN ('lore', 'location_lore')
+                  AND (campaign_id IS NULL OR campaign_id = '')
+                """,
+                (world_id,),
+            ).fetchall()
+            existing_blobs: dict[tuple[str, str, str], bytes] = {
+                (r["title"], r["content"], r["keywords_json"]): bytes(r["embedding_blob"])
+                for r in vec_rows
+            }
+        finally:
+            conn.close()
+
+        items_to_embed: list[tuple[tuple[str, str, str], str]] = []
+        for lore in payload.lore_nodes:
+            tags_json = json.dumps(lore.entity_tags)
+            items_to_embed.append(
+                (
+                    (lore.title, lore.content, tags_json),
+                    combine_entry_text(lore.title, lore.content, lore.entity_tags),
                 )
             )
-            lore_embeddings = {idx: vec for idx, vec in enumerate(computed)}
+
+        base_locations = [loc for loc in payload.locations if not loc.created_at_turn_id]
+        if not base_locations:
+            base_locations = orig.locations
+        for loc in base_locations:
+            for loc_lore in loc.lore_nodes:
+                if loc_lore.category == "secret":
+                    continue
+                vec_title, vec_keywords = _location_lore_vector_fields(
+                    loc.name, loc_lore.title, loc_lore.entity_tags
+                )
+                vec_kw_json = json.dumps(vec_keywords)
+                items_to_embed.append(
+                    (
+                        (vec_title, loc_lore.content, vec_kw_json),
+                        combine_entry_text(vec_title, loc_lore.content, vec_keywords),
+                    )
+                )
+
+        precomputed = await _compute_missing_embeddings(items_to_embed, existing_blobs)
         return self.update_world(
-            world_id, payload, lore_embeddings=lore_embeddings, owner_id=owner_id
+            world_id,
+            payload,
+            owner_id=owner_id,
+            precomputed_embeddings=precomputed,
         )
 
     def mark_world_pending_deletion(
@@ -2013,9 +2481,9 @@ class CantinaRepository:
 
             for r in rows:
                 w_id = r["id"]
-                # Delete only world lore vectors; preserve character backstory shards by detaching world_id
+                # Delete world & location lore vectors; preserve character backstory shards by detaching world_id
                 conn.execute(
-                    "DELETE FROM vector_entries WHERE world_id = ? AND source_type = 'lore'",
+                    "DELETE FROM vector_entries WHERE world_id = ? AND source_type IN ('lore', 'location_lore')",
                     (w_id,),
                 )
                 conn.execute(
@@ -2032,7 +2500,12 @@ class CantinaRepository:
 
         return pruned_ids
 
-    def get_location(self, location_id: str) -> LocationNode:
+    def get_location(
+        self,
+        location_id: str,
+        *,
+        campaign_id: str | None = None,
+    ) -> LocationNode:
         conn = self._connect()
         try:
             row = conn.execute(
@@ -2040,7 +2513,11 @@ class CantinaRepository:
             ).fetchone()
             if not row:
                 raise KeyError(f"Location '{location_id}' not found")
-            return self._row_to_location(row)
+            loc = self._row_to_location(row)
+            loc.lore_nodes = self._resolve_location_lore_map(
+                conn, [location_id], campaign_id=campaign_id
+            ).get(location_id, [])
+            return loc
         finally:
             conn.close()
 
@@ -2049,6 +2526,8 @@ class CantinaRepository:
         world_id: str,
         active_location_id: str,
         valid_turn_ids: set[str] | None = None,
+        *,
+        campaign_id: str | None = None,
     ) -> list[NeighborLocationView]:
         """Return 1-hop connected locations visible on the current timeline branch."""
         conn = self._connect()
@@ -2070,35 +2549,45 @@ class CantinaRepository:
                 """,
                 (world_id, active_location_id),
             ).fetchall()
+
+            neighbors: list[NeighborLocationView] = []
+            for r in rows:
+                edge_turn = r["edge_turn_id"]
+                edge_sup = r["edge_superseded_turn_id"]
+                loc_turn = r["created_at_turn_id"]
+                if valid_turn_ids is not None:
+                    if edge_turn is not None and edge_turn not in valid_turn_ids:
+                        continue
+                    if edge_sup is not None and edge_sup in valid_turn_ids:
+                        continue
+                    if loc_turn is not None and loc_turn not in valid_turn_ids:
+                        continue
+                elif edge_sup is not None:
+                    continue
+                dest = self._row_to_location(r)
+                cdir = normalize_compass_direction(r["compass_direction"], r["direction_label"])
+                neighbors.append(
+                    NeighborLocationView(
+                        edge_id=r["edge_id"],
+                        direction_label=r["direction_label"],
+                        compass_direction=cdir,
+                        travel_minutes=r["travel_minutes"],
+                        is_locked_or_hidden=bool(r["is_locked_or_hidden"]),
+                        destination=dest,
+                    )
+                )
+
+            if neighbors:
+                loc_lore_map = self._resolve_location_lore_map(
+                    conn,
+                    [n.destination.id for n in neighbors],
+                    campaign_id=campaign_id,
+                )
+                for n in neighbors:
+                    n.destination.lore_nodes = loc_lore_map.get(n.destination.id, [])
         finally:
             conn.close()
 
-        neighbors: list[NeighborLocationView] = []
-        for r in rows:
-            edge_turn = r["edge_turn_id"]
-            edge_sup = r["edge_superseded_turn_id"]
-            loc_turn = r["created_at_turn_id"]
-            if valid_turn_ids is not None:
-                if edge_turn is not None and edge_turn not in valid_turn_ids:
-                    continue
-                if edge_sup is not None and edge_sup in valid_turn_ids:
-                    continue
-                if loc_turn is not None and loc_turn not in valid_turn_ids:
-                    continue
-            elif edge_sup is not None:
-                continue
-            dest = self._row_to_location(r)
-            cdir = normalize_compass_direction(r["compass_direction"], r["direction_label"])
-            neighbors.append(
-                NeighborLocationView(
-                    edge_id=r["edge_id"],
-                    direction_label=r["direction_label"],
-                    compass_direction=cdir,
-                    travel_minutes=r["travel_minutes"],
-                    is_locked_or_hidden=bool(r["is_locked_or_hidden"]),
-                    destination=dest,
-                )
-            )
         return neighbors
 
     def add_improvised_location(
@@ -3990,9 +4479,21 @@ class CantinaRepository:
             if not row:
                 raise KeyError(f"Campaign '{campaign_id}' not found")
 
-            # 1. Remove episodic vector entries for this campaign
+            # 1. Remove episodic & campaign-scoped vector entries (including improvised location lore vectors)
             conn.execute(
                 "DELETE FROM vector_entries WHERE campaign_id = ?",
+                (campaign_id,),
+            )
+            conn.execute(
+                """
+                DELETE FROM vector_entries
+                WHERE location_id IN (
+                    SELECT id FROM location_nodes
+                    WHERE created_at_turn_id IN (
+                        SELECT id FROM turn_nodes WHERE campaign_id = ?
+                    )
+                )
+                """,
                 (campaign_id,),
             )
 
@@ -5108,6 +5609,230 @@ class CantinaRepository:
 
         return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
 
+    def update_campaign_location_lore(
+        self,
+        campaign_id: str,
+        location_id: str,
+        lore_nodes: list[LocationLoreNodeDraft],
+        *,
+        owner_id: str | None = None,
+        precomputed_embeddings: dict[tuple[str, str, str], np.ndarray] | None = None,
+    ) -> CampaignStateBundle:
+        """Persist a Copy-on-Write location lore override scoped strictly to a single campaign."""
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
+        if not campaign.active_leaf_turn_id:
+            raise ValueError(f"Campaign '{campaign_id}' has no active turn")
+
+        branch_turns = self.get_branch_turn_chain(campaign.active_leaf_turn_id)
+        valid_turn_ids = {t.id for t in branch_turns}
+
+        loc = self.get_location(location_id, campaign_id=campaign_id)
+        if loc.world_id != campaign.world_id:
+            raise KeyError(
+                f"Location '{location_id}' does not belong to campaign '{campaign_id}'"
+            )
+        if loc.created_at_turn_id is not None and loc.created_at_turn_id not in valid_turn_ids:
+            raise KeyError(
+                f"Location '{location_id}' is not visible on the active timeline branch"
+            )
+
+        now = utc_now_iso()
+        conn = self._connect()
+        try:
+            vec_rows = conn.execute(
+                """
+                SELECT title, content, keywords_json, embedding_blob
+                FROM vector_entries
+                WHERE world_id = ?
+                  AND location_id = ?
+                  AND source_type = 'location_lore'
+                """,
+                (campaign.world_id, location_id),
+            ).fetchall()
+            existing_blobs: dict[tuple[str, str, str], bytes] = {
+                (r["title"], r["content"], r["keywords_json"]): bytes(r["embedding_blob"])
+                for r in vec_rows
+            }
+
+            prev_camp_lore_ids = {
+                r["id"]
+                for r in conn.execute(
+                    "SELECT id FROM lore_nodes WHERE campaign_id = ? AND location_id = ?",
+                    (campaign_id, location_id),
+                ).fetchall()
+            }
+
+            conn.execute(
+                """
+                INSERT INTO campaign_location_lore_overrides (campaign_id, location_id, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(campaign_id, location_id) DO UPDATE SET updated_at = excluded.updated_at
+                """,
+                (campaign_id, location_id, now),
+            )
+            conn.execute(
+                "DELETE FROM lore_nodes WHERE campaign_id = ? AND location_id = ?",
+                (campaign_id, location_id),
+            )
+            conn.execute(
+                """
+                DELETE FROM vector_entries
+                WHERE campaign_id = ? AND location_id = ? AND source_type = 'location_lore'
+                """,
+                (campaign_id, location_id),
+            )
+
+            taken_ids = {
+                r["id"] for r in conn.execute("SELECT id FROM lore_nodes").fetchall()
+            }
+            for loc_lore in lore_nodes:
+                can_reuse_id = (
+                    bool(loc_lore.id)
+                    and loc_lore.id in prev_camp_lore_ids
+                    and loc_lore.id not in taken_ids
+                )
+                lore_id = loc_lore.id if can_reuse_id else f"lore_{uuid.uuid4().hex[:10]}"
+                taken_ids.add(lore_id)
+                tags_json = json.dumps(loc_lore.entity_tags)
+                conn.execute(
+                    """
+                    INSERT INTO lore_nodes (
+                        id, world_id, location_id, campaign_id, title, category, content, entity_tags_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        lore_id,
+                        campaign.world_id,
+                        location_id,
+                        campaign_id,
+                        loc_lore.title,
+                        loc_lore.category,
+                        loc_lore.content,
+                        tags_json,
+                    ),
+                )
+                if loc_lore.category != "secret":
+                    vec_title, vec_keywords = _location_lore_vector_fields(
+                        loc.name, loc_lore.title, loc_lore.entity_tags
+                    )
+                    vec_kw_json = json.dumps(vec_keywords)
+                    blob_key = (vec_title, loc_lore.content, vec_kw_json)
+                    if blob_key in existing_blobs:
+                        conn.execute(
+                            """
+                            INSERT INTO vector_entries (
+                                id, source_type, world_id, location_id, character_id, campaign_id,
+                                anchor_turn_id, title, content, keywords_json, embedding_blob
+                            )
+                            VALUES (?, 'location_lore', ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                lore_id,
+                                campaign.world_id,
+                                location_id,
+                                campaign_id,
+                                loc.created_at_turn_id,
+                                vec_title,
+                                loc_lore.content,
+                                vec_kw_json,
+                                existing_blobs[blob_key],
+                            ),
+                        )
+                    else:
+                        pre_vec = (
+                            precomputed_embeddings.get(blob_key)
+                            if precomputed_embeddings
+                            else None
+                        )
+                        self.vector_store.upsert_entry(
+                            entry_id=lore_id,
+                            source_type="location_lore",
+                            world_id=campaign.world_id,
+                            location_id=location_id,
+                            campaign_id=campaign_id,
+                            anchor_turn_id=loc.created_at_turn_id,
+                            title=vec_title,
+                            content=loc_lore.content,
+                            keywords=vec_keywords,
+                            embedding=pre_vec,
+                            conn=conn,
+                        )
+
+            conn.commit()
+        finally:
+            conn.close()
+
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
+
+    async def aupdate_campaign_location_lore(
+        self,
+        campaign_id: str,
+        location_id: str,
+        lore_nodes: list[LocationLoreNodeDraft],
+        *,
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
+        """Validate ownership/branch visibility, pre-compute missing embeddings asynchronously, and save override."""
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
+        if not campaign.active_leaf_turn_id:
+            raise ValueError(f"Campaign '{campaign_id}' has no active turn")
+
+        branch_turns = self.get_branch_turn_chain(campaign.active_leaf_turn_id)
+        valid_turn_ids = {t.id for t in branch_turns}
+        loc = self.get_location(location_id, campaign_id=campaign_id)
+        if loc.world_id != campaign.world_id:
+            raise KeyError(
+                f"Location '{location_id}' does not belong to campaign '{campaign_id}'"
+            )
+        if loc.created_at_turn_id is not None and loc.created_at_turn_id not in valid_turn_ids:
+            raise KeyError(
+                f"Location '{location_id}' is not visible on the active timeline branch"
+            )
+
+        conn = self._connect()
+        try:
+            vec_rows = conn.execute(
+                """
+                SELECT title, content, keywords_json, embedding_blob
+                FROM vector_entries
+                WHERE world_id = ?
+                  AND location_id = ?
+                  AND source_type = 'location_lore'
+                """,
+                (campaign.world_id, location_id),
+            ).fetchall()
+            existing_blobs: dict[tuple[str, str, str], bytes] = {
+                (r["title"], r["content"], r["keywords_json"]): bytes(r["embedding_blob"])
+                for r in vec_rows
+            }
+        finally:
+            conn.close()
+
+        items_to_embed: list[tuple[tuple[str, str, str], str]] = []
+        for loc_lore in lore_nodes:
+            if loc_lore.category == "secret":
+                continue
+            vec_title, vec_keywords = _location_lore_vector_fields(
+                loc.name, loc_lore.title, loc_lore.entity_tags
+            )
+            vec_kw_json = json.dumps(vec_keywords)
+            items_to_embed.append(
+                (
+                    (vec_title, loc_lore.content, vec_kw_json),
+                    combine_entry_text(vec_title, loc_lore.content, vec_keywords),
+                )
+            )
+
+        precomputed = await _compute_missing_embeddings(items_to_embed, existing_blobs)
+        return self.update_campaign_location_lore(
+            campaign_id,
+            location_id,
+            lore_nodes,
+            owner_id=owner_id,
+            precomputed_embeddings=precomputed,
+        )
+
     def checkout_turn_branch(
         self,
         campaign_id: str,
@@ -5145,12 +5870,20 @@ class CantinaRepository:
         all_turns = self.list_campaign_turn_nodes(campaign_id)
         leaf_turn = branch_turns[-1]
 
-        world_filtered = self.get_world(campaign.world_id, valid_turn_ids=valid_turn_ids)
-        active_loc = self.get_location(leaf_turn.world_snapshot.active_location_id)
+        world_filtered = self.get_world(
+            campaign.world_id,
+            valid_turn_ids=valid_turn_ids,
+            campaign_id=campaign_id,
+        )
+        active_loc = self.get_location(
+            leaf_turn.world_snapshot.active_location_id,
+            campaign_id=campaign_id,
+        )
         neighbors = self.get_neighbor_locations(
             campaign.world_id,
             active_loc.id,
             valid_turn_ids=valid_turn_ids,
+            campaign_id=campaign_id,
         )
         episodic_chunks = self.get_branch_episodic_chunks(campaign_id, valid_turn_ids)
 
@@ -5198,6 +5931,20 @@ class CantinaRepository:
     # ------------------------------------------------------------------
     # Row Mappers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _row_to_lore_node(r: sqlite3.Row) -> LoreNode:
+        keys = r.keys()
+        return LoreNode(
+            id=r["id"],
+            world_id=r["world_id"],
+            location_id=r["location_id"] if "location_id" in keys else None,
+            campaign_id=r["campaign_id"] if "campaign_id" in keys else None,
+            title=r["title"],
+            category=r["category"],
+            content=r["content"],
+            entity_tags=json.loads(r["entity_tags_json"] or "[]"),
+        )
 
     @staticmethod
     def _row_to_location(r: sqlite3.Row) -> LocationNode:

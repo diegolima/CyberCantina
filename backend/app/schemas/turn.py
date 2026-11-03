@@ -290,10 +290,10 @@ class PreTurnAnalysis(PreTurnLLMOutput):
 
 
 class RecalledMemoryItem(BaseModel):
-    """A single lore, character shard, or episodic memory retrieved for Zone 4."""
+    """A single world/location lore, character shard, or episodic memory retrieved for Zone 4."""
 
     id: str
-    source_type: Literal["lore", "character_shard", "episodic_chunk"]
+    source_type: Literal["lore", "location_lore", "character_shard", "episodic_chunk"]
     title: str
     content: str
     score: float = 1.0

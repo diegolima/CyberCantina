@@ -171,6 +171,7 @@ class VectorStore:
         content: str,
         keywords: list[str] | None = None,
         world_id: str | None = None,
+        location_id: str | None = None,
         character_id: str | None = None,
         campaign_id: str | None = None,
         anchor_turn_id: str | None = None,
@@ -190,11 +191,15 @@ class VectorStore:
             active_conn.execute(
                 """
                 INSERT INTO vector_entries (
-                    id, source_type, world_id, character_id, campaign_id,
+                    id, source_type, world_id, location_id, character_id, campaign_id,
                     anchor_turn_id, superseded_at_turn_id, title, content, keywords_json, embedding_blob
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
+                    source_type = excluded.source_type,
+                    world_id = excluded.world_id,
+                    location_id = excluded.location_id,
+                    campaign_id = excluded.campaign_id,
                     title = excluded.title,
                     content = excluded.content,
                     keywords_json = excluded.keywords_json,
@@ -206,6 +211,7 @@ class VectorStore:
                     entry_id,
                     source_type,
                     world_id,
+                    location_id,
                     character_id,
                     campaign_id,
                     anchor_turn_id,
@@ -231,6 +237,7 @@ class VectorStore:
         content: str,
         keywords: list[str] | None = None,
         world_id: str | None = None,
+        location_id: str | None = None,
         character_id: str | None = None,
         campaign_id: str | None = None,
         anchor_turn_id: str | None = None,
@@ -249,6 +256,7 @@ class VectorStore:
             content=content,
             keywords=kw_list,
             world_id=world_id,
+            location_id=location_id,
             character_id=character_id,
             campaign_id=campaign_id,
             anchor_turn_id=anchor_turn_id,
@@ -256,6 +264,19 @@ class VectorStore:
             embedding=vec,
             conn=conn,
         )
+
+    @staticmethod
+    def _load_overridden_location_ids(conn: sqlite3.Connection, campaign_id: str) -> set[str]:
+        if not campaign_id:
+            return set()
+        try:
+            rows = conn.execute(
+                "SELECT location_id FROM campaign_location_lore_overrides WHERE campaign_id = ?",
+                (campaign_id,),
+            ).fetchall()
+            return {r["location_id"] for r in rows}
+        except sqlite3.OperationalError:
+            return set()
 
     async def search_memories(
         self,
@@ -266,10 +287,12 @@ class VectorStore:
         character_id: str,
         campaign_id: str,
         valid_branch_turn_ids: Iterable[str],
+        exclude_location_id: str | None = None,
+        overridden_location_ids: set[str] | None = None,
         character_present_turn_ids: Iterable[str] | None = None,
         top_k: int = 4,
     ) -> list[RecalledMemoryItem]:
-        """Perform branch-safe hybrid semantic + entity-tag search across all 3 memory scopes."""
+        """Perform branch-safe hybrid semantic + entity-tag search across world, location, shard, and episodic scopes."""
         valid_turns = set(valid_branch_turn_ids)
         present_turns = (
             set(character_present_turn_ids)
@@ -288,6 +311,11 @@ class VectorStore:
 
         conn = self._connect()
         try:
+            overridden_locs = (
+                overridden_location_ids
+                if overridden_location_ids is not None
+                else self._load_overridden_location_ids(conn, campaign_id)
+            )
             has_campaign_shards = conn.execute(
                 """
                 SELECT 1 FROM vector_entries
@@ -299,17 +327,18 @@ class VectorStore:
 
             if has_campaign_shards:
                 char_clause = "(character_id = ? AND campaign_id = ? AND source_type = 'character_shard')"
-                params = (world_id, character_id, campaign_id, campaign_id)
+                params = (world_id, world_id, campaign_id, character_id, campaign_id, campaign_id)
             else:
                 char_clause = "(character_id = ? AND (campaign_id IS NULL OR campaign_id = '') AND source_type = 'character_shard')"
-                params = (world_id, character_id, campaign_id)
+                params = (world_id, world_id, campaign_id, character_id, campaign_id)
 
             rows = conn.execute(
                 f"""
-                SELECT id, source_type, character_id, anchor_turn_id, superseded_at_turn_id,
+                SELECT id, source_type, location_id, character_id, campaign_id, anchor_turn_id, superseded_at_turn_id,
                        title, content, keywords_json, embedding_blob
                 FROM vector_entries
                 WHERE (world_id = ? AND source_type = 'lore')
+                   OR (world_id = ? AND source_type = 'location_lore' AND (campaign_id IS NULL OR campaign_id = '' OR campaign_id = ?))
                    OR {char_clause}
                    OR (campaign_id = ? AND source_type = 'episodic_chunk')
                 """,
@@ -321,9 +350,10 @@ class VectorStore:
         scored: list[RecalledMemoryItem] = []
         for row in rows:
             anchor_turn = row["anchor_turn_id"]
+            row_keys = row.keys()
             superseded_turn = (
                 row["superseded_at_turn_id"]
-                if "superseded_at_turn_id" in row.keys()
+                if "superseded_at_turn_id" in row_keys
                 else None
             )
             # Enforce strict timeline branch isolation for turn-anchored or superseded memories
@@ -331,9 +361,24 @@ class VectorStore:
                 continue
             if superseded_turn is not None and superseded_turn in valid_turns:
                 continue
+
+            stype = row["source_type"]
+            if stype == "location_lore":
+                row_loc_id = row["location_id"] if "location_id" in row_keys else None
+                row_camp = row["campaign_id"] or ""
+                # Active room lore is deterministically injected in <active_location>; never double-inject
+                if exclude_location_id and row_loc_id == exclude_location_id:
+                    continue
+                if row_loc_id in overridden_locs:
+                    if row_camp != campaign_id:
+                        continue
+                else:
+                    if row_camp and row_camp != campaign_id:
+                        continue
+
             # Enforce spatial room isolation when provided for episodic memories
             if (
-                row["source_type"] == "episodic_chunk"
+                stype == "episodic_chunk"
                 and anchor_turn is not None
                 and present_turns is not None
                 and anchor_turn not in present_turns
@@ -362,11 +407,15 @@ class VectorStore:
             overlap_count = len(query_tokens & doc_tokens)
             lexical_boost = min(0.25, overlap_count * 0.05)
 
+            # Remote location lore is surfaced ONLY when brought up during conversation/interaction
+            if stype == "location_lore" and entity_boost == 0.0 and overlap_count == 0 and cosine_sim < 0.35:
+                continue
+
             total_score = round(cosine_sim + entity_boost + lexical_boost, 4)
             scored.append(
                 RecalledMemoryItem(
                     id=row["id"],
-                    source_type=row["source_type"],
+                    source_type=stype,
                     title=row["title"],
                     content=row["content"],
                     score=total_score,
@@ -385,6 +434,8 @@ class VectorStore:
         campaign_id: str,
         character_ids: list[str],
         valid_branch_turn_ids: Iterable[str],
+        exclude_location_id: str | None = None,
+        overridden_location_ids: set[str] | None = None,
         present_turn_ids_by_char: Mapping[str, set[str]] | None = None,
         character_witnessed_turn_ids: Mapping[str, set[str]] | None = None,
         top_k: int = 4,
@@ -415,17 +466,32 @@ class VectorStore:
 
         conn = self._connect()
         try:
+            overridden_locs = (
+                overridden_location_ids
+                if overridden_location_ids is not None
+                else self._load_overridden_location_ids(conn, campaign_id)
+            )
             placeholders = ",".join("?" for _ in char_set)
+            camp_shard_rows = conn.execute(
+                f"""
+                SELECT DISTINCT character_id FROM vector_entries
+                WHERE campaign_id = ? AND source_type = 'character_shard' AND character_id IN ({placeholders})
+                """,
+                (campaign_id, *char_set),
+            ).fetchall()
+            chars_with_camp_shards = {r["character_id"] for r in camp_shard_rows}
+
             rows = conn.execute(
                 f"""
-                SELECT id, source_type, character_id, campaign_id, anchor_turn_id, superseded_at_turn_id,
+                SELECT id, source_type, location_id, character_id, campaign_id, anchor_turn_id, superseded_at_turn_id,
                        title, content, keywords_json, embedding_blob
                 FROM vector_entries
                 WHERE (world_id = ? AND source_type = 'lore')
+                   OR (world_id = ? AND source_type = 'location_lore' AND (campaign_id IS NULL OR campaign_id = '' OR campaign_id = ?))
                    OR (source_type = 'character_shard' AND character_id IN ({placeholders}))
                    OR (campaign_id = ? AND source_type = 'episodic_chunk')
                 """,
-                (world_id, *char_set, campaign_id),
+                (world_id, world_id, campaign_id, *char_set, campaign_id),
             ).fetchall()
         finally:
             conn.close()
@@ -434,15 +500,38 @@ class VectorStore:
         scored_candidates: list[tuple[RecalledMemoryItem, sqlite3.Row]] = []
         for row in rows:
             anchor_turn = row["anchor_turn_id"]
+            row_keys = row.keys()
             superseded_turn = (
                 row["superseded_at_turn_id"]
-                if "superseded_at_turn_id" in row.keys()
+                if "superseded_at_turn_id" in row_keys
                 else None
             )
             if anchor_turn is not None and anchor_turn not in valid_turns:
                 continue
             if superseded_turn is not None and superseded_turn in valid_turns:
                 continue
+
+            stype = row["source_type"]
+            if stype == "location_lore":
+                row_loc_id = row["location_id"] if "location_id" in row_keys else None
+                row_camp = row["campaign_id"] or ""
+                if exclude_location_id and row_loc_id == exclude_location_id:
+                    continue
+                if row_loc_id in overridden_locs:
+                    if row_camp != campaign_id:
+                        continue
+                else:
+                    if row_camp and row_camp != campaign_id:
+                        continue
+            elif stype == "character_shard":
+                row_cid = row["character_id"]
+                row_camp = row["campaign_id"] or ""
+                if row_cid in chars_with_camp_shards:
+                    if row_camp != campaign_id:
+                        continue
+                else:
+                    if row_camp:
+                        continue
 
             vec = np.frombuffer(row["embedding_blob"], dtype=np.float32)
             if vec.shape == query_vec.shape:
@@ -462,11 +551,15 @@ class VectorStore:
 
             overlap_count = len(query_tokens & doc_tokens)
             lexical_boost = min(0.25, overlap_count * 0.05)
+
+            if stype == "location_lore" and entity_boost == 0.0 and overlap_count == 0 and cosine_sim < 0.35:
+                continue
+
             total_score = round(cosine_sim + entity_boost + lexical_boost, 4)
 
             item = RecalledMemoryItem(
                 id=row["id"],
-                source_type=row["source_type"],
+                source_type=stype,
                 title=row["title"],
                 content=row["content"],
                 score=total_score,
@@ -475,13 +568,13 @@ class VectorStore:
 
         scored_candidates.sort(key=lambda pair: pair[0].score, reverse=True)
 
-        # 1. Shared scene items: world lore + episodic chunks witnessed by any character present in room
+        # 1. Shared scene items: world lore + referenced remote location lore + witnessed episodic chunks
         shared_scene_items: list[RecalledMemoryItem] = []
         all_present_turn_ids = set().union(*witnessed_by_char.values()) if witnessed_by_char else set()
 
         for item, row in scored_candidates:
             stype = row["source_type"]
-            if stype == "lore":
+            if stype in ("lore", "location_lore"):
                 shared_scene_items.append(item)
             elif stype == "episodic_chunk":
                 anchor_turn = row["anchor_turn_id"]
@@ -498,11 +591,9 @@ class VectorStore:
             for item, row in scored_candidates:
                 stype = row["source_type"]
                 row_cid = row["character_id"]
-                row_camp = row["campaign_id"]
-                if stype == "lore":
+                if stype in ("lore", "location_lore"):
                     c_items.append(item)
                 elif stype == "character_shard":
-                    # Character shards belong strictly to this character (prefer campaign-attached if available)
                     if row_cid == cid:
                         c_items.append(item)
                 elif stype == "episodic_chunk":

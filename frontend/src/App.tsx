@@ -51,6 +51,7 @@ import {
   CognitionBlock,
   CompassDirection,
   DiceMode,
+  LocationLoreNodeDraft,
   MemoryShard,
   NarrativeMode,
   Phase3AgentProgressItem,
@@ -998,6 +999,19 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleSaveCampaignLocationLore = async (
+    locationId: string,
+    loreNodes: LocationLoreNodeDraft[]
+  ) => {
+    if (!bundle || isStreaming || isPhase4Running) return;
+    const updated = await api.updateCampaignLocationLore(
+      bundle.campaign.id,
+      locationId,
+      loreNodes
+    );
+    setBundle(updated);
+  };
+
   const handleCreateLinkedLocation = async (payload: {
     from_location_id: string;
     name: string;
@@ -1570,6 +1584,8 @@ export const App: React.FC = () => {
           onUpdateEdgeDistance={handleUpdateCampaignEdgeDistance}
           onToggleItemEquip={handleToggleItemEquip}
           onUpdateCampaignMemories={handleUpdateCampaignMemories}
+          onSaveCampaignLocationLore={handleSaveCampaignLocationLore}
+          isMutatingLocked={isStreaming || isPhase4Running}
           worlds={worlds}
         />
       ) : (

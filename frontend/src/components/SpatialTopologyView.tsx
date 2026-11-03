@@ -1,8 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertCircle,
+  BookOpen,
   Check,
+  ChevronDown,
+  ChevronRight,
   Compass,
   Crosshair,
+  EyeOff,
   GitBranch,
   Link2,
   Lock,
@@ -17,8 +22,17 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { CompassDirection, LocationEdge, LocationNode } from "../types";
+import {
+  CompassDirection,
+  LOCATION_LORE_CATEGORIES,
+  LocationEdge,
+  LocationLoreCategory,
+  LocationLoreNodeDraft,
+  LocationNode,
+  LoreNode,
+} from "../types";
 import { CommaSeparatedInput } from "./CommaSeparatedInput";
+import { TagChipsInput, normalizeTagList } from "./TagChipsInput";
 
 export const COMPASS_ORDER: CompassDirection[] = [
   "N",
@@ -272,6 +286,11 @@ export interface SpatialTopologyViewProps {
   // Campaign mode actions
   onOverrideLocation?: (locationId: string) => Promise<void> | void;
   isOverriding?: boolean;
+  onSaveCampaignLocationLore?: (
+    locationId: string,
+    loreNodes: LocationLoreNodeDraft[]
+  ) => Promise<void> | void;
+  isMutatingLocked?: boolean;
 }
 
 export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
@@ -292,6 +311,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   onCreateLinkedLocation,
   onOverrideLocation,
   isOverriding = false,
+  onSaveCampaignLocationLore,
+  isMutatingLocked = false,
 }) => {
   const [selectedLocId, setSelectedLocId] = useState<string>(
     defaultSelectedLocationId || activeLocationId || locations[0]?.id || ""
@@ -336,6 +357,22 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   // Removing edge state
   const [isRemovingEdgeId, setIsRemovingEdgeId] = useState<string | null>(null);
 
+  // Location Lore editing state (Editor expanded card ID + Campaign add/edit form)
+  const [expandedEditorLoreId, setExpandedEditorLoreId] = useState<string | null>(
+    null
+  );
+  const [campLoreFormMode, setCampLoreFormMode] = useState<
+    null | { mode: "add" } | { mode: "edit"; index: number }
+  >(null);
+  const [campLoreTitle, setCampLoreTitle] = useState("");
+  const [campLoreCategory, setCampLoreCategory] =
+    useState<LocationLoreCategory>("rumor");
+  const [campLoreContent, setCampLoreContent] = useState("");
+  const [campLoreTags, setCampLoreTags] = useState<string[]>([]);
+  const [campLorePendingTagDraft, setCampLorePendingTagDraft] = useState("");
+  const [campLoreError, setCampLoreError] = useState<string | null>(null);
+  const [isSavingCampLore, setIsSavingCampLore] = useState(false);
+
   // Keep selectedLocId valid if locations list changes
   useEffect(() => {
     if (locations.length === 0) return;
@@ -348,6 +385,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   useEffect(() => {
     setShowLinkForm(false);
     setShowConnectForm(false);
+    setCampLoreFormMode(null);
+    setCampLoreError(null);
+    setCampLorePendingTagDraft("");
   }, [selectedLocId]);
 
   const activeLoc = useMemo(
@@ -722,7 +762,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "1fr 340px",
+          gridTemplateColumns: "1fr 375px",
           gap: 14,
           minHeight: 520,
           maxHeight: "calc(88vh - 120px)",
@@ -1264,6 +1304,800 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
               </div>
             )
           )}
+
+          {/* Location Lore & Secrets */}
+          {(() => {
+            const locLoreList: LoreNode[] = selectedLocation.lore_nodes ?? [];
+
+            const updateEditorLoreAt = (
+              idx: number,
+              patch: Partial<LoreNode>
+            ) => {
+              if (!onUpdateLocation) return;
+              const next = locLoreList.map((item, i) =>
+                i === idx ? { ...item, ...patch } : item
+              );
+              onUpdateLocation({
+                ...selectedLocation,
+                lore_nodes: next,
+              });
+            };
+
+            const handleAddEditorLore = () => {
+              if (!onUpdateLocation) return;
+              const newId = `new_lore_${Date.now()}_${Math.random()
+                .toString(36)
+                .slice(2, 6)}`;
+              const created: LoreNode = {
+                id: newId,
+                world_id: selectedLocation.world_id,
+                location_id: selectedLocation.id,
+                title: "",
+                category: "rumor",
+                content: "",
+                entity_tags: [],
+              };
+              onUpdateLocation({
+                ...selectedLocation,
+                lore_nodes: [...locLoreList, created],
+              });
+              setExpandedEditorLoreId(newId);
+            };
+
+            const handleDeleteEditorLore = (idx: number) => {
+              if (!onUpdateLocation) return;
+              const removed = locLoreList[idx];
+              const next = locLoreList.filter((_, i) => i !== idx);
+              onUpdateLocation({
+                ...selectedLocation,
+                lore_nodes: next,
+              });
+              if (removed && expandedEditorLoreId === removed.id) {
+                setExpandedEditorLoreId(null);
+              }
+            };
+
+            const openCampaignAddLore = () => {
+              setCampLoreFormMode({ mode: "add" });
+              setCampLoreTitle("");
+              setCampLoreCategory("rumor");
+              setCampLoreContent("");
+              setCampLoreTags([]);
+              setCampLorePendingTagDraft("");
+              setCampLoreError(null);
+            };
+
+            const openCampaignEditLore = (idx: number) => {
+              const target = locLoreList[idx];
+              if (!target) return;
+              setCampLoreFormMode({ mode: "edit", index: idx });
+              setCampLoreTitle(target.title);
+              setCampLoreCategory(
+                LOCATION_LORE_CATEGORIES.includes(
+                  target.category as LocationLoreCategory
+                )
+                  ? (target.category as LocationLoreCategory)
+                  : "rumor"
+              );
+              setCampLoreContent(target.content);
+              setCampLoreTags([...target.entity_tags]);
+              setCampLorePendingTagDraft("");
+              setCampLoreError(null);
+            };
+
+            const submitCampaignLoreForm = async () => {
+              if (!onSaveCampaignLocationLore || !campLoreFormMode || isSavingCampLore) {
+                return;
+              }
+              const trimmedTitle = campLoreTitle.trim();
+              const trimmedContent = campLoreContent.trim();
+              const pendingParts = campLorePendingTagDraft
+                .split(/[,;\n]+/)
+                .map((s) => s.trim())
+                .filter(Boolean);
+              const effectiveTags = normalizeTagList(campLoreTags, pendingParts);
+
+              if (!trimmedTitle) {
+                setCampLoreError("Lore title is required.");
+                return;
+              }
+              if (!trimmedContent) {
+                setCampLoreError("Lore content is required.");
+                return;
+              }
+              if (effectiveTags.length === 0) {
+                setCampLoreError(
+                  "At least 1 trigger keyword is required."
+                );
+                return;
+              }
+
+              const baseDrafts: LocationLoreNodeDraft[] = locLoreList.map((ln) => ({
+                id: ln.id,
+                title: ln.title,
+                category: LOCATION_LORE_CATEGORIES.includes(
+                  ln.category as LocationLoreCategory
+                )
+                  ? (ln.category as LocationLoreCategory)
+                  : "rumor",
+                content: ln.content,
+                entity_tags: ln.entity_tags,
+              }));
+
+              if (campLoreFormMode.mode === "add") {
+                baseDrafts.push({
+                  title: trimmedTitle,
+                  category: campLoreCategory,
+                  content: trimmedContent,
+                  entity_tags: effectiveTags,
+                });
+              } else {
+                const existingId = locLoreList[campLoreFormMode.index]?.id ?? null;
+                baseDrafts[campLoreFormMode.index] = {
+                  id: existingId,
+                  title: trimmedTitle,
+                  category: campLoreCategory,
+                  content: trimmedContent,
+                  entity_tags: effectiveTags,
+                };
+              }
+
+              setIsSavingCampLore(true);
+              setCampLoreError(null);
+              try {
+                await onSaveCampaignLocationLore(selectedLocation.id, baseDrafts);
+                setCampLoreFormMode(null);
+                setCampLorePendingTagDraft("");
+              } catch (err: any) {
+                setCampLoreError(
+                  err?.message || "Failed to save location lore."
+                );
+              } finally {
+                setIsSavingCampLore(false);
+              }
+            };
+
+            const handleDeleteCampaignLore = async (idx: number) => {
+              if (
+                !onSaveCampaignLocationLore ||
+                isSavingCampLore ||
+                isMutatingLocked
+              ) {
+                return;
+              }
+              const target = locLoreList[idx];
+              if (!target) return;
+              if (
+                !window.confirm(
+                  `Remove location lore "${target.title}" from this campaign?`
+                )
+              ) {
+                return;
+              }
+              const remaining: LocationLoreNodeDraft[] = locLoreList
+                .filter((_, i) => i !== idx)
+                .map((ln) => ({
+                  id: ln.id,
+                  title: ln.title,
+                  category: LOCATION_LORE_CATEGORIES.includes(
+                    ln.category as LocationLoreCategory
+                  )
+                    ? (ln.category as LocationLoreCategory)
+                    : "rumor",
+                  content: ln.content,
+                  entity_tags: ln.entity_tags,
+                }));
+
+              setIsSavingCampLore(true);
+              setCampLoreError(null);
+              try {
+                await onSaveCampaignLocationLore(selectedLocation.id, remaining);
+                if (
+                  campLoreFormMode?.mode === "edit" &&
+                  campLoreFormMode.index === idx
+                ) {
+                  setCampLoreFormMode(null);
+                }
+              } catch (err: any) {
+                setCampLoreError(
+                  err?.message || "Failed to delete location lore."
+                );
+              } finally {
+                setIsSavingCampLore(false);
+              }
+            };
+
+            return (
+              <div
+                style={{
+                  borderTop: "1px solid var(--border-subtle)",
+                  paddingTop: 10,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
+                >
+                  <span
+                    className="cog-step-label"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 5,
+                      marginBottom: 0,
+                    }}
+                  >
+                    <BookOpen size={12} color="var(--accent-cyan)" />
+                    Location Lore &amp; Secrets ({locLoreList.length})
+                  </span>
+
+                  {mode === "editor" && onUpdateLocation && (
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{ padding: "3px 8px", fontSize: "0.7rem" }}
+                      onClick={handleAddEditorLore}
+                    >
+                      <Plus size={11} /> Add Lore
+                    </button>
+                  )}
+
+                  {mode === "campaign" &&
+                    onSaveCampaignLocationLore &&
+                    !campLoreFormMode && (
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{ padding: "3px 8px", fontSize: "0.7rem" }}
+                        disabled={isMutatingLocked || isSavingCampLore}
+                        title={
+                          isMutatingLocked
+                            ? "Wait for turn generation to finish before editing lore"
+                            : "Attach lore or a hidden secret to this location for this campaign"
+                        }
+                        onClick={openCampaignAddLore}
+                      >
+                        <Plus size={11} /> Add Lore
+                      </button>
+                    )}
+                </div>
+
+                {mode === "campaign" && isMutatingLocked && (
+                  <div
+                    style={{
+                      fontSize: "0.69rem",
+                      color: "var(--accent-amber)",
+                    }}
+                  >
+                    Turn in progress — location lore editing is temporarily locked.
+                  </div>
+                )}
+
+                {campLoreError && mode === "campaign" && !campLoreFormMode && (
+                  <div style={{ fontSize: "0.71rem", color: "#fda4af" }}>
+                    {campLoreError}
+                  </div>
+                )}
+
+                {/* Campaign Inline Add/Edit Form */}
+                {mode === "campaign" && campLoreFormMode && (
+                  <div
+                    style={{
+                      border: "1px solid rgba(6, 182, 212, 0.45)",
+                      borderRadius: 6,
+                      padding: 10,
+                      background: "var(--bg-panel)",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 7,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                      }}
+                    >
+                      <span className="cog-step-label" style={{ marginBottom: 0 }}>
+                        {campLoreFormMode.mode === "add"
+                          ? `New Lore for ${selectedLocation.name}`
+                          : "Edit Location Lore"}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: "0.64rem",
+                          color: "var(--text-muted)",
+                        }}
+                      >
+                        Campaign CoW
+                      </span>
+                    </div>
+
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "1fr 112px",
+                        gap: 6,
+                      }}
+                    >
+                      <input
+                        className="field-input"
+                        placeholder="Entry title (required)"
+                        value={campLoreTitle}
+                        disabled={isSavingCampLore || isMutatingLocked}
+                        onChange={(e) => setCampLoreTitle(e.target.value)}
+                      />
+                      <select
+                        className="field-select"
+                        value={campLoreCategory}
+                        disabled={isSavingCampLore || isMutatingLocked}
+                        onChange={(e) =>
+                          setCampLoreCategory(
+                            e.target.value as LocationLoreCategory
+                          )
+                        }
+                      >
+                        {LOCATION_LORE_CATEGORIES.map((cat) => (
+                          <option key={cat} value={cat}>
+                            {cat === "secret" ? "🔒 secret" : cat}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {campLoreCategory === "secret" && (
+                      <div
+                        style={{
+                          fontSize: "0.68rem",
+                          color: "#fda4af",
+                          background: "rgba(244, 63, 94, 0.08)",
+                          border: "1px solid rgba(244, 63, 94, 0.25)",
+                          borderRadius: 5,
+                          padding: "5px 7px",
+                          lineHeight: 1.35,
+                        }}
+                      >
+                        <strong>Secret Gate:</strong> Withheld from passive room
+                        context &amp; remote recall until unlocked by a trigger
+                        keyword or Clean/Critical Success discovery roll.
+                      </div>
+                    )}
+
+                    <textarea
+                      className="field-textarea"
+                      rows={3}
+                      placeholder="Local history, faction presence, rumor, or hidden secret..."
+                      value={campLoreContent}
+                      disabled={isSavingCampLore || isMutatingLocked}
+                      onChange={(e) => setCampLoreContent(e.target.value)}
+                    />
+
+                    <div>
+                      <label
+                        style={{
+                          display: "block",
+                          fontSize: "0.69rem",
+                          color: "var(--text-secondary)",
+                          marginBottom: 4,
+                        }}
+                      >
+                        Trigger Keywords (min 1)
+                      </label>
+                      <TagChipsInput
+                        value={campLoreTags}
+                        onChange={setCampLoreTags}
+                        onDraftChange={setCampLorePendingTagDraft}
+                        disabled={isSavingCampLore || isMutatingLocked}
+                        accentVariant={
+                          campLoreCategory === "secret" ? "amber" : "cyan"
+                        }
+                        placeholder="Type keyword & press Enter..."
+                      />
+                    </div>
+
+                    {campLoreError && (
+                      <div style={{ fontSize: "0.71rem", color: "#fda4af" }}>
+                        {campLoreError}
+                      </div>
+                    )}
+
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "flex-end",
+                        gap: 6,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{ padding: "3px 10px", fontSize: "0.73rem" }}
+                        disabled={isSavingCampLore}
+                        onClick={() => {
+                          setCampLoreFormMode(null);
+                          setCampLoreError(null);
+                          setCampLorePendingTagDraft("");
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-cyan"
+                        style={{ padding: "3px 10px", fontSize: "0.73rem" }}
+                        disabled={isSavingCampLore || isMutatingLocked}
+                        onClick={submitCampaignLoreForm}
+                      >
+                        {isSavingCampLore ? "Saving..." : "Save Lore"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Existing Location Lore Entries */}
+                {locLoreList.length === 0 ? (
+                  !campLoreFormMode && (
+                    <div
+                      style={{
+                        fontSize: "0.72rem",
+                        color: "var(--text-muted)",
+                        fontStyle: "italic",
+                      }}
+                    >
+                      No local lore attached to this room.
+                    </div>
+                  )
+                ) : mode === "editor" && onUpdateLocation ? (
+                  <div
+                    style={{ display: "flex", flexDirection: "column", gap: 6 }}
+                  >
+                    {locLoreList.map((ln, idx) => {
+                      const isExpanded = expandedEditorLoreId === ln.id;
+                      const isInvalid =
+                        !ln.title.trim() ||
+                        !ln.content.trim() ||
+                        !ln.entity_tags ||
+                        ln.entity_tags.length === 0;
+
+                      return (
+                        <div
+                          key={ln.id || idx}
+                          style={{
+                            background: "var(--bg-panel)",
+                            border: isInvalid
+                              ? "1px solid rgba(244, 63, 94, 0.55)"
+                              : "1px solid var(--border-subtle)",
+                            borderRadius: 6,
+                            padding: "7px 9px",
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 6,
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "space-between",
+                              gap: 6,
+                              cursor: "pointer",
+                            }}
+                            onClick={() =>
+                              setExpandedEditorLoreId(isExpanded ? null : ln.id)
+                            }
+                          >
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 5,
+                                minWidth: 0,
+                                flex: 1,
+                              }}
+                            >
+                              {isExpanded ? (
+                                <ChevronDown size={13} />
+                              ) : (
+                                <ChevronRight size={13} />
+                              )}
+                              <span
+                                className={`lore-cat-badge lore-cat-badge--${ln.category}`}
+                              >
+                                {ln.category === "secret" && (
+                                  <EyeOff size={10} />
+                                )}
+                                {ln.category}
+                              </span>
+                              <span
+                                style={{
+                                  fontSize: "0.76rem",
+                                  fontWeight: 600,
+                                  color: ln.title.trim()
+                                    ? "var(--text-primary)"
+                                    : "#fda4af",
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {ln.title.trim() || "Untitled Lore"}
+                              </span>
+                            </div>
+
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 5,
+                              }}
+                            >
+                              {isInvalid && (
+                                <span
+                                  title="Requires title, content, and at least 1 keyword"
+                                  style={{
+                                    color: "#fda4af",
+                                    display: "inline-flex",
+                                  }}
+                                >
+                                  <AlertCircle size={13} />
+                                </span>
+                              )}
+                              <button
+                                type="button"
+                                className="item-remove-btn"
+                                title="Delete location lore entry"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteEditorLore(idx);
+                                }}
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </div>
+                          </div>
+
+                          {isExpanded && (
+                            <div
+                              style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: 6,
+                                paddingTop: 4,
+                                borderTop: "1px solid var(--border-subtle)",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns: "1fr 108px",
+                                  gap: 6,
+                                }}
+                              >
+                                <input
+                                  className="field-input"
+                                  placeholder="Lore title (required)"
+                                  value={ln.title}
+                                  onChange={(e) =>
+                                    updateEditorLoreAt(idx, {
+                                      title: e.target.value,
+                                    })
+                                  }
+                                />
+                                <select
+                                  className="field-select"
+                                  value={ln.category}
+                                  onChange={(e) =>
+                                    updateEditorLoreAt(idx, {
+                                      category: e.target
+                                        .value as LocationLoreCategory,
+                                    })
+                                  }
+                                >
+                                  {LOCATION_LORE_CATEGORIES.map((cat) => (
+                                    <option key={cat} value={cat}>
+                                      {cat === "secret" ? "🔒 secret" : cat}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              {ln.category === "secret" && (
+                                <div
+                                  style={{
+                                    fontSize: "0.67rem",
+                                    color: "#fda4af",
+                                    lineHeight: 1.35,
+                                  }}
+                                >
+                                  Hidden from passive room prompt &amp; cross-room
+                                  RAG; unlocked only via keyword mention or
+                                  Clean/Critical Success check.
+                                </div>
+                              )}
+
+                              <textarea
+                                className="field-textarea"
+                                rows={3}
+                                placeholder="Lore details..."
+                                value={ln.content}
+                                onChange={(e) =>
+                                  updateEditorLoreAt(idx, {
+                                    content: e.target.value,
+                                  })
+                                }
+                              />
+
+                              <div>
+                                <label
+                                  style={{
+                                    display: "block",
+                                    fontSize: "0.68rem",
+                                    color: "var(--text-secondary)",
+                                    marginBottom: 3,
+                                  }}
+                                >
+                                  Trigger Keywords (min 1)
+                                </label>
+                                <TagChipsInput
+                                  value={ln.entity_tags || []}
+                                  onChange={(tags) =>
+                                    updateEditorLoreAt(idx, {
+                                      entity_tags: tags,
+                                    })
+                                  }
+                                  accentVariant={
+                                    ln.category === "secret" ? "amber" : "cyan"
+                                  }
+                                  placeholder="Type keyword & press Enter..."
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div
+                    style={{ display: "flex", flexDirection: "column", gap: 6 }}
+                  >
+                    {locLoreList.map((ln, idx) => (
+                      <div
+                        key={ln.id || idx}
+                        style={{
+                          background: "var(--bg-panel)",
+                          border:
+                            ln.category === "secret"
+                              ? "1px solid rgba(244, 63, 94, 0.35)"
+                              : "1px solid var(--border-subtle)",
+                          borderRadius: 6,
+                          padding: "8px 9px",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 5,
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            gap: 6,
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 5,
+                              minWidth: 0,
+                              flex: 1,
+                            }}
+                          >
+                            <span
+                              className={`lore-cat-badge lore-cat-badge--${ln.category}`}
+                            >
+                              {ln.category === "secret" && <EyeOff size={10} />}
+                              {ln.category}
+                            </span>
+                            <span
+                              style={{
+                                fontSize: "0.76rem",
+                                fontWeight: 600,
+                                color: "var(--text-primary)",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {ln.title}
+                            </span>
+                          </div>
+
+                          {onSaveCampaignLocationLore && (
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 4,
+                              }}
+                            >
+                              <button
+                                type="button"
+                                className="btn"
+                                style={{ padding: "2px 5px" }}
+                                title="Edit location lore"
+                                disabled={isMutatingLocked || isSavingCampLore}
+                                onClick={() => openCampaignEditLore(idx)}
+                              >
+                                <Pencil size={11} />
+                              </button>
+                              <button
+                                type="button"
+                                className="item-remove-btn"
+                                title="Delete location lore"
+                                disabled={isMutatingLocked || isSavingCampLore}
+                                onClick={() => handleDeleteCampaignLore(idx)}
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        <div
+                          style={{
+                            fontSize: "0.73rem",
+                            color: "var(--text-secondary)",
+                            lineHeight: 1.42,
+                            whiteSpace: "pre-wrap",
+                          }}
+                        >
+                          {ln.content}
+                        </div>
+
+                        {ln.entity_tags?.length > 0 && (
+                          <div
+                            style={{
+                              display: "flex",
+                              flexWrap: "wrap",
+                              gap: 4,
+                              marginTop: 2,
+                            }}
+                          >
+                            {ln.entity_tags.map((tag, tIdx) => (
+                              <span
+                                key={`${tag}-${tIdx}`}
+                                className={`tag-chip-pill ${
+                                  ln.category === "secret"
+                                    ? "tag-chip-pill--amber"
+                                    : ""
+                                }`}
+                                style={{
+                                  padding: "1px 7px",
+                                  fontSize: "0.66rem",
+                                }}
+                              >
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Action: Create Linked Location from Selected Location */}
           {onCreateLinkedLocation && (

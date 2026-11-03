@@ -147,6 +147,43 @@ export interface WorldGlobalRules {
 
 export type CompassDirection = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
 
+export type WorldLoreCategory = "history" | "culture" | "faction" | "rumor";
+export type LocationLoreCategory = WorldLoreCategory | "secret";
+
+export const WORLD_LORE_CATEGORIES: WorldLoreCategory[] = [
+  "history",
+  "culture",
+  "faction",
+  "rumor",
+];
+
+export const LOCATION_LORE_CATEGORIES: LocationLoreCategory[] = [
+  "history",
+  "culture",
+  "faction",
+  "rumor",
+  "secret",
+];
+
+export interface LocationLoreNodeDraft {
+  id?: string | null;
+  title: string;
+  category: LocationLoreCategory;
+  content: string;
+  entity_tags: string[];
+}
+
+export interface LoreNode {
+  id: string;
+  world_id: string;
+  location_id?: string | null;
+  campaign_id?: string | null;
+  title: string;
+  category: LocationLoreCategory;
+  content: string;
+  entity_tags: string[];
+}
+
 export interface LocationNode {
   id: string;
   world_id: string;
@@ -157,6 +194,7 @@ export interface LocationNode {
   environmental_tags: string[];
   is_starting_location: boolean;
   is_hub?: boolean;
+  lore_nodes?: LoreNode[];
 }
 
 export interface LocationEdge {
@@ -181,15 +219,6 @@ export interface NeighborLocationView {
   destination: LocationNode;
 }
 
-export interface LoreNode {
-  id: string;
-  world_id: string;
-  title: string;
-  category: string;
-  content: string;
-  entity_tags: string[];
-}
-
 export interface WorldRecord {
   id: string;
   name: string;
@@ -209,6 +238,7 @@ export interface LocationNodeDraft {
   environmental_tags: string[];
   is_starting_location: boolean;
   is_hub?: boolean;
+  lore_nodes?: LocationLoreNodeDraft[];
 }
 
 export interface LocationEdgeDraft {
@@ -236,8 +266,9 @@ export interface WorldWizardDraft {
   locations: LocationNodeDraft[];
   edges: LocationEdgeDraft[];
   lore_nodes: Array<{
+    id?: string | null;
     title: string;
-    category: "faction" | "history" | "item" | "culture" | "rule" | "rumor";
+    category: WorldLoreCategory;
     content: string;
     entity_tags: string[];
   }>;
@@ -384,7 +415,7 @@ export interface PreTurnAnalysis {
 
 export interface RecalledMemoryItem {
   id: string;
-  source_type: "lore" | "character_shard" | "episodic_chunk";
+  source_type: "lore" | "location_lore" | "character_shard" | "episodic_chunk";
   title: string;
   content: string;
   score: number;
