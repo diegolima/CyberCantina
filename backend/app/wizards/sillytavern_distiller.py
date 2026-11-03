@@ -11,6 +11,7 @@ from app.prompts import get_default_prompt, render_template
 from app.schemas.character import (
     BaselinePsyche,
     CharacterWizardDraft,
+    CharacterWizardLLMOutput,
     MemoryShard,
     VoiceAnchor,
 )
@@ -209,14 +210,19 @@ async def distill_sillytavern_card(
     )
 
     try:
-        draft = await llm_client.complete_structured(
+        llm_out = await llm_client.complete_structured(
             [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            CharacterWizardDraft,
+            CharacterWizardLLMOutput,
             profile=actor_prof,
             max_tokens=4096,
+        )
+        draft = (
+            llm_out.to_draft()
+            if isinstance(llm_out, CharacterWizardLLMOutput)
+            else llm_out
         )
 
         # Ensure mandatory metadata from card is strictly preserved

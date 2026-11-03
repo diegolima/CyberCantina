@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from app.auth import get_current_user
 from app.config import settings
+from app.db.repository import UNSET
 from app.dependencies import (
     get_effective_agent_dispatch_mode,
     get_effective_user_model_settings,
@@ -40,7 +41,9 @@ from app.schemas.character import (
     CharacterRecord,
     CharacterStateSnapshot,
     CognitionBlock,
+    ItemFlag,
     MemoryShard,
+    format_item_names,
 )
 from app.schemas.turn import (
     CampaignCharacterMemoriesUpdateRequest,
@@ -84,10 +87,15 @@ class LocationOverrideRequest(BaseModel):
 
 
 class ItemEquipToggleRequest(BaseModel):
-    item: str
-    action: Literal["equip", "unequip", "remove", "add"]
+    item: str = ""
+    item_id: str | None = None
+    action: Literal["equip", "unequip", "remove", "add", "update"]
     target: Literal["equipped", "inventory"] | None = None
     character_id: str | None = None
+    new_name: str | None = None
+    note: str | None = None
+    flags: list[ItemFlag] | None = None
+    lore_id: str | None = None
 
 
 class LinkedLocationCreateRequest(BaseModel):
@@ -341,14 +349,20 @@ def toggle_campaign_item_equip(
     req: ItemEquipToggleRequest,
     current_user: UserProfile = Depends(get_current_user),
 ) -> CampaignStateBundle:
-    """Equip, unequip, remove, or add an item for a character on the active leaf turn (applies next turn)."""
+    """Equip, unequip, remove, add, or update an item for a character on the active leaf turn (applies next turn)."""
+    fields_set = req.model_fields_set
     try:
         return get_repo().toggle_campaign_item_equip(
             campaign_id,
             item=req.item,
+            item_id=req.item_id,
             action=req.action,
             target=req.target,
             character_id=req.character_id,
+            new_name=req.new_name if "new_name" in fields_set else UNSET,
+            note=req.note if "note" in fields_set else UNSET,
+            flags=req.flags if "flags" in fields_set else UNSET,
+            lore_id=req.lore_id if "lore_id" in fields_set else UNSET,
             owner_id=current_user.id,
         )
     except KeyError as exc:
@@ -539,6 +553,13 @@ async def _execute_turn_stream_events(
         raw_known_entities.append(lore.title)
         raw_known_entities.extend(lore.entity_tags)
     for c in present_characters:
+        c_st = parent_turn.character_states.get(c.id, parent_turn.character_state)
+        if c_st.character_id == c.id:
+            raw_known_entities.extend(format_item_names(c_st.equipped))
+            raw_known_entities.extend(format_item_names(c_st.inventory))
+        else:
+            raw_known_entities.extend(format_item_names(c.equipped))
+            raw_known_entities.extend(format_item_names(c.inventory))
         for shard in c.memory_shards:
             raw_known_entities.extend(shard.keywords)
     for loc in world.locations:

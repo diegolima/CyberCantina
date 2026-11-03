@@ -6,6 +6,7 @@ import {
   CharacterWizardDraft,
   WorldRecord,
   WorldWizardDraft,
+  normalizeItemInstance,
 } from "../types";
 import {
   WorldInspectorModal,
@@ -551,37 +552,43 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
                   </button>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {(draft.equipped ?? []).map((item, idx) => (
-                    <div
-                      key={idx}
-                      style={{ display: "flex", alignItems: "center", gap: 6 }}
-                    >
-                      <input
-                        className="field-input"
-                        style={{ flex: 1, padding: "5px 8px", fontSize: "0.78rem" }}
-                        value={item}
-                        placeholder="e.g. Leather jacket"
-                        onChange={(e) => {
-                          const next = [...(draft.equipped ?? [])];
-                          next[idx] = e.target.value;
-                          setDraft({ ...draft, equipped: next });
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className="item-remove-btn"
-                        onClick={() =>
-                          setDraft({
-                            ...draft,
-                            equipped: (draft.equipped ?? []).filter((_, i) => i !== idx),
-                          })
-                        }
-                        title="Remove equipped item"
+                  {(draft.equipped ?? []).map((item, idx) => {
+                    const itemObj = normalizeItemInstance(item, idx);
+                    return (
+                      <div
+                        key={itemObj.id || idx}
+                        style={{ display: "flex", alignItems: "center", gap: 6 }}
                       >
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  ))}
+                        <input
+                          className="field-input"
+                          style={{ flex: 1, padding: "5px 8px", fontSize: "0.78rem" }}
+                          value={typeof item === "string" ? item : item.name}
+                          placeholder="e.g. Leather jacket"
+                          onChange={(e) => {
+                            const next = [...(draft.equipped ?? [])];
+                            next[idx] =
+                              typeof item === "string"
+                                ? e.target.value
+                                : { ...item, name: e.target.value };
+                            setDraft({ ...draft, equipped: next });
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="item-remove-btn"
+                          onClick={() =>
+                            setDraft({
+                              ...draft,
+                              equipped: (draft.equipped ?? []).filter((_, i) => i !== idx),
+                            })
+                          }
+                          title="Remove equipped item"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    );
+                  })}
                   {(draft.equipped ?? []).length === 0 && (
                     <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontStyle: "italic" }}>
                       No equipped gear specified.
@@ -627,37 +634,43 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
                   </button>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {draft.inventory.map((item, idx) => (
-                    <div
-                      key={idx}
-                      style={{ display: "flex", alignItems: "center", gap: 6 }}
-                    >
-                      <input
-                        className="field-input"
-                        style={{ flex: 1, padding: "5px 8px", fontSize: "0.78rem" }}
-                        value={item}
-                        placeholder="e.g. Encrypted datapad"
-                        onChange={(e) => {
-                          const next = [...draft.inventory];
-                          next[idx] = e.target.value;
-                          setDraft({ ...draft, inventory: next });
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className="item-remove-btn"
-                        onClick={() =>
-                          setDraft({
-                            ...draft,
-                            inventory: draft.inventory.filter((_, i) => i !== idx),
-                          })
-                        }
-                        title="Remove item"
+                  {draft.inventory.map((item, idx) => {
+                    const itemObj = normalizeItemInstance(item, idx);
+                    return (
+                      <div
+                        key={itemObj.id || idx}
+                        style={{ display: "flex", alignItems: "center", gap: 6 }}
                       >
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  ))}
+                        <input
+                          className="field-input"
+                          style={{ flex: 1, padding: "5px 8px", fontSize: "0.78rem" }}
+                          value={typeof item === "string" ? item : item.name}
+                          placeholder="e.g. Encrypted datapad"
+                          onChange={(e) => {
+                            const next = [...draft.inventory];
+                            next[idx] =
+                              typeof item === "string"
+                                ? e.target.value
+                                : { ...item, name: e.target.value };
+                            setDraft({ ...draft, inventory: next });
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="item-remove-btn"
+                          onClick={() =>
+                            setDraft({
+                              ...draft,
+                              inventory: draft.inventory.filter((_, i) => i !== idx),
+                            })
+                          }
+                          title="Remove item"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    );
+                  })}
                   {draft.inventory.length === 0 && (
                     <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontStyle: "italic" }}>
                       No carried items specified.

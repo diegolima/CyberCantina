@@ -4,14 +4,18 @@ import {
   BookOpen,
   Brain,
   Check,
+  ChevronDown,
+  ChevronUp,
   Compass,
   Database,
   Edit3,
+  FileText,
   Globe,
   HeartPulse,
   History,
   Image as ImageIcon,
   Loader2,
+  Lock,
   Maximize2,
   Package,
   Plus,
@@ -29,6 +33,8 @@ import {
   CharacterVersionSummary,
   CompassDirection,
   GalleryImage,
+  ItemFlag,
+  ItemInstance,
   LOCATION_LORE_CATEGORIES,
   LocationEdge,
   LocationEdgeDraft,
@@ -43,6 +49,8 @@ import {
   WorldLoreCategory,
   WorldRecord,
   WorldWizardDraft,
+  hasItemFlag,
+  normalizeItemList,
 } from "../types";
 import {
   OPPOSITE_COMPASS,
@@ -236,12 +244,13 @@ export const CharacterInspectorModal: React.FC<
   const [initialMessage, setInitialMessage] = useState(
     character.initial_message ?? ""
   );
-  const [equipped, setEquipped] = useState<string[]>([
-    ...(character.equipped ?? []),
-  ]);
-  const [inventory, setInventory] = useState<string[]>([
-    ...(character.inventory ?? []),
-  ]);
+  const [equipped, setEquipped] = useState<ItemInstance[]>(() =>
+    normalizeItemList(character.equipped)
+  );
+  const [inventory, setInventory] = useState<ItemInstance[]>(() =>
+    normalizeItemList(character.inventory)
+  );
+  const [expandedTemplateItemKey, setExpandedTemplateItemKey] = useState<string | null>(null);
   const [baselinePsyche, setBaselinePsyche] = useState({
     ...character.baseline_psyche,
   });
@@ -312,8 +321,8 @@ export const CharacterInspectorModal: React.FC<
       setPhysicalAppearance(character.physical_appearance ?? "");
       setCorePersona(character.core_persona);
       setInitialMessage(character.initial_message ?? "");
-      setEquipped([...(character.equipped ?? [])]);
-      setInventory([...(character.inventory ?? [])]);
+      setEquipped(normalizeItemList(character.equipped));
+      setInventory(normalizeItemList(character.inventory));
       setBaselinePsyche({ ...character.baseline_psyche });
       setVoiceAnchors(character.voice_anchors.map((v) => ({ ...v })));
       setMemoryShards(character.memory_shards.map((m) => ({ ...m, keywords: [...m.keywords] })));
@@ -339,8 +348,8 @@ export const CharacterInspectorModal: React.FC<
       setPhysicalAppearance(snap.physical_appearance ?? "");
       setCorePersona(snap.core_persona);
       setInitialMessage(snap.initial_message ?? "");
-      setEquipped([...(snap.equipped ?? [])]);
-      setInventory([...(snap.inventory ?? [])]);
+      setEquipped(normalizeItemList(snap.equipped));
+      setInventory(normalizeItemList(snap.inventory));
       setBaselinePsyche({ ...snap.baseline_psyche });
       setVoiceAnchors(snap.voice_anchors.map((v) => ({ ...v })));
       setMemoryShards(snap.memory_shards.map((m) => ({ ...m, keywords: [...m.keywords] })));
@@ -443,18 +452,50 @@ export const CharacterInspectorModal: React.FC<
     }
   };
 
+  const selectedWorldObj = worlds.find((w) => w.id === worldId);
+  const selectedWorldArtifacts = (selectedWorldObj?.lore_nodes ?? []).filter(
+    (ln) => ln.category === "artifact" && !ln.location_id
+  );
+  const selectedWorldArtifactIds = new Set(selectedWorldArtifacts.map((ln) => ln.id));
+  const selectedWorldArtifactTitleMap = new Map(
+    selectedWorldArtifacts.map((ln) => [ln.id, ln.title])
+  );
+
+  const sanitizeItemsForSave = (list: ItemInstance[]): ItemInstance[] =>
+    list
+      .map((it) => {
+        const cleanName = it.name.trim();
+        const validArtifact =
+          hasItemFlag(it, "artifact") &&
+          Boolean(it.lore_id) &&
+          selectedWorldArtifactIds.has(it.lore_id as string);
+        const cleanFlags: ItemFlag[] = [];
+        if (hasItemFlag(it, "permanent")) cleanFlags.push("permanent");
+        if (validArtifact) cleanFlags.push("artifact");
+        return {
+          ...it,
+          name: cleanName,
+          note: (it.note ?? "").trim().slice(0, 300),
+          flags: cleanFlags,
+          lore_id: validArtifact ? it.lore_id ?? null : null,
+        };
+      })
+      .filter((it) => it.name.length > 0);
+
   const handleSave = async () => {
     setSaving(true);
     setError(null);
     try {
+      const cleanEquipped = sanitizeItemsForSave(equipped);
+      const cleanInventory = sanitizeItemsForSave(inventory);
       const updated = await api.updateCharacter(character.id, {
         name: name.trim() || character.name,
         tagline: tagline.trim(),
         physical_appearance: physicalAppearance.trim(),
         core_persona: corePersona.trim(),
         initial_message: initialMessage.trim(),
-        equipped: equipped.map((i) => i.trim()).filter(Boolean),
-        inventory: inventory.map((i) => i.trim()).filter(Boolean),
+        equipped: cleanEquipped,
+        inventory: cleanInventory,
         voice_anchors: voiceAnchors,
         baseline_psyche: baselinePsyche,
         memory_shards: memoryShards,
@@ -465,6 +506,8 @@ export const CharacterInspectorModal: React.FC<
         gallery: gallery,
         world_id: worldId || null,
       });
+      setEquipped(normalizeItemList(updated.equipped));
+      setInventory(normalizeItemList(updated.inventory));
       setVersion(updated.version);
       setSelectedVersion(updated.version);
       setIsDirty(false);
@@ -676,7 +719,25 @@ export const CharacterInspectorModal: React.FC<
                   value={worldId}
                   disabled={viewingHistory}
                   onChange={(e) => {
-                    setWorldId(e.target.value);
+                    const nextWorldId = e.target.value;
+                    const nextWorld = worlds.find((w) => w.id === nextWorldId);
+                    const nextArtIds = new Set(
+                      (nextWorld?.lore_nodes ?? [])
+                        .filter((ln) => ln.category === "artifact" && !ln.location_id)
+                        .map((ln) => ln.id)
+                    );
+                    const unlinkForeignArtifacts = (items: ItemInstance[]): ItemInstance[] =>
+                      items.map((it) => {
+                        if (it.lore_id && nextArtIds.has(it.lore_id)) return it;
+                        return {
+                          ...it,
+                          flags: it.flags.filter((f) => f !== "artifact"),
+                          lore_id: null,
+                        };
+                      });
+                    setWorldId(nextWorldId);
+                    setEquipped((prev) => unlinkForeignArtifacts(prev));
+                    setInventory((prev) => unlinkForeignArtifacts(prev));
                     markDirty();
                   }}
                 >
@@ -1260,7 +1321,17 @@ export const CharacterInspectorModal: React.FC<
                     className="btn"
                     style={{ padding: "3px 8px", fontSize: "0.72rem" }}
                     onClick={() => {
-                      setEquipped([...equipped, "New equipped attire"]);
+                      const newId = `tpl_eq_${Date.now()}`;
+                      setEquipped([
+                        ...equipped,
+                        {
+                          id: newId,
+                          name: "New equipped attire",
+                          note: "",
+                          flags: [],
+                          lore_id: null,
+                        },
+                      ]);
                       markDirty();
                     }}
                   >
@@ -1281,42 +1352,194 @@ export const CharacterInspectorModal: React.FC<
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {equipped.map((item, idx) => (
-                    <div
-                      key={idx}
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: viewingHistory ? "1fr" : "1fr auto",
-                        gap: 8,
-                        alignItems: "center",
-                      }}
-                    >
-                      <ClickToEditField
-                        value={item}
-                        readOnly={viewingHistory}
-                        placeholder="e.g. Weathered leather duster"
-                        onChange={(val) => {
-                          const next = [...equipped];
-                          next[idx] = val;
-                          setEquipped(next);
-                          markDirty();
+                  {equipped.map((item, idx) => {
+                    const rowKey = `eq:${item.id || idx}`;
+                    const isExpanded = expandedTemplateItemKey === rowKey;
+                    const isPerm = hasItemFlag(item, "permanent");
+                    const isArt = hasItemFlag(item, "artifact");
+                    const hasNote = Boolean(item.note && item.note.trim());
+                    return (
+                      <div
+                        key={rowKey}
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 6,
+                          padding: 6,
+                          borderRadius: 6,
+                          border: isExpanded
+                            ? "1px solid var(--accent-amber)"
+                            : "1px solid var(--border-subtle)",
+                          background: "var(--bg-panel)",
                         }}
-                      />
-                      {!viewingHistory && (
-                        <button
-                          type="button"
-                          className="item-remove-btn"
-                          onClick={() => {
-                            setEquipped(equipped.filter((_, i) => i !== idx));
-                            markDirty();
+                      >
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: viewingHistory ? "1fr" : "1fr auto auto",
+                            gap: 6,
+                            alignItems: "center",
                           }}
-                          title="Remove equipped item"
                         >
-                          <Trash2 size={13} />
-                        </button>
-                      )}
-                    </div>
-                  ))}
+                          <ClickToEditField
+                            value={item.name}
+                            readOnly={viewingHistory}
+                            placeholder="e.g. Weathered leather duster"
+                            onChange={(val) => {
+                              const next = [...equipped];
+                              next[idx] = { ...next[idx], name: val };
+                              setEquipped(next);
+                              markDirty();
+                            }}
+                          />
+                          {!viewingHistory && (
+                            <button
+                              type="button"
+                              className="btn"
+                              style={{ padding: "4px 8px", fontSize: "0.7rem" }}
+                              title="Edit starting item mini-lore & flags"
+                              onClick={() =>
+                                setExpandedTemplateItemKey(isExpanded ? null : rowKey)
+                              }
+                            >
+                              {isPerm && <Lock size={10} color="#7dd3fc" />}
+                              {isArt && <Sparkles size={10} color="#d8b4fe" />}
+                              {hasNote && <FileText size={10} color="var(--accent-amber)" />}
+                              <span>Lore &amp; Flags</span>
+                              {isExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                            </button>
+                          )}
+                          {!viewingHistory && (
+                            <button
+                              type="button"
+                              className="item-remove-btn"
+                              onClick={() => {
+                                setEquipped(equipped.filter((_, i) => i !== idx));
+                                markDirty();
+                              }}
+                              title="Remove equipped item"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                        </div>
+                        {(isPerm || isArt || hasNote) && !isExpanded && (
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", paddingLeft: 4 }}>
+                            {isPerm && (
+                              <span className="item-flag-pill item-flag-permanent">
+                                <Lock size={10} /> Permanent
+                              </span>
+                            )}
+                            {isArt && (
+                              <span className="item-flag-pill item-flag-artifact">
+                                <Sparkles size={10} />{" "}
+                                {item.lore_id && selectedWorldArtifactTitleMap.get(item.lore_id)
+                                  ? `Artifact · ${selectedWorldArtifactTitleMap.get(item.lore_id)}`
+                                  : "Artifact"}
+                              </span>
+                            )}
+                            {hasNote && (
+                              <span className="item-flag-pill item-flag-note" title={item.note}>
+                                <FileText size={10} /> {item.note}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {isExpanded && !viewingHistory && (
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: 8,
+                              padding: "8px 6px 4px",
+                              borderTop: "1px solid var(--border-subtle)",
+                            }}
+                          >
+                            <div className="field-group">
+                              <label>
+                                Mini-Lore Note ({item.note.length}/300)
+                              </label>
+                              <textarea
+                                className="field-textarea"
+                                rows={2}
+                                maxLength={300}
+                                placeholder="Brief item history or sensory detail..."
+                                value={item.note}
+                                onChange={(e) => {
+                                  const next = [...equipped];
+                                  next[idx] = { ...next[idx], note: e.target.value };
+                                  setEquipped(next);
+                                  markDirty();
+                                }}
+                              />
+                            </div>
+                            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+                              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.75rem", cursor: "pointer" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={isPerm}
+                                  onChange={(e) => {
+                                    const nextFlags = e.target.checked
+                                      ? Array.from(new Set<ItemFlag>([...item.flags, "permanent"]))
+                                      : item.flags.filter((f) => f !== "permanent");
+                                    const next = [...equipped];
+                                    next[idx] = { ...next[idx], flags: nextFlags };
+                                    setEquipped(next);
+                                    markDirty();
+                                  }}
+                                />
+                                <Lock size={11} color="#7dd3fc" /> Permanent
+                              </label>
+                              {worldId && selectedWorldArtifacts.length > 0 && (
+                                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.75rem", cursor: "pointer" }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={isArt}
+                                    onChange={(e) => {
+                                      const checked = e.target.checked;
+                                      const nextFlags = checked
+                                        ? Array.from(new Set<ItemFlag>([...item.flags, "artifact"]))
+                                        : item.flags.filter((f) => f !== "artifact");
+                                      const next = [...equipped];
+                                      next[idx] = {
+                                        ...next[idx],
+                                        flags: nextFlags,
+                                        lore_id: checked
+                                          ? item.lore_id || selectedWorldArtifacts[0].id
+                                          : null,
+                                      };
+                                      setEquipped(next);
+                                      markDirty();
+                                    }}
+                                  />
+                                  <Sparkles size={11} color="#d8b4fe" /> World Artifact
+                                </label>
+                              )}
+                              {isArt && worldId && selectedWorldArtifacts.length > 0 && (
+                                <select
+                                  className="field-select"
+                                  style={{ width: "auto", minWidth: 200, fontSize: "0.74rem" }}
+                                  value={item.lore_id || ""}
+                                  onChange={(e) => {
+                                    const next = [...equipped];
+                                    next[idx] = { ...next[idx], lore_id: e.target.value || null };
+                                    setEquipped(next);
+                                    markDirty();
+                                  }}
+                                >
+                                  {selectedWorldArtifacts.map((ln) => (
+                                    <option key={ln.id} value={ln.id}>
+                                      {ln.title}
+                                    </option>
+                                  ))}
+                                </select>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1349,7 +1572,17 @@ export const CharacterInspectorModal: React.FC<
                     className="btn"
                     style={{ padding: "3px 8px", fontSize: "0.72rem" }}
                     onClick={() => {
-                      setInventory([...inventory, "New carried item"]);
+                      const newId = `tpl_inv_${Date.now()}`;
+                      setInventory([
+                        ...inventory,
+                        {
+                          id: newId,
+                          name: "New carried item",
+                          note: "",
+                          flags: [],
+                          lore_id: null,
+                        },
+                      ]);
                       markDirty();
                     }}
                   >
@@ -1370,42 +1603,194 @@ export const CharacterInspectorModal: React.FC<
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {inventory.map((item, idx) => (
-                    <div
-                      key={idx}
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: viewingHistory ? "1fr" : "1fr auto",
-                        gap: 8,
-                        alignItems: "center",
-                      }}
-                    >
-                      <ClickToEditField
-                        value={item}
-                        readOnly={viewingHistory}
-                        placeholder="e.g. Diagnostic scanner or Keycard"
-                        onChange={(val) => {
-                          const next = [...inventory];
-                          next[idx] = val;
-                          setInventory(next);
-                          markDirty();
+                  {inventory.map((item, idx) => {
+                    const rowKey = `inv:${item.id || idx}`;
+                    const isExpanded = expandedTemplateItemKey === rowKey;
+                    const isPerm = hasItemFlag(item, "permanent");
+                    const isArt = hasItemFlag(item, "artifact");
+                    const hasNote = Boolean(item.note && item.note.trim());
+                    return (
+                      <div
+                        key={rowKey}
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 6,
+                          padding: 6,
+                          borderRadius: 6,
+                          border: isExpanded
+                            ? "1px solid var(--accent-amber)"
+                            : "1px solid var(--border-subtle)",
+                          background: "var(--bg-panel)",
                         }}
-                      />
-                      {!viewingHistory && (
-                        <button
-                          type="button"
-                          className="item-remove-btn"
-                          onClick={() => {
-                            setInventory(inventory.filter((_, i) => i !== idx));
-                            markDirty();
+                      >
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: viewingHistory ? "1fr" : "1fr auto auto",
+                            gap: 6,
+                            alignItems: "center",
                           }}
-                          title="Remove item"
                         >
-                          <Trash2 size={13} />
-                        </button>
-                      )}
-                    </div>
-                  ))}
+                          <ClickToEditField
+                            value={item.name}
+                            readOnly={viewingHistory}
+                            placeholder="e.g. Diagnostic scanner or Keycard"
+                            onChange={(val) => {
+                              const next = [...inventory];
+                              next[idx] = { ...next[idx], name: val };
+                              setInventory(next);
+                              markDirty();
+                            }}
+                          />
+                          {!viewingHistory && (
+                            <button
+                              type="button"
+                              className="btn"
+                              style={{ padding: "4px 8px", fontSize: "0.7rem" }}
+                              title="Edit starting item mini-lore & flags"
+                              onClick={() =>
+                                setExpandedTemplateItemKey(isExpanded ? null : rowKey)
+                              }
+                            >
+                              {isPerm && <Lock size={10} color="#7dd3fc" />}
+                              {isArt && <Sparkles size={10} color="#d8b4fe" />}
+                              {hasNote && <FileText size={10} color="var(--accent-amber)" />}
+                              <span>Lore &amp; Flags</span>
+                              {isExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                            </button>
+                          )}
+                          {!viewingHistory && (
+                            <button
+                              type="button"
+                              className="item-remove-btn"
+                              onClick={() => {
+                                setInventory(inventory.filter((_, i) => i !== idx));
+                                markDirty();
+                              }}
+                              title="Remove item"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                        </div>
+                        {(isPerm || isArt || hasNote) && !isExpanded && (
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", paddingLeft: 4 }}>
+                            {isPerm && (
+                              <span className="item-flag-pill item-flag-permanent">
+                                <Lock size={10} /> Permanent
+                              </span>
+                            )}
+                            {isArt && (
+                              <span className="item-flag-pill item-flag-artifact">
+                                <Sparkles size={10} />{" "}
+                                {item.lore_id && selectedWorldArtifactTitleMap.get(item.lore_id)
+                                  ? `Artifact · ${selectedWorldArtifactTitleMap.get(item.lore_id)}`
+                                  : "Artifact"}
+                              </span>
+                            )}
+                            {hasNote && (
+                              <span className="item-flag-pill item-flag-note" title={item.note}>
+                                <FileText size={10} /> {item.note}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {isExpanded && !viewingHistory && (
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: 8,
+                              padding: "8px 6px 4px",
+                              borderTop: "1px solid var(--border-subtle)",
+                            }}
+                          >
+                            <div className="field-group">
+                              <label>
+                                Mini-Lore Note ({item.note.length}/300)
+                              </label>
+                              <textarea
+                                className="field-textarea"
+                                rows={2}
+                                maxLength={300}
+                                placeholder="Brief item history or sensory detail..."
+                                value={item.note}
+                                onChange={(e) => {
+                                  const next = [...inventory];
+                                  next[idx] = { ...next[idx], note: e.target.value };
+                                  setInventory(next);
+                                  markDirty();
+                                }}
+                              />
+                            </div>
+                            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+                              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.75rem", cursor: "pointer" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={isPerm}
+                                  onChange={(e) => {
+                                    const nextFlags = e.target.checked
+                                      ? Array.from(new Set<ItemFlag>([...item.flags, "permanent"]))
+                                      : item.flags.filter((f) => f !== "permanent");
+                                    const next = [...inventory];
+                                    next[idx] = { ...next[idx], flags: nextFlags };
+                                    setInventory(next);
+                                    markDirty();
+                                  }}
+                                />
+                                <Lock size={11} color="#7dd3fc" /> Permanent
+                              </label>
+                              {worldId && selectedWorldArtifacts.length > 0 && (
+                                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.75rem", cursor: "pointer" }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={isArt}
+                                    onChange={(e) => {
+                                      const checked = e.target.checked;
+                                      const nextFlags = checked
+                                        ? Array.from(new Set<ItemFlag>([...item.flags, "artifact"]))
+                                        : item.flags.filter((f) => f !== "artifact");
+                                      const next = [...inventory];
+                                      next[idx] = {
+                                        ...next[idx],
+                                        flags: nextFlags,
+                                        lore_id: checked
+                                          ? item.lore_id || selectedWorldArtifacts[0].id
+                                          : null,
+                                      };
+                                      setInventory(next);
+                                      markDirty();
+                                    }}
+                                  />
+                                  <Sparkles size={11} color="#d8b4fe" /> World Artifact
+                                </label>
+                              )}
+                              {isArt && worldId && selectedWorldArtifacts.length > 0 && (
+                                <select
+                                  className="field-select"
+                                  style={{ width: "auto", minWidth: 200, fontSize: "0.74rem" }}
+                                  value={item.lore_id || ""}
+                                  onChange={(e) => {
+                                    const next = [...inventory];
+                                    next[idx] = { ...next[idx], lore_id: e.target.value || null };
+                                    setInventory(next);
+                                    markDirty();
+                                  }}
+                                >
+                                  {selectedWorldArtifacts.map((ln) => (
+                                    <option key={ln.id} value={ln.id}>
+                                      {ln.title}
+                                    </option>
+                                  ))}
+                                </select>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

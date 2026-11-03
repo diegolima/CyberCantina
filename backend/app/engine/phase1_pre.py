@@ -8,7 +8,11 @@ import re
 from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
 from app.prompts import get_default_prompt, render_template
-from app.schemas.character import CharacterRecord, CharacterStateSnapshot
+from app.schemas.character import (
+    CharacterRecord,
+    CharacterStateSnapshot,
+    format_item_names,
+)
 from app.schemas.turn import (
     CanonicalOutcomeTier,
     CharacterCheckSpec,
@@ -624,11 +628,11 @@ async def run_phase1_pre_analysis(
     present_desc_lines: list[str] = []
     for c in room_chars:
         c_st = (character_states or {}).get(c.id)
-        eq = c_st.equipped if c_st is not None else c.equipped
-        inv = c_st.inventory if c_st is not None else c.inventory
-        gear_str = f" | Equipped: {', '.join(eq)}" if eq else ""
-        if inv:
-            gear_str += f" | Carried: {', '.join(inv)}"
+        eq_names = format_item_names(c_st.equipped if c_st is not None else c.equipped)
+        inv_names = format_item_names(c_st.inventory if c_st is not None else c.inventory)
+        gear_str = f" | Equipped: {', '.join(eq_names)}" if eq_names else ""
+        if inv_names:
+            gear_str += f" | Carried: {', '.join(inv_names)}"
         present_desc_lines.append(f"- id='{c.id}': {c.name} ({c.tagline}){gear_str}")
     present_desc = "\n".join(present_desc_lines)
 

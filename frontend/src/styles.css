@@ -957,6 +957,56 @@ body {
   transform: scale(1.2);
 }
 
+.item-action-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.item-badge-clickable {
+  cursor: pointer;
+}
+
+.item-badge-clickable:hover {
+  border-color: var(--accent-amber);
+}
+
+.item-meta-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.item-flag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.64rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  letter-spacing: 0.02em;
+}
+
+.item-flag-permanent {
+  background: rgba(56, 189, 248, 0.14);
+  border-color: rgba(56, 189, 248, 0.4);
+  color: #7dd3fc;
+}
+
+.item-flag-artifact {
+  background: rgba(168, 85, 247, 0.16);
+  border-color: rgba(168, 85, 247, 0.45);
+  color: #d8b4fe;
+}
+
+.item-flag-note {
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: var(--accent-amber);
+}
+
 .prose-body {
   font-size: 0.96rem;
   line-height: 1.68;
@@ -1658,6 +1708,10 @@ body {
 
 .memory-item-episodic_chunk {
   border-left-color: var(--accent-amber);
+}
+
+.memory-item-item_lore {
+  border-left-color: #f472b6;
 }
 
 .memory-item-head {

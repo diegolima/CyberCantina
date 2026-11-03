@@ -16,6 +16,7 @@ import {
   CognitionBlock,
   CreateNotePayload,
   DiceMode,
+  ItemEquipActionPayload,
   LocationLoreNodeDraft,
   MemoryShard,
   OllamaStatusResponse,
@@ -715,15 +716,7 @@ export const api = {
         body: JSON.stringify({ location_id: locationId }),
       }
     ),
-  toggleItemEquip: (
-    campaignId: string,
-    payload: {
-      item: string;
-      action: "equip" | "unequip" | "remove" | "add";
-      target?: "equipped" | "inventory";
-      character_id?: string;
-    }
-  ) =>
+  toggleItemEquip: (campaignId: string, payload: ItemEquipActionPayload) =>
     fetchJson<CampaignStateBundle>(
       `${API_BASE}/campaigns/${campaignId}/item-equip`,
       {

@@ -8,14 +8,17 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 CompassDirection = Literal["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
-WorldLoreCategory = Literal["history", "culture", "faction", "rumor"]
+SharedLoreCategory = Literal["history", "culture", "faction", "rumor"]
+WorldLoreCategory = Literal["history", "culture", "faction", "rumor", "artifact"]
 LocationLoreCategory = Literal["history", "culture", "faction", "rumor", "secret"]
+AnyLoreCategory = Literal["history", "culture", "faction", "rumor", "artifact", "secret"]
 
 WORLD_LORE_CATEGORIES: tuple[WorldLoreCategory, ...] = (
     "history",
     "culture",
     "faction",
     "rumor",
+    "artifact",
 )
 LOCATION_LORE_CATEGORIES: tuple[LocationLoreCategory, ...] = (
     "history",
@@ -44,9 +47,13 @@ def normalize_lore_category(
     raw: Any,
     *,
     allow_secret: bool,
+    allow_artifact: bool | None = None,
     strict: bool = True,
 ) -> str:
     """Normalize and validate a lore category ('rumour' -> 'rumor')."""
+    if allow_artifact is None:
+        allow_artifact = not allow_secret
+
     if not isinstance(raw, str) or not raw.strip():
         if strict:
             raise ValueError("Lore category is required and cannot be empty.")
@@ -56,7 +63,12 @@ def normalize_lore_category(
     if cat == "rumour":
         cat = "rumor"
 
-    allowed = set(LOCATION_LORE_CATEGORIES if allow_secret else WORLD_LORE_CATEGORIES)
+    allowed: set[str] = {"history", "culture", "faction", "rumor"}
+    if allow_secret:
+        allowed.add("secret")
+    if allow_artifact:
+        allowed.add("artifact")
+
     if cat in allowed:
         return cat
 
@@ -64,6 +76,8 @@ def normalize_lore_category(
         legacy_map = {
             "item": "rumor",
             "items": "rumor",
+            "artifact": "artifact" if allow_artifact else "rumor",
+            "artifacts": "artifact" if allow_artifact else "rumor",
             "rule": "culture",
             "rules": "culture",
             "law": "culture",
@@ -299,14 +313,14 @@ class BaseLoreNodeInput(BaseModel):
 
 
 class WorldLoreNodeDraft(BaseLoreNodeInput):
-    """Strict world-level macro lore entry (history, culture, faction, rumor)."""
+    """Strict world-level macro lore entry (history, culture, faction, rumor, artifact)."""
 
     category: WorldLoreCategory
 
     @field_validator("category", mode="before")
     @classmethod
     def _validate_world_category(cls, v: Any) -> str:
-        return normalize_lore_category(v, allow_secret=False, strict=True)
+        return normalize_lore_category(v, allow_secret=False, allow_artifact=True, strict=True)
 
 
 LoreNodeDraft = WorldLoreNodeDraft
@@ -320,14 +334,17 @@ class LocationLoreNodeDraft(BaseLoreNodeInput):
     @field_validator("category", mode="before")
     @classmethod
     def _validate_location_category(cls, v: Any) -> str:
-        return normalize_lore_category(v, allow_secret=True, strict=True)
+        return normalize_lore_category(v, allow_secret=True, allow_artifact=False, strict=True)
 
 
 class WizardLoreNodeLLMOutput(BaseModel):
     """Lenient LLM-ingestion schema for World Wizard generation; salvages legacy categories & missing tags."""
 
     title: str = Field(default="World Lore")
-    category: str = Field(default="faction", description="One of: history, culture, faction, rumor.")
+    category: str = Field(
+        default="faction",
+        description="One of: history, culture, faction, rumor, artifact.",
+    )
     content: str = Field(default="", description="Concise 2-4 sentence macro world lore entry.")
     entity_tags: list[str] = Field(
         default_factory=list,
@@ -478,7 +495,7 @@ class LoreNode(BaseModel):
     location_id: str | None = None
     campaign_id: str | None = None
     title: str = Field(..., min_length=1, max_length=120)
-    category: LocationLoreCategory
+    category: AnyLoreCategory
     content: str = Field(..., min_length=1, max_length=2000)
     entity_tags: list[str] = Field(..., min_length=1, max_length=20)
 
@@ -492,7 +509,7 @@ class LoreNode(BaseModel):
     @field_validator("category", mode="before")
     @classmethod
     def _validate_category(cls, v: Any) -> str:
-        return normalize_lore_category(v, allow_secret=True, strict=True)
+        return normalize_lore_category(v, allow_secret=True, allow_artifact=True, strict=True)
 
     @field_validator("entity_tags", mode="before")
     @classmethod
@@ -504,6 +521,10 @@ class LoreNode(BaseModel):
         if self.location_id is None and self.category == "secret":
             raise ValueError(
                 "Category 'secret' is only allowed on location lore entries, not world lore."
+            )
+        if self.location_id is not None and self.category == "artifact":
+            raise ValueError(
+                "Category 'artifact' is only allowed on world lore entries, not location lore."
             )
         if self.campaign_id is not None and self.location_id is None:
             raise ValueError(

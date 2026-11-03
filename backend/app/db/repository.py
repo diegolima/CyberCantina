@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import shutil
+from typing import Any
 
 import numpy as np
 
@@ -37,10 +38,126 @@ from app.schemas.character import (
     CharacterWizardDraft,
     CognitionBlock,
     GalleryImage,
+    ItemFlag,
+    ItemInstance,
     MemoryShard,
     VALID_EMOTIONS,
+    VALID_ITEM_FLAGS,
     VoiceAnchor,
+    coerce_item_list,
+    dump_items_json,
+    normalize_item_key,
 )
+
+UNSET: Any = object()
+
+
+def _validate_world_artifact_lore_id(
+    conn: sqlite3.Connection,
+    world_id: str | None,
+    lore_id: str | None,
+) -> None:
+    """Ensure lore_id points to a world-level 'artifact' LoreNode belonging to world_id."""
+    if not lore_id:
+        return
+    if not world_id:
+        raise ValueError(
+            "Cannot link a world artifact lore entry to a character without an assigned world."
+        )
+    row = conn.execute(
+        "SELECT world_id, location_id, category FROM lore_nodes WHERE id = ?",
+        (lore_id,),
+    ).fetchone()
+    if (
+        not row
+        or row["world_id"] != world_id
+        or row["location_id"] is not None
+        or row["category"] != "artifact"
+    ):
+        raise ValueError(
+            f"Lore entry '{lore_id}' is not a valid world-level 'artifact' lore entry for world '{world_id}'."
+        )
+
+
+def _remap_character_items_for_world_update(
+    raw_json: str,
+    artifact_id_map: dict[str, str],
+    valid_artifact_ids: set[str],
+) -> tuple[str, bool]:
+    """Remap or clear ItemInstance.lore_id after an in-place world edit or Copy-on-Write world fork."""
+    items = coerce_item_list(json.loads(raw_json or "[]"))
+    changed = False
+    updated: list[ItemInstance] = []
+    for it in items:
+        if it.lore_id:
+            if it.lore_id in artifact_id_map:
+                mapped = artifact_id_map[it.lore_id]
+                if mapped != it.lore_id:
+                    it = it.model_copy(update={"lore_id": mapped})
+                    changed = True
+            elif it.lore_id not in valid_artifact_ids:
+                next_flags = [f for f in it.flags if f != "artifact"]
+                it = it.model_copy(update={"lore_id": None, "flags": next_flags})
+                changed = True
+        updated.append(it)
+    return dump_items_json(updated), changed
+
+
+def _merge_live_clerk_state_items(
+    clerk_equipped: list[ItemInstance],
+    clerk_inventory: list[ItemInstance],
+    live_equipped: list[ItemInstance],
+    live_inventory: list[ItemInstance],
+) -> tuple[list[ItemInstance], list[ItemInstance]]:
+    """Overlay live manual metadata edits and preserve live permanent items during Phase 5 post-clerk commit."""
+    clerk_equipped = coerce_item_list(list(clerk_equipped))
+    clerk_inventory = coerce_item_list(list(clerk_inventory))
+    live_equipped = coerce_item_list(list(live_equipped))
+    live_inventory = coerce_item_list(list(live_inventory))
+    live_by_id: dict[str, ItemInstance] = {}
+    live_by_key: dict[str, ItemInstance] = {}
+    for li in [*live_equipped, *live_inventory]:
+        live_by_id[li.id] = li
+        k = normalize_item_key(li.name)
+        if k and k not in live_by_key:
+            live_by_key[k] = li
+
+    def _overlay(items: list[ItemInstance]) -> list[ItemInstance]:
+        out: list[ItemInstance] = []
+        for it in items:
+            live = live_by_id.get(it.id) or live_by_key.get(normalize_item_key(it.name))
+            if live is not None:
+                it = it.model_copy(
+                    update={
+                        "id": live.id,
+                        "note": live.note,
+                        "flags": list(live.flags),
+                        "lore_id": live.lore_id,
+                    }
+                )
+            out.append(it)
+        return out
+
+    merged_eq = _overlay(clerk_equipped)
+    merged_inv = _overlay(clerk_inventory)
+
+    present_ids = {x.id for x in [*merged_eq, *merged_inv]}
+    present_keys = {normalize_item_key(x.name) for x in [*merged_eq, *merged_inv]}
+
+    for li in live_equipped:
+        k = normalize_item_key(li.name)
+        if "permanent" in li.flags and li.id not in present_ids and k not in present_keys:
+            merged_eq.append(li)
+            present_ids.add(li.id)
+            present_keys.add(k)
+    for li in live_inventory:
+        k = normalize_item_key(li.name)
+        if "permanent" in li.flags and li.id not in present_ids and k not in present_keys:
+            merged_inv.append(li)
+            present_ids.add(li.id)
+            present_keys.add(k)
+
+    return merged_eq, merged_inv
 
 
 def _sanitize_character_media(
@@ -195,6 +312,7 @@ class CantinaRepository:
             "campaign_id" in ddl_sql
             and "location_id" in ddl_sql
             and "json_array_length(entity_tags_json)" in ddl_sql
+            and "'artifact'" in ddl_sql
         ):
             return
 
@@ -244,7 +362,8 @@ class CantinaRepository:
                     campaign_id TEXT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
                     title TEXT NOT NULL CHECK(length(trim(title)) >= 1),
                     category TEXT NOT NULL CHECK(
-                        category IN ('history', 'culture', 'faction', 'rumor', 'secret')
+                        category IN ('history', 'culture', 'faction', 'rumor', 'artifact', 'secret')
+                        AND (location_id IS NULL OR category != 'artifact')
                         AND (location_id IS NOT NULL OR category != 'secret')
                         AND (campaign_id IS NULL OR location_id IS NOT NULL)
                     ),
@@ -653,10 +772,32 @@ class CantinaRepository:
                 new_eq = list(eq)
                 modified = False
                 for item in inv:
-                    if re.match(r"^\[(?:worn|equipped)\]\s*", item, re.IGNORECASE):
-                        clean_item = re.sub(r"^\[(?:worn|equipped)\]\s*", "", item, flags=re.IGNORECASE).strip()
-                        if clean_item and clean_item not in new_eq:
-                            new_eq.append(clean_item)
+                    item_name = (
+                        item.get("name", "")
+                        if isinstance(item, dict)
+                        else (item if isinstance(item, str) else "")
+                    )
+                    if isinstance(item_name, str) and re.match(
+                        r"^\[(?:worn|equipped)\]\s*", item_name, re.IGNORECASE
+                    ):
+                        clean_item = re.sub(
+                            r"^\[(?:worn|equipped)\]\s*", "", item_name, flags=re.IGNORECASE
+                        ).strip()
+                        if clean_item:
+                            existing_names = {
+                                (
+                                    e.get("name", "")
+                                    if isinstance(e, dict)
+                                    else str(e)
+                                ).strip().lower()
+                                for e in new_eq
+                            }
+                            if clean_item.lower() not in existing_names:
+                                new_eq.append(
+                                    {**item, "name": clean_item}
+                                    if isinstance(item, dict)
+                                    else clean_item
+                                )
                         modified = True
                     else:
                         new_inv.append(item)
@@ -676,10 +817,32 @@ class CantinaRepository:
                 new_eq = list(eq)
                 modified = False
                 for item in inv:
-                    if re.match(r"^\[(?:worn|equipped)\]\s*", item, re.IGNORECASE):
-                        clean_item = re.sub(r"^\[(?:worn|equipped)\]\s*", "", item, flags=re.IGNORECASE).strip()
-                        if clean_item and clean_item not in new_eq:
-                            new_eq.append(clean_item)
+                    item_name = (
+                        item.get("name", "")
+                        if isinstance(item, dict)
+                        else (item if isinstance(item, str) else "")
+                    )
+                    if isinstance(item_name, str) and re.match(
+                        r"^\[(?:worn|equipped)\]\s*", item_name, re.IGNORECASE
+                    ):
+                        clean_item = re.sub(
+                            r"^\[(?:worn|equipped)\]\s*", "", item_name, flags=re.IGNORECASE
+                        ).strip()
+                        if clean_item:
+                            existing_names = {
+                                (
+                                    e.get("name", "")
+                                    if isinstance(e, dict)
+                                    else str(e)
+                                ).strip().lower()
+                                for e in new_eq
+                            }
+                            if clean_item.lower() not in existing_names:
+                                new_eq.append(
+                                    {**item, "name": clean_item}
+                                    if isinstance(item, dict)
+                                    else clean_item
+                                )
                         modified = True
                     else:
                         new_inv.append(item)
@@ -2218,6 +2381,8 @@ class CantinaRepository:
             }
 
             # Insert world-level lore nodes & vector entries (reusing existing embedding blobs when unchanged)
+            artifact_id_map: dict[str, str] = {}
+            valid_new_artifact_ids: set[str] = set()
             for idx, lore in enumerate(payload.lore_nodes):
                 can_reuse_id = (
                     campaigns_using == 0
@@ -2227,6 +2392,10 @@ class CantinaRepository:
                 )
                 lore_id = lore.id if can_reuse_id else f"lore_{uuid.uuid4().hex[:10]}"
                 existing_taken_lore_ids.add(lore_id)
+                if lore.category == "artifact":
+                    valid_new_artifact_ids.add(lore_id)
+                    if lore.id:
+                        artifact_id_map[lore.id] = lore_id
                 tags_json = json.dumps(lore.entity_tags)
                 conn.execute(
                     """
@@ -2275,6 +2444,28 @@ class CantinaRepository:
                         keywords=lore.entity_tags,
                         embedding=precomputed,
                         conn=conn,
+                    )
+
+            # Remap or clean ItemInstance.lore_id on active template characters in target_world_id
+            world_char_rows = conn.execute(
+                "SELECT id, equipped_json, inventory_json FROM characters WHERE world_id = ? AND pending_deletion = 0",
+                (target_world_id,),
+            ).fetchall()
+            for wc in world_char_rows:
+                remapped_eq, eq_changed = _remap_character_items_for_world_update(
+                    wc["equipped_json"] or "[]",
+                    artifact_id_map,
+                    valid_new_artifact_ids,
+                )
+                remapped_inv, inv_changed = _remap_character_items_for_world_update(
+                    wc["inventory_json"] or "[]",
+                    artifact_id_map,
+                    valid_new_artifact_ids,
+                )
+                if eq_changed or inv_changed:
+                    conn.execute(
+                        "UPDATE characters SET equipped_json = ?, inventory_json = ? WHERE id = ?",
+                        (remapped_eq, remapped_inv, wc["id"]),
                     )
 
             # Insert base location-level lore nodes & non-secret location_lore vectors
@@ -2965,6 +3156,11 @@ class CantinaRepository:
         gallery_json = json.dumps([img.model_dump() for img in clean_gallery])
         conn = self._connect()
         try:
+            for it in [*draft.equipped, *draft.inventory]:
+                if it.lore_id:
+                    _validate_world_artifact_lore_id(conn, world_id, it.lore_id)
+            equipped_json = dump_items_json(draft.equipped)
+            inventory_json = dump_items_json(draft.inventory)
             conn.execute(
                 """
                 INSERT INTO characters (
@@ -2984,8 +3180,8 @@ class CantinaRepository:
                     draft.physical_appearance,
                     draft.core_persona,
                     draft.initial_message,
-                    json.dumps(draft.equipped),
-                    json.dumps(draft.inventory),
+                    equipped_json,
+                    inventory_json,
                     json.dumps([v.model_dump() for v in draft.voice_anchors]),
                     draft.baseline_psyche.model_dump_json(),
                     json.dumps([m.model_dump() for m in draft.memory_shards]),
@@ -3006,8 +3202,8 @@ class CantinaRepository:
                 "physical_appearance": draft.physical_appearance,
                 "core_persona": draft.core_persona,
                 "initial_message": draft.initial_message,
-                "equipped": list(draft.equipped),
-                "inventory": list(draft.inventory),
+                "equipped": [it.model_dump() for it in draft.equipped],
+                "inventory": [it.model_dump() for it in draft.inventory],
                 "voice_anchors": [v.model_dump() for v in draft.voice_anchors],
                 "baseline_psyche": json.loads(draft.baseline_psyche.model_dump_json()),
                 "memory_shards": [m.model_dump() for m in draft.memory_shards],
@@ -3468,8 +3664,36 @@ class CantinaRepository:
                 for r in vec_rows
             }
 
-            equipped_json = json.dumps(payload.equipped)
-            inventory_json = json.dumps(payload.inventory)
+            orig_lore_ids = {
+                it.lore_id
+                for it in [*orig.equipped, *orig.inventory]
+                if it.lore_id
+            }
+
+            def _sanitize_world_character_items(items: list[ItemInstance]) -> list[ItemInstance]:
+                cleaned_list: list[ItemInstance] = []
+                for it in items:
+                    if it.lore_id:
+                        if target_world_id != orig.world_id and it.lore_id in orig_lore_ids:
+                            try:
+                                _validate_world_artifact_lore_id(conn, target_world_id, it.lore_id)
+                            except ValueError:
+                                it = it.model_copy(
+                                    update={
+                                        "lore_id": None,
+                                        "flags": [f for f in it.flags if f != "artifact"],
+                                    }
+                                )
+                        else:
+                            _validate_world_artifact_lore_id(conn, target_world_id, it.lore_id)
+                    cleaned_list.append(it)
+                return cleaned_list
+
+            clean_equipped_items = _sanitize_world_character_items(payload.equipped)
+            clean_inventory_items = _sanitize_world_character_items(payload.inventory)
+
+            equipped_json = dump_items_json(clean_equipped_items)
+            inventory_json = dump_items_json(clean_inventory_items)
             voice_json = json.dumps([v.model_dump() for v in payload.voice_anchors])
             psyche_json = payload.baseline_psyche.model_dump_json()
             shards_json = json.dumps([m.model_dump() for m in payload.memory_shards])
@@ -3531,8 +3755,8 @@ class CantinaRepository:
                     "physical_appearance": payload.physical_appearance,
                     "core_persona": payload.core_persona,
                     "initial_message": payload.initial_message,
-                    "equipped": list(payload.equipped),
-                    "inventory": list(payload.inventory),
+                    "equipped": [it.model_dump() for it in clean_equipped_items],
+                    "inventory": [it.model_dump() for it in clean_inventory_items],
                     "voice_anchors": [v.model_dump() for v in payload.voice_anchors],
                     "baseline_psyche": json.loads(payload.baseline_psyche.model_dump_json()),
                     "memory_shards": [m.model_dump() for m in payload.memory_shards],
@@ -3624,8 +3848,8 @@ class CantinaRepository:
                     "physical_appearance": payload.physical_appearance,
                     "core_persona": payload.core_persona,
                     "initial_message": payload.initial_message,
-                    "equipped": list(payload.equipped),
-                    "inventory": list(payload.inventory),
+                    "equipped": [it.model_dump() for it in clean_equipped_items],
+                    "inventory": [it.model_dump() for it in clean_inventory_items],
                     "voice_anchors": [v.model_dump() for v in payload.voice_anchors],
                     "baseline_psyche": json.loads(payload.baseline_psyche.model_dump_json()),
                     "memory_shards": [m.model_dump() for m in payload.memory_shards],
@@ -4121,8 +4345,8 @@ class CantinaRepository:
                     char.baseline_psyche.default_want,
                     char.baseline_psyche.default_plan,
                     json.dumps({"user": "Acquaintance / Uncertain trust"}),
-                    json.dumps(char.equipped),
-                    json.dumps(char.inventory),
+                    dump_items_json(char.equipped),
+                    dump_items_json(char.inventory),
                 ),
             )
             conn.commit()
@@ -4645,8 +4869,8 @@ class CantinaRepository:
                         st.active_want,
                         st.active_plan,
                         json.dumps(st.relationship_notes),
-                        json.dumps(st.equipped),
-                        json.dumps(st.inventory),
+                        dump_items_json(st.equipped),
+                        dump_items_json(st.inventory),
                     ),
                 )
                 conn.execute(
@@ -4681,6 +4905,7 @@ class CantinaRepository:
         """Commit Phase 4 Post-Turn Clerk mutations (clock advance, spatial move, affect notes)."""
         conn = self._connect()
         try:
+            conn.execute("BEGIN IMMEDIATE;")
             conn.execute(
                 "UPDATE turn_nodes SET post_turn_json = ? WHERE id = ?",
                 (post_turn.model_dump_json(), turn_id),
@@ -4699,6 +4924,19 @@ class CantinaRepository:
                 ),
             )
             for st in [updated_character_state, *(extra_character_states or [])]:
+                live_row = conn.execute(
+                    "SELECT equipped_json, inventory_json FROM character_states WHERE turn_id = ? AND character_id = ?",
+                    (turn_id, st.character_id),
+                ).fetchone()
+                if live_row:
+                    live_eq = coerce_item_list(json.loads(live_row["equipped_json"] or "[]"))
+                    live_inv = coerce_item_list(json.loads(live_row["inventory_json"] or "[]"))
+                    merged_eq, merged_inv = _merge_live_clerk_state_items(
+                        st.equipped, st.inventory, live_eq, live_inv
+                    )
+                else:
+                    merged_eq, merged_inv = list(st.equipped), list(st.inventory)
+
                 conn.execute(
                     """
                     INSERT INTO character_states (
@@ -4728,8 +4966,8 @@ class CantinaRepository:
                         st.active_want,
                         st.active_plan,
                         json.dumps(st.relationship_notes),
-                        json.dumps(st.equipped),
-                        json.dumps(st.inventory),
+                        dump_items_json(merged_eq),
+                        dump_items_json(merged_inv),
                     ),
                 )
             conn.commit()
@@ -5187,94 +5425,379 @@ class CantinaRepository:
         self,
         campaign_id: str,
         *,
-        item: str,
-        action: str,  # "equip" | "unequip" | "remove" | "add"
+        item: str = "",
+        item_id: str | None = None,
+        action: str,  # "equip" | "unequip" | "remove" | "add" | "update"
         target: str | None = None,  # "equipped" | "inventory"
         character_id: str | None = None,
+        new_name: str | None | Any = UNSET,
+        note: str | None | Any = UNSET,
+        flags: list[ItemFlag] | None | Any = UNSET,
+        lore_id: str | None | Any = UNSET,
         owner_id: str | None = None,
     ) -> CampaignStateBundle:
-        """Equip, unequip, remove, or add an item on the active leaf turn (applies from next turn)."""
+        """Equip, unequip, remove, add, or update an item on the active leaf turn (atomic BEGIN IMMEDIATE)."""
+        if action not in ("equip", "unequip", "remove", "add", "update"):
+            raise ValueError(
+                f"Invalid item equip action '{action}'. Must be 'equip', 'unequip', 'remove', 'add', or 'update'."
+            )
+
         campaign = self.get_campaign(campaign_id, owner_id=owner_id)
         if not campaign.active_leaf_turn_id:
             raise ValueError(f"Campaign '{campaign_id}' has no active turn")
 
-        leaf_turn = self.get_turn_node(campaign.active_leaf_turn_id)
-        target_char_id = character_id or leaf_turn.actor_id or campaign.character_id
-        target_state = leaf_turn.character_states.get(target_char_id, leaf_turn.character_state)
-        if target_state.character_id != target_char_id and leaf_turn.actor_id == target_char_id:
-            target_state = leaf_turn.character_state
-
         def _clean(raw: str) -> str:
-            s = raw.strip()
-            s = re.sub(r"^\[(?:worn|carried|equipped|held|stashed|clothing|item|object)\]\s*", "", s, flags=re.IGNORECASE)
-            s = re.sub(r"\s*\((?:worn|carried|equipped|held|stashed|clothing|item|object)\)$", "", s, flags=re.IGNORECASE)
+            s = re.sub(r"\s+", " ", (raw or "").strip())
+            s = re.sub(
+                r"^\[(?:worn|carried|equipped|held|stashed|clothing|item|object)\]\s*",
+                "",
+                s,
+                flags=re.IGNORECASE,
+            )
+            s = re.sub(
+                r"\s*\((?:worn|carried|equipped|held|stashed|clothing|item|object)\)$",
+                "",
+                s,
+                flags=re.IGNORECASE,
+            )
             return s.strip()
 
+        clean_item_id = (item_id or "").strip() or None
+        raw_item_low = (item or "").strip().lower()
         clean_target = _clean(item)
-        target_low = clean_target.lower()
-        equipped = list(target_state.equipped)
-        inventory = list(target_state.inventory)
+        target_key = normalize_item_key(clean_target) if clean_target else ""
 
-        if action == "equip":
-            # Remove matching item from inventory, add to equipped
-            removed_label: str | None = None
-            new_inv: list[str] = []
-            for it in inventory:
-                it_clean = _clean(it)
-                if removed_label is None and (it.strip().lower() == item.strip().lower() or it_clean.lower() == target_low):
-                    removed_label = it_clean
-                else:
-                    new_inv.append(it)
-            final_item = removed_label or clean_target
-            if final_item and not any(_clean(eq).lower() == final_item.lower() for eq in equipped):
-                equipped.append(final_item)
-            inventory = new_inv
-        elif action == "unequip":
-            # Remove matching item from equipped, add to inventory
-            removed_label = None
-            new_eq: list[str] = []
-            for eq in equipped:
-                eq_clean = _clean(eq)
-                if removed_label is None and (eq.strip().lower() == item.strip().lower() or eq_clean.lower() == target_low):
-                    removed_label = eq_clean
-                else:
-                    new_eq.append(eq)
-            final_item = removed_label or clean_target
-            if final_item and not any(_clean(inv).lower() == final_item.lower() for inv in inventory):
-                inventory.append(final_item)
-            equipped = new_eq
-        elif action == "remove":
-            # Remove matching item from both equipped and inventory
-            equipped = [
-                eq for eq in equipped
-                if _clean(eq).lower() != target_low and eq.strip().lower() != item.strip().lower()
-            ]
-            inventory = [
-                it for it in inventory
-                if _clean(it).lower() != target_low and it.strip().lower() != item.strip().lower()
-            ]
-        elif action == "add":
-            # Add item to equipped (if target == 'equipped') or carried inventory (default)
+        if not clean_item_id and not clean_target:
+            raise ValueError("An item name or item_id is required.")
+
+        def _find_idx(items: list[ItemInstance]) -> int | None:
+            if clean_item_id:
+                for idx, it in enumerate(items):
+                    if it.id == clean_item_id:
+                        return idx
             if clean_target:
-                if target == "equipped":
-                    if not any(_clean(eq).lower() == target_low for eq in equipped):
-                        equipped.append(clean_target)
-                else:
-                    if not any(_clean(inv).lower() == target_low for inv in inventory):
-                        inventory.append(clean_target)
-        else:
-            raise ValueError(f"Invalid item equip action '{action}'. Must be 'equip', 'unequip', 'remove', or 'add'.")
+                for idx, it in enumerate(items):
+                    if (
+                        it.name.strip().lower() == raw_item_low
+                        or normalize_item_key(it.name) == target_key
+                    ):
+                        return idx
+            return None
 
         conn = self._connect()
         try:
+            conn.execute("BEGIN IMMEDIATE;")
+            camp_row = conn.execute(
+                "SELECT active_leaf_turn_id FROM campaigns WHERE id = ?",
+                (campaign_id,),
+            ).fetchone()
+            leaf_turn_id = (
+                camp_row["active_leaf_turn_id"]
+                if camp_row
+                else campaign.active_leaf_turn_id
+            )
+            if not leaf_turn_id:
+                raise ValueError(f"Campaign '{campaign_id}' has no active turn")
+
+            turn_row = conn.execute(
+                "SELECT id, parent_turn_id, actor_id FROM turn_nodes WHERE id = ?",
+                (leaf_turn_id,),
+            ).fetchone()
+            if not turn_row:
+                raise KeyError(f"Turn '{leaf_turn_id}' not found")
+
+            turn_actor = turn_row["actor_id"]
+            default_actor = (
+                turn_actor
+                if turn_actor and turn_actor != "__narrator__"
+                else campaign.character_id
+            )
+            target_char_id = character_id or default_actor or campaign.character_id
+
+            cs_row = conn.execute(
+                "SELECT equipped_json, inventory_json FROM character_states WHERE turn_id = ? AND character_id = ?",
+                (leaf_turn_id, target_char_id),
+            ).fetchone()
+            if not cs_row:
+                raise ValueError(
+                    f"Character '{target_char_id}' has no state at active turn '{leaf_turn_id}'."
+                )
+
+            equipped = coerce_item_list(json.loads(cs_row["equipped_json"] or "[]"))
+            inventory = coerce_item_list(json.loads(cs_row["inventory_json"] or "[]"))
+
+            def _resolve_metadata(
+                base_item: ItemInstance | None,
+            ) -> tuple[str, list[ItemFlag], str | None]:
+                base_note = base_item.note if base_item else ""
+                base_flags: list[ItemFlag] = list(base_item.flags) if base_item else []
+                base_lore = base_item.lore_id if base_item else None
+
+                next_note = (
+                    base_note
+                    if note is UNSET
+                    else re.sub(r"\s+", " ", (note or "").strip())[:300]
+                )
+
+                if flags is UNSET and lore_id is UNSET:
+                    return next_note, base_flags, base_lore
+
+                if flags is not UNSET:
+                    dedup_flags: list[ItemFlag] = []
+                    for f in flags or []:
+                        if f in VALID_ITEM_FLAGS and f not in dedup_flags:
+                            dedup_flags.append(f)
+                    if "artifact" in dedup_flags:
+                        eff_lore = (
+                            ((lore_id or "").strip() or None)
+                            if lore_id is not UNSET
+                            else base_lore
+                        )
+                        if not eff_lore:
+                            raise ValueError(
+                                "Flag 'artifact' requires linking a valid world artifact lore entry."
+                            )
+                    else:
+                        if lore_id is not UNSET and (lore_id or "").strip():
+                            eff_lore = (lore_id or "").strip()
+                            dedup_flags.append("artifact")
+                        else:
+                            eff_lore = None
+                    next_flags = dedup_flags
+                    next_lore = eff_lore
+                else:
+                    # flags is UNSET, lore_id was explicitly provided
+                    eff_lore = (lore_id or "").strip() or None
+                    next_flags = [f for f in base_flags if f != "artifact"]
+                    if eff_lore:
+                        next_flags.append("artifact")
+                    next_lore = eff_lore
+
+                if next_lore:
+                    _validate_world_artifact_lore_id(conn, campaign.world_id, next_lore)
+                return next_note, next_flags, next_lore
+
+            parent_backfill_target: tuple[ItemInstance, ItemInstance] | None = None
+
+            if action == "equip":
+                idx = _find_idx(inventory)
+                if idx is not None:
+                    moved = inventory.pop(idx)
+                    cleaned_label = _clean(moved.name) or moved.name
+                    moved_clean = moved.model_copy(update={"name": cleaned_label[:160]})
+                    moved_key = normalize_item_key(moved_clean.name)
+                    existing_eq_idx = next(
+                        (
+                            i
+                            for i, eq in enumerate(equipped)
+                            if eq.id == moved_clean.id
+                            or normalize_item_key(eq.name) == moved_key
+                        ),
+                        None,
+                    )
+                    if existing_eq_idx is None:
+                        equipped.append(moved_clean)
+                    else:
+                        ex = equipped[existing_eq_idx]
+                        if (moved_clean.note or moved_clean.flags or moved_clean.lore_id) and not (
+                            ex.note or ex.flags or ex.lore_id
+                        ):
+                            equipped[existing_eq_idx] = moved_clean
+                elif clean_target:
+                    if not any(
+                        normalize_item_key(eq.name) == target_key for eq in equipped
+                    ):
+                        equipped.append(ItemInstance(name=clean_target[:160]))
+            elif action == "unequip":
+                idx = _find_idx(equipped)
+                if idx is not None:
+                    moved = equipped.pop(idx)
+                    cleaned_label = _clean(moved.name) or moved.name
+                    moved_clean = moved.model_copy(update={"name": cleaned_label[:160]})
+                    moved_key = normalize_item_key(moved_clean.name)
+                    existing_inv_idx = next(
+                        (
+                            i
+                            for i, inv in enumerate(inventory)
+                            if inv.id == moved_clean.id
+                            or normalize_item_key(inv.name) == moved_key
+                        ),
+                        None,
+                    )
+                    if existing_inv_idx is None:
+                        inventory.append(moved_clean)
+                    else:
+                        ex = inventory[existing_inv_idx]
+                        if (moved_clean.note or moved_clean.flags or moved_clean.lore_id) and not (
+                            ex.note or ex.flags or ex.lore_id
+                        ):
+                            inventory[existing_inv_idx] = moved_clean
+                elif clean_target:
+                    if not any(
+                        normalize_item_key(inv.name) == target_key for inv in inventory
+                    ):
+                        inventory.append(ItemInstance(name=clean_target[:160]))
+            elif action == "remove":
+                if clean_item_id:
+                    new_eq = [eq for eq in equipped if eq.id != clean_item_id]
+                    new_inv = [it for it in inventory if it.id != clean_item_id]
+                    if len(new_eq) == len(equipped) and len(new_inv) == len(inventory) and clean_target:
+                        equipped = [
+                            eq
+                            for eq in equipped
+                            if normalize_item_key(eq.name) != target_key
+                            and eq.name.strip().lower() != raw_item_low
+                        ]
+                        inventory = [
+                            it
+                            for it in inventory
+                            if normalize_item_key(it.name) != target_key
+                            and it.name.strip().lower() != raw_item_low
+                        ]
+                    else:
+                        equipped = new_eq
+                        inventory = new_inv
+                else:
+                    equipped = [
+                        eq
+                        for eq in equipped
+                        if normalize_item_key(eq.name) != target_key
+                        and eq.name.strip().lower() != raw_item_low
+                    ]
+                    inventory = [
+                        it
+                        for it in inventory
+                        if normalize_item_key(it.name) != target_key
+                        and it.name.strip().lower() != raw_item_low
+                    ]
+            elif action == "add":
+                if not clean_target:
+                    raise ValueError("Item name cannot be empty.")
+                next_note, next_flags, next_lore = _resolve_metadata(None)
+                new_inst = ItemInstance(
+                    name=clean_target[:160],
+                    note=next_note,
+                    flags=next_flags,
+                    lore_id=next_lore,
+                )
+                taken_ids = {x.id for x in [*equipped, *inventory]}
+                if new_inst.id in taken_ids:
+                    new_inst = new_inst.model_copy(
+                        update={"id": f"{new_inst.id}_{uuid.uuid4().hex[:6]}"}
+                    )
+                if target == "equipped":
+                    if not any(
+                        normalize_item_key(eq.name) == target_key for eq in equipped
+                    ):
+                        equipped.append(new_inst)
+                else:
+                    if not any(
+                        normalize_item_key(inv.name) == target_key for inv in inventory
+                    ):
+                        inventory.append(new_inst)
+            elif action == "update":
+                search_order = (
+                    [(equipped, "equipped"), (inventory, "inventory")]
+                    if target != "inventory"
+                    else [(inventory, "inventory"), (equipped, "equipped")]
+                )
+                found_bucket: list[ItemInstance] | None = None
+                found_idx: int | None = None
+                for bucket, _ in search_order:
+                    idx = _find_idx(bucket)
+                    if idx is not None:
+                        found_bucket = bucket
+                        found_idx = idx
+                        break
+                if found_bucket is None or found_idx is None:
+                    raise ValueError(
+                        f"Item '{item or item_id}' not found on character '{target_char_id}'."
+                    )
+                base_item = found_bucket[found_idx]
+                updated_label = base_item.name
+                if new_name is not UNSET and new_name is not None:
+                    cleaned_new = _clean(str(new_name))[:160]
+                    if not cleaned_new:
+                        raise ValueError("Item name cannot be empty.")
+                    updated_label = cleaned_new
+                next_note, next_flags, next_lore = _resolve_metadata(base_item)
+                updated_item = base_item.model_copy(
+                    update={
+                        "name": updated_label,
+                        "note": next_note,
+                        "flags": next_flags,
+                        "lore_id": next_lore,
+                    }
+                )
+                found_bucket[found_idx] = updated_item
+                parent_backfill_target = (base_item, updated_item)
+
             conn.execute(
                 """
                 UPDATE character_states
                 SET equipped_json = ?, inventory_json = ?
                 WHERE turn_id = ? AND character_id = ?
                 """,
-                (json.dumps(equipped), json.dumps(inventory), leaf_turn.id, target_char_id),
+                (
+                    dump_items_json(equipped),
+                    dump_items_json(inventory),
+                    leaf_turn_id,
+                    target_char_id,
+                ),
             )
+
+            # Immediate-parent blank-metadata backfill so Swipe / Delete-Last-Turn retains newly attached item metadata
+            parent_turn_id = turn_row["parent_turn_id"]
+            if (
+                parent_backfill_target is not None
+                and parent_turn_id
+                and (
+                    parent_backfill_target[1].note
+                    or parent_backfill_target[1].flags
+                    or parent_backfill_target[1].lore_id
+                )
+            ):
+                orig_it, upd_it = parent_backfill_target
+                p_row = conn.execute(
+                    "SELECT equipped_json, inventory_json FROM character_states WHERE turn_id = ? AND character_id = ?",
+                    (parent_turn_id, target_char_id),
+                ).fetchone()
+                if p_row:
+                    p_eq = coerce_item_list(json.loads(p_row["equipped_json"] or "[]"))
+                    p_inv = coerce_item_list(json.loads(p_row["inventory_json"] or "[]"))
+                    orig_key = normalize_item_key(orig_it.name)
+                    parent_changed = False
+                    for p_bucket in (p_eq, p_inv):
+                        for i, p_it in enumerate(p_bucket):
+                            if p_it.id == orig_it.id or normalize_item_key(p_it.name) == orig_key:
+                                if not p_it.note and not p_it.flags and p_it.lore_id is None:
+                                    p_bucket[i] = p_it.model_copy(
+                                        update={
+                                            "id": upd_it.id,
+                                            "note": upd_it.note,
+                                            "flags": list(upd_it.flags),
+                                            "lore_id": upd_it.lore_id,
+                                        }
+                                    )
+                                    parent_changed = True
+                                break
+                        if parent_changed:
+                            break
+                    if parent_changed:
+                        conn.execute(
+                            """
+                            UPDATE character_states
+                            SET equipped_json = ?, inventory_json = ?
+                            WHERE turn_id = ? AND character_id = ?
+                            """,
+                            (
+                                dump_items_json(p_eq),
+                                dump_items_json(p_inv),
+                                parent_turn_id,
+                                target_char_id,
+                            ),
+                        )
+
             conn.commit()
         finally:
             conn.close()

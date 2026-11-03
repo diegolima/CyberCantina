@@ -66,14 +66,105 @@ export interface GalleryImage {
   created_at: string;
 }
 
+export type ItemFlag = "permanent" | "artifact";
+
+export interface ItemInstance {
+  id: string;
+  name: string;
+  note: string;
+  flags: ItemFlag[];
+  lore_id?: string | null;
+}
+
+export type InventoryItemInput = string | ItemInstance;
+
+export interface ItemEquipActionPayload {
+  item: string;
+  item_id?: string | null;
+  action: "equip" | "unequip" | "remove" | "add" | "update";
+  target?: "equipped" | "inventory";
+  character_id?: string;
+  new_name?: string | null;
+  note?: string | null;
+  flags?: ItemFlag[] | null;
+  lore_id?: string | null;
+}
+
+export function normalizeItemInstance(
+  raw: InventoryItemInput,
+  fallbackIndex = 0
+): ItemInstance {
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    return {
+      id: `legacy_${fallbackIndex}_${trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`,
+      name: trimmed,
+      note: "",
+      flags: [],
+      lore_id: null,
+    };
+  }
+  const cleanFlags = Array.from(
+    new Set(
+      (raw.flags ?? []).filter(
+        (f): f is ItemFlag => f === "permanent" || f === "artifact"
+      )
+    )
+  );
+  return {
+    id: raw.id || `item_${fallbackIndex}_${(raw.name || "").toLowerCase().replace(/[^a-z0-9]+/g, "_")}`,
+    name: (raw.name ?? "").trim(),
+    note: raw.note ?? "",
+    flags: cleanFlags,
+    lore_id: raw.lore_id ?? null,
+  };
+}
+
+export function normalizeItemList(
+  raw?: readonly InventoryItemInput[] | null
+): ItemInstance[] {
+  if (!raw || raw.length === 0) return [];
+  return raw
+    .map((entry, idx) => normalizeItemInstance(entry, idx))
+    .filter((it) => it.name.length > 0);
+}
+
+export function splitLegacyWornItems(
+  equipped?: readonly InventoryItemInput[] | null,
+  inventory?: readonly InventoryItemInput[] | null
+): { equippedList: ItemInstance[]; inventoryList: ItemInstance[] } {
+  let equippedList = normalizeItemList(equipped);
+  let inventoryList = normalizeItemList(inventory);
+  if (
+    equippedList.length === 0 &&
+    inventoryList.some((it) => /^\[(?:worn|equipped)\]/i.test(it.name))
+  ) {
+    equippedList = inventoryList
+      .filter((it) => /^\[(?:worn|equipped)\]/i.test(it.name))
+      .map((it) => ({
+        ...it,
+        name: it.name.replace(/^\[(?:worn|equipped)\]\s*/i, "").trim(),
+      }))
+      .filter((it) => it.name.length > 0);
+    inventoryList = inventoryList.filter(
+      (it) => !/^\[(?:worn|equipped)\]/i.test(it.name)
+    );
+  }
+  return { equippedList, inventoryList };
+}
+
+export function hasItemFlag(item: ItemInstance, flag: ItemFlag): boolean {
+  return item.flags.includes(flag);
+}
+
 export interface CharacterWizardDraft {
   name: string;
   tagline: string;
   physical_appearance: string;
   core_persona: string;
   initial_message: string;
-  equipped?: string[];
-  inventory: string[];
+  equipped?: InventoryItemInput[];
+  inventory: InventoryItemInput[];
   voice_anchors: VoiceAnchor[];
   baseline_psyche: BaselinePsyche;
   memory_shards: MemoryShard[];
@@ -90,11 +181,13 @@ export interface SillyTavernImportResponse {
   auto_generated_world?: WorldWizardDraft | null;
 }
 
-export interface CharacterRecord extends CharacterWizardDraft {
+export interface CharacterRecord extends Omit<CharacterWizardDraft, "equipped" | "inventory"> {
   id: string;
   world_id?: string | null;
   pending_deletion?: boolean;
   version: number;
+  equipped?: ItemInstance[];
+  inventory: ItemInstance[];
   tags: string[];
   creator: string;
   creator_notes: string;
@@ -133,8 +226,8 @@ export interface CharacterStateSnapshot {
   active_want: string;
   active_plan: string;
   relationship_notes: Record<string, string>;
-  equipped?: string[];
-  inventory: string[];
+  equipped?: ItemInstance[];
+  inventory: ItemInstance[];
 }
 
 export interface WorldGlobalRules {
@@ -147,14 +240,17 @@ export interface WorldGlobalRules {
 
 export type CompassDirection = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
 
-export type WorldLoreCategory = "history" | "culture" | "faction" | "rumor";
-export type LocationLoreCategory = WorldLoreCategory | "secret";
+export type SharedLoreCategory = "history" | "culture" | "faction" | "rumor";
+export type WorldLoreCategory = SharedLoreCategory | "artifact";
+export type LocationLoreCategory = SharedLoreCategory | "secret";
+export type AnyLoreCategory = WorldLoreCategory | LocationLoreCategory;
 
 export const WORLD_LORE_CATEGORIES: WorldLoreCategory[] = [
   "history",
   "culture",
   "faction",
   "rumor",
+  "artifact",
 ];
 
 export const LOCATION_LORE_CATEGORIES: LocationLoreCategory[] = [
@@ -179,7 +275,7 @@ export interface LoreNode {
   location_id?: string | null;
   campaign_id?: string | null;
   title: string;
-  category: LocationLoreCategory;
+  category: AnyLoreCategory;
   content: string;
   entity_tags: string[];
 }
@@ -415,7 +511,12 @@ export interface PreTurnAnalysis {
 
 export interface RecalledMemoryItem {
   id: string;
-  source_type: "lore" | "location_lore" | "character_shard" | "episodic_chunk";
+  source_type:
+    | "lore"
+    | "location_lore"
+    | "character_shard"
+    | "episodic_chunk"
+    | "item_lore";
   title: string;
   content: string;
   score: number;

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 import re
 import uuid
 from typing import Literal
@@ -15,7 +16,10 @@ from app.engine.character_agent import (
     apply_character_inventory_delta,
     arbitrate_inventory_disputes,
     arbitrate_inventory_disputes_detailed,
+    collect_relinquished_item_instances,
     detect_inventory_disputes,
+    enforce_permanent_item_locks,
+    item_names_match_word_bounded,
     run_character_post_turn_agent,
 )
 from app.engine.llm_client import llm_client
@@ -36,6 +40,7 @@ from app.schemas.character import (
     CharacterRecord,
     CharacterStateSnapshot,
     CognitionBlock,
+    ItemInstance,
     MemoryShard,
 )
 from app.schemas.turn import (
@@ -101,9 +106,10 @@ def merge_scene_flags(
     return merged
 
 
-def _normalize_inventory_item(raw: str) -> str:
+def _normalize_inventory_item(raw: str | ItemInstance) -> str:
     """Normalize an inventory item label by stripping state tags like '[Worn]' or '(worn)'."""
-    s = raw.strip().lower()
+    raw_str = raw.name if isinstance(raw, ItemInstance) else str(raw)
+    s = raw_str.strip().lower()
     s = re.sub(
         r"^\[(?:worn|carried|equipped|held|stashed|clothing|item|object)\]\s*",
         "",
@@ -117,16 +123,17 @@ def _normalize_inventory_item(raw: str) -> str:
     return s.strip()
 
 
-def _matches_inventory_removal(existing_item: str, removal_queries: set[str]) -> bool:
-    """Return True if existing_item matches any removal query exactly, by normalized name, or by 4+ char substring."""
+def _matches_inventory_removal(existing_item: str | ItemInstance, removal_queries: set[str]) -> bool:
+    """Return True if existing_item matches any removal query by exact normalized name or whole-word token subset."""
     if not removal_queries:
         return False
-    ex_low = existing_item.strip().lower()
-    ex_norm = _normalize_inventory_item(existing_item)
+    raw_str = existing_item.name if isinstance(existing_item, ItemInstance) else str(existing_item)
+    ex_low = raw_str.strip().lower()
+    ex_norm = _normalize_inventory_item(raw_str)
     if ex_low in removal_queries or ex_norm in removal_queries:
         return True
     for rem in removal_queries:
-        if len(rem) >= 4 and (rem in ex_norm or (len(ex_norm) >= 4 and ex_norm in rem)):
+        if item_names_match_word_bounded(ex_norm, rem):
             return True
     return False
 
@@ -219,7 +226,7 @@ _GENERIC_ITEM_ADJECTIVES = {
 def _extract_heuristic_inventory_delta(
     user_message: str,
     raw_prose: str,
-    current_inventory: list[str] | None = None,
+    current_inventory: Sequence[str | ItemInstance] | None = None,
 ) -> tuple[list[str], list[str]]:
     """Extract deterministic inventory additions and removals when running without a live Clerk LLM."""
     combined = f"{user_message}\n{raw_prose}"
@@ -236,11 +243,14 @@ def _extract_heuristic_inventory_delta(
     )
     if remove_cue and current_inventory:
         for item in current_inventory:
+            if isinstance(item, ItemInstance) and "permanent" in item.flags:
+                continue
             norm = _normalize_inventory_item(item)
             if not norm:
                 continue
+            item_label = item.name if isinstance(item, ItemInstance) else str(item)
             if norm in combined_lower:
-                inv_removed.append(item)
+                inv_removed.append(item_label)
                 continue
             tokens = [
                 w
@@ -248,7 +258,7 @@ def _extract_heuristic_inventory_delta(
                 if w not in _GENERIC_ITEM_ADJECTIVES
             ]
             if any(re.search(rf"\b{re.escape(tok)}\b", combined_lower) for tok in tokens):
-                inv_removed.append(item)
+                inv_removed.append(item_label)
 
     wear_matches = re.finditer(
         r"\b(?:put on|puts on|pull on|pulls on|slip into|slips into|wear|wears|don|dons)\s+"
@@ -1304,10 +1314,17 @@ async def run_phase5_post_turn_clerk(
         scene_flags=merged_flags,
     )
 
-    # 3. Two-Tier Inventory Contention Detection & Conditional Clerk Arbitration
+    # 3. Permanent Custody Protection + Two-Tier Inventory Contention Detection & Clerk Arbitration
     arbitration_notes: list[str] = []
     arbitration_rulings: list[ArbitrationRulingRecord] = []
     if not is_narrator_turn and char_deltas:
+        perm_notes = enforce_permanent_item_locks(
+            scene_characters=scene_characters,
+            prev_states_by_char=prev_states_by_char,
+            character_deltas=char_deltas,
+        )
+        arbitration_notes.extend(perm_notes)
+
         disputes = detect_inventory_disputes(
             scene_characters=scene_characters,
             prev_states_by_char=prev_states_by_char,
@@ -1325,7 +1342,7 @@ async def run_phase5_post_turn_clerk(
                         contested_agent_keys=contested_keys,
                     )
                 )
-            char_deltas, arbitration_notes, arbitration_rulings = await arbitrate_inventory_disputes_detailed(
+            char_deltas, arb_notes, arbitration_rulings = await arbitrate_inventory_disputes_detailed(
                 disputes=disputes,
                 scene_characters=scene_characters,
                 character_deltas=char_deltas,
@@ -1333,8 +1350,9 @@ async def run_phase5_post_turn_clerk(
                 profile=clerk_prof,
                 prompt_template=arbitration_prompt_template,
             )
+            arbitration_notes.extend(arb_notes)
 
-    # 4. Reconcile CharacterStateSnapshots for all present characters
+    # 4. Reconcile CharacterStateSnapshots for all present characters (conserving transferred ItemInstances)
     updated_states_by_char: dict[str, CharacterStateSnapshot] = {}
     if is_narrator_turn:
         for ch in scene_characters:
@@ -1353,6 +1371,11 @@ async def run_phase5_post_turn_clerk(
                 inventory=list(prev_st.inventory),
             )
     else:
+        donor_pool = collect_relinquished_item_instances(
+            scene_characters=scene_characters,
+            prev_states_by_char=prev_states_by_char,
+            character_deltas=char_deltas,
+        )
         for ch in scene_characters:
             prev_st = prev_states_by_char[ch.id]
             c_delta = char_deltas[ch.id]
@@ -1392,6 +1415,8 @@ async def run_phase5_post_turn_clerk(
                 existing_equipped=prev_st.equipped,
                 existing_inventory=prev_st.inventory,
                 delta=c_delta,
+                donor_pool=donor_pool,
+                recipient_id=ch.id,
             )
 
             updated_states_by_char[ch.id] = CharacterStateSnapshot(

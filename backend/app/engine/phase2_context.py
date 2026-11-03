@@ -8,7 +8,15 @@ from typing import Any
 from app.config import settings
 from app.engine.world_clock import describe_world_timestamp
 from app.prompts import get_default_prompt, render_template
-from app.schemas.character import CharacterRecord, CharacterStateSnapshot, CognitionBlock
+from app.schemas.character import (
+    CharacterRecord,
+    CharacterStateSnapshot,
+    CognitionBlock,
+    ItemInstance,
+    coerce_item_list,
+    format_item_names,
+    normalize_item_key,
+)
 from app.schemas.turn import (
     EpisodicChunkRecord,
     PreTurnAnalysis,
@@ -54,6 +62,377 @@ def _tag_matches_text(tag: str, text_lower: str) -> bool:
         return False
     pattern = r"(?<![a-z0-9])" + re.escape(cleaned) + r"(?![a-z0-9])"
     return bool(re.search(pattern, text_lower))
+
+
+_LORE_OVERLAP_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "from",
+    "with",
+    "into",
+    "over",
+    "under",
+    "this",
+    "that",
+    "these",
+    "those",
+    "about",
+    "after",
+    "before",
+    "during",
+    "between",
+    "through",
+    "around",
+    "was",
+    "were",
+    "been",
+    "being",
+    "have",
+    "has",
+    "had",
+    "having",
+    "their",
+    "there",
+    "they",
+    "them",
+    "her",
+    "his",
+    "its",
+    "she",
+    "him",
+    "you",
+    "your",
+    "who",
+    "whom",
+    "which",
+    "what",
+    "when",
+    "where",
+    "while",
+    "only",
+    "very",
+    "just",
+    "still",
+    "some",
+    "more",
+    "most",
+    "such",
+    "than",
+    "then",
+    "also",
+    "item",
+    "items",
+    "worn",
+    "carried",
+    "equipped",
+}
+
+_ITEM_SIGNAL_ADJECTIVES = {
+    "old",
+    "new",
+    "worn",
+    "dark",
+    "light",
+    "heavy",
+    "small",
+    "large",
+    "tiny",
+    "black",
+    "white",
+    "red",
+    "blue",
+    "green",
+    "silver",
+    "gold",
+    "golden",
+    "brass",
+    "iron",
+    "steel",
+    "copper",
+    "wooden",
+    "leather",
+    "cloth",
+    "tarnished",
+    "rusted",
+    "rusty",
+    "broken",
+    "cracked",
+    "damaged",
+    "polished",
+    "ornate",
+    "ancient",
+    "weathered",
+    "faded",
+    "stained",
+    "concealed",
+    "hidden",
+    "spare",
+    "standard",
+    "custom",
+    "modified",
+    "battered",
+    "scratched",
+}
+
+
+def get_character_working_window(
+    branch_turns: list[TurnNodeRecord],
+    episodic_chunks: list[EpisodicChunkRecord],
+    *,
+    character_id: str | None = None,
+    is_narrator: bool = False,
+    working_memory_turns: int | None = None,
+) -> list[TurnNodeRecord]:
+    """Return the exact slice of unsummarized turns present in Zone 3 Working Memory."""
+    max_summarized_depth = max((c.end_turn_depth for c in episodic_chunks), default=-1)
+    unsummarized_turns = [
+        t
+        for t in branch_turns
+        if t.depth_index > max_summarized_depth
+        and (
+            is_narrator
+            or not character_id
+            or was_character_present_on_turn(t, character_id)
+        )
+    ]
+    wm_limit = (
+        working_memory_turns
+        if working_memory_turns is not None
+        else settings.memory_config.working_memory_turns
+    )
+    return unsummarized_turns[-wm_limit:]
+
+
+def is_lore_substantively_in_working_window(
+    lore_text: str,
+    working_window: list[TurnNodeRecord],
+    *,
+    overlap_threshold: float = 0.60,
+) -> bool:
+    """Return True if the substantive content of lore_text is already present in Zone 3."""
+    clean_lore = re.sub(r"\s+", " ", (lore_text or "").strip().lower())
+    if not clean_lore or not working_window:
+        return False
+
+    window_corpus = "\n".join(
+        f"{t.user_message}\n{t.raw_prose}" for t in working_window
+    ).lower()
+    if not window_corpus.strip():
+        return False
+
+    if len(clean_lore) >= 12 and clean_lore in window_corpus:
+        return True
+
+    lore_tokens = {
+        tok
+        for tok in _WORD_TOKEN_RE.findall(clean_lore)
+        if tok not in _LORE_OVERLAP_STOPWORDS
+    }
+    if not lore_tokens:
+        return False
+
+    window_tokens = set(_WORD_TOKEN_RE.findall(window_corpus))
+    matched_count = len(lore_tokens & window_tokens)
+    return (matched_count / len(lore_tokens)) >= overlap_threshold
+
+
+def _item_matches_turn_signal(
+    item: ItemInstance,
+    signal_lower: str,
+    artifact_lore: LoreNode | None = None,
+) -> bool:
+    """Return True only when item name (or linked artifact title/tags) is explicitly referenced in turn signal."""
+    if not signal_lower:
+        return False
+
+    clean_key = normalize_item_key(item.name)
+    if clean_key and _tag_matches_text(clean_key, signal_lower):
+        return True
+
+    raw_tokens = re.findall(r"[a-z0-9]+", clean_key)
+    distinctive_tokens = [
+        tok
+        for tok in raw_tokens
+        if len(tok) >= 4
+        and tok not in _ITEM_SIGNAL_ADJECTIVES
+        and tok not in _LORE_OVERLAP_STOPWORDS
+    ]
+    if any(_tag_matches_text(tok, signal_lower) for tok in distinctive_tokens):
+        return True
+
+    if raw_tokens:
+        head_noun = raw_tokens[-1]
+        if (
+            len(head_noun) >= 3
+            and head_noun not in _ITEM_SIGNAL_ADJECTIVES
+            and head_noun not in _LORE_OVERLAP_STOPWORDS
+            and _tag_matches_text(head_noun, signal_lower)
+        ):
+            return True
+
+    if artifact_lore is not None:
+        if _tag_matches_text(artifact_lore.title, signal_lower):
+            return True
+        if any(_tag_matches_text(tag, signal_lower) for tag in artifact_lore.entity_tags):
+            return True
+
+    return False
+
+
+def resolve_triggered_item_lore(
+    *,
+    world: WorldRecord,
+    branch_turns: list[TurnNodeRecord],
+    episodic_chunks: list[EpisodicChunkRecord],
+    present_characters: list[CharacterRecord],
+    all_character_states: dict[str, CharacterStateSnapshot],
+    pre_turn: PreTurnAnalysis,
+    user_message: str,
+    narrator_directive: str | None,
+    shared_scene_items: list[RecalledMemoryItem],
+    per_character_recalled_items: dict[str, list[RecalledMemoryItem]],
+    is_narrator: bool = False,
+    working_memory_turns: int | None = None,
+) -> tuple[list[RecalledMemoryItem], dict[str, list[RecalledMemoryItem]]]:
+    """Conditionally inject relevant item notes and linked world artifact lore with Zone 3 hygiene & epistemic isolation."""
+    signal_parts = [
+        user_message or "",
+        narrator_directive or "",
+        *(pre_turn.mentioned_entities if pre_turn else []),
+        *(pre_turn.memory_search_queries if pre_turn else []),
+    ]
+    signal_lower = " ".join(p for p in signal_parts if p).lower()
+
+    updated_shared = list(shared_scene_items)
+    updated_per_char: dict[str, list[RecalledMemoryItem]] = {
+        cid: list(items) for cid, items in per_character_recalled_items.items()
+    }
+    for c in present_characters:
+        updated_per_char.setdefault(c.id, [])
+
+    if not signal_lower.strip():
+        return updated_shared, updated_per_char
+
+    world_artifacts_by_id: dict[str, LoreNode] = {
+        ln.id: ln
+        for ln in world.lore_nodes
+        if ln.category == "artifact" and ln.location_id is None
+    }
+
+    primary_speaker_id = (
+        None
+        if is_narrator
+        else (
+            pre_turn.active_speaker_id
+            if pre_turn.active_speaker_id in {c.id for c in present_characters}
+            else (present_characters[0].id if present_characters else None)
+        )
+    )
+    shared_window = get_character_working_window(
+        branch_turns,
+        episodic_chunks,
+        character_id=primary_speaker_id,
+        is_narrator=is_narrator,
+        working_memory_turns=working_memory_turns,
+    )
+
+    # Also suppress any RAG-recalled world artifact lore already substantively present in Zone 3
+    if world_artifacts_by_id and shared_window:
+        updated_shared = [
+            m
+            for m in updated_shared
+            if not (
+                m.id in world_artifacts_by_id
+                and is_lore_substantively_in_working_window(m.content, shared_window)
+            )
+        ]
+
+    for c in present_characters:
+        c_state = all_character_states.get(c.id)
+        if c_state is None:
+            continue
+        c_window = get_character_working_window(
+            branch_turns,
+            episodic_chunks,
+            character_id=c.id,
+            is_narrator=False,
+            working_memory_turns=working_memory_turns,
+        )
+        char_entries: list[tuple[str, ItemInstance]] = [
+            *(("equipped", it) for it in coerce_item_list(list(c_state.equipped))),
+            *(("inventory", it) for it in coerce_item_list(list(c_state.inventory))),
+        ]
+        for bucket_kind, item in char_entries:
+            artifact_lore = (
+                world_artifacts_by_id.get(item.lore_id) if item.lore_id else None
+            )
+            if not artifact_lore and not item.note.strip():
+                continue
+            if not _item_matches_turn_signal(item, signal_lower, artifact_lore):
+                continue
+
+            # 1. World Artifact Lore (shared scene lore, deduplicated against RAG vector_store)
+            if artifact_lore is not None:
+                if normalize_item_key(item.name) != artifact_lore.title.strip().lower():
+                    prov_title = f"{artifact_lore.title} (held by {c.name} as '{item.name}')"
+                else:
+                    prov_title = f"{artifact_lore.title} (held by {c.name})"
+
+                if is_lore_substantively_in_working_window(
+                    artifact_lore.content, shared_window
+                ):
+                    updated_shared = [
+                        m for m in updated_shared if m.id != artifact_lore.id
+                    ]
+                else:
+                    existing_idx = next(
+                        (
+                            i
+                            for i, m in enumerate(updated_shared)
+                            if m.id == artifact_lore.id
+                        ),
+                        None,
+                    )
+                    if existing_idx is not None:
+                        updated_shared[existing_idx] = updated_shared[
+                            existing_idx
+                        ].model_copy(update={"title": prov_title})
+                    else:
+                        updated_shared.append(
+                            RecalledMemoryItem(
+                                id=artifact_lore.id,
+                                source_type="lore",
+                                title=prov_title,
+                                content=artifact_lore.content,
+                                score=1.0,
+                            )
+                        )
+
+            # 2. Personal Mini-Lore Note (strictly epistemically isolated to holder, or visible equipped on narrator)
+            clean_note = item.note.strip()
+            if clean_note:
+                eff_window = shared_window if is_narrator else c_window
+                if not is_lore_substantively_in_working_window(clean_note, eff_window):
+                    note_mem_id = f"item_lore:{c.id}:{item.id}"
+                    note_mem = RecalledMemoryItem(
+                        id=note_mem_id,
+                        source_type="item_lore",
+                        title=f"{c.name}'s {item.name}",
+                        content=clean_note,
+                        score=1.0,
+                    )
+                    holder_list = updated_per_char.setdefault(c.id, [])
+                    if not any(m.id == note_mem_id for m in holder_list):
+                        holder_list.append(note_mem)
+                    if (
+                        is_narrator
+                        and bucket_kind == "equipped"
+                        and not any(m.id == note_mem_id for m in updated_shared)
+                    ):
+                        updated_shared.append(note_mem)
+
+    return updated_shared, updated_per_char
 
 
 def select_active_location_lore_for_turn(
@@ -435,6 +814,21 @@ async def resolve_phase2_turn_context(
         for c in present_characters
     }
 
+    shared_items, per_char_items = resolve_triggered_item_lore(
+        world=world,
+        branch_turns=branch_turns,
+        episodic_chunks=episodic_chunks,
+        present_characters=present_characters,
+        all_character_states=all_character_states,
+        pre_turn=pre_turn,
+        user_message=user_message,
+        narrator_directive=narrator_directive,
+        shared_scene_items=recall_bundle.shared_scene_items,
+        per_character_recalled_items=recall_bundle.by_character,
+        is_narrator=is_narrator,
+        working_memory_turns=working_memory_turns,
+    )
+
     leaf_turn = branch_turns[-1]
 
     return TurnContextBundle(
@@ -447,8 +841,8 @@ async def resolve_phase2_turn_context(
         pre_turn=pre_turn,
         user_message=user_message,
         episodic_chunks=episodic_chunks,
-        shared_scene_items=recall_bundle.shared_scene_items,
-        per_character_recalled_items=recall_bundle.by_character,
+        shared_scene_items=shared_items,
+        per_character_recalled_items=per_char_items,
         all_character_states=all_character_states,
         character_name_map=character_name_map,
         is_narrator=is_narrator,
@@ -538,16 +932,10 @@ def build_zone4_ephemeral_tail_frame(
         if character_state.relationship_notes
         else "None"
     )
-    equipped_text = (
-        ", ".join(character_state.equipped)
-        if character_state.equipped
-        else "None"
-    )
-    inventory_text = (
-        ", ".join(character_state.inventory)
-        if character_state.inventory
-        else "None"
-    )
+    eq_names = format_item_names(character_state.equipped)
+    inv_names = format_item_names(character_state.inventory)
+    equipped_text = ", ".join(eq_names) if eq_names else "None"
+    inventory_text = ", ".join(inv_names) if inv_names else "None"
 
     co_present_section = ""
     if present_characters:
@@ -562,10 +950,14 @@ def build_zone4_ephemeral_tail_frame(
                     if oc.physical_appearance.strip()
                     else ""
                 )
-                oc_equipped = oc_state.equipped if oc_state is not None else oc.equipped
-                oc_inv = oc_state.inventory if oc_state is not None else oc.inventory
-                eq_info = f" | Equipped: {', '.join(oc_equipped)}" if oc_equipped else ""
-                inv_info = f" | Carried: {', '.join(oc_inv)}" if oc_inv else ""
+                oc_eq_names = format_item_names(
+                    oc_state.equipped if oc_state is not None else oc.equipped
+                )
+                oc_inv_names = format_item_names(
+                    oc_state.inventory if oc_state is not None else oc.inventory
+                )
+                eq_info = f" | Equipped: {', '.join(oc_eq_names)}" if oc_eq_names else ""
+                inv_info = f" | Carried: {', '.join(oc_inv_names)}" if oc_inv_names else ""
                 other_lines.append(
                     f"    - {oc.name} ({oc.tagline}){mood_info}{app_info}{eq_info}{inv_info}"
                 )

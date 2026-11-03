@@ -222,7 +222,7 @@ DEFAULT_WIZARD_WORLD_SYSTEM = (
     "(used when characters are inside), `environmental_tags`, and mark the primary hub `is_starting_location: true`.\n"
     "3. edges: Connect the locations using LocationEdgeDraft (`from_key`, `to_key`, evocative `direction_label`, "
     "`reverse_direction_label`, `compass_direction` in N/NE/E/SE/S/SW/W/NW, `travel_minutes`, `is_locked_or_hidden`, `bidirectional: true`). Every location must be reachable.\n"
-    "4. lore_nodes: Create 4 macro world-level LoreNodeDraft entries using ONLY categories 'faction', 'history', 'culture', or 'rumor', each with at least 1-5 trigger keywords in `entity_tags`. Keep world lore strictly global—do NOT include trivia about specific rooms, individual items, or private characters unless relevant on a global scale, and NEVER generate per-location lore entries.\n"
+    "4. lore_nodes: Create 4 macro world-level LoreNodeDraft entries using ONLY categories 'faction', 'history', 'culture', 'rumor', or 'artifact', each with at least 1-5 trigger keywords in `entity_tags`. Keep world lore strictly global—use 'artifact' ONLY for major plot-driving relics, legendary tech, or unique items of global significance; never include trivia about specific rooms, mundane gear, or private characters, and NEVER generate per-location lore entries.\n"
     "Return ONLY valid JSON matching WorldWizardDraft."
 )
 

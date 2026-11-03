@@ -21,7 +21,12 @@ from app.prompts.defaults import (
     PROMPT_KEY_CHARACTER_COGNITION,
 )
 from app.schemas.auth import ModelProfile
-from app.schemas.character import CharacterRecord, CharacterStateSnapshot, CognitionBlock
+from app.schemas.character import (
+    CharacterRecord,
+    CharacterStateSnapshot,
+    CognitionBlock,
+    format_item_names,
+)
 from app.schemas.turn import (
     CanonicalOutcomeTier,
     CharacterSpotlightRole,
@@ -406,8 +411,8 @@ async def run_character_cognition_agent(
         f"- Active Want: {previous_state.active_want}\n"
         f"- Active Plan: {previous_state.active_plan}\n"
         f"- Relationship Notes: {rel_text}\n"
-        f"- Equipped / Worn: {', '.join(previous_state.equipped) or 'None'}\n"
-        f"- Carried Inventory: {', '.join(previous_state.inventory) or 'None'}\n"
+        f"- Equipped / Worn: {', '.join(format_item_names(previous_state.equipped)) or 'None'}\n"
+        f"- Carried Inventory: {', '.join(format_item_names(previous_state.inventory)) or 'None'}\n"
         f"{anchor_guideline}\n\n"
         f"Environment ({active_location.name}):\n"
         f"- Atmosphere/Props: {', '.join(active_location.environmental_tags) or 'None'}\n"

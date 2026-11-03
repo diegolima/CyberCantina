@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 import logging
 import re
 from typing import Literal
+import uuid
 
 from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
@@ -14,7 +16,10 @@ from app.prompts.renderer import get_default_prompt, render_template
 from app.schemas.character import (
     CharacterRecord,
     CharacterStateSnapshot,
+    ItemInstance,
     MemoryShard,
+    coerce_item_list,
+    format_item_names,
 )
 from app.schemas.turn import (
     ArbitrationRulingRecord,
@@ -112,9 +117,25 @@ _USER_ALIASES = {
 }
 
 
-def normalize_inventory_item(raw: str) -> str:
+_ITEM_ARTICLES = {
+    "a",
+    "an",
+    "the",
+    "my",
+    "his",
+    "her",
+    "their",
+    "your",
+    "some",
+    "this",
+    "that",
+}
+
+
+def normalize_inventory_item(raw: str | ItemInstance) -> str:
     """Normalize an inventory item label by stripping state tags like '[Worn]' or '(equipped)'."""
-    s = raw.strip().lower()
+    raw_str = raw.name if isinstance(raw, ItemInstance) else str(raw)
+    s = raw_str.strip().lower()
     s = re.sub(
         r"^\[(?:worn|carried|equipped|held|stashed|clothing|item|object)\]\s*",
         "",
@@ -128,9 +149,10 @@ def normalize_inventory_item(raw: str) -> str:
     return s.strip()
 
 
-def clean_equipped_display_label(raw: str) -> str:
+def clean_equipped_display_label(raw: str | ItemInstance) -> str:
     """Strip redundant '[Worn]' / '[Equipped]' prefixes when storing into the dedicated equipped list."""
-    s = raw.strip()
+    raw_str = raw.name if isinstance(raw, ItemInstance) else str(raw)
+    s = raw_str.strip()
     s = re.sub(r"^[+-]\s*", "", s)
     s = re.sub(
         r"^\[(?:worn|equipped|held|clothing)\]\s*",
@@ -147,18 +169,79 @@ def clean_equipped_display_label(raw: str) -> str:
     return s.strip()
 
 
-def matches_inventory_query(existing_item: str, queries: set[str]) -> bool:
-    """Return True if existing_item matches any query exactly, by normalized name, or by 4+ char substring."""
+def _significant_item_tokens(norm_str: str) -> list[str]:
+    stripped = re.sub(r"^[a-z0-9]+'s\s+", "", norm_str.strip().lower())
+    return [
+        t
+        for t in re.findall(r"[a-z0-9]+", stripped)
+        if t not in _ITEM_ARTICLES and len(t) >= 2
+    ]
+
+
+def item_names_match_word_bounded(a_raw: str | ItemInstance, b_raw: str | ItemInstance) -> bool:
+    """Match item labels strictly on exact normalized name or whole-word significant token subset."""
+    a_norm = normalize_inventory_item(a_raw)
+    b_norm = normalize_inventory_item(b_raw)
+    if not a_norm or not b_norm:
+        return False
+    if a_norm == b_norm:
+        return True
+
+    a_tokens = _significant_item_tokens(a_norm)
+    b_tokens = _significant_item_tokens(b_norm)
+    if not a_tokens or not b_tokens:
+        return False
+
+    a_set = set(a_tokens)
+    b_set = set(b_tokens)
+    if a_set == b_set:
+        return True
+
+    if a_set.issubset(b_set):
+        return any(len(t) >= 3 and t not in _GENERIC_ITEM_ADJECTIVES for t in a_set)
+    if b_set.issubset(a_set):
+        return any(len(t) >= 3 and t not in _GENERIC_ITEM_ADJECTIVES for t in b_set)
+    return False
+
+
+def matches_inventory_query(existing_item: str | ItemInstance, queries: set[str]) -> bool:
+    """Return True if existing_item matches any query by exact normalized name or whole-word token subset."""
     if not queries:
         return False
-    ex_low = existing_item.strip().lower()
-    ex_norm = normalize_inventory_item(existing_item)
+    raw_str = existing_item.name if isinstance(existing_item, ItemInstance) else str(existing_item)
+    ex_low = raw_str.strip().lower()
+    ex_norm = normalize_inventory_item(raw_str)
     if ex_low in queries or ex_norm in queries:
         return True
     for q in queries:
-        if len(q) >= 4 and (q in ex_norm or (len(ex_norm) >= 4 and ex_norm in q)):
+        if item_names_match_word_bounded(ex_norm, q):
             return True
     return False
+
+
+def match_best_item_instance(
+    candidates: Sequence[ItemInstance],
+    raw_query: str,
+) -> int | None:
+    """Find the single best matching ItemInstance index for raw_query using word-bounded matching."""
+    q_norm = normalize_inventory_item(raw_query)
+    if not q_norm or not candidates:
+        return None
+    for idx, cand in enumerate(candidates):
+        if normalize_inventory_item(cand.name) == q_norm:
+            return idx
+
+    q_tokens = set(_significant_item_tokens(q_norm))
+    best_idx: int | None = None
+    best_score = 0
+    for idx, cand in enumerate(candidates):
+        if item_names_match_word_bounded(cand.name, q_norm):
+            c_tokens = set(_significant_item_tokens(normalize_inventory_item(cand.name)))
+            overlap = len(q_tokens & c_tokens)
+            if overlap > best_score:
+                best_score = overlap
+                best_idx = idx
+    return best_idx
 
 
 def normalize_mood_label(raw: str, fallback: str = "Observant and composed") -> str:
@@ -287,13 +370,168 @@ def format_relationship_notes_for_prompt(
     return "; ".join(parts)
 
 
+def enforce_permanent_item_locks(
+    *,
+    scene_characters: list[CharacterRecord],
+    prev_states_by_char: dict[str, CharacterStateSnapshot],
+    character_deltas: dict[str, CharacterAgentDelta],
+) -> list[str]:
+    """Veto Clerk removals on 'permanent' items and strip competing co-present NPC claims to prevent cloning."""
+    chars_by_id = {c.id: c for c in scene_characters}
+    audit_notes: list[str] = []
+
+    for ch in scene_characters:
+        prev_st = prev_states_by_char.get(ch.id)
+        if prev_st is None:
+            continue
+        perm_items = [
+            it
+            for it in coerce_item_list([*prev_st.equipped, *prev_st.inventory])
+            if "permanent" in it.flags
+        ]
+        if not perm_items:
+            continue
+
+        for perm in perm_items:
+            perm_queries = {perm.name.strip().lower(), normalize_inventory_item(perm.name)}
+            holder_delta = character_deltas.get(ch.id)
+            if holder_delta is not None:
+                kept_rem: list[str] = []
+                vetoed_rem = False
+                for r in holder_delta.items_removed:
+                    rc = r.strip().lstrip("-").strip()
+                    if rc and matches_inventory_query(rc, perm_queries):
+                        vetoed_rem = True
+                    else:
+                        kept_rem.append(r)
+                holder_delta.items_removed = kept_rem
+
+                # Also strip "-item" prefixed removal shorthands on items_equipped / items_obtained
+                def _filter_neg_shorthand(entries: list[str]) -> tuple[list[str], bool]:
+                    out: list[str] = []
+                    hit = False
+                    for ent in entries:
+                        ec = ent.strip()
+                        if ec.startswith("-") and len(ec) > 1 and matches_inventory_query(ec[1:].strip(), perm_queries):
+                            hit = True
+                        else:
+                            out.append(ent)
+                    return out, hit
+
+                holder_delta.items_equipped, hit_eq = _filter_neg_shorthand(holder_delta.items_equipped)
+                holder_delta.items_obtained, hit_ob = _filter_neg_shorthand(holder_delta.items_obtained)
+                if vetoed_rem or hit_eq or hit_ob:
+                    audit_notes.append(
+                        f"[{perm.name}] Permanent flag protected custody on {ch.name} (Clerk removal vetoed)."
+                    )
+
+            # Strip competing acquisition claims on all other co-present characters to prevent cloning
+            for other_id, other_delta in character_deltas.items():
+                if other_id == ch.id:
+                    continue
+                other_prev = prev_states_by_char.get(other_id)
+                other_already_has = other_prev is not None and any(
+                    x.id == perm.id or normalize_inventory_item(x.name) == normalize_inventory_item(perm.name)
+                    for x in coerce_item_list([*other_prev.equipped, *other_prev.inventory])
+                )
+                if other_already_has:
+                    continue
+                orig_eq_len = len(other_delta.items_equipped)
+                orig_ob_len = len(other_delta.items_obtained)
+                other_delta.items_equipped = [
+                    it
+                    for it in other_delta.items_equipped
+                    if it.strip().startswith("-") or not matches_inventory_query(it, perm_queries)
+                ]
+                other_delta.items_obtained = [
+                    it
+                    for it in other_delta.items_obtained
+                    if it.strip().startswith("-") or not matches_inventory_query(it, perm_queries)
+                ]
+                if len(other_delta.items_equipped) < orig_eq_len or len(other_delta.items_obtained) < orig_ob_len:
+                    other_name = chars_by_id[other_id].name if other_id in chars_by_id else other_id
+                    audit_notes.append(
+                        f"[{perm.name}] Permanent flag on {ch.name} blocked competing claim by {other_name} (cloning prevented)."
+                    )
+
+    return audit_notes
+
+
+def collect_relinquished_item_instances(
+    *,
+    scene_characters: list[CharacterRecord],
+    prev_states_by_char: dict[str, CharacterStateSnapshot],
+    character_deltas: dict[str, CharacterAgentDelta],
+) -> list[tuple[str, ItemInstance]]:
+    """Collect non-permanent ItemInstances being removed this turn so recipients preserve metadata/lore_id."""
+    donated: list[tuple[str, ItemInstance]] = []
+    for ch in scene_characters:
+        prev_st = prev_states_by_char.get(ch.id)
+        delta = character_deltas.get(ch.id)
+        if prev_st is None or delta is None:
+            continue
+        rem_queries: set[str] = set()
+        for raw in delta.items_removed:
+            c = raw.strip().lstrip("-").strip()
+            if c:
+                rem_queries.add(c.lower())
+                norm = normalize_inventory_item(c)
+                if norm:
+                    rem_queries.add(norm)
+        for raw in [*delta.items_equipped, *delta.items_obtained]:
+            c = raw.strip()
+            if c.startswith("-") and len(c) > 1:
+                rem = c[1:].strip()
+                rem_queries.add(rem.lower())
+                norm = normalize_inventory_item(rem)
+                if norm:
+                    rem_queries.add(norm)
+        if not rem_queries:
+            continue
+        for inst in coerce_item_list([*prev_st.equipped, *prev_st.inventory]):
+            if "permanent" in inst.flags:
+                continue
+            if matches_inventory_query(inst.name, rem_queries):
+                donated.append((ch.id, inst))
+    return donated
+
+
+def _consume_donated_instance(
+    donor_pool: list[tuple[str, ItemInstance]] | None,
+    *,
+    recipient_id: str | None,
+    raw_label: str,
+) -> ItemInstance | None:
+    if not donor_pool:
+        return None
+    eligible_indices = [
+        i
+        for i, (donor_id, _inst) in enumerate(donor_pool)
+        if recipient_id is None or donor_id != recipient_id
+    ]
+    if not eligible_indices:
+        return None
+    eligible_items = [donor_pool[i][1] for i in eligible_indices]
+    best_rel = match_best_item_instance(eligible_items, raw_label)
+    if best_rel is None:
+        return None
+    pool_idx = eligible_indices[best_rel]
+    _, matched_inst = donor_pool.pop(pool_idx)
+    return matched_inst
+
+
 def apply_character_inventory_delta(
     *,
-    existing_equipped: list[str],
-    existing_inventory: list[str],
+    existing_equipped: Sequence[ItemInstance | str],
+    existing_inventory: Sequence[ItemInstance | str],
     delta: CharacterAgentDelta,
-) -> tuple[list[str], list[str]]:
-    """Apply 4-bucket item transitions (equipped, unequipped, obtained, removed) without duplication."""
+    donor_pool: list[tuple[str, ItemInstance]] | None = None,
+    recipient_id: str | None = None,
+) -> tuple[list[ItemInstance], list[ItemInstance]]:
+    """Apply 4-bucket item transitions while preserving ItemInstance metadata and permanent locks."""
+    eq_pool = coerce_item_list(list(existing_equipped))
+    inv_pool = coerce_item_list(list(existing_inventory))
+
     remove_queries: set[str] = set()
     for raw in delta.items_removed:
         c = raw.strip().lstrip("-").strip()
@@ -353,54 +591,93 @@ def apply_character_inventory_delta(
     }
 
     # 1. Filter existing equipped items; collect stowed/unequipped items to move to carried inventory
-    new_equipped: list[str] = []
+    new_equipped: list[ItemInstance] = []
     seen_equipped_norm: set[str] = set()
-    stowed_items: list[str] = []
+    stowed_items: list[ItemInstance] = []
 
-    for item in existing_equipped:
-        clean = item.strip()
-        if not clean:
+    for inst in eq_pool:
+        clean_name = clean_equipped_display_label(inst.name) or inst.name.strip()
+        if not clean_name:
             continue
-        if matches_inventory_query(clean, remove_queries):
+        is_perm = "permanent" in inst.flags
+        if not is_perm and matches_inventory_query(clean_name, remove_queries):
             continue
-        norm = normalize_inventory_item(clean)
+        norm = normalize_inventory_item(clean_name)
         if not norm or norm in seen_equipped_norm:
             continue
-        if matches_inventory_query(clean, unequip_queries) and norm not in equip_add_norms:
-            stowed_items.append(clean_equipped_display_label(clean) or clean)
+        inst_clean = inst.model_copy(update={"name": clean_name[:160]})
+        if (
+            matches_inventory_query(clean_name, unequip_queries)
+            and not matches_inventory_query(clean_name, equip_add_norms)
+        ):
+            stowed_items.append(inst_clean)
             continue
-        new_equipped.append(clean)
+        new_equipped.append(inst_clean)
         seen_equipped_norm.add(norm)
 
-    # 2. Add newly equipped items
-    for item in equip_additions:
-        norm = normalize_inventory_item(item)
+    # 2. Add newly equipped items (drawing intact ItemInstances from carried inventory or donor_pool first)
+    remaining_inv = list(inv_pool)
+    for raw_label in equip_additions:
+        norm = normalize_inventory_item(raw_label)
         if not norm or norm in seen_equipped_norm:
             continue
-        if matches_inventory_query(item, remove_queries):
-            continue
-        new_equipped.append(item)
-        seen_equipped_norm.add(norm)
+        matched_inv_idx = match_best_item_instance(remaining_inv, raw_label)
+        if matched_inv_idx is not None:
+            drawn = remaining_inv.pop(matched_inv_idx)
+            if "permanent" not in drawn.flags and matches_inventory_query(drawn.name, remove_queries):
+                continue
+            cleaned_drawn_name = clean_equipped_display_label(drawn.name) or drawn.name
+            preferred_name = (
+                raw_label if len(raw_label) >= len(cleaned_drawn_name) else cleaned_drawn_name
+            )
+            equipped_inst = drawn.model_copy(update={"name": preferred_name[:160]})
+        else:
+            if matches_inventory_query(raw_label, remove_queries):
+                continue
+            donated_inst = _consume_donated_instance(
+                donor_pool, recipient_id=recipient_id, raw_label=raw_label
+            )
+            if donated_inst is not None:
+                cleaned_donated = clean_equipped_display_label(donated_inst.name) or donated_inst.name
+                preferred_name = (
+                    cleaned_donated if len(cleaned_donated) >= len(raw_label) else raw_label
+                )
+                equipped_inst = donated_inst.model_copy(update={"name": preferred_name[:160]})
+            else:
+                equipped_inst = ItemInstance(name=raw_label[:160])
 
-    # 3. Filter existing carried inventory (excluding items removed or newly drawn into equipped)
-    new_inventory: list[str] = []
+        eff_norm = normalize_inventory_item(equipped_inst.name)
+        if eff_norm and eff_norm not in seen_equipped_norm:
+            new_equipped.append(equipped_inst)
+            seen_equipped_norm.add(eff_norm)
+
+    # 3. Filter remaining carried inventory (excluding items removed or newly drawn into equipped)
+    new_inventory: list[ItemInstance] = []
     seen_inv_norm: set[str] = set()
 
-    for item in existing_inventory:
-        clean = item.strip()
-        if not clean:
+    for inst in remaining_inv:
+        clean_name = inst.name.strip()
+        if not clean_name:
             continue
-        if matches_inventory_query(clean, remove_queries):
+        is_perm = "permanent" in inst.flags
+        if not is_perm and matches_inventory_query(clean_name, remove_queries):
             continue
-        norm = normalize_inventory_item(clean)
+        norm = normalize_inventory_item(clean_name)
         if not norm or norm in seen_inv_norm or norm in seen_equipped_norm:
             continue
-        new_inventory.append(clean)
+        new_inventory.append(inst.model_copy(update={"name": clean_name[:160]}))
         seen_inv_norm.add(norm)
 
     # 4. Append stowed items and newly obtained items into carried inventory
-    for item in [*stowed_items, *carried_additions]:
-        clean = item.strip()
+    for stowed in stowed_items:
+        norm = normalize_inventory_item(stowed.name)
+        if not norm or norm in seen_inv_norm or norm in seen_equipped_norm:
+            continue
+        new_inventory.append(stowed)
+        seen_inv_norm.add(norm)
+
+    for raw_carried in carried_additions:
+        clean = raw_carried.strip()
         if not clean:
             continue
         norm = normalize_inventory_item(clean)
@@ -408,8 +685,29 @@ def apply_character_inventory_delta(
             continue
         if matches_inventory_query(clean, remove_queries):
             continue
-        new_inventory.append(clean)
-        seen_inv_norm.add(norm)
+        donated_inst = _consume_donated_instance(
+            donor_pool, recipient_id=recipient_id, raw_label=clean
+        )
+        if donated_inst is not None:
+            preferred_name = (
+                donated_inst.name if len(donated_inst.name) >= len(clean) else clean
+            )
+            carried_inst = donated_inst.model_copy(update={"name": preferred_name[:160]})
+        else:
+            carried_inst = ItemInstance(name=clean[:160])
+
+        eff_norm = normalize_inventory_item(carried_inst.name)
+        if eff_norm and eff_norm not in seen_inv_norm and eff_norm not in seen_equipped_norm:
+            new_inventory.append(carried_inst)
+            seen_inv_norm.add(eff_norm)
+
+    # Ensure intra-character ID uniqueness across equipped + inventory
+    seen_ids: set[str] = set()
+    for bucket in (new_equipped, new_inventory):
+        for i, it in enumerate(bucket):
+            if it.id in seen_ids:
+                bucket[i] = it.model_copy(update={"id": f"{it.id}_{uuid.uuid4().hex[:6]}"})
+            seen_ids.add(bucket[i].id)
 
     return new_equipped, new_inventory
 
@@ -476,7 +774,8 @@ def detect_inventory_disputes(
                 continue
             h_norm = normalize_inventory_item(held)
             if h_norm and h_norm not in unrelinquished_holder_by_norm:
-                unrelinquished_holder_by_norm[h_norm] = (ch.id, held)
+                held_name = held.name if isinstance(held, ItemInstance) else str(held)
+                unrelinquished_holder_by_norm[h_norm] = (ch.id, held_name)
 
     disputes: list[ContestedItemCase] = []
     for norm_key, claimants in claims_by_norm.items():
@@ -859,7 +1158,7 @@ def _extract_scoped_heuristic_inventory(
                     continue
                 tokens = [w for w in re.findall(r"[a-z0-9]{4,}", norm) if w not in _GENERIC_ITEM_ADJECTIVES]
                 if norm in seg_low or any(re.search(rf"\b{re.escape(tok)}\b", seg_low) for tok in tokens):
-                    items_unequipped.append(eq_item)
+                    items_unequipped.append(eq_item.name if isinstance(eq_item, ItemInstance) else str(eq_item))
 
         # 2. Remove / drop / hand over / take off
         if re.search(
@@ -868,15 +1167,18 @@ def _extract_scoped_heuristic_inventory(
             seg_low,
         ):
             for item in current_all:
+                if isinstance(item, ItemInstance) and "permanent" in item.flags:
+                    continue
                 norm = normalize_inventory_item(item)
                 if not norm:
                     continue
+                item_label = item.name if isinstance(item, ItemInstance) else str(item)
                 if norm in seg_low:
-                    items_removed.append(item)
+                    items_removed.append(item_label)
                     continue
                 tokens = [w for w in re.findall(r"[a-z0-9]{4,}", norm) if w not in _GENERIC_ITEM_ADJECTIVES]
                 if any(re.search(rf"\b{re.escape(tok)}\b", seg_low) for tok in tokens):
-                    items_removed.append(item)
+                    items_removed.append(item_label)
 
         # 3. Wear / equip / draw
         wear_matches = re.finditer(
@@ -1127,8 +1429,10 @@ async def run_character_post_turn_agent(
     existing_mem_str = "\n".join(existing_mem_lines) or "None"
 
     stances_str = format_relationship_notes_for_prompt(prev_state.relationship_notes, name_map)
-    equipped_str = ", ".join(prev_state.equipped) if prev_state.equipped else "None"
-    inventory_str = ", ".join(prev_state.inventory) if prev_state.inventory else "None"
+    eq_names = format_item_names(prev_state.equipped)
+    inv_names = format_item_names(prev_state.inventory)
+    equipped_str = ", ".join(eq_names) if eq_names else "None"
+    inventory_str = ", ".join(inv_names) if inv_names else "None"
 
     speaker_name = name_map.get(completed_turn.actor_id, character.name)
     char_cog = (

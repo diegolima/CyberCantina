@@ -8,9 +8,12 @@ from app.prompts import get_default_prompt, render_template
 from app.schemas.character import (
     BaselinePsyche,
     CharacterWizardDraft,
+    CharacterWizardLLMOutput,
     CharacterWizardSeed,
+    ItemInstance,
     MemoryShard,
     VoiceAnchor,
+    coerce_item_list,
 )
 from app.schemas.world import WorldRecord
 from app.db.repository import slugify_tag
@@ -176,14 +179,19 @@ async def generate_character_draft(
     fallback = _fallback_character_expansion(seed, world)
     actor_prof = profile or settings.actor_profile
     try:
-        draft = await llm_client.complete_structured(
+        llm_out = await llm_client.complete_structured(
             [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            CharacterWizardDraft,
+            CharacterWizardLLMOutput,
             profile=actor_prof,
             max_tokens=4096,
+        )
+        draft = (
+            llm_out.to_draft()
+            if isinstance(llm_out, CharacterWizardLLMOutput)
+            else llm_out
         )
         if not draft.physical_appearance.strip():
             draft.physical_appearance = fallback.physical_appearance
@@ -193,12 +201,17 @@ async def generate_character_draft(
             draft.equipped = fallback.equipped
             draft.inventory = fallback.inventory
         elif not draft.equipped:
-            # If LLM put [Worn] items into inventory, separate them
-            new_inv = []
-            new_eq = []
+            # If LLM put [Worn] items into inventory, separate them while preserving ItemInstance metadata
+            new_inv: list[ItemInstance] = []
+            new_eq: list[ItemInstance] = []
             for it in draft.inventory:
-                if re.match(r"^\[(?:worn|equipped)\]\s*", it, re.IGNORECASE):
-                    new_eq.append(re.sub(r"^\[(?:worn|equipped)\]\s*", "", it, flags=re.IGNORECASE).strip())
+                raw_label = str(it)
+                if re.match(r"^\[(?:worn|equipped)\]\s*", raw_label, re.IGNORECASE):
+                    cleaned = re.sub(
+                        r"^\[(?:worn|equipped)\]\s*", "", raw_label, flags=re.IGNORECASE
+                    ).strip()
+                    if cleaned:
+                        new_eq.extend(coerce_item_list([cleaned]))
                 else:
                     new_inv.append(it)
             draft.equipped = new_eq or fallback.equipped

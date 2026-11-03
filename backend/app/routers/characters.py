@@ -260,12 +260,15 @@ async def wizard_commit_character(
                 status_code=400,
                 detail=f"World '{req.world_id}' not found or access denied.",
             ) from exc
-    return await repo.acreate_character_from_draft(
-        req.draft,
-        world_id=req.world_id,
-        character_id=req.character_id,
-        owner_id=current_user.id,
-    )
+    try:
+        return await repo.acreate_character_from_draft(
+            req.draft,
+            world_id=req.world_id,
+            character_id=req.character_id,
+            owner_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.put("/api/characters/{character_id}", response_model=CharacterRecord)
@@ -293,6 +296,8 @@ async def update_character(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.delete("/api/characters/{character_id}")

@@ -20,6 +20,7 @@ import {
   CharacterRecord,
   CharacterStateSnapshot,
   CompassDirection,
+  ItemEquipActionPayload,
   LocationLoreNodeDraft,
   MemoryShard,
   NeighborLocationView,
@@ -41,6 +42,7 @@ const RECALL_SOURCE_LABEL: Record<RecalledMemoryItem["source_type"], string> = {
   location_lore: "Loc Lore",
   character_shard: "Shard",
   episodic_chunk: "Episode",
+  item_lore: "Item",
 };
 
 /** Scene flags shown before the "Show all" toggle in Internals. */
@@ -90,12 +92,7 @@ interface LiveInspectorProps {
     edgeId: string;
     travel_minutes: number;
   }) => Promise<void> | void;
-  onToggleItemEquip?: (payload: {
-    item: string;
-    action: "equip" | "unequip" | "remove" | "add";
-    target?: "equipped" | "inventory";
-    character_id?: string;
-  }) => Promise<void> | void;
+  onToggleItemEquip?: (payload: ItemEquipActionPayload) => Promise<void> | void;
   onUpdateCampaignMemories?: (
     characterId: string,
     memoryShards: MemoryShard[]
@@ -135,6 +132,8 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   const [expandedRecalls, setExpandedRecalls] = useState<Set<string>>(new Set());
   const [showAllFlags, setShowAllFlags] = useState(false);
   const [sheetCharacterId, setSheetCharacterId] = useState<string | null>(null);
+  const [sheetInitialTab, setSheetInitialTab] = useState<"current" | "inventory">("current");
+  const [sheetInitialItemId, setSheetInitialItemId] = useState<string | null>(null);
 
   // Latest vs previous turn on the active branch, used for "changed this turn" indicators
   const turns = bundle.active_branch_turns;
@@ -675,8 +674,18 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
               isPresent={row.isPresent}
               elsewhereLocationName={row.elsewhereLocationName}
               moodChanged={row.moodChanged}
+              isMutatingLocked={isMutatingLocked}
               onToggleItemEquip={onToggleItemEquip}
-              onOpenSheet={(cid) => setSheetCharacterId(cid)}
+              onOpenSheet={(cid) => {
+                setSheetInitialTab("current");
+                setSheetInitialItemId(null);
+                setSheetCharacterId(cid);
+              }}
+              onInspectItem={(cid, itemId) => {
+                setSheetInitialTab("inventory");
+                setSheetInitialItemId(itemId);
+                setSheetCharacterId(cid);
+              }}
             />
           ))}
         </div>
@@ -690,11 +699,18 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
           isPresent={sheetRow.isPresent}
           elsewhereLocationName={sheetRow.elsewhereLocationName}
           campaignId={bundle.campaign.id}
+          campaignWorld={world}
           worlds={worlds}
+          initialTab={sheetInitialTab}
+          initialExpandedItemId={sheetInitialItemId}
+          isMutatingLocked={isMutatingLocked}
           characterNameMap={Object.fromEntries(
             characterRows.map((r) => [r.record.id, r.record.name])
           )}
-          onClose={() => setSheetCharacterId(null)}
+          onClose={() => {
+            setSheetCharacterId(null);
+            setSheetInitialItemId(null);
+          }}
           onItemAction={onToggleItemEquip || (() => {})}
           onSaveMemories={async (cid, shards) => {
             if (onUpdateCampaignMemories) {

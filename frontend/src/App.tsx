@@ -51,6 +51,7 @@ import {
   CognitionBlock,
   CompassDirection,
   DiceMode,
+  ItemEquipActionPayload,
   LocationLoreNodeDraft,
   MemoryShard,
   NarrativeMode,
@@ -966,18 +967,16 @@ export const App: React.FC = () => {
     setPendingLocationOverrideId(locationId);
   };
 
-  const handleToggleItemEquip = async (payload: {
-    item: string;
-    action: "equip" | "unequip" | "remove" | "add";
-    target?: "equipped" | "inventory";
-    character_id?: string;
-  }) => {
+  const handleToggleItemEquip = async (payload: ItemEquipActionPayload) => {
     if (!bundle || isStreaming || isPhase4Running) return;
     try {
       const updated = await api.toggleItemEquip(bundle.campaign.id, payload);
       setBundle(updated);
     } catch (err) {
       console.error("Failed to manage item equipment/inventory:", err);
+      if (payload.action === "update" || payload.action === "add") {
+        throw err;
+      }
     }
   };
 

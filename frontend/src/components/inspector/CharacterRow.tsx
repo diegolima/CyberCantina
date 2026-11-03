@@ -4,10 +4,20 @@ import {
   ChevronRight,
   CircleMinus,
   CirclePlus,
+  FileText,
+  Lock,
   MapPin,
   SlidersHorizontal,
+  Sparkles,
 } from "lucide-react";
-import { CharacterRecord, CharacterStateSnapshot } from "../../types";
+import {
+  CharacterRecord,
+  CharacterStateSnapshot,
+  ItemEquipActionPayload,
+  ItemInstance,
+  hasItemFlag,
+  splitLegacyWornItems,
+} from "../../types";
 import { ChangeDot, MiniMoodBars, usePersistentState } from "./InspectorPrimitives";
 
 interface CharacterRowProps {
@@ -19,15 +29,31 @@ interface CharacterRowProps {
   elsewhereLocationName?: string;
   /** Whether the mood shifted on the latest turn. */
   moodChanged?: boolean;
-  /** Callback to toggle equipping or unequipping an item (applied next turn) */
-  onToggleItemEquip?: (payload: {
-    item: string;
-    action: "equip" | "unequip" | "remove" | "add";
-    target?: "equipped" | "inventory";
-    character_id?: string;
-  }) => Promise<void> | void;
+  /** True while turn streaming or Phase 5 Clerk is running. */
+  isMutatingLocked?: boolean;
+  /** Callback to toggle equipping or unequipping an item */
+  onToggleItemEquip?: (payload: ItemEquipActionPayload) => Promise<void> | void;
   /** Open full character sheet dossier modal */
   onOpenSheet?: (characterId: string) => void;
+  /** Open character sheet directly on the Inventory tab with a specific item expanded */
+  onInspectItem?: (characterId: string, itemId: string) => void;
+}
+
+function buildItemTooltip(item: ItemInstance, clickable: boolean): string {
+  const parts: string[] = [item.name];
+  const flagLabels: string[] = [];
+  if (hasItemFlag(item, "permanent")) flagLabels.push("Permanent");
+  if (hasItemFlag(item, "artifact")) flagLabels.push("World Artifact");
+  if (flagLabels.length > 0) {
+    parts.push(`[${flagLabels.join(" · ")}]`);
+  }
+  if (item.note.trim()) {
+    parts.push(`"${item.note.trim()}"`);
+  }
+  if (clickable) {
+    parts.push("(Click to edit item lore & flags)");
+  }
+  return parts.join(" — ");
 }
 
 /** Collapsible "Name · Mood" row expanding into the affective meters, gear, and "More" sheet. */
@@ -37,8 +63,10 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
   isPresent,
   elsewhereLocationName,
   moodChanged,
+  isMutatingLocked = false,
   onToggleItemEquip,
   onOpenSheet,
+  onInspectItem,
 }) => {
   const [open, setOpen] = usePersistentState<boolean>(
     `character.${character.id}`,
@@ -48,19 +76,10 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
   const valencePct = Math.round(((state.valence + 1) / 2) * 100);
   const arousalPct = Math.round(state.arousal * 100);
 
-  let equippedList = state.equipped ?? [];
-  let inventoryList = state.inventory ?? [];
-  if (
-    equippedList.length === 0 &&
-    inventoryList.some((it) => /^\[(?:worn|equipped)\]/i.test(it))
-  ) {
-    equippedList = inventoryList
-      .filter((it) => /^\[(?:worn|equipped)\]/i.test(it))
-      .map((it) => it.replace(/^\[(?:worn|equipped)\]\s*/i, ""));
-    inventoryList = inventoryList.filter(
-      (it) => !/^\[(?:worn|equipped)\]/i.test(it)
-    );
-  }
+  const { equippedList, inventoryList } = splitLegacyWornItems(
+    state.equipped,
+    state.inventory
+  );
 
   return (
     <div className={`char-row ${isPresent ? "" : "char-row-absent"}`}>
@@ -147,32 +166,59 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
               </div>
               {equippedList.length > 0 ? (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 4 }}>
-                  {equippedList.map((item, idx) => (
-                    <span
-                      key={idx}
-                      className="badge item-badge item-badge-equipped"
-                    >
-                      <span>{item}</span>
-                      {onToggleItemEquip && (
-                        <button
-                          type="button"
-                          className="item-action-btn"
-                          title="Unequip (move to carried inventory)"
-                          aria-label={`Unequip ${item}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onToggleItemEquip({
-                              character_id: character.id,
-                              item,
-                              action: "unequip",
-                            });
-                          }}
-                        >
-                          <CircleMinus size={12} />
-                        </button>
-                      )}
-                    </span>
-                  ))}
+                  {equippedList.map((item, idx) => {
+                    const isPerm = hasItemFlag(item, "permanent");
+                    const isArt = hasItemFlag(item, "artifact");
+                    const hasNote = Boolean(item.note.trim());
+                    return (
+                      <span
+                        key={item.id || idx}
+                        className={`badge item-badge item-badge-equipped ${
+                          onInspectItem ? "item-badge-clickable" : ""
+                        }`}
+                        title={buildItemTooltip(item, Boolean(onInspectItem))}
+                        onClick={
+                          onInspectItem
+                            ? (e) => {
+                                e.stopPropagation();
+                                onInspectItem(character.id, item.id);
+                              }
+                            : undefined
+                        }
+                      >
+                        <span className="item-meta-icons">
+                          {isPerm && <Lock size={10} color="#7dd3fc" />}
+                          {isArt && <Sparkles size={10} color="#d8b4fe" />}
+                          <span>{item.name}</span>
+                          {hasNote && <FileText size={10} style={{ opacity: 0.85 }} />}
+                        </span>
+                        {onToggleItemEquip && (
+                          <button
+                            type="button"
+                            className="item-action-btn"
+                            disabled={isMutatingLocked}
+                            title={
+                              isMutatingLocked
+                                ? "Wait for active turn/Clerk pass to finish"
+                                : "Unequip (move to carried inventory)"
+                            }
+                            aria-label={`Unequip ${item.name}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onToggleItemEquip({
+                                character_id: character.id,
+                                item: item.name,
+                                item_id: item.id,
+                                action: "unequip",
+                              });
+                            }}
+                          >
+                            <CircleMinus size={12} />
+                          </button>
+                        )}
+                      </span>
+                    );
+                  })}
                 </div>
               ) : (
                 <div style={{ color: "var(--text-muted)", fontStyle: "italic", fontSize: "0.72rem" }}>
@@ -188,32 +234,65 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
               </div>
               {inventoryList.length > 0 ? (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 4 }}>
-                  {inventoryList.map((item, idx) => (
-                    <span
-                      key={idx}
-                      className="badge item-badge item-badge-inventory"
-                    >
-                      <span>{item}</span>
-                      {onToggleItemEquip && (
-                        <button
-                          type="button"
-                          className="item-action-btn"
-                          title="Equip (move to equipped gear)"
-                          aria-label={`Equip ${item}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onToggleItemEquip({
-                              character_id: character.id,
-                              item,
-                              action: "equip",
-                            });
-                          }}
-                        >
-                          <CirclePlus size={12} />
-                        </button>
-                      )}
-                    </span>
-                  ))}
+                  {inventoryList.map((item, idx) => {
+                    const isPerm = hasItemFlag(item, "permanent");
+                    const isArt = hasItemFlag(item, "artifact");
+                    const hasNote = Boolean(item.note.trim());
+                    return (
+                      <span
+                        key={item.id || idx}
+                        className={`badge item-badge item-badge-inventory ${
+                          onInspectItem ? "item-badge-clickable" : ""
+                        }`}
+                        title={buildItemTooltip(item, Boolean(onInspectItem))}
+                        onClick={
+                          onInspectItem
+                            ? (e) => {
+                                e.stopPropagation();
+                                onInspectItem(character.id, item.id);
+                              }
+                            : undefined
+                        }
+                      >
+                        <span className="item-meta-icons">
+                          {isPerm && <Lock size={10} color="#7dd3fc" />}
+                          {isArt && <Sparkles size={10} color="#d8b4fe" />}
+                          <span>{item.name}</span>
+                          {hasNote && (
+                            <FileText
+                              size={10}
+                              color="var(--accent-amber)"
+                              style={{ opacity: 0.9 }}
+                            />
+                          )}
+                        </span>
+                        {onToggleItemEquip && (
+                          <button
+                            type="button"
+                            className="item-action-btn"
+                            disabled={isMutatingLocked}
+                            title={
+                              isMutatingLocked
+                                ? "Wait for active turn/Clerk pass to finish"
+                                : "Equip (move to equipped gear)"
+                            }
+                            aria-label={`Equip ${item.name}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onToggleItemEquip({
+                                character_id: character.id,
+                                item: item.name,
+                                item_id: item.id,
+                                action: "equip",
+                              });
+                            }}
+                          >
+                            <CirclePlus size={12} />
+                          </button>
+                        )}
+                      </span>
+                    );
+                  })}
                 </div>
               ) : (
                 <div style={{ color: "var(--text-muted)", fontStyle: "italic", fontSize: "0.72rem" }}>
