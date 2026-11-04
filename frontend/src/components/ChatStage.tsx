@@ -14,6 +14,7 @@ import {
   Globe,
   ListChecks,
   Lock,
+  LogOut,
   MapPin,
   Plus,
   RefreshCw,
@@ -109,6 +110,7 @@ interface ChatStageProps {
   }) => void;
   onCheckoutTurn: (turnId: string) => void;
   onDeleteLastTurn?: () => Promise<void> | void;
+  onCloseCampaign?: () => void;
 }
 
 function renderFormattedProse(text: string): React.ReactNode {
@@ -135,6 +137,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   onSendTurn,
   onCheckoutTurn,
   onDeleteLastTurn,
+  onCloseCampaign,
 }) => {
   const isBusy = isStreaming || isPhase4Running;
   const [inputText, setInputText] = useState("");
@@ -982,8 +985,29 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     <main className="chat-stage">
       <header className="stage-header">
         <div>
-          <div style={{ fontWeight: 700, fontSize: "1.02rem" }}>
-            {bundle.campaign.name}
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ fontWeight: 700, fontSize: "1.02rem" }}>
+              {bundle.campaign.name}
+            </div>
+            {onCloseCampaign && (
+              <button
+                type="button"
+                className="btn btn-sm btn-close-campaign"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 5,
+                  padding: "2px 8px",
+                  fontSize: "0.72rem",
+                  color: "var(--text-secondary)",
+                }}
+                onClick={onCloseCampaign}
+                title="Close campaign and return to Home"
+              >
+                <LogOut size={12} />
+                <span>Close Campaign</span>
+              </button>
+            )}
           </div>
           <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
             Actor: <strong style={{ color: "var(--accent-amber)" }}>{character.name}</strong>{" "}

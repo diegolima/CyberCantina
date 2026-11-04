@@ -35,6 +35,7 @@ import {
   WorldInspectorModal,
 } from "./components/EntityEditorModals";
 import { LiveInspector } from "./components/LiveInspector";
+import { HomeScreen } from "./components/HomeScreen";
 import { NewCampaignModal } from "./components/NewCampaignModal";
 import { NotesFlyout, NotesModal } from "./components/NotesDrawer";
 import { PersonaEditorModal } from "./components/PersonaEditorModal";
@@ -370,10 +371,15 @@ export const App: React.FC = () => {
     phaseStatus: string;
   } | null>(null);
 
+  const ACTIVE_CAMPAIGN_STORAGE_KEY = "cybercantina_active_campaign_id";
+
   const loadCampaignBundle = async (campaignId: string) => {
     setPendingLocationOverrideId(null);
     const stateBundle = await api.getCampaignState(campaignId);
     setBundle(stateBundle);
+    try {
+      localStorage.setItem(ACTIVE_CAMPAIGN_STORAGE_KEY, campaignId);
+    } catch {}
     const [w, c] = await Promise.all([
       api.getWorld(stateBundle.campaign.world_id),
       api.getCharacter(stateBundle.campaign.character_id),
@@ -382,6 +388,15 @@ export const App: React.FC = () => {
     setCampaignCharacter(c);
     setActiveWorld(w);
     setActiveCharacter(c);
+  };
+
+  const handleCloseCampaign = () => {
+    try {
+      localStorage.removeItem(ACTIVE_CAMPAIGN_STORAGE_KEY);
+    } catch {}
+    setBundle(null);
+    setCampaignWorld(null);
+    setCampaignCharacter(null);
   };
 
   const loadWorkspaceData = async () => {
@@ -402,8 +417,10 @@ export const App: React.FC = () => {
     if (personaList.length > 0) {
       setActivePersona(personaList[0]);
     }
-    if (camps.length > 0) {
-      await loadCampaignBundle(camps[0].id);
+    const storedCampaignId = localStorage.getItem(ACTIVE_CAMPAIGN_STORAGE_KEY);
+    const activeCamp = storedCampaignId ? camps.find((c) => c.id === storedCampaignId) : null;
+    if (activeCamp) {
+      await loadCampaignBundle(activeCamp.id);
     } else {
       setBundle(null);
       setCampaignWorld(null);
@@ -448,6 +465,9 @@ export const App: React.FC = () => {
   };
 
   const handleLogout = async () => {
+    try {
+      localStorage.removeItem(ACTIVE_CAMPAIGN_STORAGE_KEY);
+    } catch {}
     await api.logout();
     const status = await refreshAuthStatus();
     if (!status.authenticated) {
@@ -463,6 +483,9 @@ export const App: React.FC = () => {
   };
 
   const handleAccountDeleted = async () => {
+    try {
+      localStorage.removeItem(ACTIVE_CAMPAIGN_STORAGE_KEY);
+    } catch {}
     setShowProfileModal(false);
     setShowAdminModal(false);
     setStoredSessionToken(null);
@@ -601,11 +624,12 @@ export const App: React.FC = () => {
         setWorlds(updatedWorlds);
 
         if (bundle?.campaign.id === deletedCampId) {
-          if (updatedCamps.length > 0) {
-            await loadCampaignBundle(updatedCamps[0].id);
-          } else {
-            setBundle(null);
-          }
+          try {
+            localStorage.removeItem(ACTIVE_CAMPAIGN_STORAGE_KEY);
+          } catch {}
+          setBundle(null);
+          setCampaignWorld(null);
+          setCampaignCharacter(null);
         }
       }
       setDeleteTarget(null);
@@ -1234,15 +1258,21 @@ export const App: React.FC = () => {
   }
 
   return (
-    <div className="studio-shell">
-      {/* Left Sidebar: 4 Collapsible, Searchable, Paged Categories */}
-      <aside className="sidebar">
-        <div className="brand-header">
-          <div className="brand-title">
-            <Flame size={20} color="var(--accent-amber)" />
-            <span>CYBERCANTINA</span>
+    <div className={`studio-shell ${!bundle ? "no-campaign" : ""}`}>
+      {/* Left Sidebar: 4 Collapsible, Searchable, Paged Categories (Active in play mode) */}
+      {bundle && (
+        <aside className="sidebar">
+          <div
+            className="brand-header"
+            style={{ cursor: "pointer" }}
+            onClick={handleCloseCampaign}
+            title="Return to Home page"
+          >
+            <div className="brand-title">
+              <Flame size={20} color="var(--accent-amber)" />
+              <span>CYBERCANTINA</span>
+            </div>
           </div>
-        </div>
 
         {/* 1. Personas (+new) */}
         <SidebarCategory
@@ -1722,6 +1752,7 @@ export const App: React.FC = () => {
           )}
         </div>
       </aside>
+      )}
 
       {/* Quick Player Notes Flyout Drawer */}
       {showNotesFlyout && (
@@ -1743,7 +1774,7 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* Center Roleplay Stage */}
+      {/* Center Roleplay Stage or Central Home Screen */}
       {bundle && campaignCharacter ? (
         <ChatStage
           bundle={bundle}
@@ -1759,46 +1790,48 @@ export const App: React.FC = () => {
           onSendTurn={handleSendTurn}
           onCheckoutTurn={handleCheckoutTurn}
           onDeleteLastTurn={handleDeleteLastTurn}
+          onCloseCampaign={handleCloseCampaign}
         />
       ) : (
-        <main
-          className="chat-stage"
-          style={{
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 12,
-            padding: 24,
-            textAlign: "center",
+        <HomeScreen
+          personas={personas}
+          characters={characters}
+          worlds={worlds}
+          campaigns={campaigns}
+          activePersona={activePersona}
+          currentUser={currentUser}
+          singleUserMode={singleUserMode}
+          notesCount={notes.length}
+          onSelectCampaign={(c) => loadCampaignBundle(c.id)}
+          onInspectCharacter={(c) => setInspectingCharacter(c)}
+          onInspectWorld={(w) => setInspectingWorld(w)}
+          onEditPersona={(p) => {
+            setEditingPersona(p);
+            setShowPersonaModal(true);
           }}
-        >
-          <div style={{ color: "var(--text-secondary)", fontSize: "0.95rem" }}>
-            {campaigns.length === 0
-              ? "No active campaigns remaining. Create a new campaign or character to start roleplaying."
-              : "Select or create a campaign from the left sidebar."}
-          </div>
-          <div style={{ display: "flex", gap: 10 }}>
-            {worlds.length > 0 && characters.length > 0 && (
-              <button
-                type="button"
-                className="btn btn-amber"
-                onClick={handleCreateNewCampaign}
-              >
-                <Plus size={14} /> New Campaign
-              </button>
-            )}
-            <button
-              type="button"
-              className="btn"
-              onClick={() => setShowCharWizard(true)}
-            >
-              <Plus size={14} /> New Character
-            </button>
-          </div>
-        </main>
+          onSetActivePersona={(p) => setActivePersona(p)}
+          onNewCampaign={handleCreateNewCampaign}
+          onNewCharacter={() => setShowCharWizard(true)}
+          onNewWorld={() => setShowWorldWizard(true)}
+          onNewPersona={() => {
+            setEditingPersona(null);
+            setShowPersonaModal(true);
+          }}
+          onOpenProfile={() => {
+            setProfileInitialTab("identity");
+            setShowProfileModal(true);
+          }}
+          onOpenAdmin={() => {
+            setAdminInitialTab("users");
+            setShowAdminModal(true);
+          }}
+          onToggleNotes={() => setShowNotesFlyout((prev) => !prev)}
+          onLogout={handleLogout}
+        />
       )}
 
-      {/* Right Live World & Mind Inspector */}
-      {bundle && campaignWorld && campaignCharacter ? (
+      {/* Right Live World & Mind Inspector (rendered only when campaign is open) */}
+      {bundle && campaignWorld && campaignCharacter && (
         <LiveInspector
           bundle={bundle}
           world={campaignWorld}
@@ -1820,8 +1853,6 @@ export const App: React.FC = () => {
           isMutatingLocked={isStreaming || isPhase4Running}
           worlds={worlds}
         />
-      ) : (
-        <aside className="inspector" />
       )}
 
       {/* Modals */}
@@ -2042,6 +2073,9 @@ export const App: React.FC = () => {
               const allCamps = await api.listCampaigns();
               setCampaigns(allCamps);
               setBundle(newBundle);
+              try {
+                localStorage.setItem(ACTIVE_CAMPAIGN_STORAGE_KEY, newBundle.campaign.id);
+              } catch {}
               setCampaignWorld(targetWorld);
               setCampaignCharacter(createdChar);
               setActiveWorld(targetWorld);
@@ -2204,6 +2238,9 @@ export const App: React.FC = () => {
             const allCamps = await api.listCampaigns();
             setCampaigns(allCamps);
             setBundle(created);
+            try {
+              localStorage.setItem(ACTIVE_CAMPAIGN_STORAGE_KEY, created.campaign.id);
+            } catch {}
             const w = worlds.find((item) => item.id === world_id) ?? worlds[0];
             const c = characters.find((item) => item.id === character_id) ?? characters[0];
             setCampaignWorld(w);
