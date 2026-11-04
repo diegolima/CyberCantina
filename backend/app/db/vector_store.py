@@ -8,12 +8,14 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass
-from typing import Iterable, Mapping
+from typing import Callable, Iterable, Mapping
 
 import httpx
 import numpy as np
 
 from app.config import settings
+from app.providers.probe import bearer_headers
+from app.providers.resolver import resolve_system_profile
 from app.schemas.turn import RecalledMemoryItem
 
 
@@ -62,6 +64,16 @@ def compute_local_hash_embedding(text: str, dims: int = 384) -> np.ndarray:
     return vec
 
 
+def current_embedding_fingerprint() -> str:
+    """Identify the active embedding space; vectors from different fingerprints are not comparable."""
+    profile = settings.embedding_profile
+    if profile.mode == "local_hash":
+        return f"local_hash|{profile.dimensions}"
+    if profile.mode == "fastembed":
+        return "fastembed|default"
+    return f"openai_compat|{profile.provider_id or profile.base_url}|{profile.model}"
+
+
 async def embed_text(text: str) -> np.ndarray:
     """Generate a normalized float32 embedding according to the active EmbeddingProfile."""
     profile = settings.embedding_profile
@@ -69,14 +81,22 @@ async def embed_text(text: str) -> np.ndarray:
 
     if profile.mode == "openai_compat":
         try:
-            base = profile.base_url.rstrip("/")
+            endpoint = resolve_system_profile(profile, "embedding") if profile.provider_id else None  # type: ignore[arg-type]
+            if endpoint is not None:
+                base = endpoint.root_url.rstrip("/")
+                token = endpoint.bearer_token
+            else:
+                base = profile.base_url.rstrip("/")
+                token = profile.api_key if profile.api_key not in ("", "ollama") else None
             root_url = base[: -len("/v1")].rstrip("/") if base.endswith("/v1") else base
             v1_url = base if base.endswith("/v1") else f"{base}/v1"
-            headers = {"Authorization": f"Bearer {profile.api_key}"}
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            native_headers = bearer_headers(token)
+            headers = {"Authorization": f"Bearer {token or 'ollama'}"}
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
                 # 1. Try native Ollama /api/embed
                 ollama_resp = await client.post(
                     f"{root_url}/api/embed",
+                    headers=native_headers,
                     json={"model": profile.model, "input": text},
                 )
                 if ollama_resp.status_code == 200:
@@ -192,9 +212,10 @@ class VectorStore:
                 """
                 INSERT INTO vector_entries (
                     id, source_type, world_id, location_id, character_id, campaign_id,
-                    anchor_turn_id, superseded_at_turn_id, title, content, keywords_json, embedding_blob
+                    anchor_turn_id, superseded_at_turn_id, title, content, keywords_json, embedding_blob,
+                    embedding_fingerprint
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     source_type = excluded.source_type,
                     world_id = excluded.world_id,
@@ -204,6 +225,7 @@ class VectorStore:
                     content = excluded.content,
                     keywords_json = excluded.keywords_json,
                     embedding_blob = excluded.embedding_blob,
+                    embedding_fingerprint = excluded.embedding_fingerprint,
                     anchor_turn_id = excluded.anchor_turn_id,
                     superseded_at_turn_id = excluded.superseded_at_turn_id
                 """,
@@ -220,6 +242,7 @@ class VectorStore:
                     content,
                     json.dumps(kw_list),
                     blob,
+                    current_embedding_fingerprint(),
                 ),
             )
             if owns_conn:
@@ -264,6 +287,64 @@ class VectorStore:
             embedding=vec,
             conn=conn,
         )
+
+    def count_stale_entries(self) -> int:
+        """Rows embedded under a fingerprint other than the active one (excludes legacy NULL rows)."""
+        conn = self._connect()
+        try:
+            return int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM vector_entries WHERE embedding_fingerprint IS NOT NULL AND embedding_fingerprint != ?",
+                    (current_embedding_fingerprint(),),
+                ).fetchone()[0]
+            )
+        finally:
+            conn.close()
+
+    def stamp_unstamped_entries(self) -> int:
+        """One-shot migration: legacy NULL rows are assumed to belong to the active embedding space."""
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                "UPDATE vector_entries SET embedding_fingerprint = ? WHERE embedding_fingerprint IS NULL",
+                (current_embedding_fingerprint(),),
+            )
+            conn.commit()
+            return cur.rowcount
+        finally:
+            conn.close()
+
+    async def reindex(self, progress: "Callable[[int, int], None] | None" = None) -> int:
+        """Re-embed every row not in the active embedding space. Returns the number of rows updated."""
+        fingerprint = current_embedding_fingerprint()
+        conn = self._connect()
+        try:
+            todo = conn.execute(
+                """
+                SELECT id, title, content, keywords_json FROM vector_entries
+                WHERE embedding_fingerprint IS NULL OR embedding_fingerprint != ?
+                """,
+                (fingerprint,),
+            ).fetchall()
+        finally:
+            conn.close()
+        done = 0
+        for row in todo:
+            text = combine_entry_text(row["title"], row["content"], json.loads(row["keywords_json"] or "[]"))
+            vec = await embed_text(text)
+            write = self._connect()
+            try:
+                write.execute(
+                    "UPDATE vector_entries SET embedding_blob = ?, embedding_fingerprint = ? WHERE id = ?",
+                    (vec.astype(np.float32).tobytes(), fingerprint, row["id"]),
+                )
+                write.commit()
+            finally:
+                write.close()
+            done += 1
+            if progress is not None:
+                progress(done, len(todo))
+        return done
 
     @staticmethod
     def _load_overridden_location_ids(conn: sqlite3.Connection, campaign_id: str) -> set[str]:
@@ -335,7 +416,7 @@ class VectorStore:
             rows = conn.execute(
                 f"""
                 SELECT id, source_type, location_id, character_id, campaign_id, anchor_turn_id, superseded_at_turn_id,
-                       title, content, keywords_json, embedding_blob
+                       title, content, keywords_json, embedding_blob, embedding_fingerprint
                 FROM vector_entries
                 WHERE (world_id = ? AND source_type = 'lore')
                    OR (world_id = ? AND source_type = 'location_lore' AND (campaign_id IS NULL OR campaign_id = '' OR campaign_id = ?))
@@ -348,7 +429,11 @@ class VectorStore:
             conn.close()
 
         scored: list[RecalledMemoryItem] = []
+        current_fp = current_embedding_fingerprint()
         for row in rows:
+            row_fp = row["embedding_fingerprint"]
+            if row_fp is not None and row_fp != current_fp:
+                continue  # embedded in a different vector space: stale until reindexed, never garbage-scored
             anchor_turn = row["anchor_turn_id"]
             row_keys = row.keys()
             superseded_turn = (
@@ -484,7 +569,7 @@ class VectorStore:
             rows = conn.execute(
                 f"""
                 SELECT id, source_type, location_id, character_id, campaign_id, anchor_turn_id, superseded_at_turn_id,
-                       title, content, keywords_json, embedding_blob
+                       title, content, keywords_json, embedding_blob, embedding_fingerprint
                 FROM vector_entries
                 WHERE (world_id = ? AND source_type = 'lore')
                    OR (world_id = ? AND source_type = 'location_lore' AND (campaign_id IS NULL OR campaign_id = '' OR campaign_id = ?))
@@ -498,7 +583,11 @@ class VectorStore:
 
         # Score all candidates once
         scored_candidates: list[tuple[RecalledMemoryItem, sqlite3.Row]] = []
+        current_fp = current_embedding_fingerprint()
         for row in rows:
+            row_fp = row["embedding_fingerprint"]
+            if row_fp is not None and row_fp != current_fp:
+                continue  # embedded in a different vector space: stale until reindexed, never garbage-scored
             anchor_turn = row["anchor_turn_id"]
             row_keys = row.keys()
             superseded_turn = (

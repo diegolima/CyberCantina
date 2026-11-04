@@ -139,10 +139,24 @@ class UserModelSettingsPayload(BaseModel):
     max_scene_flags: int | None = Field(default=None, ge=1, le=50)
     agent_dispatch_mode: AgentDispatchMode | None = None
     persona_disclosure_mode: Literal["llm_intent", "token_matching", "hybrid"] | None = None
+    clerk_mirrors_actor: bool | None = None
+
+
+class EffectiveWarning(BaseModel):
+    """Why a user's saved override could not be honored (never silently hidden)."""
+
+    role: Literal["actor", "clerk"]
+    code: Literal["not_found", "disabled", "byop_disabled", "no_token", "missing_provider"]
+    provider_id: str | None = None
 
 
 class ProfileModelSettingsResponse(BaseModel):
     allow_user_model_overrides: bool
+    allow_user_providers: bool = False
+    warnings: list[EffectiveWarning] = Field(default_factory=list)
+    effective_clerk_mirrors_actor: bool = False
+    user_clerk_mirrors_actor: bool | None = None
+    default_clerk_mirrors_actor: bool = False
     has_override: bool
     effective_actor_profile: ModelProfile
     effective_clerk_profile: ModelProfile

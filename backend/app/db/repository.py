@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 
 from app.config import ModelProfile
+from app.db.provider_store import ProviderStore
 from app.db.vector_store import VectorStore, combine_entry_text, embed_text
 from app.prompts import BUILTIN_PRESETS, FACTORY_DEFAULT_PROMPTS
 from app.schemas.auth import (
@@ -303,6 +304,11 @@ class CantinaRepository:
         self.media_dir = media_dir or str(Path(db_path).resolve().parent / "data" / "media")
         self.vector_store = VectorStore(db_path)
 
+    @property
+    def providers(self) -> "ProviderStore":
+        """Provider persistence bound to this repository's database."""
+        return ProviderStore(self.db_path)
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
@@ -475,6 +481,9 @@ class CantinaRepository:
                 }
                 if "location_id" not in existing_vec_cols:
                     conn.execute("ALTER TABLE vector_entries ADD COLUMN location_id TEXT NULL")
+                    conn.commit()
+                if "embedding_fingerprint" not in existing_vec_cols:
+                    conn.execute("ALTER TABLE vector_entries ADD COLUMN embedding_fingerprint TEXT NULL")
                     conn.commit()
 
             camp_table_exists = conn.execute(
@@ -736,6 +745,10 @@ class CantinaRepository:
             if "agent_dispatch_mode" not in ums_cols:
                 conn.execute(
                     "ALTER TABLE user_model_settings ADD COLUMN agent_dispatch_mode TEXT NULL"
+                )
+            if "clerk_mirrors_actor" not in ums_cols:
+                conn.execute(
+                    "ALTER TABLE user_model_settings ADD COLUMN clerk_mirrors_actor INTEGER NULL"
                 )
             if "persona_disclosure_mode" not in ums_cols:
                 conn.execute(
@@ -1472,6 +1485,7 @@ class CantinaRepository:
         conn = self._connect()
         try:
             conn.execute("DELETE FROM prompt_presets WHERE owner_id = ?", (user_id,))
+            conn.execute("DELETE FROM providers WHERE scope = 'user' AND owner_id = ?", (user_id,))
             conn.execute("DELETE FROM user_model_settings WHERE user_id = ?", (user_id,))
             conn.execute("DELETE FROM user_sessions WHERE user_id = ?", (user_id,))
             conn.execute("DELETE FROM user_passkeys WHERE user_id = ?", (user_id,))
@@ -1485,7 +1499,7 @@ class CantinaRepository:
         conn = self._connect()
         try:
             row = conn.execute(
-                "SELECT actor_profile_json, clerk_profile_json, working_memory_turns, active_prompt_preset_id, delegate_cognition_to_clerk, max_scene_flags, agent_dispatch_mode, persona_disclosure_mode FROM user_model_settings WHERE user_id = ?",
+                "SELECT actor_profile_json, clerk_profile_json, working_memory_turns, active_prompt_preset_id, delegate_cognition_to_clerk, max_scene_flags, agent_dispatch_mode, persona_disclosure_mode, clerk_mirrors_actor FROM user_model_settings WHERE user_id = ?",
                 (user_id,),
             ).fetchone()
             if not row:
@@ -1528,6 +1542,9 @@ class CantinaRepository:
                 max_scene_flags=row["max_scene_flags"],
                 agent_dispatch_mode=dispatch_mode,
                 persona_disclosure_mode=pdm,
+                clerk_mirrors_actor=(
+                    bool(row["clerk_mirrors_actor"]) if row["clerk_mirrors_actor"] is not None else None
+                ),
             )
         finally:
             conn.close()
@@ -1555,10 +1572,13 @@ class CantinaRepository:
                 )
             )
             pdm_val = payload.persona_disclosure_mode or "llm_intent"
+            mirror_val = (
+                None if payload.clerk_mirrors_actor is None else (1 if payload.clerk_mirrors_actor else 0)
+            )
             conn.execute(
                 """
-                INSERT INTO user_model_settings (user_id, actor_profile_json, clerk_profile_json, working_memory_turns, active_prompt_preset_id, delegate_cognition_to_clerk, max_scene_flags, agent_dispatch_mode, persona_disclosure_mode, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO user_model_settings (user_id, actor_profile_json, clerk_profile_json, working_memory_turns, active_prompt_preset_id, delegate_cognition_to_clerk, max_scene_flags, agent_dispatch_mode, persona_disclosure_mode, clerk_mirrors_actor, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     actor_profile_json = excluded.actor_profile_json,
                     clerk_profile_json = excluded.clerk_profile_json,
@@ -1568,9 +1588,10 @@ class CantinaRepository:
                     max_scene_flags = excluded.max_scene_flags,
                     agent_dispatch_mode = excluded.agent_dispatch_mode,
                     persona_disclosure_mode = excluded.persona_disclosure_mode,
+                    clerk_mirrors_actor = excluded.clerk_mirrors_actor,
                     updated_at = excluded.updated_at
                 """,
-                (user_id, actor_json, clerk_json, payload.working_memory_turns, payload.active_prompt_preset_id, del_cog_val, payload.max_scene_flags, payload.agent_dispatch_mode, pdm_val, now),
+                (user_id, actor_json, clerk_json, payload.working_memory_turns, payload.active_prompt_preset_id, del_cog_val, payload.max_scene_flags, payload.agent_dispatch_mode, pdm_val, mirror_val, now),
             )
             conn.commit()
             return payload

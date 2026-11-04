@@ -10,6 +10,10 @@ data/
 
 # User Configuration & API Keys
 backend/cantina_settings.json
+# Provider credential encryption key and one-time pre-migration backups
+backend/.cantina_secret.key
+.cantina_secret.key
+*.bak-pre-providers
 .env
 *.env
 *.env.*

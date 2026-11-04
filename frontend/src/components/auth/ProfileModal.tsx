@@ -20,26 +20,29 @@ import { PromptPresetsManager } from "../PromptPresetsManager";
 import {
   AuthStatusResponse,
   DisclosureDetectionMode,
-  OllamaStatusResponse,
   PasskeyInfo,
   ProfileModelSettingsResponse,
   UserModelSettingsPayload,
   UserProfile,
 } from "../../types";
 import { FeedbackModal } from "./FeedbackModal";
+import { ModelRoleEditor } from "../models/ModelRoleEditor";
+import { ProvidersManager } from "../providers/ProvidersManager";
+import { ProviderChip } from "../providers/ProviderBadges";
+import { ProvidersProvider, useProviders } from "../providers/ProvidersContext";
 
 export interface ProfileModalProps {
   user: UserProfile;
   singleUserMode: boolean;
   initialTab?: "identity" | "account" | "preferences" | "models" | "prompts" | "behavior";
-  initialSubTab?: "behavior" | "prompts" | "models";
+  initialSubTab?: "behavior" | "prompts" | "models" | "providers";
   onClose: () => void;
   onUserUpdated: (updated: UserProfile, singleUserMode?: boolean) => void;
   onAccountReset: () => Promise<void>;
   onAccountDeleted: () => Promise<void>;
 }
 
-export const ProfileModal: React.FC<ProfileModalProps> = ({
+const ProfileModalInner: React.FC<ProfileModalProps> = ({
   user,
   singleUserMode,
   initialTab,
@@ -62,14 +65,15 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
     return "identity";
   };
 
-  const getInitialPrefTab = (): "behavior" | "prompts" | "models" => {
+  const getInitialPrefTab = (): "behavior" | "prompts" | "models" | "providers" => {
+    if (initialSubTab === "providers") return "providers";
     if (initialTab === "models" || initialSubTab === "models") return "models";
     if (initialTab === "prompts" || initialSubTab === "prompts") return "prompts";
     return "behavior";
   };
 
   const [activeTab, setActiveTab] = useState<"identity" | "account" | "preferences">(getInitialTab);
-  const [activePrefTab, setActivePrefTab] = useState<"behavior" | "prompts" | "models">(getInitialPrefTab);
+  const [activePrefTab, setActivePrefTab] = useState<"behavior" | "prompts" | "models" | "providers">(getInitialPrefTab);
   const [displayName, setDisplayName] = useState(user.display_name);
   const [savingName, setSavingName] = useState(false);
 
@@ -78,10 +82,12 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
     useState<ProfileModelSettingsResponse | null>(null);
   const [modelLoading, setModelLoading] = useState(false);
   const [modelSaving, setModelSaving] = useState(false);
-  const [ollamaStatus, setOllamaStatus] = useState<OllamaStatusResponse | null>(
-    null
-  );
-  const [probingOllama, setProbingOllama] = useState(false);
+  const providerStore = useProviders();
+  const [actorInvalid, setActorInvalid] = useState(0);
+  const [clerkInvalid, setClerkInvalid] = useState(0);
+  const [userActorProviderId, setUserActorProviderId] = useState<string | null>(null);
+  const [userClerkProviderId, setUserClerkProviderId] = useState<string | null>(null);
+  const [userClerkMirrors, setUserClerkMirrors] = useState(false);
 
   const [userActorModel, setUserActorModel] = useState("");
   const [userActorTemp, setUserActorTemp] = useState(0.75);
@@ -135,18 +141,6 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
     setDisplayName(user.display_name);
   }, [user.display_name]);
 
-  const probeOllama = async (urlToProbe?: string) => {
-    setProbingOllama(true);
-    try {
-      const ost = await api.getOllamaStatus(urlToProbe);
-      setOllamaStatus(ost);
-    } catch {
-      // ignore
-    } finally {
-      setProbingOllama(false);
-    }
-  };
-
   const loadProfileModels = async () => {
     setModelLoading(true);
     try {
@@ -155,6 +149,11 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       const activeActor = data.user_actor_profile ?? data.default_actor_profile;
       const activeClerk = data.user_clerk_profile ?? data.default_clerk_profile;
 
+      setUserActorProviderId(activeActor.provider_id ?? null);
+      setUserClerkProviderId(activeClerk.provider_id ?? null);
+      setUserClerkMirrors(
+        data.user_clerk_mirrors_actor ?? data.default_clerk_mirrors_actor ?? false
+      );
       setUserActorModel(activeActor.model);
       setUserActorTemp(activeActor.temperature);
       setUserActorTokens(activeActor.max_tokens);
@@ -184,8 +183,6 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
           data.default_persona_disclosure_mode ??
           "llm_intent"
       );
-
-      probeOllama(activeActor.base_url);
     } catch (err: any) {
       setErrorMsg(err?.message || "Failed to load preferences.");
     } finally {
@@ -207,12 +204,14 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       const payload: UserModelSettingsPayload = {
         actor_profile: {
           ...modelSettings.effective_actor_profile,
+          provider_id: userActorProviderId,
           model: userActorModel,
           temperature: userActorTemp,
           max_tokens: userActorTokens,
         },
         clerk_profile: {
           ...modelSettings.effective_clerk_profile,
+          provider_id: userClerkProviderId,
           model: userClerkModel,
           temperature: userClerkTemp,
           max_tokens: userClerkTokens,
@@ -222,6 +221,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
         max_scene_flags: userMaxSceneFlags,
         agent_dispatch_mode: userAgentDispatchMode,
         persona_disclosure_mode: userPersonaDisclosureMode,
+        clerk_mirrors_actor: userClerkMirrors,
       };
       const res = await api.updateProfileModels(payload);
       setModelSettings(res);
@@ -240,6 +240,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
     try {
       const res = await api.resetProfileModels();
       setModelSettings(res);
+      setUserActorProviderId(res.default_actor_profile.provider_id ?? null);
+      setUserClerkProviderId(res.default_clerk_profile.provider_id ?? null);
+      setUserClerkMirrors(res.default_clerk_mirrors_actor ?? false);
       setUserActorModel(res.default_actor_profile.model);
       setUserActorTemp(res.default_actor_profile.temperature);
       setUserActorTokens(res.default_actor_profile.max_tokens);
@@ -1412,7 +1415,29 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                     </span>
                   )}
                 </button>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${
+                    activePrefTab === "providers" ? "btn-amber" : ""
+                  }`}
+                  onClick={() => setActivePrefTab("providers")}
+                >
+                  <Server size={13} />
+                  Providers
+                  {modelSettings && !modelSettings.allow_user_providers && (
+                    <span className="modal-tab-badge" style={{ marginLeft: 6 }}>
+                      Locked
+                    </span>
+                  )}
+                </button>
               </div>
+
+              {activePrefTab === "providers" && (
+                <ProvidersManager
+                  variant="profile"
+                  allowUserProviders={!!modelSettings?.allow_user_providers}
+                />
+              )}
 
               {modelLoading && (
                 <div
@@ -1644,7 +1669,23 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 
               {/* Models Sub-tab */}
               {!modelLoading && activePrefTab === "models" && (
-                <div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  {modelSettings?.warnings?.map((w, i) => (
+                    <div key={i} className="provider-warning" role="alert">
+                      <AlertTriangle size={13} />
+                      <span>
+                        Your saved {w.role} choice is not usable (
+                        {w.code === "byop_disabled"
+                          ? "personal providers are disabled"
+                          : w.code === "disabled"
+                            ? "the provider is disabled"
+                            : w.code === "missing_provider"
+                              ? "no provider selected"
+                              : "the provider is gone"}
+                        ). The system default is used until you choose again.
+                      </span>
+                    </div>
+                  ))}
 
               {!modelLoading &&
                 modelSettings &&
@@ -1726,6 +1767,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                         >
                           {modelSettings.default_actor_profile.model}
                         </div>
+                        <div style={{ marginTop: 6 }}>
+                          <ProviderChip providerId={modelSettings.effective_actor_profile.provider_id} />
+                        </div>
                         <div
                           style={{
                             fontSize: "0.72rem",
@@ -1767,6 +1811,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                         >
                           {modelSettings.default_clerk_profile.model}
                         </div>
+                        <div style={{ marginTop: 6 }}>
+                          <ProviderChip providerId={modelSettings.effective_clerk_profile.provider_id} />
+                        </div>
                         <div
                           style={{
                             fontSize: "0.72rem",
@@ -1794,298 +1841,73 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                   </div>
                 )}
 
+
               {!modelLoading &&
                 modelSettings &&
                 modelSettings.allow_user_model_overrides && (
                   <form
                     onSubmit={handleSaveModelOverrides}
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 14,
-                    }}
+                    style={{ display: "flex", flexDirection: "column", gap: 14 }}
                   >
-                    {/* Live Ollama Discovery Banner */}
-                    <div
-                      style={{
-                        background: ollamaStatus?.reachable
-                          ? "rgba(16, 185, 129, 0.1)"
-                          : "rgba(244, 63, 94, 0.1)",
-                        border: `1px solid ${
-                          ollamaStatus?.reachable
-                            ? "rgba(16, 185, 129, 0.4)"
-                            : "rgba(244, 63, 94, 0.4)"
-                        }`,
-                        borderRadius: 8,
-                        padding: "10px 14px",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        gap: 12,
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 10,
-                        }}
-                      >
-                        <Server
-                          size={18}
-                          color={
-                            ollamaStatus?.reachable
-                              ? "var(--accent-emerald)"
-                              : "var(--accent-rose)"
-                          }
-                        />
-                        <div style={{ fontSize: "0.8rem" }}>
-                          {ollamaStatus?.reachable ? (
-                            <>
-                              <strong style={{ color: "#6ee7b7" }}>
-                                Ollama Connected ({ollamaStatus.ollama_root_url}
-                                )
-                              </strong>
-                              <div
-                                style={{
-                                  color: "var(--text-secondary)",
-                                  fontSize: "0.74rem",
-                                }}
-                              >
-                                {ollamaStatus.chat_models.length} model(s)
-                                available for override
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              <strong style={{ color: "#fda4af" }}>
-                                Ollama Server (
-                                {ollamaStatus?.ollama_root_url ??
-                                  modelSettings.effective_actor_profile.base_url}
-                                )
-                              </strong>
-                              <div
-                                style={{
-                                  color: "var(--text-secondary)",
-                                  fontSize: "0.74rem",
-                                }}
-                              >
-                                {ollamaStatus?.error ||
-                                  "Offline simulation fallback active"}
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        className="btn"
-                        onClick={() =>
-                          probeOllama(
-                            modelSettings.effective_actor_profile.base_url
-                          )
-                        }
-                        disabled={probingOllama}
-                      >
-                        <RefreshCw size={13} />
-                        {probingOllama ? "Probing..." : "Refresh"}
-                      </button>
+                    <div className="provider-note">
+                      Providers are managed in the <strong>Providers</strong> tab
+                      {modelSettings.allow_user_providers
+                        ? ", where you can also add your own."
+                        : "."}
                     </div>
 
-                    {/* Actor Model Override */}
-                    <div
-                      style={{
-                        background: "var(--bg-card)",
-                        border: "1px solid var(--border-subtle)",
-                        borderRadius: 8,
-                        padding: 14,
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 10,
+                    <ModelRoleEditor
+                      role="actor"
+                      title="1. Primary Actor Model"
+                      accent="var(--accent-amber)"
+                      headerHint={
+                        <>System default: {modelSettings.default_actor_profile.model}</>
+                      }
+                      selection={{ providerId: userActorProviderId, model: userActorModel }}
+                      onSelection={(sel) => {
+                        setUserActorProviderId(sel.providerId);
+                        setUserActorModel(sel.model);
                       }}
-                    >
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontWeight: 600,
-                            fontSize: "0.84rem",
-                            color: "var(--accent-amber)",
-                          }}
-                        >
-                          1. Primary Actor Model Override
-                        </span>
-                        <span
-                          style={{
-                            fontSize: "0.7rem",
-                            color: "var(--text-muted)",
-                          }}
-                        >
-                          System Default:{" "}
-                          {modelSettings.default_actor_profile.model}
-                        </span>
-                      </div>
+                      temperature={userActorTemp}
+                      onTemperature={setUserActorTemp}
+                      maxTokens={userActorTokens}
+                      onMaxTokens={setUserActorTokens}
+                      onInvalidChange={setActorInvalid}
+                    />
 
-                      <div className="form-group">
-                        <label className="form-label">Actor Model</label>
-                        {ollamaStatus?.chat_models &&
-                        ollamaStatus.chat_models.length > 0 ? (
-                          <select
-                            className="form-input"
-                            value={userActorModel}
-                            onChange={(e) => setUserActorModel(e.target.value)}
-                          >
-                            {ollamaStatus.chat_models.map((m) => (
-                              <option key={m} value={m}>
-                                {m}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          <input
-                            type="text"
-                            className="form-input"
-                            value={userActorModel}
-                            onChange={(e) => setUserActorModel(e.target.value)}
-                            placeholder="e.g. llama3.2:latest"
-                          />
-                        )}
-                      </div>
-
-                      <div className="grid-2">
-                        <div className="form-group">
-                          <label className="form-label">
-                            Temperature ({userActorTemp})
-                          </label>
-                          <input
-                            type="range"
-                            min="0.0"
-                            max="2.0"
-                            step="0.05"
-                            value={userActorTemp}
-                            onChange={(e) =>
-                              setUserActorTemp(parseFloat(e.target.value))
-                            }
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">Max Tokens</label>
-                          <input
-                            type="number"
-                            min={64}
-                            max={8192}
-                            className="form-input"
-                            value={userActorTokens}
-                            onChange={(e) =>
-                              setUserActorTokens(parseInt(e.target.value, 10))
-                            }
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Clerk Model Override */}
-                    <div
-                      style={{
-                        background: "var(--bg-card)",
-                        border: "1px solid var(--border-subtle)",
-                        borderRadius: 8,
-                        padding: 14,
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 10,
+                    <ModelRoleEditor
+                      role="clerk"
+                      title="2. Auxiliary Clerk Model"
+                      accent="var(--accent-cyan)"
+                      headerHint={
+                        <>System default: {modelSettings.default_clerk_profile.model}</>
+                      }
+                      selection={{ providerId: userClerkProviderId, model: userClerkModel }}
+                      onSelection={(sel) => {
+                        setUserClerkProviderId(sel.providerId);
+                        setUserClerkModel(sel.model);
                       }}
-                    >
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontWeight: 600,
-                            fontSize: "0.84rem",
-                            color: "var(--accent-cyan)",
-                          }}
-                        >
-                          2. Auxiliary Clerk Model Override
-                        </span>
-                        <span
-                          style={{
-                            fontSize: "0.7rem",
-                            color: "var(--text-muted)",
-                          }}
-                        >
-                          System Default:{" "}
-                          {modelSettings.default_clerk_profile.model}
-                        </span>
-                      </div>
-
-                      <div className="form-group">
-                        <label className="form-label">Clerk Model</label>
-                        {ollamaStatus?.chat_models &&
-                        ollamaStatus.chat_models.length > 0 ? (
-                          <select
-                            className="form-input"
-                            value={userClerkModel}
-                            onChange={(e) => setUserClerkModel(e.target.value)}
-                          >
-                            {ollamaStatus.chat_models.map((m) => (
-                              <option key={m} value={m}>
-                                {m}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
+                      temperature={userClerkTemp}
+                      onTemperature={setUserClerkTemp}
+                      maxTokens={userClerkTokens}
+                      onMaxTokens={setUserClerkTokens}
+                      selectionLockedNote={
+                        userClerkMirrors
+                          ? "The Clerk uses the Actor's provider and model. Its sampling parameters below stay separate."
+                          : undefined
+                      }
+                      topSlot={
+                        <label className="provider-inline-check" style={{ marginTop: 0 }}>
                           <input
-                            type="text"
-                            className="form-input"
-                            value={userClerkModel}
-                            onChange={(e) => setUserClerkModel(e.target.value)}
-                            placeholder="e.g. llama3.1:8b"
+                            type="checkbox"
+                            checked={userClerkMirrors}
+                            onChange={(e) => setUserClerkMirrors(e.target.checked)}
                           />
-                        )}
-                      </div>
-
-                      <div className="grid-2">
-                        <div className="form-group">
-                          <label className="form-label">
-                            Temperature ({userClerkTemp})
-                          </label>
-                          <input
-                            type="range"
-                            min="0.0"
-                            max="2.0"
-                            step="0.05"
-                            value={userClerkTemp}
-                            onChange={(e) =>
-                              setUserClerkTemp(parseFloat(e.target.value))
-                            }
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">Max Tokens</label>
-                          <input
-                            type="number"
-                            min={64}
-                            max={8192}
-                            className="form-input"
-                            value={userClerkTokens}
-                            onChange={(e) =>
-                              setUserClerkTokens(parseInt(e.target.value, 10))
-                            }
-                          />
-                        </div>
-                      </div>
-                    </div>
+                          Use the same provider and model as the Actor
+                        </label>
+                      }
+                      onInvalidChange={setClerkInvalid}
+                    />
 
                     <div
                       style={{
@@ -2111,13 +1933,19 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                       <button
                         type="submit"
                         className="btn btn-amber"
-                        disabled={modelSaving}
+                        disabled={
+                          modelSaving ||
+                          actorInvalid + clerkInvalid > 0 ||
+                          (providerStore.providers.length > 0 &&
+                            (!userActorProviderId ||
+                              !userActorModel ||
+                              (!userClerkMirrors &&
+                                (!userClerkProviderId || !userClerkModel))))
+                        }
                       >
                         <Check size={14} />
                         <span>
-                          {modelSaving
-                            ? "Saving..."
-                            : "Save My Model Overrides"}
+                          {modelSaving ? "Saving..." : "Save My Model Overrides"}
                         </span>
                       </button>
                     </div>
@@ -2141,3 +1969,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
     </div>
   );
 };
+
+export const ProfileModal: React.FC<ProfileModalProps> = (props) => (
+  <ProvidersProvider probeSystem={false}>
+    <ProfileModalInner {...props} />
+  </ProvidersProvider>
+);

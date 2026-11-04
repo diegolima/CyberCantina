@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import tempfile
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from app.providers.endpoint import ResolvedEndpoint
+
+logger = logging.getLogger("cybercantina.config")
 
 SETTINGS_FILE_PATH = Path(__file__).resolve().parent.parent / "cantina_settings.json"
 
@@ -15,15 +21,33 @@ AgentDispatchMode = Literal["sequential", "parallel"]
 
 
 class ModelProfile(BaseModel):
-    """Ollama / OpenAI-compatible endpoint profile for Actor or Auxiliary Clerk roles."""
+    """Model role profile for Actor or Clerk: which provider + model, and sampling parameters.
 
+    Connection details live on the referenced provider (``provider_id``). ``base_url`` and
+    ``api_key`` are LEGACY fields kept only so that unmigrated installs and offline tests keep
+    working; whenever ``provider_id`` is set the provider always wins and these are ignored.
+    ``api_key`` is never serialized.
+    """
+
+    provider_id: str | None = Field(
+        default=None,
+        description="ID of the provider (see /api/providers) that serves this role.",
+    )
     base_url: str = Field(
         default="http://localhost:11434/v1",
-        description="Ollama or OpenAI-compatible base URL (e.g. http://localhost:11434 or http://localhost:11434/v1).",
+        description="LEGACY: ignored when provider_id is set.",
     )
     api_key: str = Field(
         default="ollama",
-        description="API key for the endpoint (use 'ollama' or any non-empty string for local servers).",
+        exclude=True,
+        repr=False,
+        description="LEGACY and never persisted: tokens now live (encrypted) on the provider.",
+    )
+    resolved: ResolvedEndpoint | None = Field(
+        default=None,
+        exclude=True,
+        repr=False,
+        description="Runtime-only endpoint resolved from provider_id for the current request.",
     )
     model: str = Field(
         default="llama3.1:8b",
@@ -37,6 +61,10 @@ class ModelProfile(BaseModel):
 class EmbeddingProfile(BaseModel):
     """Configuration for semantic vector embeddings."""
 
+    provider_id: str | None = Field(
+        default=None,
+        description="System-scope provider serving embeddings (mode 'openai_compat').",
+    )
     mode: Literal["local_hash", "openai_compat", "fastembed"] = Field(
         default="local_hash",
         description=(
@@ -44,8 +72,8 @@ class EmbeddingProfile(BaseModel):
             "'openai_compat' calls Ollama /api/embed or /v1/embeddings; 'fastembed' uses local ONNX embeddings."
         ),
     )
-    base_url: str = Field(default="http://localhost:11434/v1")
-    api_key: str = Field(default="ollama")
+    base_url: str = Field(default="http://localhost:11434/v1", description="LEGACY: ignored when provider_id is set.")
+    api_key: str = Field(default="ollama", exclude=True, repr=False)
     model: str = Field(default="nomic-embed-text")
     dimensions: int = Field(default=384, ge=64, le=4096)
 
@@ -131,6 +159,22 @@ class AppSettings(BaseModel):
         default=False,
         description="When True, users can customize their own Actor and Clerk models in their Profile.",
     )
+    allow_user_providers: bool = Field(
+        default=False,
+        description=(
+            "When True (BYOP), users can register their own private providers. Forces "
+            "allow_user_model_overrides to True."
+        ),
+    )
+    clerk_mirrors_actor: bool = Field(
+        default=False,
+        description="When True, the Clerk uses the Actor's provider and model (sampling stays separate).",
+    )
+    settings_revision: int = Field(
+        default=0,
+        ge=0,
+        description="Monotonic counter bumped on every admin save, for optimistic concurrency.",
+    )
     delegate_cognition_to_clerk: bool = Field(
         default=False,
         description="When True, the analytical Clerk model generates character cognition (<cognition> block) before the Actor writes narrative prose.",
@@ -143,6 +187,13 @@ class AppSettings(BaseModel):
             "agents concurrently via asyncio.gather (fast on cloud APIs or multi-slot vLLM)."
         ),
     )
+
+    @model_validator(mode="after")
+    def enforce_byop_coupling(self) -> "AppSettings":
+        """BYOP implies per-user model overrides (a provider is useless without selectable models)."""
+        if self.allow_user_providers and not self.allow_user_model_overrides:
+            self.allow_user_model_overrides = True
+        return self
 
 
 def load_initial_settings() -> AppSettings:
@@ -170,14 +221,27 @@ def load_initial_settings() -> AppSettings:
 
 
 def persist_settings(current: AppSettings) -> None:
-    """Persist runtime settings to cantina_settings.json."""
+    """Atomically persist runtime settings to cantina_settings.json.
+
+    Writes to a temp file in the same directory and ``os.replace``s it, so a crash can never leave
+    a truncated file (which ``load_initial_settings`` would silently discard). Raises ``OSError``
+    on failure instead of swallowing it.
+    """
+    target = Path(SETTINGS_FILE_PATH)
+    payload = current.model_dump_json(exclude={"db_path", "media_dir"}, indent=2)
+    fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=".cantina_settings.", suffix=".tmp")
     try:
-        SETTINGS_FILE_PATH.write_text(
-            current.model_dump_json(exclude={"db_path", "media_dir"}, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, target)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 settings = load_initial_settings()

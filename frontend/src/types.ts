@@ -863,8 +863,10 @@ export interface CampaignStateBundle {
 }
 
 export interface ModelProfile {
-  base_url: string;
-  api_key: string;
+  /** Provider that serves this role (connection details live on the provider). */
+  provider_id?: string | null;
+  /** LEGACY: ignored by the server whenever provider_id is set. */
+  base_url?: string;
   model: string;
   temperature: number;
   max_tokens: number;
@@ -876,9 +878,9 @@ export interface AppSettings {
   actor_profile: ModelProfile;
   clerk_profile: ModelProfile;
   embedding_profile: {
+    provider_id?: string | null;
     mode: "local_hash" | "openai_compat" | "fastembed";
-    base_url: string;
-    api_key: string;
+    base_url?: string;
     model: string;
     dimensions: number;
   };
@@ -891,8 +893,118 @@ export interface AppSettings {
   };
   allow_offline_fallback: boolean;
   allow_user_model_overrides: boolean;
+  /** BYOP: users may register private providers. Forces allow_user_model_overrides on (server-enforced). */
+  allow_user_providers?: boolean;
+  clerk_mirrors_actor?: boolean;
+  /** Optimistic-concurrency counter; echo back what you loaded. */
+  settings_revision?: number;
   delegate_cognition_to_clerk: boolean;
   agent_dispatch_mode?: AgentDispatchMode;
+}
+
+export interface SettingsUpdateResponse extends AppSettings {
+  embedding_reindex_required: boolean;
+  stale_embedding_entries: number;
+}
+
+export type ProviderType = "ollama";
+export type ProviderScope = "system" | "user";
+export type ProviderColor = "neutral" | "cyan" | "purple" | "indigo" | "bronze";
+export type ProbeErrorCode =
+  | "dns_failure"
+  | "connect_refused"
+  | "timeout"
+  | "tls_error"
+  | "unauthorized"
+  | "forbidden"
+  | "not_found"
+  | "bad_payload"
+  | "blocked_by_policy"
+  | "invalid_url"
+  | "rate_limited"
+  | "unknown";
+
+export interface ProviderModelInfo {
+  name: string;
+  size_mb: number;
+  parameter_size: string;
+  quantization_level: string;
+  family: string;
+  is_embedding: boolean;
+}
+
+export interface LLMProvider {
+  id: string;
+  name: string;
+  type: ProviderType;
+  scope: ProviderScope;
+  owner_id: string | null;
+  color: ProviderColor;
+  is_enabled: boolean;
+  /** Only present for admins and the owner. */
+  base_url: string | null;
+  has_bearer_token: boolean;
+  usable: boolean;
+  unusable_reason: "disabled" | "byop_disabled" | null;
+  cached_models: ProviderModelInfo[];
+  last_probed_at: string | null;
+  last_error_code: ProbeErrorCode | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProviderCreatePayload {
+  name?: string | null;
+  type: ProviderType;
+  scope: ProviderScope;
+  color: ProviderColor;
+  is_enabled: boolean;
+  settings: { base_url: string; bearer_token?: string | null };
+}
+
+export interface ProviderUpdatePayload {
+  expected_version: number;
+  name?: string;
+  color?: ProviderColor;
+  is_enabled?: boolean;
+  base_url?: string;
+  bearer_token?: string;
+  clear_bearer_token?: boolean;
+}
+
+export interface ProviderDraft {
+  provider_id?: string | null;
+  type: ProviderType;
+  base_url: string;
+  bearer_token?: string | null;
+}
+
+export interface ProviderProbeResponse {
+  provider_id: string | null;
+  reachable: boolean;
+  protocol: "ollama_native" | "openai_compat" | null;
+  models: ProviderModelInfo[];
+  chat_models: string[];
+  embedding_models: string[];
+  error_code: ProbeErrorCode | null;
+  /** Detailed text, only for admins and owners. */
+  error: string | null;
+  config_version: number;
+  probed_at: string;
+  from_cache: boolean;
+}
+
+export interface ProviderReference {
+  kind: "system_role" | "user_override" | "embedding";
+  role: string | null;
+  user_count: number;
+}
+
+export interface EffectiveWarning {
+  role: "actor" | "clerk";
+  code: "not_found" | "disabled" | "byop_disabled" | "no_token" | "missing_provider";
+  provider_id?: string | null;
 }
 
 export interface OllamaModelInfo {
@@ -964,10 +1076,16 @@ export interface UserModelSettingsPayload {
   max_scene_flags?: number | null;
   agent_dispatch_mode?: AgentDispatchMode | null;
   persona_disclosure_mode?: DisclosureDetectionMode | null;
+  clerk_mirrors_actor?: boolean | null;
 }
 
 export interface ProfileModelSettingsResponse {
   allow_user_model_overrides: boolean;
+  allow_user_providers?: boolean;
+  warnings?: EffectiveWarning[];
+  effective_clerk_mirrors_actor?: boolean;
+  user_clerk_mirrors_actor?: boolean | null;
+  default_clerk_mirrors_actor?: boolean;
   has_override: boolean;
   effective_actor_profile: ModelProfile;
   effective_clerk_profile: ModelProfile;

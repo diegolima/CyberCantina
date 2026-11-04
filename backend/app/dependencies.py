@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from fastapi import HTTPException, Request, Response
@@ -17,7 +18,8 @@ from app.auth import (
 )
 from app.config import AgentDispatchMode, ModelProfile, settings
 from app.db.repository import CantinaRepository
-from app.schemas.auth import AuthSessionResponse, UserProfile
+from app.providers.resolver import ProviderUnavailableError, attach_endpoint, resolve_endpoint
+from app.schemas.auth import AuthSessionResponse, EffectiveWarning, UserProfile
 
 logger = logging.getLogger("cybercantina.dependencies")
 
@@ -44,45 +46,108 @@ def run_entity_pruner() -> dict[str, list[str]]:
     }
 
 
+@dataclass
+class EffectiveModels:
+    """Fully resolved model configuration for one user, plus reasons any override was not honored."""
+
+    actor: ModelProfile
+    clerk: ModelProfile
+    working_memory_turns: int
+    delegate_cognition_to_clerk: bool
+    max_scene_flags: int
+    clerk_mirrors_actor: bool
+    warnings: list[EffectiveWarning] = field(default_factory=list)
+
+
+def _finalize_profile(
+    profile: ModelProfile,
+    role: str,
+    *,
+    user_id: str | None,
+    from_user: bool,
+    default: ModelProfile,
+    warnings: list[EffectiveWarning],
+) -> ModelProfile:
+    """Attach the resolved endpoint. Invalid *user* overrides fall back to the system default
+    (with a warning); invalid *system* defaults are left unresolved and fail loudly at call time
+    rather than being silently re-pointed to another provider."""
+    if from_user and not profile.provider_id and default.provider_id:
+        warnings.append(EffectiveWarning(role=role, code="missing_provider"))  # type: ignore[arg-type]
+        return _finalize_profile(default, role, user_id=None, from_user=False, default=default, warnings=warnings)
+    try:
+        return attach_endpoint(
+            profile, resolve_endpoint(profile, user_id=user_id if from_user else None, role=role)
+        )
+    except ProviderUnavailableError as exc:
+        if not from_user:
+            logger.warning("System %s provider unavailable: %s", role, exc)
+            return profile
+        warnings.append(EffectiveWarning(role=role, code=exc.code, provider_id=exc.provider_id))  # type: ignore[arg-type]
+        return _finalize_profile(default, role, user_id=None, from_user=False, default=default, warnings=warnings)
+
+
+def resolve_effective_models(user_id: str | None) -> EffectiveModels:
+    """Resolve effective models for a user: overrides (when allowed), clerk mirroring, endpoints."""
+    default_actor = settings.actor_profile
+    default_clerk = settings.clerk_profile
+    wm_turns = settings.memory_config.working_memory_turns
+    delegate = settings.delegate_cognition_to_clerk
+    max_flags = settings.memory_config.max_scene_flags
+    mirror = settings.clerk_mirrors_actor
+
+    user_settings = (
+        get_repo().get_user_model_settings(user_id)
+        if (settings.allow_user_model_overrides and user_id)
+        else None
+    )
+    actor_src, clerk_src = default_actor, default_clerk
+    actor_from_user = clerk_from_user = False
+    if user_settings:
+        if user_settings.actor_profile is not None:
+            actor_src, actor_from_user = user_settings.actor_profile, True
+        if user_settings.clerk_profile is not None:
+            clerk_src, clerk_from_user = user_settings.clerk_profile, True
+        if user_settings.working_memory_turns is not None:
+            wm_turns = user_settings.working_memory_turns
+        if user_settings.delegate_cognition_to_clerk is not None:
+            delegate = user_settings.delegate_cognition_to_clerk
+        if user_settings.max_scene_flags is not None:
+            max_flags = user_settings.max_scene_flags
+        if user_settings.clerk_mirrors_actor is not None:
+            mirror = user_settings.clerk_mirrors_actor
+
+    warnings: list[EffectiveWarning] = []
+    actor = _finalize_profile(
+        actor_src, "actor", user_id=user_id, from_user=actor_from_user, default=default_actor, warnings=warnings
+    )
+    if mirror:
+        # Mirroring covers provider + model only; the Clerk keeps its own sampling parameters.
+        clerk = clerk_src.model_copy(
+            update={
+                "provider_id": actor.provider_id,
+                "model": actor.model,
+                "base_url": actor.base_url,
+                "api_key": actor.api_key,
+                "resolved": actor.resolved,
+            }
+        )
+    else:
+        clerk = _finalize_profile(
+            clerk_src, "clerk", user_id=user_id, from_user=clerk_from_user, default=default_clerk, warnings=warnings
+        )
+    return EffectiveModels(actor, clerk, wm_turns, delegate, max_flags, mirror, warnings)
+
+
 def get_effective_user_model_settings(
     user_id: str | None,
 ) -> tuple[ModelProfile, ModelProfile, int, bool, int]:
     """Resolve effective (actor_profile, clerk_profile, working_memory_turns, delegate_cognition_to_clerk, max_scene_flags) for a user.
 
-    If overrides are enabled in system settings and the user has saved custom settings,
-    those take precedence. Otherwise, defaults from AppSettings are returned.
+    Thin adapter over :func:`resolve_effective_models` kept for existing call sites. Profiles
+    returned here carry their resolved provider endpoint (when provider-backed).
     """
-    default_actor = settings.actor_profile
-    default_clerk = settings.clerk_profile
-    default_wm_turns = settings.memory_config.working_memory_turns
-    default_delegate = settings.delegate_cognition_to_clerk
-    default_max_flags = settings.memory_config.max_scene_flags
-
-    if not settings.allow_user_model_overrides or not user_id:
-        return default_actor, default_clerk, default_wm_turns, default_delegate, default_max_flags
-
-    user_settings = get_repo().get_user_model_settings(user_id)
-    if not user_settings:
-        return default_actor, default_clerk, default_wm_turns, default_delegate, default_max_flags
-
-    effective_actor = user_settings.actor_profile or default_actor
-    effective_clerk = user_settings.clerk_profile or default_clerk
-    effective_wm_turns = (
-        user_settings.working_memory_turns
-        if user_settings.working_memory_turns is not None
-        else default_wm_turns
-    )
-    effective_delegate = (
-        user_settings.delegate_cognition_to_clerk
-        if user_settings.delegate_cognition_to_clerk is not None
-        else default_delegate
-    )
-    effective_max_flags = (
-        user_settings.max_scene_flags
-        if user_settings.max_scene_flags is not None
-        else default_max_flags
-    )
-    return effective_actor, effective_clerk, effective_wm_turns, effective_delegate, effective_max_flags
+    eff = resolve_effective_models(user_id)
+    return eff.actor, eff.clerk, eff.working_memory_turns, eff.delegate_cognition_to_clerk, eff.max_scene_flags
 
 
 def get_effective_agent_dispatch_mode(user_id: str | None) -> AgentDispatchMode:

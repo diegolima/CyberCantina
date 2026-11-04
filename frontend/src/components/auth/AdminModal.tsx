@@ -18,24 +18,26 @@ import {
 } from "lucide-react";
 import { api } from "../../api";
 import { PromptPresetsManager } from "../PromptPresetsManager";
-import {
-  AppSettings,
-  OllamaStatusResponse,
-  UserProfile,
-} from "../../types";
+import { AppSettings, UserProfile } from "../../types";
 import { FeedbackModal } from "./FeedbackModal";
+import { ProvidersManager } from "../providers/ProvidersManager";
+import { ProvidersProvider, useProviders } from "../providers/ProvidersContext";
+import { DisclosureSection } from "../models/DisclosureSection";
+import { IntegerField } from "../models/IntegerField";
+import { ModelPicker } from "../models/ModelPicker";
+import { ModelRoleEditor } from "../models/ModelRoleEditor";
 
 export interface AdminModalProps {
   currentUser: UserProfile;
   singleUserMode: boolean;
-  initialTab?: "users" | "models" | "prompts";
+  initialTab?: "users" | "providers" | "models" | "prompts";
   onClose: () => void;
   onCurrentUserUpdated: (updated: UserProfile) => void;
   onAccountDeleted?: (deletedUserId: string) => Promise<void>;
   onSettingsUpdated?: (updated: AppSettings) => void;
 }
 
-export const AdminModal: React.FC<AdminModalProps> = ({
+const AdminModalInner: React.FC<AdminModalProps> = ({
   currentUser,
   singleUserMode,
   initialTab,
@@ -44,9 +46,10 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   onAccountDeleted,
   onSettingsUpdated,
 }) => {
-  const [activeTab, setActiveTab] = useState<"users" | "models" | "prompts">(
-    initialTab ?? "users"
-  );
+  const providerStore = useProviders();
+  const [activeTab, setActiveTab] = useState<
+    "users" | "providers" | "models" | "prompts"
+  >(initialTab ?? "users");
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [filterQuery, setFilterQuery] = useState("");
   const [selectedUserId, setSelectedUserId] = useState<string | null>(
@@ -58,41 +61,49 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   const [appSettingsForm, setAppSettingsForm] = useState<AppSettings | null>(
     null
   );
-  const [ollamaStatus, setOllamaStatus] = useState<OllamaStatusResponse | null>(
-    null
-  );
-  const [probingOllama, setProbingOllama] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [actorInvalid, setActorInvalid] = useState(0);
+  const [clerkInvalid, setClerkInvalid] = useState(0);
+  const [memoryInvalid, setMemoryInvalid] = useState<Record<string, boolean>>({});
+  const [staleEmbeddings, setStaleEmbeddings] = useState(0);
+  const [reindexing, setReindexing] = useState(false);
 
-  const probeOllama = async (urlToProbe?: string) => {
-    setProbingOllama(true);
-    try {
-      const ost = await api.getOllamaStatus(
-        urlToProbe ?? appSettingsForm?.actor_profile.base_url
-      );
-      setOllamaStatus(ost);
-    } catch {
-      // ignore
-    } finally {
-      setProbingOllama(false);
-    }
-  };
+  const setMemoryFieldValid = (key: string) => (valid: boolean) =>
+    setMemoryInvalid((m) => (m[key] === !valid ? m : { ...m, [key]: !valid }));
+  const memoryInvalidCount = Object.values(memoryInvalid).filter(Boolean).length;
 
   const loadSettings = async () => {
     try {
       const cfg = await api.getSettings();
       setAppSettingsForm(cfg);
-      probeOllama(cfg.actor_profile.base_url);
+      api
+        .getEmbeddingStatus()
+        .then((st) => setStaleEmbeddings(st.stale_entries))
+        .catch(() => undefined);
     } catch (err: any) {
       setErrorMsg(err?.message || "Failed to load model settings.");
     }
   };
 
   useEffect(() => {
-    if (activeTab === "models" && !appSettingsForm) {
+    if ((activeTab === "models" || activeTab === "providers") && !appSettingsForm) {
       loadSettings();
     }
   }, [activeTab]);
+
+  const handleReindex = async () => {
+    setReindexing(true);
+    setErrorMsg(null);
+    try {
+      const res = await api.reindexEmbeddings();
+      setStaleEmbeddings(0);
+      setStatusMsg(`Reindexed ${res.reindexed} stored memories.`);
+    } catch (err: any) {
+      setErrorMsg(err?.message || "Reindexing failed.");
+    } finally {
+      setReindexing(false);
+    }
+  };
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -101,11 +112,15 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     setErrorMsg(null);
     setStatusMsg(null);
     try {
+      // The server is the authority: adopt its response (including the BYOP-coerced overrides flag).
       const updated = await api.updateSettings(appSettingsForm);
       setAppSettingsForm(updated);
+      setStaleEmbeddings(updated.stale_embedding_entries);
       onSettingsUpdated?.(updated);
       setStatusMsg(
-        "Global system model settings and policies saved successfully."
+        updated.embedding_reindex_required
+          ? "Settings saved. Stored memories use a different embedding model and are ignored until reindexed."
+          : "Global system model settings and policies saved successfully."
       );
     } catch (err: any) {
       setErrorMsg(err?.message || "Failed to save system model settings.");
@@ -359,6 +374,16 @@ export const AdminModal: React.FC<AdminModalProps> = ({
           >
             <Users size={14} />
             Users ({users.length})
+          </button>
+          <button
+            type="button"
+            className={`modal-tab-btn ${
+              activeTab === "providers" ? "active" : ""
+            }`}
+            onClick={() => setActiveTab("providers")}
+          >
+            <Server size={14} />
+            Providers
           </button>
           <button
             type="button"
@@ -993,6 +1018,14 @@ export const AdminModal: React.FC<AdminModalProps> = ({
             </div>
           )}
 
+          {/* Admin Providers Tab */}
+          {activeTab === "providers" && (
+            <ProvidersManager
+              variant="admin"
+              allowUserProviders={!!appSettingsForm?.allow_user_providers}
+            />
+          )}
+
           {/* Admin Models Configuration Tab */}
           {activeTab === "models" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -1016,502 +1049,238 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                     gap: 14,
                   }}
                 >
-                  {/* Live Ollama Discovery Banner */}
-                  <div
-                    style={{
-                      background: ollamaStatus?.reachable
-                        ? "rgba(16, 185, 129, 0.1)"
-                        : "rgba(244, 63, 94, 0.1)",
-                      border: `1px solid ${
-                        ollamaStatus?.reachable
-                          ? "rgba(16, 185, 129, 0.4)"
-                          : "rgba(244, 63, 94, 0.4)"
-                      }`,
-                      borderRadius: 8,
-                      padding: "10px 14px",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: 12,
+                  <div className="provider-note">
+                    Servers, URLs and tokens are managed in the <strong>Providers</strong> tab. Here you choose
+                    which provider and model each role uses.
+                    {providerStore.providers.length === 0 && !providerStore.loading && (
+                      <> No providers exist yet: add one first.</>
+                    )}
+                  </div>
+
+                  {staleEmbeddings > 0 && (
+                    <div className="auth-warning-box" style={{ padding: "10px 12px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: "0.8rem", color: "var(--accent-amber)" }}>
+                        <AlertTriangle size={15} />
+                        <span style={{ flex: 1 }}>
+                          {staleEmbeddings} stored memories were embedded with a different embedding model and are
+                          ignored in recall until reindexed.
+                        </span>
+                        <button type="button" className="btn btn-sm" onClick={handleReindex} disabled={reindexing}>
+                          <RefreshCw size={13} className={reindexing ? "spin" : undefined} />{" "}
+                          {reindexing ? "Reindexing…" : "Reindex now"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <ModelRoleEditor
+                    role="actor"
+                    title="1. Default Primary Actor Model"
+                    subtitle="Phase 3 <cognition> + narrative prose"
+                    accent="var(--accent-amber)"
+                    selection={{
+                      providerId: appSettingsForm.actor_profile.provider_id ?? null,
+                      model: appSettingsForm.actor_profile.model,
                     }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                      }}
-                    >
-                      <Server
-                        size={18}
-                        color={
-                          ollamaStatus?.reachable
-                            ? "var(--accent-emerald)"
-                            : "var(--accent-rose)"
+                    onSelection={(sel) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        actor_profile: {
+                          ...appSettingsForm.actor_profile,
+                          provider_id: sel.providerId,
+                          model: sel.model,
+                        },
+                      })
+                    }
+                    temperature={appSettingsForm.actor_profile.temperature}
+                    onTemperature={(v) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        actor_profile: { ...appSettingsForm.actor_profile, temperature: v },
+                      })
+                    }
+                    maxTokens={appSettingsForm.actor_profile.max_tokens}
+                    onMaxTokens={(v) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        actor_profile: { ...appSettingsForm.actor_profile, max_tokens: v },
+                      })
+                    }
+                    onInvalidChange={setActorInvalid}
+                  />
+
+                  <ModelRoleEditor
+                    role="clerk"
+                    title="2. Default Auxiliary Clerk Model"
+                    subtitle="Phase 1 pre-turn analysis & Phase 4 state clerk"
+                    accent="var(--accent-cyan)"
+                    selection={{
+                      providerId: appSettingsForm.clerk_profile.provider_id ?? null,
+                      model: appSettingsForm.clerk_profile.model,
+                    }}
+                    onSelection={(sel) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        clerk_profile: {
+                          ...appSettingsForm.clerk_profile,
+                          provider_id: sel.providerId,
+                          model: sel.model,
+                        },
+                      })
+                    }
+                    temperature={appSettingsForm.clerk_profile.temperature}
+                    onTemperature={(v) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        clerk_profile: { ...appSettingsForm.clerk_profile, temperature: v },
+                      })
+                    }
+                    maxTokens={appSettingsForm.clerk_profile.max_tokens}
+                    onMaxTokens={(v) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        clerk_profile: { ...appSettingsForm.clerk_profile, max_tokens: v },
+                      })
+                    }
+                    selectionLockedNote={
+                      appSettingsForm.clerk_mirrors_actor
+                        ? "The Clerk uses the Actor's provider and model. Its sampling parameters below stay separate."
+                        : undefined
+                    }
+                    topSlot={
+                      <label className="provider-inline-check" style={{ marginTop: 0 }}>
+                        <input
+                          type="checkbox"
+                          checked={!!appSettingsForm.clerk_mirrors_actor}
+                          onChange={(e) =>
+                            setAppSettingsForm({
+                              ...appSettingsForm,
+                              clerk_mirrors_actor: e.target.checked,
+                            })
+                          }
+                        />
+                        Use the same provider and model as the Actor
+                      </label>
+                    }
+                    onInvalidChange={setClerkInvalid}
+                  />
+
+                  {/* Semantic Vector Store: engine only; tuning is collapsed */}
+                  <div className="model-role-card">
+                    <div className="model-role-title" style={{ color: "var(--accent-emerald)" }}>
+                      3. Semantic Vector Store
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Embedding Engine</label>
+                      <select
+                        className="form-input"
+                        value={appSettingsForm.embedding_profile.mode}
+                        onChange={(e) =>
+                          setAppSettingsForm({
+                            ...appSettingsForm,
+                            embedding_profile: {
+                              ...appSettingsForm.embedding_profile,
+                              mode: e.target.value as AppSettings["embedding_profile"]["mode"],
+                            },
+                          })
+                        }
+                      >
+                        <option value="local_hash">Local Feature Hash (0 VRAM)</option>
+                        <option value="openai_compat">Provider embeddings (Ollama /api/embed)</option>
+                        <option value="fastembed">Local ONNX FastEmbed</option>
+                      </select>
+                    </div>
+                    {appSettingsForm.embedding_profile.mode === "openai_compat" && (
+                      <ModelPicker
+                        role="embedding"
+                        modelKind="embedding"
+                        systemOnly
+                        value={{
+                          providerId: appSettingsForm.embedding_profile.provider_id ?? null,
+                          model: appSettingsForm.embedding_profile.model,
+                        }}
+                        onChange={(sel) =>
+                          setAppSettingsForm({
+                            ...appSettingsForm,
+                            embedding_profile: {
+                              ...appSettingsForm.embedding_profile,
+                              provider_id: sel.providerId,
+                              model: sel.model,
+                            },
+                          })
                         }
                       />
-                      <div style={{ fontSize: "0.8rem" }}>
-                        {ollamaStatus?.reachable ? (
-                          <>
-                            <strong style={{ color: "#6ee7b7" }}>
-                              Ollama Connected ({ollamaStatus.ollama_root_url})
-                            </strong>
-                            <div
-                              style={{
-                                color: "var(--text-secondary)",
-                                fontSize: "0.74rem",
-                              }}
-                            >
-                              {ollamaStatus.chat_models.length} chat model(s) &{" "}
-                              {ollamaStatus.embedding_models.length} embedding
-                              model(s) installed locally
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <strong style={{ color: "#fda4af" }}>
-                              Ollama Unreachable (
-                              {ollamaStatus?.ollama_root_url ??
-                                appSettingsForm.actor_profile.base_url}
-                              )
-                            </strong>
-                            <div
-                              style={{
-                                color: "var(--text-secondary)",
-                                fontSize: "0.74rem",
-                              }}
-                            >
-                              {ollamaStatus?.error ||
-                                "Ensure `ollama serve` is running or check the base URL below."}
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    </div>
+                    )}
 
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={() =>
-                        probeOllama(appSettingsForm.actor_profile.base_url)
-                      }
-                      disabled={probingOllama}
+                    <DisclosureSection
+                      title="3-Tier memory architecture & context tuning"
+                      summary={`N=${appSettingsForm.memory_config.working_memory_turns} · K=${appSettingsForm.memory_config.episodic_chunk_size} · flags ${appSettingsForm.memory_config.max_scene_flags ?? 10}`}
+                      invalidCount={memoryInvalidCount}
                     >
-                      <RefreshCw size={13} />
-                      {probingOllama ? "Probing..." : "Refresh Models"}
-                    </button>
-                  </div>
-
-                  {/* Primary Actor Model Default */}
-                  <div
-                    style={{
-                      background: "var(--bg-card)",
-                      border: "1px solid var(--border-subtle)",
-                      borderRadius: 8,
-                      padding: 14,
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 10,
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontWeight: 600,
-                        fontSize: "0.85rem",
-                        color: "var(--accent-amber)",
-                      }}
-                    >
-                      1. Default Primary Actor Model (Phase 3 &lt;cognition&gt;
-                      + Narrative Prose)
-                    </div>
-
-                    <div className="grid-2">
-                      <div className="form-group">
-                        <label className="form-label">Ollama Server URL</label>
-                        <input
-                          type="text"
-                          className="form-input"
-                          value={appSettingsForm.actor_profile.base_url}
-                          onChange={(e) =>
-                            setAppSettingsForm({
-                              ...appSettingsForm,
-                              actor_profile: {
-                                ...appSettingsForm.actor_profile,
-                                base_url: e.target.value,
-                              },
-                            })
-                          }
-                        />
-                      </div>
-
-                      <div className="form-group">
-                        <label className="form-label">
-                          Actor Ollama Model
-                        </label>
-                        {ollamaStatus?.chat_models &&
-                        ollamaStatus.chat_models.length > 0 ? (
-                          <select
-                            className="form-input"
-                            value={appSettingsForm.actor_profile.model}
-                            onChange={(e) =>
-                              setAppSettingsForm({
-                                ...appSettingsForm,
-                                actor_profile: {
-                                  ...appSettingsForm.actor_profile,
-                                  model: e.target.value,
-                                },
-                              })
-                            }
-                          >
-                            {ollamaStatus.chat_models.map((m) => (
-                              <option key={m} value={m}>
-                                {m}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          <input
-                            type="text"
-                            className="form-input"
-                            value={appSettingsForm.actor_profile.model}
-                            onChange={(e) =>
-                              setAppSettingsForm({
-                                ...appSettingsForm,
-                                actor_profile: {
-                                  ...appSettingsForm.actor_profile,
-                                  model: e.target.value,
-                                },
-                              })
-                            }
-                          />
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="grid-2">
-                      <div className="form-group">
-                        <label className="form-label">
-                          Default Temperature (
-                          {appSettingsForm.actor_profile.temperature})
-                        </label>
-                        <input
-                          type="range"
-                          min="0.0"
-                          max="2.0"
-                          step="0.05"
-                          value={appSettingsForm.actor_profile.temperature}
-                          onChange={(e) =>
-                            setAppSettingsForm({
-                              ...appSettingsForm,
-                              actor_profile: {
-                                ...appSettingsForm.actor_profile,
-                                temperature: parseFloat(e.target.value),
-                              },
-                            })
-                          }
-                        />
-                      </div>
-                      <div className="form-group">
-                        <label className="form-label">Max Tokens</label>
-                        <input
-                          type="number"
-                          min={64}
-                          max={8192}
-                          className="form-input"
-                          value={appSettingsForm.actor_profile.max_tokens}
-                          onChange={(e) =>
-                            setAppSettingsForm({
-                              ...appSettingsForm,
-                              actor_profile: {
-                                ...appSettingsForm.actor_profile,
-                                max_tokens: parseInt(e.target.value, 10),
-                              },
-                            })
-                          }
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Auxiliary Clerk Model Default */}
-                  <div
-                    style={{
-                      background: "var(--bg-card)",
-                      border: "1px solid var(--border-subtle)",
-                      borderRadius: 8,
-                      padding: 14,
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 10,
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontWeight: 600,
-                        fontSize: "0.85rem",
-                        color: "var(--accent-cyan)",
-                      }}
-                    >
-                      2. Default Auxiliary Clerk Model (Phase 1 Pre-Turn &amp;
-                      Phase 4 State Clerk)
-                    </div>
-
-                    <div className="grid-2">
-                      <div className="form-group">
-                        <label className="form-label">Clerk Server URL</label>
-                        <input
-                          type="text"
-                          className="form-input"
-                          value={appSettingsForm.clerk_profile.base_url}
-                          onChange={(e) =>
-                            setAppSettingsForm({
-                              ...appSettingsForm,
-                              clerk_profile: {
-                                ...appSettingsForm.clerk_profile,
-                                base_url: e.target.value,
-                              },
-                            })
-                          }
-                        />
-                      </div>
-
-                      <div className="form-group">
-                        <label className="form-label">
-                          Clerk Ollama Model
-                        </label>
-                        {ollamaStatus?.chat_models &&
-                        ollamaStatus.chat_models.length > 0 ? (
-                          <select
-                            className="form-input"
-                            value={appSettingsForm.clerk_profile.model}
-                            onChange={(e) =>
-                              setAppSettingsForm({
-                                ...appSettingsForm,
-                                clerk_profile: {
-                                  ...appSettingsForm.clerk_profile,
-                                  model: e.target.value,
-                                },
-                              })
-                            }
-                          >
-                            {ollamaStatus.chat_models.map((m) => (
-                              <option key={m} value={m}>
-                                {m}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          <input
-                            type="text"
-                            className="form-input"
-                            value={appSettingsForm.clerk_profile.model}
-                            onChange={(e) =>
-                              setAppSettingsForm({
-                                ...appSettingsForm,
-                                clerk_profile: {
-                                  ...appSettingsForm.clerk_profile,
-                                  model: e.target.value,
-                                },
-                              })
-                            }
-                          />
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="grid-2">
-                      <div className="form-group">
-                        <label className="form-label">
-                          Default Temperature (
-                          {appSettingsForm.clerk_profile.temperature})
-                        </label>
-                        <input
-                          type="range"
-                          min="0.0"
-                          max="2.0"
-                          step="0.05"
-                          value={appSettingsForm.clerk_profile.temperature}
-                          onChange={(e) =>
-                            setAppSettingsForm({
-                              ...appSettingsForm,
-                              clerk_profile: {
-                                ...appSettingsForm.clerk_profile,
-                                temperature: parseFloat(e.target.value),
-                              },
-                            })
-                          }
-                        />
-                      </div>
-                      <div className="form-group">
-                        <label className="form-label">Max Tokens</label>
-                        <input
-                          type="number"
-                          min={64}
-                          max={8192}
-                          className="form-input"
-                          value={appSettingsForm.clerk_profile.max_tokens}
-                          onChange={(e) =>
-                            setAppSettingsForm({
-                              ...appSettingsForm,
-                              clerk_profile: {
-                                ...appSettingsForm.clerk_profile,
-                                max_tokens: parseInt(e.target.value, 10),
-                              },
-                            })
-                          }
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Semantic Vector Store & Memory Settings */}
-                  <div
-                    style={{
-                      background: "var(--bg-card)",
-                      border: "1px solid var(--border-subtle)",
-                      borderRadius: 8,
-                      padding: 14,
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 10,
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontWeight: 600,
-                        fontSize: "0.85rem",
-                        color: "var(--accent-emerald)",
-                      }}
-                    >
-                      3. Semantic Vector Store &amp; 3-Tier Memory Settings
-                    </div>
-
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "1fr 1fr 1fr 1fr",
-                        gap: 10,
-                      }}
-                    >
-                      <div className="form-group">
-                        <label className="form-label">Embedding Engine</label>
-                        <select
-                          className="form-input"
-                          value={appSettingsForm.embedding_profile.mode}
-                          onChange={(e) =>
-                            setAppSettingsForm({
-                              ...appSettingsForm,
-                              embedding_profile: {
-                                ...appSettingsForm.embedding_profile,
-                                mode: e.target.value as AppSettings["embedding_profile"]["mode"],
-                              },
-                            })
-                          }
-                        >
-                          <option value="local_hash">
-                            Local Feature Hash (0 VRAM)
-                          </option>
-                          <option value="openai_compat">
-                            Ollama /api/embed
-                          </option>
-                          <option value="fastembed">
-                            Local ONNX FastEmbed
-                          </option>
-                        </select>
-                      </div>
-
-                      <div className="form-group">
-                        <label className="form-label">
-                          Zone 3 Working Turns (N)
-                        </label>
-                        <input
-                          type="number"
+                      <div className="grid-2">
+                        <IntegerField
+                          label="Zone 3 Working Turns (N)"
                           min={4}
                           max={64}
-                          className="form-input"
-                          value={
-                            appSettingsForm.memory_config.working_memory_turns
-                          }
-                          onChange={(e) =>
+                          value={appSettingsForm.memory_config.working_memory_turns}
+                          onValidityChange={setMemoryFieldValid("n")}
+                          onCommit={(v) =>
                             setAppSettingsForm({
                               ...appSettingsForm,
-                              memory_config: {
-                                ...appSettingsForm.memory_config,
-                                working_memory_turns: parseInt(
-                                  e.target.value,
-                                  10
-                                ),
-                              },
+                              memory_config: { ...appSettingsForm.memory_config, working_memory_turns: v },
                             })
                           }
                         />
-                      </div>
-
-                      <div className="form-group">
-                        <label className="form-label">
-                          Zone 2 Chunk Size (K)
-                        </label>
-                        <input
-                          type="number"
+                        <IntegerField
+                          label="Zone 2 Chunk Size (K)"
                           min={2}
                           max={32}
-                          className="form-input"
-                          value={
-                            appSettingsForm.memory_config.episodic_chunk_size
-                          }
-                          onChange={(e) =>
+                          value={appSettingsForm.memory_config.episodic_chunk_size}
+                          onValidityChange={setMemoryFieldValid("k")}
+                          onCommit={(v) =>
                             setAppSettingsForm({
                               ...appSettingsForm,
-                              memory_config: {
-                                ...appSettingsForm.memory_config,
-                                episodic_chunk_size: parseInt(
-                                  e.target.value,
-                                  10
-                                ),
-                              },
+                              memory_config: { ...appSettingsForm.memory_config, episodic_chunk_size: v },
                             })
                           }
                         />
-                      </div>
-
-                      <div className="form-group">
-                        <label className="form-label">
-                          Max Scene Flags (FIFO)
-                        </label>
-                        <input
-                          type="number"
+                        <IntegerField
+                          label="Max Scene Flags (FIFO)"
                           min={1}
                           max={50}
-                          className="form-input"
-                          value={
-                            appSettingsForm.memory_config.max_scene_flags ?? 10
+                          value={appSettingsForm.memory_config.max_scene_flags ?? 10}
+                          onValidityChange={setMemoryFieldValid("flags")}
+                          onCommit={(v) =>
+                            setAppSettingsForm({
+                              ...appSettingsForm,
+                              memory_config: { ...appSettingsForm.memory_config, max_scene_flags: v },
+                            })
                           }
-                          onChange={(e) =>
+                        />
+                        <IntegerField
+                          label="Ephemeral Memory Lifespan (turns)"
+                          min={4}
+                          max={200}
+                          value={appSettingsForm.memory_config.ephemeral_memory_lifespan_turns ?? 40}
+                          onValidityChange={setMemoryFieldValid("lifespan")}
+                          onCommit={(v) =>
                             setAppSettingsForm({
                               ...appSettingsForm,
                               memory_config: {
                                 ...appSettingsForm.memory_config,
-                                max_scene_flags: parseInt(
-                                  e.target.value,
-                                  10
-                                ) || 10,
+                                ephemeral_memory_lifespan_turns: v,
                               },
                             })
                           }
                         />
                       </div>
-                    </div>
+                    </DisclosureSection>
+                  </div>
 
-                    <label
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        fontSize: "0.82rem",
-                        marginTop: 4,
-                        cursor: "pointer",
-                      }}
-                    >
+                  {/* LLM Resilience (governs Actor/Clerk failure handling, not embeddings) */}
+                  <div className="model-role-card">
+                    <div className="model-role-title">LLM Resilience & Fallback</div>
+                    <label className="provider-inline-check" style={{ fontSize: "0.82rem" }}>
                       <input
                         type="checkbox"
                         checked={appSettingsForm.allow_offline_fallback}
@@ -1522,75 +1291,70 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                           })
                         }
                       />
-                      Allow heuristic offline simulation if Ollama server is
-                      unreachable
+                      Allow heuristic offline simulation if a provider is unreachable
                     </label>
+                    <div className="form-hint" style={{ fontSize: "0.74rem" }}>
+                      When off, a failing provider produces an error instead of simulated output. A model is never
+                      silently re-routed to a different provider.
+                    </div>
                   </div>
 
-                  {/* Per-User Model Overrides Policy Toggle */}
+                  {/* Provider & model override policies */}
                   <div
+                    className="model-role-card"
                     style={{
-                      background: appSettingsForm.allow_user_model_overrides
+                      background: appSettingsForm.allow_user_providers
                         ? "rgba(16, 185, 129, 0.08)"
                         : "var(--bg-card)",
-                      border: `1px solid ${
-                        appSettingsForm.allow_user_model_overrides
-                          ? "rgba(16, 185, 129, 0.35)"
-                          : "var(--border-subtle)"
-                      }`,
-                      borderRadius: 8,
-                      padding: 14,
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 6,
                     }}
                   >
-                    <label
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        cursor: "pointer",
-                      }}
-                    >
+                    <div className="model-role-title">User policies</div>
+                    <label className="provider-inline-check" style={{ fontSize: "0.84rem" }}>
                       <input
                         type="checkbox"
-                        checked={appSettingsForm.allow_user_model_overrides}
+                        checked={!!appSettingsForm.allow_user_providers}
+                        onChange={(e) =>
+                          setAppSettingsForm({
+                            ...appSettingsForm,
+                            allow_user_providers: e.target.checked,
+                            allow_user_model_overrides: e.target.checked
+                              ? true
+                              : appSettingsForm.allow_user_model_overrides,
+                          })
+                        }
+                      />
+                      <strong>Allow users to add their own providers (BYOP)</strong>
+                    </label>
+                    <div className="form-hint" style={{ fontSize: "0.74rem", paddingLeft: 22 }}>
+                      Personal providers are private to their owner and cannot target local or private-network
+                      addresses. System providers stay available to everyone.
+                    </div>
+
+                    <label className="provider-inline-check" style={{ fontSize: "0.84rem" }}>
+                      <input
+                        type="checkbox"
+                        checked={
+                          !!appSettingsForm.allow_user_providers ||
+                          appSettingsForm.allow_user_model_overrides
+                        }
+                        disabled={!!appSettingsForm.allow_user_providers}
                         onChange={(e) =>
                           setAppSettingsForm({
                             ...appSettingsForm,
                             allow_user_model_overrides: e.target.checked,
                           })
                         }
-                        style={{ width: 16, height: 16 }}
                       />
-                      <span
-                        style={{
-                          fontWeight: 600,
-                          fontSize: "0.86rem",
-                          color: appSettingsForm.allow_user_model_overrides
-                            ? "#6ee7b7"
-                            : "var(--text-primary)",
-                        }}
-                      >
-                        Allow Per-User Model Overrides
-                      </span>
+                      <strong>Allow per-user model overrides</strong>
+                      {appSettingsForm.allow_user_providers && (
+                        <span className="scope-badge scope-badge--system">Locked on (required by BYOP)</span>
+                      )}
                     </label>
-                    <p
-                      style={{
-                        fontSize: "0.76rem",
-                        color: "var(--text-secondary)",
-                        margin: 0,
-                        paddingLeft: 26,
-                      }}
-                    >
-                      When enabled, individual users can customize their own
-                      Actor and Clerk models and working memory window in their
-                      Profile &gt; Models tab. When disabled, global admin
-                      defaults are strictly enforced for all users.
-                    </p>
+                    <div className="form-hint" style={{ fontSize: "0.74rem", paddingLeft: 22 }}>
+                      Users can pick their own provider, model and sampling in Profile → Models. When off, the
+                      defaults above apply to everyone.
+                    </div>
                   </div>
-
 
                   {/* Character Agent Dispatch Mode */}
                   <div
@@ -1652,7 +1416,16 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                     <button
                       type="submit"
                       className="btn btn-amber"
-                      disabled={savingSettings}
+                      disabled={
+                        savingSettings ||
+                        actorInvalid + clerkInvalid + memoryInvalidCount > 0 ||
+                        (providerStore.providers.length > 0 &&
+                          (!appSettingsForm.actor_profile.provider_id ||
+                            !appSettingsForm.actor_profile.model ||
+                            (!appSettingsForm.clerk_mirrors_actor &&
+                              (!appSettingsForm.clerk_profile.provider_id ||
+                                !appSettingsForm.clerk_profile.model))))
+                      }
                     >
                       <Check size={14} />
                       <span>
@@ -1683,3 +1456,9 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     </div>
   );
 };
+
+export const AdminModal: React.FC<AdminModalProps> = (props) => (
+  <ProvidersProvider>
+    <AdminModalInner {...props} />
+  </ProvidersProvider>
+);

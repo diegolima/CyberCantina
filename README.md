@@ -43,7 +43,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173` to launch the CyberCantina Roleplay Studio. Configure your OpenAI-compatible endpoints (Ollama, `llama.cpp`, vLLM, LM Studio, OpenRouter, etc.) in the **Model Settings** panel, or use the built-in **Heuristic / Mock Offline Fallback** to test the full 5-phase pipeline without an active LLM server.
+Open `http://localhost:5173` to launch the CyberCantina Roleplay Studio. Add your model servers in **Admin Settings → Providers** (Ollama today; an optional bearer token supports hosted endpoints), then pick a provider and model for the Actor and Clerk in **Models**. Admins can let users bring their own private providers (BYOP). Provider tokens are encrypted at rest with an auto-generated key (`backend/.cantina_secret.key`, or set `CYBERCANTINA_SECRET_KEY`), so back that file up with your database. You can also use the built-in **Heuristic / Mock Offline Fallback** to test the full 5-phase pipeline without an active LLM server.
 
 ## License
 

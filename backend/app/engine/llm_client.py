@@ -6,12 +6,17 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any, TypeVar
 
 import httpx
 from pydantic import BaseModel, Field
 
 from app.config import ModelProfile, persist_settings, settings
+from app.providers.models import parse_ollama_tags
+from app.providers.probe import bearer_headers
+from app.providers.resolver import ProviderUnavailableError, resolve_system_profile
+from app.security.url_policy import UrlBlockedError, assert_url_allowed, normalize_base_url
 
 logger = logging.getLogger("cybercantina.llm")
 
@@ -65,6 +70,40 @@ def get_openai_v1_url(base_url: str) -> str:
     return cleaned
 
 
+@dataclass(frozen=True)
+class CallTarget:
+    """Everything needed to call one role's endpoint, with auth applied on every request."""
+
+    root_url: str
+    native_headers: dict[str, str]
+    openai_headers: dict[str, str]
+
+
+async def build_call_target(profile: ModelProfile, role: str = "model") -> CallTarget:
+    """Resolve a profile to a call target.
+
+    Provider-backed profiles use the resolved endpoint (bearer token applied to native AND
+    OpenAI-compatible calls); legacy profiles keep the previous behavior. Provider-backed endpoints
+    owned by non-admin users are re-validated against the SSRF policy right before use.
+    """
+    endpoint = profile.resolved or (resolve_system_profile(profile, role) if profile.provider_id else None)
+    if endpoint is not None:
+        if endpoint.network_restricted:
+            try:
+                await assert_url_allowed(normalize_base_url(endpoint.root_url), allow_private=False)
+            except UrlBlockedError as exc:
+                raise RuntimeError(f"Provider endpoint blocked by network policy: {exc}") from exc
+        native = bearer_headers(endpoint.bearer_token)
+        oai = {"Authorization": f"Bearer {endpoint.bearer_token or 'ollama'}", "Content-Type": "application/json"}
+        return CallTarget(get_ollama_root_url(endpoint.root_url), native, oai)
+    legacy_token = profile.api_key if profile.api_key not in ("", "ollama") else None
+    return CallTarget(
+        get_ollama_root_url(profile.base_url),
+        bearer_headers(legacy_token),
+        {"Authorization": f"Bearer {profile.api_key}", "Content-Type": "application/json"},
+    )
+
+
 def extract_json_object(raw_text: str) -> dict[str, Any]:
     """Robustly extract a JSON object from LLM output, stripping <think>/<thought> blocks and markdown fences."""
     cleaned = _THINK_BLOCK_RE.sub("", raw_text or "").strip()
@@ -83,15 +122,17 @@ def extract_json_object(raw_text: str) -> dict[str, Any]:
     return json.loads(cleaned)
 
 
-async def query_ollama_status(base_url: str | None = None) -> OllamaStatusResponse:
-    """Query Ollama's /api/tags endpoint to list installed models and verify connectivity."""
+async def query_ollama_status(
+    base_url: str | None = None, *, bearer_token: str | None = None
+) -> OllamaStatusResponse:
+    """Query Ollama's /api/tags endpoint to list installed models and verify connectivity (legacy path)."""
     target_url = base_url or settings.actor_profile.base_url
     root_url = get_ollama_root_url(target_url)
     tags_url = f"{root_url}/api/tags"
 
     try:
         client = await llm_client.get_http_client(timeout=5.0)
-        resp = await client.get(tags_url, timeout=5.0)
+        resp = await client.get(tags_url, headers=bearer_headers(bearer_token), timeout=5.0)
         resp.raise_for_status()
         payload = resp.json()
     except Exception as exc:
@@ -103,102 +144,111 @@ async def query_ollama_status(base_url: str | None = None) -> OllamaStatusRespon
             active_clerk_model=settings.clerk_profile.model,
         )
 
-    raw_models = payload.get("models", [])
-    models: list[OllamaModelInfo] = []
-    chat_models: list[str] = []
-    embedding_models: list[str] = []
-
-    for item in raw_models:
-        name = item.get("name") or item.get("model") or ""
-        if not name:
-            continue
-        size_bytes = int(item.get("size") or 0)
-        details = item.get("details") or {}
-        family = str(details.get("family") or "")
-        param_size = str(details.get("parameter_size") or "")
-        quant = str(details.get("quantization_level") or "")
-
-        name_lower = name.lower()
-        is_embed = any(k in name_lower for k in _EMBED_MODEL_KEYWORDS) or "bert" in family.lower()
-
-        info = OllamaModelInfo(
-            name=name,
-            size_mb=round(size_bytes / (1024 * 1024)),
-            parameter_size=param_size,
-            quantization_level=quant,
-            family=family,
-            is_embedding=is_embed,
-        )
-        models.append(info)
-        if is_embed:
-            embedding_models.append(name)
-        else:
-            chat_models.append(name)
-
+    parsed = parse_ollama_tags(payload)
+    models = [OllamaModelInfo(**m.model_dump()) for m in parsed]
     return OllamaStatusResponse(
         reachable=True,
         ollama_root_url=root_url,
         models=models,
-        chat_models=chat_models,
-        embedding_models=embedding_models,
+        chat_models=[m.name for m in parsed if not m.is_embedding],
+        embedding_models=[m.name for m in parsed if m.is_embedding],
         active_actor_model=settings.actor_profile.model,
         active_clerk_model=settings.clerk_profile.model,
     )
 
 
+async def _status_for_profile(profile: ModelProfile, role: str) -> OllamaStatusResponse | None:
+    """Status for the endpoint serving ``profile`` (provider-backed or legacy); None if unresolvable."""
+    try:
+        endpoint = resolve_system_profile(profile, role) if profile.provider_id else None
+    except ProviderUnavailableError as exc:
+        logger.warning("Skipping model auto-configuration for %s: %s", role, exc)
+        return None
+    if endpoint is not None:
+        return await query_ollama_status(endpoint.root_url, bearer_token=endpoint.bearer_token)
+    return await query_ollama_status(profile.base_url)
+
+
 async def auto_configure_ollama_models() -> OllamaStatusResponse:
-    """On startup, inspect Ollama and auto-select installed models if current defaults are missing."""
-    status = await query_ollama_status(settings.actor_profile.base_url)
-    if not status.reachable or not status.chat_models:
-        if not status.reachable:
-            logger.warning(
-                "Ollama not reachable at %s (%s). Configure endpoint in Settings or start `ollama serve`.",
-                status.ollama_root_url,
-                status.error,
-            )
-        return status
+    """On startup, inspect each role's own provider and auto-select installed models if the saved ones are missing.
+
+    Only startup defaults are touched (never user overrides), a role whose provider cannot be
+    resolved or reached is left alone, and nothing is persisted unless a model really changed.
+    """
+    actor_status = await _status_for_profile(settings.actor_profile, "actor")
+    if actor_status is None:
+        actor_status = OllamaStatusResponse(
+            reachable=False,
+            ollama_root_url="",
+            error="Actor provider is unavailable.",
+            active_actor_model=settings.actor_profile.model,
+            active_clerk_model=settings.clerk_profile.model,
+        )
+    clerk_status = (
+        actor_status
+        if settings.clerk_profile.provider_id == settings.actor_profile.provider_id
+        and settings.clerk_profile.base_url == settings.actor_profile.base_url
+        else await _status_for_profile(settings.clerk_profile, "clerk")
+    )
+
+    def _is_installed(installed: set[str], model_name: str) -> bool:
+        # Also allow matching without ':latest' suffix
+        return model_name in installed or f"{model_name}:latest" in installed
 
     changed = False
-    installed_set = set(status.chat_models)
+    for role, profile, status in (
+        ("Actor", settings.actor_profile, actor_status),
+        ("Auxiliary Clerk", settings.clerk_profile, clerk_status),
+    ):
+        if status is None or not status.reachable:
+            if status is not None:
+                logger.warning(
+                    "Ollama not reachable at %s (%s). Configure the provider in Admin > Providers or start `ollama serve`.",
+                    status.ollama_root_url,
+                    status.error,
+                )
+            continue
+        if not status.chat_models:
+            continue
+        if not _is_installed(set(status.chat_models), profile.model):
+            old = profile.model
+            profile.model = status.chat_models[0]
+            logger.info(
+                "Auto-selected installed Ollama model '%s' for %s (previous '%s' was not installed).",
+                profile.model,
+                role,
+                old,
+            )
+            changed = True
 
-    #Also allow matching without ':latest' suffix
-    def _is_installed(model_name: str) -> bool:
-        if model_name in installed_set:
-            return True
-        if f"{model_name}:latest" in installed_set:
-            return True
-        return False
-
-    if not _is_installed(settings.actor_profile.model):
-        old_actor = settings.actor_profile.model
-        settings.actor_profile.model = status.chat_models[0]
-        logger.info(
-            "Auto-selected installed Ollama model '%s' for Actor (previous '%s' was not installed).",
-            settings.actor_profile.model,
-            old_actor,
-        )
-        changed = True
-
-    if not _is_installed(settings.clerk_profile.model):
-        old_clerk = settings.clerk_profile.model
-        settings.clerk_profile.model = status.chat_models[0]
-        logger.info(
-            "Auto-selected installed Ollama model '%s' for Auxiliary Clerk (previous '%s' was not installed).",
-            settings.clerk_profile.model,
-            old_clerk,
-        )
-        changed = True
-
-    if status.embedding_models and settings.embedding_profile.model not in status.embedding_models:
-        settings.embedding_profile.model = status.embedding_models[0]
-        changed = True
+    embedding = settings.embedding_profile
+    if embedding.mode == "openai_compat":
+        try:
+            emb_endpoint = resolve_system_profile(embedding, "embedding") if embedding.provider_id else None  # type: ignore[arg-type]
+        except ProviderUnavailableError:
+            emb_endpoint = None
+        if emb_endpoint is not None:
+            emb_status = await query_ollama_status(emb_endpoint.root_url, bearer_token=emb_endpoint.bearer_token)
+        else:
+            emb_status = actor_status if actor_status.reachable else None
+        if emb_status and emb_status.reachable and emb_status.embedding_models and embedding.model not in emb_status.embedding_models:
+            embedding.model = emb_status.embedding_models[0]
+            logger.warning(
+                "Embedding model auto-selected as '%s'; existing memories embedded with another model "
+                "will be ignored until reindexed (Admin > Models).",
+                embedding.model,
+            )
+            changed = True
 
     if changed:
-        persist_settings(settings)
-        status.active_actor_model = settings.actor_profile.model
-        status.active_clerk_model = settings.clerk_profile.model
+        try:
+            persist_settings(settings)
+        except OSError as exc:
+            logger.error("Could not persist auto-configured models: %s", exc)
+        actor_status.active_actor_model = settings.actor_profile.model
+        actor_status.active_clerk_model = settings.clerk_profile.model
 
-    return status
+    return actor_status
 
 
 class LLMClient:
@@ -240,7 +290,8 @@ class LLMClient:
         # 1. Try native Ollama /api/chat first (supports grammar-enforced JSON schema in `format`)
         # Disable separate thinking stream (`think: False`) so reasoning models (e.g. gemma4, qwen3,
         # deepseek-r1) do not exhaust `num_predict` inside `message.thinking` and return empty `content`.
-        ollama_root = get_ollama_root_url(active_profile.base_url)
+        target = await build_call_target(active_profile)
+        ollama_root = target.root_url
         ollama_chat_url = f"{ollama_root}/api/chat"
         ollama_payload: dict[str, Any] = {
             "model": active_profile.model,
@@ -259,7 +310,7 @@ class LLMClient:
 
         client = await self.get_http_client(timeout=active_profile.timeout_seconds)
         try:
-            resp = await client.post(ollama_chat_url, json=ollama_payload, timeout=active_profile.timeout_seconds)
+            resp = await client.post(ollama_chat_url, headers=target.native_headers, json=ollama_payload, timeout=active_profile.timeout_seconds)
             if resp.status_code == 400:
                 # Fallback if model or older Ollama server does not accept `think: False`
                 retry_payload = {k: v for k, v in ollama_payload.items() if k != "think"}
@@ -267,7 +318,7 @@ class LLMClient:
                     "temperature": temp,
                     "num_predict": max(max_tok * 3, 4096),
                 }
-                resp = await client.post(ollama_chat_url, json=retry_payload, timeout=active_profile.timeout_seconds)
+                resp = await client.post(ollama_chat_url, headers=target.native_headers, json=retry_payload, timeout=active_profile.timeout_seconds)
 
             if resp.status_code == 200:
                 data = resp.json()
@@ -286,7 +337,7 @@ class LLMClient:
                         "temperature": temp,
                         "num_predict": max(max_tok * 3, 4096),
                     }
-                    retry_resp = await client.post(ollama_chat_url, json=fallback_payload, timeout=active_profile.timeout_seconds)
+                    retry_resp = await client.post(ollama_chat_url, headers=target.native_headers, json=fallback_payload, timeout=active_profile.timeout_seconds)
                     if retry_resp.status_code == 200:
                         retry_data = retry_resp.json()
                         retry_msg = retry_data.get("message") or {}
@@ -315,11 +366,8 @@ class LLMClient:
             pass
 
         # 2. OpenAI-compatible /v1/chat/completions endpoint
-        v1_url = f"{get_openai_v1_url(active_profile.base_url)}/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {active_profile.api_key}",
-            "Content-Type": "application/json",
-        }
+        v1_url = f"{get_openai_v1_url(target.root_url)}/chat/completions"
+        headers = target.openai_headers
         oai_payload: dict[str, Any] = {
             "model": active_profile.model,
             "messages": messages,
@@ -405,7 +453,8 @@ class LLMClient:
     ) -> AsyncIterator[str]:
         """Stream token deltas from Ollama (/api/chat or /v1/chat/completions)."""
         active_profile = profile or settings.actor_profile
-        ollama_root = get_ollama_root_url(active_profile.base_url)
+        target = await build_call_target(active_profile)
+        ollama_root = target.root_url
         ollama_chat_url = f"{ollama_root}/api/chat"
 
         ollama_payload: dict[str, Any] = {
@@ -423,7 +472,7 @@ class LLMClient:
         # Prefer native Ollama streaming on /api/chat
         try:
             need_retry_without_think = False
-            async with client.stream("POST", ollama_chat_url, json=ollama_payload, timeout=active_profile.timeout_seconds) as resp:
+            async with client.stream("POST", ollama_chat_url, headers=target.native_headers, json=ollama_payload, timeout=active_profile.timeout_seconds) as resp:
                 if resp.status_code == 200:
                     async for line in resp.aiter_lines():
                         if not line.strip():
@@ -451,7 +500,7 @@ class LLMClient:
 
             if need_retry_without_think:
                 retry_stream_payload = {k: v for k, v in ollama_payload.items() if k != "think"}
-                async with client.stream("POST", ollama_chat_url, json=retry_stream_payload, timeout=active_profile.timeout_seconds) as resp:
+                async with client.stream("POST", ollama_chat_url, headers=target.native_headers, json=retry_stream_payload, timeout=active_profile.timeout_seconds) as resp:
                     if resp.status_code == 200:
                         async for line in resp.aiter_lines():
                             if not line.strip():
@@ -472,11 +521,8 @@ class LLMClient:
             pass
 
         # Fallback to OpenAI-compatible SSE streaming (/v1/chat/completions)
-        v1_url = f"{get_openai_v1_url(active_profile.base_url)}/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {active_profile.api_key}",
-            "Content-Type": "application/json",
-        }
+        v1_url = f"{get_openai_v1_url(target.root_url)}/chat/completions"
+        headers = target.openai_headers
         oai_payload: dict[str, Any] = {
             "model": active_profile.model,
             "messages": messages,

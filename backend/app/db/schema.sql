@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS user_model_settings (
     max_scene_flags INTEGER NULL,
     agent_dispatch_mode TEXT NULL,
     persona_disclosure_mode TEXT NOT NULL DEFAULT 'llm_intent',
+    clerk_mirrors_actor INTEGER NULL,
     updated_at TEXT NOT NULL
 );
 
@@ -295,7 +296,8 @@ CREATE TABLE IF NOT EXISTS vector_entries (
     title TEXT NOT NULL,
     content TEXT NOT NULL,
     keywords_json TEXT NOT NULL DEFAULT '[]',
-    embedding_blob BLOB NOT NULL
+    embedding_blob BLOB NOT NULL,
+    embedding_fingerprint TEXT NULL -- NULL = legacy row, treated as current
 );
 
 CREATE INDEX IF NOT EXISTS idx_vector_entries_scope ON vector_entries(world_id, character_id, campaign_id);
@@ -335,3 +337,36 @@ CREATE TABLE IF NOT EXISTS webauthn_challenges (
 );
 CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_epoch ON webauthn_challenges(created_at_epoch);
 
+
+
+-- Key/value metadata for one-shot migrations and counters (e.g. providers_seeded_v1)
+CREATE TABLE IF NOT EXISTS app_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+-- LLM providers: system-scope (admin managed, shared) and user-scope (private, BYOP)
+CREATE TABLE IF NOT EXISTS providers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    name_key TEXT NOT NULL,
+    type TEXT NOT NULL,
+    scope TEXT NOT NULL CHECK (scope IN ('system', 'user')),
+    owner_id TEXT NULL REFERENCES users(id) ON DELETE CASCADE,
+    color TEXT NOT NULL DEFAULT 'neutral',
+    is_enabled INTEGER NOT NULL DEFAULT 1,
+    settings_json TEXT NOT NULL,
+    secret_enc BLOB NULL,
+    network_restricted INTEGER NOT NULL DEFAULT 0,
+    cached_models_json TEXT NULL,
+    models_hash TEXT NULL,
+    last_probed_at TEXT NULL,
+    last_error_code TEXT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK ((scope = 'system' AND owner_id IS NULL) OR (scope = 'user' AND owner_id IS NOT NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_providers_system_name ON providers(name_key) WHERE scope = 'system';
+CREATE UNIQUE INDEX IF NOT EXISTS ux_providers_user_name ON providers(owner_id, name_key) WHERE scope = 'user';
+CREATE INDEX IF NOT EXISTS idx_providers_owner ON providers(owner_id);

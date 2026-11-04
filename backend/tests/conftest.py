@@ -18,6 +18,22 @@ def isolate_settings_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(config, "SETTINGS_FILE_PATH", test_settings_file)
 
 
+@pytest.fixture(autouse=True)
+def isolate_provider_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Startup migration mutates the global settings; restore provider-related state after each test."""
+    from app.providers.probe import probe_service
+
+    for profile in (settings.actor_profile, settings.clerk_profile, settings.embedding_profile):
+        monkeypatch.setattr(profile, "provider_id", None)
+    monkeypatch.setattr(settings, "allow_user_providers", False)
+    monkeypatch.setattr(settings, "clerk_mirrors_actor", False)
+    monkeypatch.setattr(settings, "settings_revision", 0)
+    probe_service._client = None
+    probe_service._inflight.clear()
+    probe_service._cache.clear()
+    probe_service._semaphore = None
+
+
 @pytest.fixture
 def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CantinaRepository:
     """Provide a cleanly initialized temporary repository with default seeds."""

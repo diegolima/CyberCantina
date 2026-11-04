@@ -29,6 +29,13 @@ import {
   Phase5ProgressEventPayload,
   PreTurnAnalysis,
   ProfileModelSettingsResponse,
+  LLMProvider,
+  ProviderCreatePayload,
+  ProviderDraft,
+  ProviderProbeResponse,
+  ProviderReference,
+  ProviderUpdatePayload,
+  SettingsUpdateResponse,
   PromptDefaultsResponse,
   PromptEnrichRequest,
   PromptEnrichResponse,
@@ -109,16 +116,47 @@ function buildAuthHeaders(
   return headers;
 }
 
-function parseApiErrorText(status: number, errText: string): string {
+/** Error carrying the HTTP status and parsed JSON body so callers can react to 409/422 payloads. */
+export class ApiError extends Error {
+  status: number;
+  payload: any;
+  constructor(message: string, status: number, payload: any) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.payload = payload;
+  }
+  /** Structured error code (e.g. "token_required_on_url_change"), when the server sent one. */
+  get code(): string | undefined {
+    return this.payload?.detail?.code;
+  }
+  /** Usages blocking a provider delete/disable (409), for both response shapes the API uses. */
+  get references(): ProviderReference[] {
+    return this.payload?.referenced_by ?? this.payload?.detail?.referenced_by ?? [];
+  }
+}
+
+function parseApiError(status: number, errText: string): ApiError {
+  let payload: any = null;
+  let message = errText || `HTTP ${status}`;
   try {
-    const parsed = JSON.parse(errText);
-    if (parsed && typeof parsed.detail === "string") {
-      return parsed.detail;
+    payload = JSON.parse(errText);
+    const detail = payload?.detail;
+    if (typeof detail === "string") {
+      message = detail;
+    } else if (detail && typeof detail.message === "string") {
+      message = detail.message;
+    } else if (detail && typeof detail.detail === "string") {
+      message = detail.detail;
     }
   } catch {
     // fallback to raw text
   }
-  return errText || `HTTP ${status}`;
+  return new ApiError(message, status, payload);
+}
+
+function parseApiErrorText(status: number, errText: string): string {
+  return parseApiError(status, errText).message;
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -139,7 +177,7 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     ) {
       unauthorizedHandler?.();
     }
-    throw new Error(parseApiErrorText(res.status, errText));
+    throw parseApiError(res.status, errText);
   }
   return res.json() as Promise<T>;
 }
@@ -458,9 +496,52 @@ export const api = {
 
   getSettings: () => fetchJson<AppSettings>(`${API_BASE}/settings`),
   updateSettings: (settings: AppSettings) =>
-    fetchJson<AppSettings>(`${API_BASE}/settings`, {
+    fetchJson<SettingsUpdateResponse>(`${API_BASE}/settings`, {
       method: "PUT",
       body: JSON.stringify(settings),
+    }),
+  getEmbeddingStatus: () =>
+    fetchJson<{ fingerprint: string; stale_entries: number }>(
+      `${API_BASE}/admin/embeddings/status`
+    ),
+  reindexEmbeddings: () =>
+    fetchJson<{ reindexed: number }>(`${API_BASE}/admin/embeddings/reindex`, {
+      method: "POST",
+    }),
+  listProviders: (signal?: AbortSignal) =>
+    fetchJson<LLMProvider[]>(`${API_BASE}/providers`, { signal }),
+  createProvider: (payload: ProviderCreatePayload) =>
+    fetchJson<LLMProvider>(`${API_BASE}/providers`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateProvider: (id: string, payload: ProviderUpdatePayload) =>
+    fetchJson<LLMProvider>(`${API_BASE}/providers/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteProvider: async (id: string) => {
+    const res = await fetch(`${API_BASE}/providers/${id}`, {
+      method: "DELETE",
+      credentials: "include",
+      headers: buildAuthHeaders(),
+    });
+    if (!res.ok) throw parseApiError(res.status, await res.text());
+    return (await res.json()) as {
+      status: string;
+      id: string;
+      reset_user_overrides: number;
+    };
+  },
+  probeProvider: (id: string, opts?: { force?: boolean; signal?: AbortSignal }) =>
+    fetchJson<ProviderProbeResponse>(
+      `${API_BASE}/providers/${id}/probe${opts?.force ? "?force=true" : ""}`,
+      { method: "POST", signal: opts?.signal }
+    ),
+  probeProviderDraft: (draft: ProviderDraft) =>
+    fetchJson<ProviderProbeResponse>(`${API_BASE}/providers/probe-draft`, {
+      method: "POST",
+      body: JSON.stringify(draft),
     }),
   getProfileModels: () =>
     fetchJson<ProfileModelSettingsResponse>(`${API_BASE}/profile/models`),
