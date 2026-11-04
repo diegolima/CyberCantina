@@ -14,6 +14,7 @@ from app.engine.llm_client import llm_client
 from app.engine.phase3_cognition import parse_cognition_xml
 from app.schemas.auth import ModelProfile
 from app.schemas.character import CharacterRecord, CharacterStateSnapshot, CognitionBlock
+from app.schemas.persona import PersonaRecord, PersonaTurnStateSnapshot
 from app.schemas.turn import PreTurnAnalysis, RecalledMemoryItem
 from app.schemas.world import LocationNode, NeighborLocationView
 
@@ -41,6 +42,8 @@ def build_offline_simulated_prose(
     established_cognition: CognitionBlock | None = None,
     established_cognitions: dict[str, CognitionBlock] | None = None,
     include_cognition: bool = False,
+    persona_snapshot: PersonaRecord | None = None,
+    current_player_state: PersonaTurnStateSnapshot | None = None,
 ) -> str:
     """Construct offline simulated narrative prose (or legacy cognition+prose)."""
     if is_narrator:
@@ -205,6 +208,8 @@ async def stream_phase4_prose(
     narrative_mode: str | None = None,
     narrator_directive: str | None = None,
     pregenerated_cognition: CognitionBlock | None = None,
+    persona_snapshot: PersonaRecord | None = None,
+    current_player_state: PersonaTurnStateSnapshot | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream Phase 4 Narrative Prose generation with leading-tag guard and fallback."""
     actor_prof = profile or settings.actor_profile

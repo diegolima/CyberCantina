@@ -43,12 +43,18 @@ from app.schemas.character import (
     ItemInstance,
     MemoryShard,
 )
+from app.schemas.persona import (
+    PersonaKnowledgeProvenance,
+    PersonaRecord,
+    PersonaTurnStateSnapshot,
+)
 from app.schemas.turn import (
     ArbitrationRulingRecord,
     CharacterAgentDelta,
     EpisodicChunkRecord,
     ExtractedCharacterMemory,
     ImprovisedLocationSpec,
+    PersonaGossipEvent,
     Phase4ProgressCallback,
     Phase4ProgressEvent,
     Phase4RosterEntry,
@@ -121,6 +127,139 @@ def _normalize_inventory_item(raw: str | ItemInstance) -> str:
         s,
     )
     return s.strip()
+
+
+def verify_prose_gossip_exchanges(
+    *,
+    raw_prose: str,
+    present_characters: list[CharacterRecord],
+    all_character_states: dict[str, CharacterStateSnapshot],
+    persona_snapshot: PersonaRecord | None,
+) -> list[PersonaGossipEvent]:
+    """Inspect raw_prose to verify if an NPC possessing a secret verbalized it to a co-present NPC.
+
+    Prose-Verified Gossip Protocol:
+    1. Both source and recipient NPCs must be present in the room.
+    2. The source NPC must already have unlocked the secret trait in their unlocked_persona_keys.
+    3. The recipient NPC must NOT already have unlocked the secret trait.
+    4. The secret's keyword or title must actually appear in raw_prose with word boundaries.
+    """
+    if persona_snapshot is None or len(present_characters) < 2 or not raw_prose.strip():
+        return []
+
+    # Build map of secret trait_key -> list of trigger keywords
+    trait_keywords_map: dict[str, list[str]] = {}
+    if persona_snapshot.age and persona_snapshot.age_is_secret:
+        trait_keywords_map["age"] = [str(persona_snapshot.age).strip().lower()]
+
+    for it in persona_snapshot.equipped + persona_snapshot.inventory:
+        if it.is_secret:
+            kws = list(it.trigger_keywords) or [it.name.lower()]
+            trait_keywords_map[it.id] = [k.strip().lower() for k in kws if k.strip()]
+
+    for lore in persona_snapshot.lore_entries:
+        if lore.is_secret:
+            kws = list(lore.trigger_keywords) or [lore.title.lower()]
+            trait_keywords_map[lore.id] = [k.strip().lower() for k in kws if k.strip()]
+
+    events: list[PersonaGossipEvent] = []
+
+    for src in present_characters:
+        src_state = all_character_states.get(src.id)
+        if not src_state:
+            continue
+        src_keys = set(src_state.unlocked_persona_keys)
+        if not src_keys:
+            continue
+
+        for trait_key in src_keys:
+            kw_candidates = trait_keywords_map.get(trait_key, [])
+            matched_snippet = None
+            for kw in kw_candidates:
+                kw_clean = kw.strip().lower()
+                if len(kw_clean) >= 3 or (trait_key == "age" and len(kw_clean) >= 1):
+                    pattern = rf"\b{re.escape(kw_clean)}\b"
+                    m = re.search(pattern, raw_prose, flags=re.I)
+                    if m:
+                        start = max(0, m.start() - 25)
+                        end = min(len(raw_prose), m.end() + 25)
+                        matched_snippet = raw_prose[start:end].strip()
+                        break
+
+            if not matched_snippet:
+                continue
+
+            for recipient in present_characters:
+                if recipient.id == src.id:
+                    continue
+                rec_state = all_character_states.get(recipient.id)
+                if rec_state and trait_key not in rec_state.unlocked_persona_keys:
+                    if not any(
+                        e.recipient_character_id == recipient.id and e.trait_key == trait_key
+                        for e in events
+                    ):
+                        events.append(
+                            PersonaGossipEvent(
+                                source_character_id=src.id,
+                                recipient_character_id=recipient.id,
+                                trait_key=trait_key,
+                                verbatim_reference=matched_snippet,
+                            )
+                        )
+
+    return events
+
+
+def apply_turn_persona_state_and_gossip(
+    *,
+    turn_id: str,
+    present_characters: list[CharacterRecord],
+    character_states: dict[str, CharacterStateSnapshot],
+    current_player_state: PersonaTurnStateSnapshot | None,
+    player_revealed_keys: list[str],
+    verified_gossip_events: list[PersonaGossipEvent],
+) -> tuple[dict[str, CharacterStateSnapshot], PersonaTurnStateSnapshot | None]:
+    """Persist turn state mutations for personas and NPC epistemic unlocks."""
+    updated = dict(character_states)
+
+    for ch in present_characters:
+        st = updated.get(ch.id)
+        if st is None:
+            continue
+        keys = list(st.unlocked_persona_keys)
+        prov = dict(st.persona_knowledge_provenance)
+        changed = False
+
+        # 1. Direct player revelation to present NPCs
+        for k in player_revealed_keys:
+            if k not in keys:
+                keys.append(k)
+                prov[k] = PersonaKnowledgeProvenance(
+                    unlocked_at_turn_id=turn_id,
+                    learned_from="player",
+                )
+                changed = True
+
+        # 2. Verified gossip to recipient NPCs
+        for ev in verified_gossip_events:
+            if ev.recipient_character_id == ch.id:
+                if ev.trait_key not in keys:
+                    keys.append(ev.trait_key)
+                    prov[ev.trait_key] = PersonaKnowledgeProvenance(
+                        unlocked_at_turn_id=turn_id,
+                        learned_from=ev.source_character_id,
+                    )
+                    changed = True
+
+        if changed:
+            updated[ch.id] = st.model_copy(
+                update={
+                    "unlocked_persona_keys": keys,
+                    "persona_knowledge_provenance": prov,
+                }
+            )
+
+    return updated, current_player_state
 
 
 def _matches_inventory_removal(existing_item: str | ItemInstance, removal_queries: set[str]) -> bool:
@@ -996,6 +1135,8 @@ async def run_phase5_post_turn_clerk(
     character_post_turn_prompt_template: str | None = None,
     arbitration_prompt_template: str | None = None,
     summary_prompt_template: str | None = None,
+    persona_snapshot: PersonaRecord | None = None,
+    current_player_state: PersonaTurnStateSnapshot | None = None,
     on_progress: Phase5ProgressCallback | Phase4ProgressCallback | None = None,
 ) -> tuple[TurnNodeRecord, list[EpisodicChunkRecord]]:
     """Phase 5: Async Post-Turn Global World Clerk + Character State Agents & Arbitration."""
@@ -1369,6 +1510,8 @@ async def run_phase5_post_turn_clerk(
                 relationship_notes=dict(prev_st.relationship_notes),
                 equipped=list(prev_st.equipped),
                 inventory=list(prev_st.inventory),
+                unlocked_persona_keys=list(prev_st.unlocked_persona_keys),
+                persona_knowledge_provenance=dict(prev_st.persona_knowledge_provenance),
             )
     else:
         donor_pool = collect_relinquished_item_instances(
@@ -1431,7 +1574,27 @@ async def run_phase5_post_turn_clerk(
                 relationship_notes=merged_rel,
                 equipped=new_equipped,
                 inventory=new_inventory,
+                unlocked_persona_keys=list(prev_st.unlocked_persona_keys),
+                persona_knowledge_provenance=dict(prev_st.persona_knowledge_provenance),
             )
+
+    # 4.5. Prose-Verified Gossip Protocol & Player Direct Revelations
+    verified_gossip: list[PersonaGossipEvent] = []
+    if persona_snapshot is not None:
+        verified_gossip = verify_prose_gossip_exchanges(
+            raw_prose=completed_turn.raw_prose,
+            present_characters=scene_characters,
+            all_character_states=updated_states_by_char,
+            persona_snapshot=persona_snapshot,
+        )
+        updated_states_by_char, current_player_state = apply_turn_persona_state_and_gossip(
+            turn_id=completed_turn.id,
+            present_characters=scene_characters,
+            character_states=updated_states_by_char,
+            current_player_state=current_player_state,
+            player_revealed_keys=completed_turn.pre_turn.revealed_persona_keys,
+            verified_gossip_events=verified_gossip,
+        )
 
     # 5. Process per-character personal memories (ephemeral extraction + deduplication + 40-turn compaction)
     all_extracted_memories = [
@@ -1552,6 +1715,7 @@ async def run_phase5_post_turn_clerk(
         updated_world_snapshot=updated_world_snapshot,
         updated_character_state=primary_char_state,
         extra_character_states=extra_char_states,
+        updated_persona_turn_state=current_player_state,
     )
 
     # 6. Asynchronously embed and index notable atomic event, episodic chunk, and updated character memories

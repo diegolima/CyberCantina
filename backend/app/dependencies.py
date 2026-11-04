@@ -96,6 +96,17 @@ def get_effective_agent_dispatch_mode(user_id: str | None) -> AgentDispatchMode:
     return default_mode
 
 
+def get_effective_persona_disclosure_mode(user_id: str | None) -> str:
+    """Resolve effective persona_disclosure_mode ('llm_intent' or 'token_matching') for a user."""
+    default_mode = "llm_intent"
+    if not settings.allow_user_model_overrides or not user_id:
+        return default_mode
+    user_settings = get_repo().get_user_model_settings(user_id)
+    if user_settings and user_settings.persona_disclosure_mode in ("llm_intent", "token_matching", "hybrid"):
+        return user_settings.persona_disclosure_mode
+    return default_mode
+
+
 def issue_session_response(
     repo: CantinaRepository,
     user: UserProfile,

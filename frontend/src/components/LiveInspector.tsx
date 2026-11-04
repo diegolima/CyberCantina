@@ -198,6 +198,14 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
     return [...rows.filter((r) => r.isPresent), ...rows.filter((r) => !r.isPresent)];
   }, [participants, character, bundle, prevTurn, activeLoc.id]);
 
+  const characterNameMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const r of characterRows) {
+      map[r.record.id] = r.record.name;
+    }
+    return map;
+  }, [characterRows]);
+
   const sheetRow = useMemo(
     () => characterRows.find((r) => r.record.id === sheetCharacterId),
     [characterRows, sheetCharacterId]
@@ -675,6 +683,8 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
               elsewhereLocationName={row.elsewhereLocationName}
               moodChanged={row.moodChanged}
               isMutatingLocked={isMutatingLocked}
+              personaSnapshot={bundle.campaign.persona_snapshot}
+              characterNameMap={characterNameMap}
               onToggleItemEquip={onToggleItemEquip}
               onOpenSheet={(cid) => {
                 setSheetInitialTab("current");

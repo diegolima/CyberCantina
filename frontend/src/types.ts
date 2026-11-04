@@ -228,6 +228,8 @@ export interface CharacterStateSnapshot {
   relationship_notes: Record<string, string>;
   equipped?: ItemInstance[];
   inventory: ItemInstance[];
+  unlocked_persona_keys?: string[];
+  persona_knowledge_provenance?: Record<string, PersonaKnowledgeProvenance>;
 }
 
 export interface WorldGlobalRules {
@@ -840,6 +842,8 @@ export interface CampaignRecord {
   active_leaf_turn_id?: string | null;
   prompt_preset_id?: string | null;
   created_at: string;
+  persona_id?: string | null;
+  persona_snapshot?: PersonaRecord | null;
 }
 
 export interface CampaignStateBundle {
@@ -959,6 +963,7 @@ export interface UserModelSettingsPayload {
   delegate_cognition_to_clerk?: boolean | null;
   max_scene_flags?: number | null;
   agent_dispatch_mode?: AgentDispatchMode | null;
+  persona_disclosure_mode?: DisclosureDetectionMode | null;
 }
 
 export interface ProfileModelSettingsResponse {
@@ -970,12 +975,14 @@ export interface ProfileModelSettingsResponse {
   effective_delegate_cognition_to_clerk: boolean;
   effective_max_scene_flags?: number;
   effective_agent_dispatch_mode?: AgentDispatchMode;
+  effective_persona_disclosure_mode?: DisclosureDetectionMode;
   user_actor_profile?: ModelProfile | null;
   user_clerk_profile?: ModelProfile | null;
   user_working_memory_turns?: number | null;
   user_delegate_cognition_to_clerk?: boolean | null;
   user_max_scene_flags?: number | null;
   user_agent_dispatch_mode?: AgentDispatchMode | null;
+  user_persona_disclosure_mode?: DisclosureDetectionMode | null;
   active_prompt_preset_id?: string | null;
   default_actor_profile: ModelProfile;
   default_clerk_profile: ModelProfile;
@@ -983,6 +990,7 @@ export interface ProfileModelSettingsResponse {
   default_delegate_cognition_to_clerk: boolean;
   default_max_scene_flags?: number;
   default_agent_dispatch_mode?: AgentDispatchMode;
+  default_persona_disclosure_mode?: DisclosureDetectionMode;
 }
 
 export interface PromptVariableDoc {
@@ -1053,6 +1061,70 @@ export interface UpdateNotePayload {
   content?: string;
   tags?: string[];
   is_starred?: boolean;
+}
+
+export type DisclosureDetectionMode = "llm_intent" | "token_matching" | "hybrid";
+
+export interface PersonaItemInstance {
+  id: string;
+  name: string;
+  note: string;
+  flags: ItemFlag[];
+  is_secret: boolean;
+  trigger_keywords: string[];
+}
+
+export interface PersonaLoreEntry {
+  id: string;
+  title: string;
+  content: string;
+  is_secret: boolean;
+  trigger_keywords: string[];
+}
+
+export interface PersonaKnowledgeProvenance {
+  unlocked_at_turn_id: string;
+  learned_from: string;
+}
+
+export interface PersonaRecord {
+  id: string;
+  owner_id: string;
+  name: string;
+  age?: string | null;
+  age_is_secret: boolean;
+  physical_appearance: string;
+  equipped: PersonaItemInstance[];
+  inventory: PersonaItemInstance[];
+  lore_entries: PersonaLoreEntry[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PersonaCreatePayload {
+  name: string;
+  age?: string | null;
+  age_is_secret?: boolean;
+  physical_appearance?: string;
+  equipped?: PersonaItemInstance[];
+  inventory?: PersonaItemInstance[];
+  lore_entries?: PersonaLoreEntry[];
+}
+
+export interface PersonaUpdatePayload {
+  name?: string;
+  age?: string | null;
+  age_is_secret?: boolean;
+  physical_appearance?: string;
+  equipped?: PersonaItemInstance[];
+  inventory?: PersonaItemInstance[];
+  lore_entries?: PersonaLoreEntry[];
+}
+
+export interface PersonaTurnStateSnapshot {
+  turn_id: string;
+  equipped: PersonaItemInstance[];
+  inventory: PersonaItemInstance[];
 }
 
 

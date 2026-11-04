@@ -27,6 +27,7 @@ from app.routers.characters import router as characters_router
 from app.routers.enrich import router as enrich_router
 from app.routers.mechanics import router as mechanics_router
 from app.routers.notes import router as notes_router
+from app.routers.personas import router as personas_router
 from app.routers.prompts import router as prompts_router
 from app.routers.settings import router as settings_router
 from app.routers.worlds import router as worlds_router
@@ -109,6 +110,7 @@ app.include_router(prompts_router)
 app.include_router(notes_router)
 app.include_router(worlds_router)
 app.include_router(characters_router)
+app.include_router(personas_router)
 app.include_router(mechanics_router)
 app.include_router(campaigns_router)
 app.include_router(enrich_router)

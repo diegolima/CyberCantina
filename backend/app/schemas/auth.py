@@ -138,6 +138,7 @@ class UserModelSettingsPayload(BaseModel):
     delegate_cognition_to_clerk: bool | None = None
     max_scene_flags: int | None = Field(default=None, ge=1, le=50)
     agent_dispatch_mode: AgentDispatchMode | None = None
+    persona_disclosure_mode: Literal["llm_intent", "token_matching", "hybrid"] | None = None
 
 
 class ProfileModelSettingsResponse(BaseModel):
@@ -149,12 +150,14 @@ class ProfileModelSettingsResponse(BaseModel):
     effective_delegate_cognition_to_clerk: bool = False
     effective_max_scene_flags: int = 10
     effective_agent_dispatch_mode: AgentDispatchMode = "sequential"
+    effective_persona_disclosure_mode: str = "llm_intent"
     user_actor_profile: ModelProfile | None = None
     user_clerk_profile: ModelProfile | None = None
     user_working_memory_turns: int | None = None
     user_delegate_cognition_to_clerk: bool | None = None
     user_max_scene_flags: int | None = None
     user_agent_dispatch_mode: AgentDispatchMode | None = None
+    user_persona_disclosure_mode: str | None = None
     active_prompt_preset_id: str | None = None
     default_actor_profile: ModelProfile
     default_clerk_profile: ModelProfile
@@ -162,3 +165,4 @@ class ProfileModelSettingsResponse(BaseModel):
     default_delegate_cognition_to_clerk: bool = False
     default_max_scene_flags: int = 10
     default_agent_dispatch_mode: AgentDispatchMode = "sequential"
+    default_persona_disclosure_mode: str = "llm_intent"

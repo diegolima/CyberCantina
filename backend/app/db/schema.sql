@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS user_model_settings (
     delegate_cognition_to_clerk INTEGER NULL,
     max_scene_flags INTEGER NULL,
     agent_dispatch_mode TEXT NULL,
+    persona_disclosure_mode TEXT NOT NULL DEFAULT 'llm_intent',
     updated_at TEXT NOT NULL
 );
 
@@ -140,12 +141,30 @@ CREATE TABLE IF NOT EXISTS character_versions (
 
 CREATE INDEX IF NOT EXISTS idx_char_versions_char ON character_versions(character_id, version DESC);
 
+CREATE TABLE IF NOT EXISTS personas (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL CHECK(length(trim(name)) >= 1),
+    age TEXT NULL,
+    age_is_secret INTEGER NOT NULL DEFAULT 1,
+    physical_appearance TEXT NOT NULL DEFAULT '',
+    equipped_json TEXT NOT NULL DEFAULT '[]',
+    inventory_json TEXT NOT NULL DEFAULT '[]',
+    lore_entries_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_personas_owner ON personas(owner_id);
+
 CREATE TABLE IF NOT EXISTS campaigns (
     id TEXT PRIMARY KEY,
     owner_id TEXT NULL REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE RESTRICT,
     character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE RESTRICT,
+    persona_id TEXT NULL REFERENCES personas(id) ON DELETE SET NULL,
+    persona_snapshot_json TEXT NULL,
     active_leaf_turn_id TEXT NULL,
     prompt_preset_id TEXT NULL REFERENCES prompt_presets(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL
@@ -241,7 +260,15 @@ CREATE TABLE IF NOT EXISTS character_states (
     relationship_notes_json TEXT NOT NULL DEFAULT '{}',
     equipped_json TEXT NOT NULL DEFAULT '[]',
     inventory_json TEXT NOT NULL DEFAULT '[]',
+    unlocked_persona_keys_json TEXT NOT NULL DEFAULT '[]',
+    persona_knowledge_provenance_json TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (turn_id, character_id)
+);
+
+CREATE TABLE IF NOT EXISTS persona_turn_states (
+    turn_id TEXT PRIMARY KEY REFERENCES turn_nodes(id) ON DELETE CASCADE,
+    equipped_json TEXT NOT NULL DEFAULT '[]',
+    inventory_json TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS episodic_chunks (

@@ -9,12 +9,14 @@ import {
   MapPin,
   SlidersHorizontal,
   Sparkles,
+  UserCheck,
 } from "lucide-react";
 import {
   CharacterRecord,
   CharacterStateSnapshot,
   ItemEquipActionPayload,
   ItemInstance,
+  PersonaRecord,
   hasItemFlag,
   splitLegacyWornItems,
 } from "../../types";
@@ -37,6 +39,10 @@ interface CharacterRowProps {
   onOpenSheet?: (characterId: string) => void;
   /** Open character sheet directly on the Inventory tab with a specific item expanded */
   onInspectItem?: (characterId: string, itemId: string) => void;
+  /** Active campaign persona snapshot */
+  personaSnapshot?: PersonaRecord | null;
+  /** Lookup map of character names for gossip provenance tooltips */
+  characterNameMap?: Record<string, string>;
 }
 
 function buildItemTooltip(item: ItemInstance, clickable: boolean): string {
@@ -67,6 +73,8 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
   onToggleItemEquip,
   onOpenSheet,
   onInspectItem,
+  personaSnapshot,
+  characterNameMap,
 }) => {
   const [open, setOpen] = usePersistentState<boolean>(
     `character.${character.id}`,
@@ -297,6 +305,60 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
               ) : (
                 <div style={{ color: "var(--text-muted)", fontStyle: "italic", fontSize: "0.72rem" }}>
                   Empty inventory
+                </div>
+              )}
+            </div>
+
+            {/* Knowledge of Player Persona & Provenance */}
+            <div className="cog-step">
+              <div className="cog-step-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>Knowledge of You ({state.unlocked_persona_keys?.length ?? 0})</span>
+                <span style={{ fontSize: "0.68rem", color: "var(--accent-emerald)" }}>
+                  {personaSnapshot ? personaSnapshot.name : "Protagonist"}
+                </span>
+              </div>
+              {state.unlocked_persona_keys && state.unlocked_persona_keys.length > 0 ? (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 4 }}>
+                  {state.unlocked_persona_keys.map((k) => {
+                    let label = k;
+                    if (k === "age" && personaSnapshot?.age) {
+                      label = `Age: ${personaSnapshot.age}`;
+                    } else if (personaSnapshot) {
+                      const it = [...personaSnapshot.equipped, ...personaSnapshot.inventory].find((i) => i.id === k);
+                      if (it) label = `Item: ${it.name}`;
+                      const lore = personaSnapshot.lore_entries.find((l) => l.id === k);
+                      if (lore) label = `Lore: ${lore.title}`;
+                    }
+                    const prov = state.persona_knowledge_provenance?.[k];
+                    const provText = prov
+                      ? prov.learned_from === "player"
+                        ? "Learned directly from you"
+                        : `Gossiped by ${characterNameMap?.[prov.learned_from] || prov.learned_from}`
+                      : "Learned";
+
+                    return (
+                      <span
+                        key={k}
+                        className="badge item-badge"
+                        style={{
+                          backgroundColor: "rgba(16, 185, 129, 0.12)",
+                          color: "var(--accent-emerald)",
+                          borderColor: "rgba(16, 185, 129, 0.3)",
+                        }}
+                        title={`${label} (${provText})`}
+                      >
+                        <UserCheck size={10} />
+                        <span>{label}</span>
+                        <span style={{ fontSize: "0.65rem", opacity: 0.75 }}>
+                          • {prov?.learned_from === "player" ? "Direct" : "Gossip"}
+                        </span>
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ color: "var(--text-muted)", fontStyle: "italic", fontSize: "0.72rem" }}>
+                  No secrets revealed to this character yet
                 </div>
               )}
             </div>

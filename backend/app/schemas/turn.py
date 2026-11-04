@@ -13,6 +13,7 @@ from app.schemas.character import (
     CognitionBlock,
     MemoryShard,
 )
+from app.schemas.persona import PersonaRecord
 from app.schemas.world import (
     CompassDirection,
     LocationEdge,
@@ -221,6 +222,10 @@ class PreTurnLLMOutput(BaseModel):
     )
     mechanics_check: MechanicsTrigger = Field(default_factory=MechanicsTrigger)
     character_checks: list[CharacterCheckSpec] = Field(default_factory=list)
+    revealed_persona_keys: list[str] = Field(
+        default_factory=list,
+        description="Secret persona keys explicitly revealed by the player's message this turn.",
+    )
 
 
 class PreTurnAnalysis(PreTurnLLMOutput):
@@ -496,6 +501,10 @@ class CharacterAgentDelta(BaseModel):
             "formed by THIS character on this turn. Empty list on ordinary turns."
         ),
     )
+    persona_secrets_disclosed_to: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Gossip exchange: mapping of recipient character_id to secret persona keys communicated in dialogue.",
+    )
 
     @field_validator("valence_delta", "arousal_delta", mode="before")
     @classmethod
@@ -548,6 +557,18 @@ class CharacterAgentDelta(BaseModel):
             if "neighbor" in low or "depart" in low or "leave" in low or "move" in low:
                 return "move_to_neighbor"
         return "stay_here"
+
+
+class PersonaGossipEvent(BaseModel):
+    """A secret persona trait shared between NPCs during narrative prose."""
+
+    source_character_id: str
+    recipient_character_id: str
+    trait_key: str
+    verbatim_reference: str = Field(
+        default="",
+        description="Snippet from raw_prose substantiating the gossip.",
+    )
 
 
 class DisputedItemDecision(BaseModel):
@@ -772,6 +793,8 @@ class CampaignRecord(BaseModel):
     name: str
     world_id: str
     character_id: str
+    persona_id: str | None = None
+    persona_snapshot: PersonaRecord | None = None
     participant_character_ids: list[str] = Field(default_factory=list)
     active_leaf_turn_id: str | None = None
     prompt_preset_id: str | None = None

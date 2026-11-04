@@ -550,6 +550,8 @@ class CharacterStateSnapshot(BaseModel):
     relationship_notes: dict[str, str] = Field(default_factory=dict)
     equipped: list[ItemInstance] = Field(default_factory=list)
     inventory: list[ItemInstance] = Field(default_factory=list)
+    unlocked_persona_keys: list[str] = Field(default_factory=list)
+    persona_knowledge_provenance: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("equipped", "inventory", mode="before")
     @classmethod

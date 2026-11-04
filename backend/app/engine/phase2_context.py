@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 from typing import Any
 from app.config import settings
@@ -16,6 +16,12 @@ from app.schemas.character import (
     coerce_item_list,
     format_item_names,
     normalize_item_key,
+)
+from app.schemas.persona import (
+    PersonaItemInstance,
+    PersonaLoreEntry,
+    PersonaRecord,
+    PersonaTurnStateSnapshot,
 )
 from app.schemas.turn import (
     EpisodicChunkRecord,
@@ -538,13 +544,115 @@ def select_active_location_lore_for_turn(
     return selected
 
 
+@dataclass(frozen=True)
+class DiscoveredPersonaView:
+    """Subset of persona traits known to a specific character at turn execution time."""
+
+    persona_id: str
+    name: str
+    physical_appearance: str
+    revealed_age: str | None
+    visible_equipped: list[PersonaItemInstance]
+    known_inventory: list[PersonaItemInstance]
+    known_lore: list[PersonaLoreEntry]
+
+
+def resolve_character_known_persona(
+    persona_snapshot: PersonaRecord | None,
+    current_player_state: PersonaTurnStateSnapshot | None,
+    unlocked_keys: list[str] | set[str] | None,
+) -> DiscoveredPersonaView | None:
+    """Resolve the epistemically filtered view of the player persona for an NPC."""
+    if persona_snapshot is None:
+        return None
+    keys = set(unlocked_keys or [])
+
+    revealed_age = None
+    if persona_snapshot.age:
+        if not persona_snapshot.age_is_secret or "age" in keys:
+            revealed_age = str(persona_snapshot.age)
+
+    equipped_pool = (
+        current_player_state.equipped
+        if current_player_state is not None
+        else persona_snapshot.equipped
+    )
+    inventory_pool = (
+        current_player_state.inventory
+        if current_player_state is not None
+        else persona_snapshot.inventory
+    )
+
+    visible_equipped = [
+        it for it in equipped_pool if not it.is_secret or it.id in keys
+    ]
+    known_inventory = [
+        it for it in inventory_pool if not it.is_secret or it.id in keys
+    ]
+    known_lore = [
+        l for l in persona_snapshot.lore_entries if not l.is_secret or l.id in keys
+    ]
+
+    return DiscoveredPersonaView(
+        persona_id=persona_snapshot.id,
+        name=persona_snapshot.name,
+        physical_appearance=persona_snapshot.physical_appearance,
+        revealed_age=revealed_age,
+        visible_equipped=visible_equipped,
+        known_inventory=known_inventory,
+        known_lore=known_lore,
+    )
+
+
+def build_all_character_known_personas(
+    persona_snapshot: PersonaRecord | None,
+    current_player_state: PersonaTurnStateSnapshot | None,
+    all_character_states: dict[str, CharacterStateSnapshot],
+) -> dict[str, DiscoveredPersonaView]:
+    """Precompute known persona views for every character in the turn context."""
+    if persona_snapshot is None:
+        return {}
+    res: dict[str, DiscoveredPersonaView] = {}
+    for cid, cstate in all_character_states.items():
+        view = resolve_character_known_persona(
+            persona_snapshot,
+            current_player_state,
+            cstate.unlocked_persona_keys,
+        )
+        if view is not None:
+            res[cid] = view
+    return res
+
+
+def format_zone1_player_protagonist_block(persona_snapshot: PersonaRecord | None) -> str:
+    """Format static protagonist identity block for Zone 1.
+
+    Guarantees 100% KV-cache reuse because player name and physical_appearance
+    are immutable for the campaign.
+    """
+    if not persona_snapshot:
+        return ""
+    app_text = (
+        f"Physical Appearance: {persona_snapshot.physical_appearance}\n"
+        if persona_snapshot.physical_appearance.strip()
+        else ""
+    )
+    return (
+        f"\n\n=== PLAYER / PROTAGONIST ===\n"
+        f"Name: {persona_snapshot.name}\n"
+        f"{app_text}"
+        f"Note: This is the player character. Do NOT speak, decide, or act on behalf of the player."
+    )
+
+
 def build_zone1_narrator_system_prompt(
     world: WorldRecord,
     prompt_template: str | None = None,
+    persona_snapshot: PersonaRecord | None = None,
 ) -> str:
     """Zone 1: Strictly static system prompt prefix for the Narrator Meta-Actor."""
     template = prompt_template or get_default_prompt("narrator_zone1_system")
-    return render_template(
+    base = render_template(
         template,
         world_name=world.name,
         genre=world.global_rules.genre,
@@ -552,12 +660,14 @@ def build_zone1_narrator_system_prompt(
         setting_overview=world.global_rules.setting_overview,
         tech_or_magic_rules=world.global_rules.tech_or_magic_rules,
     )
+    return base + format_zone1_player_protagonist_block(persona_snapshot)
 
 
 def build_zone1_static_system_prompt(
     world: WorldRecord,
     character: CharacterRecord,
     prompt_template: str | None = None,
+    persona_snapshot: PersonaRecord | None = None,
 ) -> str:
     """Zone 1: Strictly static system prompt prefix to guarantee 100% KV-cache hits across turns."""
     voice_lines = "\n".join(
@@ -569,7 +679,7 @@ def build_zone1_static_system_prompt(
         else ""
     )
     template = prompt_template or get_default_prompt("actor_zone1_system")
-    return render_template(
+    base = render_template(
         template,
         character_name=character.name,
         world_name=world.name,
@@ -585,12 +695,14 @@ def build_zone1_static_system_prompt(
         core_fear=character.baseline_psyche.core_fear,
         voice_lines=voice_lines,
     )
+    return base + format_zone1_player_protagonist_block(persona_snapshot)
 
 
 def build_zone1_ensemble_system_prompt(
     world: WorldRecord,
     present_characters: list[CharacterRecord],
     prompt_template: str | None = None,
+    persona_snapshot: PersonaRecord | None = None,
 ) -> str:
     """Zone 1: Static prefix for multi-character ensemble prose generation.
     If len(present_characters) == 1: uses standard build_zone1_static_system_prompt.
@@ -600,8 +712,8 @@ def build_zone1_ensemble_system_prompt(
     if len(present_characters) <= 1:
         single_char = present_characters[0] if present_characters else None
         if single_char is None:
-            return build_zone1_narrator_system_prompt(world, prompt_template=prompt_template)
-        return build_zone1_static_system_prompt(world, single_char, prompt_template=prompt_template)
+            return build_zone1_narrator_system_prompt(world, prompt_template=prompt_template, persona_snapshot=persona_snapshot)
+        return build_zone1_static_system_prompt(world, single_char, prompt_template=prompt_template, persona_snapshot=persona_snapshot)
 
     # Multi-character ensemble: sort strictly by canonical id
     sorted_cast = sorted(present_characters, key=lambda c: c.id)
@@ -619,6 +731,8 @@ def build_zone1_ensemble_system_prompt(
         )
     ensemble_cast_text = "\n\n".join(cast_sections)
 
+    protagonist_block = format_zone1_player_protagonist_block(persona_snapshot)
+
     return (
         f"You are the narrative ensemble writer in an interactive story.\n\n"
         f"=== WORLD SETTING: {world.name} ===\n"
@@ -626,7 +740,8 @@ def build_zone1_ensemble_system_prompt(
         f"Overview: {world.global_rules.setting_overview}\n"
         f"World Rules: {world.global_rules.tech_or_magic_rules}\n\n"
         f"=== CAST PRESENT IN ROOM ===\n"
-        f"{ensemble_cast_text}\n\n"
+        f"{ensemble_cast_text}"
+        f"{protagonist_block}\n\n"
         f"=== NARRATIVE PROTOCOL ===\n"
         f"Write rich, immersive, multi-character narrative prose capturing physical actions (*italics*) "
         f"and spoken dialogue (\"quotes\") for the present characters. "
@@ -663,6 +778,9 @@ class TurnContextBundle:
     narrator_directive: str | None = None
     working_memory_turns: int | None = None
     actor_system_prompt_template: str | None = None
+    persona_snapshot: PersonaRecord | None = None
+    current_player_state: PersonaTurnStateSnapshot | None = None
+    per_character_known_personas: dict[str, DiscoveredPersonaView] = field(default_factory=dict)
 
 
 def build_zone2_episodic_summary(chunks: list[EpisodicChunkRecord]) -> str | None:
@@ -785,6 +903,8 @@ async def resolve_phase2_turn_context(
     working_memory_turns: int | None = None,
     actor_system_prompt_template: str | None = None,
     rag_top_k: int = 5,
+    persona_snapshot: PersonaRecord | None = None,
+    current_player_state: PersonaTurnStateSnapshot | None = None,
 ) -> TurnContextBundle:
     """Phase 2: Scoped RAG & Context Resolution.
     Computes query embeddings once and partitions memory items between shared scene items
@@ -830,6 +950,11 @@ async def resolve_phase2_turn_context(
     )
 
     leaf_turn = branch_turns[-1]
+    per_char_known = build_all_character_known_personas(
+        persona_snapshot=persona_snapshot,
+        current_player_state=current_player_state,
+        all_character_states=all_character_states,
+    )
 
     return TurnContextBundle(
         world=world,
@@ -850,6 +975,9 @@ async def resolve_phase2_turn_context(
         narrator_directive=narrator_directive,
         working_memory_turns=working_memory_turns,
         actor_system_prompt_template=actor_system_prompt_template,
+        persona_snapshot=persona_snapshot,
+        current_player_state=current_player_state,
+        per_character_known_personas=per_char_known,
     )
 
 
@@ -871,6 +999,8 @@ def build_zone4_ephemeral_tail_frame(
     narrator_directive: str | None = None,
     established_cognition: CognitionBlock | None = None,
     established_cognitions: dict[str, CognitionBlock] | None = None,
+    persona_snapshot: PersonaRecord | None = None,
+    current_player_state: PersonaTurnStateSnapshot | None = None,
 ) -> str:
     """Zone 4: Dynamic turn-specific context injected at the tail of the prompt."""
     exits_text = "\n".join(
@@ -1090,6 +1220,21 @@ def build_zone4_ephemeral_tail_frame(
         )
         local_lore_block = f"\n    <local_lore>\n{local_lore_lines}\n    </local_lore>"
 
+    player_gear_section = ""
+    if persona_snapshot:
+        eq_items = (
+            current_player_state.equipped
+            if current_player_state is not None
+            else persona_snapshot.equipped
+        )
+        vis_eq = [it.name for it in eq_items if not it.is_secret]
+        if vis_eq:
+            player_gear_section = (
+                f"\n  <player_visible_equipment player=\"{persona_snapshot.name}\">\n"
+                f"    Equipped / Worn: {', '.join(vis_eq)}\n"
+                f"  </player_visible_equipment>"
+            )
+
     return (
         "<scene_context>\n"
         f"  <world_clock>{describe_world_timestamp(world_snapshot.world_timestamp)}</world_clock>\n"
@@ -1107,7 +1252,8 @@ def build_zone4_ephemeral_tail_frame(
         f"{f' ({pre_turn.target_location_hint})' if pre_turn.target_location_hint else ''}\n"
         f"  </auxiliary_prompt_analysis>{rng_section}\n"
         f"{mind_state_section}"
-        f"{established_cognition_section}\n"
+        f"{established_cognition_section}"
+        f"{player_gear_section}\n"
         "</scene_context>\n\n"
         f"{user_tail}"
     )
@@ -1133,14 +1279,16 @@ def assemble_four_zone_messages(
     narrator_directive: str | None = None,
     established_cognition: CognitionBlock | None = None,
     established_cognitions: dict[str, CognitionBlock] | None = None,
+    persona_snapshot: PersonaRecord | None = None,
+    current_player_state: PersonaTurnStateSnapshot | None = None,
 ) -> list[dict[str, str]]:
     """Construct the complete 4-Zone OpenAI messages array for the Main Actor Model."""
     if is_narrator:
-        zone1_prompt = build_zone1_narrator_system_prompt(world, prompt_template=actor_system_prompt_template)
+        zone1_prompt = build_zone1_narrator_system_prompt(world, prompt_template=actor_system_prompt_template, persona_snapshot=persona_snapshot)
     elif present_characters and len(present_characters) > 1:
-        zone1_prompt = build_zone1_ensemble_system_prompt(world, present_characters, prompt_template=actor_system_prompt_template)
+        zone1_prompt = build_zone1_ensemble_system_prompt(world, present_characters, prompt_template=actor_system_prompt_template, persona_snapshot=persona_snapshot)
     else:
-        zone1_prompt = build_zone1_static_system_prompt(world, character, prompt_template=actor_system_prompt_template)
+        zone1_prompt = build_zone1_static_system_prompt(world, character, prompt_template=actor_system_prompt_template, persona_snapshot=persona_snapshot)
     messages: list[dict[str, str]] = [
         {
             "role": "system",
@@ -1213,6 +1361,8 @@ def assemble_four_zone_messages(
         narrator_directive=narrator_directive,
         established_cognition=established_cognition,
         established_cognitions=established_cognitions,
+        persona_snapshot=persona_snapshot,
+        current_player_state=current_player_state,
     )
     messages.append({"role": "user", "content": zone4_content})
     return messages

@@ -20,6 +20,10 @@ import {
   LocationLoreNodeDraft,
   MemoryShard,
   OllamaStatusResponse,
+  PersonaCreatePayload,
+  PersonaRecord,
+  PersonaTurnStateSnapshot,
+  PersonaUpdatePayload,
   Phase3ProgressEventPayload,
   Phase4AgentKind,
   Phase5ProgressEventPayload,
@@ -689,6 +693,7 @@ export const api = {
     world_id: string;
     character_id: string;
     opening_prose?: string;
+    persona_id?: string | null;
   }) =>
     fetchJson<CampaignStateBundle>(`${API_BASE}/campaigns`, {
       method: "POST",
@@ -703,6 +708,30 @@ export const api = {
     ),
   getCampaignState: (campaignId: string) =>
     fetchJson<CampaignStateBundle>(`${API_BASE}/campaigns/${campaignId}/state`),
+  getCampaignPersonaState: (campaignId: string) =>
+    fetchJson<PersonaTurnStateSnapshot | null>(
+      `${API_BASE}/campaigns/${campaignId}/persona-state`
+    ),
+  listPersonas: () => fetchJson<PersonaRecord[]>(`${API_BASE}/personas`),
+  getPersona: (personaId: string) =>
+    fetchJson<PersonaRecord>(`${API_BASE}/personas/${personaId}`),
+  createPersona: (payload: PersonaCreatePayload) =>
+    fetchJson<PersonaRecord>(`${API_BASE}/personas`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updatePersona: (personaId: string, payload: PersonaUpdatePayload) =>
+    fetchJson<PersonaRecord>(`${API_BASE}/personas/${personaId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deletePersona: (personaId: string) =>
+    fetchJson<{ status: string; persona_id: string }>(
+      `${API_BASE}/personas/${personaId}`,
+      {
+        method: "DELETE",
+      }
+    ),
   checkoutBranch: (campaignId: string, turnId: string) =>
     fetchJson<CampaignStateBundle>(`${API_BASE}/campaigns/${campaignId}/checkout`, {
       method: "POST",

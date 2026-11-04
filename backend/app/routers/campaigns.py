@@ -20,6 +20,7 @@ from app.config import settings
 from app.db.repository import UNSET
 from app.dependencies import (
     get_effective_agent_dispatch_mode,
+    get_effective_persona_disclosure_mode,
     get_effective_user_model_settings,
     get_repo,
     run_entity_pruner,
@@ -37,6 +38,7 @@ from app.engine.phase4_prose import stream_phase4_prose
 from app.engine.phase5_clerk import run_phase5_post_turn_clerk
 from app.engine.phase4_clerk import run_phase4_post_turn_clerk
 from app.schemas.auth import UserProfile
+from app.schemas.persona import PersonaRecord, PersonaTurnStateSnapshot
 from app.schemas.character import (
     CharacterRecord,
     CharacterStateSnapshot,
@@ -68,6 +70,7 @@ class CampaignCreateRequest(BaseModel):
     name: str
     world_id: str
     character_id: str
+    persona_id: str | None = None
     character_ids: list[str] | None = None
     character_locations: dict[str, str] | None = None
     opening_prose: str | None = None
@@ -142,6 +145,7 @@ def create_campaign(
             character_ids=req.character_ids,
             character_locations=req.character_locations,
             opening_prose=req.opening_prose,
+            persona_id=req.persona_id,
             owner_id=current_user.id,
         )
         return repo.get_campaign_state_bundle(camp.id, owner_id=current_user.id)
@@ -166,6 +170,21 @@ def add_campaign_character(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/api/campaigns/{campaign_id}/persona-state", response_model=PersonaTurnStateSnapshot | None)
+def get_campaign_player_turn_state(
+    campaign_id: str,
+    turn_id: str | None = None,
+    current_user: UserProfile = Depends(get_current_user),
+) -> PersonaTurnStateSnapshot | None:
+    """Retrieve player dynamic inventory & equipment for the campaign's active (or target) turn."""
+    repo = get_repo()
+    camp = repo.get_campaign(campaign_id, owner_id=current_user.id)
+    target_turn_id = turn_id or camp.active_leaf_turn_id
+    if not target_turn_id:
+        return None
+    return repo.get_campaign_persona_turn_state(target_turn_id)
 
 
 @router.delete("/api/campaigns/{campaign_id}")
@@ -477,6 +496,15 @@ async def _execute_turn_stream_events(
     valid_turn_ids = {t.id for t in branch_turns}
     parent_turn = branch_turns[-1]
 
+    persona_snapshot: PersonaRecord | None = campaign.persona_snapshot
+    current_player_state: PersonaTurnStateSnapshot | None = repo.get_campaign_persona_turn_state(parent_turn.id)
+    if current_player_state is None and persona_snapshot is not None:
+        current_player_state = PersonaTurnStateSnapshot(
+            turn_id=parent_turn.id,
+            equipped=list(persona_snapshot.equipped),
+            inventory=list(persona_snapshot.inventory),
+        )
+
     world = repo.get_world(
         campaign.world_id,
         valid_turn_ids=valid_turn_ids,
@@ -579,6 +607,7 @@ async def _execute_turn_stream_events(
 
     eff_actor, eff_clerk, eff_wm_turns, eff_delegate_cognition, eff_max_flags = get_effective_user_model_settings(owner_id)
     eff_dispatch_mode = get_effective_agent_dispatch_mode(owner_id)
+    eff_disclosure_mode = get_effective_persona_disclosure_mode(owner_id)
     effective_prompts = repo.resolve_effective_prompts(user_id=owner_id, campaign_id=campaign.id)
 
     effective_user_message = req.user_message.strip()
@@ -730,6 +759,9 @@ async def _execute_turn_stream_events(
             prompt_template=effective_prompts.get("clerk_pre_turn_system"),
             character_choices=applied_choices,
             message_is_synthetic=message_is_synthetic,
+            persona_snapshot=persona_snapshot,
+            current_player_items=(current_player_state.equipped + current_player_state.inventory) if current_player_state else None,
+            disclosure_detection_mode=eff_disclosure_mode,
         )
         # Resolve active speaker selected by Phase 1 from characters present in the room
         character = (
@@ -767,6 +799,8 @@ async def _execute_turn_stream_events(
             else effective_prompts.get("actor_zone1_system")
         ),
         rag_top_k=settings.memory_config.rag_top_k,
+        persona_snapshot=persona_snapshot,
+        current_player_state=current_player_state,
     )
 
     seen_recall_ids: set[str] = set()
@@ -848,6 +882,8 @@ async def _execute_turn_stream_events(
         narrative_mode=req.narrative_mode if is_narrator else None,
         narrator_directive=req.narrator_directive if is_narrator else None,
         established_cognitions=established_cognitions,
+        persona_snapshot=persona_snapshot,
+        current_player_state=current_player_state,
     )
 
     primary_cognition = (
@@ -882,6 +918,8 @@ async def _execute_turn_stream_events(
         is_narrator=is_narrator,
         narrative_mode=req.narrative_mode if is_narrator else None,
         narrator_directive=req.narrator_directive if is_narrator else None,
+        persona_snapshot=persona_snapshot,
+        current_player_state=current_player_state,
     ):
         if item["event"] == "actor_finished":
             final_cognition = CognitionBlock.model_validate(item["data"]["cognition"])
@@ -978,6 +1016,8 @@ async def _execute_turn_stream_events(
                 character_post_turn_prompt_template=effective_prompts.get("character_post_turn_system"),
                 arbitration_prompt_template=effective_prompts.get("clerk_arbitration_system"),
                 summary_prompt_template=effective_prompts.get("clerk_episodic_summary_system"),
+                persona_snapshot=persona_snapshot,
+                current_player_state=current_player_state,
                 on_progress=_phase5_progress_cb,
             )
             bundle = repo.get_campaign_state_bundle(campaign.id)

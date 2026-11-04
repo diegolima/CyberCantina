@@ -13,6 +13,12 @@ from app.schemas.character import (
     CharacterStateSnapshot,
     format_item_names,
 )
+from app.schemas.persona import (
+    DisclosureDetectionMode,
+    PersonaItemInstance,
+    PersonaLoreEntry,
+    PersonaRecord,
+)
 from app.schemas.turn import (
     CanonicalOutcomeTier,
     CharacterCheckSpec,
@@ -61,6 +67,129 @@ _RISKY_ACTION_PATTERNS: list[tuple[re.Pattern[str], str, int]] = [
 _HOSTILE_WORDS = {"gun", "weapon", "shut up", "lie", "lying", "betray", "kill", "syndicate", "threat"}
 _VULNERABLE_WORDS = {"bleeding", "hurt", "help", "scared", "dying", "wound", "sorry", "please", "trust"}
 _SARCASTIC_WORDS = {"sure", "right", "whatever", "charming", "relax", "calm down"}
+
+
+def detect_persona_disclosures_token_matching(
+    *,
+    user_message: str,
+    persona_snapshot: PersonaRecord | None,
+    current_player_items: list[PersonaItemInstance] | None = None,
+    already_unlocked_keys: set[str] | None = None,
+) -> list[str]:
+    """Word-boundary regex & stemmed keyword matching for persona secrets.
+
+    Guards:
+    - Requires word-boundary match (r'\\b' + re.escape(kw) + r'\\b')
+    - Enforces min keyword length >= 3 to prevent substring collisions (except numeric age >= 1 digit)
+    - Checks both snapshot lore and active turn items
+    """
+    if persona_snapshot is None:
+        return []
+
+    msg_lower = user_message.lower()
+    already = already_unlocked_keys or set()
+    disclosed: list[str] = []
+
+    # 1. Age check
+    if persona_snapshot.age and persona_snapshot.age_is_secret and "age" not in already:
+        age_str = str(persona_snapshot.age).strip().lower()
+        if age_str:
+            pattern = rf"\b{re.escape(age_str)}\b"
+            if re.search(pattern, msg_lower):
+                disclosed.append("age")
+
+    # 2. Items check (equipped & inventory)
+    items_pool = (
+        current_player_items
+        if current_player_items is not None
+        else (persona_snapshot.equipped + persona_snapshot.inventory)
+    )
+    for it in items_pool:
+        if not it.is_secret or it.id in already or it.id in disclosed:
+            continue
+        kws = list(it.trigger_keywords) or [it.name.lower()]
+        for kw in kws:
+            kw_clean = kw.strip().lower()
+            if len(kw_clean) >= 3:
+                pattern = rf"\b{re.escape(kw_clean)}\b"
+                if re.search(pattern, msg_lower):
+                    disclosed.append(it.id)
+                    break
+
+    # 3. Lore entries check
+    for lore in persona_snapshot.lore_entries:
+        if not lore.is_secret or lore.id in already or lore.id in disclosed:
+            continue
+        kws = list(lore.trigger_keywords) or [lore.title.lower()]
+        for kw in kws:
+            kw_clean = kw.strip().lower()
+            if len(kw_clean) >= 3:
+                pattern = rf"\b{re.escape(kw_clean)}\b"
+                if re.search(pattern, msg_lower):
+                    disclosed.append(lore.id)
+                    break
+
+    return disclosed
+
+
+def detect_persona_disclosures(
+    *,
+    user_message: str,
+    persona_snapshot: PersonaRecord | None,
+    current_player_items: list[PersonaItemInstance] | None = None,
+    already_unlocked_keys: set[str] | None = None,
+    present_characters_count: int = 1,
+    mode: DisclosureDetectionMode = "llm_intent",
+    llm_revealed_keys: list[str] | None = None,
+) -> list[str]:
+    """Resolve disclosed persona keys using selected strategy.
+
+    Solitary Action Guard:
+    If present_characters_count == 0, keys are recorded as player-active but
+    flagged as un-witnessed by NPCs (empty disclosure returned).
+    """
+    if persona_snapshot is None:
+        return []
+
+    # Solitary Action Guard
+    if present_characters_count <= 0:
+        return []
+
+    token_matches = detect_persona_disclosures_token_matching(
+        user_message=user_message,
+        persona_snapshot=persona_snapshot,
+        current_player_items=current_player_items,
+        already_unlocked_keys=already_unlocked_keys,
+    )
+
+    if mode == "token_matching":
+        return token_matches
+
+    # Candidate secret keys filter
+    candidate_keys: set[str] = set()
+    if persona_snapshot.age_is_secret and persona_snapshot.age:
+        candidate_keys.add("age")
+    items_pool = (
+        current_player_items
+        if current_player_items is not None
+        else (persona_snapshot.equipped + persona_snapshot.inventory)
+    )
+    for it in items_pool:
+        if it.is_secret:
+            candidate_keys.add(it.id)
+    for l in persona_snapshot.lore_entries:
+        if l.is_secret:
+            candidate_keys.add(l.id)
+
+    llm_valid = [k for k in (llm_revealed_keys or []) if k in candidate_keys]
+
+    if mode == "llm_intent":
+        return llm_valid
+    elif mode == "hybrid":
+        return list(dict.fromkeys(token_matches + llm_valid))
+
+    return llm_valid
+
 
 
 def classify_outcome_tier(
@@ -461,6 +590,9 @@ def _build_heuristic_llm_output(
     known_entities: list[str],
     present_characters: list[CharacterRecord] | None = None,
     previous_speaker_id: str | None = None,
+    persona_snapshot: PersonaRecord | None = None,
+    current_player_items: list[PersonaItemInstance] | None = None,
+    already_unlocked_keys: set[str] | None = None,
 ) -> PreTurnLLMOutput:
     """Deterministic extractor producing structured PreTurnLLMOutput without invoking RNG."""
     msg_lower = user_message.lower()
@@ -532,6 +664,16 @@ def _build_heuristic_llm_output(
     )
     active_speaker_id = speaker_order[0] if speaker_order else None
 
+    # 7. Deterministic persona disclosures via token matching
+    revealed_keys: list[str] = []
+    if persona_snapshot is not None and len(room_chars) > 0:
+        revealed_keys = detect_persona_disclosures_token_matching(
+            user_message=user_message,
+            persona_snapshot=persona_snapshot,
+            current_player_items=current_player_items,
+            already_unlocked_keys=already_unlocked_keys,
+        )
+
     return PreTurnLLMOutput(
         user_sentiment=sentiment,
         subtext_interpretation=subtext,
@@ -543,6 +685,7 @@ def _build_heuristic_llm_output(
         speaker_order=speaker_order,
         mechanics_check=mechanics,
         character_checks=[],
+        revealed_persona_keys=revealed_keys,
     )
 
 
@@ -556,6 +699,9 @@ def heuristic_pre_turn_analysis(
     dice_mode: DiceMode = "auto",
     manual_dice_override: int | None = None,
     rng: random.Random | None = None,
+    persona_snapshot: PersonaRecord | None = None,
+    current_player_items: list[PersonaItemInstance] | None = None,
+    already_unlocked_keys: set[str] | None = None,
 ) -> PreTurnAnalysis:
     """Fast deterministic analyzer used as fallback when no auxiliary LLM server is reachable."""
     room_chars = present_characters or []
@@ -566,6 +712,9 @@ def heuristic_pre_turn_analysis(
         known_entities=known_entities,
         present_characters=room_chars,
         previous_speaker_id=previous_speaker_id,
+        persona_snapshot=persona_snapshot,
+        current_player_items=current_player_items,
+        already_unlocked_keys=already_unlocked_keys,
     )
 
     character_rolls = resolve_character_dice_checks(
@@ -605,6 +754,10 @@ async def run_phase1_pre_analysis(
     rng: random.Random | None = None,
     character_choices: Mapping[str, CharacterChoiceSet] | None = None,
     message_is_synthetic: bool = False,
+    persona_snapshot: PersonaRecord | None = None,
+    current_player_items: list[PersonaItemInstance] | None = None,
+    disclosure_detection_mode: DisclosureDetectionMode = "llm_intent",
+    already_unlocked_keys: set[str] | None = None,
 ) -> PreTurnAnalysis:
     """Execute Phase 1 Pre-Turn Analysis via the Auxiliary Clerk (with offline fallback) and resolve RNG."""
     has_any_gates = any(cs.has_gates for cs in (character_choices or {}).values())
@@ -642,6 +795,32 @@ async def run_phase1_pre_analysis(
     elif dice_mode == "disabled":
         mode_prompt_hint = "\nNote: Dice mechanics are disabled for this turn. Set character_checks=[] and mechanics_check.requires_roll=false."
 
+    persona_manifest_lines: list[str] = []
+    if persona_snapshot:
+        if persona_snapshot.age and persona_snapshot.age_is_secret:
+            persona_manifest_lines.append(f"- key='age': Player Age ({persona_snapshot.age})")
+        items_cand = (
+            current_player_items
+            if current_player_items is not None
+            else (persona_snapshot.equipped + persona_snapshot.inventory)
+        )
+        for it in items_cand:
+            if it.is_secret:
+                kw_str = f" [Keywords: {', '.join(it.trigger_keywords)}]" if it.trigger_keywords else ""
+                persona_manifest_lines.append(f"- key='{it.id}': Item '{it.name}'{kw_str}")
+        for l in persona_snapshot.lore_entries:
+            if l.is_secret:
+                kw_str = f" [Keywords: {', '.join(l.trigger_keywords)}]" if l.trigger_keywords else ""
+                persona_manifest_lines.append(f"- key='{l.id}': Lore '{l.title}'{kw_str}")
+
+    persona_prompt_hint = ""
+    if persona_manifest_lines:
+        persona_prompt_hint = (
+            "\nSecret Persona Manifest (Candidate keys to include in revealed_persona_keys ONLY if explicitly revealed by the user's message):\n"
+            + "\n".join(persona_manifest_lines)
+            + "\nIf user message explicitly reveals any secret above, include its exact key in revealed_persona_keys."
+        )
+
     system_prompt = render_template(
         prompt_template or get_default_prompt("clerk_pre_turn_system")
     )
@@ -650,7 +829,7 @@ async def run_phase1_pre_analysis(
         f"Previous Turn Speaker ID: {previous_speaker_id or character.id}\n"
         f"Current Location: {active_location.name} ({active_location.summary})\n"
         f"Adjacent Exits: {neighbor_desc}\n"
-        f"Known Entities/Lore Keywords: {', '.join(known_entities[:30])}\n{mode_prompt_hint}\n\n"
+        f"Known Entities/Lore Keywords: {', '.join(known_entities[:30])}\n{mode_prompt_hint}{persona_prompt_hint}\n\n"
         f"User Message:\n{user_message}"
     )
 
@@ -675,8 +854,23 @@ async def run_phase1_pre_analysis(
             known_entities=known_entities,
             present_characters=room_chars,
             previous_speaker_id=previous_speaker_id,
+            persona_snapshot=persona_snapshot,
+            current_player_items=current_player_items,
+            already_unlocked_keys=already_unlocked_keys,
         )
         analysis = PreTurnAnalysis(**raw_output.model_dump())
+
+    # Resolve disclosed persona secrets with strategy and solitary action guard
+    revealed_keys = detect_persona_disclosures(
+        user_message=user_message,
+        persona_snapshot=persona_snapshot,
+        current_player_items=current_player_items,
+        already_unlocked_keys=already_unlocked_keys,
+        present_characters_count=len(present_characters) if present_characters is not None else len(room_chars),
+        mode=disclosure_detection_mode,
+        llm_revealed_keys=raw_output.revealed_persona_keys,
+    )
+    analysis.revealed_persona_keys = revealed_keys
 
     # Ensure active_speaker_id and speaker_order only reference characters actually present in active_location
     valid_order = [cid for cid in analysis.speaker_order if cid in room_char_ids]

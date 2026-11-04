@@ -29,6 +29,19 @@ from app.schemas.note import (
     UserNoteUpdatePayload,
 )
 from app.schemas.prompt import PromptPresetRecord
+from app.schemas.persona import (
+    DEFAULT_PERSONA_ID,
+    DisclosureDetectionMode,
+    PersonaCreatePayload,
+    PersonaItemInstance,
+    PersonaLoreEntry,
+    PersonaRecord,
+    PersonaTurnStateSnapshot,
+    PersonaUpdatePayload,
+    default_persona_id_for_user,
+    get_default_persona,
+    is_default_persona_id,
+)
 from app.schemas.character import (
     BaselinePsyche,
     CharacterRecord,
@@ -464,6 +477,24 @@ class CantinaRepository:
                     conn.execute("ALTER TABLE vector_entries ADD COLUMN location_id TEXT NULL")
                     conn.commit()
 
+            camp_table_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='campaigns'"
+            ).fetchone()
+            if camp_table_exists:
+                existing_camp_cols = {
+                    r["name"]
+                    for r in conn.execute("PRAGMA table_info(campaigns)").fetchall()
+                }
+                if "persona_id" not in existing_camp_cols:
+                    conn.execute(
+                        "ALTER TABLE campaigns ADD COLUMN persona_id TEXT NULL REFERENCES personas(id) ON DELETE SET NULL"
+                    )
+                if "persona_snapshot_json" not in existing_camp_cols:
+                    conn.execute(
+                        "ALTER TABLE campaigns ADD COLUMN persona_snapshot_json TEXT NULL"
+                    )
+                conn.commit()
+
             conn.executescript(sql)
             # Idempotent migration for existing databases created before pending_deletion
             world_cols = {
@@ -591,8 +622,69 @@ class CantinaRepository:
                 conn.execute(
                     "ALTER TABLE campaigns ADD COLUMN prompt_preset_id TEXT NULL REFERENCES prompt_presets(id) ON DELETE SET NULL"
                 )
+            if "persona_id" not in camp_cols:
+                conn.execute(
+                    "ALTER TABLE campaigns ADD COLUMN persona_id TEXT NULL REFERENCES personas(id) ON DELETE SET NULL"
+                )
+            if "persona_snapshot_json" not in camp_cols:
+                conn.execute(
+                    "ALTER TABLE campaigns ADD COLUMN persona_snapshot_json TEXT NULL"
+                )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_campaigns_owner ON campaigns(owner_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_campaigns_persona ON campaigns(persona_id)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS personas (
+                    id TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL CHECK(length(trim(name)) >= 1),
+                    age TEXT NULL,
+                    age_is_secret INTEGER NOT NULL DEFAULT 1,
+                    physical_appearance TEXT NOT NULL DEFAULT '',
+                    equipped_json TEXT NOT NULL DEFAULT '[]',
+                    inventory_json TEXT NOT NULL DEFAULT '[]',
+                    lore_entries_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_personas_owner ON personas(owner_id)")
+
+            # Purge any invalid legacy persona rows without an owner
+            conn.execute("DELETE FROM personas WHERE owner_id IS NULL")
+
+            # Ensure each existing user has their own default persona
+            user_table_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'"
+            ).fetchone()
+            if user_table_exists:
+                user_rows = conn.execute("SELECT id FROM users").fetchall()
+                for u in user_rows:
+                    uid = u["id"]
+                    def_persona = self._ensure_default_persona_for_user_conn(conn, uid)
+                    # Backfill this user's legacy campaigns without a persona
+                    conn.execute(
+                        """
+                        UPDATE campaigns
+                        SET persona_id = ?,
+                            persona_snapshot_json = ?
+                        WHERE owner_id = ? AND (persona_id IS NULL OR persona_snapshot_json IS NULL)
+                        """,
+                        (def_persona.id, def_persona.model_dump_json(), uid),
+                    )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS persona_turn_states (
+                    turn_id TEXT PRIMARY KEY REFERENCES turn_nodes(id) ON DELETE CASCADE,
+                    equipped_json TEXT NOT NULL DEFAULT '[]',
+                    inventory_json TEXT NOT NULL DEFAULT '[]'
+                );
+                """
             )
             conn.execute(
                 """
@@ -644,6 +736,10 @@ class CantinaRepository:
             if "agent_dispatch_mode" not in ums_cols:
                 conn.execute(
                     "ALTER TABLE user_model_settings ADD COLUMN agent_dispatch_mode TEXT NULL"
+                )
+            if "persona_disclosure_mode" not in ums_cols:
+                conn.execute(
+                    "ALTER TABLE user_model_settings ADD COLUMN persona_disclosure_mode TEXT NOT NULL DEFAULT 'llm_intent'"
                 )
 
             # Seed / ensure built-in prompt presets
@@ -704,6 +800,14 @@ class CantinaRepository:
             if "inventory_json" not in cs_cols:
                 conn.execute(
                     "ALTER TABLE character_states ADD COLUMN inventory_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "unlocked_persona_keys_json" not in cs_cols:
+                conn.execute(
+                    "ALTER TABLE character_states ADD COLUMN unlocked_persona_keys_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "persona_knowledge_provenance_json" not in cs_cols:
+                conn.execute(
+                    "ALTER TABLE character_states ADD COLUMN persona_knowledge_provenance_json TEXT NOT NULL DEFAULT '{}'"
                 )
 
             loc_cols = {
@@ -1064,6 +1168,7 @@ class CantinaRepository:
                 """,
                 (u_id, clean_username, clean_display, password_hash, role, now, now),
             )
+            self._ensure_default_persona_for_user_conn(conn, u_id)
             conn.commit()
         finally:
             conn.close()
@@ -1232,6 +1337,7 @@ class CantinaRepository:
         """Assign any pre-existing worlds, characters, and campaigns with owner_id IS NULL to user_id."""
         conn = self._connect()
         try:
+            def_persona = self._ensure_default_persona_for_user_conn(conn, user_id)
             conn.execute(
                 "UPDATE worlds SET owner_id = ? WHERE owner_id IS NULL",
                 (user_id,),
@@ -1243,6 +1349,19 @@ class CantinaRepository:
             conn.execute(
                 "UPDATE campaigns SET owner_id = ? WHERE owner_id IS NULL",
                 (user_id,),
+            )
+            conn.execute(
+                "UPDATE personas SET owner_id = ? WHERE owner_id IS NULL",
+                (user_id,),
+            )
+            conn.execute(
+                """
+                UPDATE campaigns
+                SET persona_id = ?,
+                    persona_snapshot_json = ?
+                WHERE owner_id = ? AND (persona_id IS NULL OR persona_snapshot_json IS NULL)
+                """,
+                (def_persona.id, def_persona.model_dump_json(), user_id),
             )
             conn.commit()
         finally:
@@ -1335,8 +1454,9 @@ class CantinaRepository:
                 conn.execute("DELETE FROM lore_nodes WHERE world_id = ?", (w_id,))
                 conn.execute("DELETE FROM worlds WHERE id = ?", (w_id,))
 
-            # 4. Delete user private notes
+            # 4. Delete user private notes and personas
             conn.execute("DELETE FROM user_notes WHERE owner_id = ?", (user_id,))
+            conn.execute("DELETE FROM personas WHERE owner_id = ?", (user_id,))
 
             conn.commit()
         finally:
@@ -1365,7 +1485,7 @@ class CantinaRepository:
         conn = self._connect()
         try:
             row = conn.execute(
-                "SELECT actor_profile_json, clerk_profile_json, working_memory_turns, active_prompt_preset_id, delegate_cognition_to_clerk, max_scene_flags, agent_dispatch_mode FROM user_model_settings WHERE user_id = ?",
+                "SELECT actor_profile_json, clerk_profile_json, working_memory_turns, active_prompt_preset_id, delegate_cognition_to_clerk, max_scene_flags, agent_dispatch_mode, persona_disclosure_mode FROM user_model_settings WHERE user_id = ?",
                 (user_id,),
             ).fetchone()
             if not row:
@@ -1393,6 +1513,12 @@ class CantinaRepository:
             dispatch_mode = (
                 raw_dispatch if raw_dispatch in ("sequential", "parallel") else None
             )
+            raw_pdm = (
+                row["persona_disclosure_mode"]
+                if "persona_disclosure_mode" in row.keys()
+                else None
+            )
+            pdm = raw_pdm if raw_pdm in ("llm_intent", "token_matching", "hybrid") else "llm_intent"
             return UserModelSettingsPayload(
                 actor_profile=actor,
                 clerk_profile=clerk,
@@ -1401,6 +1527,7 @@ class CantinaRepository:
                 delegate_cognition_to_clerk=del_cog,
                 max_scene_flags=row["max_scene_flags"],
                 agent_dispatch_mode=dispatch_mode,
+                persona_disclosure_mode=pdm,
             )
         finally:
             conn.close()
@@ -1427,10 +1554,11 @@ class CantinaRepository:
                     0 if payload.delegate_cognition_to_clerk is False else None
                 )
             )
+            pdm_val = payload.persona_disclosure_mode or "llm_intent"
             conn.execute(
                 """
-                INSERT INTO user_model_settings (user_id, actor_profile_json, clerk_profile_json, working_memory_turns, active_prompt_preset_id, delegate_cognition_to_clerk, max_scene_flags, agent_dispatch_mode, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO user_model_settings (user_id, actor_profile_json, clerk_profile_json, working_memory_turns, active_prompt_preset_id, delegate_cognition_to_clerk, max_scene_flags, agent_dispatch_mode, persona_disclosure_mode, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     actor_profile_json = excluded.actor_profile_json,
                     clerk_profile_json = excluded.clerk_profile_json,
@@ -1439,9 +1567,10 @@ class CantinaRepository:
                     delegate_cognition_to_clerk = excluded.delegate_cognition_to_clerk,
                     max_scene_flags = excluded.max_scene_flags,
                     agent_dispatch_mode = excluded.agent_dispatch_mode,
+                    persona_disclosure_mode = excluded.persona_disclosure_mode,
                     updated_at = excluded.updated_at
                 """,
-                (user_id, actor_json, clerk_json, payload.working_memory_turns, payload.active_prompt_preset_id, del_cog_val, payload.max_scene_flags, payload.agent_dispatch_mode, now),
+                (user_id, actor_json, clerk_json, payload.working_memory_turns, payload.active_prompt_preset_id, del_cog_val, payload.max_scene_flags, payload.agent_dispatch_mode, pdm_val, now),
             )
             conn.commit()
             return payload
@@ -4110,6 +4239,311 @@ class CantinaRepository:
         return pruned_ids
 
     # ------------------------------------------------------------------
+    # Personas & Dynamic Player States
+    # ------------------------------------------------------------------
+
+    def create_persona(
+        self,
+        draft: PersonaCreatePayload,
+        owner_id: str,
+        persona_id: str | None = None,
+    ) -> PersonaRecord:
+        """Create a new user persona in the master gallery."""
+        p_id = persona_id or f"persona_{uuid.uuid4().hex[:10]}"
+        now = utc_now_iso()
+        equipped_json = json.dumps([it.model_dump() for it in draft.equipped])
+        inventory_json = json.dumps([it.model_dump() for it in draft.inventory])
+        lore_json = json.dumps([entry.model_dump() for entry in draft.lore_entries])
+
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO personas (
+                    id, owner_id, name, age, age_is_secret, physical_appearance,
+                    equipped_json, inventory_json, lore_entries_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    p_id,
+                    owner_id,
+                    draft.name.strip(),
+                    draft.age.strip() if draft.age else None,
+                    1 if draft.age_is_secret else 0,
+                    draft.physical_appearance.strip(),
+                    equipped_json,
+                    inventory_json,
+                    lore_json,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            created = self.get_persona(p_id, owner_id=owner_id)
+            if not created:
+                raise RuntimeError(f"Failed to retrieve created persona '{p_id}'")
+            return created
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _ensure_default_persona_for_user_conn(conn: sqlite3.Connection, user_id: str) -> PersonaRecord:
+        """Ensure the deterministic default 'User' persona exists for the specified user."""
+        def_id = default_persona_id_for_user(user_id)
+        r = conn.execute("SELECT * FROM personas WHERE id = ?", (def_id,)).fetchone()
+        if r:
+            return CantinaRepository._row_to_persona_record(r)
+
+        default_persona = get_default_persona(owner_id=user_id)
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO personas (
+                id, owner_id, name, age, age_is_secret, physical_appearance,
+                equipped_json, inventory_json, lore_entries_json, created_at, updated_at
+            )
+            VALUES (?, ?, ?, NULL, 0, '', '[]', '[]', '[]', ?, ?)
+            """,
+            (
+                def_id,
+                user_id,
+                default_persona.name,
+                default_persona.created_at,
+                default_persona.updated_at,
+            ),
+        )
+        return default_persona
+
+    def ensure_default_persona_for_user(self, user_id: str) -> PersonaRecord:
+        """Public helper to retrieve or ensure a user's default persona."""
+        conn = self._connect()
+        try:
+            p = self._ensure_default_persona_for_user_conn(conn, user_id)
+            conn.commit()
+            return p
+        finally:
+            conn.close()
+
+    def get_persona(
+        self,
+        persona_id: str,
+        owner_id: str | None = None,
+    ) -> PersonaRecord | None:
+        """Fetch a single persona by ID, enforcing ownership if provided."""
+        conn = self._connect()
+        try:
+            if owner_id is not None:
+                if persona_id == default_persona_id_for_user(owner_id) or persona_id == DEFAULT_PERSONA_ID:
+                    p = self._ensure_default_persona_for_user_conn(conn, owner_id)
+                    conn.commit()
+                    return p
+                r = conn.execute(
+                    "SELECT * FROM personas WHERE id = ? AND owner_id = ?",
+                    (persona_id, owner_id),
+                ).fetchone()
+            else:
+                r = conn.execute(
+                    "SELECT * FROM personas WHERE id = ?",
+                    (persona_id,),
+                ).fetchone()
+            if not r:
+                return None
+            return self._row_to_persona_record(r)
+        finally:
+            conn.close()
+
+    def list_personas(
+        self,
+        owner_id: str | None = None,
+    ) -> list[PersonaRecord]:
+        """List all personas, filtered by owner_id if supplied, always ensuring user's default persona exists."""
+        conn = self._connect()
+        try:
+            if owner_id is not None:
+                def_p = self._ensure_default_persona_for_user_conn(conn, owner_id)
+                conn.commit()
+                rows = conn.execute(
+                    "SELECT * FROM personas WHERE owner_id = ? ORDER BY (CASE WHEN id = ? THEN 1 ELSE 0 END), created_at DESC",
+                    (owner_id, def_p.id),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM personas ORDER BY (CASE WHEN id LIKE 'persona_default_%' THEN 1 ELSE 0 END), created_at DESC"
+                ).fetchall()
+            return [self._row_to_persona_record(r) for r in rows]
+        finally:
+            conn.close()
+
+    def update_persona(
+        self,
+        persona_id: str,
+        payload: PersonaUpdatePayload,
+        owner_id: str | None = None,
+    ) -> PersonaRecord:
+        """Update an existing master persona."""
+        if is_default_persona_id(persona_id):
+            raise ValueError("The default 'User' persona is hard-coded and cannot be modified.")
+        existing = self.get_persona(persona_id, owner_id=owner_id)
+        if not existing:
+            raise KeyError(f"Persona '{persona_id}' not found")
+
+        now = utc_now_iso()
+        name = payload.name.strip() if payload.name is not None else existing.name
+        age = payload.age.strip() if payload.age is not None else existing.age
+        age_is_secret = (
+            (1 if payload.age_is_secret else 0)
+            if payload.age_is_secret is not None
+            else (1 if existing.age_is_secret else 0)
+        )
+        physical_appearance = (
+            payload.physical_appearance.strip()
+            if payload.physical_appearance is not None
+            else existing.physical_appearance
+        )
+        equipped = (
+            [it.model_dump() for it in payload.equipped]
+            if payload.equipped is not None
+            else [it.model_dump() for it in existing.equipped]
+        )
+        inventory = (
+            [it.model_dump() for it in payload.inventory]
+            if payload.inventory is not None
+            else [it.model_dump() for it in existing.inventory]
+        )
+        lore = (
+            [entry.model_dump() for entry in payload.lore_entries]
+            if payload.lore_entries is not None
+            else [entry.model_dump() for entry in existing.lore_entries]
+        )
+
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                UPDATE personas
+                SET name = ?, age = ?, age_is_secret = ?, physical_appearance = ?,
+                    equipped_json = ?, inventory_json = ?, lore_entries_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    name,
+                    age,
+                    age_is_secret,
+                    physical_appearance,
+                    json.dumps(equipped),
+                    json.dumps(inventory),
+                    json.dumps(lore),
+                    now,
+                    persona_id,
+                ),
+            )
+            conn.commit()
+            updated = self.get_persona(persona_id, owner_id=owner_id)
+            if not updated:
+                raise RuntimeError(f"Failed to retrieve updated persona '{persona_id}'")
+            return updated
+        finally:
+            conn.close()
+
+    def delete_persona(
+        self,
+        persona_id: str,
+        owner_id: str | None = None,
+    ) -> bool:
+        """Delete a persona from the master gallery. Campaigns retain their snapshots."""
+        if is_default_persona_id(persona_id):
+            raise ValueError("The default 'User' persona is hard-coded and cannot be deleted.")
+        conn = self._connect()
+        try:
+            if owner_id is not None:
+                res = conn.execute(
+                    "DELETE FROM personas WHERE id = ? AND owner_id = ?",
+                    (persona_id, owner_id),
+                )
+            else:
+                res = conn.execute(
+                    "DELETE FROM personas WHERE id = ?",
+                    (persona_id,),
+                )
+            conn.commit()
+            return res.rowcount > 0
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _row_to_persona_record(r: sqlite3.Row) -> PersonaRecord:
+        r_keys = r.keys()
+        equipped_raw = json.loads(
+            r["equipped_json"] if "equipped_json" in r_keys and r["equipped_json"] else "[]"
+        )
+        inventory_raw = json.loads(
+            r["inventory_json"] if "inventory_json" in r_keys and r["inventory_json"] else "[]"
+        )
+        lore_raw = json.loads(
+            r["lore_entries_json"] if "lore_entries_json" in r_keys and r["lore_entries_json"] else "[]"
+        )
+        return PersonaRecord(
+            id=r["id"],
+            owner_id=r["owner_id"] if "owner_id" in r_keys else None,
+            name=r["name"],
+            age=r["age"] if "age" in r_keys else None,
+            age_is_secret=bool(r["age_is_secret"]) if "age_is_secret" in r_keys else True,
+            physical_appearance=r["physical_appearance"] if "physical_appearance" in r_keys else "",
+            equipped=[PersonaItemInstance.model_validate(it) for it in equipped_raw],
+            inventory=[PersonaItemInstance.model_validate(it) for it in inventory_raw],
+            lore_entries=[PersonaLoreEntry.model_validate(entry) for entry in lore_raw],
+            created_at=r["created_at"],
+            updated_at=r["updated_at"] if "updated_at" in r_keys else r["created_at"],
+        )
+
+    def get_campaign_persona_turn_state(self, turn_id: str) -> PersonaTurnStateSnapshot | None:
+        """Retrieve the player's dynamic inventory & equipped items for a turn."""
+        conn = self._connect()
+        try:
+            r = conn.execute(
+                "SELECT equipped_json, inventory_json FROM persona_turn_states WHERE turn_id = ?",
+                (turn_id,),
+            ).fetchone()
+            if not r:
+                return None
+            equipped_raw = json.loads(r["equipped_json"] or "[]")
+            inventory_raw = json.loads(r["inventory_json"] or "[]")
+            return PersonaTurnStateSnapshot(
+                turn_id=turn_id,
+                equipped=[PersonaItemInstance.model_validate(it) for it in equipped_raw],
+                inventory=[PersonaItemInstance.model_validate(it) for it in inventory_raw],
+            )
+        finally:
+            conn.close()
+
+    def save_campaign_persona_turn_state(
+        self,
+        turn_id: str,
+        equipped: list[PersonaItemInstance],
+        inventory: list[PersonaItemInstance],
+    ) -> None:
+        """Persist or update the player's turn-indexed dynamic inventory state."""
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO persona_turn_states (turn_id, equipped_json, inventory_json)
+                VALUES (?, ?, ?)
+                ON CONFLICT(turn_id) DO UPDATE SET
+                    equipped_json = excluded.equipped_json,
+                    inventory_json = excluded.inventory_json
+                """,
+                (
+                    turn_id,
+                    json.dumps([it.model_dump() for it in equipped]),
+                    json.dumps([it.model_dump() for it in inventory]),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------------
     # Campaigns & Branching Turn Tree
     # ------------------------------------------------------------------
 
@@ -4146,6 +4580,7 @@ class CantinaRepository:
         character_locations: dict[str, str] | None = None,
         opening_prose: str | None = None,
         campaign_id: str | None = None,
+        persona_id: str | None = None,
         prompt_preset_id: str | None = None,
         owner_id: str | None = None,
     ) -> CampaignRecord:
@@ -4154,6 +4589,28 @@ class CantinaRepository:
         now = utc_now_iso()
         world = self.get_world(world_id, owner_id=owner_id)
         character = self.get_character(character_id, owner_id=owner_id)
+
+        persona: PersonaRecord | None = None
+        persona_snapshot_json: str | None = None
+        if persona_id:
+            persona = self.get_persona(persona_id, owner_id=owner_id)
+        if not persona:
+            if owner_id:
+                persona = self.ensure_default_persona_for_user(owner_id)
+                persona_id = persona.id
+            else:
+                conn = self._connect()
+                try:
+                    first_user = conn.execute("SELECT id FROM users ORDER BY created_at ASC LIMIT 1").fetchone()
+                finally:
+                    conn.close()
+                if first_user:
+                    persona = self.ensure_default_persona_for_user(first_user["id"])
+                    persona_id = persona.id
+                else:
+                    persona = get_default_persona(owner_id="default_user")
+                    persona_id = None
+        persona_snapshot_json = persona.model_dump_json() if persona else None
 
         all_char_ids: list[str] = [character_id]
         for cid in character_ids or []:
@@ -4177,10 +4634,10 @@ class CantinaRepository:
         try:
             conn.execute(
                 """
-                INSERT INTO campaigns (id, owner_id, name, world_id, character_id, active_leaf_turn_id, prompt_preset_id, created_at)
-                VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
+                INSERT INTO campaigns (id, owner_id, name, world_id, character_id, persona_id, persona_snapshot_json, active_leaf_turn_id, prompt_preset_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
                 """,
-                (camp_id, owner_id, name, world_id, character_id, prompt_preset_id, now),
+                (camp_id, owner_id, name, world_id, character_id, persona_id, persona_snapshot_json, prompt_preset_id, now),
             )
             for cid in all_char_ids:
                 conn.execute(
@@ -4294,6 +4751,12 @@ class CantinaRepository:
             extra_character_states=extra_states,
             recalled_items=[],
         )
+        if persona:
+            self.save_campaign_persona_turn_state(
+                root_turn_id,
+                persona.equipped,
+                persona.inventory,
+            )
         return self.get_campaign(camp_id)
 
     def add_character_to_campaign(
@@ -4393,11 +4856,25 @@ class CantinaRepository:
             if r["character_id"] not in participant_ids:
                 participant_ids.insert(0, r["character_id"])
             preset_id = r["prompt_preset_id"] if "prompt_preset_id" in r.keys() else None
+            persona_id = r["persona_id"] if "persona_id" in r.keys() else None
+            persona_snapshot = None
+            if "persona_snapshot_json" in r.keys() and r["persona_snapshot_json"]:
+                try:
+                    persona_snapshot = PersonaRecord.model_validate_json(r["persona_snapshot_json"])
+                except Exception:
+                    pass
+            if persona_snapshot is None:
+                default_p = get_default_persona(owner_id=r["owner_id"] if "owner_id" in r.keys() and r["owner_id"] else "default_user")
+                persona_snapshot = default_p
+                if not persona_id:
+                    persona_id = default_p.id
             return CampaignRecord(
                 id=r["id"],
                 name=r["name"],
                 world_id=r["world_id"],
                 character_id=r["character_id"],
+                persona_id=persona_id,
+                persona_snapshot=persona_snapshot,
                 participant_character_ids=participant_ids,
                 active_leaf_turn_id=r["active_leaf_turn_id"],
                 prompt_preset_id=preset_id,
@@ -4825,6 +5302,19 @@ class CantinaRepository:
                 states_by_char[st.character_id] = st
 
             if parent_turn_id is not None:
+                parent_pts = conn.execute(
+                    "SELECT equipped_json, inventory_json FROM persona_turn_states WHERE turn_id = ?",
+                    (parent_turn_id,),
+                ).fetchone()
+                if parent_pts:
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO persona_turn_states (turn_id, equipped_json, inventory_json)
+                        VALUES (?, ?, ?)
+                        """,
+                        (turn_id, parent_pts["equipped_json"], parent_pts["inventory_json"]),
+                    )
+
                 parent_cs_rows = conn.execute(
                     "SELECT * FROM character_states WHERE turn_id = ?",
                     (parent_turn_id,),
@@ -4848,6 +5338,16 @@ class CantinaRepository:
                             inventory=json.loads(pcs["inventory_json"] or "[]")
                             if "inventory_json" in pcs.keys()
                             else [],
+                            unlocked_persona_keys=(
+                                json.loads(pcs["unlocked_persona_keys_json"] or "[]")
+                                if "unlocked_persona_keys_json" in pcs.keys()
+                                else []
+                            ),
+                            persona_knowledge_provenance=(
+                                json.loads(pcs["persona_knowledge_provenance_json"] or "{}")
+                                if "persona_knowledge_provenance_json" in pcs.keys()
+                                else {}
+                            ),
                         )
 
             for st in states_by_char.values():
@@ -4855,9 +5355,10 @@ class CantinaRepository:
                     """
                     INSERT INTO character_states (
                         turn_id, character_id, current_location_id, mood_label,
-                        valence, arousal, active_want, active_plan, relationship_notes_json, equipped_json, inventory_json
+                        valence, arousal, active_want, active_plan, relationship_notes_json,
+                        equipped_json, inventory_json, unlocked_persona_keys_json, persona_knowledge_provenance_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         turn_id,
@@ -4871,6 +5372,8 @@ class CantinaRepository:
                         json.dumps(st.relationship_notes),
                         dump_items_json(st.equipped),
                         dump_items_json(st.inventory),
+                        json.dumps(st.unlocked_persona_keys),
+                        json.dumps(st.persona_knowledge_provenance),
                     ),
                 )
                 conn.execute(
@@ -4901,6 +5404,7 @@ class CantinaRepository:
         updated_world_snapshot: WorldStateSnapshot,
         updated_character_state: CharacterStateSnapshot,
         extra_character_states: list[CharacterStateSnapshot] | None = None,
+        updated_persona_turn_state: PersonaTurnStateSnapshot | None = None,
     ) -> TurnNodeRecord:
         """Commit Phase 4 Post-Turn Clerk mutations (clock advance, spatial move, affect notes)."""
         conn = self._connect()
@@ -4923,6 +5427,21 @@ class CantinaRepository:
                     turn_id,
                 ),
             )
+            if updated_persona_turn_state is not None:
+                conn.execute(
+                    """
+                    INSERT INTO persona_turn_states (turn_id, equipped_json, inventory_json)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(turn_id) DO UPDATE SET
+                        equipped_json = excluded.equipped_json,
+                        inventory_json = excluded.inventory_json
+                    """,
+                    (
+                        turn_id,
+                        json.dumps([it.model_dump() for it in updated_persona_turn_state.equipped]),
+                        json.dumps([it.model_dump() for it in updated_persona_turn_state.inventory]),
+                    ),
+                )
             for st in [updated_character_state, *(extra_character_states or [])]:
                 live_row = conn.execute(
                     "SELECT equipped_json, inventory_json FROM character_states WHERE turn_id = ? AND character_id = ?",
@@ -4942,9 +5461,10 @@ class CantinaRepository:
                     INSERT INTO character_states (
                         turn_id, character_id, current_location_id, mood_label,
                         valence, arousal, active_want, active_plan,
-                        relationship_notes_json, equipped_json, inventory_json
+                        relationship_notes_json, equipped_json, inventory_json,
+                        unlocked_persona_keys_json, persona_knowledge_provenance_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(turn_id, character_id) DO UPDATE SET
                         current_location_id = excluded.current_location_id,
                         mood_label = excluded.mood_label,
@@ -4954,7 +5474,9 @@ class CantinaRepository:
                         active_plan = excluded.active_plan,
                         relationship_notes_json = excluded.relationship_notes_json,
                         equipped_json = excluded.equipped_json,
-                        inventory_json = excluded.inventory_json
+                        inventory_json = excluded.inventory_json,
+                        unlocked_persona_keys_json = excluded.unlocked_persona_keys_json,
+                        persona_knowledge_provenance_json = excluded.persona_knowledge_provenance_json
                     """,
                     (
                         turn_id,
@@ -4968,6 +5490,8 @@ class CantinaRepository:
                         json.dumps(st.relationship_notes),
                         dump_items_json(merged_eq),
                         dump_items_json(merged_inv),
+                        json.dumps(st.unlocked_persona_keys),
+                        json.dumps(st.persona_knowledge_provenance),
                     ),
                 )
             conn.commit()
@@ -5139,6 +5663,16 @@ class CantinaRepository:
                 inventory=json.loads(r["inventory_json"] or "[]")
                 if "inventory_json" in r.keys()
                 else [],
+                unlocked_persona_keys=(
+                    json.loads(r["unlocked_persona_keys_json"] or "[]")
+                    if "unlocked_persona_keys_json" in r.keys()
+                    else []
+                ),
+                persona_knowledge_provenance=(
+                    json.loads(r["persona_knowledge_provenance_json"] or "{}")
+                    if "persona_knowledge_provenance_json" in r.keys()
+                    else {}
+                ),
             )
         for t in turns:
             t.character_states = states_by_turn.get(
@@ -5166,7 +5700,9 @@ class CantinaRepository:
                     cs.active_plan,
                     cs.relationship_notes_json,
                     cs.equipped_json,
-                    cs.inventory_json
+                    cs.inventory_json,
+                    cs.unlocked_persona_keys_json,
+                    cs.persona_knowledge_provenance_json
                 FROM turn_nodes t
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
                 JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = (
@@ -5213,7 +5749,9 @@ class CantinaRepository:
                     cs.active_plan,
                     cs.relationship_notes_json,
                     cs.equipped_json,
-                    cs.inventory_json
+                    cs.inventory_json,
+                    cs.unlocked_persona_keys_json,
+                    cs.persona_knowledge_provenance_json
                 FROM branch_path bp
                 JOIN turn_nodes t ON t.id = bp.id
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
@@ -5250,7 +5788,9 @@ class CantinaRepository:
                     cs.active_plan,
                     cs.relationship_notes_json,
                     cs.equipped_json,
-                    cs.inventory_json
+                    cs.inventory_json,
+                    cs.unlocked_persona_keys_json,
+                    cs.persona_knowledge_provenance_json
                 FROM turn_nodes t
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
                 JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = (
@@ -6562,6 +7102,16 @@ class CantinaRepository:
                 inventory=json.loads(r["inventory_json"] or "[]")
                 if "inventory_json" in r.keys()
                 else [],
+                unlocked_persona_keys=(
+                    json.loads(r["unlocked_persona_keys_json"] or "[]")
+                    if "unlocked_persona_keys_json" in r.keys()
+                    else []
+                ),
+                persona_knowledge_provenance=(
+                    json.loads(r["persona_knowledge_provenance_json"] or "{}")
+                    if "persona_knowledge_provenance_json" in r.keys()
+                    else {}
+                ),
             ),
             recalled_items=[
                 RecalledMemoryItem.model_validate(item)

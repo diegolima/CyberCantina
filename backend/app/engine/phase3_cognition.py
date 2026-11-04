@@ -10,6 +10,7 @@ from typing import Any
 
 from app.config import settings
 from app.engine.phase2_context import (
+    DiscoveredPersonaView,
     TurnContextBundle,
     resolve_character_previous_state,
     select_active_location_lore_for_turn,
@@ -165,6 +166,7 @@ def heuristic_character_cognition(
     prior_cues: list[PriorCognitionCue] | None = None,
     role: CharacterSpotlightRole = "primary_speaker",
     choice_resolution: ChoiceResolution | None = None,
+    known_persona: DiscoveredPersonaView | None = None,
 ) -> CognitionBlock:
     """Generate a deterministic, high-quality fallback CognitionBlock without LLM."""
     sentiment_lower = pre_turn.user_sentiment.lower()
@@ -184,6 +186,14 @@ def heuristic_character_cognition(
         f"- Sizing up the interaction in {previous_state.current_location_id}.",
         f"- Noted player tone: {pre_turn.user_sentiment}.",
     ]
+    if known_persona:
+        if known_persona.revealed_age:
+            recall_bullets.append(f"- Aware of player age: {known_persona.revealed_age}.")
+        if known_persona.known_inventory:
+            recall_bullets.append(f"- Observed player gear: {', '.join(it.name for it in known_persona.known_inventory)}.")
+        if known_persona.known_lore:
+            for l in known_persona.known_lore:
+                recall_bullets.append(f"- Knows player history: {l.title}.")
     if prior_cues:
         for c in prior_cues[:2]:
             conseq_str = f" after {c.roll_outcome_tier}" if c.roll_outcome_tier else ""
@@ -282,6 +292,7 @@ async def run_character_cognition_agent(
     system_prompt_template: str | None = None,
     choice_resolution: ChoiceResolution | None = None,
     narrator_directive: str | None = None,
+    known_persona: DiscoveredPersonaView | None = None,
 ) -> CognitionBlock:
     """Execute a single character subconscious cognition agent turn."""
     template = system_prompt_template or get_default_prompt(
@@ -399,6 +410,28 @@ async def run_character_cognition_agent(
         )
         local_lore_section = f"- Local Facts & Rumors:\n{loc_lore_lines}\n"
 
+    known_player_facts_section = ""
+    if known_persona is not None:
+        lines: list[str] = [f"Player Character ({known_persona.name}):"]
+        if known_persona.physical_appearance:
+            lines.append(f"- Appearance: {known_persona.physical_appearance}")
+        if known_persona.revealed_age:
+            lines.append(f"- Known Age: {known_persona.revealed_age}")
+        if known_persona.visible_equipped:
+            eq_names = [f"{it.name}{' (' + it.note + ')' if it.note else ''}" for it in known_persona.visible_equipped]
+            lines.append(f"- Visible Garments/Gear: {', '.join(eq_names)}")
+        if known_persona.known_inventory:
+            inv_names = [f"{it.name}{' (' + it.note + ')' if it.note else ''}" for it in known_persona.known_inventory]
+            lines.append(f"- Known Carried Items: {', '.join(inv_names)}")
+        if known_persona.known_lore:
+            for l in known_persona.known_lore:
+                lines.append(f"- Known Player Background: [{l.title}] {l.content}")
+        known_player_facts_section = (
+            f"Known Player Facts & Secrets (epistemically verified for {character.name}):\n"
+            + "\n".join(lines)
+            + "\n\n"
+        )
+
     user_prompt = (
         f"Character: {character.name} (id='{character.id}', Role in scene: {role})\n"
         f"- Tagline: {character.tagline}\n"
@@ -419,7 +452,8 @@ async def run_character_cognition_agent(
         f"{local_lore_section}\n"
         f"Co-Present Characters in Room:\n"
         f"{co_present_text}\n"
-        f"{prior_cues_section}"
+        f"{prior_cues_section}\n"
+        f"{known_player_facts_section}"
         f"Turn Context:\n"
         f"- User Sentiment: {pre_turn.user_sentiment}\n"
         f"- Subtext Interpretation: {pre_turn.subtext_interpretation}\n"
@@ -585,6 +619,7 @@ async def run_phase3_multi_cognition(
                     )
                 )
             c_res = context.pre_turn.choice_resolutions.get(entry.character_id)
+            known_p = (context.per_character_known_personas or {}).get(char.id)
             try:
                 char_prev = context.all_character_states.get(
                     char.id
@@ -612,6 +647,7 @@ async def run_phase3_multi_cognition(
                     system_prompt_template=cognition_system_template,
                     choice_resolution=c_res,
                     narrator_directive=context.narrator_directive,
+                    known_persona=known_p,
                 )
                 used_fallback = False
             except Exception as err:
@@ -628,6 +664,7 @@ async def run_phase3_multi_cognition(
                     pre_turn=context.pre_turn,
                     role=entry.role,
                     choice_resolution=c_res,
+                    known_persona=known_p,
                 )
                 used_fallback = True
 
@@ -667,6 +704,7 @@ async def run_phase3_multi_cognition(
                     )
                 )
             c_res = context.pre_turn.choice_resolutions.get(entry.character_id)
+            known_p = (context.per_character_known_personas or {}).get(char.id)
             try:
                 char_prev = context.all_character_states.get(
                     char.id
@@ -694,6 +732,7 @@ async def run_phase3_multi_cognition(
                     system_prompt_template=cognition_system_template,
                     choice_resolution=c_res,
                     narrator_directive=context.narrator_directive,
+                    known_persona=known_p,
                 )
                 used_fallback = False
             except Exception as err:
@@ -711,6 +750,7 @@ async def run_phase3_multi_cognition(
                     prior_cues=list(prior_cues),
                     role=entry.role,
                     choice_resolution=c_res,
+                    known_persona=known_p,
                 )
                 used_fallback = True
 

@@ -13,6 +13,7 @@ import {
   Search,
   StickyNote,
   User,
+  UserCheck,
   UserCog,
   Users,
   X,
@@ -35,7 +36,9 @@ import {
   WorldInspectorModal,
 } from "./components/EntityEditorModals";
 import { LiveInspector } from "./components/LiveInspector";
+import { NewCampaignModal } from "./components/NewCampaignModal";
 import { NotesFlyout, NotesModal } from "./components/NotesDrawer";
+import { PersonaEditorModal } from "./components/PersonaEditorModal";
 import {
   CharacterWizardModal,
   WorldWizardModal,
@@ -55,6 +58,7 @@ import {
   LocationLoreNodeDraft,
   MemoryShard,
   NarrativeMode,
+  PersonaRecord,
   Phase3AgentProgressItem,
   Phase3TurnProgress,
   Phase4AgentProgressItem,
@@ -224,6 +228,7 @@ export const App: React.FC = () => {
   const [campaigns, setCampaigns] = useState<CampaignRecord[]>([]);
   const [worlds, setWorlds] = useState<WorldRecord[]>([]);
   const [characters, setCharacters] = useState<CharacterRecord[]>([]);
+  const [personas, setPersonas] = useState<PersonaRecord[]>([]);
   const [bundle, setBundle] = useState<CampaignStateBundle | null>(null);
   const [campaignWorld, setCampaignWorld] = useState<WorldRecord | null>(null);
   const [campaignCharacter, setCampaignCharacter] =
@@ -232,11 +237,15 @@ export const App: React.FC = () => {
   const [activeCharacter, setActiveCharacter] = useState<CharacterRecord | null>(
     null
   );
+  const [activePersona, setActivePersona] = useState<PersonaRecord | null>(null);
   const [inspectingCharacter, setInspectingCharacter] =
     useState<CharacterRecord | null>(null);
   const [inspectingWorld, setInspectingWorld] = useState<WorldRecord | null>(
     null
   );
+  const [showPersonaModal, setShowPersonaModal] = useState(false);
+  const [editingPersona, setEditingPersona] = useState<PersonaRecord | null>(null);
+  const [showNewCampaignModal, setShowNewCampaignModal] = useState(false);
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
 
   const [showCharWizard, setShowCharWizard] = useState(false);
@@ -333,6 +342,11 @@ export const App: React.FC = () => {
         world: WorldRecord;
         campaignsUsing: CampaignRecord[];
       }
+    | {
+        kind: "persona";
+        persona: PersonaRecord;
+        campaignsUsing: CampaignRecord[];
+      }
     | null
   >(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -372,18 +386,23 @@ export const App: React.FC = () => {
   };
 
   const loadWorkspaceData = async () => {
-    const [camps, wList, cList, cfg, userNotes] = await Promise.all([
+    const [camps, wList, cList, cfg, userNotes, personaList] = await Promise.all([
       api.listCampaigns(),
       api.listWorlds(),
       api.listCharacters(),
       api.getSettings(),
       api.listNotes().catch(() => [] as UserNote[]),
+      api.listPersonas().catch(() => [] as PersonaRecord[]),
     ]);
     setCampaigns(camps);
     setWorlds(wList);
     setCharacters(cList);
     setAppSettings(cfg);
     setNotes(userNotes);
+    setPersonas(personaList);
+    if (personaList.length > 0) {
+      setActivePersona(personaList[0]);
+    }
     if (camps.length > 0) {
       await loadCampaignBundle(camps[0].id);
     } else {
@@ -438,6 +457,8 @@ export const App: React.FC = () => {
       setCampaigns([]);
       setWorlds([]);
       setCharacters([]);
+      setPersonas([]);
+      setActivePersona(null);
       setNotes([]);
     }
   };
@@ -451,6 +472,8 @@ export const App: React.FC = () => {
     setCampaigns([]);
     setWorlds([]);
     setCharacters([]);
+    setPersonas([]);
+    setActivePersona(null);
     setNotes([]);
     try {
       await api.logout();
@@ -523,6 +546,20 @@ export const App: React.FC = () => {
     });
   };
 
+  const handleRequestDeletePersona = (
+    e: React.MouseEvent,
+    persona: PersonaRecord
+  ) => {
+    e.stopPropagation();
+    if (isStreaming) return;
+    const using = campaigns.filter((c) => c.persona_id === persona.id);
+    setDeleteTarget({
+      kind: "persona",
+      persona,
+      campaignsUsing: using,
+    });
+  };
+
   const handleRequestDeleteCampaign = (
     e: React.MouseEvent,
     camp: CampaignRecord
@@ -547,6 +584,13 @@ export const App: React.FC = () => {
         await api.deleteWorld(deleteTarget.world.id);
         const updatedWorlds = await api.listWorlds();
         setWorlds(updatedWorlds);
+      } else if (deleteTarget.kind === "persona") {
+        await api.deletePersona(deleteTarget.persona.id);
+        const updatedPersonas = await api.listPersonas();
+        setPersonas(updatedPersonas);
+        if (activePersona?.id === deleteTarget.persona.id) {
+          setActivePersona(updatedPersonas[0] ?? null);
+        }
       } else {
         const deletedCampId = deleteTarget.campaign.id;
         await api.deleteCampaign(deletedCampId);
@@ -1122,7 +1166,118 @@ export const App: React.FC = () => {
           </div>
         </div>
 
-        {/* 1. Characters (+new) */}
+        {/* 1. Personas (+new) */}
+        <SidebarCategory
+          title="Personas"
+          icon={<UserCheck size={14} color="var(--accent-emerald)" />}
+          items={personas}
+          searchPlaceholder="Search personas, appearance, lore..."
+          onNewClick={() => {
+            setEditingPersona(null);
+            setShowPersonaModal(true);
+          }}
+          newButtonTitle="Create a new User Persona"
+          filterFn={(p, q) => {
+            const query = q.trim().toLowerCase();
+            return Boolean(
+              p.name.toLowerCase().includes(query) ||
+              p.physical_appearance.toLowerCase().includes(query) ||
+              (p.inventory && p.inventory.some((i) => i.name.toLowerCase().includes(query))) ||
+              (p.lore_entries && p.lore_entries.some((l) => l.title.toLowerCase().includes(query)))
+            );
+          }}
+          renderItem={(p) => (
+            <div
+              key={p.id}
+              className={`campaign-item ${
+                activePersona?.id === p.id || bundle?.campaign.persona_id === p.id ? "active" : ""
+              }`}
+              onClick={() => {
+                setActivePersona(p);
+                setEditingPersona(p);
+                setShowPersonaModal(true);
+              }}
+            >
+              {!p.id.startsWith("persona_default_") && p.id !== "persona_default_user" ? (
+                <button
+                  type="button"
+                  className="item-remove-btn"
+                  onClick={(e) => handleRequestDeletePersona(e, p)}
+                  disabled={isStreaming}
+                  title={`Delete persona ${p.name}`}
+                >
+                  <X size={13} />
+                </button>
+              ) : (
+                <div style={{ width: 14 }} />
+              )}
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
+                  <span style={{ fontWeight: 600, fontSize: "0.81rem" }}>
+                    {p.name}
+                    {(p.id.startsWith("persona_default_") || p.id === "persona_default_user") && (
+                      <span
+                        style={{
+                          fontSize: "0.62rem",
+                          color: "var(--accent-emerald)",
+                          background: "rgba(16, 185, 129, 0.12)",
+                          padding: "1px 4px",
+                          borderRadius: 3,
+                          marginLeft: 5,
+                          fontWeight: 500,
+                        }}
+                      >
+                        Default
+                      </span>
+                    )}
+                  </span>
+                  {p.age && (
+                    <span
+                      style={{
+                        fontSize: "0.65rem",
+                        color: "var(--accent-emerald)",
+                        background: "rgba(16, 185, 129, 0.12)",
+                        padding: "1px 4px",
+                        borderRadius: 3,
+                        flexShrink: 0,
+                      }}
+                    >
+                      Age {p.age}
+                    </span>
+                  )}
+                </div>
+                <div
+                  style={{
+                    fontSize: "0.71rem",
+                    color: "var(--text-secondary)",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {p.physical_appearance || "No physical description"}
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 6,
+                    marginTop: 3,
+                    fontSize: "0.63rem",
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  <span>{p.equipped?.length ?? 0} equipped</span>
+                  <span>•</span>
+                  <span>{p.inventory?.length ?? 0} items</span>
+                  <span>•</span>
+                  <span>{p.lore_entries?.length ?? 0} lore</span>
+                </div>
+              </div>
+            </div>
+          )}
+        />
+
+        {/* 2. Characters (+new) */}
         <SidebarCategory
           title="Characters"
           icon={<Users size={14} color="var(--accent-amber)" />}
@@ -1221,7 +1376,7 @@ export const App: React.FC = () => {
           )}
         />
 
-        {/* 2. Worlds (+new) */}
+        {/* 3. Worlds (+new) */}
         <SidebarCategory
           title="Worlds"
           icon={<Globe size={14} color="var(--accent-cyan)" />}
@@ -1270,7 +1425,7 @@ export const App: React.FC = () => {
           )}
         />
 
-        {/* 3. Campaigns (+new) */}
+        {/* 4. Campaigns (+new) */}
         <SidebarCategory
           title="Campaigns"
           icon={<FolderKanban size={14} color="var(--accent-emerald)" />}
@@ -1278,10 +1433,10 @@ export const App: React.FC = () => {
           searchPlaceholder="Search campaigns..."
           onNewClick={
             worlds.length > 0 && characters.length > 0
-              ? handleCreateNewCampaign
+              ? () => setShowNewCampaignModal(true)
               : undefined
           }
-          newButtonTitle="Start a new campaign with the selected Character & World"
+          newButtonTitle="Start a new campaign with selected Character, World & Persona"
           filterFn={(camp, q) => camp.name.toLowerCase().includes(q)}
           renderItem={(camp) => (
             <div
@@ -1609,6 +1764,8 @@ export const App: React.FC = () => {
                   ? "Delete Campaign & Timeline"
                   : deleteTarget.kind === "world"
                   ? "Remove World"
+                  : deleteTarget.kind === "persona"
+                  ? "Delete User Persona"
                   : "Remove Character"}
               </span>
               <button
@@ -1665,6 +1822,39 @@ export const App: React.FC = () => {
                     <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>
                       This world is not referenced by any running campaigns and
                       will be permanently pruned.
+                    </div>
+                  )}
+                </>
+              ) : deleteTarget.kind === "persona" ? (
+                <>
+                  <p>
+                    Are you sure you want to delete persona{" "}
+                    <strong style={{ color: "var(--accent-emerald)" }}>
+                      "{deleteTarget.persona.name}"
+                    </strong>
+                    ?
+                  </p>
+                  {deleteTarget.campaignsUsing.length > 0 ? (
+                    <div
+                      className="cog-step"
+                      style={{
+                        borderColor: "rgba(16, 185, 129, 0.4)",
+                        fontSize: "0.8rem",
+                      }}
+                    >
+                      <strong style={{ color: "var(--accent-emerald)" }}>
+                        Referenced by {deleteTarget.campaignsUsing.length} active
+                        campaign(s):
+                      </strong>{" "}
+                      {deleteTarget.campaignsUsing.map((c) => c.name).join(", ")}
+                      <div style={{ marginTop: 4, color: "var(--text-secondary)" }}>
+                        Active campaigns will continue unaffected because each campaign
+                        maintains its own frozen persona snapshot.
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>
+                      This persona template will be permanently removed.
                     </div>
                   )}
                 </>
@@ -1734,6 +1924,8 @@ export const App: React.FC = () => {
                     ? "Delete Campaign"
                     : deleteTarget.kind === "world"
                     ? "Remove World"
+                    : deleteTarget.kind === "persona"
+                    ? "Delete Persona"
                     : "Remove Character"}
                 </button>
               </div>
@@ -1767,6 +1959,7 @@ export const App: React.FC = () => {
                 name: `${createdChar.name} in ${targetWorld.name}`,
                 world_id: targetWorld.id,
                 character_id: createdChar.id,
+                persona_id: activePersona?.id,
               });
               const allCamps = await api.listCampaigns();
               setCampaigns(allCamps);
@@ -1883,6 +2076,67 @@ export const App: React.FC = () => {
           onSaveNote={handleSaveNote}
           onDeleteNote={handleDeleteNote}
           onToggleStar={handleToggleNoteStar}
+        />
+      )}
+
+      {showPersonaModal && (
+        <PersonaEditorModal
+          persona={editingPersona}
+          onClose={() => {
+            setShowPersonaModal(false);
+            setEditingPersona(null);
+          }}
+          onSaved={async (savedPersona) => {
+            const list = await api.listPersonas();
+            setPersonas(list);
+            setActivePersona(savedPersona);
+            setShowPersonaModal(false);
+            setEditingPersona(null);
+          }}
+          onDeleted={async () => {
+            const list = await api.listPersonas();
+            setPersonas(list);
+            setActivePersona(list[0] ?? null);
+            setShowPersonaModal(false);
+            setEditingPersona(null);
+          }}
+        />
+      )}
+
+      {showNewCampaignModal && (
+        <NewCampaignModal
+          worlds={worlds}
+          characters={characters}
+          personas={personas}
+          initialWorldId={activeWorld?.id}
+          initialCharacterId={activeCharacter?.id}
+          initialPersonaId={activePersona?.id}
+          onClose={() => setShowNewCampaignModal(false)}
+          onOpenPersonaModal={() => {
+            setEditingPersona(null);
+            setShowPersonaModal(true);
+          }}
+          onCreate={async ({ name, world_id, character_id, persona_id }) => {
+            const created = await api.createCampaign({
+              name,
+              world_id,
+              character_id,
+              persona_id,
+            });
+            const allCamps = await api.listCampaigns();
+            setCampaigns(allCamps);
+            setBundle(created);
+            const w = worlds.find((item) => item.id === world_id) ?? worlds[0];
+            const c = characters.find((item) => item.id === character_id) ?? characters[0];
+            setCampaignWorld(w);
+            setCampaignCharacter(c);
+            setActiveWorld(w);
+            setActiveCharacter(c);
+            if (persona_id) {
+              const p = personas.find((item) => item.id === persona_id);
+              if (p) setActivePersona(p);
+            }
+          }}
         />
       )}
     </div>

@@ -19,6 +19,7 @@ import { api } from "../../api";
 import { PromptPresetsManager } from "../PromptPresetsManager";
 import {
   AuthStatusResponse,
+  DisclosureDetectionMode,
   OllamaStatusResponse,
   PasskeyInfo,
   ProfileModelSettingsResponse,
@@ -94,6 +95,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   const [userWmTurns, setUserWmTurns] = useState<number>(10);
   const [userMaxSceneFlags, setUserMaxSceneFlags] = useState<number>(10);
   const [userAgentDispatchMode, setUserAgentDispatchMode] = useState<"sequential" | "parallel">("sequential");
+  const [userPersonaDisclosureMode, setUserPersonaDisclosureMode] = useState<DisclosureDetectionMode>("llm_intent");
 
   // Password change state
   const [currentPasswordForPwd, setCurrentPasswordForPwd] = useState("");
@@ -177,6 +179,11 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
           data.default_agent_dispatch_mode ??
           "sequential"
       );
+      setUserPersonaDisclosureMode(
+        data.user_persona_disclosure_mode ??
+          data.default_persona_disclosure_mode ??
+          "llm_intent"
+      );
 
       probeOllama(activeActor.base_url);
     } catch (err: any) {
@@ -214,6 +221,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
         delegate_cognition_to_clerk: userDelegateCognition,
         max_scene_flags: userMaxSceneFlags,
         agent_dispatch_mode: userAgentDispatchMode,
+        persona_disclosure_mode: userPersonaDisclosureMode,
       };
       const res = await api.updateProfileModels(payload);
       setModelSettings(res);
@@ -242,6 +250,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       setUserDelegateCognition(res.default_delegate_cognition_to_clerk);
       setUserMaxSceneFlags(res.default_max_scene_flags ?? 10);
       setUserAgentDispatchMode(res.default_agent_dispatch_mode ?? "sequential");
+      setUserPersonaDisclosureMode(res.default_persona_disclosure_mode ?? "llm_intent");
       setStatusMsg("Reverted to system default preferences.");
     } catch (err: any) {
       setErrorMsg(err?.message || "Failed to reset preferences.");
@@ -1530,6 +1539,40 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                       </option>
                       <option value="parallel">
                         Parallel — Concurrent Dispatch (Cloud APIs / Multi-Slot vLLM)
+                      </option>
+                    </select>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 4,
+                      marginBottom: 12,
+                    }}
+                  >
+                    <label style={{ fontSize: "0.82rem", fontWeight: 600 }}>
+                      Persona Disclosure Detection Strategy{" "}
+                      <span style={{ fontWeight: 400, fontSize: "0.74rem", color: "var(--text-secondary)" }}>
+                        (System Default: {modelSettings?.default_persona_disclosure_mode ?? "llm_intent"})
+                      </span>
+                    </label>
+                    <select
+                      className="field-select"
+                      disabled={!modelSettings?.allow_user_model_overrides}
+                      value={userPersonaDisclosureMode}
+                      onChange={(e) =>
+                        setUserPersonaDisclosureMode(e.target.value as DisclosureDetectionMode)
+                      }
+                    >
+                      <option value="llm_intent">
+                        LLM Intent (Semantic Phase 1 Analysis)
+                      </option>
+                      <option value="token_matching">
+                        Token Matching (Fast Deterministic Keywords)
+                      </option>
+                      <option value="hybrid">
+                        Hybrid (Token Matching + Semantic LLM)
                       </option>
                     </select>
                   </div>
