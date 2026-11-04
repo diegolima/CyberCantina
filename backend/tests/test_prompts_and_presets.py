@@ -263,3 +263,25 @@ def test_prompts_rest_api_lifecycle(client_with_auth: tuple[TestClient, CantinaR
     # Verify 404 after deletion
     get_res = client.get(f"/api/prompts/presets/{preset_id}")
     assert get_res.status_code == 404
+
+
+def test_character_cognition_prompt_affordance_hierarchy() -> None:
+    """Verify that DEFAULT_CHARACTER_COGNITION_SYSTEM contains the 4-tier affordance hierarchy."""
+    from app.prompts.defaults import (
+        DEFAULT_ACTOR_ZONE1_SYSTEM,
+        DEFAULT_CHARACTER_COGNITION_SYSTEM,
+        NOVELISTIC_ACTOR_ZONE1,
+    )
+
+    for p in (
+        DEFAULT_CHARACTER_COGNITION_SYSTEM,
+        DEFAULT_ACTOR_ZONE1_SYSTEM,
+        NOVELISTIC_ACTOR_ZONE1,
+    ):
+        assert "=== PHYSICAL ACTION & OBJECT INTERACTION HIERARCHY ===" in p
+        assert "1. Equipped & In-Hand" in p
+        assert "2. Carried Inventory" in p
+        assert "3. Scene Props & Fixtures" in p
+        assert "4. Terminal Fallback" in p
+        assert "Never manifest or invent unlisted mechanical items" in p
+
