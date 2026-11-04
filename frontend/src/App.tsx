@@ -1813,7 +1813,10 @@ export const App: React.FC = () => {
             setAdminInitialTab("users");
             setShowAdminModal(true);
           }}
-          onToggleNotes={() => setShowNotesFlyout((prev) => !prev)}
+          onOpenNotes={() => {
+            setNotesModalInitialId(undefined);
+            setShowNotesModal(true);
+          }}
           onLogout={handleLogout}
           onDeleteCampaign={(camp) => handleRequestDeleteCampaign(undefined, camp)}
           onDeleteCharacter={(char) => handleRequestDeleteCharacter(undefined, char)}

@@ -45,7 +45,7 @@ export interface HomeScreenProps {
   onSetActivePersona: (persona: PersonaRecord) => void;
   onOpenProfile: () => void;
   onOpenAdmin: () => void;
-  onToggleNotes: () => void;
+  onOpenNotes: () => void;
   onLogout: () => void;
   onDeleteCampaign?: (campaign: CampaignRecord) => void;
   onDeleteCharacter?: (character: CharacterRecord) => void;
@@ -191,7 +191,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onSetActivePersona,
   onOpenProfile,
   onOpenAdmin,
-  onToggleNotes,
+  onOpenNotes,
   onLogout,
   onDeleteCampaign,
   onDeleteCharacter,
@@ -237,12 +237,12 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         </div>
 
         <div className="home-nav-actions">
-          {/* Notes scratchpad button */}
+          {/* Notes button */}
           <button
             type="button"
             className="home-nav-btn"
-            onClick={onToggleNotes}
-            title="Open Player Notes scratchpad"
+            onClick={onOpenNotes}
+            title="Open Notes Manager"
           >
             <StickyNote size={14} color="var(--accent-amber)" />
             <span>Notes</span>
