@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  Computer,
   Flame,
   FolderKanban,
   Globe,
   LogOut,
   Plus,
-  Sparkles,
   StickyNote,
   User,
   UserCheck,
@@ -47,6 +47,10 @@ export interface HomeScreenProps {
   onOpenAdmin: () => void;
   onToggleNotes: () => void;
   onLogout: () => void;
+  onDeleteCampaign?: (campaign: CampaignRecord) => void;
+  onDeleteCharacter?: (character: CharacterRecord) => void;
+  onDeleteWorld?: (world: WorldRecord) => void;
+  onDeletePersona?: (persona: PersonaRecord) => void;
 }
 
 interface HomeCardProps {
@@ -189,6 +193,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onOpenAdmin,
   onToggleNotes,
   onLogout,
+  onDeleteCampaign,
+  onDeleteCharacter,
+  onDeleteWorld,
+  onDeletePersona,
 }) => {
   const [activePickerCategory, setActivePickerCategory] = useState<EntityCategory | null>(null);
 
@@ -301,101 +309,79 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           {/* Hero Header */}
           <div className="home-header">
             <div className="home-title">
-              <Sparkles size={24} color="var(--accent-amber)" />
-              <span>Cybercantina Hub</span>
+              <Computer size={32} color="var(--accent-amber)" />
+              <span>Control Deck</span>
             </div>
             <div className="home-subtitle">
               Welcome to your central control deck. Manage characters, explore worlds, configure personas, or dive straight into active campaigns.
             </div>
-
-            <div className="home-stats-bar">
-              <span className="home-stat-chip">
-                <FolderKanban size={13} color="var(--accent-violet)" />
-                <strong>{campaigns.length}</strong> Campaigns
-              </span>
-              <span className="home-stat-chip">
-                <Users size={13} color="var(--accent-amber)" />
-                <strong>{characters.length}</strong> Characters
-              </span>
-              <span className="home-stat-chip">
-                <Globe size={13} color="var(--accent-cyan)" />
-                <strong>{worlds.length}</strong> Worlds
-              </span>
-              <span className="home-stat-chip">
-                <UserCheck size={13} color="var(--accent-emerald)" />
-                <strong>{personas.length}</strong> Personas
-                {activePersona && (
-                  <span style={{ color: "var(--accent-emerald)", marginLeft: 4 }}>
-                    (Active: {activePersona.name})
-                  </span>
-                )}
-              </span>
-            </div>
           </div>
 
-        {/* 4 Central Cards Grid */}
-        <div className="home-grid">
-          {/* 1. Personas */}
-          <HomeCard
-            category="personas"
-            title="Personas"
-            singular="Persona"
-            count={personas.length}
-            countLabel={personas.length === 1 ? "persona" : "personas"}
-            watermarkIcon={<UserCheck size={140} />}
-            accentColor="var(--accent-emerald)"
-            images={personaImages}
-            imagePosition="top"
-            onCardClick={() => handleOpenPicker("personas")}
-            onNewClick={onNewPersona}
-          />
+          {/* Centralized Cards Deck Area */}
+          <div className="home-deck-area">
+            <div className="home-grid">
+              {/* 1. Personas */}
+              <HomeCard
+                category="personas"
+                title="Personas"
+                singular="Persona"
+                count={personas.length}
+                countLabel={personas.length === 1 ? "persona" : "personas"}
+                watermarkIcon={<UserCheck size={140} />}
+                accentColor="var(--accent-emerald)"
+                images={personaImages}
+                imagePosition="top"
+                onCardClick={() => handleOpenPicker("personas")}
+                onNewClick={onNewPersona}
+              />
 
-          {/* 2. Characters */}
-          <HomeCard
-            category="characters"
-            title="Characters"
-            singular="Character"
-            count={characters.length}
-            countLabel={characters.length === 1 ? "character" : "characters"}
-            watermarkIcon={<Users size={140} />}
-            accentColor="var(--accent-amber)"
-            images={characterImages}
-            imagePosition="top"
-            onCardClick={() => handleOpenPicker("characters")}
-            onNewClick={onNewCharacter}
-          />
+              {/* 2. Characters */}
+              <HomeCard
+                category="characters"
+                title="Characters"
+                singular="Character"
+                count={characters.length}
+                countLabel={characters.length === 1 ? "character" : "characters"}
+                watermarkIcon={<Users size={140} />}
+                accentColor="var(--accent-amber)"
+                images={characterImages}
+                imagePosition="top"
+                onCardClick={() => handleOpenPicker("characters")}
+                onNewClick={onNewCharacter}
+              />
 
-          {/* 3. Worlds */}
-          <HomeCard
-            category="worlds"
-            title="Worlds"
-            singular="World"
-            count={worlds.length}
-            countLabel={worlds.length === 1 ? "world" : "worlds"}
-            watermarkIcon={<Globe size={140} />}
-            accentColor="var(--accent-cyan)"
-            images={worldImages}
-            imagePosition="center"
-            onCardClick={() => handleOpenPicker("worlds")}
-            onNewClick={onNewWorld}
-          />
+              {/* 3. Worlds */}
+              <HomeCard
+                category="worlds"
+                title="Worlds"
+                singular="World"
+                count={worlds.length}
+                countLabel={worlds.length === 1 ? "world" : "worlds"}
+                watermarkIcon={<Globe size={140} />}
+                accentColor="var(--accent-cyan)"
+                images={worldImages}
+                imagePosition="center"
+                onCardClick={() => handleOpenPicker("worlds")}
+                onNewClick={onNewWorld}
+              />
 
-          {/* 4. Campaigns */}
-          <HomeCard
-            category="campaigns"
-            title="Campaigns"
-            singular="Campaign"
-            count={campaigns.length}
-            countLabel={campaigns.length === 1 ? "campaign" : "campaigns"}
-            watermarkIcon={<FolderKanban size={140} />}
-            accentColor="var(--accent-violet)"
-            images={campaignImages}
-            imagePosition="center"
-            onCardClick={() => handleOpenPicker("campaigns")}
-            onNewClick={onNewCampaign}
-          />
+              {/* 4. Campaigns */}
+              <HomeCard
+                category="campaigns"
+                title="Campaigns"
+                singular="Campaign"
+                count={campaigns.length}
+                countLabel={campaigns.length === 1 ? "campaign" : "campaigns"}
+                watermarkIcon={<FolderKanban size={140} />}
+                accentColor="var(--accent-violet)"
+                images={campaignImages}
+                imagePosition="center"
+                onCardClick={() => handleOpenPicker("campaigns")}
+                onNewClick={onNewCampaign}
+              />
+            </div>
+          </div>
         </div>
-      </div>
       </div>
 
       {/* Entity Picker Selection Modal */}
@@ -429,6 +415,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             setActivePickerCategory(null);
             handlePickerNewClick(cat);
           }}
+          onDeleteCampaign={onDeleteCampaign}
+          onDeleteCharacter={onDeleteCharacter}
+          onDeleteWorld={onDeleteWorld}
+          onDeletePersona={onDeletePersona}
         />
       )}
     </main>

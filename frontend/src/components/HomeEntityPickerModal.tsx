@@ -5,6 +5,7 @@ import {
   Globe,
   Plus,
   Search,
+  Trash2,
   UserCheck,
   Users,
   X,
@@ -30,6 +31,10 @@ export interface HomeEntityPickerModalProps {
   onSelectWorld: (world: WorldRecord) => void;
   onSelectPersona: (persona: PersonaRecord) => void;
   onNewClick: (category: EntityCategory) => void;
+  onDeleteCampaign?: (campaign: CampaignRecord) => void;
+  onDeleteCharacter?: (character: CharacterRecord) => void;
+  onDeleteWorld?: (world: WorldRecord) => void;
+  onDeletePersona?: (persona: PersonaRecord) => void;
 }
 
 export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
@@ -45,6 +50,10 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
   onSelectWorld,
   onSelectPersona,
   onNewClick,
+  onDeleteCampaign,
+  onDeleteCharacter,
+  onDeleteWorld,
+  onDeletePersona,
 }) => {
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -277,17 +286,33 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
                         <span>World: <strong style={{ color: "var(--accent-cyan)" }}>{world?.name ?? "Unknown"}</strong></span>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-amber"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onClose();
-                        onSelectCampaign(camp);
-                      }}
-                    >
-                      Launch
-                    </button>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-amber"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onClose();
+                          onSelectCampaign(camp);
+                        }}
+                      >
+                        Launch
+                      </button>
+                      {onDeleteCampaign && (
+                        <button
+                          type="button"
+                          className="btn btn-sm home-picker-delete-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onClose();
+                            onDeleteCampaign(camp);
+                          }}
+                          title={`Delete campaign ${camp.name}`}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               }
@@ -327,17 +352,33 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
                         </div>
                       )}
                     </div>
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onClose();
-                        onSelectCharacter(char);
-                      }}
-                    >
-                      Inspect
-                    </button>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onClose();
+                          onSelectCharacter(char);
+                        }}
+                      >
+                        Inspect
+                      </button>
+                      {onDeleteCharacter && (
+                        <button
+                          type="button"
+                          className="btn btn-sm home-picker-delete-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onClose();
+                            onDeleteCharacter(char);
+                          }}
+                          title={`Remove character ${char.name}`}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               }
@@ -372,17 +413,33 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
                         <span>{world.edges?.length ?? 0} links</span>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onClose();
-                        onSelectWorld(world);
-                      }}
-                    >
-                      Inspect
-                    </button>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onClose();
+                          onSelectWorld(world);
+                        }}
+                      >
+                        Inspect
+                      </button>
+                      {onDeleteWorld && (
+                        <button
+                          type="button"
+                          className="btn btn-sm home-picker-delete-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onClose();
+                            onDeleteWorld(world);
+                          }}
+                          title={`Remove world ${world.name}`}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               }
@@ -433,17 +490,33 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
                         {persona.lore_entries ? ` • ${persona.lore_entries.length} lore entries` : ""}
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onClose();
-                        onSelectPersona(persona);
-                      }}
-                    >
-                      Edit
-                    </button>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onClose();
+                          onSelectPersona(persona);
+                        }}
+                      >
+                        Edit
+                      </button>
+                      {onDeletePersona && (
+                        <button
+                          type="button"
+                          className="btn btn-sm home-picker-delete-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onClose();
+                            onDeletePersona(persona);
+                          }}
+                          title={`Delete persona ${persona.name}`}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               }

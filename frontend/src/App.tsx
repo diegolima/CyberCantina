@@ -508,26 +508,6 @@ export const App: React.FC = () => {
     setCurrentUser(null);
   };
 
-  const handleCreateNewCampaign = async () => {
-    if (worlds.length === 0 || characters.length === 0) return;
-    const w = worlds.find((item) => item.id === activeWorld?.id) ?? worlds[0];
-    const c =
-      characters.find((item) => item.id === activeCharacter?.id) ??
-      characters[0];
-    const created = await api.createCampaign({
-      name: `${c.name} in ${w.name}`,
-      world_id: w.id,
-      character_id: c.id,
-    });
-    const allCamps = await api.listCampaigns();
-    setCampaigns(allCamps);
-    setBundle(created);
-    setCampaignWorld(w);
-    setCampaignCharacter(c);
-    setActiveWorld(w);
-    setActiveCharacter(c);
-  };
-
   const handleSelectCharacter = (char: CharacterRecord) => {
     setInspectingCharacter(char);
   };
@@ -537,10 +517,10 @@ export const App: React.FC = () => {
   };
 
   const handleRequestDeleteCharacter = (
-    e: React.MouseEvent,
+    e: React.MouseEvent | undefined,
     char: CharacterRecord
   ) => {
-    e.stopPropagation();
+    e?.stopPropagation();
     if (isStreaming) return;
     const using = campaigns.filter((c) =>
       (c.participant_character_ids ?? [c.character_id]).includes(char.id)
@@ -553,10 +533,10 @@ export const App: React.FC = () => {
   };
 
   const handleRequestDeleteWorld = (
-    e: React.MouseEvent,
+    e: React.MouseEvent | undefined,
     world: WorldRecord
   ) => {
-    e.stopPropagation();
+    e?.stopPropagation();
     if (isStreaming) return;
     const using = campaigns.filter((c) => c.world_id === world.id);
     setDeleteTarget({
@@ -567,10 +547,10 @@ export const App: React.FC = () => {
   };
 
   const handleRequestDeletePersona = (
-    e: React.MouseEvent,
+    e: React.MouseEvent | undefined,
     persona: PersonaRecord
   ) => {
-    e.stopPropagation();
+    e?.stopPropagation();
     if (isStreaming) return;
     const using = campaigns.filter((c) => c.persona_id === persona.id);
     setDeleteTarget({
@@ -581,10 +561,10 @@ export const App: React.FC = () => {
   };
 
   const handleRequestDeleteCampaign = (
-    e: React.MouseEvent,
+    e: React.MouseEvent | undefined,
     camp: CampaignRecord
   ) => {
-    e.stopPropagation();
+    e?.stopPropagation();
     if (isStreaming) return;
     setDeleteTarget({
       kind: "campaign",
@@ -1810,7 +1790,15 @@ export const App: React.FC = () => {
             setShowPersonaModal(true);
           }}
           onSetActivePersona={(p) => setActivePersona(p)}
-          onNewCampaign={handleCreateNewCampaign}
+          onNewCampaign={() => {
+            if (worlds.length > 0 && characters.length > 0) {
+              setShowNewCampaignModal(true);
+            } else if (worlds.length === 0) {
+              setShowWorldWizard(true);
+            } else {
+              setShowCharWizard(true);
+            }
+          }}
           onNewCharacter={() => setShowCharWizard(true)}
           onNewWorld={() => setShowWorldWizard(true)}
           onNewPersona={() => {
@@ -1827,6 +1815,10 @@ export const App: React.FC = () => {
           }}
           onToggleNotes={() => setShowNotesFlyout((prev) => !prev)}
           onLogout={handleLogout}
+          onDeleteCampaign={(camp) => handleRequestDeleteCampaign(undefined, camp)}
+          onDeleteCharacter={(char) => handleRequestDeleteCharacter(undefined, char)}
+          onDeleteWorld={(w) => handleRequestDeleteWorld(undefined, w)}
+          onDeletePersona={(p) => handleRequestDeletePersona(undefined, p)}
         />
       )}
 

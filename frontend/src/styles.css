@@ -3370,61 +3370,55 @@ body {
 .home-body {
   flex: 1;
   overflow-y: auto;
-  padding: 32px 40px;
+  padding: 32px 40px 36px 40px;
   display: flex;
   flex-direction: column;
-  justify-content: center;
 }
 
 .home-container {
   max-width: 1200px;
   width: 100%;
   margin: 0 auto;
+  flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 24px;
 }
 
 .home-header {
   display: flex;
   flex-direction: column;
+  align-items: center;
+  text-align: center;
   gap: 8px;
+  padding-top: 6px;
+  padding-bottom: 24px;
+  flex-shrink: 0;
 }
 
 .home-title {
-  font-size: 1.65rem;
+  font-size: 2.5rem;
   font-weight: 800;
   letter-spacing: -0.02em;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   color: var(--text-primary);
 }
 
 .home-subtitle {
   color: var(--text-secondary);
-  font-size: 0.92rem;
-  max-width: 680px;
+  font-size: 0.95rem;
+  max-width: 100%;
   line-height: 1.5;
 }
 
-.home-stats-bar {
+.home-deck-area {
+  flex: 1;
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 6px;
-}
-
-.home-stat-chip {
-  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 0.76rem;
-  color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.03);
-  padding: 4px 11px;
-  border-radius: 9999px;
-  border: 1px solid var(--border-subtle);
+  justify-content: center;
+  width: 100%;
+  min-height: min-content;
 }
 
 .home-grid {
@@ -3692,5 +3686,24 @@ body {
 .btn-close-campaign:hover {
   border-color: var(--accent-rose);
   color: #fda4af !important;
+}
+
+.home-picker-delete-btn {
+  color: var(--text-muted);
+  border-color: transparent;
+  padding: 5px 8px;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.home-picker-delete-btn:hover {
+  color: #fda4af;
+  border-color: rgba(244, 63, 94, 0.4);
+  background: rgba(244, 63, 94, 0.1);
 }
 
