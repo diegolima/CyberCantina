@@ -6,7 +6,6 @@ import {
   ChevronRight,
   Flame,
   FolderKanban,
-  GitBranch,
   Globe,
   LogOut,
   Plus,
@@ -507,12 +506,10 @@ export const App: React.FC = () => {
   };
 
   const handleSelectCharacter = (char: CharacterRecord) => {
-    setActiveCharacter(char);
     setInspectingCharacter(char);
   };
 
   const handleSelectWorld = (world: WorldRecord) => {
-    setActiveWorld(world);
     setInspectingWorld(world);
   };
 
@@ -1128,9 +1125,90 @@ export const App: React.FC = () => {
     setCampaignWorld(updatedWorld);
   };
 
-  const activeBranchSet = new Set(
-    bundle?.active_branch_turns.map((t) => t.id) ?? []
-  );
+  // Highlight entities strictly according to the active campaign.
+  // Edge case: if the campaign was created with an older version of a character/world,
+  // find and highlight the latest version currently in the library.
+  const campaignActiveWorldId = useMemo(() => {
+    if (!bundle?.campaign) return null;
+    const targetWorldId = bundle.campaign.world_id;
+    const worldName = campaignWorld?.name;
+
+    if (worldName) {
+      const matchingByName = worlds.filter(
+        (w) => w.name === worldName && !w.pending_deletion
+      );
+      if (matchingByName.length > 0) {
+        return [...matchingByName].sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        )[0].id;
+      }
+    }
+
+    const directMatch = worlds.find((w) => w.id === targetWorldId);
+    return directMatch?.id ?? targetWorldId;
+  }, [bundle?.campaign, worlds, campaignWorld]);
+
+  const campaignActiveCharacterIds = useMemo(() => {
+    if (!bundle?.campaign) return new Set<string>();
+    const activeIds = new Set<string>();
+    const campaignCharIds = bundle.campaign.participant_character_ids?.length
+      ? bundle.campaign.participant_character_ids
+      : [bundle.campaign.character_id].filter(Boolean);
+
+    // Collect all campaign character records (including historical/snapshots)
+    const campaignRecords: CharacterRecord[] = [];
+    for (const cid of campaignCharIds) {
+      const rec =
+        bundle.character_records?.[cid] ??
+        (campaignCharacter?.id === cid ? campaignCharacter : null);
+      if (rec) {
+        campaignRecords.push(rec);
+      }
+    }
+
+    for (const cid of campaignCharIds) {
+      const cRec =
+        campaignRecords.find((r) => r.id === cid) ??
+        (campaignCharacter?.id === cid ? campaignCharacter : null);
+
+      if (cRec?.name) {
+        const matchingByName = characters.filter(
+          (c) => c.name === cRec.name && !c.pending_deletion
+        );
+        if (matchingByName.length > 0) {
+          // Sort by version descending, then created_at descending -> latest version first
+          const latest = [...matchingByName].sort((a, b) => {
+            const vDiff = (b.version ?? 1) - (a.version ?? 1);
+            if (vDiff !== 0) return vDiff;
+            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+          })[0];
+          activeIds.add(latest.id);
+          continue;
+        }
+      }
+
+      const directMatch = characters.find((c) => c.id === cid);
+      if (directMatch) {
+        activeIds.add(directMatch.id);
+      }
+    }
+
+    return activeIds;
+  }, [bundle?.campaign, bundle?.character_records, characters, campaignCharacter]);
+
+  const campaignActivePersonaId = useMemo(() => {
+    if (!bundle?.campaign) return null;
+    const targetId = bundle.campaign.persona_id;
+    if (!targetId) return null;
+    const directMatch = personas.find((p) => p.id === targetId);
+    if (directMatch) return directMatch.id;
+    const pName = bundle.campaign.persona_snapshot?.name;
+    if (pName) {
+      const match = personas.find((p) => p.name === pName);
+      if (match) return match.id;
+    }
+    return targetId;
+  }, [bundle?.campaign, personas]);
 
   if (authChecking) {
     return (
@@ -1186,95 +1264,113 @@ export const App: React.FC = () => {
               (p.lore_entries && p.lore_entries.some((l) => l.title.toLowerCase().includes(query)))
             );
           }}
-          renderItem={(p) => (
-            <div
-              key={p.id}
-              className={`campaign-item ${
-                activePersona?.id === p.id || bundle?.campaign.persona_id === p.id ? "active" : ""
-              }`}
-              onClick={() => {
-                setActivePersona(p);
-                setEditingPersona(p);
-                setShowPersonaModal(true);
-              }}
-            >
-              {!p.id.startsWith("persona_default_") && p.id !== "persona_default_user" ? (
-                <button
-                  type="button"
-                  className="item-remove-btn"
-                  onClick={(e) => handleRequestDeletePersona(e, p)}
-                  disabled={isStreaming}
-                  title={`Delete persona ${p.name}`}
-                >
-                  <X size={13} />
-                </button>
-              ) : (
-                <div style={{ width: 14 }} />
-              )}
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
-                  <span style={{ fontWeight: 600, fontSize: "0.81rem" }}>
-                    {p.name}
-                    {(p.id.startsWith("persona_default_") || p.id === "persona_default_user") && (
-                      <span
-                        style={{
-                          fontSize: "0.62rem",
-                          color: "var(--accent-emerald)",
-                          background: "rgba(16, 185, 129, 0.12)",
-                          padding: "1px 4px",
-                          borderRadius: 3,
-                          marginLeft: 5,
-                          fontWeight: 500,
-                        }}
-                      >
-                        Default
-                      </span>
-                    )}
-                  </span>
-                  {p.age && (
-                    <span
-                      style={{
-                        fontSize: "0.65rem",
-                        color: "var(--accent-emerald)",
-                        background: "rgba(16, 185, 129, 0.12)",
-                        padding: "1px 4px",
-                        borderRadius: 3,
-                        flexShrink: 0,
-                      }}
-                    >
-                      Age {p.age}
+          renderItem={(p) => {
+            const isActive = campaignActivePersonaId === p.id;
+            return (
+              <div
+                key={p.id}
+                className={`campaign-item ${isActive ? "active" : ""}`}
+                onClick={() => {
+                  setEditingPersona(p);
+                  setShowPersonaModal(true);
+                }}
+              >
+                {!p.id.startsWith("persona_default_") && p.id !== "persona_default_user" ? (
+                  <button
+                    type="button"
+                    className="item-remove-btn"
+                    onClick={(e) => handleRequestDeletePersona(e, p)}
+                    disabled={isStreaming}
+                    title={`Delete persona ${p.name}`}
+                  >
+                    <X size={13} />
+                  </button>
+                ) : (
+                  <div style={{ width: 14 }} />
+                )}
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
+                    <span style={{ fontWeight: 600, fontSize: "0.81rem" }}>
+                      {p.name}
+                      {(p.id.startsWith("persona_default_") || p.id === "persona_default_user") && (
+                        <span
+                          style={{
+                            fontSize: "0.62rem",
+                            color: "var(--accent-emerald)",
+                            background: "rgba(16, 185, 129, 0.12)",
+                            padding: "1px 4px",
+                            borderRadius: 3,
+                            marginLeft: 5,
+                            fontWeight: 500,
+                          }}
+                        >
+                          Default
+                        </span>
+                      )}
                     </span>
-                  )}
-                </div>
-                <div
-                  style={{
-                    fontSize: "0.71rem",
-                    color: "var(--text-secondary)",
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                >
-                  {p.physical_appearance || "No physical description"}
-                </div>
-                <div
-                  style={{
-                    display: "flex",
-                    gap: 6,
-                    marginTop: 3,
-                    fontSize: "0.63rem",
-                    color: "var(--text-muted)",
-                  }}
-                >
-                  <span>{p.equipped?.length ?? 0} equipped</span>
-                  <span>•</span>
-                  <span>{p.inventory?.length ?? 0} items</span>
-                  <span>•</span>
-                  <span>{p.lore_entries?.length ?? 0} lore</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      {isActive && (
+                        <span
+                          style={{
+                            fontSize: "0.62rem",
+                            color: "var(--accent-amber)",
+                            background: "rgba(245, 158, 11, 0.12)",
+                            border: "1px solid rgba(245, 158, 11, 0.35)",
+                            padding: "1px 4px",
+                            borderRadius: 3,
+                            fontWeight: 600,
+                            flexShrink: 0,
+                          }}
+                        >
+                          Active
+                        </span>
+                      )}
+                      {p.age && (
+                        <span
+                          style={{
+                            fontSize: "0.65rem",
+                            color: "var(--accent-emerald)",
+                            background: "rgba(16, 185, 129, 0.12)",
+                            padding: "1px 4px",
+                            borderRadius: 3,
+                            flexShrink: 0,
+                          }}
+                        >
+                          Age {p.age}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "0.71rem",
+                      color: "var(--text-secondary)",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {p.physical_appearance || "No physical description"}
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 6,
+                      marginTop: 3,
+                      fontSize: "0.63rem",
+                      color: "var(--text-muted)",
+                    }}
+                  >
+                    <span>{p.equipped?.length ?? 0} equipped</span>
+                    <span>•</span>
+                    <span>{p.inventory?.length ?? 0} items</span>
+                    <span>•</span>
+                    <span>{p.lore_entries?.length ?? 0} lore</span>
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            );
+          }}
         />
 
         {/* 2. Characters (+new) */}
@@ -1294,86 +1390,105 @@ export const App: React.FC = () => {
               (char.creator && char.creator.toLowerCase().includes(query))
             );
           }}
-          renderItem={(char) => (
-            <div
-              key={char.id}
-              className={`campaign-item ${
-                activeCharacter?.id === char.id ? "active" : ""
-              }`}
-              onClick={() => handleSelectCharacter(char)}
-            >
-              <button
-                type="button"
-                className="item-remove-btn"
-                onClick={(e) => handleRequestDeleteCharacter(e, char)}
-                disabled={isStreaming}
-                title={`Remove ${char.name}`}
+          renderItem={(char) => {
+            const isActive = campaignActiveCharacterIds.has(char.id);
+            return (
+              <div
+                key={char.id}
+                className={`campaign-item ${isActive ? "active" : ""}`}
+                onClick={() => handleSelectCharacter(char)}
               >
-                <X size={13} />
-              </button>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
-                  <span style={{ fontWeight: 600, fontSize: "0.81rem" }}>
-                    {char.name}
-                  </span>
-                  <span
-                    style={{
-                      fontSize: "0.65rem",
-                      color: "var(--accent-amber)",
-                      background: "rgba(245, 158, 11, 0.12)",
-                      padding: "1px 4px",
-                      borderRadius: 3,
-                      flexShrink: 0,
-                    }}
-                  >
-                    v{char.version ?? 1}
-                  </span>
-                </div>
-                <div
-                  style={{
-                    fontSize: "0.71rem",
-                    color: "var(--text-secondary)",
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
+                <button
+                  type="button"
+                  className="item-remove-btn"
+                  onClick={(e) => handleRequestDeleteCharacter(e, char)}
+                  disabled={isStreaming}
+                  title={`Remove ${char.name}`}
                 >
-                  {char.tagline}
-                </div>
-                {char.tags && char.tags.length > 0 && (
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: 4,
-                      marginTop: 3,
-                      overflow: "hidden",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {char.tags.slice(0, 3).map((t) => (
+                  <X size={13} />
+                </button>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
+                    <span style={{ fontWeight: 600, fontSize: "0.81rem" }}>
+                      {char.name}
+                    </span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      {isActive && (
+                        <span
+                          style={{
+                            fontSize: "0.62rem",
+                            color: "var(--accent-amber)",
+                            background: "rgba(245, 158, 11, 0.12)",
+                            border: "1px solid rgba(245, 158, 11, 0.35)",
+                            padding: "1px 4px",
+                            borderRadius: 3,
+                            fontWeight: 600,
+                            flexShrink: 0,
+                          }}
+                        >
+                          Active
+                        </span>
+                      )}
                       <span
-                        key={t}
                         style={{
-                          fontSize: "0.62rem",
-                          color: "var(--accent-cyan)",
-                          background: "rgba(6, 182, 212, 0.1)",
-                          padding: "0 4px",
-                          borderRadius: 2,
+                          fontSize: "0.65rem",
+                          color: "var(--accent-amber)",
+                          background: "rgba(245, 158, 11, 0.12)",
+                          padding: "1px 4px",
+                          borderRadius: 3,
+                          flexShrink: 0,
                         }}
                       >
-                        #{t}
+                        v{char.version ?? 1}
                       </span>
-                    ))}
-                    {char.tags.length > 3 && (
-                      <span style={{ fontSize: "0.62rem", color: "var(--text-muted)" }}>
-                        +{char.tags.length - 3}
-                      </span>
-                    )}
+                    </div>
                   </div>
-                )}
+                  <div
+                    style={{
+                      fontSize: "0.71rem",
+                      color: "var(--text-secondary)",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {char.tagline}
+                  </div>
+                  {char.tags && char.tags.length > 0 && (
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 4,
+                        marginTop: 3,
+                        overflow: "hidden",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {char.tags.slice(0, 3).map((t) => (
+                        <span
+                          key={t}
+                          style={{
+                            fontSize: "0.62rem",
+                            color: "var(--accent-cyan)",
+                            background: "rgba(6, 182, 212, 0.1)",
+                            padding: "0 4px",
+                            borderRadius: 2,
+                          }}
+                        >
+                          #{t}
+                        </span>
+                      ))}
+                      {char.tags.length > 3 && (
+                        <span style={{ fontSize: "0.62rem", color: "var(--text-muted)" }}>
+                          +{char.tags.length - 3}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          }}
         />
 
         {/* 3. Worlds (+new) */}
@@ -1388,41 +1503,60 @@ export const App: React.FC = () => {
             w.name.toLowerCase().includes(q) ||
             w.global_rules.genre.toLowerCase().includes(q)
           }
-          renderItem={(w) => (
-            <div
-              key={w.id}
-              className={`campaign-item ${
-                activeWorld?.id === w.id ? "active" : ""
-              }`}
-              onClick={() => handleSelectWorld(w)}
-            >
-              <button
-                type="button"
-                className="item-remove-btn"
-                onClick={(e) => handleRequestDeleteWorld(e, w)}
-                disabled={isStreaming}
-                title={`Remove ${w.name}`}
+          renderItem={(w) => {
+            const isActive = campaignActiveWorldId === w.id;
+            return (
+              <div
+                key={w.id}
+                className={`campaign-item ${isActive ? "active" : ""}`}
+                onClick={() => handleSelectWorld(w)}
               >
-                <X size={13} />
-              </button>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontWeight: 600, fontSize: "0.81rem" }}>
-                  {w.name}
-                </div>
-                <div
-                  style={{
-                    fontSize: "0.71rem",
-                    color: "var(--text-secondary)",
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
+                <button
+                  type="button"
+                  className="item-remove-btn"
+                  onClick={(e) => handleRequestDeleteWorld(e, w)}
+                  disabled={isStreaming}
+                  title={`Remove ${w.name}`}
                 >
-                  {w.global_rules.genre} • {w.locations.length} locations
+                  <X size={13} />
+                </button>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
+                    <div style={{ fontWeight: 600, fontSize: "0.81rem" }}>
+                      {w.name}
+                    </div>
+                    {isActive && (
+                      <span
+                        style={{
+                          fontSize: "0.62rem",
+                          color: "var(--accent-amber)",
+                          background: "rgba(245, 158, 11, 0.12)",
+                          border: "1px solid rgba(245, 158, 11, 0.35)",
+                          padding: "1px 4px",
+                          borderRadius: 3,
+                          fontWeight: 600,
+                          flexShrink: 0,
+                        }}
+                      >
+                        Active
+                      </span>
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "0.71rem",
+                      color: "var(--text-secondary)",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {w.global_rules.genre} • {w.locations.length} locations
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            );
+          }}
         />
 
         {/* 4. Campaigns (+new) */}
@@ -1470,63 +1604,6 @@ export const App: React.FC = () => {
               </div>
             </div>
           )}
-        />
-
-        {/* 4. Timeline Branch Tree */}
-        <SidebarCategory
-          title="Timeline Branch Tree"
-          icon={<GitBranch size={14} color="var(--accent-violet)" />}
-          items={bundle?.all_turn_nodes ?? []}
-          searchPlaceholder="Search turns..."
-          filterFn={(node, q) =>
-            `turn #${node.depth_index}`.includes(q) ||
-            node.user_message.toLowerCase().includes(q) ||
-            node.raw_prose.toLowerCase().includes(q) ||
-            node.world_snapshot.world_timestamp.toLowerCase().includes(q)
-          }
-          renderItem={(node) => {
-            const inActive = activeBranchSet.has(node.id);
-            const isLeaf = node.id === bundle?.campaign.active_leaf_turn_id;
-            return (
-              <div
-                key={node.id}
-                className={`branch-node-item ${
-                  inActive ? "in-active-branch" : ""
-                } ${isLeaf ? "is-leaf" : ""}`}
-                style={{ marginLeft: Math.min(node.depth_index * 6, 36) }}
-                onClick={() => handleCheckoutTurn(node.id)}
-                title="Click to checkout this timeline branch and roll back world/spatial/memory state"
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    fontWeight: 600,
-                    color: isLeaf
-                      ? "var(--accent-amber)"
-                      : inActive
-                      ? "#e2e8f0"
-                      : "var(--text-muted)",
-                  }}
-                >
-                  <span>Turn #{node.depth_index}</span>
-                  <span>{node.world_snapshot.world_timestamp.split(" ")[1]}</span>
-                </div>
-                <div
-                  style={{
-                    color: "var(--text-secondary)",
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                >
-                  {node.depth_index === 0
-                    ? "[Opening Scene]"
-                    : node.user_message}
-                </div>
-              </div>
-            );
-          }}
         />
 
         {/* Bottom User Profile & Admin Area */}
@@ -1727,7 +1804,7 @@ export const App: React.FC = () => {
           world={campaignWorld}
           character={campaignCharacter}
           participants={characters.filter((ch) =>
-            (bundle.campaign.participant_character_ids ?? [bundle.campaign.character_id]).includes(ch.id)
+            campaignActiveCharacterIds.has(ch.id)
           )}
           memoryConfig={appSettings?.memory_config}
           pendingLocationOverrideId={pendingLocationOverrideId}
@@ -1739,6 +1816,7 @@ export const App: React.FC = () => {
           onToggleItemEquip={handleToggleItemEquip}
           onUpdateCampaignMemories={handleUpdateCampaignMemories}
           onSaveCampaignLocationLore={handleSaveCampaignLocationLore}
+          onCheckoutTurn={handleCheckoutTurn}
           isMutatingLocked={isStreaming || isPhase4Running}
           worlds={worlds}
         />
