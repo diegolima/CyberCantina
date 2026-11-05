@@ -3246,6 +3246,44 @@ body {
 
 .model-picker { display: flex; flex-direction: column; gap: 4px; }
 .model-picker-provider-line { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.model-combobox { position: relative; width: 100%; }
+.model-suggestions-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--bg-card, #131722);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  z-index: 100;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+}
+.model-suggestion-item {
+  padding: 6px 10px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary, #f1f5f9);
+}
+.model-suggestion-item:hover, .model-suggestion-item.highlighted {
+  background: rgba(255, 255, 255, 0.08);
+}
+.model-suggestion-name {
+  font-family: monospace;
+  font-size: 0.78rem;
+}
+.model-suggestion-meta {
+  font-size: 0.7rem;
+  color: var(--text-muted, #94a3b8);
+}
 .model-role-card { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
 .model-role-header { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
 .model-role-title { font-weight: 600; font-size: 0.86rem; }

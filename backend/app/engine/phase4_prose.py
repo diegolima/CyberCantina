@@ -253,7 +253,7 @@ async def stream_phase4_prose(
 
     async def _token_generator() -> AsyncIterator[str]:
         try:
-            async for delta in effective_client.stream_chat(messages, profile=actor_prof):
+            async for delta in effective_client.stream_chat(messages, profile=actor_prof, disable_reasoning=True):
                 yield delta
         except Exception as exc:
             if not settings.allow_offline_fallback:

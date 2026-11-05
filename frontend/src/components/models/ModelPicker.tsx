@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { LLMProvider } from "../../types";
 import { ProviderColorPill, ScopeBadge, StatusDot } from "../providers/ProviderBadges";
@@ -40,6 +40,19 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
 }) => {
   const store = useProviders();
   const [showAll, setShowAll] = useState(false);
+  const [comboboxOpen, setComboboxOpen] = useState(false);
+  const [highlightIndex, setHighlightIndex] = useState(-1);
+  const comboboxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (comboboxRef.current && !comboboxRef.current.contains(e.target as Node)) {
+        setComboboxOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, []);
 
   const selected = store.byId(value.providerId);
   const live = value.providerId ? store.status[value.providerId]?.result : undefined;
@@ -48,6 +61,17 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
   const hidden = models.length - filterByKind(models, modelKind, false).length;
   const unreachable = value.providerId ? store.status[value.providerId]?.state === "unreachable" : false;
   const issues = pickerIssues(value, selected, visibleModels, source, unreachable ? false : undefined);
+
+  const openrouterSuggestions = useMemo(() => {
+    if (selected?.type !== "openrouter") return [];
+    const query = (value.model || "").trim().toLowerCase();
+    if (query.length < 2) {
+      return visibleModels.slice(0, 15);
+    }
+    return visibleModels
+      .filter((m) => m.name.toLowerCase().includes(query) || m.family.toLowerCase().includes(query))
+      .slice(0, 15);
+  }, [selected, value.model, visibleModels]);
 
   const selectable = (p: LLMProvider) =>
     (!systemOnly || p.scope === "system") && ((p.is_enabled && p.usable) || p.id === value.providerId);
@@ -116,7 +140,77 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
           <label className="form-label" htmlFor={modelId}>
             Model
           </label>
-          {models.length > 0 ? (
+          {selected?.type === "openrouter" ? (
+            <div className="model-combobox" ref={comboboxRef}>
+              <input
+                id={modelId}
+                className="form-input"
+                value={value.model}
+                disabled={disabled || !value.providerId}
+                placeholder="Type 2+ chars to filter (e.g. anthropic/claude-3.5-sonnet)..."
+                autoComplete="off"
+                onChange={(e) => {
+                  onChange({ ...value, model: e.target.value });
+                  setComboboxOpen(true);
+                  setHighlightIndex(-1);
+                }}
+                onFocus={() => {
+                  setComboboxOpen(true);
+                  setHighlightIndex(-1);
+                }}
+                onKeyDown={(e) => {
+                  if (!comboboxOpen) {
+                    if (e.key === "ArrowDown") setComboboxOpen(true);
+                    return;
+                  }
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setHighlightIndex((prev) =>
+                      prev + 1 < openrouterSuggestions.length ? prev + 1 : 0
+                    );
+                  } else if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setHighlightIndex((prev) =>
+                      prev > 0 ? prev - 1 : openrouterSuggestions.length - 1
+                    );
+                  } else if (
+                    e.key === "Enter" &&
+                    highlightIndex >= 0 &&
+                    highlightIndex < openrouterSuggestions.length
+                  ) {
+                    e.preventDefault();
+                    const chosen = openrouterSuggestions[highlightIndex];
+                    onChange({ ...value, model: chosen.name });
+                    setComboboxOpen(false);
+                  } else if (e.key === "Escape") {
+                    setComboboxOpen(false);
+                  }
+                }}
+              />
+              {comboboxOpen && openrouterSuggestions.length > 0 && (
+                <ul className="model-suggestions-list" role="listbox">
+                  {openrouterSuggestions.map((m, idx) => (
+                    <li
+                      key={m.name}
+                      className={`model-suggestion-item ${idx === highlightIndex ? "highlighted" : ""}`}
+                      role="option"
+                      aria-selected={m.name === value.model}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        onChange({ ...value, model: m.name });
+                        setComboboxOpen(false);
+                      }}
+                    >
+                      <span className="model-suggestion-name">{m.name}</span>
+                      {m.parameter_size && (
+                        <span className="model-suggestion-meta">{m.parameter_size}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : models.length > 0 ? (
             <select
               id={modelId}
               className="form-input"

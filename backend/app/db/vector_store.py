@@ -88,26 +88,32 @@ async def embed_text(text: str) -> np.ndarray:
             else:
                 base = profile.base_url.rstrip("/")
                 token = profile.api_key if profile.api_key not in ("", "ollama") else None
-            root_url = base[: -len("/v1")].rstrip("/") if base.endswith("/v1") else base
-            v1_url = base if base.endswith("/v1") else f"{base}/v1"
+            is_openrouter = endpoint is not None and endpoint.type == "openrouter"
+            if is_openrouter:
+                v1_url = endpoint.root_url.rstrip("/")
+                root_url = v1_url
+            else:
+                root_url = base[: -len("/v1")].rstrip("/") if base.endswith("/v1") else base
+                v1_url = base if base.endswith("/v1") else f"{base}/v1"
             native_headers = bearer_headers(token)
             headers = {"Authorization": f"Bearer {token or 'ollama'}"}
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
-                # 1. Try native Ollama /api/embed
-                ollama_resp = await client.post(
-                    f"{root_url}/api/embed",
-                    headers=native_headers,
-                    json={"model": profile.model, "input": text},
-                )
-                if ollama_resp.status_code == 200:
-                    data = ollama_resp.json()
-                    embeddings = data.get("embeddings") or []
-                    if embeddings:
-                        arr = np.asarray(embeddings[0], dtype=np.float32)
-                        norm = float(np.linalg.norm(arr))
-                        if norm > 1e-8:
-                            arr /= norm
-                        return arr
+                # 1. Try native Ollama /api/embed (skip for openrouter)
+                if not is_openrouter:
+                    ollama_resp = await client.post(
+                        f"{root_url}/api/embed",
+                        headers=native_headers,
+                        json={"model": profile.model, "input": text},
+                    )
+                    if ollama_resp.status_code == 200:
+                        data = ollama_resp.json()
+                        embeddings = data.get("embeddings") or []
+                        if embeddings:
+                            arr = np.asarray(embeddings[0], dtype=np.float32)
+                            norm = float(np.linalg.norm(arr))
+                            if norm > 1e-8:
+                                arr /= norm
+                            return arr
 
                 # 2. Fallback to OpenAI-compatible /v1/embeddings
                 resp = await client.post(

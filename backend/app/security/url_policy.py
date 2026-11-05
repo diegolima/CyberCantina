@@ -38,11 +38,17 @@ class NormalizedUrl:
     scheme: str
 
 
-def normalize_base_url(raw: str) -> NormalizedUrl:
+OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+
+
+def normalize_base_url(raw: str, *, provider_type: str = "ollama") -> NormalizedUrl:
     """Validate syntax and reduce to a root URL (no trailing slash, ``/v1`` or ``/api``)."""
     text = (raw or "").strip()
     if not text:
-        raise UrlBlockedError("invalid_url", "Server URL is required.")
+        if provider_type == "openrouter":
+            text = OPENROUTER_DEFAULT_BASE_URL
+        else:
+            raise UrlBlockedError("invalid_url", "Server URL is required.")
     parts = urlsplit(text)
     if parts.scheme not in ("http", "https"):
         raise UrlBlockedError("invalid_url", "Server URL must start with http:// or https://.")
@@ -57,9 +63,13 @@ def normalize_base_url(raw: str) -> NormalizedUrl:
     except ValueError as exc:
         raise UrlBlockedError("invalid_url", "Server URL has an invalid port.") from exc
     path = parts.path.rstrip("/")
-    for suffix in ("/v1", "/api"):
-        if path.endswith(suffix):
-            path = path[: -len(suffix)].rstrip("/")
+    if provider_type == "openrouter":
+        if not path:
+            path = "/api/v1"
+    else:
+        for suffix in ("/v1", "/api"):
+            if path.endswith(suffix):
+                path = path[: -len(suffix)].rstrip("/")
     host_part = parts.netloc
     root = f"{parts.scheme}://{host_part}{path}"
     return NormalizedUrl(root=root, host=parts.hostname.lower(), port=port, scheme=parts.scheme)

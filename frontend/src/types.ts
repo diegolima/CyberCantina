@@ -907,7 +907,7 @@ export interface SettingsUpdateResponse extends AppSettings {
   stale_embedding_entries: number;
 }
 
-export type ProviderType = "ollama";
+export type ProviderType = "ollama" | "openrouter";
 export type ProviderScope = "system" | "user";
 export type ProviderColor = "neutral" | "cyan" | "purple" | "indigo" | "bronze";
 export type ProbeErrorCode =

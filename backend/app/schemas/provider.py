@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ProviderType = Literal["ollama"]
+ProviderType = Literal["ollama", "openrouter"]
 ProviderScope = Literal["system", "user"]
 ProviderColor = Literal["neutral", "cyan", "purple", "indigo", "bronze"]
 ProbeErrorCode = Literal[
@@ -59,8 +59,8 @@ class ProviderModelInfo(BaseModel):
 
 
 class OllamaProviderSettings(BaseModel):
-    base_url: str = Field(..., description="Mandatory server URL, e.g. http://localhost:11434")
-    bearer_token: str | None = Field(default=None, description="Optional bearer token for hosted endpoints.")
+    base_url: str | None = Field(default=None, description="Server URL, e.g. http://localhost:11434 (defaults to https://openrouter.ai/api/v1 for OpenRouter).")
+    bearer_token: str | None = Field(default=None, description="Optional bearer token, or mandatory API key for OpenRouter.")
 
 
 class ProviderCreatePayload(BaseModel):
@@ -87,7 +87,7 @@ class ProviderDraft(BaseModel):
 
     provider_id: str | None = None
     type: ProviderType = "ollama"
-    base_url: str
+    base_url: str | None = None
     bearer_token: str | None = None
 
 

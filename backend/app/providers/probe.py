@@ -12,6 +12,7 @@ import httpx
 
 from app.db.provider_store import ProviderStore
 from app.providers.models import parse_ollama_tags, parse_openai_models
+from app.providers.openrouter_catalog import openrouter_catalog_service
 from app.schemas.provider import (
     ProbeErrorCode,
     ProviderDraft,
@@ -79,13 +80,42 @@ def _classify_exception(exc: Exception) -> tuple[ProbeErrorCode, str]:
     return "unknown", text
 
 
-async def _probe_once(root_url: str, token: str | None, *, restricted: bool, client: httpx.AsyncClient) -> _Outcome:
+async def _probe_once(
+    root_url: str,
+    token: str | None,
+    *,
+    provider_type: str = "ollama",
+    restricted: bool,
+    client: httpx.AsyncClient,
+) -> _Outcome:
     try:
-        url = normalize_base_url(root_url)
+        url = normalize_base_url(root_url, provider_type=provider_type)
         await assert_url_allowed(url, allow_private=not restricted)
     except UrlBlockedError as exc:
         return _Outcome(False, error_code=exc.code if exc.code in ("dns_failure", "invalid_url") else "blocked_by_policy", error=str(exc))  # type: ignore[arg-type]
     headers = bearer_headers(token)
+
+    if provider_type == "openrouter":
+        if not token or not token.strip():
+            return _Outcome(False, error_code="unauthorized", error="OpenRouter API key is required.")
+        auth_url = f"{url.root.rstrip('/')}/auth/key"
+        try:
+            resp = await client.get(auth_url, headers=headers, timeout=5.0)
+            if resp.status_code == 200:
+                try:
+                    models = await openrouter_catalog_service.get_models(client=client)
+                except Exception:
+                    models = openrouter_catalog_service.get_cached_models_sync()
+                return _Outcome(True, "openai_compat", models)
+            if resp.status_code == 401:
+                return _Outcome(False, error_code="unauthorized", error="Invalid OpenRouter API key.")
+            if resp.status_code == 403:
+                return _Outcome(False, error_code="forbidden", error="OpenRouter API key forbidden or restricted.")
+            return _Outcome(False, error_code="unknown", error=f"HTTP {resp.status_code}")
+        except Exception as exc:  # noqa: BLE001
+            code, text = _classify_exception(exc)
+            return _Outcome(False, error_code=code, error=text)
+
     try:
         resp = await client.get(f"{url.root}/api/tags", headers=headers, timeout=PROBE_TIMEOUT_SECONDS)
         if resp.status_code == 200:
@@ -192,7 +222,11 @@ class ProbeService:
         else:
             async with self._sem():
                 outcome = await _probe_once(
-                    record.base_url, token, restricted=record.network_restricted, client=self._http()
+                    record.base_url,
+                    token,
+                    provider_type=record.type,
+                    restricted=record.network_restricted,
+                    client=self._http(),
                 )
         probed_at = datetime.now(timezone.utc).isoformat()
         response = _to_response(
@@ -200,10 +234,11 @@ class ProbeService:
         )
         self._cache[(record.id, record.version)] = (time.monotonic(), response)
         # Persist off the event loop (sync sqlite); only the catalog changes cause row writes.
+        persist_models = outcome.models if (outcome.reachable and record.type != "openrouter") else None
         await asyncio.to_thread(
             store.record_probe,
             record.id,
-            models=outcome.models if outcome.reachable else None,
+            models=persist_models,
             error_code=None if outcome.reachable else outcome.error_code,
             probed_at=probed_at,
         )
@@ -214,7 +249,13 @@ class ProbeService:
     ) -> ProviderProbeResponse:
         """Test an unsaved configuration. ``token`` is resolved by the caller (stored token reuse rules)."""
         async with self._sem():
-            outcome = await _probe_once(draft.base_url, token, restricted=restricted, client=self._http())
+            outcome = await _probe_once(
+                draft.base_url or "",
+                token,
+                provider_type=draft.type,
+                restricted=restricted,
+                client=self._http(),
+            )
         return _to_response(
             outcome,
             provider_id=draft.provider_id,

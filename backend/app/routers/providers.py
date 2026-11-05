@@ -16,6 +16,7 @@ from app.db.provider_store import (
     ProviderVersionConflictError,
 )
 from app.dependencies import get_repo
+from app.providers.openrouter_catalog import openrouter_catalog_service
 from app.providers.probe import ProbeRateLimited, probe_service
 from app.providers.references import clear_user_overrides, find_references
 from app.providers.resolver import visibility_problem
@@ -53,6 +54,11 @@ def _can_manage(record: ProviderRecord, user: UserProfile) -> bool:
 def _to_response(record: ProviderRecord, user: UserProfile) -> ProviderResponse:
     problem = visibility_problem(record, record.owner_id if record.scope == "user" else None)
     show_url = _is_admin(user) or record.owner_id == user.id
+    cached_models = (
+        openrouter_catalog_service.get_cached_models_sync() or record.cached_models
+        if record.type == "openrouter"
+        else record.cached_models
+    )
     return ProviderResponse(
         id=record.id,
         name=record.name,
@@ -65,7 +71,7 @@ def _to_response(record: ProviderRecord, user: UserProfile) -> ProviderResponse:
         has_bearer_token=bool(record.secret_enc),
         usable=problem is None,
         unusable_reason=problem if problem in ("disabled", "byop_disabled") else None,  # type: ignore[arg-type]
-        cached_models=record.cached_models,
+        cached_models=cached_models,
         last_probed_at=record.last_probed_at,
         last_error_code=record.last_error_code,  # type: ignore[arg-type]
         version=record.version,
@@ -82,9 +88,9 @@ def _visible_or_404(store: ProviderStore, provider_id: str, user: UserProfile) -
     return record
 
 
-def _validate_url(raw: str, *, allow_private: bool):
+def _validate_url(raw: str | None, *, provider_type: str = "ollama", allow_private: bool):
     try:
-        url = normalize_base_url(raw)
+        url = normalize_base_url(raw or "", provider_type=provider_type)
     except UrlBlockedError as exc:
         raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
     return url
@@ -115,7 +121,16 @@ async def create_provider(
     elif not settings.allow_user_providers:
         raise HTTPException(status_code=403, detail="Personal providers are disabled by the administrator.")
     allow_private = _is_admin(user)
-    url = _validate_url(payload.settings.base_url, allow_private=allow_private)
+
+    raw_token = (payload.settings.bearer_token or "").strip()
+    if payload.type == "openrouter":
+        if not raw_token:
+            raise HTTPException(status_code=422, detail="OpenRouter requires an API key (Bearer token).")
+        raw_url = (payload.settings.base_url or "").strip() or "https://openrouter.ai/api/v1"
+    else:
+        raw_url = (payload.settings.base_url or "").strip()
+
+    url = _validate_url(raw_url, provider_type=payload.type, allow_private=allow_private)
     await _check_url_policy(url, allow_private=allow_private)
     store = _store()
     try:
@@ -127,7 +142,7 @@ async def create_provider(
             color=payload.color,
             is_enabled=payload.is_enabled,
             base_url=url.root,
-            bearer_token=(payload.settings.bearer_token or "").strip() or None,
+            bearer_token=raw_token or None,
             network_restricted=not allow_private,
         )
     except ProviderNameConflictError as exc:
@@ -151,10 +166,10 @@ async def update_provider(
     new_url: str | None = None
     if payload.base_url is not None:
         allow_private = _is_admin(user) and not record.network_restricted
-        url = _validate_url(payload.base_url, allow_private=allow_private)
+        url = _validate_url(payload.base_url, provider_type=record.type, allow_private=allow_private)
         await _check_url_policy(url, allow_private=allow_private)
         new_url = url.root
-        old_host = normalize_base_url(record.base_url).host if record.base_url else ""
+        old_host = normalize_base_url(record.base_url, provider_type=record.type).host if record.base_url else ""
         if (
             url.host != old_host
             and record.secret_enc
@@ -273,8 +288,9 @@ async def probe_draft(draft: ProviderDraft, user: UserProfile = Depends(get_curr
     store = _store()
     token = (draft.bearer_token or "").strip() or None
     restricted = not _is_admin(user)
+    draft_url = draft.base_url or ("https://openrouter.ai/api/v1" if draft.type == "openrouter" else "")
     try:
-        url = normalize_base_url(draft.base_url)
+        url = normalize_base_url(draft_url, provider_type=draft.type)
     except UrlBlockedError as exc:
         return ProviderProbeResponse(
             provider_id=draft.provider_id, reachable=False, error_code="invalid_url", error=str(exc), probed_at=""
@@ -285,7 +301,7 @@ async def probe_draft(draft: ProviderDraft, user: UserProfile = Depends(get_curr
             raise HTTPException(status_code=403, detail="You are not allowed to test this provider.")
         restricted = restricted or record.network_restricted
         # Reuse the stored token only for the same host, never to a new destination.
-        if token is None and record.secret_enc and url.host == normalize_base_url(record.base_url).host:
+        if token is None and record.secret_enc and url.host == normalize_base_url(record.base_url, provider_type=record.type).host:
             token = store.bearer_token(record)
     resp = await probe_service.probe_draft(draft.model_copy(update={"base_url": url.root}), store, restricted=restricted, token=token)
     return _public_probe(resp, privileged=True)

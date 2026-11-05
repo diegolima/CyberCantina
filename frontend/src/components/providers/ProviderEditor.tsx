@@ -7,6 +7,7 @@ import {
   ProviderProbeResponse,
   ProviderReference,
   ProviderScope,
+  ProviderType,
 } from "../../types";
 import { PROVIDER_COLORS, ProviderColorPill, describeProbeError } from "./ProviderBadges";
 import { useProviders } from "./ProvidersContext";
@@ -35,6 +36,7 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
   const existing = props.mode === "edit" ? props.provider : null;
   const deleteOnly = props.mode === "edit" && props.deleteOnly;
 
+  const [providerType, setProviderType] = useState<ProviderType>(existing?.type ?? "ollama");
   const [name, setName] = useState(existing?.name ?? "");
   const [url, setUrl] = useState(existing?.base_url ?? "");
   const [token, setToken] = useState("");
@@ -49,23 +51,25 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [blockers, setBlockers] = useState<ProviderReference[]>([]);
 
-  const urlMissing = url.trim() === "";
+  const urlMissing = providerType === "ollama" && url.trim() === "";
+  const tokenMissing = providerType === "openrouter" && props.mode === "create" && !token.trim();
   const hostChanged =
     !!existing &&
     existing.base_url !== null &&
     hostOf(url) !== null &&
     hostOf(url) !== hostOf(existing.base_url);
   const tokenRequired = hostChanged && !!existing?.has_bearer_token && !token && !clearToken;
-  const canSave = !urlMissing && !saving && !tokenRequired && (props.mode === "create" || name.trim() !== "");
+  const canSave = !urlMissing && !tokenMissing && !saving && !tokenRequired && (props.mode === "create" || name.trim() !== "");
 
   const handleTest = async () => {
     setTesting(true);
     setTestResult(null);
     try {
+      const effectiveUrl = url.trim() || (providerType === "openrouter" ? "https://openrouter.ai/api/v1" : "");
       const result = await api.probeProviderDraft({
         provider_id: existing?.id ?? null,
-        type: "ollama",
-        base_url: url.trim(),
+        type: providerType,
+        base_url: effectiveUrl,
         bearer_token: token || null,
       });
       setTestResult(result);
@@ -81,14 +85,15 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
     setError(null);
     setConflict(false);
     try {
+      const effectiveUrl = url.trim() || (providerType === "openrouter" ? "https://openrouter.ai/api/v1" : "");
       if (props.mode === "create") {
         await store.create({
           name: name.trim() || null,
-          type: "ollama",
+          type: providerType,
           scope: props.scope,
           color,
           is_enabled: enabled,
-          settings: { base_url: url.trim(), bearer_token: token || null },
+          settings: { base_url: effectiveUrl, bearer_token: token || null },
         });
       } else {
         const p = props.provider;
@@ -97,7 +102,7 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
           name: name.trim() !== p.name ? name.trim() : undefined,
           color: color !== p.color ? color : undefined,
           is_enabled: enabled !== p.is_enabled ? enabled : undefined,
-          base_url: url.trim() !== (p.base_url ?? "") ? url.trim() : undefined,
+          base_url: url.trim() !== (p.base_url ?? "") ? (effectiveUrl || undefined) : undefined,
           bearer_token: token || undefined,
           clear_bearer_token: clearToken || undefined,
         });
@@ -141,6 +146,38 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
         </div>
       )}
 
+      <div className="form-group">
+        <label className="form-label">Provider Type</label>
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button
+            type="button"
+            disabled={deleteOnly || props.mode === "edit"}
+            className={`btn ${providerType === "ollama" ? "btn--primary" : "btn--subtle"}`}
+            style={{ flex: 1, padding: "7px 12px", fontSize: "0.82rem" }}
+            onClick={() => {
+              setProviderType("ollama");
+              if (!name || name === "OpenRouter") setName("");
+              if (url === "https://openrouter.ai/api/v1") setUrl("");
+            }}
+          >
+            Ollama (Local / Self-hosted)
+          </button>
+          <button
+            type="button"
+            disabled={deleteOnly || props.mode === "edit"}
+            className={`btn ${providerType === "openrouter" ? "btn--primary" : "btn--subtle"}`}
+            style={{ flex: 1, padding: "7px 12px", fontSize: "0.82rem" }}
+            onClick={() => {
+              setProviderType("openrouter");
+              if (!name || name === "Ollama") setName("OpenRouter");
+              if (!url) setUrl("https://openrouter.ai/api/v1");
+            }}
+          >
+            OpenRouter (Cloud API)
+          </button>
+        </div>
+      </div>
+
       <div className="grid-2">
         <div className="form-group">
           <label className="form-label">Name</label>
@@ -148,18 +185,20 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
             className="form-input"
             value={name}
             disabled={deleteOnly}
-            placeholder={props.mode === "create" ? "Defaults to “Ollama”" : undefined}
+            placeholder={props.mode === "create" ? (providerType === "openrouter" ? "Defaults to “OpenRouter”" : "Defaults to “Ollama”") : undefined}
             maxLength={60}
             onChange={(e) => setName(e.target.value)}
           />
         </div>
         <div className="form-group">
-          <label className="form-label">Server URL</label>
+          <label className="form-label">
+            Server URL {providerType === "openrouter" && <span className="form-hint">(default: openrouter.ai/api/v1)</span>}
+          </label>
           <input
             className="form-input"
             value={url}
             disabled={deleteOnly}
-            placeholder="http://localhost:11434"
+            placeholder={providerType === "openrouter" ? "https://openrouter.ai/api/v1" : "http://localhost:11434"}
             onChange={(e) => setUrl(e.target.value)}
             aria-invalid={urlMissing}
           />
@@ -168,7 +207,10 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
 
       <div className="form-group">
         <label className="form-label">
-          Bearer token <span className="form-hint">(optional, for hosted/cloud endpoints)</span>
+          {providerType === "openrouter" ? "OpenRouter API Key" : "Bearer token"}{" "}
+          <span className="form-hint">
+            {providerType === "openrouter" ? "(required, sk-or-v1-...)" : "(optional, for hosted/cloud endpoints)"}
+          </span>
         </label>
         <input
           type="password"
@@ -177,7 +219,11 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
           value={token}
           disabled={deleteOnly || clearToken}
           placeholder={
-            existing?.has_bearer_token ? "•••••••• saved. Type to replace" : "Leave empty if not needed"
+            existing?.has_bearer_token
+              ? "•••••••• saved. Type to replace"
+              : providerType === "openrouter"
+              ? "sk-or-v1-..."
+              : "Leave empty if not needed"
           }
           onChange={(e) => setToken(e.target.value)}
         />

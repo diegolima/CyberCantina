@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 import httpx
@@ -750,3 +751,180 @@ async def test_background_probe_keeps_last_status_visible_to_users(env) -> None:
     assert listed["Down"]["last_probed_at"] and listed["Down"]["last_error_code"] == "connect_refused"
     assert listed["Off"]["last_probed_at"] is None
     assert listed["Up"]["base_url"] is None  # still no connection details for users
+
+
+# ------------------------------------------------------------------ OpenRouter tests
+def test_openrouter_provider_crud_and_validation(env) -> None:
+    client, _repo, admin_h, make_user = env
+    alice_h, _ = make_user("alice")
+    settings.allow_user_providers = True
+
+    # 1. OpenRouter requires an API key
+    res_no_key = client.post(
+        "/api/providers",
+        headers=alice_h,
+        json={"type": "openrouter", "scope": "user", "settings": {}},
+    )
+    assert res_no_key.status_code == 422
+    assert "API key" in res_no_key.text
+
+    # 2. Creating with valid token defaults URL to https://openrouter.ai/api/v1
+    res = client.post(
+        "/api/providers",
+        headers=alice_h,
+        json={"type": "openrouter", "scope": "user", "settings": {"bearer_token": "sk-or-v1-test"}},
+    )
+    assert res.status_code == 201
+    created = res.json()
+    assert created["name"] == "OpenRouter"
+    assert created["type"] == "openrouter"
+    assert created["base_url"] == "https://openrouter.ai/api/v1"
+    assert created["has_bearer_token"] is True
+
+
+async def test_openrouter_probe_validates_key_via_auth_key(env) -> None:
+    from app.providers.probe import probe_service
+
+    client, _repo, admin_h, make_user = env
+    settings.allow_user_providers = True
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        auth = request.headers.get("authorization", "")
+        if request.url.path == "/api/v1/auth/key":
+            if auth == "Bearer sk-valid":
+                return httpx.Response(200, json={"data": {"label": "test-key", "limit": 100}})
+            return httpx.Response(401, json={"error": {"message": "Invalid key"}})
+        if request.url.path == "/api/v1/models":
+            return httpx.Response(
+                200,
+                headers={"cache-control": "public, max-age=120, stale-while-revalidate=3600, stale-if-error=3600"},
+                json={"data": [{"id": "anthropic/claude-3.5-sonnet", "name": "Claude 3.5", "context_length": 200000}]},
+            )
+        return httpx.Response(404)
+
+    probe_service._client = _mock_client(handler)
+
+    # 1. Invalid key -> 401 unauthorized
+    draft_bad = {
+        "type": "openrouter",
+        "base_url": "https://openrouter.ai/api/v1",
+        "bearer_token": "sk-invalid",
+    }
+    probe_bad = client.post("/api/providers/probe-draft", headers=admin_h, json=draft_bad).json()
+    assert probe_bad["reachable"] is False
+    assert probe_bad["error_code"] == "unauthorized"
+
+    # 2. Valid key -> reachable, returns models from OpenRouter catalog
+    draft_ok = {
+        "type": "openrouter",
+        "base_url": "https://openrouter.ai/api/v1",
+        "bearer_token": "sk-valid",
+    }
+    probe_ok = client.post("/api/providers/probe-draft", headers=admin_h, json=draft_ok).json()
+    assert probe_ok["reachable"] is True
+    assert probe_ok["protocol"] == "openai_compat"
+    assert "anthropic/claude-3.5-sonnet" in probe_ok["chat_models"]
+
+
+async def test_openrouter_catalog_service_caching_and_rfc5861() -> None:
+    from app.providers.openrouter_catalog import OpenRouterCatalogService
+
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] > 1 and calls.get("fail_next"):
+            return httpx.Response(500, text="Internal Server Error")
+        return httpx.Response(
+            200,
+            headers={"cache-control": "public, max-age=1, stale-while-revalidate=10, stale-if-error=20"},
+            json={
+                "data": [
+                    {"id": "meta-llama/llama-3.3-70b", "name": "Llama 3.3 70B", "context_length": 128000},
+                    {"id": "openai/text-embedding-3-small", "name": "Embed Small", "architecture": {"modality": "text->embedding"}},
+                ]
+            },
+        )
+
+    cat = OpenRouterCatalogService()
+    mock_http = _mock_client(handler)
+
+    # 1. Initial fetch
+    models = await cat.get_models(client=mock_http)
+    assert len(models) == 2
+    assert calls["count"] == 1
+    assert models[0].name == "meta-llama/llama-3.3-70b" and not models[0].is_embedding
+    assert models[1].name == "openai/text-embedding-3-small" and models[1].is_embedding
+
+    # 2. Immediate second call is fresh cache hit
+    models_cached = await cat.get_models(client=mock_http)
+    assert calls["count"] == 1  # no network call
+
+    # 3. Simulate age within stale-while-revalidate
+    cat._fetched_at = time.monotonic() - 2.0  # past max-age=1, within stale-while-revalidate=10
+    models_swr = await cat.get_models(client=mock_http)
+    assert len(models_swr) == 2  # served immediately
+    # background task triggered
+    await asyncio.sleep(0.05)
+    assert calls["count"] == 2
+
+    # 4. Simulate failure within stale-if-error
+    calls["fail_next"] = True
+    cat._fetched_at = time.monotonic() - 5.0  # past max-age
+    models_sie = await cat.get_models(client=mock_http, force=True)
+    assert len(models_sie) == 2  # served stale cache gracefully on error
+
+
+async def test_openrouter_inference_and_reasoning_controls() -> None:
+    from app.config import ModelProfile
+    from app.engine.llm_client import LLMClient
+    from app.providers.endpoint import ResolvedEndpoint
+
+    recorded_requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        data = json.loads(request.read())
+        recorded_requests.append({
+            "url": str(request.url),
+            "headers": dict(request.headers),
+            "json": data,
+        })
+        # Simulate model that rejects reasoning: {"effort": "none"} with 400
+        if data.get("reasoning", {}).get("effort") == "none":
+            return httpx.Response(400, json={"error": "Reasoning is mandatory for this endpoint and cannot be disabled"})
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "Hello from OpenRouter!"}}]},
+        )
+
+    client = LLMClient()
+    client._client = _mock_client(handler)
+
+    endpoint = ResolvedEndpoint(
+        provider_id="p-or",
+        type="openrouter",
+        root_url="https://openrouter.ai/api/v1",
+        bearer_token="sk-or-key",
+    )
+    profile = ModelProfile(
+        provider_id="p-or",
+        model="deepseek/deepseek-r1",
+        resolved=endpoint,
+    )
+
+    # Call with disable_reasoning=True:
+    # 1st attempt sends reasoning: {"effort": "none"} -> receives 400
+    # 2nd attempt retries with reasoning: {"exclude": True} -> receives 200
+    res = await client.complete_text(
+        [{"role": "user", "content": "hi"}],
+        profile=profile,
+        disable_reasoning=True,
+    )
+    assert res == "Hello from OpenRouter!"
+    assert len(recorded_requests) == 2
+    # Verify OpenRouter attribution headers and endpoint URL
+    assert recorded_requests[0]["url"] == "https://openrouter.ai/api/v1/chat/completions"
+    assert recorded_requests[0]["headers"]["authorization"] == "Bearer sk-or-key"
+    assert recorded_requests[0]["headers"]["x-title"] == "Cybercantina"
+    assert recorded_requests[0]["json"]["reasoning"] == {"effort": "none"}
+    assert recorded_requests[1]["json"]["reasoning"] == {"exclude": True}
