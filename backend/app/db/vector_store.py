@@ -88,8 +88,8 @@ async def embed_text(text: str) -> np.ndarray:
             else:
                 base = profile.base_url.rstrip("/")
                 token = profile.api_key if profile.api_key not in ("", "ollama") else None
-            is_openrouter = endpoint is not None and endpoint.type == "openrouter"
-            if is_openrouter:
+            is_remote_v1 = endpoint is not None and endpoint.type in ("openrouter", "aihorde")
+            if is_remote_v1:
                 v1_url = endpoint.root_url.rstrip("/")
                 root_url = v1_url
             else:
@@ -98,8 +98,8 @@ async def embed_text(text: str) -> np.ndarray:
             native_headers = bearer_headers(token)
             headers = {"Authorization": f"Bearer {token or 'ollama'}"}
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
-                # 1. Try native Ollama /api/embed (skip for openrouter)
-                if not is_openrouter:
+                # 1. Try native Ollama /api/embed (skip for openrouter and aihorde)
+                if not is_remote_v1:
                     ollama_resp = await client.post(
                         f"{root_url}/api/embed",
                         headers=native_headers,

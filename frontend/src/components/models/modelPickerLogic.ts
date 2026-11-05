@@ -89,3 +89,35 @@ export function describeIssue(issue: PickerIssue): string {
       return `Model "${issue.model}" was not found on this provider.`;
   }
 }
+
+/**
+ * Ranks models for AI Horde using Option A capacity scoring:
+ * (workers * 1000) - queued.
+ */
+export function rankHordeModels(models: ProviderModelInfo[]): ProviderModelInfo[] {
+  return [...models].sort((a, b) => {
+    const scoreA = (a.workers ?? 0) * 1000 - (a.queued ?? 0);
+    const scoreB = (b.workers ?? 0) * 1000 - (b.queued ?? 0);
+    return scoreB - scoreA;
+  });
+}
+
+/**
+ * Filter AI Horde suggestions:
+ * If query is empty, return top 5 pre-ranked models.
+ * If query is typed, filter by relaxed substring match and return top 5.
+ */
+export function filterHordeSuggestions(
+  models: ProviderModelInfo[],
+  query: string,
+  limit: number = 5
+): ProviderModelInfo[] {
+  const ranked = rankHordeModels(models);
+  const q = query.trim().toLowerCase();
+  if (!q) {
+    return ranked.slice(0, limit);
+  }
+  return ranked
+    .filter((m) => m.name.toLowerCase().includes(q) || m.family.toLowerCase().includes(q))
+    .slice(0, limit);
+}

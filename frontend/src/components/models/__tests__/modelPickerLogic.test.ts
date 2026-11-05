@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import { LLMProvider, ProviderModelInfo, ProviderProbeResponse } from "../../../types";
 import {
   filterByKind,
+  filterHordeSuggestions,
   modelAfterProviderChange,
   modelsForProvider,
   pickerIssues,
+  rankHordeModels,
   sameModel,
 } from "../modelPickerLogic";
 
@@ -106,5 +108,51 @@ describe("pickerIssues", () => {
     ).toContainEqual({ kind: "provider_unreachable_cached", providerId: "p1" });
     expect(pickerIssues({ providerId: "p1", model: "llama3:8b" }, provider(), models, "live", true)).toEqual([]);
     expect(pickerIssues({ providerId: null, model: "" }, undefined, [], "none", undefined)).toEqual([]);
+  });
+});
+
+describe("AI Horde Option A ranking and suggestions", () => {
+  const hordeModels: ProviderModelInfo[] = [
+    { ...model("koboldcpp/Slow-1w-busy"), workers: 1, queued: 400.0, family: "koboldcpp" },
+    { ...model("koboldcpp/Fast-3w"), workers: 3, queued: 20.0, family: "koboldcpp" },
+    { ...model("koboldcpp/Medium-2w"), workers: 2, queued: 0.0, family: "koboldcpp" },
+    { ...model("custom/Stheno-8B"), workers: 2, queued: 100.0, family: "custom" },
+    { ...model("custom/Gemma-4B"), workers: 1, queued: 0.0, family: "custom" },
+    { ...model("archive/Old-Model"), workers: 0, queued: 0.0, family: "archive" },
+  ];
+
+  it("ranks models by capacity score: (workers * 1000) - queued", () => {
+    const ranked = rankHordeModels(hordeModels);
+    // Fast: 3*1000 - 20 = 2980
+    // Medium: 2*1000 - 0 = 2000
+    // Stheno: 2*1000 - 100 = 1900
+    // Gemma: 1*1000 - 0 = 1000
+    // Slow: 1*1000 - 400 = 600
+    // Old: 0*1000 - 0 = 0
+    expect(ranked.map((m) => m.name)).toEqual([
+      "koboldcpp/Fast-3w",
+      "koboldcpp/Medium-2w",
+      "custom/Stheno-8B",
+      "custom/Gemma-4B",
+      "koboldcpp/Slow-1w-busy",
+      "archive/Old-Model",
+    ]);
+  });
+
+  it("returns top 5 models when query is empty", () => {
+    const suggestions = filterHordeSuggestions(hordeModels, "");
+    expect(suggestions).toHaveLength(5);
+    expect(suggestions[0].name).toBe("koboldcpp/Fast-3w");
+    expect(suggestions[4].name).toBe("koboldcpp/Slow-1w-busy");
+  });
+
+  it("filters with relaxed case-insensitive match on name or family", () => {
+    const stheno = filterHordeSuggestions(hordeModels, "stheno");
+    expect(stheno).toHaveLength(1);
+    expect(stheno[0].name).toBe("custom/Stheno-8B");
+
+    const custom = filterHordeSuggestions(hordeModels, "custom");
+    expect(custom).toHaveLength(2);
+    expect(custom.map((m) => m.name)).toEqual(["custom/Stheno-8B", "custom/Gemma-4B"]);
   });
 });

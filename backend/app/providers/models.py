@@ -45,3 +45,40 @@ def parse_openai_models(payload: dict[str, Any]) -> list[ProviderModelInfo]:
             ProviderModelInfo(name=name, is_embedding=any(k in lowered for k in EMBED_MODEL_KEYWORDS))
         )
     return models
+
+
+def parse_aihorde_models(payload: dict[str, Any]) -> list[ProviderModelInfo]:
+    """Parse an AI Horde OpenAI-compatible ``/v1/models`` payload and sort by Option A capacity score."""
+    models: list[ProviderModelInfo] = []
+    items = payload.get("data", []) or []
+    for item in items:
+        name = item.get("id") or ""
+        if not name:
+            continue
+        family = name.split("/")[0] if "/" in name else ""
+        ctx = item.get("context_length")
+        x_horde = item.get("x_horde") or {}
+        workers = int(x_horde.get("workers") or 0)
+        queued = float(x_horde.get("queued") or 0.0)
+        supported_params = [str(p) for p in (item.get("supported_parameters") or [])]
+
+        ctx_part = f"{ctx // 1000}k ctx" if isinstance(ctx, int) and ctx > 0 else ""
+        worker_part = f"{workers}w" if workers > 0 else "0w"
+        param_size = f"{ctx_part} • {worker_part}".strip(" •")
+
+        models.append(
+            ProviderModelInfo(
+                name=name,
+                size_mb=0,
+                parameter_size=param_size,
+                quantization_level="",
+                family=family,
+                is_embedding=False,
+                workers=workers,
+                queued=queued,
+                supported_parameters=supported_params,
+            )
+        )
+    # Option A: workers descending, queued ascending
+    models.sort(key=lambda m: (m.workers * 1000 - m.queued), reverse=True)
+    return models

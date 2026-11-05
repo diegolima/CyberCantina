@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import httpx
 
 from app.db.provider_store import ProviderStore
-from app.providers.models import parse_ollama_tags, parse_openai_models
+from app.providers.models import parse_aihorde_models, parse_ollama_tags, parse_openai_models
 from app.providers.openrouter_catalog import openrouter_catalog_service
 from app.schemas.provider import (
     ProbeErrorCode,
@@ -111,6 +111,29 @@ async def _probe_once(
                 return _Outcome(False, error_code="unauthorized", error="Invalid OpenRouter API key.")
             if resp.status_code == 403:
                 return _Outcome(False, error_code="forbidden", error="OpenRouter API key forbidden or restricted.")
+            return _Outcome(False, error_code="unknown", error=f"HTTP {resp.status_code}")
+        except Exception as exc:  # noqa: BLE001
+            code, text = _classify_exception(exc)
+            return _Outcome(False, error_code=code, error=text)
+
+    if provider_type == "aihorde":
+        effective_token = (token or "").strip() or "0000000000"
+        horde_headers = bearer_headers(effective_token)
+        models_url = f"{url.root.rstrip('/')}/models"
+        try:
+            resp = await client.get(models_url, headers=horde_headers, timeout=5.0)
+            if resp.status_code == 200:
+                try:
+                    models = parse_aihorde_models(resp.json())
+                    return _Outcome(True, "openai_compat", models)
+                except (ValueError, KeyError):
+                    return _Outcome(False, error_code="bad_payload", error="AI Horde returned a non-JSON model list.")
+            if resp.status_code == 401:
+                return _Outcome(False, error_code="unauthorized", error="Invalid AI Horde API key.")
+            if resp.status_code == 403:
+                return _Outcome(False, error_code="forbidden", error="AI Horde access forbidden.")
+            if resp.status_code == 502:
+                return _Outcome(False, error_code="connect_refused", error="AI Horde gateway unavailable (502).")
             return _Outcome(False, error_code="unknown", error=f"HTTP {resp.status_code}")
         except Exception as exc:  # noqa: BLE001
             code, text = _classify_exception(exc)
@@ -234,7 +257,11 @@ class ProbeService:
         )
         self._cache[(record.id, record.version)] = (time.monotonic(), response)
         # Persist off the event loop (sync sqlite); only the catalog changes cause row writes.
-        persist_models = outcome.models if (outcome.reachable and record.type != "openrouter") else None
+        persist_models = (
+            outcome.models
+            if (outcome.reachable and record.type != "openrouter" and outcome.models is not None and len(outcome.models) > 0)
+            else None
+        )
         await asyncio.to_thread(
             store.record_probe,
             record.id,

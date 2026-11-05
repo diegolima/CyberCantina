@@ -8,6 +8,7 @@ import {
   RoleSelection,
   describeIssue,
   filterByKind,
+  filterHordeSuggestions,
   modelAfterProviderChange,
   modelsForProvider,
   pickerIssues,
@@ -62,8 +63,12 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
   const unreachable = value.providerId ? store.status[value.providerId]?.state === "unreachable" : false;
   const issues = pickerIssues(value, selected, visibleModels, source, unreachable ? false : undefined);
 
+  const isAihorde = selected?.type === "aihorde";
+  const isOpenrouter = selected?.type === "openrouter";
+  const isCombobox = isOpenrouter || isAihorde;
+
   const openrouterSuggestions = useMemo(() => {
-    if (selected?.type !== "openrouter") return [];
+    if (!isOpenrouter) return [];
     const query = (value.model || "").trim().toLowerCase();
     if (query.length < 2) {
       return visibleModels.slice(0, 15);
@@ -71,7 +76,14 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
     return visibleModels
       .filter((m) => m.name.toLowerCase().includes(query) || m.family.toLowerCase().includes(query))
       .slice(0, 15);
-  }, [selected, value.model, visibleModels]);
+  }, [isOpenrouter, value.model, visibleModels]);
+
+  const aihordeSuggestions = useMemo(() => {
+    if (!isAihorde) return [];
+    return filterHordeSuggestions(visibleModels, value.model || "", 5);
+  }, [isAihorde, value.model, visibleModels]);
+
+  const suggestions = isAihorde ? aihordeSuggestions : openrouterSuggestions;
 
   const selectable = (p: LLMProvider) =>
     (!systemOnly || p.scope === "system") && ((p.is_enabled && p.usable) || p.id === value.providerId);
@@ -139,15 +151,24 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
         <div className="form-group">
           <label className="form-label" htmlFor={modelId}>
             Model
+            {isAihorde && value.model && !modelInList && (
+              <span className="badge badge--warning" style={{ fontSize: "0.75rem", marginLeft: "6px" }}>
+                ⚠️ Worker Offline
+              </span>
+            )}
           </label>
-          {selected?.type === "openrouter" ? (
+          {isCombobox ? (
             <div className="model-combobox" ref={comboboxRef}>
               <input
                 id={modelId}
                 className="form-input"
                 value={value.model}
                 disabled={disabled || !value.providerId}
-                placeholder="Type 2+ chars to filter (e.g. anthropic/claude-3.5-sonnet)..."
+                placeholder={
+                  isAihorde
+                    ? "Search active Horde models (e.g. Stheno, L3, Gemma)..."
+                    : "Type 2+ chars to filter (e.g. anthropic/claude-3.5-sonnet)..."
+                }
                 autoComplete="off"
                 onChange={(e) => {
                   onChange({ ...value, model: e.target.value });
@@ -166,20 +187,20 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
                   if (e.key === "ArrowDown") {
                     e.preventDefault();
                     setHighlightIndex((prev) =>
-                      prev + 1 < openrouterSuggestions.length ? prev + 1 : 0
+                      prev + 1 < suggestions.length ? prev + 1 : 0
                     );
                   } else if (e.key === "ArrowUp") {
                     e.preventDefault();
                     setHighlightIndex((prev) =>
-                      prev > 0 ? prev - 1 : openrouterSuggestions.length - 1
+                      prev > 0 ? prev - 1 : suggestions.length - 1
                     );
                   } else if (
                     e.key === "Enter" &&
                     highlightIndex >= 0 &&
-                    highlightIndex < openrouterSuggestions.length
+                    highlightIndex < suggestions.length
                   ) {
                     e.preventDefault();
-                    const chosen = openrouterSuggestions[highlightIndex];
+                    const chosen = suggestions[highlightIndex];
                     onChange({ ...value, model: chosen.name });
                     setComboboxOpen(false);
                   } else if (e.key === "Escape") {
@@ -187,9 +208,9 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
                   }
                 }}
               />
-              {comboboxOpen && openrouterSuggestions.length > 0 && (
+              {comboboxOpen && suggestions.length > 0 && (
                 <ul className="model-suggestions-list" role="listbox">
-                  {openrouterSuggestions.map((m, idx) => (
+                  {suggestions.map((m, idx) => (
                     <li
                       key={m.name}
                       className={`model-suggestion-item ${idx === highlightIndex ? "highlighted" : ""}`}

@@ -39,6 +39,7 @@ class NormalizedUrl:
 
 
 OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+AIHORDE_DEFAULT_BASE_URL = "https://oai.stablehorde.net/v1"
 
 
 def normalize_base_url(raw: str, *, provider_type: str = "ollama") -> NormalizedUrl:
@@ -47,6 +48,8 @@ def normalize_base_url(raw: str, *, provider_type: str = "ollama") -> Normalized
     if not text:
         if provider_type == "openrouter":
             text = OPENROUTER_DEFAULT_BASE_URL
+        elif provider_type == "aihorde":
+            text = AIHORDE_DEFAULT_BASE_URL
         else:
             raise UrlBlockedError("invalid_url", "Server URL is required.")
     parts = urlsplit(text)
@@ -66,6 +69,9 @@ def normalize_base_url(raw: str, *, provider_type: str = "ollama") -> Normalized
     if provider_type == "openrouter":
         if not path:
             path = "/api/v1"
+    elif provider_type == "aihorde":
+        if not path or not path.endswith("/v1"):
+            path = f"{path}/v1" if path else "/v1"
     else:
         for suffix in ("/v1", "/api"):
             if path.endswith(suffix):

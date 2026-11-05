@@ -172,7 +172,12 @@ class ProviderStore:
         conn: sqlite3.Connection | None = None,
     ) -> ProviderRecord:
         if name is None or not name.strip():
-            base_label = "OpenRouter" if type == "openrouter" else type.capitalize()
+            if type == "openrouter":
+                base_label = "OpenRouter"
+            elif type == "aihorde":
+                base_label = "AI Horde"
+            else:
+                base_label = type.capitalize()
             display = self.unique_default_name(base_label, scope=scope, owner_id=owner_id)
         else:
             display = normalize_provider_name(name)

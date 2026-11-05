@@ -127,6 +127,8 @@ async def create_provider(
         if not raw_token:
             raise HTTPException(status_code=422, detail="OpenRouter requires an API key (Bearer token).")
         raw_url = (payload.settings.base_url or "").strip() or "https://openrouter.ai/api/v1"
+    elif payload.type == "aihorde":
+        raw_url = (payload.settings.base_url or "").strip() or "https://oai.stablehorde.net/v1"
     else:
         raw_url = (payload.settings.base_url or "").strip()
 
@@ -288,7 +290,12 @@ async def probe_draft(draft: ProviderDraft, user: UserProfile = Depends(get_curr
     store = _store()
     token = (draft.bearer_token or "").strip() or None
     restricted = not _is_admin(user)
-    draft_url = draft.base_url or ("https://openrouter.ai/api/v1" if draft.type == "openrouter" else "")
+    default_draft_url = (
+        "https://openrouter.ai/api/v1"
+        if draft.type == "openrouter"
+        else ("https://oai.stablehorde.net/v1" if draft.type == "aihorde" else "")
+    )
+    draft_url = draft.base_url or default_draft_url
     try:
         url = normalize_base_url(draft_url, provider_type=draft.type)
     except UrlBlockedError as exc:

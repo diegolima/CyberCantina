@@ -907,7 +907,7 @@ export interface SettingsUpdateResponse extends AppSettings {
   stale_embedding_entries: number;
 }
 
-export type ProviderType = "ollama" | "openrouter";
+export type ProviderType = "ollama" | "openrouter" | "aihorde";
 export type ProviderScope = "system" | "user";
 export type ProviderColor = "neutral" | "cyan" | "purple" | "indigo" | "bronze";
 export type ProbeErrorCode =
@@ -931,6 +931,9 @@ export interface ProviderModelInfo {
   quantization_level: string;
   family: string;
   is_embedding: boolean;
+  workers?: number;
+  queued?: number;
+  supported_parameters?: string[];
 }
 
 export interface LLMProvider {

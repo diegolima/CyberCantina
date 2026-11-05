@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -13,7 +15,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from app.config import ModelProfile, persist_settings, settings
-from app.providers.models import parse_ollama_tags
+from app.providers.models import parse_aihorde_models, parse_ollama_tags
 from app.providers.probe import bearer_headers
 from app.providers.resolver import ProviderUnavailableError, resolve_system_profile
 from app.security.url_policy import UrlBlockedError, assert_url_allowed, normalize_base_url
@@ -26,6 +28,24 @@ _THINK_BLOCK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.D
 _UNCLOSED_THINK_RE = re.compile(r"^.*?<(?:think|thought)>", re.DOTALL | re.I)
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _EMBED_MODEL_KEYWORDS = ("embed", "minilm", "bge-", "nomic-embed", "mxbai-embed", "arctic-embed")
+_AIHORDE_ANON_SEMAPHORE = asyncio.Semaphore(1)
+
+
+async def _get_aihorde_fallback_model(
+    client: httpx.AsyncClient, root_url: str, headers: dict[str, str], exclude_model: str
+) -> str | None:
+    """Fetch active models from AI Horde and return the top-ranked alternative model."""
+    try:
+        models_url = f"{root_url.rstrip('/')}/models"
+        resp = await client.get(models_url, headers=headers, timeout=5.0)
+        if resp.status_code == 200:
+            parsed = parse_aihorde_models(resp.json())
+            for m in parsed:
+                if m.name != exclude_model:
+                    return m.name
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to fetch AI Horde fallback models: %s", exc)
+    return None
 
 
 class OllamaModelInfo(BaseModel):
@@ -81,7 +101,7 @@ class CallTarget:
 
 
 def get_chat_completions_url(target: CallTarget) -> str:
-    if target.provider_type == "openrouter":
+    if target.provider_type in ("openrouter", "aihorde"):
         return f"{target.root_url.rstrip('/')}/chat/completions"
     return f"{get_openai_v1_url(target.root_url)}/chat/completions"
 
@@ -109,6 +129,16 @@ async def build_call_target(profile: ModelProfile, role: str = "model") -> CallT
                 "X-Title": "Cybercantina",
             }
             return CallTarget(endpoint.root_url, {}, oai, provider_type="openrouter")
+
+        if ptype == "aihorde":
+            token = (endpoint.bearer_token or "").strip() or "0000000000"
+            oai = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "http://localhost:5173",
+                "X-Title": "Cybercantina",
+            }
+            return CallTarget(endpoint.root_url, {}, oai, provider_type="aihorde")
 
         native = bearer_headers(endpoint.bearer_token)
         oai = {"Authorization": f"Bearer {endpoint.bearer_token or 'ollama'}", "Content-Type": "application/json"}
@@ -310,7 +340,7 @@ class LLMClient:
         client = await self.get_http_client(timeout=active_profile.timeout_seconds)
 
         # 1. Try native Ollama /api/chat first (only for Ollama providers)
-        if target.provider_type != "openrouter":
+        if target.provider_type not in ("openrouter", "aihorde"):
             ollama_root = target.root_url
             ollama_chat_url = f"{ollama_root}/api/chat"
             ollama_payload: dict[str, Any] = {
@@ -379,9 +409,11 @@ class LLMClient:
             except httpx.HTTPError:
                 pass
 
-        # 2. OpenAI-compatible / OpenRouter /chat/completions endpoint
+        # 2. OpenAI-compatible / OpenRouter / AI Horde /chat/completions endpoint
         v1_url = get_chat_completions_url(target)
         headers = target.openai_headers
+        if target.provider_type == "aihorde":
+            max_tok = max(max_tok, 16)
         oai_payload: dict[str, Any] = {
             "model": active_profile.model,
             "messages": messages,
@@ -393,22 +425,50 @@ class LLMClient:
             oai_payload["response_format"] = {"type": "json_object"}
         if target.provider_type == "openrouter" and disable_reasoning:
             oai_payload["reasoning"] = {"effort": "none"}
+        elif target.provider_type == "aihorde" and disable_reasoning:
+            oai_payload["reasoning_effort"] = "none"
 
-        resp = await client.post(v1_url, headers=headers, json=oai_payload, timeout=active_profile.timeout_seconds)
-        if resp.status_code == 400 and target.provider_type == "openrouter" and disable_reasoning and "reasoning" in resp.text.lower():
-            # If the model enforces reasoning (e.g. DeepSeek R1), retry with exclude: True to omit CoT
-            retry_oai = dict(oai_payload)
-            retry_oai["reasoning"] = {"exclude": True}
-            resp = await client.post(v1_url, headers=headers, json=retry_oai, timeout=active_profile.timeout_seconds)
-            if resp.status_code == 400 and "reasoning" in resp.text.lower():
-                retry_oai.pop("reasoning", None)
+        is_horde_anon = target.provider_type == "aihorde" and "0000000000" in headers.get("Authorization", "")
+        sem = _AIHORDE_ANON_SEMAPHORE if is_horde_anon else contextlib.nullcontext()
+
+        async with sem:
+            resp = await client.post(v1_url, headers=headers, json=oai_payload, timeout=active_profile.timeout_seconds)
+            if resp.status_code == 400 and target.provider_type == "openrouter" and disable_reasoning and "reasoning" in resp.text.lower():
+                # If the model enforces reasoning (e.g. DeepSeek R1), retry with exclude: True to omit CoT
+                retry_oai = dict(oai_payload)
+                retry_oai["reasoning"] = {"exclude": True}
+                resp = await client.post(v1_url, headers=headers, json=retry_oai, timeout=active_profile.timeout_seconds)
+                if resp.status_code == 400 and "reasoning" in resp.text.lower():
+                    retry_oai.pop("reasoning", None)
+                    resp = await client.post(v1_url, headers=headers, json=retry_oai, timeout=active_profile.timeout_seconds)
+            elif resp.status_code == 400 and target.provider_type == "aihorde" and "reasoning_effort" in oai_payload:
+                retry_oai = dict(oai_payload)
+                retry_oai.pop("reasoning_effort", None)
                 resp = await client.post(v1_url, headers=headers, json=retry_oai, timeout=active_profile.timeout_seconds)
 
-        if resp.status_code == 404 and "model" in resp.text.lower():
-            raise RuntimeError(
-                f"Model '{active_profile.model}' not found at {v1_url}: {resp.text}"
-            )
-        resp.raise_for_status()
+            if target.provider_type == "aihorde" and resp.status_code in (404, 403) and ("unknownchatmodel" in resp.text.lower() or "noeligibleworker" in resp.text.lower() or "model" in resp.text.lower()):
+                fallback = await _get_aihorde_fallback_model(client, target.root_url, headers, active_profile.model)
+                if fallback:
+                    logger.warning("AI Horde model '%s' offline; attempting fallback to '%s'", active_profile.model, fallback)
+                    fallback_payload = dict(oai_payload)
+                    fallback_payload["model"] = fallback
+                    fallback_resp = await client.post(v1_url, headers=headers, json=fallback_payload, timeout=active_profile.timeout_seconds)
+                    if fallback_resp.status_code == 200:
+                        resp = fallback_resp
+                    else:
+                        raise RuntimeError(
+                            f"AI Horde model '{active_profile.model}' is offline, and automatic fallback to '{fallback}' failed (HTTP {fallback_resp.status_code}: {fallback_resp.text}). Please choose an active model in Settings."
+                        )
+                else:
+                    raise RuntimeError(
+                        f"AI Horde model '{active_profile.model}' is currently offline on the network (no workers available). Please choose an active model in Settings."
+                    )
+
+            if resp.status_code == 404 and "model" in resp.text.lower():
+                raise RuntimeError(
+                    f"Model '{active_profile.model}' not found at {v1_url}: {resp.text}"
+                )
+            resp.raise_for_status()
         data = resp.json()
         choice_msg = data["choices"][0]["message"]
         return (
@@ -483,7 +543,7 @@ class LLMClient:
         client = await self.get_http_client(timeout=active_profile.timeout_seconds)
 
         # 1. Prefer native Ollama streaming on /api/chat (only for Ollama providers)
-        if target.provider_type != "openrouter":
+        if target.provider_type not in ("openrouter", "aihorde"):
             ollama_root = target.root_url
             ollama_chat_url = f"{ollama_root}/api/chat"
             ollama_payload: dict[str, Any] = {
@@ -546,57 +606,84 @@ class LLMClient:
             except httpx.HTTPError:
                 pass
 
-        # 2. Direct OpenAI-compatible / OpenRouter SSE streaming (/chat/completions)
+        # 2. Direct OpenAI-compatible / OpenRouter / AI Horde SSE streaming (/chat/completions)
         v1_url = get_chat_completions_url(target)
         headers = target.openai_headers
+        stream_tokens = active_profile.max_tokens
+        if target.provider_type == "aihorde":
+            stream_tokens = max(stream_tokens, 16)
         oai_payload: dict[str, Any] = {
             "model": active_profile.model,
             "messages": messages,
             "temperature": active_profile.temperature,
-            "max_tokens": active_profile.max_tokens,
+            "max_tokens": stream_tokens,
             "stream": True,
         }
         if target.provider_type == "openrouter" and disable_reasoning:
             oai_payload["reasoning"] = {"effort": "none"}
+        elif target.provider_type == "aihorde" and disable_reasoning:
+            oai_payload["reasoning_effort"] = "none"
 
-        active_payload = dict(oai_payload)
-        for attempt in range(3):
-            try:
-                stream_ok = False
-                async with client.stream("POST", v1_url, headers=headers, json=active_payload, timeout=active_profile.timeout_seconds) as resp:
-                    if resp.status_code == 400 and target.provider_type == "openrouter" and "reasoning" in active_payload:
-                        err_bytes = await resp.aread()
-                        err_text = err_bytes.decode("utf-8", errors="ignore").lower()
-                        if "reasoning" in err_text:
-                            if attempt == 0:
-                                active_payload["reasoning"] = {"exclude": True}
+        is_horde_anon = target.provider_type == "aihorde" and "0000000000" in headers.get("Authorization", "")
+        sem = _AIHORDE_ANON_SEMAPHORE if is_horde_anon else contextlib.nullcontext()
+
+        async with sem:
+            active_payload = dict(oai_payload)
+            for attempt in range(3):
+                try:
+                    stream_ok = False
+                    async with client.stream("POST", v1_url, headers=headers, json=active_payload, timeout=active_profile.timeout_seconds) as resp:
+                        if resp.status_code == 400:
+                            err_bytes = await resp.aread()
+                            err_text = err_bytes.decode("utf-8", errors="ignore").lower()
+                            if target.provider_type == "openrouter" and "reasoning" in active_payload:
+                                if "reasoning" in err_text:
+                                    if attempt == 0:
+                                        active_payload["reasoning"] = {"exclude": True}
+                                        continue
+                                    elif attempt == 1:
+                                        active_payload.pop("reasoning", None)
+                                        continue
+                            elif target.provider_type == "aihorde" and "reasoning_effort" in active_payload:
+                                active_payload.pop("reasoning_effort", None)
                                 continue
-                            elif attempt == 1:
-                                active_payload.pop("reasoning", None)
+
+                        if target.provider_type == "aihorde" and resp.status_code in (404, 403):
+                            err_bytes = await resp.aread()
+                            err_text = err_bytes.decode("utf-8", errors="ignore").lower()
+                            if "unknownchatmodel" in err_text or "noeligibleworker" in err_text or "model" in err_text:
+                                fallback = await _get_aihorde_fallback_model(client, target.root_url, headers, active_payload["model"])
+                                if fallback and fallback != active_payload["model"]:
+                                    logger.warning("AI Horde streaming model '%s' offline; attempting fallback to '%s'", active_payload["model"], fallback)
+                                    active_payload["model"] = fallback
+                                    continue
+                                raise RuntimeError(
+                                    f"AI Horde model '{active_profile.model}' is currently offline on the network (no workers available). Please choose an active model in Settings."
+                                )
+
+                        resp.raise_for_status()
+                        stream_ok = True
+                        async for line in resp.aiter_lines():
+                            if not line or not line.startswith("data:"):
                                 continue
-                    resp.raise_for_status()
-                    stream_ok = True
-                    async for line in resp.aiter_lines():
-                        if not line or not line.startswith("data:"):
-                            continue
-                        data_str = line[len("data:") :].strip()
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(data_str)
-                            choices = chunk.get("choices", [])
-                            if choices:
-                                delta = choices[0].get("delta", {})
-                                content = delta.get("content")
-                                if content:
-                                    yield content
-                        except json.JSONDecodeError:
-                            continue
-                if stream_ok:
-                    break
-            except Exception:
-                if attempt == 2 or target.provider_type != "openrouter":
-                    raise
+                            data_str = line[len("data:") :].strip()
+                            if data_str == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data_str)
+                                choices = chunk.get("choices", [])
+                                if choices:
+                                    delta = choices[0].get("delta", {})
+                                    content = delta.get("content")
+                                    if content:
+                                        yield content
+                            except json.JSONDecodeError:
+                                continue
+                    if stream_ok:
+                        break
+                except Exception:
+                    if attempt == 2 or target.provider_type not in ("openrouter", "aihorde"):
+                        raise
 
 
 llm_client = LLMClient()

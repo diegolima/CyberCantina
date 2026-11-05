@@ -65,7 +65,13 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
     setTesting(true);
     setTestResult(null);
     try {
-      const effectiveUrl = url.trim() || (providerType === "openrouter" ? "https://openrouter.ai/api/v1" : "");
+      const defaultUrl =
+        providerType === "openrouter"
+          ? "https://openrouter.ai/api/v1"
+          : providerType === "aihorde"
+          ? "https://oai.stablehorde.net/v1"
+          : "";
+      const effectiveUrl = url.trim() || defaultUrl;
       const result = await api.probeProviderDraft({
         provider_id: existing?.id ?? null,
         type: providerType,
@@ -85,7 +91,13 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
     setError(null);
     setConflict(false);
     try {
-      const effectiveUrl = url.trim() || (providerType === "openrouter" ? "https://openrouter.ai/api/v1" : "");
+      const defaultUrl =
+        providerType === "openrouter"
+          ? "https://openrouter.ai/api/v1"
+          : providerType === "aihorde"
+          ? "https://oai.stablehorde.net/v1"
+          : "";
+      const effectiveUrl = url.trim() || defaultUrl;
       if (props.mode === "create") {
         await store.create({
           name: name.trim() || null,
@@ -156,8 +168,8 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
             style={{ flex: 1, padding: "7px 12px", fontSize: "0.82rem" }}
             onClick={() => {
               setProviderType("ollama");
-              if (!name || name === "OpenRouter") setName("");
-              if (url === "https://openrouter.ai/api/v1") setUrl("");
+              if (!name || name === "OpenRouter" || name === "AI Horde") setName("");
+              if (url === "https://openrouter.ai/api/v1" || url === "https://oai.stablehorde.net/v1") setUrl("");
             }}
           >
             Ollama (Local / Self-hosted)
@@ -169,11 +181,24 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
             style={{ flex: 1, padding: "7px 12px", fontSize: "0.82rem" }}
             onClick={() => {
               setProviderType("openrouter");
-              if (!name || name === "Ollama") setName("OpenRouter");
-              if (!url) setUrl("https://openrouter.ai/api/v1");
+              if (!name || name === "Ollama" || name === "AI Horde") setName("OpenRouter");
+              if (!url || url === "https://oai.stablehorde.net/v1") setUrl("https://openrouter.ai/api/v1");
             }}
           >
             OpenRouter (Cloud API)
+          </button>
+          <button
+            type="button"
+            disabled={deleteOnly || props.mode === "edit"}
+            className={`btn ${providerType === "aihorde" ? "btn--primary" : "btn--subtle"}`}
+            style={{ flex: 1, padding: "7px 12px", fontSize: "0.82rem" }}
+            onClick={() => {
+              setProviderType("aihorde");
+              if (!name || name === "Ollama" || name === "OpenRouter") setName("AI Horde");
+              if (!url || url === "https://openrouter.ai/api/v1") setUrl("https://oai.stablehorde.net/v1");
+            }}
+          >
+            AI Horde (Crowdsourced)
           </button>
         </div>
       </div>
@@ -185,20 +210,39 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
             className="form-input"
             value={name}
             disabled={deleteOnly}
-            placeholder={props.mode === "create" ? (providerType === "openrouter" ? "Defaults to “OpenRouter”" : "Defaults to “Ollama”") : undefined}
+            placeholder={
+              props.mode === "create"
+                ? providerType === "openrouter"
+                  ? "Defaults to “OpenRouter”"
+                  : providerType === "aihorde"
+                  ? "Defaults to “AI Horde”"
+                  : "Defaults to “Ollama”"
+                : undefined
+            }
             maxLength={60}
             onChange={(e) => setName(e.target.value)}
           />
         </div>
         <div className="form-group">
           <label className="form-label">
-            Server URL {providerType === "openrouter" && <span className="form-hint">(default: openrouter.ai/api/v1)</span>}
+            Server URL{" "}
+            {providerType === "openrouter" ? (
+              <span className="form-hint">(default: openrouter.ai/api/v1)</span>
+            ) : providerType === "aihorde" ? (
+              <span className="form-hint">(default: oai.stablehorde.net/v1)</span>
+            ) : null}
           </label>
           <input
             className="form-input"
             value={url}
-            disabled={deleteOnly}
-            placeholder={providerType === "openrouter" ? "https://openrouter.ai/api/v1" : "http://localhost:11434"}
+            disabled={deleteOnly || providerType === "aihorde"}
+            placeholder={
+              providerType === "openrouter"
+                ? "https://openrouter.ai/api/v1"
+                : providerType === "aihorde"
+                ? "https://oai.stablehorde.net/v1"
+                : "http://localhost:11434"
+            }
             onChange={(e) => setUrl(e.target.value)}
             aria-invalid={urlMissing}
           />
@@ -207,9 +251,17 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
 
       <div className="form-group">
         <label className="form-label">
-          {providerType === "openrouter" ? "OpenRouter API Key" : "Bearer token"}{" "}
+          {providerType === "openrouter"
+            ? "OpenRouter API Key"
+            : providerType === "aihorde"
+            ? "AI Horde API Key"
+            : "Bearer token"}{" "}
           <span className="form-hint">
-            {providerType === "openrouter" ? "(required, sk-or-v1-...)" : "(optional, for hosted/cloud endpoints)"}
+            {providerType === "openrouter"
+              ? "(required, sk-or-v1-...)"
+              : providerType === "aihorde"
+              ? "(optional, defaults to anonymous 0000000000)"
+              : "(optional, for hosted/cloud endpoints)"}
           </span>
         </label>
         <input
@@ -223,6 +275,8 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
               ? "•••••••• saved. Type to replace"
               : providerType === "openrouter"
               ? "sk-or-v1-..."
+              : providerType === "aihorde"
+              ? "Leave blank to use anonymous key (0000000000)"
               : "Leave empty if not needed"
           }
           onChange={(e) => setToken(e.target.value)}
