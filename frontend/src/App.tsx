@@ -250,6 +250,9 @@ export const App: React.FC = () => {
 
   const [showCharWizard, setShowCharWizard] = useState(false);
   const [showWorldWizard, setShowWorldWizard] = useState(false);
+  const [wizardInitialDraft, setWizardInitialDraft] = useState<any>(null);
+  const [wizardInitialWorldDraft, setWizardInitialWorldDraft] = useState<any>(null);
+  const [wizardInitialPreassignedId, setWizardInitialPreassignedId] = useState<string | null>(null);
 
   // User Notes (Player Scratchpad) State
   const [notes, setNotes] = useState<UserNote[]>([]);
@@ -1830,6 +1833,24 @@ export const App: React.FC = () => {
           onDeleteCharacter={(char) => handleRequestDeleteCharacter(undefined, char)}
           onDeleteWorld={(w) => handleRequestDeleteWorld(undefined, w)}
           onDeletePersona={(p) => handleRequestDeletePersona(undefined, p)}
+          onRefreshData={async () => {
+            const [c, w, p, camp] = await Promise.all([
+              api.listCharacters(),
+              api.listWorlds(),
+              api.listPersonas(),
+              api.listCampaigns(),
+            ]);
+            setCharacters(c);
+            setWorlds(w);
+            setPersonas(p);
+            setCampaigns(camp);
+          }}
+          onOpenCharacterWizardWithDraft={(draft, autoWorld, preassignedId) => {
+            setWizardInitialDraft(draft);
+            setWizardInitialWorldDraft(autoWorld);
+            setWizardInitialPreassignedId(preassignedId || null);
+            setShowCharWizard(true);
+          }}
         />
       )}
 
@@ -2054,9 +2075,20 @@ export const App: React.FC = () => {
             worlds[0]?.id ??
             ""
           }
-          onClose={() => setShowCharWizard(false)}
+          initialDraft={wizardInitialDraft}
+          initialPreassignedId={wizardInitialPreassignedId}
+          initialWorldDraft={wizardInitialWorldDraft}
+          onClose={() => {
+            setShowCharWizard(false);
+            setWizardInitialDraft(null);
+            setWizardInitialWorldDraft(null);
+            setWizardInitialPreassignedId(null);
+          }}
           onCreated={async (createdChar, launchWorldId) => {
             setShowCharWizard(false);
+            setWizardInitialDraft(null);
+            setWizardInitialWorldDraft(null);
+            setWizardInitialPreassignedId(null);
             const [cList, wList] = await Promise.all([
               api.listCharacters(),
               api.listWorlds(),

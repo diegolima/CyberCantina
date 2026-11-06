@@ -3453,7 +3453,7 @@ body {
 .home-deck-area {
   flex: 1;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   justify-content: center;
   width: 100%;
   min-height: min-content;
@@ -3464,6 +3464,33 @@ body {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 18px;
   width: 100%;
+}
+
+.home-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+  align-self: flex-start;
+}
+
+.home-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  font-size: 0.88rem;
+  font-weight: 500;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  transition: all 0.15s ease;
+}
+
+.home-action-btn:hover {
+  border-color: var(--border-color);
+  background: rgba(255, 255, 255, 0.04);
+  transform: translateY(-1px);
 }
 
 @media (max-width: 1120px) {
@@ -4074,5 +4101,58 @@ body {
   color: #f43f5e;
   background: rgba(244, 63, 94, 0.15);
 }
+
+/* Export Modal Search Filter */
+.export-category-search-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  max-width: 220px;
+}
+
+.export-category-search-input {
+  width: 100%;
+  height: 26px;
+  padding: 3px 24px 3px 26px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.export-category-search-input:focus {
+  border-color: var(--accent-cyan);
+  outline: none;
+  background: var(--bg-card);
+}
+
+.export-category-search-icon {
+  position: absolute;
+  left: 7px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.export-category-search-clear {
+  position: absolute;
+  right: 5px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+}
+
+.export-category-search-clear:hover {
+  color: var(--text-primary);
+}
+
 
 

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Sparkles, Globe, UserPlus, X, Check, Plus, Trash2, Upload } from "lucide-react";
+import { Sparkles, Globe, UserPlus, X, Check, Plus, Trash2 } from "lucide-react";
 import { api } from "../api";
 import {
   CharacterRecord,
@@ -14,11 +14,14 @@ import {
   worldStateToDraft,
 } from "./EntityEditorModals";
 
-interface CharacterWizardModalProps {
+export interface CharacterWizardModalProps {
   worlds: WorldRecord[];
   defaultWorldId: string;
   onClose: () => void;
   onCreated: (char: CharacterRecord, launchWorldId: string) => void;
+  initialDraft?: CharacterWizardDraft | null;
+  initialPreassignedId?: string | null;
+  initialWorldDraft?: WorldWizardDraft | null;
 }
 
 export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
@@ -26,8 +29,10 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
   defaultWorldId,
   onClose,
   onCreated,
+  initialDraft = null,
+  initialPreassignedId = null,
+  initialWorldDraft = null,
 }) => {
-  const [tab, setTab] = useState<"seed" | "import">("seed");
   const [name, setName] = useState("Soren Kael");
   const [archetype, setArchetype] = useState(
     "Rogue corporate courier with an encrypted memory vault"
@@ -41,14 +46,10 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
   );
   const [worldId, setWorldId] = useState(defaultWorldId);
 
-  // SillyTavern Import State
-  const [importFile, setImportFile] = useState<File | null>(null);
-  const [autoGenWorld, setAutoGenWorld] = useState(true);
-  const [preassignedCharId, setPreassignedCharId] = useState<string | null>(null);
-  const [importedWorldDraft, setImportedWorldDraft] = useState<WorldWizardDraft | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
+  const [preassignedCharId, setPreassignedCharId] = useState<string | null>(initialPreassignedId);
+  const [importedWorldDraft, setImportedWorldDraft] = useState<WorldWizardDraft | null>(initialWorldDraft);
 
-  const [draft, setDraft] = useState<CharacterWizardDraft | null>(null);
+  const [draft, setDraft] = useState<CharacterWizardDraft | null>(initialDraft);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -71,30 +72,6 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
       setDraft(res);
       setPreassignedCharId(null);
       setImportedWorldDraft(null);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleImportCard = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!importFile) {
-      setError("Please select or drop a SillyTavern .png or .json character card.");
-      return;
-    }
-    setLoading(true);
-    setError("");
-    try {
-      const res = await api.importSillyTavernCard(
-        importFile,
-        autoGenWorld,
-        worldId || null
-      );
-      setDraft(res.draft);
-      setPreassignedCharId(res.preassigned_character_id);
-      setImportedWorldDraft(res.auto_generated_world ?? null);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -150,37 +127,7 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
           )}
 
           {!draft ? (
-            <>
-              {/* Mode Selection Tabs */}
-              <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-                <button
-                  type="button"
-                  className={`btn ${tab === "seed" ? "btn-amber" : ""}`}
-                  style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
-                  onClick={() => {
-                    setTab("seed");
-                    setError("");
-                  }}
-                >
-                  <Sparkles size={14} />
-                  Create from Concept Seed
-                </button>
-                <button
-                  type="button"
-                  className={`btn ${tab === "import" ? "btn-amber" : ""}`}
-                  style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
-                  onClick={() => {
-                    setTab("import");
-                    setError("");
-                  }}
-                >
-                  <Upload size={14} />
-                  Import SillyTavern Card (.png / .json)
-                </button>
-              </div>
-
-              {tab === "seed" ? (
-                <form onSubmit={handleGenerateDraft} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <form onSubmit={handleGenerateDraft} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   <div className="field-group">
                     <label>Target World Setting</label>
                     <select
@@ -244,139 +191,24 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
                     />
                   </div>
 
-                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 6 }}>
-                    <button type="button" className="btn" onClick={onClose}>
-                      Cancel
-                    </button>
-                    <button type="submit" className="btn btn-amber" disabled={loading}>
-                      <Sparkles size={15} />
-                      {loading ? "AI Expanding Character..." : "Expand & Optimize with AI"}
-                    </button>
-                  </div>
-                </form>
-              ) : (
-                <form onSubmit={handleImportCard} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                  {/* Dropzone */}
-                  <div
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      setIsDragging(true);
-                    }}
-                    onDragLeave={() => setIsDragging(false)}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      setIsDragging(false);
-                      const file = e.dataTransfer.files?.[0];
-                      if (file) {
-                        setImportFile(file);
-                        setError("");
-                      }
-                    }}
-                    style={{
-                      border: isDragging ? "2px dashed var(--accent-amber)" : "2px dashed var(--border-subtle)",
-                      borderRadius: 8,
-                      padding: "24px 16px",
-                      textAlign: "center",
-                      background: isDragging ? "rgba(245, 158, 11, 0.05)" : "var(--bg-card)",
-                      cursor: "pointer",
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      gap: 8,
-                      transition: "border-color 0.15s, background-color 0.15s",
-                    }}
-                    onClick={() => {
-                      const input = document.getElementById("st-card-file-input");
-                      input?.click();
-                    }}
-                  >
-                    <input
-                      id="st-card-file-input"
-                      type="file"
-                      accept=".png,.json,image/png,application/json"
-                      style={{ display: "none" }}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          setImportFile(file);
-                          setError("");
-                        }
-                      }}
-                    />
-                    <Upload size={28} style={{ color: "var(--accent-amber)" }} />
-                    <div style={{ fontWeight: 500, fontSize: "0.9rem" }}>
-                      {importFile ? (
-                        <span style={{ color: "var(--accent-cyan)" }}>
-                          Selected: {importFile.name} ({(importFile.size / 1024).toFixed(1)} KB)
-                        </span>
-                      ) : (
-                        "Drop SillyTavern Card (.png or .json) here, or click to browse"
-                      )}
-                    </div>
-                    <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                      Supports Card Spec V2 & V1. PNGs with embedded chunks extract portraits and gallery artwork automatically.
-                    </div>
-                  </div>
+              <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: 4 }}>
+                Looking to import an existing character card (.png / .json) or .zcc archive? Use <strong>Import</strong> on the Home Screen.
+              </div>
 
-                  {/* World Option Selection */}
-                  <div
-                    style={{
-                      background: "var(--bg-card)",
-                      border: "1px solid var(--border-subtle)",
-                      borderRadius: 8,
-                      padding: 12,
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 10,
-                    }}
-                  >
-                    <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: "0.85rem", fontWeight: 500 }}>
-                      <input
-                        type="checkbox"
-                        checked={autoGenWorld}
-                        onChange={(e) => setAutoGenWorld(e.target.checked)}
-                      />
-                      <span>Auto-generate matching world from card setting (Recommended)</span>
-                    </label>
-                    <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", marginLeft: 24 }}>
-                      Synthesizes a 5-room spatial setting with compass edges and lore matching the character's scenario and greeting.
-                    </div>
-
-                    {!autoGenWorld && (
-                      <div className="field-group" style={{ marginTop: 4 }}>
-                        <label>Target World Setting</label>
-                        <select
-                          className="field-select"
-                          value={worldId}
-                          onChange={(e) => setWorldId(e.target.value)}
-                        >
-                          <option value="">Standalone (No specific world)</option>
-                          {worlds.map((w) => (
-                            <option key={w.id} value={w.id}>
-                              {w.name} ({w.global_rules.genre})
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-                  </div>
-
-                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 6 }}>
-                    <button type="button" className="btn" onClick={onClose}>
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      className="btn btn-amber"
-                      disabled={loading || !importFile}
-                    >
-                      <Sparkles size={15} />
-                      {loading ? "Importing & Distilling Character..." : "Import & Distill with AI"}
-                    </button>
-                  </div>
-                </form>
-              )}
-            </>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 6 }}>
+                <button type="button" className="btn" onClick={onClose}>
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-amber"
+                  disabled={loading}
+                >
+                  <Sparkles size={15} />
+                  {loading ? "AI Expanding Character..." : "Expand & Optimize with AI"}
+                </button>
+              </div>
+            </form>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {/* Media Preview Banner if Portrait Present */}

@@ -1,12 +1,15 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Computer,
+  Download,
+  FileArchive,
   Flame,
   FolderKanban,
   Globe,
   LogOut,
   Plus,
   StickyNote,
+  Upload,
   User,
   UserCheck,
   UserCog,
@@ -24,6 +27,8 @@ import {
   getCategoryPrimaryImages,
 } from "../utils/entityImages";
 import { HomeEntityPickerModal } from "./HomeEntityPickerModal";
+import { ExportBundleModal } from "./ExportBundleModal";
+import { ImportPreviewModal } from "./ImportPreviewModal";
 
 export interface HomeScreenProps {
   personas: PersonaRecord[];
@@ -51,6 +56,8 @@ export interface HomeScreenProps {
   onDeleteCharacter?: (character: CharacterRecord) => void;
   onDeleteWorld?: (world: WorldRecord) => void;
   onDeletePersona?: (persona: PersonaRecord) => void;
+  onRefreshData?: () => void;
+  onOpenCharacterWizardWithDraft?: (draft: any, autoWorld?: any, preassignedId?: string) => void;
 }
 
 interface HomeCardProps {
@@ -197,8 +204,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onDeleteCharacter,
   onDeleteWorld,
   onDeletePersona,
+  onRefreshData,
+  onOpenCharacterWizardWithDraft,
 }) => {
   const [activePickerCategory, setActivePickerCategory] = useState<EntityCategory | null>(null);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [droppedFile, setDroppedFile] = useState<File | null>(null);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
 
   // Extract primary images (at most 1 per entity) for each category
   const personaImages = useMemo(() => getCategoryPrimaryImages("personas", personas), [personas]);
@@ -228,7 +241,26 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   };
 
   return (
-    <main className="home-screen">
+    <main
+      className="home-screen"
+      onDragOver={(e) => {
+        e.preventDefault();
+        setIsDraggingOver(true);
+      }}
+      onDragLeave={(e) => {
+        e.preventDefault();
+        setIsDraggingOver(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setIsDraggingOver(false);
+        const f = e.dataTransfer.files?.[0];
+        if (f) {
+          setDroppedFile(f);
+          setShowImportModal(true);
+        }
+      }}
+    >
       {/* Top Hub Navigation Bar */}
       <header className="home-navbar">
         <div className="home-nav-brand">
@@ -380,9 +412,85 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 onNewClick={onNewCampaign}
               />
             </div>
+
+            {/* Import & Export Action Row */}
+            <div className="home-actions-row">
+              <button
+                type="button"
+                className="btn home-action-btn"
+                onClick={() => {
+                  setDroppedFile(null);
+                  setShowImportModal(true);
+                }}
+                title="Import CyberCantina packages (.zcc) or SillyTavern character cards"
+              >
+                <Download size={15} color="var(--accent-emerald)" />
+                <span>Import</span>
+              </button>
+
+              <button
+                type="button"
+                className="btn home-action-btn"
+                onClick={() => setShowExportModal(true)}
+                title="Export bundle of characters, worlds, and personas as .zcc"
+              >
+                <Upload size={15} color="var(--accent-cyan)" />
+                <span>Export</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Drag & Drop Full Window Overlay */}
+      {isDraggingOver && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(10, 15, 29, 0.88)",
+            backdropFilter: "blur(4px)",
+            border: "3px dashed var(--accent-cyan)",
+            zIndex: 9999,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 16,
+            pointerEvents: "none",
+          }}
+        >
+          <FileArchive size={64} color="var(--accent-cyan)" />
+          <div style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--text-primary)" }}>
+            Drop package (.zcc / .zip) or character card (.png / .json) to import
+          </div>
+        </div>
+      )}
+
+      {/* Export Bundle Modal */}
+      {showExportModal && (
+        <ExportBundleModal
+          characters={characters}
+          worlds={worlds}
+          personas={personas}
+          onClose={() => setShowExportModal(false)}
+        />
+      )}
+
+      {/* Import Preview Modal */}
+      {showImportModal && (
+        <ImportPreviewModal
+          initialFile={droppedFile}
+          onClose={() => {
+            setShowImportModal(false);
+            setDroppedFile(null);
+          }}
+          onImportSuccess={() => {
+            onRefreshData?.();
+          }}
+          onOpenCharacterWizardWithDraft={onOpenCharacterWizardWithDraft}
+        />
+      )}
 
       {/* Entity Picker Selection Modal */}
       {activePickerCategory && (

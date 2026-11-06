@@ -290,7 +290,20 @@ export const CharacterInspectorModal: React.FC<
 
   const [isDirty, setIsDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [exportingChar, setExportingChar] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const handleExportCharacter = async () => {
+    setExportingChar(true);
+    try {
+      const includeWorld = character.world_id ? window.confirm("Include associated world in this export package?") : false;
+      await api.exportCharacter(character.id, includeWorld);
+    } catch (err: any) {
+      setError(err?.message || String(err));
+    } finally {
+      setExportingChar(false);
+    }
+  };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -2214,6 +2227,17 @@ export const CharacterInspectorModal: React.FC<
               : "Click any field above to edit."}
           </div>
           <div style={{ display: "flex", gap: 10 }}>
+            <button
+              type="button"
+              className="btn"
+              disabled={exportingChar}
+              onClick={handleExportCharacter}
+              title="Export this character as a .zcc package"
+              style={{ display: "flex", alignItems: "center", gap: 6 }}
+            >
+              <Upload size={14} color="var(--accent-cyan)" />
+              {exportingChar ? "Exporting..." : "Export (.zcc)"}
+            </button>
             <button type="button" className="btn" onClick={onClose}>
               {isDirty ? "Cancel" : "Close"}
             </button>
@@ -2619,7 +2643,20 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
 
   const [isDirty, setIsDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [exportingWorld, setExportingWorld] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const handleExportWorld = async () => {
+    setExportingWorld(true);
+    try {
+      const includeChars = window.confirm("Include resident characters belonging to this world in the export package?");
+      await api.exportWorld(world.id, includeChars);
+    } catch (err: any) {
+      setError(err?.message || String(err));
+    } finally {
+      setExportingWorld(false);
+    }
+  };
 
   // Re-imagine Map Modal state
   const [showReimagineModal, setShowReimagineModal] = useState(false);
@@ -3513,6 +3550,17 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                   : "Click any field above to edit."}
               </div>
               <div style={{ display: "flex", gap: 10 }}>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={exportingWorld}
+                  onClick={handleExportWorld}
+                  title="Export this world as a .zcc package"
+                  style={{ display: "flex", alignItems: "center", gap: 6 }}
+                >
+                  <Upload size={14} color="var(--accent-cyan)" />
+                  {exportingWorld ? "Exporting..." : "Export (.zcc)"}
+                </button>
                 <button type="button" className="btn" onClick={onClose}>
                   {isDirty ? "Cancel" : "Close"}
                 </button>

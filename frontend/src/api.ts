@@ -17,6 +17,10 @@ import {
   CreateNotePayload,
   CreateCampaignPayload,
   DiceMode,
+  ExportBundleRequest,
+  ImportCommitRequest,
+  ImportCommitResponse,
+  ImportInspectResponse,
   ItemEquipActionPayload,
   LocationLoreNodeDraft,
   MemoryShard,
@@ -181,6 +185,52 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     throw parseApiError(res.status, errText);
   }
   return res.json() as Promise<T>;
+}
+
+async function fetchBlob(url: string, init?: RequestInit): Promise<{ blob: Blob; filename?: string }> {
+  const isFormData =
+    typeof FormData !== "undefined" && init?.body instanceof FormData;
+  const res = await fetch(url, {
+    ...init,
+    credentials: "include",
+    headers: buildAuthHeaders(init?.headers, isFormData),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    if (
+      res.status === 401 &&
+      !url.includes("/auth/login") &&
+      !url.includes("/auth/passkey/login") &&
+      !url.includes("/auth/status")
+    ) {
+      unauthorizedHandler?.();
+    }
+    throw parseApiError(res.status, errText);
+  }
+
+  // Extract filename from Content-Disposition if present
+  let filename: string | undefined;
+  const disposition = res.headers.get("Content-Disposition");
+  if (disposition) {
+    const match = /filename\*?=['"]?(?:UTF-\d['"]*)?([^;\r\n"']*)['"]?/i.exec(disposition);
+    if (match?.[1]) {
+      filename = decodeURIComponent(match[1]);
+    }
+  }
+
+  const blob = await res.blob();
+  return { blob, filename };
+}
+
+export function triggerDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // ------------------------------------------------------------------
@@ -691,6 +741,48 @@ export const api = {
         body: formData,
       }
     );
+  },
+
+  // Native Import / Export (.zcc)
+  exportBundle: async (payload: ExportBundleRequest) => {
+    const { blob, filename } = await fetchBlob(`${API_BASE}/export/bundle`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    triggerDownload(blob, filename || `${payload.bundle_name || "cybercantina_export"}.zcc`);
+    return blob;
+  },
+
+  exportCharacter: async (characterId: string, includeWorld: boolean = false) => {
+    const { blob, filename } = await fetchBlob(
+      `${API_BASE}/export/character/${encodeURIComponent(characterId)}?include_world=${includeWorld}`
+    );
+    triggerDownload(blob, filename || `character_${characterId}.zcc`);
+    return blob;
+  },
+
+  exportWorld: async (worldId: string, includeCharacters: boolean = true) => {
+    const { blob, filename } = await fetchBlob(
+      `${API_BASE}/export/world/${encodeURIComponent(worldId)}?include_characters=${includeCharacters}`
+    );
+    triggerDownload(blob, filename || `world_${worldId}.zcc`);
+    return blob;
+  },
+
+  inspectImport: (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return fetchJson<ImportInspectResponse>(`${API_BASE}/import/inspect`, {
+      method: "POST",
+      body: formData,
+    });
+  },
+
+  commitImport: (payload: ImportCommitRequest) => {
+    return fetchJson<ImportCommitResponse>(`${API_BASE}/import/commit`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
   },
   commitCharacter: (
     draft: CharacterWizardDraft,
