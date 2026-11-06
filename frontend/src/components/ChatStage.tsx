@@ -61,6 +61,12 @@ import {
   decomposeClientUserMessage,
   normalizeQuotes,
 } from "../utils/mentions";
+import {
+  isLiveStreamCognitionSkipped,
+  isLiveStreamNarrator,
+  isNarratorTurnNode,
+  isTurnCognitionSkipped,
+} from "../utils/narratorCognition";
 
 function getTierBadgeClass(tier?: string): string {
   switch (tier) {
@@ -93,6 +99,7 @@ interface LiveStreamState {
   cognitionParsed: CognitionBlock | null;
   proseText: string;
   phaseStatus: string;
+  isNarrator?: boolean;
 }
 
 interface ChatStageProps {
@@ -1520,8 +1527,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                 if (turn.depth_index === 0) {
                   return null;
                 }
-                const isNarratorTurn =
-                  turn.user_message.startsWith("[NARRATOR DIRECTIVE]");
+                const isNarratorTurn = isNarratorTurnNode(turn);
                 const hasMultiCognition = Boolean(
                   turn.cognitions && Object.keys(turn.cognitions).length > 0
                 );
@@ -1542,9 +1548,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                     ? character.name
                     : "Character");
 
-                const isSkipped =
-                  !isNarratorTurn &&
-                  Boolean(activeCognition.skipped || !activeCognition.recall);
+                const isSkipped = isTurnCognitionSkipped(turn, activeCognition);
                 const showRetained = Boolean(showRetainedIds[turn.id]);
 
                 return (
@@ -1599,7 +1603,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
 
                     {cogOpen && (
                       <>
-                        {charIds.length > 1 && (
+                        {charIds.length > 1 && !isNarratorTurn && (
                           <div className="cognition-char-tabs">
                             {charIds.map((cid) => {
                               const isSelected = cid === selectedCharId;
@@ -2261,9 +2265,11 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                   ? character.name
                   : "Character");
 
-              const liveSkipped = Boolean(activeLiveCog?.skipped);
-              const isNarratorCue =
-                liveStream.cognitionParsed?.feeling === "Objective / Detached";
+              const isNarratorCue = isLiveStreamNarrator(liveStream);
+              const liveSkipped = isLiveStreamCognitionSkipped(
+                liveStream,
+                activeLiveCog
+              );
               const isAgentThinking = activeLiveAgent?.status === "thinking";
 
               return (
@@ -2303,7 +2309,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                     )}
                   </div>
 
-                  {liveCharIds.length > 1 && (
+                  {liveCharIds.length > 1 && !isNarratorCue && (
                     <div className="cognition-char-tabs">
                       {liveCharIds.map((cid) => {
                         const isSelected = cid === liveSelectedId;
@@ -2419,7 +2425,9 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                       {isAgentThinking
                         ? `${activeLiveName} is evaluating memories & intentions...`
                         : liveStream.cognitionRaw ||
-                          "Analyzing scene & recalling memories..."}
+                          (isNarratorCue
+                            ? "Observing environment & world state..."
+                            : "Analyzing scene & recalling memories...")}
                     </pre>
                   )}
                 </div>

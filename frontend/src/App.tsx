@@ -369,6 +369,7 @@ export const App: React.FC = () => {
     cognitionParsed: CognitionBlock | null;
     proseText: string;
     phaseStatus: string;
+    isNarrator?: boolean;
   } | null>(null);
 
   const ACTIVE_CAMPAIGN_STORAGE_KEY = "cybercantina_active_campaign_id";
@@ -632,6 +633,9 @@ export const App: React.FC = () => {
     setIsStreaming(true);
     setStreamError(null);
     setPhase3Progress(null);
+    const isNarrator = Boolean(
+      opts.narrativeMode && opts.narrativeMode !== "standard"
+    );
     setLiveStream({
       userMessage: opts.userMessage,
       preTurn: null,
@@ -639,8 +643,9 @@ export const App: React.FC = () => {
       cognitionRaw: "",
       cognitionParsed: null,
       proseText: "",
+      isNarrator,
       phaseStatus:
-        opts.narrativeMode && opts.narrativeMode !== "standard"
+        isNarrator
           ? "Invoking Neutral Scene Narrator..."
           : "Phase 1: Pre-Turn Analysis & GraphRAG...",
     });
@@ -673,6 +678,9 @@ export const App: React.FC = () => {
                     ...prev,
                     preTurn: data.pre_turn,
                     recalledItems: data.recalled_items,
+                    isNarrator:
+                      prev.isNarrator ||
+                      data.pre_turn?.active_speaker_id === "__narrator__",
                     phaseStatus: "Phase 2: Scoped RAG & Context Resolved...",
                   }
                 : null
