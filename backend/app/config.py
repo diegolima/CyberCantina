@@ -63,6 +63,12 @@ class ModelProfile(BaseModel):
         default=False,
         description="Run on CPU by offloading 0 layers to GPU (injects num_gpu=0 for Ollama).",
     )
+    keep_alive_minutes: int = Field(
+        default=30,
+        ge=-1,
+        le=1440,
+        description="Ollama keep_alive duration in minutes (-1 for indefinite, 0 to unload immediately, default 30).",
+    )
 
 
 class EmbeddingProfile(BaseModel):

@@ -1106,6 +1106,13 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
                         actor_profile: { ...appSettingsForm.actor_profile, max_tokens: v },
                       })
                     }
+                    keepAliveMinutes={appSettingsForm.actor_profile.keep_alive_minutes ?? 30}
+                    onKeepAliveMinutes={(v) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        actor_profile: { ...appSettingsForm.actor_profile, keep_alive_minutes: v },
+                      })
+                    }
                     onInvalidChange={setActorInvalid}
                   />
 
@@ -1143,6 +1150,13 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
                       setAppSettingsForm({
                         ...appSettingsForm,
                         clerk_profile: { ...appSettingsForm.clerk_profile, max_tokens: v },
+                      })
+                    }
+                    keepAliveMinutes={appSettingsForm.clerk_profile.keep_alive_minutes ?? 30}
+                    onKeepAliveMinutes={(v) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        clerk_profile: { ...appSettingsForm.clerk_profile, keep_alive_minutes: v },
                       })
                     }
                     selectionLockedNote={

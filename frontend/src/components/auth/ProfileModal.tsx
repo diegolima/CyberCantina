@@ -92,10 +92,12 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
   const [userActorModel, setUserActorModel] = useState("");
   const [userActorTemp, setUserActorTemp] = useState(0.75);
   const [userActorTokens, setUserActorTokens] = useState(1024);
+  const [userActorKeepAlive, setUserActorKeepAlive] = useState(30);
 
   const [userClerkModel, setUserClerkModel] = useState("");
   const [userClerkTemp, setUserClerkTemp] = useState(0.2);
   const [userClerkTokens, setUserClerkTokens] = useState(768);
+  const [userClerkKeepAlive, setUserClerkKeepAlive] = useState(30);
   const [userClerkRunOnCpu, setUserClerkRunOnCpu] = useState(false);
   const [userDelegateCognition, setUserDelegateCognition] = useState<boolean>(false);
 
@@ -158,10 +160,12 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
       setUserActorModel(activeActor.model);
       setUserActorTemp(activeActor.temperature);
       setUserActorTokens(activeActor.max_tokens);
+      setUserActorKeepAlive(activeActor.keep_alive_minutes ?? 30);
 
       setUserClerkModel(activeClerk.model);
       setUserClerkTemp(activeClerk.temperature);
       setUserClerkTokens(activeClerk.max_tokens);
+      setUserClerkKeepAlive(activeClerk.keep_alive_minutes ?? 30);
       setUserClerkRunOnCpu(activeClerk.run_on_cpu ?? false);
 
       setUserWmTurns(
@@ -210,6 +214,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
           model: userActorModel,
           temperature: userActorTemp,
           max_tokens: userActorTokens,
+          keep_alive_minutes: userActorKeepAlive,
         },
         clerk_profile: {
           ...modelSettings.effective_clerk_profile,
@@ -218,6 +223,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
           temperature: userClerkTemp,
           max_tokens: userClerkTokens,
           run_on_cpu: userClerkRunOnCpu,
+          keep_alive_minutes: userClerkKeepAlive,
         },
         working_memory_turns: userWmTurns,
         delegate_cognition_to_clerk: userDelegateCognition,
@@ -249,9 +255,11 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
       setUserActorModel(res.default_actor_profile.model);
       setUserActorTemp(res.default_actor_profile.temperature);
       setUserActorTokens(res.default_actor_profile.max_tokens);
+      setUserActorKeepAlive(res.default_actor_profile.keep_alive_minutes ?? 30);
       setUserClerkModel(res.default_clerk_profile.model);
       setUserClerkTemp(res.default_clerk_profile.temperature);
       setUserClerkTokens(res.default_clerk_profile.max_tokens);
+      setUserClerkKeepAlive(res.default_clerk_profile.keep_alive_minutes ?? 30);
       setUserClerkRunOnCpu(res.default_clerk_profile.run_on_cpu ?? false);
       setUserWmTurns(res.default_working_memory_turns);
       setUserDelegateCognition(res.default_delegate_cognition_to_clerk);
@@ -1876,6 +1884,8 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
                       onTemperature={setUserActorTemp}
                       maxTokens={userActorTokens}
                       onMaxTokens={setUserActorTokens}
+                      keepAliveMinutes={userActorKeepAlive}
+                      onKeepAliveMinutes={setUserActorKeepAlive}
                       onInvalidChange={setActorInvalid}
                     />
 
@@ -1899,6 +1909,8 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
                       onTemperature={setUserClerkTemp}
                       maxTokens={userClerkTokens}
                       onMaxTokens={setUserClerkTokens}
+                      keepAliveMinutes={userClerkKeepAlive}
+                      onKeepAliveMinutes={setUserClerkKeepAlive}
                       selectionLockedNote={
                         userClerkMirrors
                           ? "The Clerk uses the Actor's provider and model. Its sampling parameters below stay separate."

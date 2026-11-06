@@ -13,8 +13,16 @@ from app.dependencies import (
     normalize_model_tag,
     resolve_effective_models,
 )
-from app.engine.llm_client import LLMClient
+from app.engine.llm_client import LLMClient, format_ollama_keep_alive
 from app.providers.endpoint import ResolvedEndpoint
+
+
+def test_format_ollama_keep_alive() -> None:
+    assert format_ollama_keep_alive(30) == "30m"
+    assert format_ollama_keep_alive(60) == "60m"
+    assert format_ollama_keep_alive(0) == 0
+    assert format_ollama_keep_alive(-1) == "-1"
+    assert format_ollama_keep_alive(None) == "30m"
 
 
 def test_normalize_model_tag() -> None:
@@ -151,3 +159,81 @@ async def test_llm_client_omits_num_gpu_when_run_on_cpu_is_false() -> None:
         assert len(captured_requests) == 1
         req_json = captured_requests[0]["json"]
         assert "num_gpu" not in req_json["options"]
+
+
+@pytest.mark.asyncio
+async def test_llm_client_injects_keep_alive() -> None:
+    client = LLMClient()
+    profile = ModelProfile(
+        model="qwen2.5:3b",
+        base_url="http://localhost:11434/v1",
+        keep_alive_minutes=45,
+    )
+    profile.resolved = ResolvedEndpoint(
+        provider_id="prov_test",
+        type="ollama",
+        root_url="http://localhost:11434",
+        bearer_token=None,
+    )
+
+    captured_requests: list[dict] = []
+
+    def fake_post(url, headers, json, timeout):
+        captured_requests.append({"url": str(url), "json": json})
+        return httpx.Response(
+            status_code=200,
+            json={"message": {"content": "ok"}, "done": True},
+            request=httpx.Request("POST", str(url)),
+        )
+
+    mock_http = AsyncMock()
+    mock_http.post = AsyncMock(side_effect=fake_post)
+
+    with patch.object(client, "get_http_client", return_value=mock_http):
+        res = await client.complete_text(
+            [{"role": "user", "content": "ping"}],
+            profile=profile,
+        )
+        assert res == "ok"
+        assert len(captured_requests) == 1
+        req_json = captured_requests[0]["json"]
+        assert req_json["keep_alive"] == "45m"
+
+
+@pytest.mark.asyncio
+async def test_llm_client_omits_keep_alive_for_openrouter() -> None:
+    client = LLMClient()
+    profile = ModelProfile(
+        model="meta-llama/llama-3.1-8b-instruct",
+        base_url="https://openrouter.ai/api/v1",
+        keep_alive_minutes=30,
+    )
+    profile.resolved = ResolvedEndpoint(
+        provider_id="prov_or",
+        type="openrouter",
+        root_url="https://openrouter.ai/api",
+        bearer_token="sk-or-test",
+    )
+
+    captured_requests: list[dict] = []
+
+    def fake_post(url, headers, json, timeout):
+        captured_requests.append({"url": str(url), "json": json})
+        return httpx.Response(
+            status_code=200,
+            json={"choices": [{"message": {"content": "ok"}}]},
+            request=httpx.Request("POST", str(url)),
+        )
+
+    mock_http = AsyncMock()
+    mock_http.post = AsyncMock(side_effect=fake_post)
+
+    with patch.object(client, "get_http_client", return_value=mock_http):
+        res = await client.complete_text(
+            [{"role": "user", "content": "ping"}],
+            profile=profile,
+        )
+        assert res == "ok"
+        assert len(captured_requests) == 1
+        req_json = captured_requests[0]["json"]
+        assert "keep_alive" not in req_json

@@ -915,6 +915,7 @@ export interface ModelProfile {
   max_tokens: number;
   timeout_seconds: number;
   run_on_cpu?: boolean;
+  keep_alive_minutes?: number;
 }
 
 export interface AppSettings {

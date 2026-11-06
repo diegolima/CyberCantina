@@ -90,6 +90,17 @@ def get_openai_v1_url(base_url: str) -> str:
     return cleaned
 
 
+def format_ollama_keep_alive(minutes: int | None) -> str | int:
+    """Format minutes into Ollama's keep_alive format ('30m', '-1', or 0)."""
+    if minutes is None:
+        return "30m"
+    if minutes < 0:
+        return "-1"
+    if minutes == 0:
+        return 0
+    return f"{minutes}m"
+
+
 @dataclass(frozen=True)
 class CallTarget:
     """Everything needed to call one role's endpoint, with auth applied on every request."""
@@ -354,6 +365,7 @@ class LLMClient:
                 "messages": messages,
                 "stream": False,
                 "think": False,
+                "keep_alive": format_ollama_keep_alive(getattr(active_profile, "keep_alive_minutes", 30)),
                 "options": ollama_opts,
             }
             if json_schema is not None:
@@ -566,6 +578,7 @@ class LLMClient:
                 "messages": messages,
                 "stream": True,
                 "think": False,
+                "keep_alive": format_ollama_keep_alive(getattr(active_profile, "keep_alive_minutes", 30)),
                 "options": stream_opts,
             }
             try:
