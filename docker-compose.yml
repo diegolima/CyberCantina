@@ -1,9 +1,8 @@
 services:
   cybercantina-backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: diegolima/cybercantina-backend:alpha
     container_name: cybercantina-backend
+    pull_policy: always
     restart: unless-stopped
     environment:
       - CYBERCANTINA_DB_PATH=/data/cybercantina.db
@@ -26,10 +25,9 @@ services:
       - cantina-net
 
   cybercantina-frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    image: diegolima/cybercantina-frontend:alpha
     container_name: cybercantina-frontend
+    pull_policy: always
     restart: unless-stopped
     ports:
       - "${PORT:-3000}:80"

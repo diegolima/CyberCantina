@@ -25,8 +25,40 @@
 
 ## Quick Start
 
-### 1. Backend (Python / FastAPI)
+### Option 1: Docker (Alpha Test / Pre-Built Images)
 
+The easiest way to test CyberCantina without installing Python or Node development environments is using our pre-built alpha containers. Note that at this stage, releases do not follow a fixed schedule—new images may be published months, weeks, or minutes apart as features and fixes land.
+
+```bash
+docker compose up -d
+```
+
+Or run directly without cloning the repository:
+```bash
+curl -O https://raw.githubusercontent.com/diegolima/cybercantina/main/docker-compose.yml
+docker compose up -d
+```
+
+Open **`http://localhost:3000`** in your browser.
+
+To pull the latest alpha release at any time:
+```bash
+docker compose pull && docker compose up -d
+```
+
+---
+
+### Option 2: Local Development (Build from Source)
+
+#### With Docker Compose:
+```bash
+docker compose -f docker-compose.dev.yml up --build
+```
+Open **`http://localhost:3000`**.
+
+#### Without Docker:
+
+**1. Backend (Python / FastAPI)**
 ```bash
 cd backend
 python -m venv .venv
@@ -35,15 +67,33 @@ pip install -e ".[dev]"
 uvicorn app.main:app --reload --port 8000
 ```
 
-### 2. Frontend (React / TypeScript / Vite)
-
+**2. Frontend (React / TypeScript / Vite)**
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
+Open **`http://localhost:5173`**.
 
-Open `http://localhost:5173` to launch the CyberCantina Roleplay Studio. Add your model servers in **Admin Settings → Providers** (Ollama today; an optional bearer token supports hosted endpoints), then pick a provider and model for the Actor and Clerk in **Models**. Admins can let users bring their own private providers (BYOP). Provider tokens are encrypted at rest with an auto-generated key (`backend/.cantina_secret.key`, or set `CYBERCANTINA_SECRET_KEY`), so back that file up with your database. You can also use the built-in **Heuristic / Mock Offline Fallback** to test the full 5-phase pipeline without an active LLM server.
+---
+
+### Model Setup & Ollama Recommendations
+
+1. **Accessing the Studio:** Open `http://localhost:3000` (Docker) or `http://localhost:5173` (Vite dev).
+2. **Configure Providers:** Go to **Admin Settings → Providers** to connect your model servers (e.g., local Ollama or hosted OpenAI-compatible endpoints), then pick a provider and model for the **Actor** and **Clerk** in **Models**. Admins can let users bring their own private providers (BYOP).
+3. **Allow Two Simultaneous Models (Crucial for CPU SLM + Actor):**
+   CyberCantina's 5-phase pipeline pairs a creative **Actor** (narrative prose) with an analytical **Clerk** (state updates, memory extraction, and character cognition, often running on a lightweight CPU SLM like `qwen2.5:3b` or `llama3.2:3b`).
+   To avoid costly model-swapping latency on every turn, ensure your model server keeps **at least two models loaded in memory simultaneously**:
+   * For **Ollama**, launch with:
+     ```bash
+     OLLAMA_MAX_LOADED_MODELS=2 ollama serve
+     ```
+   * **Linux Docker Note:** If running CyberCantina inside Docker with a host Ollama instance on Linux, configure Ollama to bind to all interfaces so the container can reach it via `host.docker.internal`:
+     ```bash
+     OLLAMA_HOST=0.0.0.0:11434 OLLAMA_MAX_LOADED_MODELS=2 ollama serve
+     ```
+4. **Security & Secrets:** Provider tokens are encrypted at rest with an auto-generated key (`/data/.cantina_secret.key` in Docker, or `backend/.cantina_secret.key` in local dev, configurable via `CYBERCANTINA_SECRET_KEY`). Back this key up alongside your database.
+5. **Offline Mock Mode:** You can also enable the built-in **Heuristic / Mock Offline Fallback** in Settings to test the full 5-phase pipeline without an active LLM server.
 
 ## License
 
