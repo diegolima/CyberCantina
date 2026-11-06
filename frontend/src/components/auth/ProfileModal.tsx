@@ -26,9 +26,8 @@ import {
   UserProfile,
 } from "../../types";
 import { FeedbackModal } from "./FeedbackModal";
-import { ModelRoleEditor } from "../models/ModelRoleEditor";
+import { ModelDeck } from "../models/ModelDeck";
 import { ProvidersManager } from "../providers/ProvidersManager";
-import { ProviderChip } from "../providers/ProviderBadges";
 import { ProvidersProvider, useProviders } from "../providers/ProvidersContext";
 
 export interface ProfileModalProps {
@@ -83,8 +82,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
   const [modelLoading, setModelLoading] = useState(false);
   const [modelSaving, setModelSaving] = useState(false);
   const providerStore = useProviders();
-  const [actorInvalid, setActorInvalid] = useState(0);
-  const [clerkInvalid, setClerkInvalid] = useState(0);
+  const [modelsDeckInvalid, setModelsDeckInvalid] = useState(0);
   const [userActorProviderId, setUserActorProviderId] = useState<string | null>(null);
   const [userClerkProviderId, setUserClerkProviderId] = useState<string | null>(null);
   const [userClerkMirrors, setUserClerkMirrors] = useState(false);
@@ -241,6 +239,41 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
       setModelSaving(false);
     }
   };
+
+  const handleResetActor = () => {
+    if (!modelSettings) return;
+    setUserActorProviderId(modelSettings.default_actor_profile.provider_id ?? null);
+    setUserActorModel(modelSettings.default_actor_profile.model);
+    setUserActorTemp(modelSettings.default_actor_profile.temperature);
+    setUserActorTokens(modelSettings.default_actor_profile.max_tokens);
+    setUserActorKeepAlive(modelSettings.default_actor_profile.keep_alive_minutes ?? 30);
+  };
+
+  const handleResetClerk = () => {
+    if (!modelSettings) return;
+    setUserClerkProviderId(modelSettings.default_clerk_profile.provider_id ?? null);
+    setUserClerkModel(modelSettings.default_clerk_profile.model);
+    setUserClerkTemp(modelSettings.default_clerk_profile.temperature);
+    setUserClerkTokens(modelSettings.default_clerk_profile.max_tokens);
+    setUserClerkKeepAlive(modelSettings.default_clerk_profile.keep_alive_minutes ?? 30);
+    setUserClerkMirrors(modelSettings.default_clerk_mirrors_actor ?? false);
+    setUserClerkRunOnCpu(modelSettings.default_clerk_profile.run_on_cpu ?? false);
+  };
+
+  const isActorOverridden =
+    !!modelSettings?.user_actor_profile ||
+    userActorModel !== modelSettings?.default_actor_profile.model ||
+    (userActorProviderId ?? null) !== (modelSettings?.default_actor_profile.provider_id ?? null) ||
+    userActorTemp !== modelSettings?.default_actor_profile.temperature ||
+    userActorTokens !== modelSettings?.default_actor_profile.max_tokens;
+
+  const isClerkOverridden =
+    !!modelSettings?.user_clerk_profile ||
+    userClerkModel !== modelSettings?.default_clerk_profile.model ||
+    (userClerkProviderId ?? null) !== (modelSettings?.default_clerk_profile.provider_id ?? null) ||
+    userClerkTemp !== modelSettings?.default_clerk_profile.temperature ||
+    userClerkTokens !== modelSettings?.default_clerk_profile.max_tokens ||
+    userClerkMirrors !== (modelSettings?.default_clerk_mirrors_actor ?? false);
 
   const handleResetModelOverrides = async () => {
     setModelSaving(true);
@@ -514,9 +547,20 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
     }
   };
 
+  const isModelsTab =
+    (activeTab === "preferences" && activePrefTab === "models") ||
+    (activeTab as string) === "models";
+
   return (
     <div className="modal-backdrop">
-      <div className="modal-panel" style={{ maxWidth: 660 }}>
+      <div
+        className="modal-panel"
+        style={{
+          maxWidth: isModelsTab ? 880 : 660,
+          width: isModelsTab ? "min(880px, 95vw)" : undefined,
+          transition: "max-width 0.2s ease",
+        }}
+      >
         <div className="modal-header">
           <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <User size={18} color="var(--accent-amber)" />
@@ -1699,34 +1743,13 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
                     </div>
                   ))}
 
-              {!modelLoading &&
-                modelSettings &&
-                !modelSettings.allow_user_model_overrides && (
-                  <div
-                    style={{
-                      background: "rgba(255, 255, 255, 0.03)",
-                      border: "1px solid var(--border-subtle)",
-                      borderRadius: 8,
-                      padding: 18,
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 14,
-                      opacity: 0.9,
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        padding: "10px 14px",
-                        background: "rgba(245, 158, 11, 0.1)",
-                        border: "1px solid rgba(245, 158, 11, 0.3)",
-                        borderRadius: 6,
-                        color: "var(--accent-amber)",
-                        fontSize: "0.82rem",
-                      }}
-                    >
+              {!modelLoading && modelSettings && (
+                <form
+                  onSubmit={handleSaveModelOverrides}
+                  style={{ display: "flex", flexDirection: "column", gap: 14 }}
+                >
+                  {!modelSettings.allow_user_model_overrides ? (
+                    <div className="auth-warning-box">
                       <Lock size={16} style={{ flexShrink: 0 }} />
                       <span>
                         <strong>Per-User Model Overrides Disabled:</strong> The
@@ -1735,237 +1758,70 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
                         are currently locked.
                       </span>
                     </div>
-
-                    <div
-                      style={{
-                        fontSize: "0.78rem",
-                        color: "var(--text-secondary)",
-                      }}
-                    >
-                      System default models currently active for your session:
-                    </div>
-
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "1fr 1fr",
-                        gap: 10,
-                      }}
-                    >
-                      <div
-                        style={{
-                          padding: 12,
-                          borderRadius: 6,
-                          background: "var(--bg-deep)",
-                          border: "1px solid var(--border-subtle)",
-                        }}
-                      >
-                        <div
-                          style={{
-                            fontSize: "0.72rem",
-                            color: "var(--accent-amber)",
-                            fontWeight: 600,
-                            marginBottom: 4,
-                          }}
-                        >
-                          Primary Actor Model
-                        </div>
-                        <div
-                          style={{
-                            fontWeight: 600,
-                            fontSize: "0.86rem",
-                            color: "var(--text-primary)",
-                          }}
-                        >
-                          {modelSettings.default_actor_profile.model}
-                        </div>
-                        <div style={{ marginTop: 6 }}>
-                          <ProviderChip providerId={modelSettings.effective_actor_profile.provider_id} />
-                        </div>
-                        <div
-                          style={{
-                            fontSize: "0.72rem",
-                            color: "var(--text-muted)",
-                            marginTop: 4,
-                          }}
-                        >
-                          Temp:{" "}
-                          {modelSettings.default_actor_profile.temperature} • Max
-                          Tokens:{" "}
-                          {modelSettings.default_actor_profile.max_tokens}
-                        </div>
-                      </div>
-
-                      <div
-                        style={{
-                          padding: 12,
-                          borderRadius: 6,
-                          background: "var(--bg-deep)",
-                          border: "1px solid var(--border-subtle)",
-                        }}
-                      >
-                        <div
-                          style={{
-                            fontSize: "0.72rem",
-                            color: "var(--accent-cyan)",
-                            fontWeight: 600,
-                            marginBottom: 4,
-                          }}
-                        >
-                          Auxiliary Clerk Model
-                        </div>
-                        <div
-                          style={{
-                            fontWeight: 600,
-                            fontSize: "0.86rem",
-                            color: "var(--text-primary)",
-                          }}
-                        >
-                          {modelSettings.default_clerk_profile.model}
-                        </div>
-                        <div style={{ marginTop: 6 }}>
-                          <ProviderChip providerId={modelSettings.effective_clerk_profile.provider_id} />
-                        </div>
-                        <div
-                          style={{
-                            fontSize: "0.72rem",
-                            color: "var(--text-muted)",
-                            marginTop: 4,
-                          }}
-                        >
-                          Temp:{" "}
-                          {modelSettings.default_clerk_profile.temperature} • Max
-                          Tokens:{" "}
-                          {modelSettings.default_clerk_profile.max_tokens}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div
-                      style={{
-                        fontSize: "0.74rem",
-                        color: "var(--text-muted)",
-                      }}
-                    >
-                      Working Memory Window:{" "}
-                      {modelSettings.default_working_memory_turns} turns
-                    </div>
-                  </div>
-                )}
-
-
-              {!modelLoading &&
-                modelSettings &&
-                modelSettings.allow_user_model_overrides && (
-                  <form
-                    onSubmit={handleSaveModelOverrides}
-                    style={{ display: "flex", flexDirection: "column", gap: 14 }}
-                  >
+                  ) : (
                     <div className="provider-note">
                       Providers are managed in the <strong>Providers</strong> tab
                       {modelSettings.allow_user_providers
                         ? ", where you can also add your own."
                         : "."}
                     </div>
+                  )}
 
-                    <ModelRoleEditor
-                      role="actor"
-                      title="1. Primary Actor Model"
-                      accent="var(--accent-amber)"
-                      headerHint={
-                        <>System default: {modelSettings.default_actor_profile.model}</>
+                  <ModelDeck
+                    scope="user"
+                    isLocked={!modelSettings.allow_user_model_overrides}
+                    actorSelection={{
+                      providerId: userActorProviderId,
+                      model: userActorModel,
+                    }}
+                    onActorSelection={(sel) => {
+                      setUserActorProviderId(sel.providerId);
+                      setUserActorModel(sel.model);
+                    }}
+                    actorTemp={userActorTemp}
+                    onActorTemp={setUserActorTemp}
+                    actorTokens={userActorTokens}
+                    onActorTokens={setUserActorTokens}
+                    actorKeepAlive={userActorKeepAlive}
+                    onActorKeepAlive={setUserActorKeepAlive}
+                    actorOverridden={isActorOverridden}
+                    onResetActor={handleResetActor}
+                    clerkSelection={{
+                      providerId: userClerkProviderId,
+                      model: userClerkModel,
+                    }}
+                    onClerkSelection={(sel) => {
+                      setUserClerkProviderId(sel.providerId);
+                      setUserClerkModel(sel.model);
+                      const newProv = sel.providerId ? providerStore.byId(sel.providerId) : null;
+                      if (newProv && newProv.type !== "ollama") {
+                        setUserClerkRunOnCpu(false);
                       }
-                      selection={{ providerId: userActorProviderId, model: userActorModel }}
-                      onSelection={(sel) => {
-                        setUserActorProviderId(sel.providerId);
-                        setUserActorModel(sel.model);
-                      }}
-                      temperature={userActorTemp}
-                      onTemperature={setUserActorTemp}
-                      maxTokens={userActorTokens}
-                      onMaxTokens={setUserActorTokens}
-                      keepAliveMinutes={userActorKeepAlive}
-                      onKeepAliveMinutes={setUserActorKeepAlive}
-                      onInvalidChange={setActorInvalid}
-                    />
+                    }}
+                    clerkTemp={userClerkTemp}
+                    onClerkTemp={setUserClerkTemp}
+                    clerkTokens={userClerkTokens}
+                    onClerkTokens={setUserClerkTokens}
+                    clerkKeepAlive={userClerkKeepAlive}
+                    onClerkKeepAlive={setUserClerkKeepAlive}
+                    clerkMirrorsActor={userClerkMirrors}
+                    onToggleClerkMirror={setUserClerkMirrors}
+                    clerkRunOnCpu={userClerkRunOnCpu}
+                    onToggleClerkRunOnCpu={setUserClerkRunOnCpu}
+                    clerkOverridden={isClerkOverridden}
+                    onResetClerk={handleResetClerk}
+                    vectorMode={modelSettings.default_embedding_profile?.mode || "local_hash"}
+                    vectorSelection={{
+                      providerId: modelSettings.default_embedding_profile?.provider_id ?? null,
+                      model: modelSettings.default_embedding_profile?.model || "nomic-embed-text",
+                    }}
+                    workingMemoryTurns={modelSettings.effective_working_memory_turns}
+                    episodicChunkSize={6}
+                    maxSceneFlags={modelSettings.effective_max_scene_flags ?? 10}
+                    onInvalidChange={setModelsDeckInvalid}
+                  />
 
-                    <ModelRoleEditor
-                      role="clerk"
-                      title="2. Auxiliary Clerk Model"
-                      accent="var(--accent-cyan)"
-                      headerHint={
-                        <>System default: {modelSettings.default_clerk_profile.model}</>
-                      }
-                      selection={{ providerId: userClerkProviderId, model: userClerkModel }}
-                      onSelection={(sel) => {
-                        setUserClerkProviderId(sel.providerId);
-                        setUserClerkModel(sel.model);
-                        const newProv = sel.providerId ? providerStore.byId(sel.providerId) : null;
-                        if (newProv && newProv.type !== "ollama") {
-                          setUserClerkRunOnCpu(false);
-                        }
-                      }}
-                      temperature={userClerkTemp}
-                      onTemperature={setUserClerkTemp}
-                      maxTokens={userClerkTokens}
-                      onMaxTokens={setUserClerkTokens}
-                      keepAliveMinutes={userClerkKeepAlive}
-                      onKeepAliveMinutes={setUserClerkKeepAlive}
-                      selectionLockedNote={
-                        userClerkMirrors
-                          ? "The Clerk uses the Actor's provider and model. Its sampling parameters below stay separate."
-                          : undefined
-                      }
-                      topSlot={
-                        <label className="provider-inline-check" style={{ marginTop: 0 }}>
-                          <input
-                            type="checkbox"
-                            checked={userClerkMirrors}
-                            onChange={(e) => setUserClerkMirrors(e.target.checked)}
-                          />
-                          Use the same provider and model as the Actor
-                        </label>
-                      }
-                      afterPickerSlot={(() => {
-                        const clerkProv = userClerkProviderId ? providerStore.byId(userClerkProviderId) : null;
-                        const isClerkOllama = !clerkProv || clerkProv.type === "ollama";
-                        if (!isClerkOllama) return null;
-
-                        const normTag = (m: string) => {
-                          const c = (m || "").trim().toLowerCase();
-                          return c.endsWith(":latest") ? c.slice(0, -":latest".length).trim() : c;
-                        };
-                        const isSameModel =
-                          normTag(userClerkModel) === normTag(userActorModel) &&
-                          (userClerkProviderId ?? null) === (userActorProviderId ?? null);
-                        const isSeparateModel = !userClerkMirrors && !isSameModel;
-
-                        return (
-                          <div style={{ marginTop: 8 }}>
-                            <label className="provider-inline-check" style={{ marginTop: 0 }}>
-                              <input
-                                type="checkbox"
-                                checked={userClerkRunOnCpu}
-                                disabled={!isSeparateModel}
-                                onChange={(e) => setUserClerkRunOnCpu(e.target.checked)}
-                              />
-                              Run on CPU (<code>num_gpu: 0</code>)
-                            </label>
-                            {!isSeparateModel ? (
-                              <div className="form-hint" style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: 2 }}>
-                                Only active when using a separate model from the Actor to avoid GPU/CPU memory thrashing.
-                              </div>
-                            ) : (
-                              <div className="form-hint" style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: 2 }}>
-                                Loads model in system RAM (offloading 0 layers to GPU). Keeps GPU VRAM 100% dedicated to narrative prose. Requires starting Ollama with <code>OLLAMA_MAX_LOADED_MODELS=2</code>.
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
-                      onInvalidChange={setClerkInvalid}
-                    />
-
+                  {modelSettings.allow_user_model_overrides && (
                     <div
                       style={{
                         display: "flex",
@@ -1981,7 +1837,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
                           onClick={handleResetModelOverrides}
                           disabled={modelSaving}
                         >
-                          Reset to Defaults
+                          Reset All to Defaults
                         </button>
                       ) : (
                         <div />
@@ -1992,7 +1848,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
                         className="btn btn-amber"
                         disabled={
                           modelSaving ||
-                          actorInvalid + clerkInvalid > 0 ||
+                          modelsDeckInvalid > 0 ||
                           (providerStore.providers.length > 0 &&
                             (!userActorProviderId ||
                               !userActorModel ||
@@ -2006,8 +1862,9 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
                         </span>
                       </button>
                     </div>
-                  </form>
-                )}
+                  )}
+                </form>
+              )}
                 </div>
               )}
             </div>

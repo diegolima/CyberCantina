@@ -7,7 +7,6 @@ import {
   FileText,
   KeyRound,
   Plus,
-  RefreshCw,
   Search,
   Server,
   Trash2,
@@ -22,10 +21,7 @@ import { AppSettings, UserProfile } from "../../types";
 import { FeedbackModal } from "./FeedbackModal";
 import { ProvidersManager } from "../providers/ProvidersManager";
 import { ProvidersProvider, useProviders } from "../providers/ProvidersContext";
-import { DisclosureSection } from "../models/DisclosureSection";
-import { IntegerField } from "../models/IntegerField";
-import { ModelPicker } from "../models/ModelPicker";
-import { ModelRoleEditor } from "../models/ModelRoleEditor";
+import { ModelDeck } from "../models/ModelDeck";
 
 export interface AdminModalProps {
   currentUser: UserProfile;
@@ -62,15 +58,9 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
     null
   );
   const [savingSettings, setSavingSettings] = useState(false);
-  const [actorInvalid, setActorInvalid] = useState(0);
-  const [clerkInvalid, setClerkInvalid] = useState(0);
-  const [memoryInvalid, setMemoryInvalid] = useState<Record<string, boolean>>({});
+  const [modelsDeckInvalid, setModelsDeckInvalid] = useState(0);
   const [staleEmbeddings, setStaleEmbeddings] = useState(0);
   const [reindexing, setReindexing] = useState(false);
-
-  const setMemoryFieldValid = (key: string) => (valid: boolean) =>
-    setMemoryInvalid((m) => (m[key] === !valid ? m : { ...m, [key]: !valid }));
-  const memoryInvalidCount = Object.values(memoryInvalid).filter(Boolean).length;
 
   const loadSettings = async () => {
     try {
@@ -352,7 +342,14 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
 
   return (
     <div className="modal-backdrop">
-      <div className="modal-panel" style={{ maxWidth: 740 }}>
+      <div
+        className="modal-panel"
+        style={{
+          maxWidth: activeTab === "models" ? 880 : 740,
+          width: activeTab === "models" ? "min(880px, 95vw)" : undefined,
+          transition: "max-width 0.2s ease",
+        }}
+      >
         <div className="modal-header">
           <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <UserCog size={18} color="var(--accent-amber)" />
@@ -1057,32 +1054,13 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
                     )}
                   </div>
 
-                  {staleEmbeddings > 0 && (
-                    <div className="auth-warning-box" style={{ padding: "10px 12px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: "0.8rem", color: "var(--accent-amber)" }}>
-                        <AlertTriangle size={15} />
-                        <span style={{ flex: 1 }}>
-                          {staleEmbeddings} stored memories were embedded with a different embedding model and are
-                          ignored in recall until reindexed.
-                        </span>
-                        <button type="button" className="btn btn-sm" onClick={handleReindex} disabled={reindexing}>
-                          <RefreshCw size={13} className={reindexing ? "spin" : undefined} />{" "}
-                          {reindexing ? "Reindexing…" : "Reindex now"}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  <ModelRoleEditor
-                    role="actor"
-                    title="1. Default Primary Actor Model"
-                    subtitle="Phase 3 <cognition> + narrative prose"
-                    accent="var(--accent-amber)"
-                    selection={{
+                  <ModelDeck
+                    scope="admin"
+                    actorSelection={{
                       providerId: appSettingsForm.actor_profile.provider_id ?? null,
                       model: appSettingsForm.actor_profile.model,
                     }}
-                    onSelection={(sel) =>
+                    onActorSelection={(sel) =>
                       setAppSettingsForm({
                         ...appSettingsForm,
                         actor_profile: {
@@ -1092,40 +1070,32 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
                         },
                       })
                     }
-                    temperature={appSettingsForm.actor_profile.temperature}
-                    onTemperature={(v) =>
+                    actorTemp={appSettingsForm.actor_profile.temperature}
+                    onActorTemp={(v) =>
                       setAppSettingsForm({
                         ...appSettingsForm,
                         actor_profile: { ...appSettingsForm.actor_profile, temperature: v },
                       })
                     }
-                    maxTokens={appSettingsForm.actor_profile.max_tokens}
-                    onMaxTokens={(v) =>
+                    actorTokens={appSettingsForm.actor_profile.max_tokens}
+                    onActorTokens={(v) =>
                       setAppSettingsForm({
                         ...appSettingsForm,
                         actor_profile: { ...appSettingsForm.actor_profile, max_tokens: v },
                       })
                     }
-                    keepAliveMinutes={appSettingsForm.actor_profile.keep_alive_minutes ?? 30}
-                    onKeepAliveMinutes={(v) =>
+                    actorKeepAlive={appSettingsForm.actor_profile.keep_alive_minutes ?? 30}
+                    onActorKeepAlive={(v) =>
                       setAppSettingsForm({
                         ...appSettingsForm,
                         actor_profile: { ...appSettingsForm.actor_profile, keep_alive_minutes: v },
                       })
                     }
-                    onInvalidChange={setActorInvalid}
-                  />
-
-                  <ModelRoleEditor
-                    role="clerk"
-                    title="2. Default Auxiliary Clerk Model"
-                    subtitle="Phase 1 pre-turn analysis & Phase 4 state clerk"
-                    accent="var(--accent-cyan)"
-                    selection={{
+                    clerkSelection={{
                       providerId: appSettingsForm.clerk_profile.provider_id ?? null,
                       model: appSettingsForm.clerk_profile.model,
                     }}
-                    onSelection={(sel) => {
+                    onClerkSelection={(sel) => {
                       const newProv = sel.providerId ? providerStore.byId(sel.providerId) : null;
                       const isOllama = !newProv || newProv.type === "ollama";
                       setAppSettingsForm({
@@ -1138,208 +1108,101 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
                         },
                       });
                     }}
-                    temperature={appSettingsForm.clerk_profile.temperature}
-                    onTemperature={(v) =>
+                    clerkTemp={appSettingsForm.clerk_profile.temperature}
+                    onClerkTemp={(v) =>
                       setAppSettingsForm({
                         ...appSettingsForm,
                         clerk_profile: { ...appSettingsForm.clerk_profile, temperature: v },
                       })
                     }
-                    maxTokens={appSettingsForm.clerk_profile.max_tokens}
-                    onMaxTokens={(v) =>
+                    clerkTokens={appSettingsForm.clerk_profile.max_tokens}
+                    onClerkTokens={(v) =>
                       setAppSettingsForm({
                         ...appSettingsForm,
                         clerk_profile: { ...appSettingsForm.clerk_profile, max_tokens: v },
                       })
                     }
-                    keepAliveMinutes={appSettingsForm.clerk_profile.keep_alive_minutes ?? 30}
-                    onKeepAliveMinutes={(v) =>
+                    clerkKeepAlive={appSettingsForm.clerk_profile.keep_alive_minutes ?? 30}
+                    onClerkKeepAlive={(v) =>
                       setAppSettingsForm({
                         ...appSettingsForm,
                         clerk_profile: { ...appSettingsForm.clerk_profile, keep_alive_minutes: v },
                       })
                     }
-                    selectionLockedNote={
-                      appSettingsForm.clerk_mirrors_actor
-                        ? "The Clerk uses the Actor's provider and model. Its sampling parameters below stay separate."
-                        : undefined
+                    clerkMirrorsActor={!!appSettingsForm.clerk_mirrors_actor}
+                    onToggleClerkMirror={(val) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        clerk_mirrors_actor: val,
+                      })
                     }
-                    topSlot={
-                      <label className="provider-inline-check" style={{ marginTop: 0 }}>
-                        <input
-                          type="checkbox"
-                          checked={!!appSettingsForm.clerk_mirrors_actor}
-                          onChange={(e) =>
-                            setAppSettingsForm({
-                              ...appSettingsForm,
-                              clerk_mirrors_actor: e.target.checked,
-                            })
-                          }
-                        />
-                        Use the same provider and model as the Actor
-                      </label>
+                    clerkRunOnCpu={!!appSettingsForm.clerk_profile.run_on_cpu}
+                    onToggleClerkRunOnCpu={(val) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        clerk_profile: {
+                          ...appSettingsForm.clerk_profile,
+                          run_on_cpu: val,
+                        },
+                      })
                     }
-                    afterPickerSlot={(() => {
-                      const clerkProv = appSettingsForm.clerk_profile.provider_id
-                        ? providerStore.byId(appSettingsForm.clerk_profile.provider_id)
-                        : null;
-                      const isClerkOllama = !clerkProv || clerkProv.type === "ollama";
-                      if (!isClerkOllama) return null;
-
-                      const normTag = (m: string) => {
-                        const c = (m || "").trim().toLowerCase();
-                        return c.endsWith(":latest") ? c.slice(0, -":latest".length).trim() : c;
-                      };
-                      const isSameModel =
-                        normTag(appSettingsForm.clerk_profile.model) === normTag(appSettingsForm.actor_profile.model) &&
-                        (appSettingsForm.clerk_profile.provider_id ?? null) === (appSettingsForm.actor_profile.provider_id ?? null);
-                      const isSeparateModel = !appSettingsForm.clerk_mirrors_actor && !isSameModel;
-
-                      return (
-                        <div style={{ marginTop: 8 }}>
-                          <label className="provider-inline-check" style={{ marginTop: 0 }}>
-                            <input
-                              type="checkbox"
-                              checked={!!appSettingsForm.clerk_profile.run_on_cpu}
-                              disabled={!isSeparateModel}
-                              onChange={(e) =>
-                                setAppSettingsForm({
-                                  ...appSettingsForm,
-                                  clerk_profile: {
-                                    ...appSettingsForm.clerk_profile,
-                                    run_on_cpu: e.target.checked,
-                                  },
-                                })
-                              }
-                            />
-                            Run on CPU (<code>num_gpu: 0</code>)
-                          </label>
-                          {!isSeparateModel ? (
-                            <div className="form-hint" style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: 2 }}>
-                              Only active when using a separate model from the Actor to avoid GPU/CPU memory thrashing.
-                            </div>
-                          ) : (
-                            <div className="form-hint" style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: 2 }}>
-                              Loads model in system RAM (offloading 0 layers to GPU). Keeps GPU VRAM 100% dedicated to narrative prose. Requires starting Ollama with <code>OLLAMA_MAX_LOADED_MODELS=2</code>.
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })()}
-                    onInvalidChange={setClerkInvalid}
+                    vectorMode={appSettingsForm.embedding_profile.mode}
+                    onChangeVectorMode={(mode) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        embedding_profile: {
+                          ...appSettingsForm.embedding_profile,
+                          mode,
+                        },
+                      })
+                    }
+                    vectorSelection={{
+                      providerId: appSettingsForm.embedding_profile.provider_id ?? null,
+                      model: appSettingsForm.embedding_profile.model,
+                    }}
+                    onVectorSelection={(sel) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        embedding_profile: {
+                          ...appSettingsForm.embedding_profile,
+                          provider_id: sel.providerId,
+                          model: sel.model,
+                        },
+                      })
+                    }
+                    workingMemoryTurns={appSettingsForm.memory_config.working_memory_turns}
+                    onWorkingMemoryTurns={(v) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        memory_config: { ...appSettingsForm.memory_config, working_memory_turns: v },
+                      })
+                    }
+                    episodicChunkSize={appSettingsForm.memory_config.episodic_chunk_size}
+                    onEpisodicChunkSize={(v) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        memory_config: { ...appSettingsForm.memory_config, episodic_chunk_size: v },
+                      })
+                    }
+                    maxSceneFlags={appSettingsForm.memory_config.max_scene_flags ?? 10}
+                    onMaxSceneFlags={(v) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        memory_config: { ...appSettingsForm.memory_config, max_scene_flags: v },
+                      })
+                    }
+                    ephemeralLifespan={appSettingsForm.memory_config.ephemeral_memory_lifespan_turns ?? 40}
+                    onEphemeralLifespan={(v) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        memory_config: { ...appSettingsForm.memory_config, ephemeral_memory_lifespan_turns: v },
+                      })
+                    }
+                    staleEmbeddingsCount={staleEmbeddings}
+                    reindexing={reindexing}
+                    onReindex={handleReindex}
+                    onInvalidChange={setModelsDeckInvalid}
                   />
-
-                  {/* Semantic Vector Store: engine only; tuning is collapsed */}
-                  <div className="model-role-card">
-                    <div className="model-role-title" style={{ color: "var(--accent-emerald)" }}>
-                      3. Semantic Vector Store
-                    </div>
-                    <div className="form-group">
-                      <label className="form-label">Embedding Engine</label>
-                      <select
-                        className="form-input"
-                        value={appSettingsForm.embedding_profile.mode}
-                        onChange={(e) =>
-                          setAppSettingsForm({
-                            ...appSettingsForm,
-                            embedding_profile: {
-                              ...appSettingsForm.embedding_profile,
-                              mode: e.target.value as AppSettings["embedding_profile"]["mode"],
-                            },
-                          })
-                        }
-                      >
-                        <option value="local_hash">Local Feature Hash (0 VRAM)</option>
-                        <option value="openai_compat">Provider embeddings (Ollama /api/embed)</option>
-                        <option value="fastembed">Local ONNX FastEmbed</option>
-                      </select>
-                    </div>
-                    {appSettingsForm.embedding_profile.mode === "openai_compat" && (
-                      <ModelPicker
-                        role="embedding"
-                        modelKind="embedding"
-                        systemOnly
-                        value={{
-                          providerId: appSettingsForm.embedding_profile.provider_id ?? null,
-                          model: appSettingsForm.embedding_profile.model,
-                        }}
-                        onChange={(sel) =>
-                          setAppSettingsForm({
-                            ...appSettingsForm,
-                            embedding_profile: {
-                              ...appSettingsForm.embedding_profile,
-                              provider_id: sel.providerId,
-                              model: sel.model,
-                            },
-                          })
-                        }
-                      />
-                    )}
-
-                    <DisclosureSection
-                      title="3-Tier memory architecture & context tuning"
-                      summary={`N=${appSettingsForm.memory_config.working_memory_turns} · K=${appSettingsForm.memory_config.episodic_chunk_size} · flags ${appSettingsForm.memory_config.max_scene_flags ?? 10}`}
-                      invalidCount={memoryInvalidCount}
-                    >
-                      <div className="grid-2">
-                        <IntegerField
-                          label="Zone 3 Working Turns (N)"
-                          min={4}
-                          max={64}
-                          value={appSettingsForm.memory_config.working_memory_turns}
-                          onValidityChange={setMemoryFieldValid("n")}
-                          onCommit={(v) =>
-                            setAppSettingsForm({
-                              ...appSettingsForm,
-                              memory_config: { ...appSettingsForm.memory_config, working_memory_turns: v },
-                            })
-                          }
-                        />
-                        <IntegerField
-                          label="Zone 2 Chunk Size (K)"
-                          min={2}
-                          max={32}
-                          value={appSettingsForm.memory_config.episodic_chunk_size}
-                          onValidityChange={setMemoryFieldValid("k")}
-                          onCommit={(v) =>
-                            setAppSettingsForm({
-                              ...appSettingsForm,
-                              memory_config: { ...appSettingsForm.memory_config, episodic_chunk_size: v },
-                            })
-                          }
-                        />
-                        <IntegerField
-                          label="Max Scene Flags (FIFO)"
-                          min={1}
-                          max={50}
-                          value={appSettingsForm.memory_config.max_scene_flags ?? 10}
-                          onValidityChange={setMemoryFieldValid("flags")}
-                          onCommit={(v) =>
-                            setAppSettingsForm({
-                              ...appSettingsForm,
-                              memory_config: { ...appSettingsForm.memory_config, max_scene_flags: v },
-                            })
-                          }
-                        />
-                        <IntegerField
-                          label="Ephemeral Memory Lifespan (turns)"
-                          min={4}
-                          max={200}
-                          value={appSettingsForm.memory_config.ephemeral_memory_lifespan_turns ?? 40}
-                          onValidityChange={setMemoryFieldValid("lifespan")}
-                          onCommit={(v) =>
-                            setAppSettingsForm({
-                              ...appSettingsForm,
-                              memory_config: {
-                                ...appSettingsForm.memory_config,
-                                ephemeral_memory_lifespan_turns: v,
-                              },
-                            })
-                          }
-                        />
-                      </div>
-                    </DisclosureSection>
-                  </div>
 
                   {/* LLM Resilience (governs Actor/Clerk failure handling, not embeddings) */}
                   <div className="model-role-card">
@@ -1482,7 +1345,7 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
                       className="btn btn-amber"
                       disabled={
                         savingSettings ||
-                        actorInvalid + clerkInvalid + memoryInvalidCount > 0 ||
+                        modelsDeckInvalid > 0 ||
                         (providerStore.providers.length > 0 &&
                           (!appSettingsForm.actor_profile.provider_id ||
                             !appSettingsForm.actor_profile.model ||

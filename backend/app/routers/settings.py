@@ -220,6 +220,7 @@ def get_profile_models(
         default_agent_dispatch_mode=settings.agent_dispatch_mode,
         default_persona_disclosure_mode="llm_intent",
         default_clerk_mirrors_actor=settings.clerk_mirrors_actor,
+        default_embedding_profile=settings.embedding_profile,
     )
 
 

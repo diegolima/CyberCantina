@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.config import AgentDispatchMode, ModelProfile
+from app.config import AgentDispatchMode, EmbeddingProfile, ModelProfile
 
 UserRole = Literal["user", "admin"]
 
@@ -180,3 +180,4 @@ class ProfileModelSettingsResponse(BaseModel):
     default_max_scene_flags: int = 10
     default_agent_dispatch_mode: AgentDispatchMode = "sequential"
     default_persona_disclosure_mode: str = "llm_intent"
+    default_embedding_profile: EmbeddingProfile | None = None

@@ -1157,6 +1157,7 @@ export interface ProfileModelSettingsResponse {
   default_max_scene_flags?: number;
   default_agent_dispatch_mode?: AgentDispatchMode;
   default_persona_disclosure_mode?: DisclosureDetectionMode;
+  default_embedding_profile?: AppSettings["embedding_profile"];
 }
 
 export interface PromptVariableDoc {
