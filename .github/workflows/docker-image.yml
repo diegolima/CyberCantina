@@ -1,0 +1,33 @@
+name: Docker Image CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+    - name: Login to Docker Hub
+      uses: docker/login-action@v4
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_PASSWORD }}
+    - name: Build and push backend
+      uses: docker/build-push-action@v7
+      with:
+        context: "{{defaultContext}}:backend"
+        push: true
+        tags: diegolima/cybercantina-backend:alpha,diegolima/cybercantina-backend:alpha-${{ vars.GITHUB_SHA }}
+    - name: Build and push frontend
+      uses: docker/build-push-action@v7
+      with:
+        context: "{{defaultContext}}:frontend"
+        push: true
+        tags: diegolima/cybercantina-frontend:alpha,diegolima/cybercantina-frontend:alpha-${{ vars.GITHUB_SHA }}
