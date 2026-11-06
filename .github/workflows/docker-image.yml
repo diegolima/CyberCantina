@@ -24,10 +24,10 @@ jobs:
       with:
         context: "{{defaultContext}}:backend"
         push: true
-        tags: diegolima/cybercantina-backend:alpha,diegolima/cybercantina-backend:alpha-${{ vars.GITHUB_SHA }}
+        tags: diegolima/cybercantina-backend:alpha,diegolima/cybercantina-backend:alpha-${{ github.sha }}
     - name: Build and push frontend
       uses: docker/build-push-action@v7
       with:
         context: "{{defaultContext}}:frontend"
         push: true
-        tags: diegolima/cybercantina-frontend:alpha,diegolima/cybercantina-frontend:alpha-${{ vars.GITHUB_SHA }}
+        tags: diegolima/cybercantina-frontend:alpha,diegolima/cybercantina-frontend:alpha-${{ github.sha }}
