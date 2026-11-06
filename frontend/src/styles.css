@@ -3745,3 +3745,334 @@ body {
   background: rgba(244, 63, 94, 0.1);
 }
 
+/* =========================================================================
+   Character Mentions & Whispers System Styles
+   ========================================================================= */
+
+/* Presence Badges */
+.mention-badge-present {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.mention-badge-remote {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: rgba(6, 182, 212, 0.15);
+  color: #22d3ee;
+  border: 1px solid rgba(6, 182, 212, 0.35);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.presence-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.presence-dot.emerald {
+  background-color: #10b981;
+  box-shadow: 0 0 4px #10b981;
+}
+
+/* User Message Bubble with Whispers */
+.user-message-container {
+  align-self: flex-end;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 85%;
+  width: 100%;
+}
+
+.user-bubble-shared {
+  align-self: flex-end;
+  max-width: 100%;
+}
+
+.whispers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.user-whisper-card {
+  align-self: flex-end;
+  width: 100%;
+  max-width: 100%;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  border-left: 3px solid #a855f7;
+  border-radius: 8px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+.whisper-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.whisper-target-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.whisper-target-chip {
+  font-weight: 600;
+  font-size: 0.82rem;
+  color: #c084fc;
+}
+
+.whisper-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.whisper-speech-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 0.88rem;
+  color: #e0e7ff;
+  line-height: 1.45;
+}
+
+.whisper-icon-speech {
+  color: #818cf8;
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.whisper-speech-text {
+  font-style: normal;
+  font-weight: 500;
+}
+
+.whisper-sensory-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: #94a3b8;
+  font-style: italic;
+  line-height: 1.4;
+}
+
+.whisper-icon-sensory {
+  color: #a855f7;
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.whisper-sensory-text {
+  color: #cbd5e1;
+}
+
+.whisper-fallback-line {
+  font-size: 0.88rem;
+  color: #e2e8f0;
+}
+
+/* Mention Autocomplete Popover */
+.mention-picker-popover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  width: min(340px, 95vw);
+  background: #111827;
+  border: 1px solid rgba(139, 92, 246, 0.4);
+  border-radius: 8px;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(139, 92, 246, 0.2);
+  z-index: 100;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.mention-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: rgba(139, 92, 246, 0.12);
+  border-bottom: 1px solid rgba(139, 92, 246, 0.2);
+  font-size: 0.72rem;
+}
+
+.mention-picker-title {
+  font-weight: 600;
+  color: #c084fc;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mention-picker-shortcut {
+  color: #94a3b8;
+  font-size: 0.68rem;
+}
+
+.mention-picker-list {
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+}
+
+.mention-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.mention-picker-item:hover,
+.mention-picker-item.selected {
+  background: rgba(139, 92, 246, 0.22);
+}
+
+.mention-picker-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(139, 92, 246, 0.2);
+  color: #c084fc;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.mention-picker-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.mention-picker-name-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.mention-picker-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.mention-picker-tagline {
+  font-size: 0.72rem;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Composer Mention Chips Strip */
+.composer-mention-chips-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(15, 23, 42, 0.75);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.composer-mention-chips-label {
+  font-size: 0.70rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+  margin-right: 2px;
+}
+
+.composer-mention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px 2px 8px;
+  background: rgba(139, 92, 246, 0.15);
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  border-radius: 12px;
+  font-size: 0.75rem;
+  color: #f3e8ff;
+}
+
+.mention-chip-name {
+  font-weight: 600;
+  color: #d8b4fe;
+}
+
+.mention-chip-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.65rem;
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.mention-chip-tag.speech {
+  background: rgba(99, 102, 241, 0.25);
+  color: #a5b4fc;
+}
+
+.mention-chip-tag.sensory {
+  background: rgba(168, 85, 247, 0.25);
+  color: #e9d5ff;
+}
+
+.mention-chip-remove {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: #a855f7;
+  padding: 1px;
+  margin-left: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: color 0.12s, background 0.12s;
+}
+
+.mention-chip-remove:hover {
+  color: #f43f5e;
+  background: rgba(244, 63, 94, 0.15);
+}
+
+

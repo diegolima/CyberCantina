@@ -386,6 +386,10 @@ class WizardLocationNodeLLMOutput(BaseModel):
     )
     is_starting_location: bool = Field(default=False)
     is_hub: bool = Field(default=False)
+    starting_message: str = Field(
+        default="",
+        description="Atmospheric Turn 0 opening scene prose if this room serves as campaign entry.",
+    )
 
     def to_location_draft(self) -> "LocationNodeDraft":
         return LocationNodeDraft(
@@ -396,6 +400,7 @@ class WizardLocationNodeLLMOutput(BaseModel):
             environmental_tags=list(self.environmental_tags),
             is_starting_location=self.is_starting_location,
             is_hub=self.is_hub,
+            starting_message=self.starting_message,
             lore_nodes=[],
         )
 
@@ -417,6 +422,10 @@ class LocationNodeDraft(BaseModel):
     )
     is_starting_location: bool = Field(default=False)
     is_hub: bool = Field(default=False)
+    starting_message: str = Field(
+        default="",
+        description="Atmospheric Turn 0 opening scene prose if this room serves as campaign entry.",
+    )
     lore_nodes: list[LocationLoreNodeDraft] = Field(
         default_factory=list,
         description="User-authored location lore entries preserved across wizard review -> commit.",
@@ -545,6 +554,10 @@ class LocationNode(BaseModel):
     environmental_tags: list[str] = Field(default_factory=list)
     is_starting_location: bool = False
     is_hub: bool = False
+    starting_message: str = Field(
+        default="",
+        description="Atmospheric Turn 0 opening scene prose if this room serves as campaign entry.",
+    )
     lore_nodes: list[LoreNode] = Field(default_factory=list)
 
     @model_validator(mode="before")

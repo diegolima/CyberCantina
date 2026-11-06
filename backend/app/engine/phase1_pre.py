@@ -7,6 +7,7 @@ import re
 
 from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
+from app.engine.mentions import DecomposedUserMessage, MentionTargetScope, decompose_user_message
 from app.prompts import get_default_prompt, render_template
 from app.schemas.character import (
     CharacterRecord,
@@ -533,6 +534,7 @@ def select_speaker_order(
     user_message: str,
     present_characters: list[CharacterRecord],
     previous_speaker_id: str | None = None,
+    decomposed_message: DecomposedUserMessage | None = None,
 ) -> list[str]:
     """Order speakers present at active_location by direct address, topic relevance, or turn rotation."""
     if not present_characters:
@@ -540,19 +542,32 @@ def select_speaker_order(
     if len(present_characters) == 1:
         return [present_characters[0].id]
 
+    decomp = (
+        decomposed_message
+        if decomposed_message is not None
+        else decompose_user_message(user_message, present_characters)
+    )
+
     msg_lower = user_message.lower()
     named_scores: dict[str, int] = {}
     topic_scores: dict[str, int] = {}
 
     for char in present_characters:
+        score = 0
+        if decomp:
+            w = decomp.whispers_by_character_id.get(char.id)
+            if w and w.target_scope == MentionTargetScope.LOCAL:
+                score = 200 if w.speech_parts else 150
+
         name_lower = char.name.lower()
         first_name = name_lower.split()[0] if name_lower.split() else name_lower
-        if name_lower in msg_lower or (
-            len(first_name) >= 3 and re.search(rf"\b{re.escape(first_name)}\b", msg_lower)
-        ):
-            named_scores[char.id] = 100
-        else:
-            named_scores[char.id] = 0
+        if score == 0:
+            if name_lower in msg_lower or (
+                len(first_name) >= 3 and re.search(rf"\b{re.escape(first_name)}\b", msg_lower)
+            ):
+                score = 100
+
+        named_scores[char.id] = score
 
         kw_hits = 0
         for shard in char.memory_shards:
@@ -593,6 +608,7 @@ def _build_heuristic_llm_output(
     persona_snapshot: PersonaRecord | None = None,
     current_player_items: list[PersonaItemInstance] | None = None,
     already_unlocked_keys: set[str] | None = None,
+    decomposed_message: DecomposedUserMessage | None = None,
 ) -> PreTurnLLMOutput:
     """Deterministic extractor producing structured PreTurnLLMOutput without invoking RNG."""
     msg_lower = user_message.lower()
@@ -610,6 +626,10 @@ def _build_heuristic_llm_output(
     else:
         sentiment = "focused, observant, direct"
         subtext = "Engaging directly with the situation and gauging reaction."
+
+    if decomposed_message and decomposed_message.remote_whispers:
+        rem_names = ", ".join(w.character_name for w in decomposed_message.remote_whispers)
+        subtext += f" Comms transmission directed off-site to {rem_names}."
 
     # 2. Mentioned entities
     mentioned: list[str] = []
@@ -661,10 +681,30 @@ def _build_heuristic_llm_output(
         user_message,
         room_chars,
         previous_speaker_id=previous_speaker_id,
+        decomposed_message=decomposed_message,
     )
     active_speaker_id = speaker_order[0] if speaker_order else None
 
-    # 7. Deterministic persona disclosures via token matching
+    # 7. Character checks for sensory cues
+    char_checks: list[CharacterCheckSpec] = []
+    if decomposed_message:
+        for w in decomposed_message.whispers:
+            if w.target_scope == MentionTargetScope.LOCAL and w.sensory_parts:
+                sensory_text = " ".join(w.sensory_parts).lower()
+                if any(k in sensory_text for k in ("shadow", "click", "noise", "sound", "threat", "wire", "hear", "see", "spot")):
+                    char_checks.append(
+                        CharacterCheckSpec(
+                            character_id=w.character_id,
+                            requires_roll=True,
+                            check_role="active_attempt",
+                            action_description=f"Perceiving sensory cue: {w.sensory_parts[0][:50]}",
+                            skill_or_approach="Perception",
+                            difficulty_class=12,
+                            relevant_modifier=1,
+                        )
+                    )
+
+    # 8. Deterministic persona disclosures via token matching
     revealed_keys: list[str] = []
     if persona_snapshot is not None and len(room_chars) > 0:
         revealed_keys = detect_persona_disclosures_token_matching(
@@ -684,7 +724,7 @@ def _build_heuristic_llm_output(
         active_speaker_id=active_speaker_id,
         speaker_order=speaker_order,
         mechanics_check=mechanics,
-        character_checks=[],
+        character_checks=char_checks,
         revealed_persona_keys=revealed_keys,
     )
 
@@ -758,6 +798,7 @@ async def run_phase1_pre_analysis(
     current_player_items: list[PersonaItemInstance] | None = None,
     disclosure_detection_mode: DisclosureDetectionMode = "llm_intent",
     already_unlocked_keys: set[str] | None = None,
+    decomposed_message: DecomposedUserMessage | None = None,
 ) -> PreTurnAnalysis:
     """Execute Phase 1 Pre-Turn Analysis via the Auxiliary Clerk (with offline fallback) and resolve RNG."""
     has_any_gates = any(cs.has_gates for cs in (character_choices or {}).values())
@@ -768,10 +809,16 @@ async def run_phase1_pre_analysis(
 
     room_chars = present_characters if present_characters else [character]
     room_char_ids = {c.id for c in room_chars}
+    decomp = (
+        decomposed_message
+        if decomposed_message is not None
+        else decompose_user_message(user_message, room_chars)
+    )
     fallback_order = select_speaker_order(
         user_message,
         room_chars,
         previous_speaker_id=previous_speaker_id,
+        decomposed_message=decomp,
     )
 
     neighbor_desc = ", ".join(
@@ -794,6 +841,23 @@ async def run_phase1_pre_analysis(
         mode_prompt_hint = "\nNote: Dice mechanics are forced for this turn. Identify characters facing risk/action or assign an active attempt to the primary speaker."
     elif dice_mode == "disabled":
         mode_prompt_hint = "\nNote: Dice mechanics are disabled for this turn. Set character_checks=[] and mechanics_check.requires_roll=false."
+
+    mention_hint = ""
+    if decomp and decomp.whispers:
+        mLines = []
+        for w in decomp.whispers:
+            pts = []
+            if w.speech_parts:
+                pts.append(f"Spoken Dialogue: {w.speech_parts}")
+            if w.sensory_parts:
+                pts.append(f"Sensory/Observation: {w.sensory_parts}")
+            mLines.append(f"- @{w.character_name} ({w.target_scope.value.upper()}): {'; '.join(pts)}")
+        mention_hint = (
+            "\nTargeted Mentions / Whispers in this Message:\n"
+            + "\n".join(mLines)
+            + "\nPrioritize mentioned characters who are present in the room for active_speaker_id and speaker_order. "
+            "If sensory danger or observation is whispered, consider requiring perception/reaction checks for that character."
+        )
 
     persona_manifest_lines: list[str] = []
     if persona_snapshot:
@@ -829,7 +893,7 @@ async def run_phase1_pre_analysis(
         f"Previous Turn Speaker ID: {previous_speaker_id or character.id}\n"
         f"Current Location: {active_location.name} ({active_location.summary})\n"
         f"Adjacent Exits: {neighbor_desc}\n"
-        f"Known Entities/Lore Keywords: {', '.join(known_entities[:30])}\n{mode_prompt_hint}{persona_prompt_hint}\n\n"
+        f"Known Entities/Lore Keywords: {', '.join(known_entities[:30])}\n{mode_prompt_hint}{persona_prompt_hint}{mention_hint}\n\n"
         f"User Message:\n{user_message}"
     )
 
@@ -857,6 +921,7 @@ async def run_phase1_pre_analysis(
             persona_snapshot=persona_snapshot,
             current_player_items=current_player_items,
             already_unlocked_keys=already_unlocked_keys,
+            decomposed_message=decomp,
         )
         analysis = PreTurnAnalysis(**raw_output.model_dump())
 

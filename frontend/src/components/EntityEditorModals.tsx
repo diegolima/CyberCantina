@@ -2387,6 +2387,7 @@ export function mapDraftToNodesAndEdges(
       environmental_tags: [...(loc.environmental_tags ?? [])],
       is_starting_location: isStart,
       is_hub: Boolean(loc.is_hub),
+      starting_message: loc.starting_message ?? "",
       lore_nodes: (loc.lore_nodes ?? []).map((ln, lIdx) => ({
         id: ln.id || `draft_loc_lore_${idx}_${lIdx}`,
         world_id: worldId,
@@ -2521,6 +2522,7 @@ export function worldStateToDraft(state: {
         ? Boolean(loc.is_starting_location)
         : idx === 0,
       is_hub: Boolean(loc.is_hub),
+      starting_message: loc.starting_message ?? "",
       lore_nodes: (loc.lore_nodes ?? []).map((ln) => ({
         id: ln.id,
         title: ln.title.trim(),

@@ -6,6 +6,11 @@ from dataclasses import dataclass, field
 import re
 from typing import Any
 from app.config import settings
+from app.engine.mentions import (
+    DecomposedUserMessage,
+    decompose_user_message,
+    filter_user_message_for_character,
+)
 from app.engine.world_clock import describe_world_timestamp
 from app.prompts import get_default_prompt, render_template
 from app.schemas.character import (
@@ -781,6 +786,7 @@ class TurnContextBundle:
     persona_snapshot: PersonaRecord | None = None
     current_player_state: PersonaTurnStateSnapshot | None = None
     per_character_known_personas: dict[str, DiscoveredPersonaView] = field(default_factory=dict)
+    decomposed_message: DecomposedUserMessage | None = None
 
 
 def build_zone2_episodic_summary(chunks: list[EpisodicChunkRecord]) -> str | None:
@@ -905,11 +911,17 @@ async def resolve_phase2_turn_context(
     rag_top_k: int = 5,
     persona_snapshot: PersonaRecord | None = None,
     current_player_state: PersonaTurnStateSnapshot | None = None,
+    decomposed_message: DecomposedUserMessage | None = None,
 ) -> TurnContextBundle:
     """Phase 2: Scoped RAG & Context Resolution.
     Computes query embeddings once and partitions memory items between shared scene items
     and strictly epistemically-isolated per-character items.
     """
+    decomp = (
+        decomposed_message
+        if decomposed_message is not None
+        else decompose_user_message(user_message, present_characters)
+    )
     valid_branch_turn_ids = {t.id for t in branch_turns}
     character_witnessed_turn_ids = {
         c.id: {t.id for t in branch_turns if was_character_present_on_turn(t, c.id)}
@@ -978,6 +990,7 @@ async def resolve_phase2_turn_context(
         persona_snapshot=persona_snapshot,
         current_player_state=current_player_state,
         per_character_known_personas=per_char_known,
+        decomposed_message=decomp,
     )
 
 
@@ -1001,6 +1014,7 @@ def build_zone4_ephemeral_tail_frame(
     established_cognitions: dict[str, CognitionBlock] | None = None,
     persona_snapshot: PersonaRecord | None = None,
     current_player_state: PersonaTurnStateSnapshot | None = None,
+    decomposed_message: DecomposedUserMessage | None = None,
 ) -> str:
     """Zone 4: Dynamic turn-specific context injected at the tail of the prompt."""
     exits_text = "\n".join(
@@ -1235,6 +1249,23 @@ def build_zone4_ephemeral_tail_frame(
                 f"  </player_visible_equipment>"
             )
 
+    directed_cues_section = ""
+    if decomposed_message and decomposed_message.whispers:
+        whisper_lines = []
+        for w in decomposed_message.whispers:
+            pts = []
+            if w.speech_parts:
+                pts.append(f"Spoken Dialogue: {w.speech_parts}")
+            if w.sensory_parts:
+                pts.append(f"Sensory/Perception: {w.sensory_parts}")
+            whisper_lines.append(f"    - @{w.character_name} ({w.target_scope.value.upper()}): {'; '.join(pts)}")
+        directed_cues_section = (
+            f"\n  <directed_character_cues>\n"
+            + "\n".join(whisper_lines)
+            + "\n    CRITICAL DIRECTIVE: Characters are only aware of their own private perceptions and words spoken aloud in the room. Characters must NOT metagame each other's private sensory observations.\n"
+            f"  </directed_character_cues>"
+        )
+
     return (
         "<scene_context>\n"
         f"  <world_clock>{describe_world_timestamp(world_snapshot.world_timestamp)}</world_clock>\n"
@@ -1253,7 +1284,8 @@ def build_zone4_ephemeral_tail_frame(
         f"  </auxiliary_prompt_analysis>{rng_section}\n"
         f"{mind_state_section}"
         f"{established_cognition_section}"
-        f"{player_gear_section}\n"
+        f"{player_gear_section}"
+        f"{directed_cues_section}\n"
         "</scene_context>\n\n"
         f"{user_tail}"
     )
@@ -1281,6 +1313,7 @@ def assemble_four_zone_messages(
     established_cognitions: dict[str, CognitionBlock] | None = None,
     persona_snapshot: PersonaRecord | None = None,
     current_player_state: PersonaTurnStateSnapshot | None = None,
+    decomposed_message: DecomposedUserMessage | None = None,
 ) -> list[dict[str, str]]:
     """Construct the complete 4-Zone OpenAI messages array for the Main Actor Model."""
     if is_narrator:
@@ -1331,10 +1364,20 @@ def assemble_four_zone_messages(
         elif turn.actor_id == "__narrator__" and active_actor_id != "__narrator__":
             prose_text = f"[Narrator]: {turn.raw_prose}"
 
+        filtered_user_msg = (
+            turn.user_message
+            if is_narrator
+            else filter_user_message_for_character(
+                turn.user_message,
+                target_character_id=character.id,
+                campaign_characters=present_characters or [character],
+            )
+        )
+
         if turn.depth_index == 0 and turn.user_message == "[Scene Start]":
             messages.append({"role": "assistant", "content": prose_text})
         else:
-            messages.append({"role": "user", "content": turn.user_message})
+            messages.append({"role": "user", "content": filtered_user_msg})
             messages.append({"role": "assistant", "content": prose_text})
 
     # Zone 4: Ephemeral Turn Frame + latest user message at the very tail
@@ -1363,6 +1406,7 @@ def assemble_four_zone_messages(
         established_cognitions=established_cognitions,
         persona_snapshot=persona_snapshot,
         current_player_state=current_player_state,
+        decomposed_message=decomposed_message,
     )
     messages.append({"role": "user", "content": zone4_content})
     return messages

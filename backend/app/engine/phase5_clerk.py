@@ -23,6 +23,7 @@ from app.engine.character_agent import (
     run_character_post_turn_agent,
 )
 from app.engine.llm_client import llm_client
+from app.engine.mentions import filter_user_message_for_character, sanitize_history_for_episodic_summary
 from app.engine.phase2_context import resolve_character_previous_state
 from app.prompts import (
     DEFAULT_CLERK_MEMORY_COMPACTION_SYSTEM,
@@ -628,8 +629,10 @@ def _extract_heuristic_character_memories(
 
     results: list[ExtractedCharacterMemory] = []
     for ch in target_chars:
+        u_filtered = filter_user_message_for_character(user_message, ch.id, present_characters)
+        u_clean_char = _synthesize_concise_sentences(u_filtered or user_message, max_sentences=1)
         synth = _synthesize_concise_sentences(
-            f"{ch.name} experienced a {matched_sig} moment: {u_clean} {p_clean}",
+            f"{ch.name} experienced a {matched_sig} moment: {u_clean_char} {p_clean}",
             max_sentences=2,
         )
         results.append(
@@ -1037,8 +1040,9 @@ async def summarize_turn_chunk(
             if t.world_snapshot.scene_flags
             else ""
         )
+        sanitized_u = sanitize_history_for_episodic_summary(t.user_message, [character])
         transcript_lines.append(
-            f"Turn {t.depth_index}{flags_str} | User: {t.user_message}\n{speaker_label}: {t.raw_prose}"
+            f"Turn {t.depth_index}{flags_str} | User: {sanitized_u}\n{speaker_label}: {t.raw_prose}"
         )
     transcript = "\n".join(transcript_lines)
     system_prompt = render_template(

@@ -2223,28 +2223,24 @@ export const App: React.FC = () => {
             setEditingPersona(null);
             setShowPersonaModal(true);
           }}
-          onCreate={async ({ name, world_id, character_id, persona_id }) => {
-            const created = await api.createCampaign({
-              name,
-              world_id,
-              character_id,
-              persona_id,
-            });
+          onCreate={async (payload) => {
+            const created = await api.createCampaign(payload);
             const allCamps = await api.listCampaigns();
             setCampaigns(allCamps);
             setBundle(created);
             try {
               localStorage.setItem(ACTIVE_CAMPAIGN_STORAGE_KEY, created.campaign.id);
             } catch {}
-            const w = worlds.find((item) => item.id === world_id) ?? worlds[0];
-            const c = characters.find((item) => item.id === character_id) ?? characters[0];
+            const w = worlds.find((item) => item.id === payload.world_id) ?? worlds[0];
+            const primaryId = payload.focus_character_id || payload.character_id || payload.character_ids?.[0];
+            const c = characters.find((item) => item.id === primaryId) ?? characters[0];
             setCampaignWorld(w);
             setCampaignCharacter(c);
             setActiveWorld(w);
             setActiveCharacter(c);
-            if (persona_id) {
-              const p = personas.find((item) => item.id === persona_id);
-              if (p) setActivePersona(p);
+            if (payload.persona_id) {
+              const p = personas.find((item) => item.id === payload.persona_id) ?? null;
+              setActivePersona(p);
             }
           }}
         />

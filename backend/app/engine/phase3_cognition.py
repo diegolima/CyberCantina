@@ -9,6 +9,7 @@ import re
 from typing import Any
 
 from app.config import settings
+from app.engine.mentions import CharacterWhisper, DecomposedUserMessage, decompose_user_message
 from app.engine.phase2_context import (
     DiscoveredPersonaView,
     TurnContextBundle,
@@ -167,6 +168,8 @@ def heuristic_character_cognition(
     role: CharacterSpotlightRole = "primary_speaker",
     choice_resolution: ChoiceResolution | None = None,
     known_persona: DiscoveredPersonaView | None = None,
+    public_message: str | None = None,
+    char_whisper: CharacterWhisper | None = None,
 ) -> CognitionBlock:
     """Generate a deterministic, high-quality fallback CognitionBlock without LLM."""
     sentiment_lower = pre_turn.user_sentiment.lower()
@@ -241,9 +244,14 @@ def heuristic_character_cognition(
                 "- Seize decisive initiative with unexpected advantage.",
             ]
     else:
+        target_cue = (
+            char_whisper.raw_lines[0]
+            if char_whisper and char_whisper.raw_lines
+            else (public_message or user_message)
+        )
         plan_bullets = (
             [
-                f"- Address the player directly regarding: {user_message[:60]}...",
+                f"- Address the player directly regarding: {target_cue[:60]}...",
                 f"- Hold ground and monitor room reactions.",
             ]
             if role == "primary_speaker"
@@ -293,6 +301,8 @@ async def run_character_cognition_agent(
     choice_resolution: ChoiceResolution | None = None,
     narrator_directive: str | None = None,
     known_persona: DiscoveredPersonaView | None = None,
+    public_message: str | None = None,
+    char_whisper: CharacterWhisper | None = None,
 ) -> CognitionBlock:
     """Execute a single character subconscious cognition agent turn."""
     template = system_prompt_template or get_default_prompt(
@@ -462,8 +472,25 @@ async def run_character_cognition_agent(
         f"{choice_directive_text}"
         f"Recalled Scoped Memories & Lore:\n"
         f"{recalled_text}\n\n"
-        f"User Action / Dialogue:\n"
-        f"\"{user_message}\""
+    )
+
+    eff_public = public_message if public_message is not None else user_message
+    directed_sections: list[str] = []
+    if char_whisper:
+        if char_whisper.speech_parts:
+            s_lines = "\n".join(f'  - "{s}"' for s in char_whisper.speech_parts)
+            directed_sections.append(f"Player Dialogue Directed Specifically To You:\n{s_lines}")
+        if char_whisper.sensory_parts:
+            sens_lines = "\n".join(f"  - {s}" for s in char_whisper.sensory_parts)
+            directed_sections.append(
+                f"Private Perception / Sensory Cues (Known ONLY to you, not spoken aloud):\n{sens_lines}"
+            )
+    directed_block = ("\n\n" + "\n\n".join(directed_sections)) if directed_sections else ""
+
+    user_prompt += (
+        f"Shared Scene Action (Observed by everyone in the room):\n"
+        f"\"{eff_public}\""
+        f"{directed_block}"
     )
 
     eff_profile = profile or settings.clerk_profile
@@ -604,6 +631,12 @@ async def run_phase3_multi_cognition(
     char_lookup = {c.id: c for c in context.present_characters}
     results: dict[str, CognitionBlock] = {}
 
+    decomp = getattr(context, "decomposed_message", None)
+    if decomp is None:
+        decomp = decompose_user_message(context.user_message, context.present_characters)
+
+    semaphore = asyncio.Semaphore(4)
+
     if dispatch_mode == "parallel":
         async def _run_parallel_entry(entry: Phase3RosterEntry) -> tuple[str, CognitionBlock]:
             char = char_lookup.get(entry.character_id)
@@ -621,35 +654,40 @@ async def run_phase3_multi_cognition(
                 )
             c_res = context.pre_turn.choice_resolutions.get(entry.character_id)
             known_p = (context.per_character_known_personas or {}).get(char.id)
+            char_w = decomp.whispers_by_character_id.get(char.id)
+            pub_text = decomp.public_text
             try:
                 char_prev = context.all_character_states.get(
                     char.id
                 ) or resolve_character_previous_state(
                     context.branch_turns, char, context.active_location.id
                 )
-                cog = await run_character_cognition_agent(
-                    user_message=context.user_message,
-                    character=char,
-                    world=context.world,
-                    role=entry.role,
-                    previous_state=char_prev,
-                    active_location=context.active_location,
-                    neighbors=context.neighbors,
-                    shared_scene_items=context.shared_scene_items,
-                    character_recalled_items=context.per_character_recalled_items.get(
-                        char.id, []
-                    ),
-                    pre_turn=context.pre_turn,
-                    co_present_characters=[
-                        c for c in context.present_characters if c.id != char.id
-                    ],
-                    prior_cues=None,
-                    profile=profile,
-                    system_prompt_template=cognition_system_template,
-                    choice_resolution=c_res,
-                    narrator_directive=context.narrator_directive,
-                    known_persona=known_p,
-                )
+                async with semaphore:
+                    cog = await run_character_cognition_agent(
+                        user_message=context.user_message,
+                        character=char,
+                        world=context.world,
+                        role=entry.role,
+                        previous_state=char_prev,
+                        active_location=context.active_location,
+                        neighbors=context.neighbors,
+                        shared_scene_items=context.shared_scene_items,
+                        character_recalled_items=context.per_character_recalled_items.get(
+                            char.id, []
+                        ),
+                        pre_turn=context.pre_turn,
+                        co_present_characters=[
+                            c for c in context.present_characters if c.id != char.id
+                        ],
+                        prior_cues=None,
+                        profile=profile,
+                        system_prompt_template=cognition_system_template,
+                        choice_resolution=c_res,
+                        narrator_directive=context.narrator_directive,
+                        known_persona=known_p,
+                        public_message=pub_text,
+                        char_whisper=char_w,
+                    )
                 used_fallback = False
             except Exception as err:
                 logger.warning("Parallel Phase 3 error for %s: %s", char.name, err)
@@ -666,6 +704,8 @@ async def run_phase3_multi_cognition(
                     role=entry.role,
                     choice_resolution=c_res,
                     known_persona=known_p,
+                    public_message=pub_text,
+                    char_whisper=char_w,
                 )
                 used_fallback = True
 
@@ -706,6 +746,8 @@ async def run_phase3_multi_cognition(
                 )
             c_res = context.pre_turn.choice_resolutions.get(entry.character_id)
             known_p = (context.per_character_known_personas or {}).get(char.id)
+            char_w = decomp.whispers_by_character_id.get(char.id)
+            pub_text = decomp.public_text
             try:
                 char_prev = context.all_character_states.get(
                     char.id
@@ -734,6 +776,8 @@ async def run_phase3_multi_cognition(
                     choice_resolution=c_res,
                     narrator_directive=context.narrator_directive,
                     known_persona=known_p,
+                    public_message=pub_text,
+                    char_whisper=char_w,
                 )
                 used_fallback = False
             except Exception as err:
@@ -752,6 +796,8 @@ async def run_phase3_multi_cognition(
                     role=entry.role,
                     choice_resolution=c_res,
                     known_persona=known_p,
+                    public_message=pub_text,
+                    char_whisper=char_w,
                 )
                 used_fallback = True
 
@@ -766,12 +812,14 @@ async def run_phase3_multi_cognition(
             if c_roll and len(cog.plan.splitlines()) > 1:
                 c_consequence = re.sub(r"^[-*•\d.)\s]+", "", cog.plan.splitlines()[1]).strip()
 
+            # Prevent leaking private whisper states into outward posture cues
+            has_secret_whisper = bool(char_w and char_w.sensory_parts)
             prior_cues.append(
                 PriorCognitionCue(
                     character_id=char.id,
                     character_name=char.name,
-                    feeling_summary=cog.feeling,
-                    want_summary=cog.want,
+                    feeling_summary="Alert, assessing scene" if has_secret_whisper else cog.feeling,
+                    want_summary="Respond to immediate developments" if has_secret_whisper else cog.want,
                     observable_action_hint=first_plan_action,
                     roll_outcome_tier=c_tier,
                     observable_consequence_hint=c_consequence,

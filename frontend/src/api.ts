@@ -15,6 +15,7 @@ import {
   ChoicePreviewResponse,
   CognitionBlock,
   CreateNotePayload,
+  CreateCampaignPayload,
   DiceMode,
   ItemEquipActionPayload,
   LocationLoreNodeDraft,
@@ -769,13 +770,7 @@ export const api = {
     ),
 
   listCampaigns: () => fetchJson<CampaignRecord[]>(`${API_BASE}/campaigns`),
-  createCampaign: (payload: {
-    name: string;
-    world_id: string;
-    character_id: string;
-    opening_prose?: string;
-    persona_id?: string | null;
-  }) =>
+  createCampaign: (payload: CreateCampaignPayload) =>
     fetchJson<CampaignStateBundle>(`${API_BASE}/campaigns`, {
       method: "POST",
       body: JSON.stringify(payload),

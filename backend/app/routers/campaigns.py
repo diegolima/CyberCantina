@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
 from app.config import settings
@@ -25,6 +25,7 @@ from app.dependencies import (
     get_repo,
     run_entity_pruner,
 )
+from app.engine.mentions import decompose_user_message
 from app.engine.phase1_pre import run_phase1_pre_analysis
 from app.engine.phase2_context import (
     assemble_four_zone_messages,
@@ -37,6 +38,8 @@ from app.engine.phase3_cognition import run_phase3_multi_cognition
 from app.engine.phase4_prose import stream_phase4_prose
 from app.engine.phase5_clerk import run_phase5_post_turn_clerk
 from app.engine.phase4_clerk import run_phase4_post_turn_clerk
+from app.engine.clerk_placement import generate_clerk_starting_placement
+from app.prompts.defaults import PROMPT_KEY_CLERK_WORLD_START_PLACEMENT
 from app.schemas.auth import UserProfile
 from app.schemas.persona import PersonaRecord, PersonaTurnStateSnapshot
 from app.schemas.character import (
@@ -69,11 +72,13 @@ router = APIRouter(tags=["campaigns"])
 class CampaignCreateRequest(BaseModel):
     name: str
     world_id: str
-    character_id: str
+    character_id: str | None = None
     persona_id: str | None = None
-    character_ids: list[str] | None = None
+    character_ids: list[str] = Field(default_factory=list)
     character_locations: dict[str, str] | None = None
     opening_prose: str | None = None
+    start_focus: Literal["world", "character"] = "character"
+    focus_character_id: str | None = None
 
 
 class CampaignAddCharacterRequest(BaseModel):
@@ -132,25 +137,89 @@ def list_campaigns(
 
 
 @router.post("/api/campaigns", response_model=CampaignStateBundle)
-def create_campaign(
+async def create_campaign(
     req: CampaignCreateRequest,
     current_user: UserProfile = Depends(get_current_user),
 ) -> CampaignStateBundle:
     repo = get_repo()
+
+    primary_char_id = req.focus_character_id or req.character_id or (req.character_ids[0] if req.character_ids else None)
+    if not primary_char_id:
+        raise HTTPException(status_code=400, detail="At least one character must be selected for the campaign.")
+
+    all_char_ids = list(req.character_ids or [])
+    if primary_char_id not in all_char_ids:
+        all_char_ids.insert(0, primary_char_id)
+
+    try:
+        world = repo.get_world(req.world_id, owner_id=current_user.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"World not found: {exc}") from exc
+
+    start_loc = next(
+        (loc for loc in world.locations if loc.is_starting_location),
+        world.locations[0] if world.locations else None,
+    )
+    if not start_loc:
+        raise HTTPException(status_code=400, detail="The selected world has no locations.")
+
+    loc_map = req.character_locations or {}
+    opening_prose = req.opening_prose
+    actor_id: str | None = None
+
+    if req.start_focus == "world":
+        actor_id = "__narrator__"
+        world_starting_msg = (start_loc.starting_message or "").strip()
+        if not world_starting_msg:
+            world_starting_msg = f"*{start_loc.name} serves as the starting threshold. {start_loc.description}*"
+
+        present_char_ids = [
+            cid for cid in all_char_ids
+            if loc_map.get(cid, start_loc.id) == start_loc.id
+        ]
+        present_npcs: list[CharacterRecord] = []
+        for cid in present_char_ids:
+            try:
+                present_npcs.append(repo.get_character(cid, owner_id=current_user.id))
+            except KeyError:
+                continue
+
+        if present_npcs:
+            eff_actor, eff_clerk, _, _, _ = get_effective_user_model_settings(current_user.id)
+            effective_prompts = repo.resolve_effective_prompts(user_id=current_user.id)
+            prompt_tpl = effective_prompts.get(PROMPT_KEY_CLERK_WORLD_START_PLACEMENT)
+            staging_text = await generate_clerk_starting_placement(
+                world=world,
+                location=start_loc,
+                participant_characters=present_npcs,
+                profile=eff_clerk,
+                prompt_template=prompt_tpl,
+                timeout_seconds=10.0,
+            )
+            opening_prose = f"{world_starting_msg}{staging_text}".strip()
+        else:
+            opening_prose = world_starting_msg
+    else:
+        actor_id = primary_char_id
+
     try:
         camp = repo.create_campaign(
             name=req.name,
             world_id=req.world_id,
-            character_id=req.character_id,
-            character_ids=req.character_ids,
+            character_id=primary_char_id,
+            character_ids=all_char_ids,
             character_locations=req.character_locations,
-            opening_prose=req.opening_prose,
+            opening_prose=opening_prose,
             persona_id=req.persona_id,
             owner_id=current_user.id,
+            actor_id=actor_id,
+            skip_turn_0_cognition=True,
         )
         return repo.get_campaign_state_bundle(camp.id, owner_id=current_user.id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/api/campaigns/{campaign_id}/characters", response_model=CampaignStateBundle)
@@ -695,6 +764,14 @@ async def _execute_turn_stream_events(
         else:
             raise HTTPException(status_code=400, detail="User message cannot be empty")
 
+    # Decompose user message into public text vs character-directed whispers
+    present_char_ids = {c.id for c in present_characters}
+    decomposed_msg = decompose_user_message(
+        effective_user_message,
+        campaign_characters=participants,
+        present_character_ids=present_char_ids,
+    )
+
     # PHASE 1: Auxiliary Pre-Turn Analysis, Multi-Character Speaker Orchestration & RNG Mechanics
     if is_narrator:
         if req.narrative_mode == "complication":
@@ -762,6 +839,7 @@ async def _execute_turn_stream_events(
             persona_snapshot=persona_snapshot,
             current_player_items=(current_player_state.equipped + current_player_state.inventory) if current_player_state else None,
             disclosure_detection_mode=eff_disclosure_mode,
+            decomposed_message=decomposed_msg,
         )
         # Resolve active speaker selected by Phase 1 from characters present in the room
         character = (
@@ -801,6 +879,7 @@ async def _execute_turn_stream_events(
         rag_top_k=settings.memory_config.rag_top_k,
         persona_snapshot=persona_snapshot,
         current_player_state=current_player_state,
+        decomposed_message=decomposed_msg,
     )
 
     seen_recall_ids: set[str] = set()
@@ -884,6 +963,7 @@ async def _execute_turn_stream_events(
         established_cognitions=established_cognitions,
         persona_snapshot=persona_snapshot,
         current_player_state=current_player_state,
+        decomposed_message=decomposed_msg,
     )
 
     primary_cognition = (
@@ -920,6 +1000,7 @@ async def _execute_turn_stream_events(
         narrator_directive=req.narrator_directive if is_narrator else None,
         persona_snapshot=persona_snapshot,
         current_player_state=current_player_state,
+        decomposed_message=decomposed_msg,
     ):
         if item["event"] == "actor_finished":
             final_cognition = CognitionBlock.model_validate(item["data"]["cognition"])
@@ -976,6 +1057,7 @@ async def _execute_turn_stream_events(
         cognitions=established_cognitions,
         cognition_character_names={c.id: c.name for c in participants},
         pre_turn=pre_turn,
+        whispers=decomposed_msg.whispers,
         world_snapshot=initial_world_snapshot,
         character_state=initial_char_state,
         extra_character_states=extra_character_states,

@@ -1261,6 +1261,63 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             </div>
           )}
 
+          {/* Starting Message / Turn 0 Atmosphere */}
+          {mode === "editor" && onUpdateLocation ? (
+            <div className="field-group">
+              <label
+                style={{
+                  fontSize: "0.72rem",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                }}
+              >
+                <span>Starting Message (Turn 0 Atmosphere)</span>
+                {selectedLocation.is_starting_location && (
+                  <span
+                    className="badge"
+                    style={{
+                      fontSize: "0.64rem",
+                      background: "rgba(16, 185, 129, 0.15)",
+                      color: "var(--accent-emerald)",
+                      border: "1px solid rgba(16, 185, 129, 0.4)",
+                    }}
+                  >
+                    Primary Starting Location
+                  </span>
+                )}
+              </label>
+              <textarea
+                className="field-textarea"
+                rows={3}
+                value={selectedLocation.starting_message ?? ""}
+                placeholder="Atmospheric opening prose used if campaigns start in this room..."
+                onChange={(e) =>
+                  onUpdateLocation({
+                    ...selectedLocation,
+                    starting_message: e.target.value,
+                  })
+                }
+              />
+            </div>
+          ) : selectedLocation.starting_message ? (
+            <div className="cog-step">
+              <div className="cog-step-label">
+                Starting Message (Turn 0 Atmosphere)
+              </div>
+              <div
+                style={{
+                  fontSize: "0.76rem",
+                  lineHeight: 1.45,
+                  fontStyle: "italic",
+                  color: "var(--text-secondary)",
+                }}
+              >
+                {selectedLocation.starting_message}
+              </div>
+            </div>
+          ) : null}
+
           {/* Environmental Tags */}
           {mode === "editor" && onUpdateLocation ? (
             <div className="field-group">

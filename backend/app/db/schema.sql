@@ -87,7 +87,8 @@ CREATE TABLE IF NOT EXISTS location_nodes (
     description TEXT NOT NULL,
     environmental_tags_json TEXT NOT NULL DEFAULT '[]',
     is_starting_location INTEGER NOT NULL DEFAULT 0,
-    is_hub INTEGER NOT NULL DEFAULT 0
+    is_hub INTEGER NOT NULL DEFAULT 0,
+    starting_message TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_location_nodes_world ON location_nodes(world_id);
@@ -233,6 +234,7 @@ CREATE TABLE IF NOT EXISTS turn_nodes (
     raw_prose TEXT NOT NULL,
     cognition_json TEXT NOT NULL,
     cognitions_json TEXT NULL,
+    whispers_json TEXT NULL,
     pre_turn_json TEXT NOT NULL,
     post_turn_json TEXT NULL,
     recalled_items_json TEXT NOT NULL DEFAULT '[]',

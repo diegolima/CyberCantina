@@ -292,6 +292,7 @@ export interface LocationNode {
   environmental_tags: string[];
   is_starting_location: boolean;
   is_hub?: boolean;
+  starting_message?: string;
   lore_nodes?: LoreNode[];
 }
 
@@ -336,6 +337,7 @@ export interface LocationNodeDraft {
   environmental_tags: string[];
   is_starting_location: boolean;
   is_hub?: boolean;
+  starting_message?: string;
   lore_nodes?: LocationLoreNodeDraft[];
 }
 
@@ -801,6 +803,34 @@ export interface TurnSubmitOptions {
   narrator_directive?: string | null;
   duration_minutes?: number | null;
   character_choices?: Record<string, CharacterChoiceSet>;
+  whispers?: CharacterWhisper[];
+}
+
+export type MentionTargetScope = "local" | "remote";
+
+export interface CharacterWhisper {
+  character_id: string;
+  character_name: string;
+  target_scope: MentionTargetScope;
+  raw_lines: string[];
+  speech_parts: string[];
+  sensory_parts: string[];
+}
+
+export interface DecomposedUserMessage {
+  raw_message: string;
+  public_text: string;
+  whispers: CharacterWhisper[];
+  whispers_by_character_id: Record<string, CharacterWhisper>;
+  remote_whispers: CharacterWhisper[];
+}
+
+export interface MentionSuggestion {
+  character_id: string;
+  character_name: string;
+  tagline?: string;
+  is_present: boolean;
+  avatar_url?: string;
 }
 
 export interface EpisodicChunkRecord {
@@ -829,6 +859,7 @@ export interface TurnNodeRecord {
   world_snapshot: WorldStateSnapshot;
   character_state: CharacterStateSnapshot;
   character_states?: Record<string, CharacterStateSnapshot>;
+  whispers?: CharacterWhisper[];
   recalled_items: RecalledMemoryItem[];
   created_at: string;
 }
@@ -844,6 +875,18 @@ export interface CampaignRecord {
   created_at: string;
   persona_id?: string | null;
   persona_snapshot?: PersonaRecord | null;
+}
+
+export interface CreateCampaignPayload {
+  name: string;
+  world_id: string;
+  character_id?: string;
+  character_ids?: string[];
+  persona_id?: string | null;
+  opening_prose?: string;
+  start_focus?: "world" | "character";
+  focus_character_id?: string | null;
+  character_locations?: Record<string, string>;
 }
 
 export interface CampaignStateBundle {

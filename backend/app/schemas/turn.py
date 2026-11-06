@@ -7,6 +7,7 @@ import re
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.engine.mentions import CharacterWhisper
 from app.schemas.character import (
     CharacterRecord,
     CharacterStateSnapshot,
@@ -782,6 +783,10 @@ class TurnNodeRecord(BaseModel):
     world_snapshot: WorldStateSnapshot
     character_state: CharacterStateSnapshot
     character_states: dict[str, CharacterStateSnapshot] = Field(default_factory=dict)
+    whispers: list[CharacterWhisper] = Field(
+        default_factory=list,
+        description="Targeted whispers and directed perceptions associated with this turn.",
+    )
     recalled_items: list[RecalledMemoryItem] = Field(default_factory=list)
     created_at: str
 
@@ -829,6 +834,10 @@ class TurnSubmitRequest(BaseModel):
     """Payload to execute a 4-phase roleplay turn (or swipe/branch from parent_turn_id)."""
 
     user_message: str = Field(default="")
+    whispers: list[CharacterWhisper] = Field(
+        default_factory=list,
+        description="Targeted whispers and directed perceptions associated with this turn.",
+    )
     parent_turn_id: str | None = Field(
         default=None,
         description=(

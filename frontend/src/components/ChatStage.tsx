@@ -16,7 +16,9 @@ import {
   Lock,
   LogOut,
   MapPin,
+  MessageSquare,
   Plus,
+  Radio,
   RefreshCw,
   Send,
   Sparkles,
@@ -28,6 +30,7 @@ import {
   CharacterChoiceOption,
   CharacterChoiceSet,
   CharacterRecord,
+  CharacterWhisper,
   ChoiceGate,
   ChoicePreviewResponse,
   CognitionBlock,
@@ -53,6 +56,11 @@ import {
 } from "../utils/choiceCommand";
 import { useMagicWand } from "../hooks/useMagicWand";
 import { MagicWandButton } from "./MagicWandButton";
+import { CharacterMentionPicker } from "./CharacterMentionPicker";
+import {
+  decomposeClientUserMessage,
+  normalizeQuotes,
+} from "../utils/mentions";
 
 function getTierBadgeClass(tier?: string): string {
   switch (tier) {
@@ -250,6 +258,190 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       presentCharacters.find((c) => c.id === activeChoiceCharId) || character
     );
   }, [presentCharacters, activeChoiceCharId, character]);
+
+  const allCampaignCharacters = useMemo(() => {
+    const map = new Map<string, CharacterRecord>();
+    if (bundle.character_records) {
+      Object.values(bundle.character_records).forEach((c) => {
+        if (c && c.id) map.set(c.id, c);
+      });
+    }
+    if (character && character.id) {
+      map.set(character.id, character);
+    }
+    return Array.from(map.values());
+  }, [bundle.character_records, character]);
+
+  const presentCharacterIds = useMemo(() => {
+    return presentCharacters.map((c) => c.id);
+  }, [presentCharacters]);
+
+  // Mention Autocomplete & Whispers State
+  const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
+
+  const filteredMentionCharacters = useMemo(() => {
+    const clean = mentionQuery.trim().toLowerCase();
+    if (!clean) return allCampaignCharacters;
+    return allCampaignCharacters.filter(
+      (c) =>
+        c.name.toLowerCase().includes(clean) ||
+        (c.tagline && c.tagline.toLowerCase().includes(clean))
+    );
+  }, [allCampaignCharacters, mentionQuery]);
+
+  useEffect(() => {
+    setMentionSelectedIndex(0);
+  }, [mentionQuery]);
+
+  const decomposedInput = useMemo(() => {
+    return decomposeClientUserMessage(
+      inputText,
+      allCampaignCharacters,
+      presentCharacterIds
+    );
+  }, [inputText, allCampaignCharacters, presentCharacterIds]);
+
+  const checkAndTriggerMention = (newText: string, cursorOffset?: number) => {
+    const textarea = textareaRef.current;
+    const cursorPos = cursorOffset ?? textarea?.selectionStart ?? newText.length;
+    const textBeforeCursor = newText.slice(0, cursorPos);
+    const lastNewlineIdx = textBeforeCursor.lastIndexOf("\n");
+    const lineStartIdx = lastNewlineIdx === -1 ? 0 : lastNewlineIdx + 1;
+    const lineBeforeCursor = textBeforeCursor.slice(lineStartIdx);
+
+    if (lineBeforeCursor.startsWith("@") && !lineBeforeCursor.includes(":")) {
+      setMentionQuery(lineBeforeCursor.slice(1));
+      setMentionPickerOpen(true);
+    } else {
+      setMentionPickerOpen(false);
+    }
+  };
+
+  const handleSelectMention = (char: CharacterRecord) => {
+    const textarea = textareaRef.current;
+    const cursorPos = textarea?.selectionStart ?? inputText.length;
+    const textBeforeCursor = inputText.slice(0, cursorPos);
+    const lastNewlineIdx = textBeforeCursor.lastIndexOf("\n");
+    const lineStartIdx = lastNewlineIdx === -1 ? 0 : lastNewlineIdx + 1;
+
+    const nextNewlineIdx = inputText.indexOf("\n", cursorPos);
+    const lineFull = inputText.slice(
+      lineStartIdx,
+      nextNewlineIdx === -1 ? inputText.length : nextNewlineIdx
+    );
+
+    const textBeforeLine = inputText.slice(0, lineStartIdx);
+    const restOfLine = lineFull.includes(":")
+      ? lineFull.slice(lineFull.indexOf(":") + 1)
+      : "";
+    const textAfterLine =
+      nextNewlineIdx === -1 ? "" : inputText.slice(nextNewlineIdx);
+
+    const newPrefix = `@${char.name}: `;
+    const newText =
+      textBeforeLine + newPrefix + restOfLine.trimStart() + textAfterLine;
+    setInputText(newText);
+    setMentionPickerOpen(false);
+
+    const newCursorPos = lineStartIdx + newPrefix.length;
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
+      }
+    }, 10);
+  };
+
+  const handleRemoveMentionChip = (charName: string) => {
+    const lines = inputText.split("\n");
+    const filtered = lines.filter((l) => {
+      const norm = normalizeQuotes(l).trim();
+      return !norm.toLowerCase().startsWith(`@${charName.toLowerCase()}:`);
+    });
+    setInputText(filtered.join("\n"));
+  };
+
+  const renderUserMessageBubble = (
+    message: string,
+    turnWhispers?: CharacterWhisper[]
+  ) => {
+    const decomposed = decomposeClientUserMessage(
+      message,
+      allCampaignCharacters,
+      presentCharacterIds
+    );
+    const whispers =
+      turnWhispers && turnWhispers.length > 0
+        ? turnWhispers
+        : decomposed.whispers;
+    const publicText = decomposed.public_text.trim();
+
+    if (!whispers || whispers.length === 0) {
+      return <div className="user-bubble">{message}</div>;
+    }
+
+    return (
+      <div className="user-message-container">
+        {publicText && (
+          <div className="user-bubble user-bubble-shared">{publicText}</div>
+        )}
+        <div className="whispers-list">
+          {whispers.map((w, wIdx) => {
+            const isPresent = w.target_scope === "local";
+            return (
+              <div key={w.character_id || wIdx} className="user-whisper-card">
+                <div className="whisper-card-header">
+                  <div className="whisper-target-info">
+                    <span className="whisper-target-chip">
+                      @{w.character_name}
+                    </span>
+                    {isPresent ? (
+                      <span className="mention-badge-present">
+                        <span className="presence-dot emerald" />
+                        In Room
+                      </span>
+                    ) : (
+                      <span className="mention-badge-remote">
+                        <Radio size={10} />
+                        Comms
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="whisper-card-body">
+                  {w.speech_parts.map((speech, sIdx) => (
+                    <div key={`sp-${sIdx}`} className="whisper-speech-line">
+                      <MessageSquare
+                        size={12}
+                        className="whisper-icon-speech"
+                      />
+                      <span className="whisper-speech-text">
+                        "{speech}"
+                      </span>
+                    </div>
+                  ))}
+                  {w.sensory_parts.map((sens, senIdx) => (
+                    <div key={`sens-${senIdx}`} className="whisper-sensory-line">
+                      <Eye size={12} className="whisper-icon-sensory" />
+                      <span className="whisper-sensory-text">{sens}</span>
+                    </div>
+                  ))}
+                  {w.speech_parts.length === 0 &&
+                    w.sensory_parts.length === 0 && (
+                      <div className="whisper-fallback-line">
+                        {w.raw_lines.join("\n")}
+                      </div>
+                    )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
 
   const hasActiveGates = useMemo(() => {
     return Object.values(stagedChoices).some((cs) =>
@@ -691,6 +883,9 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       characterChoices: effectiveChoices,
     });
     setInputText("");
+    setMentionPickerOpen(false);
+    setMentionQuery("");
+    setMentionSelectedIndex(0);
     setDiceMode("auto");
     setDiceOverride("");
     setStagedChoices({});
@@ -1155,7 +1350,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                     </div>
                   )
                 ) : (
-                  <div className="user-bubble">{turn.user_message}</div>
+                  renderUserMessageBubble(turn.user_message, turn.whispers)
                 ))}
 
               {/* Staged Director Choices Badge Strip */}
@@ -1322,6 +1517,9 @@ export const ChatStage: React.FC<ChatStageProps> = ({
 
               {/* Phase 3 Multi-Step <cognition> Drawer */}
               {(() => {
+                if (turn.depth_index === 0) {
+                  return null;
+                }
                 const isNarratorTurn =
                   turn.user_message.startsWith("[NARRATOR DIRECTIVE]");
                 const hasMultiCognition = Boolean(
@@ -1924,7 +2122,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                 <span>{liveStream.userMessage}</span>
               </div>
             ) : (
-              <div className="user-bubble">{liveStream.userMessage}</div>
+              renderUserMessageBubble(liveStream.userMessage)
             )}
             <div className="meta-strip">
               <span className="badge badge-dice">{liveStream.phaseStatus}</span>
@@ -2760,18 +2958,118 @@ export const ChatStage: React.FC<ChatStageProps> = ({
 
         {/* Unified Modern Composer Card */}
         <div className="composer-card">
+          {decomposedInput.whispers.length > 0 && (
+            <div className="composer-mention-chips-strip">
+              <span className="composer-mention-chips-label">
+                Targeted Whispers:
+              </span>
+              {decomposedInput.whispers.map((w) => (
+                <div key={w.character_id} className="composer-mention-chip">
+                  <span className="mention-chip-name">@{w.character_name}</span>
+                  {w.target_scope === "local" ? (
+                    <span className="mention-badge-present">
+                      <span className="presence-dot emerald" />
+                      In Room
+                    </span>
+                  ) : (
+                    <span className="mention-badge-remote">
+                      <Radio size={9} />
+                      Comms
+                    </span>
+                  )}
+                  {w.speech_parts.length > 0 && (
+                    <span
+                      className="mention-chip-tag speech"
+                      title="Spoken dialogue (in quotes)"
+                    >
+                      <MessageSquare size={10} />
+                      {w.speech_parts.length}
+                    </span>
+                  )}
+                  {w.sensory_parts.length > 0 && (
+                    <span
+                      className="mention-chip-tag sensory"
+                      title="Sensory / perception whisper (outside quotes)"
+                    >
+                      <Eye size={10} />
+                      {w.sensory_parts.length}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    className="mention-chip-remove"
+                    onClick={() => handleRemoveMentionChip(w.character_name)}
+                    title={`Remove whisper to ${w.character_name}`}
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="composer-input-wrapper">
+            <CharacterMentionPicker
+              isOpen={mentionPickerOpen}
+              filterText={mentionQuery}
+              characters={allCampaignCharacters}
+              presentCharacterIds={presentCharacterIds}
+              selectedIndex={mentionSelectedIndex}
+              onSelect={handleSelectMention}
+              onClose={() => setMentionPickerOpen(false)}
+            />
             <textarea
               ref={textareaRef}
               className="composer-textarea"
               placeholder={
                 totalStagedOptionsCount > 0
                   ? "Optional user action / dialogue (Leave blank to let characters act on your staged choices)..."
-                  : `Write your action or dialogue to ${character.name}... (Or try /choice, /look, /wait 30m, /narrate)`
+                  : `Write your action or dialogue to ${character.name}... (Or try @Name:, /choice, /look, /wait 30m)`
               }
               value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                setInputText(val);
+                checkAndTriggerMention(val, e.target.selectionStart);
+              }}
+              onKeyUp={(e) => {
+                if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+                  checkAndTriggerMention(inputText);
+                }
+              }}
               onKeyDown={(e) => {
+                if (mentionPickerOpen && filteredMentionCharacters.length > 0) {
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setMentionSelectedIndex(
+                      (prev) => (prev + 1) % filteredMentionCharacters.length
+                    );
+                    return;
+                  }
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setMentionSelectedIndex(
+                      (prev) =>
+                        (prev - 1 + filteredMentionCharacters.length) %
+                        filteredMentionCharacters.length
+                    );
+                    return;
+                  }
+                  if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+                    e.preventDefault();
+                    const picked =
+                      filteredMentionCharacters[mentionSelectedIndex] ||
+                      filteredMentionCharacters[0];
+                    if (picked) {
+                      handleSelectMention(picked);
+                    }
+                    return;
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setMentionPickerOpen(false);
+                    return;
+                  }
+                }
                 if (
                   (e.altKey && e.shiftKey && (e.key === "E" || e.key === "e")) ||
                   (e.ctrlKey && e.shiftKey && (e.key === "E" || e.key === "e"))

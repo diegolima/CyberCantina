@@ -12,6 +12,7 @@ from typing import Any
 from app.config import settings
 from app.engine.llm_client import llm_client
 from app.engine.phase3_cognition import parse_cognition_xml
+from app.engine.mentions import DecomposedUserMessage
 from app.schemas.auth import ModelProfile
 from app.schemas.character import CharacterRecord, CharacterStateSnapshot, CognitionBlock
 from app.schemas.persona import PersonaRecord, PersonaTurnStateSnapshot
@@ -44,6 +45,7 @@ def build_offline_simulated_prose(
     include_cognition: bool = False,
     persona_snapshot: PersonaRecord | None = None,
     current_player_state: PersonaTurnStateSnapshot | None = None,
+    decomposed_message: DecomposedUserMessage | None = None,
 ) -> str:
     """Construct offline simulated narrative prose (or legacy cognition+prose)."""
     if is_narrator:
@@ -210,6 +212,7 @@ async def stream_phase4_prose(
     pregenerated_cognition: CognitionBlock | None = None,
     persona_snapshot: PersonaRecord | None = None,
     current_player_state: PersonaTurnStateSnapshot | None = None,
+    decomposed_message: DecomposedUserMessage | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream Phase 4 Narrative Prose generation with leading-tag guard and fallback."""
     actor_prof = profile or settings.actor_profile
@@ -275,6 +278,9 @@ async def stream_phase4_prose(
                 established_cognition=primary_cognition,
                 established_cognitions=cogs_map,
                 include_cognition=is_legacy_single_pass,
+                persona_snapshot=persona_snapshot,
+                current_player_state=current_player_state,
+                decomposed_message=decomposed_message,
             )
             step = 18
             for i in range(0, len(simulated), step):

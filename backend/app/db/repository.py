@@ -218,6 +218,7 @@ def slugify_tag(text: str) -> str:
     """Normalize tag string to lowercase kebab-case matching frontend slugifyTag."""
     cleaned = re.sub(r"[^\w\s-]", "", text.strip().lower())
     return re.sub(r"\s+", "-", cleaned)
+from app.engine.mentions import CharacterWhisper
 from app.schemas.turn import (
     CampaignRecord,
     CampaignStateBundle,
@@ -801,6 +802,10 @@ class CantinaRepository:
                 conn.execute(
                     "ALTER TABLE turn_nodes ADD COLUMN cognitions_json TEXT NULL"
                 )
+            if "whispers_json" not in tn_cols:
+                conn.execute(
+                    "ALTER TABLE turn_nodes ADD COLUMN whispers_json TEXT NULL"
+                )
 
             cs_cols = {
                 r["name"]
@@ -830,6 +835,10 @@ class CantinaRepository:
             if "is_hub" not in loc_cols:
                 conn.execute(
                     "ALTER TABLE location_nodes ADD COLUMN is_hub INTEGER NOT NULL DEFAULT 0"
+                )
+            if "starting_message" not in loc_cols:
+                conn.execute(
+                    "ALTER TABLE location_nodes ADD COLUMN starting_message TEXT NOT NULL DEFAULT ''"
                 )
 
             edge_cols = {
@@ -1979,13 +1988,14 @@ class CantinaRepository:
                 key_to_loc_id[loc.key] = loc_id
                 is_start = 1 if (loc.is_starting_location or (not has_start and idx == 0)) else 0
                 is_hub = 1 if getattr(loc, "is_hub", False) else 0
+                starting_msg = getattr(loc, "starting_message", "") or ""
                 conn.execute(
                     """
                     INSERT INTO location_nodes (
                         id, world_id, created_at_turn_id, name, summary,
-                        description, environmental_tags_json, is_starting_location, is_hub
+                        description, environmental_tags_json, is_starting_location, is_hub, starting_message
                     )
-                    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         loc_id,
@@ -1996,6 +2006,7 @@ class CantinaRepository:
                         json.dumps(loc.environmental_tags),
                         is_start,
                         is_hub,
+                        starting_msg,
                     ),
                 )
                 for loc_lore in loc.lore_nodes:
@@ -2384,13 +2395,14 @@ class CantinaRepository:
                     loc_id_map[loc.id] = new_loc_id
                     is_start = 1 if (loc.is_starting_location or (not has_start and idx == 0)) else 0
                     is_hub = 1 if getattr(loc, "is_hub", False) else 0
+                    starting_msg = getattr(loc, "starting_message", "") or ""
                     conn.execute(
                         """
                         INSERT INTO location_nodes (
                             id, world_id, created_at_turn_id, name, summary,
-                            description, environmental_tags_json, is_starting_location, is_hub
+                            description, environmental_tags_json, is_starting_location, is_hub, starting_message
                         )
-                        VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             new_loc_id,
@@ -2401,6 +2413,7 @@ class CantinaRepository:
                             json.dumps(loc.environmental_tags),
                             is_start,
                             is_hub,
+                            starting_msg,
                         ),
                     )
 
@@ -2463,13 +2476,14 @@ class CantinaRepository:
                     loc_id_map[loc.id] = new_loc_id
                     is_start = 1 if (loc.is_starting_location or (not has_start and idx == 0)) else 0
                     is_hub = 1 if getattr(loc, "is_hub", False) else 0
+                    starting_msg = getattr(loc, "starting_message", "") or ""
                     conn.execute(
                         """
                         INSERT INTO location_nodes (
                             id, world_id, created_at_turn_id, name, summary,
-                            description, environmental_tags_json, is_starting_location, is_hub
+                            description, environmental_tags_json, is_starting_location, is_hub, starting_message
                         )
-                        VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             new_loc_id,
@@ -2480,6 +2494,7 @@ class CantinaRepository:
                             json.dumps(loc.environmental_tags),
                             is_start,
                             is_hub,
+                            starting_msg,
                         ),
                     )
 
@@ -4604,6 +4619,8 @@ class CantinaRepository:
         persona_id: str | None = None,
         prompt_preset_id: str | None = None,
         owner_id: str | None = None,
+        actor_id: str | None = None,
+        skip_turn_0_cognition: bool = True,
     ) -> CampaignRecord:
         """Create a new campaign and initialize Turn 0 (opening scene snapshot)."""
         camp_id = campaign_id or f"camp_{uuid.uuid4().hex[:10]}"
@@ -4692,14 +4709,7 @@ class CantinaRepository:
                 f"*{character.name} stands inside {primary_loc.name}. {primary_loc.description}*\n\n"
                 f"\"You're late,\" {character.name} says quietly, eyes scanning the room."
             )
-        root_cognition = CognitionBlock(
-            recall=f"Standing in {primary_loc.name}, keeping watch.",
-            feeling=character.baseline_psyche.mood_label,
-            valence=character.baseline_psyche.valence,
-            arousal=character.baseline_psyche.arousal,
-            want=character.baseline_psyche.default_want,
-            plan=character.baseline_psyche.default_plan,
-        )
+
         root_turn_id = f"turn_{uuid.uuid4().hex[:10]}"
         root_snapshot = WorldStateSnapshot(
             turn_id=root_turn_id,
@@ -4737,18 +4747,35 @@ class CantinaRepository:
             for extra_char in extra_characters
         ]
 
-        root_cognitions = {character.id: root_cognition}
-        for extra_char in extra_characters:
-            if loc_map.get(extra_char.id, start_loc.id) == primary_loc_id:
-                root_cognitions[extra_char.id] = CognitionBlock(
-                    recall=f"Standing in {primary_loc.name}, observing.",
-                    feeling=extra_char.baseline_psyche.mood_label,
-                    valence=extra_char.baseline_psyche.valence,
-                    arousal=extra_char.baseline_psyche.arousal,
-                    want=extra_char.baseline_psyche.default_want,
-                    plan=extra_char.baseline_psyche.default_plan,
-                )
+        if skip_turn_0_cognition:
+            root_cognition = CognitionBlock(skipped=True)
+            root_cognitions = {}
+        else:
+            root_cognition = CognitionBlock(
+                recall=f"Standing in {primary_loc.name}, keeping watch.",
+                feeling=character.baseline_psyche.mood_label,
+                valence=character.baseline_psyche.valence,
+                arousal=character.baseline_psyche.arousal,
+                want=character.baseline_psyche.default_want,
+                plan=character.baseline_psyche.default_plan,
+            )
+            root_cognitions = {character.id: root_cognition}
+            for extra_char in extra_characters:
+                if loc_map.get(extra_char.id, start_loc.id) == primary_loc_id:
+                    root_cognitions[extra_char.id] = CognitionBlock(
+                        recall=f"Standing in {primary_loc.name}, observing.",
+                        feeling=extra_char.baseline_psyche.mood_label,
+                        valence=extra_char.baseline_psyche.valence,
+                        arousal=extra_char.baseline_psyche.arousal,
+                        want=extra_char.baseline_psyche.default_want,
+                        plan=extra_char.baseline_psyche.default_plan,
+                    )
+
         cognition_names = {character.id: character.name, **{c.id: c.name for c in extra_characters}}
+        effective_actor_id = actor_id or character.id
+        speaker_list = [
+            cid for cid in ([character.id] + [s.character_id for s in extra_states if s.current_location_id == primary_loc_id])
+        ]
 
         self.save_turn_node(
             turn_id=root_turn_id,
@@ -4756,16 +4783,14 @@ class CantinaRepository:
             parent_turn_id=None,
             depth_index=0,
             user_message="[Scene Start]",
-            actor_id=character.id,
+            actor_id=effective_actor_id,
             raw_prose=root_prose,
             cognition=root_cognition,
             cognitions=root_cognitions,
             cognition_character_names=cognition_names,
             pre_turn=PreTurnAnalysis(
-                active_speaker_id=character.id,
-                speaker_order=[character.id] + [
-                    s.character_id for s in extra_states if s.current_location_id == primary_loc_id
-                ],
+                active_speaker_id=character.id if effective_actor_id != "__narrator__" else (speaker_list[0] if speaker_list else character.id),
+                speaker_order=speaker_list,
             ),
             world_snapshot=root_snapshot,
             character_state=root_char_state,
@@ -5258,6 +5283,7 @@ class CantinaRepository:
         cognition: CognitionBlock,
         cognitions: dict[str, CognitionBlock] | None = None,
         cognition_character_names: dict[str, str] | None = None,
+        whispers: list[CharacterWhisper] | None = None,
         pre_turn: PreTurnAnalysis,
         world_snapshot: WorldStateSnapshot,
         character_state: CharacterStateSnapshot,
@@ -5274,16 +5300,21 @@ class CantinaRepository:
             "cognitions": {cid: c.model_dump() for cid, c in eff_cognitions.items()},
             "character_names": cognition_character_names or {},
         }
+        whispers_payload = (
+            json.dumps([w.model_dump() for w in whispers])
+            if whispers
+            else None
+        )
         conn = self._connect()
         try:
             conn.execute(
                 """
                 INSERT INTO turn_nodes (
                     id, campaign_id, parent_turn_id, depth_index, user_message,
-                    actor_id, raw_prose, cognition_json, cognitions_json, pre_turn_json,
+                    actor_id, raw_prose, cognition_json, cognitions_json, whispers_json, pre_turn_json,
                     post_turn_json, recalled_items_json, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     turn_id,
@@ -5295,6 +5326,7 @@ class CantinaRepository:
                     raw_prose,
                     cognition.model_dump_json(),
                     json.dumps(cognitions_payload),
+                    whispers_payload,
                     pre_turn.model_dump_json(),
                     post_turn.model_dump_json() if post_turn else None,
                     json.dumps([item.model_dump() for item in recalled_items]),
@@ -7043,6 +7075,7 @@ class CantinaRepository:
             environmental_tags=json.loads(r["environmental_tags_json"] or "[]"),
             is_starting_location=bool(r["is_starting_location"]),
             is_hub=bool(r["is_hub"]) if "is_hub" in keys else False,
+            starting_message=r["starting_message"] if "starting_message" in keys and r["starting_message"] else "",
         )
 
     @staticmethod
@@ -7088,6 +7121,16 @@ class CantinaRepository:
         if not cognitions_map and r["actor_id"] != "__narrator__" and not base_cog.skipped:
             cognitions_map = {r["actor_id"]: base_cog}
 
+        whispers_list: list[CharacterWhisper] = []
+        if "whispers_json" in r.keys() and r["whispers_json"]:
+            try:
+                whispers_list = [
+                    CharacterWhisper.model_validate(w)
+                    for w in json.loads(r["whispers_json"])
+                ]
+            except Exception:
+                pass
+
         return TurnNodeRecord(
             id=r["id"],
             campaign_id=r["campaign_id"],
@@ -7099,6 +7142,7 @@ class CantinaRepository:
             cognition=base_cog,
             cognitions=cognitions_map,
             cognition_character_names=cognition_names,
+            whispers=whispers_list,
             pre_turn=PreTurnAnalysis.model_validate_json(r["pre_turn_json"]),
             post_turn=PostTurnStateDelta.model_validate_json(post_json) if post_json else None,
             world_snapshot=WorldStateSnapshot(

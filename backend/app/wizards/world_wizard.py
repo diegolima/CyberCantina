@@ -62,6 +62,15 @@ def _normalize_topology(draft: Any) -> Any:
     if draft.locations and not any(loc.is_starting_location for loc in draft.locations):
         draft.locations[0].is_starting_location = True
 
+    for loc in draft.locations:
+        if loc.is_starting_location and not (getattr(loc, "starting_message", None) or "").strip():
+            desc = getattr(loc, "description", "").strip()
+            loc.starting_message = (
+                f"*{loc.name} serves as the threshold into this realm. {desc}*"
+                if desc
+                else f"*{loc.name} stands ready as the entry point into this world.*"
+            )
+
     occupied_from: dict[str, set[str]] = {}
     for edge in draft.edges:
         occ = occupied_from.setdefault(edge.from_key, set())
@@ -136,6 +145,11 @@ def _fallback_world_expansion(seed: WorldWizardSeed) -> WorldWizardDraft:
                 environmental_tags=["ambient lighting", "central counter", "vantage point"],
                 is_starting_location=True,
                 is_hub=False,
+                starting_message=(
+                    f"The heavy threshold of {hub_name} gives way to the ambient warmth and low chatter of {seed.name}. "
+                    f"{seed.core_premise} Outside, the elements press against the reinforced glass, while the steady rhythm "
+                    f"of daily life continues under the dim, watchful fixtures above."
+                ),
             ),
             LocationNodeDraft(
                 key="private_backroom",

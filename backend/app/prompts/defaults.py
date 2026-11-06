@@ -12,6 +12,7 @@ PROMPT_KEY_CLERK_SUMMARY = "clerk_episodic_summary_system"
 PROMPT_KEY_CLERK_POST_TURN = "clerk_post_turn_system"
 PROMPT_KEY_CHARACTER_POST_TURN = "character_post_turn_system"
 PROMPT_KEY_CLERK_ARBITRATION = "clerk_arbitration_system"
+PROMPT_KEY_CLERK_WORLD_START_PLACEMENT = "clerk_world_start_placement_system"
 PROMPT_KEY_WIZARD_WORLD = "wizard_world_system"
 PROMPT_KEY_WIZARD_CHARACTER = "wizard_character_system"
 PROMPT_KEY_WIZARD_MAP_REIMAGINE = "wizard_map_reimagine_system"
@@ -26,6 +27,7 @@ ALL_PROMPT_KEYS = [
     PROMPT_KEY_CLERK_POST_TURN,
     PROMPT_KEY_CHARACTER_POST_TURN,
     PROMPT_KEY_CLERK_ARBITRATION,
+    PROMPT_KEY_CLERK_WORLD_START_PLACEMENT,
     PROMPT_KEY_WIZARD_WORLD,
     PROMPT_KEY_WIZARD_CHARACTER,
     PROMPT_KEY_WIZARD_MAP_REIMAGINE,
@@ -227,13 +229,28 @@ DEFAULT_CLERK_ARBITRATION_SYSTEM = (
     "- rationale (string): 1 brief sentence citing the prose or roll outcome."
 )
 
+DEFAULT_CLERK_WORLD_START_PLACEMENT_SYSTEM = (
+    "You are the Scene Staging Clerk in the CyberCantina simulation engine.\n\n"
+    "Your objective: Given the setting's atmospheric opening message and a list of present characters, "
+    "write a single concise narrative paragraph describing the physical presence, posture, and current activity "
+    "of each character within the starting location.\n\n"
+    "STRICT DIRECTIVES:\n"
+    "1. PHYSICAL STAGING ONLY: Describe where each character is sitting, leaning, or standing, and what ambient activity they are engaged in (e.g., nursing a drink, checking equipment, watching the doorway).\n"
+    "2. NO SPOKEN DIALOGUE: Absolutely NEVER output spoken dialogue, quoted speech, or verbal interaction.\n"
+    "3. NO INTERNAL MONOLOGUE OR EMOTIONAL DECLARATIONS: Do not reveal hidden feelings or cognitive plans.\n"
+    "4. NO REPETITION: Do NOT repeat, summarize, or quote the existing opening scene atmosphere.\n"
+    "5. PURE APPENDAGE: Output ONLY the paragraph to be appended to the opening message, beginning with a double newline (\\n\\n).\n"
+    "6. TONE: Match the third-person descriptive tone of the setting rules.\n"
+)
+
 DEFAULT_WIZARD_WORLD_SYSTEM = (
     "You are an expert AI Worldbuilder & Spatial Level Designer for an agentic roleplay framework.\n"
     "Given the user's world seed, output a JSON object matching WorldWizardDraft:\n"
     "1. global_rules: genre (must accurately reflect the genre from the user seed), tone (must match the mood/tone from the user seed), setting_overview (2-4 sentences), tech_or_magic_rules (rules appropriate for this genre and setting), starting_timestamp ('YYYY-MM-DD HH:MM').\n"
     "2. locations: Create {location_count} distinct, atmospheric LocationNodeDraft objects with slug `key` values, "
     "`name`, 1-sentence `summary` (used when shown as an adjacent exit), 3-4 sentence sensory `description` "
-    "(used when characters are inside), `environmental_tags`, and mark the primary hub `is_starting_location: true`.\n"
+    "(used when characters are inside), `environmental_tags`, and mark the primary hub `is_starting_location: true` "
+    "with `starting_message`: a vivid 2-3 paragraph opening scene establishing the sensory atmosphere, lighting, sound, and mood when an adventurer first arrives.\n"
     "3. edges: Connect the locations using LocationEdgeDraft (`from_key`, `to_key`, evocative `direction_label`, "
     "`reverse_direction_label`, `compass_direction` in N/NE/E/SE/S/SW/W/NW, `travel_minutes`, `is_locked_or_hidden`, `bidirectional: true`). Every location must be reachable.\n"
     "4. lore_nodes: Create 4 macro world-level LoreNodeDraft entries using ONLY categories 'faction', 'history', 'culture', 'rumor', or 'artifact', each with at least 1-5 trigger keywords in `entity_tags`. Keep world lore strictly global—use 'artifact' ONLY for major plot-driving relics, legendary tech, or unique items of global significance; never include trivia about specific rooms, mundane gear, or private characters, and NEVER generate per-location lore entries.\n"
@@ -245,7 +262,7 @@ DEFAULT_WIZARD_MAP_REIMAGINE_SYSTEM = (
     "Given the world setting and the user's specific map vision and desired layout, generate a newly re-imagined interconnected spatial topology matching WorldMapDraft:\n"
     "1. locations: Create exactly {location_count} distinct, atmospheric LocationNodeDraft objects with unique slug `key` values, "
     "`name`, 1-sentence `summary` (used when shown as an adjacent exit), 3-4 sentence sensory `description` "
-    "(used when characters are inside), `environmental_tags`, and mark exactly one primary starting hub with `is_starting_location: true`.\n"
+    "(used when characters are inside), `environmental_tags`, and mark exactly one primary starting hub with `is_starting_location: true` and an atmospheric `starting_message`.\n"
     "2. edges: Connect the locations using LocationEdgeDraft (`from_key`, `to_key`, evocative `direction_label`, "
     "`reverse_direction_label`, `compass_direction` in N/NE/E/SE/S/SW/W/NW, `travel_minutes` between 1-10, `is_locked_or_hidden: false`, `bidirectional: true`). "
     "Every location must be reachable from the starting location via connecting edges.\n"
@@ -340,6 +357,7 @@ FACTORY_DEFAULT_PROMPTS: dict[str, str] = {
     PROMPT_KEY_CLERK_POST_TURN: DEFAULT_CLERK_POST_TURN_SYSTEM,
     PROMPT_KEY_CHARACTER_POST_TURN: DEFAULT_CHARACTER_POST_TURN_SYSTEM,
     PROMPT_KEY_CLERK_ARBITRATION: DEFAULT_CLERK_ARBITRATION_SYSTEM,
+    PROMPT_KEY_CLERK_WORLD_START_PLACEMENT: DEFAULT_CLERK_WORLD_START_PLACEMENT_SYSTEM,
     PROMPT_KEY_WIZARD_WORLD: DEFAULT_WIZARD_WORLD_SYSTEM,
     PROMPT_KEY_WIZARD_CHARACTER: DEFAULT_WIZARD_CHARACTER_SYSTEM,
     PROMPT_KEY_WIZARD_MAP_REIMAGINE: DEFAULT_WIZARD_MAP_REIMAGINE_SYSTEM,
@@ -579,6 +597,16 @@ PROMPTS_METADATA = [
         ),
         "available_variables": [],
         "required_tags": ["InventoryArbitrationResult"],
+    },
+    {
+        "key": PROMPT_KEY_CLERK_WORLD_START_PLACEMENT,
+        "title": "Clerk World Start Scene Staging",
+        "description": (
+            "Generates a concise physical staging paragraph describing the presence and postures of participant "
+            "characters to be appended to a world-focused campaign start message."
+        ),
+        "available_variables": [],
+        "required_tags": [],
     },
     {
         "key": PROMPT_KEY_WIZARD_WORLD,
