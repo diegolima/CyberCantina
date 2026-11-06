@@ -1,0 +1,49 @@
+services:
+  cybercantina-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cybercantina-backend
+    restart: unless-stopped
+    environment:
+      - CYBERCANTINA_DB_PATH=/data/cybercantina.db
+      - CYBERCANTINA_SETTINGS_PATH=/data/cantina_settings.json
+      - CYBERCANTINA_MEDIA_DIR=/data/media
+      - CYBERCANTINA_SECRET_KEY=${CYBERCANTINA_SECRET_KEY:-}
+      - ACTOR_BASE_URL=${ACTOR_BASE_URL:-http://host.docker.internal:11434/v1}
+      - CLERK_BASE_URL=${CLERK_BASE_URL:-http://host.docker.internal:11434/v1}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - cantina_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - cantina-net
+
+  cybercantina-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cybercantina-frontend
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:80"
+    depends_on:
+      cybercantina-backend:
+        condition: service_healthy
+    networks:
+      - cantina-net
+
+volumes:
+  cantina_data:
+    name: cybercantina_data
+
+networks:
+  cantina-net:
+    name: cybercantina_network
+    driver: bridge

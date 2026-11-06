@@ -15,7 +15,10 @@ from app.providers.endpoint import ResolvedEndpoint
 
 logger = logging.getLogger("cybercantina.config")
 
-SETTINGS_FILE_PATH = Path(__file__).resolve().parent.parent / "cantina_settings.json"
+DEFAULT_SETTINGS_PATH = Path(__file__).resolve().parent.parent / "cantina_settings.json"
+SETTINGS_FILE_PATH = Path(
+    os.environ.get("CYBERCANTINA_SETTINGS_PATH", str(DEFAULT_SETTINGS_PATH))
+)
 
 AgentDispatchMode = Literal["sequential", "parallel"]
 
@@ -228,6 +231,7 @@ def persist_settings(current: AppSettings) -> None:
     on failure instead of swallowing it.
     """
     target = Path(SETTINGS_FILE_PATH)
+    target.parent.mkdir(parents=True, exist_ok=True)
     payload = current.model_dump_json(exclude={"db_path", "media_dir"}, indent=2)
     fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=".cantina_settings.", suffix=".tmp")
     try:

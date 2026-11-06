@@ -1,0 +1,29 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+venv/
+.venv/
+tests/
+.tests/
+
+# Local databases and runtime state
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+cybercantina.db*
+data/
+cantina_settings.json*
+.cantina_secret.key
+*.bak-pre-providers
+
+# Git and OS
+.git
+.gitignore
+.DS_Store
+Thumbs.db
