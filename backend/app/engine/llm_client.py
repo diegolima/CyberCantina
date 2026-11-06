@@ -343,15 +343,18 @@ class LLMClient:
         if target.provider_type not in ("openrouter", "aihorde"):
             ollama_root = target.root_url
             ollama_chat_url = f"{ollama_root}/api/chat"
+            ollama_opts: dict[str, Any] = {
+                "temperature": temp,
+                "num_predict": max_tok,
+            }
+            if getattr(active_profile, "run_on_cpu", False):
+                ollama_opts["num_gpu"] = 0
             ollama_payload: dict[str, Any] = {
                 "model": active_profile.model,
                 "messages": messages,
                 "stream": False,
                 "think": False,
-                "options": {
-                    "temperature": temp,
-                    "num_predict": max_tok,
-                },
+                "options": ollama_opts,
             }
             if json_schema is not None:
                 ollama_payload["format"] = json_schema
@@ -362,10 +365,13 @@ class LLMClient:
                 resp = await client.post(ollama_chat_url, headers=target.native_headers, json=ollama_payload, timeout=active_profile.timeout_seconds)
                 if resp.status_code == 400:
                     retry_payload = {k: v for k, v in ollama_payload.items() if k != "think"}
-                    retry_payload["options"] = {
+                    retry_opts = {
                         "temperature": temp,
                         "num_predict": max(max_tok * 3, 4096),
                     }
+                    if getattr(active_profile, "run_on_cpu", False):
+                        retry_opts["num_gpu"] = 0
+                    retry_payload["options"] = retry_opts
                     resp = await client.post(ollama_chat_url, headers=target.native_headers, json=retry_payload, timeout=active_profile.timeout_seconds)
 
                 if resp.status_code == 200:
@@ -379,10 +385,13 @@ class LLMClient:
                         fallback_payload = dict(ollama_payload)
                         if json_schema is not None:
                             fallback_payload["format"] = "json"
-                        fallback_payload["options"] = {
+                        fb_opts = {
                             "temperature": temp,
                             "num_predict": max(max_tok * 3, 4096),
                         }
+                        if getattr(active_profile, "run_on_cpu", False):
+                            fb_opts["num_gpu"] = 0
+                        fallback_payload["options"] = fb_opts
                         retry_resp = await client.post(ollama_chat_url, headers=target.native_headers, json=fallback_payload, timeout=active_profile.timeout_seconds)
                         if retry_resp.status_code == 200:
                             retry_data = retry_resp.json()
@@ -546,15 +555,18 @@ class LLMClient:
         if target.provider_type not in ("openrouter", "aihorde"):
             ollama_root = target.root_url
             ollama_chat_url = f"{ollama_root}/api/chat"
+            stream_opts: dict[str, Any] = {
+                "temperature": active_profile.temperature,
+                "num_predict": active_profile.max_tokens,
+            }
+            if getattr(active_profile, "run_on_cpu", False):
+                stream_opts["num_gpu"] = 0
             ollama_payload: dict[str, Any] = {
                 "model": active_profile.model,
                 "messages": messages,
                 "stream": True,
                 "think": False,
-                "options": {
-                    "temperature": active_profile.temperature,
-                    "num_predict": active_profile.max_tokens,
-                },
+                "options": stream_opts,
             }
             try:
                 need_retry_without_think = False

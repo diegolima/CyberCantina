@@ -86,6 +86,58 @@ def _finalize_profile(
         return _finalize_profile(default, role, user_id=None, from_user=False, default=default, warnings=warnings)
 
 
+def _normalize_host_url(url: str | None) -> str:
+    """Normalize a base URL to scheme://host[:port] collapsing loopback aliases."""
+    if not url:
+        return ""
+    cleaned = url.strip().lower().rstrip("/")
+    for suffix in ("/v1", "/api"):
+        if cleaned.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)].rstrip("/")
+    for prefix in ("http://", "https://"):
+        if cleaned.startswith(prefix):
+            scheme = prefix
+            rest = cleaned[len(prefix) :]
+            host_port = rest.split("/")[0]
+            host = host_port.split(":")[0]
+            port = (":" + host_port.split(":")[1]) if ":" in host_port else ""
+            if host in ("127.0.0.1", "localhost", "0.0.0.0", "host.docker.internal"):
+                return f"{scheme}localhost{port}"
+            return f"{scheme}{host_port}"
+    return cleaned
+
+
+def normalize_model_tag(model_name: str) -> str:
+    """Normalize an LLM model identifier for robust identity comparison (stripping tags like ':latest', whitespace, case)."""
+    cleaned = (model_name or "").strip().lower()
+    if cleaned.endswith(":latest"):
+        cleaned = cleaned[: -len(":latest")].strip()
+    return cleaned
+
+
+def is_separate_clerk_model(
+    actor: ModelProfile, clerk: ModelProfile, clerk_mirrors_actor: bool
+) -> bool:
+    """Verify whether Clerk and Actor use genuinely separate models on their resolved endpoints."""
+    if clerk_mirrors_actor:
+        return False
+
+    actor_tag = normalize_model_tag(actor.model)
+    clerk_tag = normalize_model_tag(clerk.model)
+    if actor_tag != clerk_tag:
+        return True
+
+    actor_endpoint = actor.resolved.root_url if actor.resolved else (actor.base_url or "")
+    clerk_endpoint = clerk.resolved.root_url if clerk.resolved else (clerk.base_url or "")
+    actor_host = _normalize_host_url(actor_endpoint)
+    clerk_host = _normalize_host_url(clerk_endpoint)
+
+    if actor_host and clerk_host and actor_host != clerk_host:
+        return True
+
+    return False
+
+
 def resolve_effective_models(user_id: str | None) -> EffectiveModels:
     """Resolve effective models for a user: overrides (when allowed), clerk mirroring, endpoints."""
     default_actor = settings.actor_profile
@@ -129,12 +181,15 @@ def resolve_effective_models(user_id: str | None) -> EffectiveModels:
                 "base_url": actor.base_url,
                 "api_key": actor.api_key,
                 "resolved": actor.resolved,
+                "run_on_cpu": False,
             }
         )
     else:
         clerk = _finalize_profile(
             clerk_src, "clerk", user_id=user_id, from_user=clerk_from_user, default=default_clerk, warnings=warnings
         )
+        if clerk.run_on_cpu and not is_separate_clerk_model(actor, clerk, mirror):
+            clerk = clerk.model_copy(update={"run_on_cpu": False})
     return EffectiveModels(actor, clerk, wm_turns, delegate, max_flags, mirror, warnings)
 
 

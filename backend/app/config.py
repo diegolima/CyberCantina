@@ -59,6 +59,10 @@ class ModelProfile(BaseModel):
     temperature: float = Field(default=0.75, ge=0.0, le=2.0)
     max_tokens: int = Field(default=1024, ge=64, le=8192)
     timeout_seconds: float = Field(default=120.0, ge=5.0, le=600.0)
+    run_on_cpu: bool = Field(
+        default=False,
+        description="Run on CPU by offloading 0 layers to GPU (injects num_gpu=0 for Ollama).",
+    )
 
 
 class EmbeddingProfile(BaseModel):

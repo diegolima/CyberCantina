@@ -23,6 +23,8 @@ export interface ModelRoleEditorProps {
   selectionLockedNote?: string;
   /** Rendered above the provider/model pickers (e.g. the Clerk "mirror the Actor" checkbox). */
   topSlot?: React.ReactNode;
+  /** Rendered directly below the provider/model pickers (e.g. Clerk "Run on CPU" checkbox). */
+  afterPickerSlot?: React.ReactNode;
   disabled?: boolean;
   /** Bubbles the number of invalid fields so the parent can block Save. */
   onInvalidChange?: (count: number) => void;
@@ -44,6 +46,7 @@ export const ModelRoleEditor: React.FC<ModelRoleEditorProps> = ({
   headerHint,
   selectionLockedNote,
   topSlot,
+  afterPickerSlot,
   disabled,
   onInvalidChange,
   children,
@@ -72,13 +75,16 @@ export const ModelRoleEditor: React.FC<ModelRoleEditorProps> = ({
       {selectionLockedNote ? (
         <div className="provider-note">{selectionLockedNote}</div>
       ) : (
-        <ModelPicker
-          role={role}
-          value={selection}
-          onChange={onSelection}
-          modelKind="chat"
-          disabled={disabled}
-        />
+        <>
+          <ModelPicker
+            role={role}
+            value={selection}
+            onChange={onSelection}
+            modelKind="chat"
+            disabled={disabled}
+          />
+          {afterPickerSlot}
+        </>
       )}
 
       <DisclosureSection

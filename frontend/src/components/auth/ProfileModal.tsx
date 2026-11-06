@@ -96,6 +96,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
   const [userClerkModel, setUserClerkModel] = useState("");
   const [userClerkTemp, setUserClerkTemp] = useState(0.2);
   const [userClerkTokens, setUserClerkTokens] = useState(768);
+  const [userClerkRunOnCpu, setUserClerkRunOnCpu] = useState(false);
   const [userDelegateCognition, setUserDelegateCognition] = useState<boolean>(false);
 
   const [userWmTurns, setUserWmTurns] = useState<number>(10);
@@ -161,6 +162,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
       setUserClerkModel(activeClerk.model);
       setUserClerkTemp(activeClerk.temperature);
       setUserClerkTokens(activeClerk.max_tokens);
+      setUserClerkRunOnCpu(activeClerk.run_on_cpu ?? false);
 
       setUserWmTurns(
         data.user_working_memory_turns ?? data.default_working_memory_turns
@@ -215,6 +217,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
           model: userClerkModel,
           temperature: userClerkTemp,
           max_tokens: userClerkTokens,
+          run_on_cpu: userClerkRunOnCpu,
         },
         working_memory_turns: userWmTurns,
         delegate_cognition_to_clerk: userDelegateCognition,
@@ -249,6 +252,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
       setUserClerkModel(res.default_clerk_profile.model);
       setUserClerkTemp(res.default_clerk_profile.temperature);
       setUserClerkTokens(res.default_clerk_profile.max_tokens);
+      setUserClerkRunOnCpu(res.default_clerk_profile.run_on_cpu ?? false);
       setUserWmTurns(res.default_working_memory_turns);
       setUserDelegateCognition(res.default_delegate_cognition_to_clerk);
       setUserMaxSceneFlags(res.default_max_scene_flags ?? 10);
@@ -1886,6 +1890,10 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
                       onSelection={(sel) => {
                         setUserClerkProviderId(sel.providerId);
                         setUserClerkModel(sel.model);
+                        const newProv = sel.providerId ? providerStore.byId(sel.providerId) : null;
+                        if (newProv && newProv.type !== "ollama") {
+                          setUserClerkRunOnCpu(false);
+                        }
                       }}
                       temperature={userClerkTemp}
                       onTemperature={setUserClerkTemp}
@@ -1906,6 +1914,43 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
                           Use the same provider and model as the Actor
                         </label>
                       }
+                      afterPickerSlot={(() => {
+                        const clerkProv = userClerkProviderId ? providerStore.byId(userClerkProviderId) : null;
+                        const isClerkOllama = !clerkProv || clerkProv.type === "ollama";
+                        if (!isClerkOllama) return null;
+
+                        const normTag = (m: string) => {
+                          const c = (m || "").trim().toLowerCase();
+                          return c.endsWith(":latest") ? c.slice(0, -":latest".length).trim() : c;
+                        };
+                        const isSameModel =
+                          normTag(userClerkModel) === normTag(userActorModel) &&
+                          (userClerkProviderId ?? null) === (userActorProviderId ?? null);
+                        const isSeparateModel = !userClerkMirrors && !isSameModel;
+
+                        return (
+                          <div style={{ marginTop: 8 }}>
+                            <label className="provider-inline-check" style={{ marginTop: 0 }}>
+                              <input
+                                type="checkbox"
+                                checked={userClerkRunOnCpu}
+                                disabled={!isSeparateModel}
+                                onChange={(e) => setUserClerkRunOnCpu(e.target.checked)}
+                              />
+                              Run on CPU (<code>num_gpu: 0</code>)
+                            </label>
+                            {!isSeparateModel ? (
+                              <div className="form-hint" style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: 2 }}>
+                                Only active when using a separate model from the Actor to avoid GPU/CPU memory thrashing.
+                              </div>
+                            ) : (
+                              <div className="form-hint" style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: 2 }}>
+                                Loads model in system RAM (offloading 0 layers to GPU). Keeps GPU VRAM 100% dedicated to narrative prose. Requires starting Ollama with <code>OLLAMA_MAX_LOADED_MODELS=2</code>.
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                       onInvalidChange={setClerkInvalid}
                     />
 

@@ -1118,16 +1118,19 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
                       providerId: appSettingsForm.clerk_profile.provider_id ?? null,
                       model: appSettingsForm.clerk_profile.model,
                     }}
-                    onSelection={(sel) =>
+                    onSelection={(sel) => {
+                      const newProv = sel.providerId ? providerStore.byId(sel.providerId) : null;
+                      const isOllama = !newProv || newProv.type === "ollama";
                       setAppSettingsForm({
                         ...appSettingsForm,
                         clerk_profile: {
                           ...appSettingsForm.clerk_profile,
                           provider_id: sel.providerId,
                           model: sel.model,
+                          run_on_cpu: isOllama ? appSettingsForm.clerk_profile.run_on_cpu : false,
                         },
-                      })
-                    }
+                      });
+                    }}
                     temperature={appSettingsForm.clerk_profile.temperature}
                     onTemperature={(v) =>
                       setAppSettingsForm({
@@ -1162,6 +1165,53 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
                         Use the same provider and model as the Actor
                       </label>
                     }
+                    afterPickerSlot={(() => {
+                      const clerkProv = appSettingsForm.clerk_profile.provider_id
+                        ? providerStore.byId(appSettingsForm.clerk_profile.provider_id)
+                        : null;
+                      const isClerkOllama = !clerkProv || clerkProv.type === "ollama";
+                      if (!isClerkOllama) return null;
+
+                      const normTag = (m: string) => {
+                        const c = (m || "").trim().toLowerCase();
+                        return c.endsWith(":latest") ? c.slice(0, -":latest".length).trim() : c;
+                      };
+                      const isSameModel =
+                        normTag(appSettingsForm.clerk_profile.model) === normTag(appSettingsForm.actor_profile.model) &&
+                        (appSettingsForm.clerk_profile.provider_id ?? null) === (appSettingsForm.actor_profile.provider_id ?? null);
+                      const isSeparateModel = !appSettingsForm.clerk_mirrors_actor && !isSameModel;
+
+                      return (
+                        <div style={{ marginTop: 8 }}>
+                          <label className="provider-inline-check" style={{ marginTop: 0 }}>
+                            <input
+                              type="checkbox"
+                              checked={!!appSettingsForm.clerk_profile.run_on_cpu}
+                              disabled={!isSeparateModel}
+                              onChange={(e) =>
+                                setAppSettingsForm({
+                                  ...appSettingsForm,
+                                  clerk_profile: {
+                                    ...appSettingsForm.clerk_profile,
+                                    run_on_cpu: e.target.checked,
+                                  },
+                                })
+                              }
+                            />
+                            Run on CPU (<code>num_gpu: 0</code>)
+                          </label>
+                          {!isSeparateModel ? (
+                            <div className="form-hint" style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: 2 }}>
+                              Only active when using a separate model from the Actor to avoid GPU/CPU memory thrashing.
+                            </div>
+                          ) : (
+                            <div className="form-hint" style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: 2 }}>
+                              Loads model in system RAM (offloading 0 layers to GPU). Keeps GPU VRAM 100% dedicated to narrative prose. Requires starting Ollama with <code>OLLAMA_MAX_LOADED_MODELS=2</code>.
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                     onInvalidChange={setClerkInvalid}
                   />
 

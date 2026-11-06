@@ -914,6 +914,7 @@ export interface ModelProfile {
   temperature: number;
   max_tokens: number;
   timeout_seconds: number;
+  run_on_cpu?: boolean;
 }
 
 export interface AppSettings {
