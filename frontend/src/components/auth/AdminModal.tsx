@@ -1368,7 +1368,13 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
           )}
 
           {/* Admin Prompts & Presets Tab */}
-          {activeTab === "prompts" && <PromptPresetsManager />}
+          {activeTab === "prompts" && (
+            <PromptPresetsManager
+              onActivePresetChanged={async (presetId) => {
+                await api.setActivePromptPreset(presetId);
+              }}
+            />
+          )}
         </div>
       </div>
 

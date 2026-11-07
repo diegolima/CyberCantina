@@ -28,6 +28,10 @@ class SetCampaignPresetRequest(BaseModel):
     preset_id: str | None = None
 
 
+class SetUserActivePresetRequest(BaseModel):
+    preset_id: str | None = None
+
+
 @router.get("/api/prompts/defaults", response_model=PromptDefaultsResponse)
 def get_prompt_defaults(
     current_user: UserProfile = Depends(get_current_user),
@@ -35,11 +39,47 @@ def get_prompt_defaults(
     """Return factory defaults, template documentation/variables, and available presets."""
     repo = get_repo()
     presets = repo.list_prompt_presets(user_id=current_user.id)
+    ums = repo.get_user_model_settings(current_user.id)
+    active_preset_id = ums.active_prompt_preset_id if ums else None
     return PromptDefaultsResponse(
         presets=presets,
         defaults=dict(FACTORY_DEFAULT_PROMPTS),
         metadata=[PromptMetadata.model_validate(m) for m in PROMPTS_METADATA],
+        active_preset_id=active_preset_id,
     )
+
+
+@router.get("/api/prompts/active")
+def get_active_prompt_preset(
+    current_user: UserProfile = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Get the current user's active prompt preset."""
+    repo = get_repo()
+    ums = repo.get_user_model_settings(current_user.id)
+    active_id = ums.active_prompt_preset_id if ums else None
+    return {"active_prompt_preset_id": active_id}
+
+
+@router.put("/api/prompts/active")
+def set_active_prompt_preset(
+    payload: SetUserActivePresetRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Set or clear the active prompt preset for the current user."""
+    repo = get_repo()
+    if payload.preset_id:
+        preset = repo.get_prompt_preset(payload.preset_id)
+        if not preset or (
+            not preset.is_builtin
+            and preset.owner_id
+            and preset.owner_id != current_user.id
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Preset '{payload.preset_id}' not found or access denied.",
+            )
+    repo.set_user_active_prompt_preset(current_user.id, payload.preset_id)
+    return {"status": "ok", "active_prompt_preset_id": payload.preset_id}
 
 
 @router.get("/api/prompts/presets", response_model=list[PromptPresetRecord])

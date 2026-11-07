@@ -5133,9 +5133,32 @@ class CantinaRepository:
 
         conn = self._connect()
         try:
+            conn.execute("UPDATE user_model_settings SET active_prompt_preset_id = NULL WHERE active_prompt_preset_id = ?", (preset_id,))
+            conn.execute("UPDATE campaigns SET prompt_preset_id = NULL WHERE prompt_preset_id = ?", (preset_id,))
             conn.execute("DELETE FROM prompt_presets WHERE id = ?", (preset_id,))
             conn.commit()
             return True
+        finally:
+            conn.close()
+
+    def set_user_active_prompt_preset(
+        self, user_id: str, preset_id: str | None
+    ) -> None:
+        """Set or clear the active prompt preset for a user without modifying other settings."""
+        conn = self._connect()
+        try:
+            now = utc_now_iso()
+            conn.execute(
+                """
+                INSERT INTO user_model_settings (user_id, active_prompt_preset_id, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    active_prompt_preset_id = excluded.active_prompt_preset_id,
+                    updated_at = excluded.updated_at
+                """,
+                (user_id, preset_id, now),
+            )
+            conn.commit()
         finally:
             conn.close()
 

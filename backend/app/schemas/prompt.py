@@ -46,3 +46,4 @@ class PromptDefaultsResponse(BaseModel):
     presets: list[PromptPresetRecord]
     defaults: dict[str, str]
     metadata: list[PromptMetadata]
+    active_preset_id: str | None = None

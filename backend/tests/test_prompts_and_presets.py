@@ -285,3 +285,51 @@ def test_character_cognition_prompt_affordance_hierarchy() -> None:
         assert "4. Terminal Fallback" in p
         assert "Never manifest or invent unlisted mechanical items" in p
 
+
+def test_active_prompt_preset_api_and_isolation(client_with_auth: tuple[TestClient, CantinaRepository], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that users can set, fetch, and clear active prompt presets, even with model overrides disabled."""
+    client, repo = client_with_auth
+
+    # Disable user model overrides to verify prompt presets are NOT blocked
+    monkeypatch.setattr(settings, "allow_user_model_overrides", False)
+
+    # 1. Initially no active preset override (null in defaults)
+    defaults = client.get("/api/prompts/defaults").json()
+    assert defaults["active_preset_id"] is None
+
+    # 2. Create custom preset
+    create_res = client.post(
+        "/api/prompts/presets",
+        json={"name": "Noir Active Test", "base_preset_id": "builtin-default"},
+    )
+    assert create_res.status_code == 200
+    preset_id = create_res.json()["id"]
+
+    # 3. Set active via PUT /api/prompts/active
+    set_res = client.put("/api/prompts/active", json={"preset_id": preset_id})
+    assert set_res.status_code == 200
+    assert set_res.json()["active_prompt_preset_id"] == preset_id
+
+    # 4. GET /api/prompts/active and GET /api/prompts/defaults reflect the active preset
+    get_res = client.get("/api/prompts/active")
+    assert get_res.status_code == 200
+    assert get_res.json()["active_prompt_preset_id"] == preset_id
+
+    defaults_after = client.get("/api/prompts/defaults").json()
+    assert defaults_after["active_preset_id"] == preset_id
+
+    # 5. Saving other settings via /api/profile/models does NOT erase active_prompt_preset_id
+    update_prof = client.put(
+        "/api/profile/models",
+        json={"working_memory_turns": 15},
+    )
+    assert update_prof.status_code == 200
+    assert update_prof.json()["active_prompt_preset_id"] == preset_id
+
+    # 6. Deleting active preset clears active_preset_id
+    del_res = client.delete(f"/api/prompts/presets/{preset_id}")
+    assert del_res.status_code == 200
+
+    defaults_deleted = client.get("/api/prompts/defaults").json()
+    assert defaults_deleted["active_preset_id"] is None
+

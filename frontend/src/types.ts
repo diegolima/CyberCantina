@@ -1201,6 +1201,7 @@ export interface PromptDefaultsResponse {
   presets: PromptPresetRecord[];
   defaults: Record<string, string>;
   metadata: PromptMetadata[];
+  active_preset_id?: string | null;
 }
 
 export interface UserNote {

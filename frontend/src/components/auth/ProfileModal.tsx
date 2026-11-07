@@ -103,6 +103,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
   const [userMaxSceneFlags, setUserMaxSceneFlags] = useState<number>(10);
   const [userAgentDispatchMode, setUserAgentDispatchMode] = useState<"sequential" | "parallel">("sequential");
   const [userPersonaDisclosureMode, setUserPersonaDisclosureMode] = useState<DisclosureDetectionMode>("llm_intent");
+  const [userActivePresetId, setUserActivePresetId] = useState<string | null>(null);
 
   // Password change state
   const [currentPasswordForPwd, setCurrentPasswordForPwd] = useState("");
@@ -187,6 +188,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
           data.default_persona_disclosure_mode ??
           "llm_intent"
       );
+      setUserActivePresetId(data.active_prompt_preset_id ?? null);
     } catch (err: any) {
       setErrorMsg(err?.message || "Failed to load preferences.");
     } finally {
@@ -224,6 +226,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
           keep_alive_minutes: userClerkKeepAlive,
         },
         working_memory_turns: userWmTurns,
+        active_prompt_preset_id: userActivePresetId,
         delegate_cognition_to_clerk: userDelegateCognition,
         max_scene_flags: userMaxSceneFlags,
         agent_dispatch_mode: userAgentDispatchMode,
@@ -1698,27 +1701,19 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
               {/* Prompts & Presets Sub-tab */}
               {!modelLoading && activePrefTab === "prompts" && (
                 <PromptPresetsManager
-                  activePresetId={modelSettings?.active_prompt_preset_id}
+                  activePresetId={userActivePresetId}
                   onActivePresetChanged={async (presetId) => {
-                    const payload: UserModelSettingsPayload = {
-                      ...(modelSettings?.user_actor_profile
-                        ? { actor_profile: modelSettings.user_actor_profile }
-                        : {}),
-                      ...(modelSettings?.user_clerk_profile
-                        ? { clerk_profile: modelSettings.user_clerk_profile }
-                        : {}),
-                      working_memory_turns:
-                        modelSettings?.user_working_memory_turns ?? null,
-                      active_prompt_preset_id: presetId,
-                      delegate_cognition_to_clerk:
-                        modelSettings?.user_delegate_cognition_to_clerk ?? null,
-                      max_scene_flags:
-                        modelSettings?.user_max_scene_flags ?? null,
-                      agent_dispatch_mode:
-                        modelSettings?.user_agent_dispatch_mode ?? null,
-                    };
-                    const updated = await api.updateProfileModels(payload);
-                    setModelSettings(updated);
+                    setUserActivePresetId(presetId);
+                    await api.setActivePromptPreset(presetId);
+                    setModelSettings((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            active_prompt_preset_id: presetId,
+                            has_override: true,
+                          }
+                        : prev
+                    );
                   }}
                 />
               )}

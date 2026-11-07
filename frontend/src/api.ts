@@ -629,6 +629,16 @@ export const api = {
     fetchJson<PromptPresetRecord>(`${API_BASE}/prompts/presets/${id}/reset`, {
       method: "POST",
     }),
+  getActivePromptPreset: () =>
+    fetchJson<{ active_prompt_preset_id: string | null }>(`${API_BASE}/prompts/active`),
+  setActivePromptPreset: (presetId: string | null) =>
+    fetchJson<{ status: string; active_prompt_preset_id: string | null }>(
+      `${API_BASE}/prompts/active`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ preset_id: presetId }),
+      }
+    ),
   setCampaignPromptPreset: (campaignId: string, presetId: string | null) =>
     fetchJson<CampaignRecord>(`${API_BASE}/campaigns/${campaignId}/prompt-preset`, {
       method: "PUT",

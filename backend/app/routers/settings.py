@@ -229,11 +229,12 @@ def update_profile_models(
     payload: UserModelSettingsPayload,
     current_user: UserProfile = Depends(get_current_user),
 ) -> ProfileModelSettingsResponse:
-    if not settings.allow_user_model_overrides:
-        raise HTTPException(
-            status_code=403,
-            detail="Per-user model overrides are currently disabled by the system administrator.",
-        )
+    if not settings.allow_user_model_overrides and current_user.role != "admin":
+        if payload.actor_profile is not None or payload.clerk_profile is not None:
+            raise HTTPException(
+                status_code=403,
+                detail="Per-user model overrides are currently disabled by the system administrator.",
+            )
     repo = get_repo()
     if payload.active_prompt_preset_id:
         preset = repo.get_prompt_preset(payload.active_prompt_preset_id)
@@ -254,6 +255,10 @@ def update_profile_models(
         payload.clerk_profile = _sanitize_user_profile(
             payload.clerk_profile, "clerk", current_user, settings.clerk_profile
         )
+    if payload.active_prompt_preset_id is None:
+        existing = repo.get_user_model_settings(current_user.id)
+        if existing and existing.active_prompt_preset_id:
+            payload.active_prompt_preset_id = existing.active_prompt_preset_id
     repo.save_user_model_settings(current_user.id, payload)
     return get_profile_models(current_user=current_user)
 
