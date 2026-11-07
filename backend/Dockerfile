@@ -14,7 +14,7 @@ COPY pyproject.toml ./
 COPY app ./app
 
 # Install package dependencies and optional embeddings
-RUN pip install --no-cache-dir --upgrade pip && \
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir ".[embeddings]"
 
 # Ensure default data directory exists

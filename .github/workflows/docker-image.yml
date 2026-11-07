@@ -23,11 +23,15 @@ jobs:
       uses: docker/build-push-action@v7
       with:
         context: "{{defaultContext}}:backend"
+        pull: true
+        no-cache: true
         push: true
         tags: diegolima/cybercantina-backend:alpha,diegolima/cybercantina-backend:alpha-${{ github.sha }}
     - name: Build and push frontend
       uses: docker/build-push-action@v7
       with:
         context: "{{defaultContext}}:frontend"
+        pull: true
+        no-cache: true
         push: true
         tags: diegolima/cybercantina-frontend:alpha,diegolima/cybercantina-frontend:alpha-${{ github.sha }}
