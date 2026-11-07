@@ -345,8 +345,8 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
       <div
         className="modal-panel"
         style={{
-          maxWidth: activeTab === "models" ? 880 : 740,
-          width: activeTab === "models" ? "min(880px, 95vw)" : undefined,
+          maxWidth: activeTab === "models" || activeTab === "prompts" ? 880 : 740,
+          width: activeTab === "models" || activeTab === "prompts" ? "min(880px, 95vw)" : undefined,
           transition: "max-width 0.2s ease",
         }}
       >

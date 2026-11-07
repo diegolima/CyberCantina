@@ -550,8 +550,8 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
     }
   };
 
-  const isModelsTab =
-    (activeTab === "preferences" && activePrefTab === "models") ||
+  const isWideTab =
+    (activeTab === "preferences" && (activePrefTab === "models" || activePrefTab === "prompts")) ||
     (activeTab as string) === "models";
 
   return (
@@ -559,8 +559,8 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
       <div
         className="modal-panel"
         style={{
-          maxWidth: isModelsTab ? 880 : 660,
-          width: isModelsTab ? "min(880px, 95vw)" : undefined,
+          maxWidth: isWideTab ? 880 : 660,
+          width: isWideTab ? "min(880px, 95vw)" : undefined,
           transition: "max-width 0.2s ease",
         }}
       >

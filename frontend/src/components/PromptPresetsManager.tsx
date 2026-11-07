@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -15,6 +15,12 @@ import {
   PromptDefaultsResponse,
   PromptPresetRecord,
 } from "../types";
+import {
+  PROMPT_ROLES,
+  PromptRoleId,
+  getRoleForPromptKey,
+} from "./prompts/promptRoleDefinitions";
+import { PromptRoleDeck, RoleStats } from "./prompts/PromptRoleDeck";
 
 interface PromptPresetsManagerProps {
   activePresetId?: string | null;
@@ -27,13 +33,17 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
 }) => {
   const [data, setData] = useState<PromptDefaultsResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [activeIdState, setActiveIdState] = useState<string | null>(activePresetId ?? null);
+  const [savingPreset, setSavingPreset] = useState(false);
   const [selectedId, setSelectedId] = useState<string>("builtin-default");
-  const [expandedKeys, setExpandedKeys] = useState<Record<string, boolean>>({
-    actor_zone1_system: true,
-  });
+  const [currentActivePresetId, setCurrentActivePresetId] = useState<string | null>(
+    activePresetId ?? null
+  );
+  const [selectedRoleId, setSelectedRoleId] = useState<PromptRoleId>("storytelling");
+  // Default to all collapsed
+  const [expandedKeys, setExpandedKeys] = useState<Record<string, boolean>>({});
   const [editingPrompts, setEditingPrompts] = useState<Record<string, string>>({});
+  const [savingKeys, setSavingKeys] = useState<Record<string, boolean>>({});
+  const [savedNoticeKeys, setSavedNoticeKeys] = useState<Record<string, boolean>>({});
   const [statusMsg, setStatusMsg] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
 
@@ -41,32 +51,29 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newPresetName, setNewPresetName] = useState("");
   const [newPresetDesc, setNewPresetDesc] = useState("");
-  const [createAsActive, setCreateAsActive] = useState(true);
 
-  useEffect(() => {
-    if (activePresetId !== undefined) {
-      setActiveIdState(activePresetId);
-    }
-  }, [activePresetId]);
-
-  const loadData = async (preferredId?: string) => {
+  const loadData = async () => {
     setLoading(true);
     try {
       const resp = await api.getPromptDefaults();
       setData(resp);
-      const serverActive = activePresetId !== undefined ? activePresetId : (resp.active_preset_id ?? null);
-      setActiveIdState(serverActive);
 
-      setSelectedId((prevSelectedId) => {
-        const candidate = preferredId ?? prevSelectedId;
-        if (candidate && resp.presets.some((p) => p.id === candidate)) {
-          return candidate;
-        }
-        if (serverActive && resp.presets.some((p) => p.id === serverActive)) {
-          return serverActive;
-        }
-        return resp.presets[0]?.id || "builtin-default";
-      });
+      // Determine active preset id from prop or backend response
+      const effectiveActive =
+        activePresetId !== undefined ? activePresetId : (resp.active_preset_id ?? null);
+      setCurrentActivePresetId(effectiveActive);
+
+      // Initial selected preset: active preset if valid, else first preset
+      const initialId =
+        effectiveActive && resp.presets.some((p) => p.id === effectiveActive)
+          ? effectiveActive
+          : resp.presets[0]?.id || "builtin-default";
+      setSelectedId(initialId);
+
+      const sel = resp.presets.find((p) => p.id === initialId) || resp.presets[0];
+      if (sel) {
+        setEditingPrompts({ ...sel.prompts });
+      }
     } catch (err: any) {
       setErrorMsg(err.message || "Failed to load prompt presets");
     } finally {
@@ -77,6 +84,13 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
   useEffect(() => {
     loadData();
   }, []);
+
+  // Sync if parent updates activePresetId prop
+  useEffect(() => {
+    if (activePresetId !== undefined) {
+      setCurrentActivePresetId(activePresetId);
+    }
+  }, [activePresetId]);
 
   useEffect(() => {
     if (data) {
@@ -91,8 +105,8 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
     (p) => p.id === selectedId
   );
   const isBuiltin = currentPreset?.is_builtin ?? false;
-  const effectiveActiveId = activePresetId !== undefined ? activePresetId : activeIdState;
-  const isActive = (effectiveActiveId || "builtin-default") === selectedId;
+  const effectiveActiveId = currentActivePresetId || "builtin-default";
+  const isActive = effectiveActiveId === selectedId;
 
   const toggleExpand = (key: string) => {
     setExpandedKeys((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -102,57 +116,79 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
     setEditingPrompts((prev) => ({ ...prev, [key]: val }));
   };
 
-  const handleSavePresetPrompts = async (alsoActivate: boolean = false) => {
+  // Compute aggregate stats per role
+  const roleStats: Record<PromptRoleId, RoleStats> = useMemo(() => {
+    const initial: Record<PromptRoleId, RoleStats> = {
+      storytelling: { promptCount: 0, missingTokenCount: 0, unsavedCount: 0 },
+      cognition: { promptCount: 0, missingTokenCount: 0, unsavedCount: 0 },
+      auxiliary: { promptCount: 0, missingTokenCount: 0, unsavedCount: 0 },
+      wizard: { promptCount: 0, missingTokenCount: 0, unsavedCount: 0 },
+    };
+
+    if (!data) return initial;
+
+    for (const meta of data.metadata) {
+      const roleId = getRoleForPromptKey(meta.key);
+      const templateVal =
+        editingPrompts[meta.key] ?? currentPreset?.prompts[meta.key] ?? data.defaults[meta.key] ?? "";
+      const savedVal = currentPreset?.prompts[meta.key] ?? data.defaults[meta.key] ?? "";
+      const hasMissingTag = meta.required_tags.some((t) => !templateVal.includes(t));
+      const isDirty = !isBuiltin && (templateVal !== savedVal);
+
+      if (initial[roleId]) {
+        initial[roleId].promptCount += 1;
+        if (hasMissingTag) {
+          initial[roleId].missingTokenCount += 1;
+        }
+        if (isDirty) {
+          initial[roleId].unsavedCount += 1;
+        }
+      }
+    }
+
+    return initial;
+  }, [data, editingPrompts, currentPreset, isBuiltin]);
+
+  // Active Role and Filtered Prompts
+  const activeRole = useMemo(() => {
+    return PROMPT_ROLES.find((r) => r.id === selectedRoleId) || PROMPT_ROLES[0];
+  }, [selectedRoleId]);
+
+  const filteredPrompts = useMemo(() => {
+    if (!data) return [];
+    return data.metadata.filter((meta) => activeRole.promptKeys.includes(meta.key));
+  }, [data, activeRole]);
+
+  const handleSelectRole = (roleId: PromptRoleId) => {
+    setSelectedRoleId(roleId);
+  };
+
+  // Per-prompt save & discard handlers
+  const handleSavePrompt = async (key: string) => {
     if (!currentPreset || currentPreset.is_builtin) return;
-    setSaving(true);
+    const templateVal =
+      editingPrompts[key] ?? currentPreset.prompts[key] ?? data?.defaults[key] ?? "";
+    setSavingKeys((prev) => ({ ...prev, [key]: true }));
     setErrorMsg("");
     try {
       await api.updatePromptPreset(selectedId, {
-        prompts: editingPrompts,
+        prompts: { [key]: templateVal },
       });
-      if (alsoActivate) {
-        const targetId = selectedId === "builtin-default" ? null : selectedId;
-        if (onActivePresetChanged) {
-          await onActivePresetChanged(targetId);
-        } else {
-          await api.setActivePromptPreset(targetId);
-        }
-        setActiveIdState(targetId);
-        setStatusMsg(`Preset "${currentPreset.name}" saved and set as active.`);
-      } else {
-        setStatusMsg("Prompt preset saved successfully.");
-      }
-      await loadData(selectedId);
-      setTimeout(() => setStatusMsg(""), 3500);
+      await loadData();
+      setSavedNoticeKeys((prev) => ({ ...prev, [key]: true }));
+      setTimeout(() => {
+        setSavedNoticeKeys((prev) => ({ ...prev, [key]: false }));
+      }, 2500);
     } catch (err: any) {
-      setErrorMsg(err.message || "Failed to save prompt preset");
+      setErrorMsg(err.message || `Failed to save prompt "${key}"`);
     } finally {
-      setSaving(false);
+      setSavingKeys((prev) => ({ ...prev, [key]: false }));
     }
   };
 
-  const handleResetToDefault = async () => {
-    if (!currentPreset) return;
-    if (
-      !confirm(
-        `Reset all prompts in preset "${currentPreset.name}" back to the factory defaults?`
-      )
-    ) {
-      return;
-    }
-    setSaving(true);
-    setErrorMsg("");
-    try {
-      const res = await api.resetPromptPreset(selectedId);
-      setEditingPrompts({ ...res.prompts });
-      await loadData(selectedId);
-      setStatusMsg("Preset prompts have been reset to factory defaults.");
-      setTimeout(() => setStatusMsg(""), 3500);
-    } catch (err: any) {
-      setErrorMsg(err.message || "Failed to reset preset");
-    } finally {
-      setSaving(false);
-    }
+  const handleDiscardPrompt = (key: string) => {
+    const savedVal = currentPreset?.prompts[key] ?? data?.defaults[key] ?? "";
+    setEditingPrompts((prev) => ({ ...prev, [key]: savedVal }));
   };
 
   const handleDeletePreset = async () => {
@@ -160,33 +196,25 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
     if (!confirm(`Delete custom prompt preset "${currentPreset.name}"?`)) {
       return;
     }
-    setSaving(true);
+    setSavingPreset(true);
     setErrorMsg("");
     try {
       await api.deletePromptPreset(selectedId);
-      if (effectiveActiveId === selectedId) {
-        if (onActivePresetChanged) {
-          await onActivePresetChanged(null);
-        } else {
-          await api.setActivePromptPreset(null);
-        }
-        setActiveIdState(null);
-      }
-      await loadData("builtin-default");
+      await loadData();
       setSelectedId("builtin-default");
       setStatusMsg("Preset deleted.");
       setTimeout(() => setStatusMsg(""), 3500);
     } catch (err: any) {
       setErrorMsg(err.message || "Failed to delete preset");
     } finally {
-      setSaving(false);
+      setSavingPreset(false);
     }
   };
 
   const handleCreatePreset = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newPresetName.trim()) return;
-    setSaving(true);
+    setSavingPreset(true);
     setErrorMsg("");
     try {
       const created = await api.createPromptPreset({
@@ -194,48 +222,37 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
         description: newPresetDesc.trim(),
         base_preset_id: selectedId,
       });
-      if (createAsActive) {
-        if (onActivePresetChanged) {
-          await onActivePresetChanged(created.id);
-        } else {
-          await api.setActivePromptPreset(created.id);
-        }
-        setActiveIdState(created.id);
-      }
       setShowCreateModal(false);
       setNewPresetName("");
       setNewPresetDesc("");
-      await loadData(created.id);
+      await loadData();
       setSelectedId(created.id);
-      setStatusMsg(
-        `Preset "${created.name}" created${createAsActive ? " and set as active" : ""}.`
-      );
+      setStatusMsg(`Preset "${created.name}" created.`);
       setTimeout(() => setStatusMsg(""), 3500);
     } catch (err: any) {
       setErrorMsg(err.message || "Failed to create preset");
     } finally {
-      setSaving(false);
+      setSavingPreset(false);
     }
   };
 
   const handleSetActive = async () => {
-    if (!currentPreset) return;
-    setSaving(true);
+    setSavingPreset(true);
     setErrorMsg("");
+    const targetId = selectedId === "builtin-default" ? null : selectedId;
     try {
-      const targetId = selectedId === "builtin-default" ? null : selectedId;
       if (onActivePresetChanged) {
         await onActivePresetChanged(targetId);
       } else {
         await api.setActivePromptPreset(targetId);
       }
-      setActiveIdState(targetId);
-      setStatusMsg(`Preset "${currentPreset.name}" is now active.`);
+      setCurrentActivePresetId(targetId);
+      setStatusMsg(`Preset "${currentPreset?.name}" is now active.`);
       setTimeout(() => setStatusMsg(""), 3500);
     } catch (err: any) {
       setErrorMsg(err.message || "Failed to set active preset");
     } finally {
-      setSaving(false);
+      setSavingPreset(false);
     }
   };
 
@@ -268,7 +285,7 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
         style={{
           background: "var(--bg-card)",
           border: "1px solid var(--border-subtle)",
-          borderRadius: 8,
+          borderRadius: 10,
           padding: 16,
           display: "flex",
           flexDirection: "column",
@@ -320,7 +337,7 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
               {data?.presets.map((preset) => (
                 <option key={preset.id} value={preset.id}>
                   {preset.name} {preset.is_builtin ? "(Built-in)" : "(Custom)"}
-                  {(effectiveActiveId || "builtin-default") === preset.id ? " ★ Active" : ""}
+                  {effectiveActiveId === preset.id ? " ★ Active" : ""}
                 </option>
               ))}
             </select>
@@ -332,35 +349,22 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
               className={`btn ${isActive ? "btn-secondary" : "btn-amber"}`}
               style={{ padding: "8px 14px", fontSize: "0.82rem", whiteSpace: "nowrap" }}
               onClick={handleSetActive}
-              disabled={saving || isActive}
+              disabled={savingPreset || isActive}
             >
               {isActive ? "✓ Currently Active" : "Set as Active Preset"}
             </button>
 
             {!isBuiltin && (
-              <>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  style={{ padding: "8px 12px", fontSize: "0.82rem", color: "var(--text-secondary)" }}
-                  title="Reset this preset's templates to default"
-                  onClick={handleResetToDefault}
-                  disabled={saving}
-                >
-                  <RotateCcw size={14} />
-                  Reset
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  style={{ padding: "8px 12px", fontSize: "0.82rem", color: "var(--accent-rose)" }}
-                  title="Delete preset"
-                  onClick={handleDeletePreset}
-                  disabled={saving}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                style={{ padding: "8px 12px", fontSize: "0.82rem", color: "var(--accent-rose)" }}
+                title="Delete preset"
+                onClick={handleDeletePreset}
+                disabled={savingPreset}
+              >
+                <Trash2 size={14} />
+              </button>
             )}
           </div>
         </div>
@@ -389,13 +393,24 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
         )}
       </div>
 
-      {/* Prompts Accordion List */}
+      {/* Role Deck (Card Selector) with Descriptions in Hover Tooltips */}
+      <PromptRoleDeck
+        selectedRoleId={selectedRoleId}
+        onSelectRole={handleSelectRole}
+        stats={roleStats}
+      />
+
+      {/* Filtered Prompts Accordion List (Flows Directly Under Deck) */}
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {data?.metadata.map((meta) => {
+        {filteredPrompts.map((meta) => {
           const isExpanded = !!expandedKeys[meta.key];
           const templateVal =
-            editingPrompts[meta.key] ?? currentPreset?.prompts[meta.key] ?? data.defaults[meta.key] ?? "";
+            editingPrompts[meta.key] ?? currentPreset?.prompts[meta.key] ?? data?.defaults[meta.key] ?? "";
+          const savedVal = currentPreset?.prompts[meta.key] ?? data?.defaults[meta.key] ?? "";
           const hasMissingTag = meta.required_tags.some((t) => !templateVal.includes(t));
+          const isDirty = !isBuiltin && (templateVal !== savedVal);
+          const isSavingThis = !!savingKeys[meta.key];
+          const justSavedThis = !!savedNoticeKeys[meta.key];
 
           return (
             <div
@@ -405,6 +420,7 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
                 border: "1px solid var(--border-subtle)",
                 borderRadius: 8,
                 overflow: "hidden",
+                transition: "border-color 0.2s ease",
               }}
             >
               {/* Accordion Header */}
@@ -423,8 +439,22 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <FileText size={16} style={{ color: "var(--text-secondary)" }} />
                   <div>
-                    <div style={{ fontWeight: 600, fontSize: "0.88rem", color: "var(--text-primary)" }}>
-                      {meta.title}
+                    <div style={{ fontWeight: 600, fontSize: "0.88rem", color: "var(--text-primary)", display: "flex", alignItems: "center", gap: 8 }}>
+                      <span>{meta.title}</span>
+
+                      {/* Dirty State / Unsaved Edits Badge */}
+                      {isDirty && (
+                        <span className="prompt-unsaved-badge" title="This prompt has unsaved changes">
+                          Unsaved edits
+                        </span>
+                      )}
+
+                      {/* Just Saved Success Indicator */}
+                      {justSavedThis && (
+                        <span className="prompt-saved-badge" title="Changes saved successfully">
+                          <Check size={12} /> Saved
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: "0.76rem", color: "var(--text-muted)" }}>
                       Key: <code>{meta.key}</code>
@@ -456,7 +486,15 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
 
               {/* Accordion Body */}
               {isExpanded && (
-                <div style={{ padding: "12px 16px 16px", borderTop: "1px solid var(--border-subtle)", display: "flex", flexDirection: "column", gap: 10 }}>
+                <div
+                  style={{
+                    padding: "12px 16px 16px",
+                    borderTop: "1px solid var(--border-subtle)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 10,
+                  }}
+                >
                   <p style={{ fontSize: "0.8rem", color: "var(--text-secondary)", lineHeight: 1.4 }}>
                     {meta.description}
                   </p>
@@ -510,7 +548,7 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
                   <textarea
                     value={templateVal}
                     onChange={(e) => handlePromptChange(meta.key, e.target.value)}
-                    disabled={isBuiltin || saving}
+                    disabled={isBuiltin || isSavingThis}
                     rows={8}
                     style={{
                       width: "100%",
@@ -526,52 +564,51 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
                       opacity: isBuiltin ? 0.85 : 1,
                     }}
                   />
+
+                  {/* Inline Per-Prompt Action Micro-Bar for Custom Presets */}
+                  {!isBuiltin && isDirty && (
+                    <div className="prompt-editor-actions">
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => handleDiscardPrompt(meta.key)}
+                        disabled={isSavingThis}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          fontSize: "0.80rem",
+                          padding: "6px 12px",
+                          color: "var(--text-secondary)",
+                        }}
+                      >
+                        <RotateCcw size={13} />
+                        <span>Discard</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-amber"
+                        onClick={() => handleSavePrompt(meta.key)}
+                        disabled={isSavingThis}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          fontSize: "0.80rem",
+                          padding: "6px 14px",
+                        }}
+                      >
+                        <Check size={13} />
+                        <span>{isSavingThis ? "Saving..." : "Save changes"}</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           );
         })}
       </div>
-
-      {/* Save Action for Custom Presets */}
-      {!isBuiltin && (
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 4 }}>
-          {!isActive ? (
-            <>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => handleSavePresetPrompts(false)}
-                disabled={saving}
-                style={{ padding: "8px 16px" }}
-              >
-                <span>Save Changes</span>
-              </button>
-              <button
-                type="button"
-                className="btn btn-amber"
-                onClick={() => handleSavePresetPrompts(true)}
-                disabled={saving}
-                style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 18px" }}
-              >
-                <Check size={14} />
-                <span>{saving ? "Saving..." : "Save & Set as Active Preset"}</span>
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              className="btn btn-amber"
-              onClick={() => handleSavePresetPrompts(true)}
-              disabled={saving}
-              style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 18px" }}
-            >
-              <Check size={14} />
-              <span>{saving ? "Saving..." : "Save Custom Preset Changes"}</span>
-            </button>
-          )}
-        </div>
-      )}
 
       {/* Create / Clone Modal */}
       {showCreateModal && (
@@ -659,15 +696,6 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
                 Initial templates will be cloned from <strong>{currentPreset?.name}</strong>.
               </div>
 
-              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.82rem", cursor: "pointer", color: "var(--text-secondary)" }}>
-                <input
-                  type="checkbox"
-                  checked={createAsActive}
-                  onChange={(e) => setCreateAsActive(e.target.checked)}
-                />
-                <span>Set as active roleplay preset immediately</span>
-              </label>
-
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 8 }}>
                 <button
                   type="button"
@@ -679,7 +707,7 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
                 <button
                   type="submit"
                   className="btn btn-amber"
-                  disabled={saving || !newPresetName.trim()}
+                  disabled={savingPreset || !newPresetName.trim()}
                 >
                   Create Preset
                 </button>
