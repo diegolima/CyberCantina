@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { getCategoryPrimaryImages, getEntityPrimaryImage } from "../entityImages";
+import {
+  getCategoryPrimaryImages,
+  getCharacterEmotionPortrait,
+  getEntityPrimaryImage,
+} from "../entityImages";
 
 describe("entityImages utility", () => {
   it("extracts character portrait default first", () => {
@@ -70,5 +74,22 @@ describe("entityImages utility", () => {
 
     const campaign = { cover_url: "https://example.com/campaign.png" };
     expect(getEntityPrimaryImage("campaigns", campaign)).toBe("https://example.com/campaign.png");
+  });
+
+  it("resolves live CARE emotion portraits with fallback to default and gallery", () => {
+    const char = {
+      name: "Kira",
+      portraits: {
+        default: "https://example.com/kira-default.webp",
+        angry: "https://example.com/kira-angry.webp",
+        happy: "https://example.com/kira-happy.webp",
+      },
+      gallery: [{ id: "g1", url: "https://example.com/kira-gal.webp", created_at: "2026" }],
+    };
+
+    expect(getCharacterEmotionPortrait(char, "angry")).toBe("https://example.com/kira-angry.webp");
+    expect(getCharacterEmotionPortrait(char, "afraid")).toBe("https://example.com/kira-default.webp");
+    expect(getCharacterEmotionPortrait(char, null)).toBe("https://example.com/kira-default.webp");
+    expect(getCharacterEmotionPortrait(null, "happy")).toBeNull();
   });
 });

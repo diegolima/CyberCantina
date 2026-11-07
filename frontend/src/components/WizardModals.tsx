@@ -4,8 +4,11 @@ import { api } from "../api";
 import {
   CharacterRecord,
   CharacterWizardDraft,
+  TEMPERAMENT_ARCHETYPE_OPTIONS,
+  TemperamentArchetype,
   WorldRecord,
   WorldWizardDraft,
+  getTemperamentPresetMeta,
   normalizeItemInstance,
 } from "../types";
 import {
@@ -510,6 +513,150 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
                   )}
                 </div>
               </div>
+
+              {/* CARE Temperament Preset & Initial Worldview */}
+              {(() => {
+                const activePreset = getTemperamentPresetMeta(
+                  draft.baseline_psyche.temperament?.archetype
+                );
+                const wv =
+                  draft.baseline_psyche.initial_worldview ?? activePreset.worldview;
+                return (
+                  <div className="cog-step" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div className="cog-step-label">
+                      Psychological Temperament &amp; Worldview Priors
+                    </div>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "2fr 1fr 1fr 1fr",
+                        gap: 8,
+                        alignItems: "end",
+                      }}
+                    >
+                      <div className="field-group">
+                        <label>Temperament Archetype</label>
+                        <select
+                          className="field-select"
+                          value={activePreset.archetype}
+                          onChange={(e) => {
+                            const nextMeta = getTemperamentPresetMeta(
+                              e.target.value as TemperamentArchetype
+                            );
+                            setDraft({
+                              ...draft,
+                              baseline_psyche: {
+                                ...draft.baseline_psyche,
+                                temperament: { ...nextMeta.temperament },
+                                initial_worldview: { ...nextMeta.worldview },
+                              },
+                            });
+                          }}
+                        >
+                          {TEMPERAMENT_ARCHETYPE_OPTIONS.map((opt) => (
+                            <option key={opt.archetype} value={opt.archetype}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="field-group">
+                        <label>Benevolence</label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="-1"
+                          max="1"
+                          className="field-input"
+                          value={wv.benevolence}
+                          onChange={(e) =>
+                            setDraft({
+                              ...draft,
+                              baseline_psyche: {
+                                ...draft.baseline_psyche,
+                                temperament:
+                                  draft.baseline_psyche.temperament ?? {
+                                    ...activePreset.temperament,
+                                  },
+                                initial_worldview: {
+                                  ...wv,
+                                  benevolence: Math.max(
+                                    -1,
+                                    Math.min(1, Number(e.target.value) || 0)
+                                  ),
+                                },
+                              },
+                            })
+                          }
+                        />
+                      </div>
+                      <div className="field-group">
+                        <label>Belonging</label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="-1"
+                          max="1"
+                          className="field-input"
+                          value={wv.belonging}
+                          onChange={(e) =>
+                            setDraft({
+                              ...draft,
+                              baseline_psyche: {
+                                ...draft.baseline_psyche,
+                                temperament:
+                                  draft.baseline_psyche.temperament ?? {
+                                    ...activePreset.temperament,
+                                  },
+                                initial_worldview: {
+                                  ...wv,
+                                  belonging: Math.max(
+                                    -1,
+                                    Math.min(1, Number(e.target.value) || 0)
+                                  ),
+                                },
+                              },
+                            })
+                          }
+                        />
+                      </div>
+                      <div className="field-group">
+                        <label>Agency</label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="-1"
+                          max="1"
+                          className="field-input"
+                          value={wv.agency}
+                          onChange={(e) =>
+                            setDraft({
+                              ...draft,
+                              baseline_psyche: {
+                                ...draft.baseline_psyche,
+                                temperament:
+                                  draft.baseline_psyche.temperament ?? {
+                                    ...activePreset.temperament,
+                                  },
+                                initial_worldview: {
+                                  ...wv,
+                                  agency: Math.max(
+                                    -1,
+                                    Math.min(1, Number(e.target.value) || 0)
+                                  ),
+                                },
+                              },
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
+                    <div style={{ fontSize: "0.73rem", color: "var(--text-muted)" }}>
+                      {activePreset.summary}
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <div className="cog-step">

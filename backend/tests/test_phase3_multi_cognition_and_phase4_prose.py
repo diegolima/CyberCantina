@@ -325,10 +325,12 @@ async def test_sequential_mode_passes_prior_cues_and_emits_events(
     assert results[kira.id].feeling == "Sharp medical adrenaline"
     assert results[viktor.id].feeling == "Guarded anticipation"
 
-    # Verify Viktor received Kira's observable posture/cue in prompt, but NOT Kira's private recall
+    # Verify Viktor received Kira's composure-masked outward posture/cue in prompt,
+    # NOT Kira's raw private feeling or private recall (CARE §4.2.C epistemic isolation!)
     viktor_prompt = called_prompts[1]
     assert "Observable Co-Present Character Actions & Postures this turn:" in viktor_prompt
-    assert "Sharp medical adrenaline" in viktor_prompt
+    assert "Outwardly" in viktor_prompt
+    assert "Sharp medical adrenaline" not in viktor_prompt
     assert "Clear the gurney immediately" in viktor_prompt
     assert "Patient needs instant stabilization" not in viktor_prompt  # Epistemic isolation!
 

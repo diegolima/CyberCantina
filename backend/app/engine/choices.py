@@ -220,23 +220,32 @@ def render_choice_directive(resolution: ChoiceResolution, character_name: str) -
         "(or null if deciding freely).",
         "2. Field `<plan>` (Bullet 1): Your first bullet point MUST immediately and irrevocably "
         "execute the chosen action.",
-        "3. Inner Conflict & Regret: If the choice conflicts with your core persona, baseline valence, or core fear:",
+        "3. Inner Conflict & Regret: If the choice conflicts with your core persona, active disposition, or core fear:",
         "   - Your `<want>` must maintain your true personal desire.",
         "   - Bullets 2-3 of `<plan>` must focus on damage control, visceral hesitation, or coping with consequences.",
-        "   - You are explicitly PERMITTED a sharp drop in valence and spike in arousal in `<feeling>`.",
+        "   - You are explicitly PERMITTED a sharp shift in `feeling_tone`, `feeling_intensity`, and `feeling_agency` to reflect shock, strain, or reluctance.",
     ])
 
     return "\n".join(lines)
 
 
 def build_directed_cognition_schema(resolution: ChoiceResolution) -> dict[str, Any]:
-    """Build a structured JSON schema for CognitionBlock with selected_choice placed before plan."""
+    """Build a flat GBNF-safe JSON schema for CognitionBlock with categorical affect enums."""
     schema = CognitionBlock.model_json_schema()
+    schema.pop("$defs", None)
     props = dict(schema.get("properties", {}))
 
-    # Reorder properties: recall -> feeling -> valence -> arousal -> want -> selected_choice -> plan -> skipped
     ordered_props: dict[str, Any] = {}
-    for key in ("recall", "feeling", "valence", "arousal", "want"):
+    for key in (
+        "recall",
+        "feeling",
+        "feeling_tone",
+        "feeling_intensity",
+        "feeling_agency",
+        "scene_threat",
+        "scene_coping",
+        "want",
+    ):
         if key in props:
             ordered_props[key] = props[key]
 
@@ -260,8 +269,11 @@ def build_directed_cognition_schema(resolution: ChoiceResolution) -> dict[str, A
     schema["required"] = [
         "recall",
         "feeling",
-        "valence",
-        "arousal",
+        "feeling_tone",
+        "feeling_intensity",
+        "feeling_agency",
+        "scene_threat",
+        "scene_coping",
         "want",
         "selected_choice",
         "plan",
@@ -271,18 +283,36 @@ def build_directed_cognition_schema(resolution: ChoiceResolution) -> dict[str, A
 
 
 def build_undirected_cognition_schema() -> dict[str, Any]:
-    """Build structured schema omitting choice-related fields for characters without choices."""
+    """Build flat structured schema omitting choice-related and raw float fields."""
     schema = CognitionBlock.model_json_schema()
+    schema.pop("$defs", None)
     props = dict(schema.get("properties", {}))
-    props.pop("selected_choice", None)
-    props.pop("choice_compliance", None)
-    props.pop("choice_compliance_note", None)
-    schema["properties"] = props
+
+    ordered_props: dict[str, Any] = {}
+    for key in (
+        "recall",
+        "feeling",
+        "feeling_tone",
+        "feeling_intensity",
+        "feeling_agency",
+        "scene_threat",
+        "scene_coping",
+        "want",
+        "plan",
+        "skipped",
+    ):
+        if key in props:
+            ordered_props[key] = props[key]
+
+    schema["properties"] = ordered_props
     schema["required"] = [
         "recall",
         "feeling",
-        "valence",
-        "arousal",
+        "feeling_tone",
+        "feeling_intensity",
+        "feeling_agency",
+        "scene_threat",
+        "scene_coping",
         "want",
         "plan",
         "skipped",

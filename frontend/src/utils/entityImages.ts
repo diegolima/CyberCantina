@@ -1,6 +1,32 @@
-import { CampaignRecord, CharacterRecord, PersonaRecord, WorldRecord } from "../types";
+import { BasicEmotion, CampaignRecord, CharacterRecord, PersonaRecord, WorldRecord } from "../types";
 
 export type EntityCategory = "personas" | "characters" | "worlds" | "campaigns";
+
+/**
+ * Resolves a character's portrait for a live CARE BasicEmotion, falling back cleanly
+ * to portraits.default -> first uploaded portrait -> gallery[0] -> null.
+ */
+export function getCharacterEmotionPortrait(
+  character: Partial<CharacterRecord> | null | undefined,
+  activeEmotion?: BasicEmotion | string | null
+): string | null {
+  if (!character) return null;
+  const portraits = character.portraits || {};
+  if (activeEmotion && portraits[activeEmotion]) {
+    return portraits[activeEmotion];
+  }
+  if (portraits.default) {
+    return portraits.default;
+  }
+  const portraitValues = Object.values(portraits);
+  if (portraitValues.length > 0 && portraitValues[0]) {
+    return portraitValues[0];
+  }
+  if (character.gallery && character.gallery.length > 0 && character.gallery[0]?.url) {
+    return character.gallery[0].url;
+  }
+  return null;
+}
 
 /**
  * Extracts the single primary image URL for an entity (if any).

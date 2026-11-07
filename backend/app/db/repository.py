@@ -62,8 +62,30 @@ from app.schemas.character import (
     dump_items_json,
     normalize_item_key,
 )
+from app.engine.affective_engine import seed_initial_care_state
+from app.schemas.affective import AffectiveCareState
 
 UNSET: Any = object()
+
+
+def _parse_care_state_json(raw_json: str | None) -> AffectiveCareState | None:
+    """Deserialize affective_state_json column, returning None for empty/legacy '{}' rows."""
+    if not raw_json:
+        return None
+    stripped = raw_json.strip()
+    if not stripped or stripped == "{}":
+        return None
+    try:
+        return AffectiveCareState.model_validate_json(stripped)
+    except Exception:
+        return None
+
+
+def _dump_care_state_json(care_state: AffectiveCareState | None) -> str:
+    """Serialize optional AffectiveCareState for SQLite persistence."""
+    if care_state is None:
+        return "{}"
+    return care_state.model_dump_json()
 
 
 def _validate_world_artifact_lore_id(
@@ -807,6 +829,15 @@ class CantinaRepository:
                     "ALTER TABLE turn_nodes ADD COLUMN whispers_json TEXT NULL"
                 )
 
+            ws_cols = {
+                r["name"]
+                for r in conn.execute("PRAGMA table_info(world_state_snapshots)").fetchall()
+            }
+            if "campaign_elapsed_minutes" not in ws_cols:
+                conn.execute(
+                    "ALTER TABLE world_state_snapshots ADD COLUMN campaign_elapsed_minutes INTEGER NOT NULL DEFAULT 0"
+                )
+
             cs_cols = {
                 r["name"]
                 for r in conn.execute("PRAGMA table_info(character_states)").fetchall()
@@ -826,6 +857,10 @@ class CantinaRepository:
             if "persona_knowledge_provenance_json" not in cs_cols:
                 conn.execute(
                     "ALTER TABLE character_states ADD COLUMN persona_knowledge_provenance_json TEXT NOT NULL DEFAULT '{}'"
+                )
+            if "affective_state_json" not in cs_cols:
+                conn.execute(
+                    "ALTER TABLE character_states ADD COLUMN affective_state_json TEXT NOT NULL DEFAULT '{}'"
                 )
 
             loc_cols = {
@@ -4716,6 +4751,11 @@ class CantinaRepository:
             world_timestamp=world.global_rules.starting_timestamp,
             active_location_id=primary_loc_id,
             scene_flags=["Scene Opening"],
+            campaign_elapsed_minutes=0,
+        )
+        root_care = seed_initial_care_state(
+            character.baseline_psyche,
+            initial_elapsed_minutes=0,
         )
         root_char_state = CharacterStateSnapshot(
             turn_id=root_turn_id,
@@ -4729,6 +4769,7 @@ class CantinaRepository:
             relationship_notes={"user": "Acquaintance / Uncertain trust"},
             equipped=list(character.equipped),
             inventory=list(character.inventory),
+            care_state=root_care,
         )
         extra_states = [
             CharacterStateSnapshot(
@@ -4743,6 +4784,10 @@ class CantinaRepository:
                 relationship_notes={"user": "Acquaintance / Uncertain trust"},
                 equipped=list(extra_char.equipped),
                 inventory=list(extra_char.inventory),
+                care_state=seed_initial_care_state(
+                    extra_char.baseline_psyche,
+                    initial_elapsed_minutes=0,
+                ),
             )
             for extra_char in extra_characters
         ]
@@ -4822,6 +4867,10 @@ class CantinaRepository:
         # Validate location exists
         self.get_location(target_loc_id)
 
+        joined_care = seed_initial_care_state(
+            char.baseline_psyche,
+            initial_elapsed_minutes=leaf_turn.world_snapshot.campaign_elapsed_minutes,
+        )
         now = utc_now_iso()
         conn = self._connect()
         try:
@@ -4838,9 +4887,10 @@ class CantinaRepository:
                 """
                 INSERT INTO character_states (
                     turn_id, character_id, current_location_id, mood_label,
-                    valence, arousal, active_want, active_plan, relationship_notes_json, equipped_json, inventory_json
+                    valence, arousal, active_want, active_plan, relationship_notes_json,
+                    equipped_json, inventory_json, affective_state_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(turn_id, character_id) DO UPDATE SET
                     current_location_id = excluded.current_location_id
                 """,
@@ -4856,6 +4906,7 @@ class CantinaRepository:
                     json.dumps({"user": "Acquaintance / Uncertain trust"}),
                     dump_items_json(char.equipped),
                     dump_items_json(char.inventory),
+                    _dump_care_state_json(joined_care),
                 ),
             )
             conn.commit()
@@ -5359,15 +5410,16 @@ class CantinaRepository:
             conn.execute(
                 """
                 INSERT INTO world_state_snapshots (
-                    turn_id, world_timestamp, active_location_id, scene_flags_json
+                    turn_id, world_timestamp, active_location_id, scene_flags_json, campaign_elapsed_minutes
                 )
-                VALUES (?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 (
                     turn_id,
                     world_snapshot.world_timestamp,
                     world_snapshot.active_location_id,
                     json.dumps(world_snapshot.scene_flags),
+                    int(world_snapshot.campaign_elapsed_minutes),
                 ),
             )
 
@@ -5398,6 +5450,7 @@ class CantinaRepository:
                 for pcs in parent_cs_rows:
                     cid = pcs["character_id"]
                     if cid not in states_by_char:
+                        pcs_keys = pcs.keys()
                         states_by_char[cid] = CharacterStateSnapshot(
                             turn_id=turn_id,
                             character_id=cid,
@@ -5409,20 +5462,25 @@ class CantinaRepository:
                             active_plan=pcs["active_plan"],
                             relationship_notes=json.loads(pcs["relationship_notes_json"] or "{}"),
                             equipped=json.loads(pcs["equipped_json"] or "[]")
-                            if "equipped_json" in pcs.keys()
+                            if "equipped_json" in pcs_keys
                             else [],
                             inventory=json.loads(pcs["inventory_json"] or "[]")
-                            if "inventory_json" in pcs.keys()
+                            if "inventory_json" in pcs_keys
                             else [],
                             unlocked_persona_keys=(
                                 json.loads(pcs["unlocked_persona_keys_json"] or "[]")
-                                if "unlocked_persona_keys_json" in pcs.keys()
+                                if "unlocked_persona_keys_json" in pcs_keys
                                 else []
                             ),
                             persona_knowledge_provenance=(
                                 json.loads(pcs["persona_knowledge_provenance_json"] or "{}")
-                                if "persona_knowledge_provenance_json" in pcs.keys()
+                                if "persona_knowledge_provenance_json" in pcs_keys
                                 else {}
+                            ),
+                            care_state=_parse_care_state_json(
+                                pcs["affective_state_json"]
+                                if "affective_state_json" in pcs_keys
+                                else None
                             ),
                         )
 
@@ -5432,9 +5490,10 @@ class CantinaRepository:
                     INSERT INTO character_states (
                         turn_id, character_id, current_location_id, mood_label,
                         valence, arousal, active_want, active_plan, relationship_notes_json,
-                        equipped_json, inventory_json, unlocked_persona_keys_json, persona_knowledge_provenance_json
+                        equipped_json, inventory_json, unlocked_persona_keys_json,
+                        persona_knowledge_provenance_json, affective_state_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         turn_id,
@@ -5450,6 +5509,7 @@ class CantinaRepository:
                         dump_items_json(st.inventory),
                         json.dumps(st.unlocked_persona_keys),
                         json.dumps(st.persona_knowledge_provenance),
+                        _dump_care_state_json(st.care_state),
                     ),
                 )
                 conn.execute(
@@ -5486,6 +5546,15 @@ class CantinaRepository:
         conn = self._connect()
         try:
             conn.execute("BEGIN IMMEDIATE;")
+            parent_exists = conn.execute(
+                "SELECT 1 FROM turn_nodes WHERE id = ?",
+                (turn_id,),
+            ).fetchone()
+            if not parent_exists:
+                conn.rollback()
+                raise KeyError(
+                    f"Turn node '{turn_id}' was deleted before Phase 5 Clerk commit"
+                )
             conn.execute(
                 "UPDATE turn_nodes SET post_turn_json = ? WHERE id = ?",
                 (post_turn.model_dump_json(), turn_id),
@@ -5493,13 +5562,14 @@ class CantinaRepository:
             conn.execute(
                 """
                 UPDATE world_state_snapshots
-                SET world_timestamp = ?, active_location_id = ?, scene_flags_json = ?
+                SET world_timestamp = ?, active_location_id = ?, scene_flags_json = ?, campaign_elapsed_minutes = ?
                 WHERE turn_id = ?
                 """,
                 (
                     updated_world_snapshot.world_timestamp,
                     updated_world_snapshot.active_location_id,
                     json.dumps(updated_world_snapshot.scene_flags),
+                    int(updated_world_snapshot.campaign_elapsed_minutes),
                     turn_id,
                 ),
             )
@@ -5520,15 +5590,18 @@ class CantinaRepository:
                 )
             for st in [updated_character_state, *(extra_character_states or [])]:
                 live_row = conn.execute(
-                    "SELECT equipped_json, inventory_json FROM character_states WHERE turn_id = ? AND character_id = ?",
+                    "SELECT equipped_json, inventory_json, affective_state_json FROM character_states WHERE turn_id = ? AND character_id = ?",
                     (turn_id, st.character_id),
                 ).fetchone()
+                eff_care = st.care_state
                 if live_row:
                     live_eq = coerce_item_list(json.loads(live_row["equipped_json"] or "[]"))
                     live_inv = coerce_item_list(json.loads(live_row["inventory_json"] or "[]"))
                     merged_eq, merged_inv = _merge_live_clerk_state_items(
                         st.equipped, st.inventory, live_eq, live_inv
                     )
+                    if eff_care is None and "affective_state_json" in live_row.keys():
+                        eff_care = _parse_care_state_json(live_row["affective_state_json"])
                 else:
                     merged_eq, merged_inv = list(st.equipped), list(st.inventory)
 
@@ -5538,9 +5611,10 @@ class CantinaRepository:
                         turn_id, character_id, current_location_id, mood_label,
                         valence, arousal, active_want, active_plan,
                         relationship_notes_json, equipped_json, inventory_json,
-                        unlocked_persona_keys_json, persona_knowledge_provenance_json
+                        unlocked_persona_keys_json, persona_knowledge_provenance_json,
+                        affective_state_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(turn_id, character_id) DO UPDATE SET
                         current_location_id = excluded.current_location_id,
                         mood_label = excluded.mood_label,
@@ -5552,7 +5626,8 @@ class CantinaRepository:
                         equipped_json = excluded.equipped_json,
                         inventory_json = excluded.inventory_json,
                         unlocked_persona_keys_json = excluded.unlocked_persona_keys_json,
-                        persona_knowledge_provenance_json = excluded.persona_knowledge_provenance_json
+                        persona_knowledge_provenance_json = excluded.persona_knowledge_provenance_json,
+                        affective_state_json = excluded.affective_state_json
                     """,
                     (
                         turn_id,
@@ -5568,6 +5643,7 @@ class CantinaRepository:
                         dump_items_json(merged_inv),
                         json.dumps(st.unlocked_persona_keys),
                         json.dumps(st.persona_knowledge_provenance),
+                        _dump_care_state_json(eff_care),
                     ),
                 )
             conn.commit()
@@ -5723,6 +5799,7 @@ class CantinaRepository:
         for r in cs_rows:
             tid = r["turn_id"]
             cid = r["character_id"]
+            r_keys = r.keys()
             states_by_turn.setdefault(tid, {})[cid] = CharacterStateSnapshot(
                 turn_id=tid,
                 character_id=cid,
@@ -5734,20 +5811,25 @@ class CantinaRepository:
                 active_plan=r["active_plan"],
                 relationship_notes=json.loads(r["relationship_notes_json"] or "{}"),
                 equipped=json.loads(r["equipped_json"] or "[]")
-                if "equipped_json" in r.keys()
+                if "equipped_json" in r_keys
                 else [],
                 inventory=json.loads(r["inventory_json"] or "[]")
-                if "inventory_json" in r.keys()
+                if "inventory_json" in r_keys
                 else [],
                 unlocked_persona_keys=(
                     json.loads(r["unlocked_persona_keys_json"] or "[]")
-                    if "unlocked_persona_keys_json" in r.keys()
+                    if "unlocked_persona_keys_json" in r_keys
                     else []
                 ),
                 persona_knowledge_provenance=(
                     json.loads(r["persona_knowledge_provenance_json"] or "{}")
-                    if "persona_knowledge_provenance_json" in r.keys()
+                    if "persona_knowledge_provenance_json" in r_keys
                     else {}
+                ),
+                care_state=_parse_care_state_json(
+                    r["affective_state_json"]
+                    if "affective_state_json" in r_keys
+                    else None
                 ),
             )
         for t in turns:
@@ -5767,6 +5849,7 @@ class CantinaRepository:
                     ws.world_timestamp,
                     ws.active_location_id,
                     ws.scene_flags_json,
+                    ws.campaign_elapsed_minutes,
                     cs.character_id AS cs_character_id,
                     cs.current_location_id,
                     cs.mood_label,
@@ -5778,7 +5861,8 @@ class CantinaRepository:
                     cs.equipped_json,
                     cs.inventory_json,
                     cs.unlocked_persona_keys_json,
-                    cs.persona_knowledge_provenance_json
+                    cs.persona_knowledge_provenance_json,
+                    cs.affective_state_json
                 FROM turn_nodes t
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
                 JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = (
@@ -5816,6 +5900,7 @@ class CantinaRepository:
                     ws.world_timestamp,
                     ws.active_location_id,
                     ws.scene_flags_json,
+                    ws.campaign_elapsed_minutes,
                     cs.character_id AS cs_character_id,
                     cs.current_location_id,
                     cs.mood_label,
@@ -5827,7 +5912,8 @@ class CantinaRepository:
                     cs.equipped_json,
                     cs.inventory_json,
                     cs.unlocked_persona_keys_json,
-                    cs.persona_knowledge_provenance_json
+                    cs.persona_knowledge_provenance_json,
+                    cs.affective_state_json
                 FROM branch_path bp
                 JOIN turn_nodes t ON t.id = bp.id
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
@@ -5855,6 +5941,7 @@ class CantinaRepository:
                     ws.world_timestamp,
                     ws.active_location_id,
                     ws.scene_flags_json,
+                    ws.campaign_elapsed_minutes,
                     cs.character_id AS cs_character_id,
                     cs.current_location_id,
                     cs.mood_label,
@@ -5866,7 +5953,8 @@ class CantinaRepository:
                     cs.equipped_json,
                     cs.inventory_json,
                     cs.unlocked_persona_keys_json,
-                    cs.persona_knowledge_provenance_json
+                    cs.persona_knowledge_provenance_json,
+                    cs.affective_state_json
                 FROM turn_nodes t
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
                 JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = (
@@ -7173,6 +7261,11 @@ class CantinaRepository:
                 world_timestamp=r["world_timestamp"],
                 active_location_id=r["active_location_id"],
                 scene_flags=json.loads(r["scene_flags_json"] or "[]"),
+                campaign_elapsed_minutes=(
+                    int(r["campaign_elapsed_minutes"] or 0)
+                    if "campaign_elapsed_minutes" in r.keys()
+                    else 0
+                ),
             ),
             character_state=CharacterStateSnapshot(
                 turn_id=r["id"],
@@ -7199,6 +7292,11 @@ class CantinaRepository:
                     json.loads(r["persona_knowledge_provenance_json"] or "{}")
                     if "persona_knowledge_provenance_json" in r.keys()
                     else {}
+                ),
+                care_state=_parse_care_state_json(
+                    r["affective_state_json"]
+                    if "affective_state_json" in r.keys()
+                    else None
                 ),
             ),
             recalled_items=[

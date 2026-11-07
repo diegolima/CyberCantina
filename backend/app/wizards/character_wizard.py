@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import re
+
 from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
 from app.prompts import get_default_prompt, render_template
+from app.schemas.affective import infer_temperament_and_worldview_from_text
 from app.schemas.character import (
     BaselinePsyche,
     CharacterWizardDraft,
@@ -49,6 +52,13 @@ def _fallback_character_expansion(
     ]
     if seed.rough_notes.strip():
         default_inventory.append(f"Signature item ({seed.rough_notes.strip()[:48].rstrip('.')})")
+
+    inferred_temp, inferred_wv = infer_temperament_and_worldview_from_text(
+        seed.archetype,
+        seed.role_in_story,
+        " ".join(seed.personality_keywords),
+        seed.rough_notes,
+    )
 
     return CharacterWizardDraft(
         name=seed.name,
@@ -103,6 +113,8 @@ def _fallback_character_expansion(
             core_fear="Being compromised by past mistakes or losing the few allies they trust.",
             default_want=f"Assess the user's intentions and establish their dynamic as {seed.role_in_story}.",
             default_plan="Engage in measured conversation and test the user's reliability with a pointed question.",
+            initial_worldview=inferred_wv,
+            temperament=inferred_temp,
         ),
         memory_shards=[
             MemoryShard(

@@ -25,6 +25,11 @@ from app.dependencies import (
     get_repo,
     run_entity_pruner,
 )
+from app.engine.affective_engine import (
+    compute_provisional_cognition_preview,
+    ensure_snapshot_care_state,
+    materialize_snapshot_with_care,
+)
 from app.engine.mentions import decompose_user_message
 from app.engine.phase1_pre import run_phase1_pre_analysis
 from app.engine.phase2_context import (
@@ -286,17 +291,21 @@ def get_campaign_state(
 
 
 @router.post("/api/campaigns/{campaign_id}/checkout", response_model=CampaignStateBundle)
-def checkout_campaign_branch(
+async def checkout_campaign_branch(
     campaign_id: str,
     req: BranchCheckoutRequest,
     current_user: UserProfile = Depends(get_current_user),
 ) -> CampaignStateBundle:
-    try:
-        return get_repo().checkout_turn_branch(
-            campaign_id, req.turn_id, owner_id=current_user.id
-        )
-    except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    async with campaign_turn_gate.lock_for(campaign_id):
+        try:
+            return await asyncio.to_thread(
+                get_repo().checkout_turn_branch,
+                campaign_id,
+                req.turn_id,
+                owner_id=current_user.id,
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/api/campaigns/{campaign_id}/locations", response_model=CampaignStateBundle)
@@ -492,34 +501,43 @@ async def update_campaign_character_memories(
 
 
 @router.delete("/api/campaigns/{campaign_id}/turns/last", response_model=CampaignStateBundle)
-def delete_campaign_last_turn(
+async def delete_campaign_last_turn(
     campaign_id: str,
     current_user: UserProfile = Depends(get_current_user),
 ) -> CampaignStateBundle:
     """Delete the last user message turn on the active branch, including all generated swipes."""
-    try:
-        return get_repo().delete_last_turn(campaign_id, owner_id=current_user.id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    async with campaign_turn_gate.lock_for(campaign_id):
+        try:
+            return await asyncio.to_thread(
+                get_repo().delete_last_turn,
+                campaign_id,
+                owner_id=current_user.id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.delete("/api/campaigns/{campaign_id}/turns/{turn_id}", response_model=CampaignStateBundle)
-def delete_campaign_turn(
+async def delete_campaign_turn(
     campaign_id: str,
     turn_id: str,
     current_user: UserProfile = Depends(get_current_user),
 ) -> CampaignStateBundle:
     """Delete the specified last user message turn (and its sibling swipes) from the campaign."""
-    try:
-        return get_repo().delete_last_turn(
-            campaign_id, turn_id=turn_id, owner_id=current_user.id
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    async with campaign_turn_gate.lock_for(campaign_id):
+        try:
+            return await asyncio.to_thread(
+                get_repo().delete_last_turn,
+                campaign_id,
+                turn_id=turn_id,
+                owner_id=current_user.id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ------------------------------------------------------------------
@@ -548,7 +566,37 @@ _Phase4QueueItem = _PhaseQueueItem
 _Phase5QueueItem = _PhaseQueueItem
 
 
+class CampaignTurnGate:
+    """Keyed per-campaign asyncio.Lock registry serializing turn streams, swipes, and deletes."""
+
+    def __init__(self) -> None:
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def lock_for(self, campaign_id: str) -> asyncio.Lock:
+        lock = self._locks.get(campaign_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[campaign_id] = lock
+        return lock
+
+
+campaign_turn_gate = CampaignTurnGate()
+
+
 async def _execute_turn_stream_events(
+    campaign_id: str,
+    req: TurnSubmitRequest,
+    owner_id: str | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    """Serialize per-campaign turn execution through CampaignTurnGate until Phase 5 commits."""
+    async with campaign_turn_gate.lock_for(campaign_id):
+        async for packet in _execute_turn_stream_events_unlocked(
+            campaign_id, req, owner_id=owner_id
+        ):
+            yield packet
+
+
+async def _execute_turn_stream_events_unlocked(
     campaign_id: str,
     req: TurnSubmitRequest,
     owner_id: str | None = None,
@@ -1011,24 +1059,53 @@ async def _execute_turn_stream_events(
     # Persist initial Turn Node prior to Phase 5 Post-Turn Clerk
     new_turn_id = f"turn_{uuid.uuid4().hex[:10]}"
     new_depth = parent_turn.depth_index + 1
+    parent_elapsed = parent_turn.world_snapshot.campaign_elapsed_minutes
     initial_world_snapshot = WorldStateSnapshot(
         turn_id=new_turn_id,
         world_timestamp=parent_turn.world_snapshot.world_timestamp,
+        campaign_elapsed_minutes=parent_elapsed,
         active_location_id=active_location.id,
         scene_flags=parent_turn.world_snapshot.scene_flags,
     )
+    base_primary_state = context_bundle.all_character_states.get(character.id) or prev_char_state
+    base_primary_care = ensure_snapshot_care_state(
+        base_primary_state,
+        character.baseline_psyche,
+        elapsed_minutes=parent_elapsed,
+    )
+    if not is_narrator and not final_cognition.skipped:
+        primary_roll = pre_turn.character_rolls.get(character.id) or (
+            pre_turn.resolved_roll
+            if pre_turn.resolved_roll and pre_turn.resolved_roll.character_id in (None, character.id)
+            else None
+        )
+        provisional_primary_care = compute_provisional_cognition_preview(
+            base_primary_care,
+            final_cognition.to_feeling_impulse(),
+            roll_outcome=primary_roll.outcome_tier if primary_roll else None,
+        )
+    else:
+        provisional_primary_care = base_primary_care
+
     initial_char_state = CharacterStateSnapshot(
         turn_id=new_turn_id,
         character_id=character.id,
         current_location_id=active_location.id,
-        mood_label=prev_char_state.mood_label if is_narrator else (final_cognition.feeling[:80] or prev_char_state.mood_label),
-        valence=prev_char_state.valence if is_narrator else final_cognition.valence,
-        arousal=prev_char_state.arousal if is_narrator else final_cognition.arousal,
-        active_want=prev_char_state.active_want if is_narrator else (final_cognition.want or prev_char_state.active_want),
-        active_plan=prev_char_state.active_plan if is_narrator else (final_cognition.plan or prev_char_state.active_plan),
-        relationship_notes=prev_char_state.relationship_notes,
-        equipped=list(prev_char_state.equipped),
-        inventory=list(prev_char_state.inventory),
+        mood_label=(
+            base_primary_state.mood_label
+            if is_narrator
+            else (final_cognition.feeling[:80] or provisional_primary_care.short_mood_label)
+        ),
+        valence=base_primary_state.valence if is_narrator else provisional_primary_care.valence,
+        arousal=base_primary_state.arousal if is_narrator else provisional_primary_care.arousal,
+        active_want=base_primary_state.active_want if is_narrator else (final_cognition.want or base_primary_state.active_want),
+        active_plan=base_primary_state.active_plan if is_narrator else (final_cognition.plan or base_primary_state.active_plan),
+        relationship_notes=dict(base_primary_state.relationship_notes),
+        equipped=list(base_primary_state.equipped),
+        inventory=list(base_primary_state.inventory),
+        unlocked_persona_keys=list(base_primary_state.unlocked_persona_keys),
+        persona_knowledge_provenance=dict(base_primary_state.persona_knowledge_provenance),
+        care_state=provisional_primary_care,
     )
 
     # Seed all participant character states so UI doesn't drop co-present character state
@@ -1038,11 +1115,24 @@ async def _execute_turn_stream_events(
             st = context_bundle.all_character_states[p.id].model_copy(update={"turn_id": new_turn_id})
             cog = established_cognitions.get(p.id)
             if cog and not cog.skipped and not is_narrator:
-                st.mood_label = (cog.feeling[:80] or st.mood_label)
-                st.valence = cog.valence
-                st.arousal = cog.arousal
-                st.active_want = cog.want or st.active_want
-                st.active_plan = cog.plan or st.active_plan
+                p_care = ensure_snapshot_care_state(
+                    st,
+                    p.baseline_psyche,
+                    elapsed_minutes=parent_elapsed,
+                )
+                p_roll = pre_turn.character_rolls.get(p.id)
+                p_prov = compute_provisional_cognition_preview(
+                    p_care,
+                    cog.to_feeling_impulse(),
+                    roll_outcome=p_roll.outcome_tier if p_roll else None,
+                )
+                st = materialize_snapshot_with_care(st, p_prov).model_copy(
+                    update={
+                        "mood_label": cog.feeling[:80] or p_prov.short_mood_label,
+                        "active_want": cog.want or st.active_want,
+                        "active_plan": cog.plan or st.active_plan,
+                    }
+                )
             extra_character_states.append(st)
 
     saved_turn = repo.save_turn_node(

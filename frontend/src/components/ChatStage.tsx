@@ -67,6 +67,7 @@ import {
   isNarratorTurnNode,
   isTurnCognitionSkipped,
 } from "../utils/narratorCognition";
+import { getCharacterEmotionPortrait } from "../utils/entityImages";
 
 function getTierBadgeClass(tier?: string): string {
   switch (tier) {
@@ -1591,9 +1592,9 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                                 color: "var(--text-secondary)",
                               }}
                             >
-                              Valence {activeCognition.valence >= 0 ? "+" : ""}
-                              {activeCognition.valence.toFixed(2)} | Arousal{" "}
-                              {activeCognition.arousal.toFixed(2)}
+                              {activeCognition.feeling_tone
+                                ? `${activeCognition.feeling_tone} · ${activeCognition.feeling_intensity || "moderate"}`
+                                : `Valence ${activeCognition.valence >= 0 ? "+" : ""}${activeCognition.valence.toFixed(2)} | Arousal ${activeCognition.arousal.toFixed(2)}`}
                             </span>
                           )
                         )}
@@ -1998,7 +1999,84 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                 );
               })()}
 
-              {/* Narrative Prose */}
+              {/* Speaker Emotion Portrait Header (when available) & Narrative Prose */}
+              {!isNarratorTurn &&
+                (() => {
+                  const actorId = turn.actor_id || character.id;
+                  const speakerChar =
+                    bundle.character_records?.[actorId] ||
+                    (actorId === character.id ? character : null);
+                  const speakerState =
+                    turn.character_states?.[actorId] ||
+                    (turn.character_state?.character_id === actorId
+                      ? turn.character_state
+                      : null);
+                  const activeEmotion =
+                    speakerState?.care_state?.active_emotion ?? "default";
+                  const speakerPortrait = getCharacterEmotionPortrait(
+                    speakerChar,
+                    activeEmotion
+                  );
+                  if (!speakerPortrait) return null;
+                  return (
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        marginBottom: 8,
+                      }}
+                    >
+                      <img
+                        src={speakerPortrait}
+                        alt={`${speakerChar?.name || "Speaker"} (${activeEmotion})`}
+                        title={`Expression: ${activeEmotion}`}
+                        style={{
+                          width: 36,
+                          height: 36,
+                          borderRadius: "50%",
+                          objectFit: "cover",
+                          border: "1px solid var(--border-subtle)",
+                          flexShrink: 0,
+                        }}
+                      />
+                      <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ fontWeight: 600, fontSize: "0.82rem" }}>
+                            {speakerChar?.name}
+                          </span>
+                          {activeEmotion !== "default" && (
+                            <span
+                              className="badge"
+                              style={{
+                                fontSize: "0.64rem",
+                                padding: "0px 6px",
+                                textTransform: "capitalize",
+                              }}
+                            >
+                              {activeEmotion}
+                            </span>
+                          )}
+                        </div>
+                        {(speakerState?.care_state?.outward_demeanor ||
+                          speakerState?.mood_label) && (
+                          <span
+                            style={{
+                              fontSize: "0.72rem",
+                              color: "var(--text-muted)",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {speakerState?.care_state?.outward_demeanor ||
+                              speakerState?.mood_label}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
               <div className="prose-body">{renderFormattedProse(turn.raw_prose)}</div>
 
               {/* Turn Footer: Clock, Post-Turn Delta, Phase 4 Agent Mutation Pills, Swipe/Regenerate */}

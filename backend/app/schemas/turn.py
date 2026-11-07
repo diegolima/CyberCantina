@@ -8,6 +8,22 @@ import re
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.engine.mentions import CharacterWhisper
+from app.schemas.affective import (
+    MAX_TURN_ELAPSED_MINUTES_SANITY,
+    AgencyLevel,
+    CopingLevel,
+    FeelingTone,
+    IntensityLevel,
+    OrdinalImpact,
+    RelationalEventSpec,
+    ThreatLevel,
+    coerce_agency_level,
+    coerce_coping_level,
+    coerce_feeling_tone,
+    coerce_intensity_level,
+    coerce_ordinal_impact,
+    coerce_threat_level,
+)
 from app.schemas.character import (
     CharacterRecord,
     CharacterStateSnapshot,
@@ -319,6 +335,11 @@ class WorldStateSnapshot(BaseModel):
     world_timestamp: str
     active_location_id: str
     scene_flags: list[str] = Field(default_factory=list)
+    campaign_elapsed_minutes: int = Field(
+        default=0,
+        ge=0,
+        description="Monotonic in-campaign elapsed minutes accumulated since Turn 0.",
+    )
 
 
 class ImprovisedLocationSpec(BaseModel):
@@ -405,7 +426,7 @@ class WorldPostTurnDelta(BaseModel):
     elapsed_minutes: int = Field(
         default=2,
         ge=0,
-        le=1440,
+        le=MAX_TURN_ELAPSED_MINUTES_SANITY,
         description="Narrative time elapsed during this turn in minutes.",
     )
     new_world_timestamp: str | None = Field(
@@ -430,7 +451,7 @@ class WorldPostTurnDelta(BaseModel):
     @classmethod
     def _clamp_elapsed_minutes(cls, v: Any) -> int:
         try:
-            return max(0, min(1440, int(round(float(v)))))
+            return max(0, min(MAX_TURN_ELAPSED_MINUTES_SANITY, int(round(float(v)))))
         except (TypeError, ValueError):
             return 2
 
@@ -445,17 +466,52 @@ class CharacterAgentDelta(BaseModel):
         default="Observant and composed",
         description="2-4 word evocative mood description capturing the character's current affective state.",
     )
+    affect_tone: FeelingTone | None = Field(
+        default=None,
+        description="Categorical post-turn emotional tone of this character after the exchange.",
+    )
+    affect_intensity: IntensityLevel | None = Field(
+        default=None,
+        description="Categorical post-turn emotional activation/intensity level.",
+    )
+    affect_agency: AgencyLevel | None = Field(
+        default=None,
+        description="Categorical post-turn sense of agency, control, or dominance.",
+    )
+    scene_threat: ThreatLevel = Field(
+        default="none",
+        description="Perceived immediate danger or stakes at the end of the turn.",
+    )
+    scene_coping: CopingLevel = Field(
+        default="adequate",
+        description="Confidence in handling or mastering the immediate situation.",
+    )
+    goal_congruence: OrdinalImpact = Field(
+        default="none",
+        description="How this turn affected the character's active want/goal.",
+    )
+    scene_surprise: IntensityLevel = Field(
+        default="calm",
+        description="How unexpected, uncanny, or shocking this turn's events were.",
+    )
+    relational_events: list[RelationalEventSpec] = Field(
+        default_factory=list,
+        description=(
+            "Structured dyadic relationship shifts toward 'user' or co-present character IDs "
+            "whose standing changed this turn. Empty list if no relationship shifted."
+        ),
+    )
     valence_delta: float = Field(
         default=0.0,
         ge=-1.0,
         le=1.0,
-        description="Signed change in emotional valence relative to pre-turn baseline (typically -0.20 to +0.20).",
+        description="Signed change in emotional valence relative to pre-turn baseline (legacy fallback).",
     )
     arousal_delta: float = Field(
         default=0.0,
         ge=-1.0,
         le=1.0,
-        description="Signed change in emotional arousal/intensity relative to pre-turn baseline (typically -0.20 to +0.20).",
+        description="Signed change in emotional arousal/intensity relative to pre-turn baseline (legacy fallback).",
     )
     updated_want: str | None = Field(
         default=None,
@@ -506,6 +562,47 @@ class CharacterAgentDelta(BaseModel):
         default_factory=dict,
         description="Gossip exchange: mapping of recipient character_id to secret persona keys communicated in dialogue.",
     )
+
+    @field_validator("affect_tone", mode="before")
+    @classmethod
+    def _coerce_opt_tone(cls, v: Any) -> FeelingTone | None:
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        return coerce_feeling_tone(v)
+
+    @field_validator("affect_intensity", mode="before")
+    @classmethod
+    def _coerce_opt_intensity(cls, v: Any) -> IntensityLevel | None:
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        return coerce_intensity_level(v)
+
+    @field_validator("affect_agency", mode="before")
+    @classmethod
+    def _coerce_opt_agency(cls, v: Any) -> AgencyLevel | None:
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        return coerce_agency_level(v)
+
+    @field_validator("scene_threat", mode="before")
+    @classmethod
+    def _coerce_scene_threat(cls, v: Any) -> ThreatLevel:
+        return coerce_threat_level(v)
+
+    @field_validator("scene_coping", mode="before")
+    @classmethod
+    def _coerce_scene_coping(cls, v: Any) -> CopingLevel:
+        return coerce_coping_level(v)
+
+    @field_validator("goal_congruence", mode="before")
+    @classmethod
+    def _coerce_goal_congruence(cls, v: Any) -> OrdinalImpact:
+        return coerce_ordinal_impact(v)
+
+    @field_validator("scene_surprise", mode="before")
+    @classmethod
+    def _coerce_scene_surprise(cls, v: Any) -> IntensityLevel:
+        return coerce_intensity_level(v, default="calm")
 
     @field_validator("valence_delta", "arousal_delta", mode="before")
     @classmethod
@@ -609,7 +706,7 @@ class PostTurnStateDelta(BaseModel):
     elapsed_minutes: int = Field(
         default=2,
         ge=0,
-        le=1440,
+        le=MAX_TURN_ELAPSED_MINUTES_SANITY,
         description="Narrative time elapsed during this turn in minutes.",
     )
     new_world_timestamp: str | None = Field(
@@ -876,7 +973,7 @@ class TurnSubmitRequest(BaseModel):
     duration_minutes: int | None = Field(
         default=None,
         ge=1,
-        le=1440,
+        le=MAX_TURN_ELAPSED_MINUTES_SANITY,
         description="Optional explicit minutes to advance the in-game clock when narrative_mode is 'advance'.",
     )
     character_choices: dict[str, CharacterChoiceSet] = Field(

@@ -12,6 +12,15 @@ from pydantic import BaseModel, Field
 
 from app.config import AgentDispatchMode, ModelProfile, settings
 from app.db.repository import CantinaRepository
+from app.engine.affective_engine import (
+    MechanicalTurnSignals,
+    ResolvedWitnessEvent,
+    apply_co_present_witness_coupling,
+    ensure_snapshot_care_state,
+    materialize_snapshot_with_care,
+    project_care_to_minute,
+    resolve_post_turn_care_state,
+)
 from app.engine.character_agent import (
     apply_character_inventory_delta,
     arbitrate_inventory_disputes,
@@ -19,11 +28,19 @@ from app.engine.character_agent import (
     collect_relinquished_item_instances,
     detect_inventory_disputes,
     enforce_permanent_item_locks,
+    heuristic_character_agent_delta,
     item_names_match_word_bounded,
+    resolve_roll_for_character,
     run_character_post_turn_agent,
 )
 from app.engine.llm_client import llm_client
-from app.engine.mentions import filter_user_message_for_character, sanitize_history_for_episodic_summary
+from app.engine.mentions import (
+    DecomposedUserMessage,
+    MentionTargetScope,
+    decompose_user_message,
+    filter_user_message_for_character,
+    sanitize_history_for_episodic_summary,
+)
 from app.engine.phase2_context import resolve_character_previous_state
 from app.prompts import (
     DEFAULT_CLERK_MEMORY_COMPACTION_SYSTEM,
@@ -35,7 +52,13 @@ from app.engine.world_clock import (
     describe_world_timestamp,
     extract_time_hint_minutes,
     parse_world_timestamp,
+    resolve_bounded_turn_elapsed_minutes,
     resolve_turn_timestamp,
+)
+from app.schemas.affective import (
+    AffectiveCareState,
+    MAX_TURN_ELAPSED_MINUTES_SANITY,
+    VisibilityScope,
 )
 from app.schemas.character import (
     CharacterRecord,
@@ -1080,6 +1103,39 @@ async def summarize_turn_chunk(
     return f"Turns {start_d}–{end_d} summary: " + " | ".join(snippets[:4])
 
 
+def should_fast_path_passive_bystander(
+    character: CharacterRecord,
+    *,
+    completed_turn: TurnNodeRecord,
+    decomposed_message: DecomposedUserMessage,
+    has_mechanics_roll: bool,
+    player_moved_location: bool,
+) -> bool:
+    """Return True when a co-present bystander was completely unengaged and needs only deterministic CARE math."""
+    if completed_turn.actor_id == "__narrator__":
+        return True
+    if character.id == completed_turn.actor_id:
+        return False
+    if character.id in decomposed_message.whispers_by_character_id:
+        return False
+    if has_mechanics_roll or player_moved_location:
+        return False
+    char_cog = (completed_turn.cognitions or {}).get(character.id)
+    if char_cog is not None and not char_cog.skipped:
+        return False
+
+    combined_low = f"{decomposed_message.public_text}\n{completed_turn.raw_prose}".lower()
+    full_name_low = character.name.strip().lower()
+    if full_name_low and full_name_low in combined_low:
+        return False
+    first_tok = full_name_low.split()[0] if full_name_low.split() else ""
+    if len(first_tok) >= 3 and re.search(rf"\b{re.escape(first_tok)}\b", combined_low):
+        return False
+    if character.id.lower() in combined_low:
+        return False
+    return True
+
+
 def heuristic_world_post_turn_delta(
     *,
     user_message: str,
@@ -1099,13 +1155,17 @@ def heuristic_world_post_turn_delta(
         current_inventory=None,
     )
     new_ts: str | None = None
-    elapsed = legacy.elapsed_minutes
+    elapsed = (
+        0
+        if user_message.strip().lower().startswith("[describe")
+        else legacy.elapsed_minutes
+    )
     if current_timestamp is not None:
         hint_minutes = extract_time_hint_minutes(user_message, current_timestamp)
         if hint_minutes is not None and hint_minutes > 0:
             if parse_world_timestamp(current_timestamp) is not None:
                 new_ts = advance_world_timestamp(current_timestamp, hint_minutes)
-            elapsed = min(hint_minutes, 1440)
+            elapsed = min(hint_minutes, MAX_TURN_ELAPSED_MINUTES_SANITY)
 
     return WorldPostTurnDelta(
         elapsed_minutes=elapsed,
@@ -1180,6 +1240,31 @@ async def run_phase5_post_turn_clerk(
     branch_turns = repo.get_branch_turn_chain(completed_turn.id)
     valid_turn_ids = {t.id for t in branch_turns}
     prior_branch_turns = branch_turns[:-1] if branch_turns and branch_turns[-1].id == completed_turn.id else branch_turns
+    prior_elapsed = (
+        prior_branch_turns[-1].world_snapshot.campaign_elapsed_minutes
+        if prior_branch_turns
+        else 0
+    )
+
+    eff_persona_name: str | None = (
+        persona_snapshot.name.strip()
+        if (persona_snapshot is not None and persona_snapshot.name and persona_snapshot.name.strip())
+        else None
+    )
+    if eff_persona_name is None:
+        try:
+            camp_rec = repo.get_campaign(campaign_id)
+            if camp_rec.persona_snapshot and camp_rec.persona_snapshot.name:
+                eff_persona_name = camp_rec.persona_snapshot.name.strip()
+        except Exception:
+            eff_persona_name = None
+
+    decomposed_msg = decompose_user_message(
+        completed_turn.user_message,
+        campaign_characters=known_participants,
+        present_character_ids={c.id for c in scene_characters},
+    )
+    player_moved_intent = completed_turn.pre_turn.spatial_intent != "stay"
 
     # Resolve strict pre-turn baselines for every present character to prevent double-applying speaker cognition
     prev_states_by_char: dict[str, CharacterStateSnapshot] = {
@@ -1290,19 +1375,35 @@ async def run_phase5_post_turn_clerk(
                 )
             )
         try:
-            c_delta = await run_character_post_turn_agent(
-                character=ch,
-                prev_state=prev_states_by_char[ch.id],
+            has_char_roll = resolve_roll_for_character(completed_turn.pre_turn, ch.id) is not None
+            if should_fast_path_passive_bystander(
+                ch,
                 completed_turn=completed_turn,
-                active_location=active_location,
-                neighbors=neighbors,
-                present_characters=scene_characters,
-                all_participants=known_participants,
-                active_shards=active_shards_by_char.get(ch.id, []),
-                profile=clerk_prof,
-                prompt_template=character_post_turn_prompt_template,
-                extracted_memories_fn=_extract_heuristic_character_memories,
-            )
+                decomposed_message=decomposed_msg,
+                has_mechanics_roll=has_char_roll,
+                player_moved_location=player_moved_intent,
+            ):
+                c_delta = CharacterAgentDelta(
+                    mood_label=prev_states_by_char[ch.id].mood_label,
+                    location_transition="stay_here",
+                )
+            else:
+                c_delta = await run_character_post_turn_agent(
+                    character=ch,
+                    prev_state=prev_states_by_char[ch.id],
+                    completed_turn=completed_turn,
+                    active_location=active_location,
+                    neighbors=neighbors,
+                    present_characters=scene_characters,
+                    all_participants=known_participants,
+                    active_shards=active_shards_by_char.get(ch.id, []),
+                    profile=clerk_prof,
+                    prompt_template=character_post_turn_prompt_template,
+                    extracted_memories_fn=_extract_heuristic_character_memories,
+                    persona_name=eff_persona_name,
+                    decomposed_message=decomposed_msg,
+                    campaign_elapsed_minutes=prior_elapsed,
+                )
             if on_progress:
                 await on_progress(
                     Phase4ProgressEvent(
@@ -1433,6 +1534,23 @@ async def run_phase5_post_turn_clerk(
         world_delta.elapsed_minutes,
         world_delta.new_world_timestamp,
     )
+    is_static_describe = (
+        is_narrator_turn
+        and completed_turn.user_message.strip().lower().startswith("[describe")
+        and not world_delta.new_world_timestamp
+    )
+    turn_elapsed = (
+        0
+        if is_static_describe
+        else resolve_bounded_turn_elapsed_minutes(
+            prev_timestamp=current_timestamp,
+            new_timestamp=new_timestamp,
+            clerk_elapsed_minutes=world_delta.elapsed_minutes,
+            raw_turn_text=f"{completed_turn.user_message}\n{completed_turn.raw_prose}",
+        )
+    )
+    new_campaign_elapsed = prior_elapsed + turn_elapsed
+
     location_changed = new_location_id != active_location.id
     if location_changed:
         try:
@@ -1455,6 +1573,7 @@ async def run_phase5_post_turn_clerk(
     updated_world_snapshot = WorldStateSnapshot(
         turn_id=completed_turn.id,
         world_timestamp=new_timestamp,
+        campaign_elapsed_minutes=new_campaign_elapsed,
         active_location_id=new_location_id,
         scene_flags=merged_flags,
     )
@@ -1497,12 +1616,22 @@ async def run_phase5_post_turn_clerk(
             )
             arbitration_notes.extend(arb_notes)
 
-    # 4. Reconcile CharacterStateSnapshots for all present characters (conserving transferred ItemInstances)
+    # 4. Reconcile CharacterStateSnapshots via CARE Solver + Witness Coupling (conserving ItemInstances)
     updated_states_by_char: dict[str, CharacterStateSnapshot] = {}
     if is_narrator_turn:
         for ch in scene_characters:
             prev_st = prev_states_by_char[ch.id]
-            updated_states_by_char[ch.id] = CharacterStateSnapshot(
+            prior_care = ensure_snapshot_care_state(
+                prev_st,
+                ch.baseline_psyche,
+                elapsed_minutes=prior_elapsed,
+            )
+            projected_care = project_care_to_minute(
+                prior_care,
+                target_elapsed_minutes=new_campaign_elapsed,
+                psyche=ch.baseline_psyche,
+            )
+            base_snap = CharacterStateSnapshot(
                 turn_id=completed_turn.id,
                 character_id=ch.id,
                 current_location_id=new_location_id,
@@ -1516,6 +1645,12 @@ async def run_phase5_post_turn_clerk(
                 inventory=list(prev_st.inventory),
                 unlocked_persona_keys=list(prev_st.unlocked_persona_keys),
                 persona_knowledge_provenance=dict(prev_st.persona_knowledge_provenance),
+                care_state=projected_care,
+            )
+            updated_states_by_char[ch.id] = (
+                base_snap
+                if turn_elapsed == 0
+                else materialize_snapshot_with_care(base_snap, projected_care)
             )
     else:
         donor_pool = collect_relinquished_item_instances(
@@ -1523,6 +1658,12 @@ async def run_phase5_post_turn_clerk(
             prev_states_by_char=prev_states_by_char,
             character_deltas=char_deltas,
         )
+        base_snaps_by_char: dict[str, CharacterStateSnapshot] = {}
+        post_care_by_char: dict[str, AffectiveCareState] = {}
+        end_loc_by_char: dict[str, str] = {}
+        all_public_witness_events: list[ResolvedWitnessEvent] = []
+        scene_ids = {c.id for c in scene_characters}
+
         for ch in scene_characters:
             prev_st = prev_states_by_char[ch.id]
             c_delta = char_deltas[ch.id]
@@ -1537,9 +1678,7 @@ async def run_phase5_post_turn_clerk(
                 char_loc_id = new_location_id
             else:
                 char_loc_id = active_location.id
-
-            new_val = round(max(-1.0, min(1.0, prev_st.valence + c_delta.valence_delta)), 2)
-            new_ar = round(max(0.0, min(1.0, prev_st.arousal + c_delta.arousal_delta)), 2)
+            end_loc_by_char[ch.id] = char_loc_id
 
             char_cog = (completed_turn.cognitions or {}).get(ch.id) or (
                 completed_turn.cognition if ch.id == completed_turn.actor_id else None
@@ -1566,13 +1705,13 @@ async def run_phase5_post_turn_clerk(
                 recipient_id=ch.id,
             )
 
-            updated_states_by_char[ch.id] = CharacterStateSnapshot(
+            base_snaps_by_char[ch.id] = CharacterStateSnapshot(
                 turn_id=completed_turn.id,
                 character_id=ch.id,
                 current_location_id=char_loc_id,
                 mood_label=c_delta.mood_label,
-                valence=new_val,
-                arousal=new_ar,
+                valence=prev_st.valence,
+                arousal=prev_st.arousal,
                 active_want=new_want,
                 active_plan=new_plan,
                 relationship_notes=merged_rel,
@@ -1581,6 +1720,135 @@ async def run_phase5_post_turn_clerk(
                 unlocked_persona_keys=list(prev_st.unlocked_persona_keys),
                 persona_knowledge_provenance=dict(prev_st.persona_knowledge_provenance),
             )
+
+            # Python-enforced epistemic visibility ceiling
+            vis_ceiling: dict[str, VisibilityScope] = {
+                tid: "public_room" for tid in (scene_ids | {"user"}) if tid != ch.id
+            }
+            w_entry = decomposed_msg.whispers_by_character_id.get(ch.id)
+            if w_entry is not None:
+                if w_entry.target_scope == MentionTargetScope.REMOTE:
+                    vis_ceiling["user"] = "remote_comm"
+                elif not decomposed_msg.public_text.strip() or (
+                    w_entry.sensory_parts and not w_entry.speech_parts
+                ):
+                    vis_ceiling["user"] = "local_whisper"
+
+            char_roll = resolve_roll_for_character(completed_turn.pre_turn, ch.id)
+            seized_from_me = tuple(
+                r.winner_id
+                for r in arbitration_rulings
+                if r.reason == "unrelinquished_transfer"
+                and r.prior_holder_id == ch.id
+                and r.winner_id not in ("none", ch.id)
+            )
+            signals = MechanicalTurnSignals(
+                roll_outcome=char_roll.outcome_tier if char_roll else None,
+                seized_from_me_by=seized_from_me,
+                extracted_memories=tuple(c_delta.new_memories),
+                visibility_ceiling_by_target=vis_ceiling,
+            )
+            cog_imp = (
+                char_cog.to_feeling_impulse()
+                if (char_cog and not char_cog.skipped)
+                else None
+            )
+            prior_care = ensure_snapshot_care_state(
+                prev_st,
+                ch.baseline_psyche,
+                elapsed_minutes=prior_elapsed,
+            )
+            allowed_targets = {"user"} | (scene_ids - {ch.id})
+            post_care, witness_evs = resolve_post_turn_care_state(
+                prior_care,
+                psyche=ch.baseline_psyche,
+                delta=c_delta,
+                cognition_impulse=cog_imp,
+                signals=signals,
+                turn_elapsed_minutes=turn_elapsed,
+                target_elapsed_minutes=new_campaign_elapsed,
+                self_id=ch.id,
+                self_name=ch.name,
+                persona_name=eff_persona_name,
+                allowed_target_ids=allowed_targets,
+                character_name_map=char_name_map,
+            )
+            post_care_by_char[ch.id] = post_care
+            all_public_witness_events.extend(witness_evs)
+
+        # Co-present witness coupling strictly across characters sharing start_loc -> end_loc
+        co_present_throughout_ids = {
+            cid for cid, end_loc in end_loc_by_char.items() if end_loc == new_location_id
+        }
+        coupled_care_by_char = apply_co_present_witness_coupling(
+            post_care_by_char,
+            psyches_by_char={c.id: c.baseline_psyche for c in scene_characters},
+            public_events=all_public_witness_events,
+            co_present_throughout_ids=co_present_throughout_ids,
+        )
+        for ch in scene_characters:
+            updated_states_by_char[ch.id] = materialize_snapshot_with_care(
+                base_snaps_by_char[ch.id],
+                coupled_care_by_char[ch.id],
+            )
+
+        # Update off-screen campaign characters addressed via REMOTE @Character comm whispers
+        if decomposed_msg.remote_whispers:
+            participants_by_id = {p.id: p for p in known_participants}
+            for rw in decomposed_msg.remote_whispers:
+                rem_char = participants_by_id.get(rw.character_id)
+                if rem_char is None or rem_char.id in updated_states_by_char:
+                    continue
+                rem_prev = resolve_character_previous_state(
+                    prior_branch_turns, rem_char, active_location.id
+                )
+                rem_visible_msg = "\n".join(rw.raw_lines)
+                rem_delta = heuristic_character_agent_delta(
+                    character=rem_char,
+                    prev_state=rem_prev,
+                    completed_turn=completed_turn.model_copy(update={"raw_prose": ""}),
+                    active_location=active_location,
+                    neighbors=[],
+                    present_characters=[rem_char],
+                    user_message_override=rem_visible_msg,
+                )
+                rem_delta = rem_delta.model_copy(
+                    update={
+                        "items_equipped": [],
+                        "items_unequipped": [],
+                        "items_obtained": [],
+                        "items_removed": [],
+                        "location_transition": "stay_here",
+                        "target_location_id": None,
+                    }
+                )
+                rem_prior_care = ensure_snapshot_care_state(
+                    rem_prev,
+                    rem_char.baseline_psyche,
+                    elapsed_minutes=prior_elapsed,
+                )
+                rem_post_care, _ = resolve_post_turn_care_state(
+                    rem_prior_care,
+                    psyche=rem_char.baseline_psyche,
+                    delta=rem_delta,
+                    cognition_impulse=None,
+                    signals=MechanicalTurnSignals(
+                        visibility_ceiling_by_target={"user": "remote_comm"}
+                    ),
+                    turn_elapsed_minutes=turn_elapsed,
+                    target_elapsed_minutes=new_campaign_elapsed,
+                    self_id=rem_char.id,
+                    self_name=rem_char.name,
+                    persona_name=eff_persona_name,
+                    allowed_target_ids={"user"},
+                    character_name_map=char_name_map,
+                )
+                rem_snap = rem_prev.model_copy(
+                    update={"turn_id": completed_turn.id}
+                )
+                updated_states_by_char[rem_char.id] = materialize_snapshot_with_care(
+                    rem_snap, rem_post_care
+                )
 
     # 4.5. Prose-Verified Gossip Protocol & Player Direct Revelations
     verified_gossip: list[PersonaGossipEvent] = []
@@ -1677,6 +1945,16 @@ async def run_phase5_post_turn_clerk(
 
     # Assemble composite PostTurnStateDelta (preserving legacy top-level fields + per-character audit map)
     speaker_delta = char_deltas.get(character.id)
+    speaker_user_rel_note = None
+    if speaker_delta is not None:
+        speaker_user_rel_note = speaker_delta.stance_updates.get("user") or next(
+            (
+                ev.note
+                for ev in speaker_delta.relational_events
+                if ev.target.strip().lower() in ("user", "player") and ev.note.strip()
+            ),
+            None,
+        )
     composite_post_turn = PostTurnStateDelta(
         elapsed_minutes=world_delta.elapsed_minutes,
         new_world_timestamp=world_delta.new_world_timestamp,
@@ -1694,9 +1972,7 @@ async def run_phase5_post_turn_clerk(
         inventory_removed=(
             list(speaker_delta.items_removed) if speaker_delta is not None else []
         ),
-        relationship_shift_note=(
-            speaker_delta.stance_updates.get("user") if speaker_delta is not None else None
-        ),
+        relationship_shift_note=speaker_user_rel_note,
         character_memories=all_extracted_memories,
         character_deltas=char_deltas,
         arbitration_notes=arbitration_notes,
@@ -1722,54 +1998,41 @@ async def run_phase5_post_turn_clerk(
         updated_persona_turn_state=current_player_state,
     )
 
-    # 6. Asynchronously embed and index notable atomic event, episodic chunk, and updated character memories
-    async_tasks = []
+    # 6. Sequentially embed and index notable atomic event, episodic chunk, and updated character memories
+    # (Serialized to prevent concurrent SQLite write contention under dispatch_mode='parallel')
     if world_delta.notable_event_summary:
-        async_tasks.append(
-            repo.vector_store.aupsert_entry(
-                entry_id=f"event_{completed_turn.id}",
-                source_type="episodic_chunk",
-                world_id=world_id,
-                character_id=character.id,
-                campaign_id=campaign_id,
-                anchor_turn_id=completed_turn.id,
-                title=f"Turn {completed_turn.depth_index} Event ({new_timestamp})",
-                content=world_delta.notable_event_summary,
-                keywords=completed_turn.pre_turn.mentioned_entities,
-            )
+        await repo.vector_store.aupsert_entry(
+            entry_id=f"event_{completed_turn.id}",
+            source_type="episodic_chunk",
+            world_id=world_id,
+            character_id=character.id,
+            campaign_id=campaign_id,
+            anchor_turn_id=completed_turn.id,
+            title=f"Turn {completed_turn.depth_index} Event ({new_timestamp})",
+            content=world_delta.notable_event_summary,
+            keywords=completed_turn.pre_turn.mentioned_entities,
         )
 
     if needs_chunk_summary and summary_text is not None:
-        async_tasks.append(
-            repo.asave_episodic_chunk(
-                campaign_id=campaign_id,
-                world_id=world_id,
-                character_id=character.id,
-                start_turn_depth=chunk_slice[0].depth_index,
-                end_turn_depth=chunk_slice[-1].depth_index,
-                leaf_turn_id=completed_turn.id,
-                summary_text=summary_text,
-            )
+        saved_chunk = await repo.asave_episodic_chunk(
+            campaign_id=campaign_id,
+            world_id=world_id,
+            character_id=character.id,
+            start_turn_depth=chunk_slice[0].depth_index,
+            end_turn_depth=chunk_slice[-1].depth_index,
+            leaf_turn_id=completed_turn.id,
+            summary_text=summary_text,
         )
+        if isinstance(saved_chunk, EpisodicChunkRecord):
+            existing_chunks.append(saved_chunk)
 
     for cid in modified_char_ids:
-        async_tasks.append(
-            repo.aupdate_campaign_character_memories(
-                campaign_id=campaign_id,
-                character_id=cid,
-                memory_shards=raw_shards_by_char[cid],
-                preserve_other_branches=False,
-            )
+        await repo.aupdate_campaign_character_memories(
+            campaign_id=campaign_id,
+            character_id=cid,
+            memory_shards=raw_shards_by_char[cid],
+            preserve_other_branches=False,
         )
-
-    if async_tasks:
-        if eff_dispatch == "parallel":
-            results = await asyncio.gather(*async_tasks)
-        else:
-            results = [await t for t in async_tasks]
-        for res in results:
-            if isinstance(res, EpisodicChunkRecord):
-                existing_chunks.append(res)
 
     return updated_turn, existing_chunks
 

@@ -10,9 +10,23 @@ from typing import Literal
 import uuid
 
 from app.config import ModelProfile, settings
+from app.engine.affective_engine import (
+    ensure_snapshot_care_state,
+    render_zone4_affective_block,
+)
 from app.engine.llm_client import llm_client
+from app.engine.mentions import DecomposedUserMessage, filter_user_message_for_character
 from app.prompts import PROMPT_KEY_CHARACTER_POST_TURN, PROMPT_KEY_CLERK_ARBITRATION
 from app.prompts.renderer import get_default_prompt, render_template
+from app.schemas.affective import (
+    AgencyLevel,
+    CopingLevel,
+    FeelingTone,
+    IntensityLevel,
+    OrdinalImpact,
+    RelationalEventSpec,
+    ThreatLevel,
+)
 from app.schemas.character import (
     CharacterRecord,
     CharacterStateSnapshot,
@@ -114,6 +128,15 @@ _USER_ALIASES = {
     "the player",
     "the protagonist",
     "stranger",
+}
+
+_NARRATOR_ALIASES = {
+    "__narrator__",
+    "narrator",
+    "the narrator",
+    "gm",
+    "game master",
+    "director",
 }
 
 
@@ -301,6 +324,7 @@ def normalize_stance_updates(
     *,
     self_id: str,
     self_name: str = "",
+    persona_name: str | None = None,
     known_characters: list[CharacterRecord] | None = None,
 ) -> dict[str, str]:
     """Resolve raw target labels in stance_updates to canonical 'user' or character.id keys."""
@@ -308,6 +332,8 @@ def normalize_stance_updates(
         return {}
     chars = known_characters or []
     normalized: dict[str, str] = {}
+    p_low = persona_name.strip().lower() if (persona_name and persona_name.strip()) else ""
+    p_first = p_low.split()[0] if p_low else ""
 
     for raw_target, raw_note in raw_stances.items():
         target_clean = raw_target.strip()
@@ -316,11 +342,19 @@ def normalize_stance_updates(
             continue
 
         t_low = target_clean.lower()
+        if t_low in _NARRATOR_ALIASES:
+            continue
         if t_low == self_id.lower() or (self_name and t_low == self_name.strip().lower()):
             continue
 
         canonical_key: str | None = None
-        if t_low in _USER_ALIASES or t_low.startswith("player ") or t_low.startswith("user "):
+        if (
+            t_low in _USER_ALIASES
+            or t_low.startswith("player ")
+            or t_low.startswith("user ")
+            or (p_low and t_low == p_low)
+            or (len(p_first) >= 3 and t_low == p_first)
+        ):
             canonical_key = "user"
         else:
             for ch in chars:
@@ -1219,78 +1253,252 @@ def heuristic_character_agent_delta(
     neighbors: list[NeighborLocationView],
     present_characters: list[CharacterRecord],
     extracted_memories_fn=None,
+    user_message_override: str | None = None,
 ) -> CharacterAgentDelta:
     """Deterministic per-character state delta used when running without a live Clerk LLM."""
     is_speaker = completed_turn.actor_id == character.id
-    user_msg = completed_turn.user_message
+    user_msg = user_message_override if user_message_override is not None else completed_turn.user_message
     raw_prose = completed_turn.raw_prose
     pre_turn = completed_turn.pre_turn
     combined_lower = f"{user_msg}\n{raw_prose}".lower()
+    user_msg_lower = user_msg.lower()
 
-    # 1. Mood, Valence & Arousal (anchored strictly to prev_state)
+    # 1. Categorical CARE Mood, Appraisal & Legacy Float Fallback (anchored strictly to prev_state)
+    affect_tone: FeelingTone | None = None
+    affect_intensity: IntensityLevel | None = None
+    affect_agency: AgencyLevel | None = None
+    scene_threat: ThreatLevel = "none"
+    scene_coping: CopingLevel = "adequate"
+    goal_congruence: OrdinalImpact = "none"
+    scene_surprise: IntensityLevel = "calm"
+
     char_cog = (
         (completed_turn.cognitions or {}).get(character.id)
         if hasattr(completed_turn, "cognitions") and completed_turn.cognitions
         else (completed_turn.cognition if is_speaker else None)
     )
+    char_roll = resolve_roll_for_character(pre_turn, character.id)
+
     if char_cog and not char_cog.skipped:
+        imp = char_cog.to_feeling_impulse()
+        affect_tone = imp.tone
+        affect_intensity = imp.intensity
+        affect_agency = imp.agency
+        scene_threat = imp.threat
+        scene_coping = imp.coping
         val_delta = round(char_cog.valence - prev_state.valence, 2)
         ar_delta = round(char_cog.arousal - prev_state.arousal, 2)
         mood = normalize_mood_label(char_cog.feeling, fallback=prev_state.mood_label)
         updated_want = char_cog.want or None
-    else:
-        char_roll = resolve_roll_for_character(pre_turn, character.id)
-        if char_roll:
-            if char_roll.outcome_tier == "Critical Failure":
-                val_delta = -0.35
-                ar_delta = 0.35
-                mood = "Shaken, critical setback"
-            elif char_roll.outcome_tier == "Failure with Consequences":
-                val_delta = -0.15
-                ar_delta = 0.15
-                mood = "Guarded, tense strain"
-            elif char_roll.outcome_tier == "Simple Failure":
-                val_delta = -0.05
-                ar_delta = 0.05
-                mood = "Wary, thwarted attempt"
-            elif char_roll.outcome_tier == "Clean Success":
-                val_delta = 0.15
-                ar_delta = -0.05
-                mood = "Confident, steady relief"
-            else:  # Critical Success
-                val_delta = 0.30
-                ar_delta = 0.15
-                mood = "Triumphant, sharp breakthrough"
-        else:
-            sentiment_low = pre_turn.user_sentiment.lower()
-            if "betray" in combined_lower or "confrontational" in sentiment_low or "tense" in sentiment_low:
-                val_delta = -0.12
-                ar_delta = 0.15
-                mood = "Guarded, tense vigilance"
-            elif "vulnerable" in sentiment_low or "trust" in combined_lower or "saved" in combined_lower:
-                val_delta = 0.10
-                ar_delta = 0.06
-                mood = "Attentive, quiet concern"
-            else:
-                val_delta = 0.02
-                ar_delta = 0.0
-                mood = normalize_mood_label(prev_state.mood_label, fallback="Observant and measured")
+    elif char_roll:
         updated_want = None
+        if char_roll.outcome_tier == "Critical Failure":
+            affect_tone = "anguished"
+            affect_intensity = "extreme"
+            affect_agency = "helpless"
+            scene_threat = "high"
+            scene_coping = "overwhelmed"
+            goal_congruence = "strong_neg"
+            scene_surprise = "extreme"
+            val_delta = -0.35
+            ar_delta = 0.35
+            mood = "Shaken, critical setback"
+        elif char_roll.outcome_tier == "Failure with Consequences":
+            affect_tone = "uneasy"
+            affect_intensity = "high"
+            affect_agency = "pressured"
+            scene_threat = "moderate"
+            scene_coping = "strained"
+            goal_congruence = "mild_neg"
+            scene_surprise = "moderate"
+            val_delta = -0.15
+            ar_delta = 0.15
+            mood = "Guarded, tense strain"
+        elif char_roll.outcome_tier == "Simple Failure":
+            affect_tone = "guarded"
+            affect_intensity = "moderate"
+            affect_agency = "pressured"
+            scene_threat = "low"
+            scene_coping = "adequate"
+            goal_congruence = "mild_neg"
+            scene_surprise = "low"
+            val_delta = -0.05
+            ar_delta = 0.05
+            mood = "Wary, thwarted attempt"
+        elif char_roll.outcome_tier == "Clean Success":
+            affect_tone = "content"
+            affect_intensity = "moderate"
+            affect_agency = "assured"
+            scene_threat = "none"
+            scene_coping = "adequate"
+            goal_congruence = "mild_pos"
+            scene_surprise = "low"
+            val_delta = 0.15
+            ar_delta = -0.05
+            mood = "Confident, steady relief"
+        else:  # Critical Success
+            affect_tone = "elated"
+            affect_intensity = "high"
+            affect_agency = "commanding"
+            scene_threat = "none"
+            scene_coping = "mastery"
+            goal_congruence = "strong_pos"
+            scene_surprise = "high"
+            val_delta = 0.30
+            ar_delta = 0.15
+            mood = "Triumphant, sharp breakthrough"
+    else:
+        updated_want = None
+        sentiment_low = pre_turn.user_sentiment.lower()
+        if (
+            re.search(r"\b(betray(?:ed|al)?|sold .+ out|aims? a|points? a gun|threaten|traitor)\b", combined_lower)
+            or "confrontational" in sentiment_low
+            or "tense" in sentiment_low
+        ):
+            affect_tone = "hostile" if "betray" in combined_lower else "guarded"
+            affect_intensity = "high"
+            affect_agency = "steady"
+            scene_threat = "high" if ("gun" in combined_lower or "betray" in combined_lower) else "moderate"
+            scene_coping = "strained"
+            goal_congruence = "strong_neg" if "betray" in combined_lower else "mild_neg"
+            scene_surprise = "high" if "betray" in combined_lower else "low"
+            val_delta = -0.12
+            ar_delta = 0.15
+            mood = "Guarded, tense vigilance"
+        elif (
+            "vulnerable" in sentiment_low
+            or "trust" in combined_lower
+            or "saved" in combined_lower
+            or "restitution" in combined_lower
+        ):
+            affect_tone = "warm"
+            affect_intensity = "moderate"
+            affect_agency = "assured"
+            scene_threat = "none"
+            scene_coping = "adequate"
+            goal_congruence = "mild_pos"
+            val_delta = 0.10
+            ar_delta = 0.06
+            mood = "Attentive, quiet concern"
+        else:
+            val_delta = 0.02
+            ar_delta = 0.0
+            mood = normalize_mood_label(prev_state.mood_label, fallback="Observant and measured")
 
-    # 2. Directed Stances (toward 'user' and co-present NPCs)
+    # 2. Directed Relational Events & Stances (toward 'user' and co-present NPCs)
     stances: dict[str, str] = {}
+    rel_events: list[RelationalEventSpec] = []
     char_first = character.name.split()[0].lower() if character.name.split() else character.name.lower()
-    char_engaged = is_speaker or character.name.lower() in combined_lower or (
-        len(char_first) >= 3 and bool(re.search(rf"\b{re.escape(char_first)}\b", combined_lower))
+    char_engaged = (
+        is_speaker
+        or character.name.lower() in combined_lower
+        or (len(char_first) >= 3 and bool(re.search(rf"\b{re.escape(char_first)}\b", combined_lower)))
     )
 
     if char_engaged:
-        if re.search(r"\b(betray(?:ed|al)?|sold .+ out|lied to|broke .+ trust)\b", combined_lower):
-            stances["user"] = "Views them with sharp distrust after the exposed betrayal."
-        elif re.search(r"\b(solemn(?:ly)? (?:swear|vow)|blood oath|saved (?:my|her|his) life|trust you)\b", combined_lower):
-            stances["user"] = "Holds cautious, deepening trust bound by their shared commitment."
+        if re.search(
+            r"\b(betray(?:ed|al)?|sold .+ out|lied to|broke .+ trust|stabbed .+ back)\b",
+            combined_lower,
+        ):
+            note = "Views them with sharp distrust after the exposed betrayal."
+            stances["user"] = note
+            rel_events.append(
+                RelationalEventSpec(
+                    target="user",
+                    warmth_shift="strong_neg",
+                    trust_shift="strong_neg",
+                    grievance_shift="grave_wrong",
+                    note=note,
+                )
+            )
+        elif re.search(
+            r"\b(make restitution|return(?:s|ed)? the stolen|atone|risked my life|saved (?:my|your|her|his) life|"
+            r"shielded (?:me|you|her|him)|blood oath|solemn(?:ly)? (?:swear|vow))\b",
+            combined_lower,
+        ):
+            note = "Holds cautious, deepening trust bound by costly proof of commitment."
+            stances["user"] = note
+            rel_events.append(
+                RelationalEventSpec(
+                    target="user",
+                    warmth_shift="strong_pos",
+                    respect_shift="strong_pos",
+                    trust_shift="strong_pos",
+                    grievance_shift="reconciled",
+                    obligation_shift="strong_pos",
+                    note=note,
+                )
+            )
+        elif re.search(
+            r"\b(aims? a|points? a gun|draws? a blade on|threaten(?:s|ed)?|kill you)\b",
+            user_msg_lower,
+        ):
+            note = "Bracing against overt hostility and physical intimidation."
+            stances["user"] = note
+            rel_events.append(
+                RelationalEventSpec(
+                    target="user",
+                    warmth_shift="strong_neg",
+                    trust_shift="strong_neg",
+                    power_shift="mild_neg",
+                    grievance_shift="slighted",
+                    note=note,
+                )
+            )
+        elif re.search(
+            r"\b(pathetic|coward|idiot|useless|worthless|mock(?:s|ed)?|insult(?:s|ed)?)\b",
+            user_msg_lower,
+        ):
+            note = "Resents the open disrespect and sharp mockery."
+            stances["user"] = note
+            rel_events.append(
+                RelationalEventSpec(
+                    target="user",
+                    warmth_shift="mild_neg",
+                    respect_shift="mild_neg",
+                    grievance_shift="slighted",
+                    note=note,
+                )
+            )
+        elif re.search(
+            r"\b(nice jacket|you look nice|charming|flatter|sweet talk|pretty eyes|compliment|great hair)\b",
+            user_msg_lower,
+        ):
+            note = "Registers the casual flattery without dropping deeper guard."
+            rel_events.append(
+                RelationalEventSpec(
+                    target="user",
+                    warmth_shift="mild_pos",
+                    trust_shift="none",
+                    note=note,
+                )
+            )
+        elif re.search(
+            r"\b(buy you a drink|cover your tab|patch you up|here, take this|do you a favor|trust you)\b",
+            user_msg_lower,
+        ):
+            note = "Appreciates the practical goodwill extended to them."
+            stances["user"] = note
+            rel_events.append(
+                RelationalEventSpec(
+                    target="user",
+                    warmth_shift="mild_pos",
+                    trust_shift="mild_pos",
+                    obligation_shift="mild_pos",
+                    note=note,
+                )
+            )
         elif "confrontational" in pre_turn.user_sentiment.lower():
-            stances["user"] = "Wary of their confrontational posture and watching their hands."
+            note = "Wary of their confrontational posture and watching their hands."
+            stances["user"] = note
+            rel_events.append(
+                RelationalEventSpec(
+                    target="user",
+                    warmth_shift="mild_neg",
+                    trust_shift="mild_neg",
+                    note=note,
+                )
+            )
 
         for oc in present_characters:
             if oc.id == character.id:
@@ -1376,6 +1584,14 @@ def heuristic_character_agent_delta(
 
     return CharacterAgentDelta(
         mood_label=mood,
+        affect_tone=affect_tone,
+        affect_intensity=affect_intensity,
+        affect_agency=affect_agency,
+        scene_threat=scene_threat,
+        scene_coping=scene_coping,
+        goal_congruence=goal_congruence,
+        scene_surprise=scene_surprise,
+        relational_events=rel_events,
         valence_delta=val_delta,
         arousal_delta=ar_delta,
         updated_want=updated_want,
@@ -1403,6 +1619,9 @@ async def run_character_post_turn_agent(
     profile: ModelProfile | None = None,
     prompt_template: str | None = None,
     extracted_memories_fn=None,
+    persona_name: str | None = None,
+    decomposed_message: DecomposedUserMessage | None = None,
+    campaign_elapsed_minutes: int = 0,
 ) -> CharacterAgentDelta:
     """Execute a focused Post-Turn Character State Agent for a single present character."""
     clerk_prof = profile or settings.clerk_profile
@@ -1422,17 +1641,32 @@ async def run_character_post_turn_agent(
         for n in neighbors
     ) or "None"
 
+    # Omit numeric emotional_weight floats so Phase 5 prompts remain 100% zero-float
     existing_mem_lines = [
         f"- [id='{s.id}' | {s.origin}{f'/{s.significance}' if s.significance else ''}] {s.title}: {s.content}"
         for s in active_shards[-8:]
     ]
     existing_mem_str = "\n".join(existing_mem_lines) or "None"
 
-    stances_str = format_relationship_notes_for_prompt(prev_state.relationship_notes, name_map)
     eq_names = format_item_names(prev_state.equipped)
     inv_names = format_item_names(prev_state.inventory)
     equipped_str = ", ".join(eq_names) if eq_names else "None"
     inventory_str = ", ".join(inv_names) if inv_names else "None"
+
+    prior_care = ensure_snapshot_care_state(
+        prev_state,
+        character.baseline_psyche,
+        elapsed_minutes=campaign_elapsed_minutes,
+    )
+    co_present_ids = {c.id for c in present_characters if c.id != character.id}
+    affective_block = render_zone4_affective_block(
+        prior_care,
+        character_name=character.name,
+        persona_name=persona_name,
+        character_name_map=name_map,
+        active_speaker_id=completed_turn.actor_id,
+        co_present_ids=co_present_ids,
+    )
 
     speaker_name = name_map.get(completed_turn.actor_id, character.name)
     char_cog = (
@@ -1445,10 +1679,11 @@ async def run_character_post_turn_agent(
         cognition_context = (
             f"\n{character.name}'s Intra-Turn Cognition Impulse (at start of response):\n"
             f"- Feeling Impulse: {char_cog.feeling} "
-            f"(Impulse Valence: {char_cog.valence:+.2f}, Impulse Arousal: {char_cog.arousal:.2f})\n"
+            f"(tone={char_cog.feeling_tone}, intensity={char_cog.feeling_intensity}, "
+            f"agency={char_cog.feeling_agency}, threat={char_cog.scene_threat}, coping={char_cog.scene_coping})\n"
             f"- Immediate Want: {char_cog.want}\n"
             f"- Planned Action: {char_cog.plan}\n"
-            f"*(Note: Compute valence_delta and arousal_delta strictly relative to Pre-Turn Baseline below, NOT relative to Impulse.)*\n"
+            f"*(Note: Anchor post-turn affect_tone and relational_events relative to Pre-Turn Baseline State below.)*\n"
         )
 
     char_roll = resolve_roll_for_character(completed_turn.pre_turn, character.id)
@@ -1458,6 +1693,12 @@ async def run_character_post_turn_agent(
     elif completed_turn.pre_turn.resolved_roll is not None and completed_turn.pre_turn.resolved_roll.character_id in (None, character.id):
         r = completed_turn.pre_turn.resolved_roll
         roll_str = f"Mechanics Outcome: {r.action_description} -> [{r.outcome_tier}] ({r.narrative_directive})\n"
+
+    visible_user_msg = filter_user_message_for_character(
+        completed_turn.user_message,
+        target_character_id=character.id,
+        campaign_characters=all_participants,
+    )
 
     system_prompt = render_template(
         prompt_template or get_default_prompt(PROMPT_KEY_CHARACTER_POST_TURN),
@@ -1471,12 +1712,9 @@ async def run_character_post_turn_agent(
         f"- Core Drive: {character.baseline_psyche.core_drive}\n"
         f"- Core Fear: {character.baseline_psyche.core_fear}\n"
         f"- Role This Turn: {'Primary Speaking Character' if is_speaker else 'Co-Present Witness in Scene'}\n\n"
-        f"Pre-Turn Baseline State (Anchor deltas here):\n"
-        f"- Pre-Turn Mood: {prev_state.mood_label}\n"
-        f"- Pre-Turn Valence: {prev_state.valence:+.2f}\n"
-        f"- Pre-Turn Arousal: {prev_state.arousal:.2f}\n"
+        f"Pre-Turn Baseline State (Anchor post-turn updates here):\n"
+        f"{affective_block}\n"
         f"- Pre-Turn Want: {prev_state.active_want}\n"
-        f"- Existing Stances: {stances_str}\n"
         f"- Equipped / Worn: {equipped_str}\n"
         f"- Carried Inventory: {inventory_str}\n"
         f"{cognition_context}\n"
@@ -1490,7 +1728,7 @@ async def run_character_post_turn_agent(
         f"{existing_mem_str}\n\n"
         f"=== COMPLETED TURN EXCHANGE ===\n"
         f"{roll_str}"
-        f"User Message:\n{completed_turn.user_message}\n\n"
+        f"User Message:\n{visible_user_msg}\n\n"
         f"Narrative Prose (spoken/enacted primarily by {speaker_name}):\n{completed_turn.raw_prose}"
     )
 
@@ -1520,6 +1758,7 @@ async def run_character_post_turn_agent(
             neighbors=neighbors,
             present_characters=present_characters,
             extracted_memories_fn=extracted_memories_fn,
+            user_message_override=visible_user_msg,
         )
 
     # Post-process invariants: 2-4 word mood, canonical stance keys, and strict self-scoped memory ownership
@@ -1528,6 +1767,7 @@ async def run_character_post_turn_agent(
         delta.stance_updates,
         self_id=character.id,
         self_name=character.name,
+        persona_name=persona_name,
         known_characters=all_participants,
     )
     for mem in delta.new_memories:

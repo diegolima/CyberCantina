@@ -8,6 +8,7 @@ from typing import Any
 from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
 from app.prompts import get_default_prompt, render_template
+from app.schemas.affective import infer_temperament_and_worldview_from_text
 from app.schemas.character import (
     BaselinePsyche,
     CharacterWizardDraft,
@@ -107,7 +108,14 @@ def _fallback_sillytavern_distillation(
             ),
         ]
 
-    # 6. Baseline Psyche
+    # 6. Baseline Psyche (including CARE temperament preset & worldview inference)
+    inferred_temp, inferred_wv = infer_temperament_and_worldview_from_text(
+        card.personality,
+        core_persona,
+        card.description,
+        card.scenario,
+        " ".join(card.tags),
+    )
     baseline_psyche = BaselinePsyche(
         mood_label="Alert and observant",
         valence=0.1,
@@ -116,6 +124,8 @@ def _fallback_sillytavern_distillation(
         core_fear=f"Being cornered, manipulated, or losing control in critical moments.",
         default_want=f"Assess the immediate surroundings and the user's motives.",
         default_plan=f"Engage in guarded conversation while keeping exits in sight.",
+        initial_worldview=inferred_wv,
+        temperament=inferred_temp,
     )
 
     # 7. Memory Shards

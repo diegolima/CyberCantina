@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.db.repository import CantinaRepository
+from app.schemas.affective import WorldviewProfile, temperament_config_for_archetype
 from app.schemas.character import (
     BaselinePsyche,
     CharacterWizardDraft,
@@ -278,6 +279,8 @@ def ensure_default_seed(
             core_fear="Vespera Hounds tracing the stolen Chimera cortex chip back to her clinic.",
             default_want="Find out why the user showed up after hours soaked in rain and whether they were followed.",
             default_plan="Pour them a warming drink to get them talking while subtly checking the street cameras.",
+            initial_worldview=WorldviewProfile(benevolence=-0.15, belonging=0.45, agency=0.35),
+            temperament=temperament_config_for_archetype("stoic"),
         ),
         memory_shards=[
             MemoryShard(

@@ -20,6 +20,7 @@ import {
   hasItemFlag,
   splitLegacyWornItems,
 } from "../../types";
+import { getCharacterEmotionPortrait } from "../../utils/entityImages";
 import { ChangeDot, MiniMoodBars, usePersistentState } from "./InspectorPrimitives";
 
 interface CharacterRowProps {
@@ -83,6 +84,11 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
   const bodyId = useId();
   const valencePct = Math.round(((state.valence + 1) / 2) * 100);
   const arousalPct = Math.round(state.arousal * 100);
+  const care = state.care_state ?? null;
+  const dominancePct = care ? Math.round(((care.dominance + 1) / 2) * 100) : 50;
+  const composurePct = care ? Math.round(care.composure * 100) : 82;
+  const activeEmotion = care?.active_emotion ?? "default";
+  const portraitUrl = getCharacterEmotionPortrait(character, activeEmotion);
 
   const { equippedList, inventoryList } = splitLegacyWornItems(
     state.equipped,
@@ -102,12 +108,43 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
           <span className="char-row-chevron">
             {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           </span>
+          {portraitUrl && (
+            <img
+              src={portraitUrl}
+              alt={`${character.name} (${activeEmotion})`}
+              title={`Expression: ${activeEmotion}`}
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: "50%",
+                objectFit: "cover",
+                border: "1px solid var(--border-subtle)",
+                flexShrink: 0,
+              }}
+            />
+          )}
           <span className="char-row-text">
             <span className="char-row-name-line">
               <span className="char-row-name">{character.name}</span>
+              {activeEmotion !== "default" && (
+                <span
+                  className="badge"
+                  style={{
+                    fontSize: "0.62rem",
+                    padding: "0px 5px",
+                    textTransform: "capitalize",
+                    opacity: 0.9,
+                  }}
+                >
+                  {activeEmotion}
+                </span>
+              )}
               {moodChanged && !open && <ChangeDot title="Mood shifted this turn" />}
             </span>
-            <span className="char-row-mood" title={state.mood_label}>
+            <span
+              className="char-row-mood"
+              title={care?.outward_demeanor || state.mood_label}
+            >
               {state.mood_label}
             </span>
             {!isPresent && (
@@ -156,6 +193,62 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
               />
             </div>
           </div>
+
+          {care && (
+            <>
+              {/* Dominance / Agency Meter */}
+              <div className="meter-row">
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.73rem" }}>
+                  <span>Dominance (Cornered ↔ Commanding)</span>
+                  <span>
+                    {care.dominance >= 0
+                      ? `+${care.dominance.toFixed(2)}`
+                      : care.dominance.toFixed(2)}
+                  </span>
+                </div>
+                <div className="meter-track">
+                  <div
+                    className="meter-fill"
+                    style={{
+                      width: `${dominancePct}%`,
+                      background: "var(--accent-cyan)",
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Composure / Mask Meter */}
+              <div className="meter-row">
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.73rem" }}>
+                  <span>Composure Mask</span>
+                  <span>{composurePct}%</span>
+                </div>
+                <div className="meter-track">
+                  <div
+                    className="meter-fill"
+                    style={{
+                      width: `${composurePct}%`,
+                      background:
+                        care.composure >= 0.45 ? "#a78bfa" : "var(--accent-rose)",
+                    }}
+                  />
+                </div>
+              </div>
+
+              {care.outward_demeanor && (
+                <div
+                  style={{
+                    fontSize: "0.71rem",
+                    color: "var(--text-secondary)",
+                    fontStyle: "italic",
+                    marginTop: 2,
+                  }}
+                >
+                  {care.outward_demeanor}
+                </div>
+              )}
+            </>
+          )}
 
           {/* Gear & Inventory */}
           <div

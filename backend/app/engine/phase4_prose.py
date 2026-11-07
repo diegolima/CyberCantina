@@ -163,16 +163,17 @@ def build_offline_simulated_prose(
             action_prose += f"\n\n*{oc.name} watches silently from near the entryway, arms crossed in quiet vigilance.*"
 
     if include_cognition:
-        # Legacy compatibility format: wrap with <cognition>
+        # Legacy compatibility format: wrap with <cognition> using categorical CARE attributes
         eff_cog = (
             established_cognition
             or (established_cognitions or {}).get(character.id)
         )
         if eff_cog:
+            imp = eff_cog.to_feeling_impulse()
             return (
                 f"<cognition>\n"
                 f"  <recall>\n{eff_cog.recall}\n  </recall>\n"
-                f"  <feeling valence=\"{eff_cog.valence:+.2f}\" arousal=\"{eff_cog.arousal:.2f}\">{eff_cog.feeling}</feeling>\n"
+                f"  <feeling tone=\"{imp.tone}\" intensity=\"{imp.intensity}\" agency=\"{imp.agency}\" threat=\"{imp.threat}\" coping=\"{imp.coping}\">{eff_cog.feeling}</feeling>\n"
                 f"  <want>{eff_cog.want}</want>\n"
                 f"  <plan>\n{eff_cog.plan}\n  </plan>\n"
                 f"</cognition>\n"
@@ -182,7 +183,7 @@ def build_offline_simulated_prose(
         return (
             f"<cognition>\n"
             f"  <recall>\n{bullet_parsed}\n  </recall>\n"
-            f"  <feeling valence=\"{previous_state.valence:+.2f}\" arousal=\"{previous_state.arousal:.2f}\">{previous_state.mood_label}</feeling>\n"
+            f"  <feeling tone=\"neutral\" intensity=\"moderate\" agency=\"steady\" threat=\"none\" coping=\"adequate\">{previous_state.mood_label}</feeling>\n"
             f"  <want>{previous_state.active_want}</want>\n"
             f"  <plan>\n- Address player.\n  </plan>\n"
             f"</cognition>\n"

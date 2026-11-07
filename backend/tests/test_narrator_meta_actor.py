@@ -361,19 +361,23 @@ async def test_narrator_turn_preserves_character_emotional_anchor(
     t3_turn = bundle_t3.active_branch_turns[-1]
     assert t3_turn.actor_id == "__narrator__"
     t3_char_state = t3_turn.character_states[char.id]
-    assert t3_char_state.mood_label == t1_char_state.mood_label
-    assert t3_char_state.valence == t1_char_state.valence
-    assert t3_char_state.arousal == t1_char_state.arousal
+    assert t3_char_state.mood_label != "Objective / Detached"
+    assert t3_char_state.care_state is not None
+    assert t3_char_state.care_state.state_elapsed_minutes >= t1_turn.world_snapshot.campaign_elapsed_minutes + 10
+    # Smooth OU relaxation toward resting baseline over 10 elapsed minutes (never erased to Objective / Detached)
+    assert abs(t3_char_state.valence - char.baseline_psyche.valence) <= abs(
+        t1_char_state.valence - char.baseline_psyche.valence
+    ) + 1e-4
 
-    # 4. Verify resolve_character_previous_state walks backwards past consecutive narrator turns to find Turn 1
+    # 4. Verify resolve_character_previous_state preserves valid CARE-decayed state on Narrator advance turns
     resolved_prev = resolve_character_previous_state(
         bundle_t3.active_branch_turns,
         char,
         bundle_t3.active_location.id,
     )
-    assert resolved_prev.mood_label == t1_char_state.mood_label
-    assert resolved_prev.valence == t1_char_state.valence
-    assert resolved_prev.arousal == t1_char_state.arousal
+    assert resolved_prev.mood_label == t3_char_state.mood_label
+    assert resolved_prev.valence == t3_char_state.valence
+    assert resolved_prev.arousal == t3_char_state.arousal
 
     # 5. Player speaks to character -> Turn 4: Verify NPC resumes from Turn 1's emotional anchor
     t4_events = []

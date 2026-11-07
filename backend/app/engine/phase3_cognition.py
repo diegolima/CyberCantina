@@ -9,6 +9,11 @@ import re
 from typing import Any
 
 from app.config import settings
+from app.engine.affective_engine import (
+    compute_provisional_cognition_preview,
+    ensure_snapshot_care_state,
+    render_zone4_affective_block,
+)
 from app.engine.mentions import CharacterWhisper, DecomposedUserMessage, decompose_user_message
 from app.engine.phase2_context import (
     DiscoveredPersonaView,
@@ -21,6 +26,22 @@ from app.prompts import get_default_prompt, render_template
 from app.prompts.defaults import (
     DEFAULT_CHARACTER_COGNITION_SYSTEM,
     PROMPT_KEY_CHARACTER_COGNITION,
+)
+from app.schemas.affective import (
+    INTENSITY_TO_AROUSAL,
+    TONE_TO_VALENCE,
+    AgencyLevel,
+    CategoricalFeelingImpulse,
+    CopingLevel,
+    FeelingTone,
+    IntensityLevel,
+    ThreatLevel,
+    coerce_agency_level,
+    coerce_coping_level,
+    coerce_feeling_tone,
+    coerce_intensity_level,
+    coerce_threat_level,
+    impulse_from_legacy_floats,
 )
 from app.schemas.auth import ModelProfile
 from app.schemas.character import (
@@ -50,6 +71,11 @@ _SELECTED_CHOICE_RE = re.compile(r"<selected_choice>(.*?)</selected_choice>", re
 _PLAN_RE = re.compile(r"<plan>(.*?)</plan>", re.DOTALL | re.IGNORECASE)
 _VALENCE_ATTR_RE = re.compile(r'valence=["\']([+-]?\d+(?:\.\d+)?)["\']', re.IGNORECASE)
 _AROUSAL_ATTR_RE = re.compile(r'arousal=["\']([+-]?\d+(?:\.\d+)?)["\']', re.IGNORECASE)
+_TONE_ATTR_RE = re.compile(r'tone=["\']([^"\']+)["\']', re.IGNORECASE)
+_INTENSITY_ATTR_RE = re.compile(r'intensity=["\']([^"\']+)["\']', re.IGNORECASE)
+_AGENCY_ATTR_RE = re.compile(r'agency=["\']([^"\']+)["\']', re.IGNORECASE)
+_THREAT_ATTR_RE = re.compile(r'threat=["\']([^"\']+)["\']', re.IGNORECASE)
+_COPING_ATTR_RE = re.compile(r'coping=["\']([^"\']+)["\']', re.IGNORECASE)
 
 
 def _clamp(val: float, low: float, high: float) -> float:
@@ -60,7 +86,7 @@ def parse_cognition_xml(
     cognition_xml: str,
     fallback_state: CharacterStateSnapshot,
 ) -> CognitionBlock:
-    """Parse inner tags of <cognition>...</cognition> into a validated CognitionBlock."""
+    """Parse inner tags of <cognition>...</cognition> supporting both CARE enums and legacy floats."""
     recall_match = _RECALL_RE.search(cognition_xml)
     feeling_match = _FEELING_RE.search(cognition_xml)
     want_match = _WANT_RE.search(cognition_xml)
@@ -76,23 +102,66 @@ def parse_cognition_xml(
         if feeling_match
         else fallback_state.mood_label
     )
+
+    fallback_imp = impulse_from_legacy_floats(fallback_state.valence, fallback_state.arousal)
     valence = fallback_state.valence
     arousal = fallback_state.arousal
+    impulse: CategoricalFeelingImpulse = fallback_imp
 
     if feeling_match:
         attrs = feeling_match.group("attrs") or ""
-        v_m = _VALENCE_ATTR_RE.search(attrs)
-        a_m = _AROUSAL_ATTR_RE.search(attrs)
-        if v_m:
-            try:
-                valence = _clamp(float(v_m.group(1)), -1.0, 1.0)
-            except ValueError:
-                pass
-        if a_m:
-            try:
-                arousal = _clamp(float(a_m.group(1)), 0.0, 1.0)
-            except ValueError:
-                pass
+        t_m = _TONE_ATTR_RE.search(attrs)
+        i_m = _INTENSITY_ATTR_RE.search(attrs)
+        ag_m = _AGENCY_ATTR_RE.search(attrs)
+        th_m = _THREAT_ATTR_RE.search(attrs)
+        cp_m = _COPING_ATTR_RE.search(attrs)
+
+        if any((t_m, i_m, ag_m, th_m, cp_m)):
+            tone = coerce_feeling_tone(t_m.group(1), default=fallback_imp.tone) if t_m else fallback_imp.tone
+            intensity = (
+                coerce_intensity_level(i_m.group(1), default=fallback_imp.intensity)
+                if i_m
+                else fallback_imp.intensity
+            )
+            agency = (
+                coerce_agency_level(ag_m.group(1), default=fallback_imp.agency)
+                if ag_m
+                else fallback_imp.agency
+            )
+            threat = (
+                coerce_threat_level(th_m.group(1), default=fallback_imp.threat)
+                if th_m
+                else fallback_imp.threat
+            )
+            coping = (
+                coerce_coping_level(cp_m.group(1), default=fallback_imp.coping)
+                if cp_m
+                else fallback_imp.coping
+            )
+            impulse = CategoricalFeelingImpulse(
+                tone=tone,
+                intensity=intensity,
+                agency=agency,
+                threat=threat,
+                coping=coping,
+                used_legacy_float_fallback=False,
+            )
+            valence = TONE_TO_VALENCE[impulse.tone]
+            arousal = INTENSITY_TO_AROUSAL[impulse.intensity]
+        else:
+            v_m = _VALENCE_ATTR_RE.search(attrs)
+            a_m = _AROUSAL_ATTR_RE.search(attrs)
+            if v_m:
+                try:
+                    valence = _clamp(float(v_m.group(1)), -1.0, 1.0)
+                except ValueError:
+                    pass
+            if a_m:
+                try:
+                    arousal = _clamp(float(a_m.group(1)), 0.0, 1.0)
+                except ValueError:
+                    pass
+            impulse = impulse_from_legacy_floats(valence, arousal)
 
     want = want_match.group(1).strip() if want_match else fallback_state.active_want
     choice_match = _SELECTED_CHOICE_RE.search(cognition_xml)
@@ -102,8 +171,14 @@ def parse_cognition_xml(
     return CognitionBlock(
         recall=recall,
         feeling=feeling,
+        feeling_tone=impulse.tone,
+        feeling_intensity=impulse.intensity,
+        feeling_agency=impulse.agency,
+        scene_threat=impulse.threat,
+        scene_coping=impulse.coping,
         valence=round(valence, 2),
         arousal=round(arousal, 2),
+        feeling_impulse=impulse,
         want=want,
         selected_choice=selected_choice,
         plan=plan,
@@ -209,10 +284,25 @@ def heuristic_character_cognition(
         else None
     )
 
+    is_lethal_danger = bool(
+        re.search(r"\b(gun|shoot|kill|ambush|hit-squad|grenade|blade|attack)\b", user_message.lower())
+    )
+    base_imp = impulse_from_legacy_floats(new_valence, new_arousal)
+    h_tone: FeelingTone = "uneasy" if is_lethal_danger else base_imp.tone
+    h_intensity: IntensityLevel = "high" if is_lethal_danger else base_imp.intensity
+    h_agency: AgencyLevel = "pressured" if is_lethal_danger else base_imp.agency
+    h_threat: ThreatLevel = "high" if is_lethal_danger else ("moderate" if is_negative else "none")
+    h_coping: CopingLevel = "strained" if is_lethal_danger else "adequate"
+
     if char_roll:
         if char_roll.outcome_tier == "Critical Failure":
             new_valence = max(-1.0, min(1.0, round(previous_state.valence - 0.35, 2)))
             new_arousal = max(0.0, min(1.0, round(previous_state.arousal + 0.35, 2)))
+            h_tone = "anguished" if new_valence <= -0.6 else "uneasy"
+            h_intensity = "extreme"
+            h_agency = "pressured"
+            h_threat = "high"
+            h_coping = "strained"
             plan_bullets = [
                 f"- React to catastrophic backfire of '{char_roll.action_description}'.",
                 "- Scramble to contain the immediate danger and fallout.",
@@ -220,18 +310,28 @@ def heuristic_character_cognition(
         elif char_roll.outcome_tier == "Failure with Consequences":
             new_valence = max(-1.0, min(1.0, round(previous_state.valence - 0.15, 2)))
             new_arousal = max(0.0, min(1.0, round(previous_state.arousal + 0.15, 2)))
+            h_tone = "guarded"
+            h_intensity = "high"
+            h_agency = "pressured"
+            h_threat = "moderate"
+            h_coping = "strained"
             plan_bullets = [
                 f"- Attempt at '{char_roll.action_description}' met with resistance.",
                 "- Regroup and brace for secondary complications.",
             ]
         elif char_roll.outcome_tier == "Simple Failure":
             new_valence = max(-1.0, min(1.0, round(previous_state.valence - 0.05, 2)))
+            h_tone = "guarded"
+            h_intensity = "moderate"
             plan_bullets = [
                 f"- Notice '{char_roll.action_description}' failed to produce results.",
                 "- Reset stance without immediate overcommitment.",
             ]
         elif char_roll.outcome_tier == "Clean Success":
             new_valence = max(-1.0, min(1.0, round(previous_state.valence + 0.15, 2)))
+            h_tone = "content" if new_valence >= 0.15 else h_tone
+            h_agency = "assured"
+            h_coping = "adequate"
             plan_bullets = [
                 f"- Execute '{char_roll.action_description}' cleanly.",
                 "- Capitalize on the intended opening.",
@@ -239,6 +339,10 @@ def heuristic_character_cognition(
         else:  # Critical Success
             new_valence = max(-1.0, min(1.0, round(previous_state.valence + 0.35, 2)))
             new_arousal = max(0.0, min(1.0, round(previous_state.arousal + 0.20, 2)))
+            h_tone = "elated" if new_valence >= 0.55 else "warm"
+            h_intensity = "high"
+            h_agency = "commanding"
+            h_coping = "mastery"
             plan_bullets = [
                 f"- Capitalize on exceptional breakthrough from '{char_roll.action_description}'.",
                 "- Seize decisive initiative with unexpected advantage.",
@@ -267,11 +371,24 @@ def heuristic_character_cognition(
             f"observing {c.character_name}'s {c.feeling_summary}" for c in prior_cues
         )
 
+    h_impulse = CategoricalFeelingImpulse(
+        tone=h_tone,
+        intensity=h_intensity,
+        agency=h_agency,
+        threat=h_threat,
+        coping=h_coping,
+    )
     cog = CognitionBlock(
         recall="\n".join(recall_bullets),
         feeling=f"{previous_state.mood_label}.{cues_text}",
+        feeling_tone=h_tone,
+        feeling_intensity=h_intensity,
+        feeling_agency=h_agency,
+        scene_threat=h_threat,
+        scene_coping=h_coping,
         valence=new_valence,
         arousal=new_arousal,
+        feeling_impulse=h_impulse,
         want=previous_state.active_want or character.baseline_psyche.default_want,
         plan="\n".join(plan_bullets),
         skipped=False,
@@ -370,10 +487,6 @@ async def run_character_cognition_agent(
                 f"  * Critical Success: You succeed beyond expectations, gaining an extra advantage/opening.\n"
             )
 
-    rel_text = (
-        "; ".join(f"{k}: {v}" for k, v in previous_state.relationship_notes.items())
-        or "None"
-    )
     voice_quotes = [v.snippet for v in character.voice_anchors[:2]]
 
     co_present_text = "\n".join(
@@ -397,9 +510,25 @@ async def run_character_cognition_agent(
         )
 
     if (char_roll and char_roll.outcome_tier in ("Critical Failure", "Critical Success")) or choice_resolution:
-        anchor_guideline = f"*(Anchor guideline: This turn involves a critical outcome or direct choice constraint! You are explicitly permitted a sharp immediate emotional shift in valence and arousal from this previous baseline.)*"
+        anchor_guideline = "*(Anchor guideline: This turn involves a critical outcome or direct choice constraint! Sharp immediate shifts in feeling_tone, feeling_intensity, and feeling_agency are explicitly warranted.)*"
     else:
-        anchor_guideline = "*(Anchor guideline: evolve valence and arousal gradually from this previous baseline unless this turn brings a critical dramatic shock or danger.)*"
+        anchor_guideline = "*(Anchor guideline: Evolve your emotional stance naturally from this baseline unless this turn introduces an acute shock, betrayal, or danger.)*"
+
+    prior_care = ensure_snapshot_care_state(
+        previous_state,
+        character.baseline_psyche,
+    )
+    co_present_name_map = {c.id: c.name for c in co_present_characters}
+    co_present_ids_set = {c.id for c in co_present_characters}
+    affective_anchor_block = render_zone4_affective_block(
+        prior_care,
+        character_name=character.name,
+        persona_name=known_persona.name if known_persona is not None else None,
+        character_name_map=co_present_name_map,
+        active_speaker_id=pre_turn.active_speaker_id,
+        co_present_ids=co_present_ids_set,
+        max_npc_edges=2,
+    )
 
     choice_directive_text = ""
     if choice_resolution:
@@ -450,10 +579,9 @@ async def run_character_cognition_agent(
         f"- Core Fear: {character.baseline_psyche.core_fear}\n"
         f"- Voice Quotes: {', '.join(voice_quotes) or 'None'}\n\n"
         f"Previous Psychological State (Emotional Anchor):\n"
-        f"- Mood: {previous_state.mood_label} (Valence: {previous_state.valence:+.2f}, Arousal: {previous_state.arousal:.2f})\n"
+        f"{affective_anchor_block}\n"
         f"- Active Want: {previous_state.active_want}\n"
         f"- Active Plan: {previous_state.active_plan}\n"
-        f"- Relationship Notes: {rel_text}\n"
         f"{anchor_guideline}\n\n"
         f"Available Physical Affordances:\n"
         f"- [1] Equipped / In-Hand: {', '.join(format_item_names(previous_state.equipped)) or 'None'}\n"
@@ -812,13 +940,23 @@ async def run_phase3_multi_cognition(
             if c_roll and len(cog.plan.splitlines()) > 1:
                 c_consequence = re.sub(r"^[-*•\d.)\s]+", "", cog.plan.splitlines()[1]).strip()
 
-            # Prevent leaking private whisper states into outward posture cues
+            # Prevent leaking private whisper states or composure-masked hidden distress into outward posture cues
             has_secret_whisper = bool(char_w and char_w.sensory_parts)
+            cue_base_care = ensure_snapshot_care_state(
+                char_prev,
+                char.baseline_psyche,
+                elapsed_minutes=context.leaf_turn.world_snapshot.campaign_elapsed_minutes,
+            )
+            cue_preview = compute_provisional_cognition_preview(
+                cue_base_care,
+                cog.to_feeling_impulse(),
+                roll_outcome=c_tier,
+            )
             prior_cues.append(
                 PriorCognitionCue(
                     character_id=char.id,
                     character_name=char.name,
-                    feeling_summary="Alert, assessing scene" if has_secret_whisper else cog.feeling,
+                    feeling_summary="Alert, assessing scene" if has_secret_whisper else cue_preview.outward_demeanor,
                     want_summary="Respond to immediate developments" if has_secret_whisper else cog.want,
                     observable_action_hint=first_plan_action,
                     roll_outcome_tier=c_tier,

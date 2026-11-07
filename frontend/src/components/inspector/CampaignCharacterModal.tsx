@@ -33,9 +33,11 @@ import {
   ItemInstance,
   MemoryShard,
   WorldRecord,
+  getTemperamentPresetMeta,
   hasItemFlag,
   splitLegacyWornItems,
 } from "../../types";
+import { getCharacterEmotionPortrait } from "../../utils/entityImages";
 import { BASIC_EMOTIONS } from "../EntityEditorModals";
 import { CommaSeparatedInput } from "../CommaSeparatedInput";
 
@@ -165,6 +167,14 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
 
   const valencePct = Math.round(((state.valence + 1) / 2) * 100);
   const arousalPct = Math.round(state.arousal * 100);
+  const care = state.care_state ?? null;
+  const dominancePct = care ? Math.round(((care.dominance + 1) / 2) * 100) : 50;
+  const composurePct = care ? Math.round(care.composure * 100) : 82;
+  const activeEmotion = care?.active_emotion ?? "default";
+  const livePortraitUrl = getCharacterEmotionPortrait(character, activeEmotion);
+  const temperamentMeta = getTemperamentPresetMeta(
+    character.baseline_psyche.temperament?.archetype
+  );
   const relationships = Object.entries(state.relationship_notes || {});
   const homeWorld = worlds.find((w) => w.id === character.world_id);
   const activeWorld = campaignWorld ?? homeWorld;
@@ -744,10 +754,32 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
         {/* Header */}
         <div className="modal-header">
           <span style={{ display: "flex", alignItems: "center", gap: 9 }}>
-            <Users size={18} color="var(--accent-amber)" />
+            {livePortraitUrl ? (
+              <img
+                src={livePortraitUrl}
+                alt={`${character.name} (${activeEmotion})`}
+                title={`Expression: ${activeEmotion}`}
+                style={{
+                  width: 30,
+                  height: 30,
+                  borderRadius: "50%",
+                  objectFit: "cover",
+                  border: "1px solid var(--border-subtle)",
+                }}
+              />
+            ) : (
+              <Users size={18} color="var(--accent-amber)" />
+            )}
             <span style={{ fontWeight: 700 }}>{character.name}</span>
             <span style={{ color: "var(--text-muted)", fontSize: "0.82rem" }}>
               · Character Dossier
+            </span>
+            <span
+              className="badge"
+              style={{ fontSize: "0.68rem", padding: "2px 6px" }}
+              title={temperamentMeta.summary}
+            >
+              {temperamentMeta.label}
             </span>
             {!isPresent && (
               <span
@@ -982,6 +1014,40 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
                 <ReadOnlyField
                   label="Baseline Arousal"
                   value={character.baseline_psyche.arousal.toFixed(2)}
+                />
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "2fr 1fr 1fr 1fr",
+                  gap: 10,
+                }}
+              >
+                <ReadOnlyField
+                  label="CARE Temperament Preset"
+                  value={`${temperamentMeta.label} (${temperamentMeta.archetype})`}
+                />
+                <ReadOnlyField
+                  label="Worldview · Benevolence"
+                  value={(
+                    character.baseline_psyche.initial_worldview?.benevolence ??
+                    temperamentMeta.worldview.benevolence
+                  ).toFixed(2)}
+                />
+                <ReadOnlyField
+                  label="Worldview · Belonging"
+                  value={(
+                    character.baseline_psyche.initial_worldview?.belonging ??
+                    temperamentMeta.worldview.belonging
+                  ).toFixed(2)}
+                />
+                <ReadOnlyField
+                  label="Worldview · Agency"
+                  value={(
+                    character.baseline_psyche.initial_worldview?.agency ??
+                    temperamentMeta.worldview.agency
+                  ).toFixed(2)}
                 />
               </div>
 
@@ -1642,6 +1708,14 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
                   >
                     Mood: {state.mood_label || "Neutral"}
                   </span>
+                  {activeEmotion !== "default" && (
+                    <span
+                      className="badge"
+                      style={{ textTransform: "capitalize" }}
+                    >
+                      Expression: {activeEmotion}
+                    </span>
+                  )}
                 </div>
                 <div
                   style={{
@@ -1657,7 +1731,23 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
                 </div>
               </div>
 
-              {/* Emotional Meters */}
+              {care?.outward_demeanor && (
+                <div
+                  style={{
+                    fontSize: "0.78rem",
+                    color: "var(--text-secondary)",
+                    fontStyle: "italic",
+                    background: "var(--bg-panel)",
+                    padding: "6px 10px",
+                    borderRadius: 6,
+                    border: "1px solid var(--border-subtle)",
+                  }}
+                >
+                  <strong>Outward Demeanor:</strong> {care.outward_demeanor}
+                </div>
+              )}
+
+              {/* Layer 2: PAD + Composure Emotional Meters */}
               <div
                 style={{
                   display: "grid",
@@ -1718,8 +1808,162 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
                     />
                   </div>
                 </div>
+
+                {care && (
+                  <>
+                    <div className="meter-row">
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          fontSize: "0.73rem",
+                          marginBottom: 4,
+                        }}
+                      >
+                        <span>Dominance (Cornered ↔ Commanding)</span>
+                        <span style={{ fontWeight: 600 }}>
+                          {care.dominance >= 0
+                            ? `+${care.dominance.toFixed(2)}`
+                            : care.dominance.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="meter-track">
+                        <div
+                          className="meter-fill"
+                          style={{
+                            width: `${dominancePct}%`,
+                            background: "var(--accent-cyan)",
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="meter-row">
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          fontSize: "0.73rem",
+                          marginBottom: 4,
+                        }}
+                      >
+                        <span>Composure &amp; Emotional Mask</span>
+                        <span style={{ fontWeight: 600 }}>{composurePct}%</span>
+                      </div>
+                      <div className="meter-track">
+                        <div
+                          className="meter-fill"
+                          style={{
+                            width: `${composurePct}%`,
+                            background:
+                              care.composure >= 0.45
+                                ? "#a78bfa"
+                                : "var(--accent-rose)",
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
+
+            {/* Layer 3 & Layer 1: Situational Appraisal & Active Worldview */}
+            {care && (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 12,
+                }}
+              >
+                <div
+                  style={{
+                    background: "var(--bg-card)",
+                    border: "1px solid var(--border-subtle)",
+                    borderRadius: 8,
+                    padding: 12,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                  }}
+                >
+                  <div className="sidebar-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <Brain size={13} color="var(--accent-amber)" />
+                    Layer 3 · Scene Appraisal
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: "0.74rem" }}>
+                    <div>
+                      <span style={{ color: "var(--text-muted)" }}>Threat: </span>
+                      <strong>{Math.round(care.appraisal.threat * 100)}%</strong>
+                    </div>
+                    <div>
+                      <span style={{ color: "var(--text-muted)" }}>Coping: </span>
+                      <strong>
+                        {care.appraisal.coping >= 0
+                          ? `+${care.appraisal.coping.toFixed(2)}`
+                          : care.appraisal.coping.toFixed(2)}
+                      </strong>
+                    </div>
+                    <div>
+                      <span style={{ color: "var(--text-muted)" }}>Goal Fit: </span>
+                      <strong>
+                        {care.appraisal.goal_congruence >= 0
+                          ? `+${care.appraisal.goal_congruence.toFixed(2)}`
+                          : care.appraisal.goal_congruence.toFixed(2)}
+                      </strong>
+                    </div>
+                    <div>
+                      <span style={{ color: "var(--text-muted)" }}>Surprise: </span>
+                      <strong>{Math.round(care.appraisal.ambiguity * 100)}%</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    background: "var(--bg-card)",
+                    border: "1px solid var(--border-subtle)",
+                    borderRadius: 8,
+                    padding: 12,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                  }}
+                >
+                  <div className="sidebar-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <HeartPulse size={13} color="#ec4899" />
+                    Layer 1 · Active Worldview
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, fontSize: "0.74rem" }}>
+                    <div>
+                      <div style={{ color: "var(--text-muted)", fontSize: "0.69rem" }}>Benevolence</div>
+                      <strong>
+                        {care.active_worldview.benevolence >= 0
+                          ? `+${care.active_worldview.benevolence.toFixed(2)}`
+                          : care.active_worldview.benevolence.toFixed(2)}
+                      </strong>
+                    </div>
+                    <div>
+                      <div style={{ color: "var(--text-muted)", fontSize: "0.69rem" }}>Belonging</div>
+                      <strong>
+                        {care.active_worldview.belonging >= 0
+                          ? `+${care.active_worldview.belonging.toFixed(2)}`
+                          : care.active_worldview.belonging.toFixed(2)}
+                      </strong>
+                    </div>
+                    <div>
+                      <div style={{ color: "var(--text-muted)", fontSize: "0.69rem" }}>Agency</div>
+                      <strong>
+                        {care.active_worldview.agency >= 0
+                          ? `+${care.active_worldview.agency.toFixed(2)}`
+                          : care.active_worldview.agency.toFixed(2)}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Active Scene Want */}
             <div
@@ -1801,7 +2045,7 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
               </div>
             </div>
 
-            {/* Relationship & Trust Notes */}
+            {/* Layer 4: Dyadic Relational Matrix & Trust Notes */}
             <div
               style={{
                 background: "var(--bg-card)",
@@ -1820,10 +2064,108 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
                 }}
               >
                 <Users size={13} color="var(--accent-violet)" />
-                Relationship &amp; Trust Notes ({relationships.length})
+                Layer 4 · Dyadic Relational Bonds (
+                {care
+                  ? Object.keys(care.relations || {}).length
+                  : relationships.length}
+                )
               </div>
 
-              {relationships.length === 0 ? (
+              {care && Object.keys(care.relations || {}).length > 0 ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {Object.entries(care.relations).map(([target, edge]) => {
+                    const displayTarget =
+                      target === "user"
+                        ? "Player (You)"
+                        : characterNameMap[target] || target;
+                    const renderMiniAxis = (label: string, val: number) => {
+                      const pct = Math.round(((val + 1) / 2) * 100);
+                      return (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.69rem" }}>
+                            <span style={{ color: "var(--text-muted)" }}>{label}</span>
+                            <span>{val >= 0 ? `+${val.toFixed(2)}` : val.toFixed(2)}</span>
+                          </div>
+                          <div className="meter-track" style={{ height: 4 }}>
+                            <div
+                              className="meter-fill"
+                              style={{
+                                width: `${pct}%`,
+                                background:
+                                  val >= 0.05
+                                    ? "var(--accent-emerald)"
+                                    : val <= -0.05
+                                    ? "var(--accent-rose)"
+                                    : "var(--text-muted)",
+                              }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    };
+                    return (
+                      <div
+                        key={target}
+                        style={{
+                          background: "var(--bg-panel)",
+                          border: "1px solid var(--border-subtle)",
+                          borderRadius: 6,
+                          padding: "9px 11px",
+                          fontSize: "0.78rem",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 8,
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+                          <strong style={{ color: "#c4b5fd" }}>{displayTarget}</strong>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            {edge.grievance >= 0.15 && (
+                              <span
+                                className="badge"
+                                style={{
+                                  fontSize: "0.66rem",
+                                  padding: "1px 6px",
+                                  borderColor: "rgba(244, 63, 94, 0.45)",
+                                  color: "#fda4af",
+                                }}
+                              >
+                                Grievance: {Math.round(edge.grievance * 100)}%
+                              </span>
+                            )}
+                            {Math.abs(edge.obligation) >= 0.15 && (
+                              <span
+                                className="badge"
+                                style={{
+                                  fontSize: "0.66rem",
+                                  padding: "1px 6px",
+                                  borderColor: "rgba(245, 158, 11, 0.45)",
+                                  color: "var(--accent-amber)",
+                                }}
+                              >
+                                {edge.obligation > 0
+                                  ? `Indebted (+${edge.obligation.toFixed(2)})`
+                                  : `Owed Debt (${edge.obligation.toFixed(2)})`}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
+                          {renderMiniAxis("Warmth", edge.warmth)}
+                          {renderMiniAxis("Trust", edge.trust)}
+                          {renderMiniAxis("Respect", edge.respect)}
+                          {renderMiniAxis("Power", edge.power)}
+                        </div>
+                        {(edge.episodic_note || state.relationship_notes?.[target]) && (
+                          <div style={{ color: "var(--text-secondary)", fontSize: "0.76rem" }}>
+                            {edge.episodic_note || state.relationship_notes?.[target]}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : relationships.length === 0 ? (
                 <div
                   style={{
                     fontSize: "0.75rem",

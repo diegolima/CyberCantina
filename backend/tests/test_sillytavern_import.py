@@ -328,3 +328,61 @@ def test_media_sanitization_removes_invalid_entries(temp_repo: CantinaRepository
     assert len(char.gallery) == 1
     assert char.gallery[0].id == "valid_img"
 
+
+def test_care_temperament_and_worldview_inference_across_wizards():
+    """Verify SillyTavern distiller and Character Wizard classify CARE TemperamentArchetype & WorldviewProfile."""
+    from app.schemas.character import CharacterWizardSeed
+    from app.wizards.character_wizard import _fallback_character_expansion
+
+    # 1. Legacy V1 Marcus Kane ("Ex-soldier turned mercenary bodyguard", "Stoic and disciplined") -> stoic
+    marcus_card = parse_sillytavern_json(LEGACY_V1_JSON)
+    marcus_draft = _fallback_sillytavern_distillation(marcus_card)
+    assert marcus_draft.baseline_psyche.temperament.archetype == "stoic"
+    assert marcus_draft.baseline_psyche.temperament.composure_resilience >= 1.5
+
+    # 2. Paranoid exiled informant -> paranoiac + negative benevolence & belonging
+    spy_seed = CharacterWizardSeed(
+        name="Soren Vale",
+        archetype="Paranoid exiled informant in a corrupt syndicate state",
+        role_in_story="Suspicious broker",
+        personality_keywords=["paranoid", "cynical", "distrustful"],
+        rough_notes="Lone wolf haunted by past betrayal.",
+    )
+    spy_draft = _fallback_character_expansion(spy_seed)
+    assert spy_draft.baseline_psyche.temperament.archetype == "paranoiac"
+    assert spy_draft.baseline_psyche.initial_worldview.benevolence < -0.5
+    assert spy_draft.baseline_psyche.initial_worldview.belonging < -0.5
+
+    # 3. Warm compassionate clinic healer -> confidant + positive benevolence & belonging
+    healer_seed = CharacterWizardSeed(
+        name="Dr. Mira Solis",
+        archetype="Compassionate neighborhood clinic healer",
+        role_in_story="Trusted confidant and devoted community protector",
+        personality_keywords=["warm", "empathic", "generous"],
+    )
+    healer_draft = _fallback_character_expansion(healer_seed)
+    assert healer_draft.baseline_psyche.temperament.archetype == "confidant"
+    assert healer_draft.baseline_psyche.initial_worldview.benevolence >= 0.5
+    assert healer_draft.baseline_psyche.initial_worldview.belonging >= 0.7
+
+    # 4. Hot-headed pit brawler -> volatile; Haughty noble duelist -> proud_rival
+    volatile_draft = _fallback_character_expansion(
+        CharacterWizardSeed(
+            name="Jax",
+            archetype="Hot-headed impulsive pit brawler",
+            personality_keywords=["volatile", "explosive", "reckless"],
+        )
+    )
+    assert volatile_draft.baseline_psyche.temperament.archetype == "volatile"
+
+    rival_draft = _fallback_character_expansion(
+        CharacterWizardSeed(
+            name="Cassian",
+            archetype="Arrogant noble duelist and self-made rival",
+            personality_keywords=["proud", "haughty", "competitive"],
+        )
+    )
+    assert rival_draft.baseline_psyche.temperament.archetype == "proud_rival"
+    assert rival_draft.baseline_psyche.initial_worldview.agency >= 0.8
+
+

@@ -190,9 +190,12 @@ async def test_mood_and_stance_normalization_and_zone4_rendering(
         character_name_map={c.id: c.name for c in participants},
     )
     zone4 = msgs[-1]["content"]
-    assert "Viktor Kroll: Grateful that he stepped between the bar and the door." in zone4
-    assert "Nyx Holloway: Trusts her surgical hands if things turn bloody." in zone4
+    assert "Stance toward Viktor Kroll:" in zone4
+    assert "Grateful that he stepped between the bar and the door." in zone4
+    # Absent Nyx (not in present_characters) is omitted from Zone 4 O(1) dyadic rendering
+    assert "Nyx Holloway" not in zone4
     assert viktor.id not in zone4
+    assert nyx.id not in zone4
 
 
 def test_four_bucket_inventory_state_machine() -> None:
@@ -392,21 +395,22 @@ async def test_multi_character_copresent_evolution_anchor_safety_and_spatial_iso
     viktor_after = bundle1.character_states[viktor.id]
     nyx_after = bundle1.character_states[nyx.id]
 
-    # Anchor safety: Kira's valence is kira_pre.valence + (-0.30), NOT -0.50 + (-0.30)!
-    expected_kira_val = round(max(-1.0, min(1.0, kira_pre.valence - 0.30)), 2)
-    expected_kira_ar = round(max(0.0, min(1.0, kira_pre.arousal + 0.25)), 2)
-    assert kira_after.valence == expected_kira_val
-    assert kira_after.arousal == expected_kira_ar
+    # Anchor safety: Kira's CARE Kalman-filtered valence drops from kira_pre.valence, NOT stacking onto -0.50!
+    assert kira_after.valence < kira_pre.valence
+    assert kira_after.valence > -0.75
+    assert kira_after.arousal > kira_pre.arousal
     assert kira_after.mood_label == "Cold betrayed fury"
-    assert kira_after.relationship_notes["user"].startswith("Views them as a dangerous traitor")
-    assert kira_after.relationship_notes[viktor.id].startswith("Relies on him to hold")
+    assert kira_after.care_state is not None and kira_after.care_state.is_provisional is False
+    assert "Views them as a dangerous traitor" in kira_after.relationship_notes["user"]
+    assert "Relies on him to hold" in kira_after.relationship_notes[viktor.id]
 
     # Silent witness Viktor also evolved mood, valence/arousal, stances, and personal memory!
-    assert viktor_after.valence == round(viktor_pre.valence - 0.25, 2)
-    assert viktor_after.arousal == round(viktor_pre.arousal + 0.35, 2)
+    assert viktor_after.valence < viktor_pre.valence
+    assert viktor_after.arousal > viktor_pre.arousal
     assert viktor_after.mood_label == "Bristling protective hostility"
-    assert viktor_after.relationship_notes["user"].startswith("Ready to drop them")
-    assert viktor_after.relationship_notes[kira.id].startswith("Watching her hand")
+    assert viktor_after.care_state is not None and viktor_after.care_state.is_provisional is False
+    assert "Ready to drop them" in viktor_after.relationship_notes["user"]
+    assert "Watching her hand" in viktor_after.relationship_notes[kira.id]
 
     kira_ephem = [
         s for s in bundle1.character_records[kira.id].memory_shards if s.origin == "clerk_ephemeral"

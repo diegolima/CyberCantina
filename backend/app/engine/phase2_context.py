@@ -6,6 +6,14 @@ from dataclasses import dataclass, field
 import re
 from typing import Any
 from app.config import settings
+from app.engine.affective_engine import (
+    compute_provisional_cognition_preview,
+    ensure_snapshot_care_state,
+    materialize_snapshot_with_care,
+    project_care_to_minute,
+    render_zone4_affective_block,
+    seed_initial_care_state,
+)
 from app.engine.mentions import (
     DecomposedUserMessage,
     decompose_user_message,
@@ -814,13 +822,43 @@ def was_character_present_on_turn(turn: TurnNodeRecord, character_id: str) -> bo
     return False
 
 
+def _project_snapshot_to_elapsed(
+    snapshot: CharacterStateSnapshot,
+    character: CharacterRecord,
+    target_elapsed_minutes: int,
+) -> CharacterStateSnapshot:
+    """Idempotently project a character's CARE state up to target_elapsed_minutes."""
+    target = max(0, int(target_elapsed_minutes))
+    if snapshot.care_state is None:
+        hydrated = ensure_snapshot_care_state(
+            snapshot,
+            character.baseline_psyche,
+            elapsed_minutes=target,
+        )
+        return snapshot.model_copy(update={"care_state": hydrated})
+
+    if target <= snapshot.care_state.state_elapsed_minutes:
+        return snapshot
+
+    projected = project_care_to_minute(
+        snapshot.care_state,
+        target_elapsed_minutes=target,
+        psyche=character.baseline_psyche,
+    )
+    return materialize_snapshot_with_care(snapshot, projected)
+
+
 def resolve_character_previous_state(
     branch_turns: list[TurnNodeRecord],
     character: CharacterRecord,
     fallback_location_id: str,
 ) -> CharacterStateSnapshot:
-    """Resolve a character's state before the current turn, anchoring emotional state to the last non-narrator turn."""
+    """Resolve a character's state before the current turn, preserving valid CARE states across narrator turns."""
     if not branch_turns:
+        seeded = seed_initial_care_state(
+            character.baseline_psyche,
+            initial_elapsed_minutes=0,
+        )
         return CharacterStateSnapshot(
             turn_id="turn_root",
             character_id=character.id,
@@ -833,14 +871,20 @@ def resolve_character_previous_state(
             relationship_notes={"user": "Acquaintance / Uncertain trust"},
             equipped=list(character.equipped),
             inventory=list(character.inventory),
+            care_state=seeded,
         )
 
     parent_turn = branch_turns[-1]
+    parent_elapsed = parent_turn.world_snapshot.campaign_elapsed_minutes
     current_state = parent_turn.character_states.get(
         character.id,
         parent_turn.character_state if parent_turn.character_state.character_id == character.id else None,
     )
     if current_state is None:
+        seeded = seed_initial_care_state(
+            character.baseline_psyche,
+            initial_elapsed_minutes=parent_elapsed,
+        )
         current_state = CharacterStateSnapshot(
             turn_id=parent_turn.id,
             character_id=character.id,
@@ -853,11 +897,14 @@ def resolve_character_previous_state(
             relationship_notes={"user": "Acquaintance / Uncertain trust"},
             equipped=list(character.equipped),
             inventory=list(character.inventory),
+            care_state=seeded,
         )
 
-    # If the parent turn was a narrator turn or holds a detached narrator placeholder mood,
-    # walk backwards along branch_turns to recover the authentic emotional state from the last non-narrator turn.
-    if parent_turn.actor_id == "__narrator__" or current_state.mood_label == "Objective / Detached":
+    # Only rewind across narrator turns if current_state holds a detached narrator placeholder
+    # or lacks a self-contained CARE snapshot (never overwrite valid narrator-decayed CARE states).
+    if current_state.mood_label == "Objective / Detached" or (
+        parent_turn.actor_id == "__narrator__" and current_state.care_state is None
+    ):
         for turn in reversed(branch_turns):
             if turn.actor_id == "__narrator__":
                 continue
@@ -866,17 +913,33 @@ def resolve_character_previous_state(
                 turn.character_state if turn.character_state.character_id == character.id else None,
             )
             if hist_state and hist_state.mood_label != "Objective / Detached":
-                return current_state.model_copy(
+                rewound = current_state.model_copy(
                     update={
                         "mood_label": hist_state.mood_label,
                         "valence": hist_state.valence,
                         "arousal": hist_state.arousal,
                         "active_want": hist_state.active_want,
                         "active_plan": hist_state.active_plan,
+                        "care_state": hist_state.care_state,
                     }
                 )
+                if rewound.care_state is None:
+                    rewound = rewound.model_copy(
+                        update={
+                            "care_state": ensure_snapshot_care_state(
+                                rewound,
+                                character.baseline_psyche,
+                                elapsed_minutes=parent_elapsed,
+                            )
+                        }
+                    )
+                return rewound
 
         # Fallback to baseline psyche if no non-narrator turn had custom emotion
+        seeded_fallback = seed_initial_care_state(
+            character.baseline_psyche,
+            initial_elapsed_minutes=parent_elapsed,
+        )
         return current_state.model_copy(
             update={
                 "mood_label": character.baseline_psyche.mood_label,
@@ -884,9 +947,20 @@ def resolve_character_previous_state(
                 "arousal": character.baseline_psyche.arousal,
                 "active_want": character.baseline_psyche.default_want,
                 "active_plan": character.baseline_psyche.default_plan,
+                "care_state": seeded_fallback,
             }
         )
 
+    if current_state.care_state is None:
+        current_state = current_state.model_copy(
+            update={
+                "care_state": ensure_snapshot_care_state(
+                    current_state,
+                    character.baseline_psyche,
+                    elapsed_minutes=parent_elapsed,
+                )
+            }
+        )
     return current_state
 
 
@@ -941,8 +1015,14 @@ async def resolve_phase2_turn_context(
         exclude_location_id=active_location.id,
     )
 
+    leaf_turn = branch_turns[-1]
+    target_elapsed = leaf_turn.world_snapshot.campaign_elapsed_minutes
     all_character_states = {
-        c.id: resolve_character_previous_state(branch_turns, c, active_location.id)
+        c.id: _project_snapshot_to_elapsed(
+            resolve_character_previous_state(branch_turns, c, active_location.id),
+            c,
+            target_elapsed,
+        )
         for c in present_characters
     }
 
@@ -961,7 +1041,6 @@ async def resolve_phase2_turn_context(
         working_memory_turns=working_memory_turns,
     )
 
-    leaf_turn = branch_turns[-1]
     per_char_known = build_all_character_known_personas(
         persona_snapshot=persona_snapshot,
         current_player_state=current_player_state,
@@ -1068,14 +1147,6 @@ def build_zone4_ephemeral_tail_frame(
         if world_snapshot.scene_flags
         else "None"
     )
-    rel_notes_text = (
-        "; ".join(
-            f"{name_lookup_local.get(k, k)}: {v}"
-            for k, v in character_state.relationship_notes.items()
-        )
-        if character_state.relationship_notes
-        else "None"
-    )
     eq_names = format_item_names(character_state.equipped)
     inv_names = format_item_names(character_state.inventory)
     equipped_text = ", ".join(eq_names) if eq_names else "None"
@@ -1088,7 +1159,22 @@ def build_zone4_ephemeral_tail_frame(
             other_lines: list[str] = []
             for oc in others:
                 oc_state = (all_character_states or {}).get(oc.id)
-                mood_info = f" [Mood: {oc_state.mood_label}]" if oc_state else ""
+                demeanor_info = ""
+                if oc_state is not None:
+                    oc_care = ensure_snapshot_care_state(
+                        oc_state,
+                        oc.baseline_psyche,
+                        elapsed_minutes=world_snapshot.campaign_elapsed_minutes,
+                    )
+                    oc_cog = (established_cognitions or {}).get(oc.id)
+                    if oc_cog is not None and not oc_cog.skipped:
+                        oc_roll = pre_turn.character_rolls.get(oc.id)
+                        oc_care = compute_provisional_cognition_preview(
+                            oc_care,
+                            oc_cog.to_feeling_impulse(),
+                            roll_outcome=oc_roll.outcome_tier if oc_roll else None,
+                        )
+                    demeanor_info = f" [Demeanor: {oc_care.outward_demeanor}]"
                 app_info = (
                     f" | Appearance: {oc.physical_appearance}"
                     if oc.physical_appearance.strip()
@@ -1103,7 +1189,7 @@ def build_zone4_ephemeral_tail_frame(
                 eq_info = f" | Equipped: {', '.join(oc_eq_names)}" if oc_eq_names else ""
                 inv_info = f" | Carried: {', '.join(oc_inv_names)}" if oc_inv_names else ""
                 other_lines.append(
-                    f"    - {oc.name} ({oc.tagline}){mood_info}{app_info}{eq_info}{inv_info}"
+                    f"    - {oc.name} ({oc.tagline}){demeanor_info}{app_info}{eq_info}{inv_info}"
                 )
             co_present_section = (
                 "\n  <other_characters_in_room>\n"
@@ -1153,22 +1239,47 @@ def build_zone4_ephemeral_tail_frame(
             if pre_turn.resolved_roll and pre_turn.resolved_roll.character_id in (None, character.id)
             else None
         )
+        active_care = ensure_snapshot_care_state(
+            character_state,
+            character.baseline_psyche,
+            elapsed_minutes=world_snapshot.campaign_elapsed_minutes,
+        )
+        active_cog = (established_cognitions or {}).get(character.id) or established_cognition
+        if active_cog is not None and not active_cog.skipped:
+            active_care = compute_provisional_cognition_preview(
+                active_care,
+                active_cog.to_feeling_impulse(),
+                roll_outcome=char_roll_for_anchor.outcome_tier if char_roll_for_anchor else None,
+            )
+
+        co_present_npc_ids = {
+            c.id for c in (present_characters or []) if c.id != character.id
+        }
+        affective_block = render_zone4_affective_block(
+            active_care,
+            character_name=character.name,
+            persona_name=persona_snapshot.name if persona_snapshot else None,
+            character_name_map=name_lookup_local,
+            active_speaker_id=pre_turn.active_speaker_id,
+            co_present_ids=co_present_npc_ids,
+            max_npc_edges=2,
+        )
+        indented_affective = "\n".join("  " + ln for ln in affective_block.splitlines())
+
         if char_roll_for_anchor and char_roll_for_anchor.outcome_tier in ("Critical Failure", "Critical Success"):
-            anchor_line = f"    Emotional Anchor: This turn resulted in a [{char_roll_for_anchor.outcome_tier}]! You are explicitly permitted a sharp immediate emotional shift from this previous baseline.\n"
+            anchor_line = f"    Behavioral Anchor: This turn resulted in a [{char_roll_for_anchor.outcome_tier}]—sharp emotional and behavioral shifts are warranted.\n"
         else:
-            anchor_line = "    Emotional Anchor: Evolve valence and arousal gradually from this previous baseline (typically ±0.05 to ±0.20), reserving large swings for dramatic turning points or acute shocks.\n"
+            anchor_line = "    Behavioral Anchor: Ground outward speech, cadence, and micro-expressions in the affective state and self-control directives above.\n"
 
         mind_state_section = (
-            f"  <character_previous_mind_state character=\"{character.name}\">\n"
-            f"    Previous Mood: {character_state.mood_label} "
-            f"(Valence: {character_state.valence:+.2f}, Arousal: {character_state.arousal:.2f})\n"
+            f"{indented_affective}\n"
+            f"  <character_equipment_and_goals character=\"{character.name}\">\n"
             f"    Previous Want: {character_state.active_want}\n"
             f"    Previous Plan: {character_state.active_plan}\n"
-            f"    Relationship Notes: {rel_notes_text}\n"
             f"    Equipped / Worn: {equipped_text}\n"
             f"    Carried Inventory: {inventory_text}\n"
             f"{anchor_line}"
-            f"  </character_previous_mind_state>"
+            f"  </character_equipment_and_goals>"
         )
         user_tail = f"User Action / Dialogue:\n{user_message}"
 
@@ -1192,7 +1303,7 @@ def build_zone4_ephemeral_tail_frame(
                 role_label = "primary_speaker" if pc.id == primary_id else "co_present"
                 cog_blocks.append(
                     f"  <character_active_cognition character=\"{pc.name}\" character_id=\"{pc.id}\" role=\"{role_label}\">\n"
-                    f"    <feeling valence=\"{cog.valence:+.2f}\" arousal=\"{cog.arousal:.2f}\">{cog.feeling}</feeling>\n"
+                    f"    <feeling>{cog.feeling}</feeling>\n"
                     f"    <want>{cog.want}</want>\n"
                     f"    <plan>\n{cog.plan}\n    </plan>\n"
                     f"  </character_active_cognition>"
@@ -1210,7 +1321,7 @@ def build_zone4_ephemeral_tail_frame(
             established_cognition_section = (
                 f"\n  <character_active_cognition character=\"{character.name}\">\n"
                 f"    <recall>\n{established_cognition.recall}\n    </recall>\n"
-                f"    <feeling valence=\"{established_cognition.valence:+.2f}\" arousal=\"{established_cognition.arousal:.2f}\">{established_cognition.feeling}</feeling>\n"
+                f"    <feeling>{established_cognition.feeling}</feeling>\n"
                 f"    <want>{established_cognition.want}</want>\n"
                 f"    <plan>\n{established_cognition.plan}\n    </plan>\n"
                 f"  </character_active_cognition>\n"
@@ -1382,9 +1493,18 @@ def assemble_four_zone_messages(
 
     # Zone 4: Ephemeral Turn Frame + latest user message at the very tail
     leaf_turn = branch_turns[-1]
-    char_state = resolve_character_previous_state(branch_turns, character, active_location.id)
+    target_elapsed = leaf_turn.world_snapshot.campaign_elapsed_minutes
+    char_state = _project_snapshot_to_elapsed(
+        resolve_character_previous_state(branch_turns, character, active_location.id),
+        character,
+        target_elapsed,
+    )
     resolved_all_states = {
-        c.id: resolve_character_previous_state(branch_turns, c, active_location.id)
+        c.id: _project_snapshot_to_elapsed(
+            resolve_character_previous_state(branch_turns, c, active_location.id),
+            c,
+            target_elapsed,
+        )
         for c in (present_characters or [character])
     }
     zone4_content = build_zone4_ephemeral_tail_frame(

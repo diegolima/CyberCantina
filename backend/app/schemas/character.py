@@ -10,6 +10,26 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.schemas.affective import (
+    INTENSITY_TO_AROUSAL,
+    TONE_TO_VALENCE,
+    AgencyLevel,
+    AffectiveCareState,
+    CategoricalFeelingImpulse,
+    CopingLevel,
+    FeelingTone,
+    IntensityLevel,
+    TemperamentConfig,
+    ThreatLevel,
+    WorldviewProfile,
+    coerce_agency_level,
+    coerce_coping_level,
+    coerce_feeling_tone,
+    coerce_intensity_level,
+    coerce_threat_level,
+    impulse_from_legacy_floats,
+)
+
 MemoryOrigin = Literal[
     "backstory", "clerk_ephemeral", "clerk_promoted", "compacted"
 ]
@@ -246,6 +266,14 @@ class BaselinePsyche(BaseModel):
     core_fear: str = Field(description="What the character most dreads losing or facing.")
     default_want: str = Field(description="Immediate scene-level desire at the start of the story.")
     default_plan: str = Field(description="Initial actionable approach to achieving their want.")
+    initial_worldview: WorldviewProfile = Field(
+        default_factory=WorldviewProfile,
+        description="Starting Layer 1 existential priors (benevolence, belonging, agency).",
+    )
+    temperament: TemperamentConfig = Field(
+        default_factory=TemperamentConfig,
+        description="Gottman & Kalman psychological temperament preset and dynamics tuning.",
+    )
 
 
 class MemoryShard(BaseModel):
@@ -508,8 +536,32 @@ class CognitionBlock(BaseModel):
         default="",
         description="How the character feels right now in response to the user's words/subtext (1 evocative sentence).",
     )
+    feeling_tone: FeelingTone = Field(
+        default="neutral",
+        description="Primary affective tone right now.",
+    )
+    feeling_intensity: IntensityLevel = Field(
+        default="moderate",
+        description="Emotional activation/intensity level right now.",
+    )
+    feeling_agency: AgencyLevel = Field(
+        default="steady",
+        description="Sense of personal control, leverage, or dominance right now.",
+    )
+    scene_threat: ThreatLevel = Field(
+        default="none",
+        description="Immediate physical or social danger perceived in the scene.",
+    )
+    scene_coping: CopingLevel = Field(
+        default="adequate",
+        description="Assessed tactical ability to handle the situation.",
+    )
     valence: float = Field(default=0.0, ge=-1.0, le=1.0)
     arousal: float = Field(default=0.5, ge=0.0, le=1.0)
+    feeling_impulse: CategoricalFeelingImpulse | None = Field(
+        default=None,
+        description="Parsed categorical affective appraisal from Phase 3.",
+    )
     want: str = Field(
         default="",
         description="What the character needs and wants in this immediate interaction (1 singular sentence).",
@@ -535,6 +587,113 @@ class CognitionBlock(BaseModel):
         description="True if the model omitted the <cognition> block and streamed prose directly.",
     )
 
+    @field_validator("feeling_tone", mode="before")
+    @classmethod
+    def _coerce_tone(cls, v: Any) -> FeelingTone:
+        return coerce_feeling_tone(v)
+
+    @field_validator("feeling_intensity", mode="before")
+    @classmethod
+    def _coerce_intensity(cls, v: Any) -> IntensityLevel:
+        return coerce_intensity_level(v)
+
+    @field_validator("feeling_agency", mode="before")
+    @classmethod
+    def _coerce_agency(cls, v: Any) -> AgencyLevel:
+        return coerce_agency_level(v)
+
+    @field_validator("scene_threat", mode="before")
+    @classmethod
+    def _coerce_threat(cls, v: Any) -> ThreatLevel:
+        return coerce_threat_level(v)
+
+    @field_validator("scene_coping", mode="before")
+    @classmethod
+    def _coerce_coping(cls, v: Any) -> CopingLevel:
+        return coerce_coping_level(v)
+
+    @model_validator(mode="after")
+    def _sync_affective_cognition(self) -> "CognitionBlock":
+        categorical_keys = {
+            "feeling_tone",
+            "feeling_intensity",
+            "feeling_agency",
+            "scene_threat",
+            "scene_coping",
+        }
+        has_cat_set = bool(self.model_fields_set & categorical_keys)
+        has_legacy_float_set = bool(self.model_fields_set & {"valence", "arousal"})
+
+        if self.feeling_impulse is not None:
+            if "valence" not in self.model_fields_set:
+                self.valence = round(
+                    self.feeling_impulse.legacy_valence
+                    if (
+                        self.feeling_impulse.used_legacy_float_fallback
+                        and self.feeling_impulse.legacy_valence is not None
+                    )
+                    else TONE_TO_VALENCE[self.feeling_impulse.tone],
+                    2,
+                )
+            if "arousal" not in self.model_fields_set:
+                self.arousal = round(
+                    self.feeling_impulse.legacy_arousal
+                    if (
+                        self.feeling_impulse.used_legacy_float_fallback
+                        and self.feeling_impulse.legacy_arousal is not None
+                    )
+                    else INTENSITY_TO_AROUSAL[self.feeling_impulse.intensity],
+                    2,
+                )
+            if not has_cat_set:
+                self.feeling_tone = self.feeling_impulse.tone
+                self.feeling_intensity = self.feeling_impulse.intensity
+                self.feeling_agency = self.feeling_impulse.agency
+                self.scene_threat = self.feeling_impulse.threat
+                self.scene_coping = self.feeling_impulse.coping
+        elif has_cat_set and not has_legacy_float_set:
+            self.valence = round(TONE_TO_VALENCE[self.feeling_tone], 2)
+            self.arousal = round(INTENSITY_TO_AROUSAL[self.feeling_intensity], 2)
+            if not self.skipped:
+                self.feeling_impulse = CategoricalFeelingImpulse(
+                    tone=self.feeling_tone,
+                    intensity=self.feeling_intensity,
+                    agency=self.feeling_agency,
+                    threat=self.scene_threat,
+                    coping=self.scene_coping,
+                )
+        elif has_legacy_float_set and not has_cat_set:
+            imp = impulse_from_legacy_floats(self.valence, self.arousal)
+            self.feeling_tone = imp.tone
+            self.feeling_intensity = imp.intensity
+            self.feeling_agency = imp.agency
+            self.scene_threat = imp.threat
+            self.scene_coping = imp.coping
+            if not self.skipped:
+                self.feeling_impulse = imp
+        elif has_cat_set and has_legacy_float_set:
+            if not self.skipped:
+                self.feeling_impulse = CategoricalFeelingImpulse(
+                    tone=self.feeling_tone,
+                    intensity=self.feeling_intensity,
+                    agency=self.feeling_agency,
+                    threat=self.scene_threat,
+                    coping=self.scene_coping,
+                )
+        return self
+
+    def to_feeling_impulse(self) -> CategoricalFeelingImpulse:
+        """Return validated CategoricalFeelingImpulse for provisional previews and Phase 5 fusion."""
+        if self.feeling_impulse is not None:
+            return self.feeling_impulse
+        return CategoricalFeelingImpulse(
+            tone=self.feeling_tone,
+            intensity=self.feeling_intensity,
+            agency=self.feeling_agency,
+            threat=self.scene_threat,
+            coping=self.scene_coping,
+        )
+
 
 class CharacterStateSnapshot(BaseModel):
     """Turn-indexed affective, spatial, inventory, and motivational state of a character."""
@@ -552,6 +711,10 @@ class CharacterStateSnapshot(BaseModel):
     inventory: list[ItemInstance] = Field(default_factory=list)
     unlocked_persona_keys: list[str] = Field(default_factory=list)
     persona_knowledge_provenance: dict[str, Any] = Field(default_factory=dict)
+    care_state: AffectiveCareState | None = Field(
+        default=None,
+        description="Self-contained 4-layer CARE affective and relational snapshot.",
+    )
 
     @field_validator("equipped", "inventory", mode="before")
     @classmethod

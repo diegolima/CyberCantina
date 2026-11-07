@@ -248,7 +248,8 @@ CREATE TABLE IF NOT EXISTS world_state_snapshots (
     turn_id TEXT PRIMARY KEY REFERENCES turn_nodes(id) ON DELETE CASCADE,
     world_timestamp TEXT NOT NULL,
     active_location_id TEXT NOT NULL REFERENCES location_nodes(id),
-    scene_flags_json TEXT NOT NULL DEFAULT '[]'
+    scene_flags_json TEXT NOT NULL DEFAULT '[]',
+    campaign_elapsed_minutes INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS character_states (
@@ -265,6 +266,7 @@ CREATE TABLE IF NOT EXISTS character_states (
     inventory_json TEXT NOT NULL DEFAULT '[]',
     unlocked_persona_keys_json TEXT NOT NULL DEFAULT '[]',
     persona_knowledge_provenance_json TEXT NOT NULL DEFAULT '{}',
+    affective_state_json TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (turn_id, character_id)
 );
 

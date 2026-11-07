@@ -493,10 +493,14 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
       r.prior_holder_id === charId
   );
 
+  const relationalEvents = delta?.relational_events || [];
+
   const hasAnyMutations =
     Boolean(delta?.updated_want) ||
+    Boolean(delta?.affect_tone) ||
     valDelta !== 0 ||
     arDelta !== 0 ||
+    relationalEvents.length > 0 ||
     stanceEntries.length > 0 ||
     hasInventoryChanges ||
     locTransition !== "stay_here" ||
@@ -598,6 +602,46 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
                   </span>
                 )}
               </div>
+              {(delta?.affect_tone ||
+                delta?.affect_intensity ||
+                delta?.affect_agency ||
+                (delta?.scene_threat && delta.scene_threat !== "none") ||
+                delta?.scene_coping) && (
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {delta?.affect_tone && (
+                    <span className="badge" style={{ fontSize: "0.71rem" }}>
+                      Tone: {delta.affect_tone}
+                    </span>
+                  )}
+                  {delta?.affect_intensity && (
+                    <span className="badge" style={{ fontSize: "0.71rem" }}>
+                      Intensity: {delta.affect_intensity}
+                    </span>
+                  )}
+                  {delta?.affect_agency && (
+                    <span className="badge" style={{ fontSize: "0.71rem" }}>
+                      Agency: {delta.affect_agency}
+                    </span>
+                  )}
+                  {delta?.scene_threat && delta.scene_threat !== "none" && (
+                    <span
+                      className="badge"
+                      style={{
+                        fontSize: "0.71rem",
+                        borderColor: "rgba(244, 63, 94, 0.4)",
+                        color: "#fda4af",
+                      }}
+                    >
+                      Threat: {delta.scene_threat}
+                    </span>
+                  )}
+                  {delta?.scene_coping && (
+                    <span className="badge" style={{ fontSize: "0.71rem" }}>
+                      Coping: {delta.scene_coping}
+                    </span>
+                  )}
+                </div>
+              )}
               <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.78rem" }}>
                   <span style={{ color: "var(--text-muted)" }}>Valence Delta:</span>
@@ -670,19 +714,78 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
             </div>
           )}
 
-          {/* Relationship Stance Updates */}
+          {/* Relationship Stance & CARE Relational Events */}
           <div className="agent-modal-card">
             <div className="agent-modal-card-header">
               <User size={13} color="var(--accent-cyan)" />
-              <span>Interpersonal Stance Updates</span>
+              <span>Interpersonal Relational Events &amp; Stances</span>
             </div>
             <div className="agent-modal-card-body">
-              {stanceEntries.length === 0 ? (
+              {stanceEntries.length === 0 && relationalEvents.length === 0 ? (
                 <span style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>
                   No interpersonal stances shifted this turn.
                 </span>
               ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {relationalEvents.map((ev, idx) => {
+                    const tLow = (ev.target || "").toLowerCase();
+                    const evLabel =
+                      tLow === "user" || tLow === "player"
+                        ? "Player (You)"
+                        : bundle.character_records?.[ev.target]?.name || ev.target;
+                    const shiftBadges: string[] = [];
+                    if (ev.warmth_shift && ev.warmth_shift !== "none")
+                      shiftBadges.push(`Warmth: ${ev.warmth_shift}`);
+                    if (ev.trust_shift && ev.trust_shift !== "none")
+                      shiftBadges.push(`Trust: ${ev.trust_shift}`);
+                    if (ev.respect_shift && ev.respect_shift !== "none")
+                      shiftBadges.push(`Respect: ${ev.respect_shift}`);
+                    if (ev.power_shift && ev.power_shift !== "none")
+                      shiftBadges.push(`Power: ${ev.power_shift}`);
+                    if (ev.grievance_shift && ev.grievance_shift !== "none")
+                      shiftBadges.push(`Grievance: ${ev.grievance_shift}`);
+                    if (ev.obligation_shift && ev.obligation_shift !== "none")
+                      shiftBadges.push(`Obligation: ${ev.obligation_shift}`);
+                    return (
+                      <div
+                        key={`rel-ev-${idx}`}
+                        style={{
+                          padding: "7px 9px",
+                          borderRadius: 6,
+                          background: "var(--bg-card)",
+                          border: "1px solid var(--border-subtle)",
+                          fontSize: "0.79rem",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 4,
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                          <strong style={{ color: "var(--accent-cyan)" }}>{evLabel}</strong>
+                          {ev.visibility && ev.visibility !== "public_room" && (
+                            <span
+                              className="badge"
+                              style={{ fontSize: "0.66rem", padding: "0px 5px" }}
+                            >
+                              {ev.visibility}
+                            </span>
+                          )}
+                          {shiftBadges.map((b, bIdx) => (
+                            <span
+                              key={bIdx}
+                              className="badge"
+                              style={{ fontSize: "0.68rem", padding: "1px 6px" }}
+                            >
+                              {b}
+                            </span>
+                          ))}
+                        </div>
+                        {ev.note && (
+                          <div style={{ color: "var(--text-secondary)" }}>{ev.note}</div>
+                        )}
+                      </div>
+                    );
+                  })}
                   {stanceEntries.map(({ targetKey, targetLabel, note }) => (
                     <div
                       key={targetKey}

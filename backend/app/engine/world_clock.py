@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta
 
+from app.schemas.affective import MAX_TURN_ELAPSED_MINUTES_SANITY
+
 _TIMESTAMP_FORMATS = ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S")
 _CANONICAL_FORMAT = "%Y-%m-%d %H:%M"
 
@@ -70,10 +72,11 @@ def resolve_turn_timestamp(
     """Compute the post-turn clock.
 
     An explicit absolute timestamp (set by the Clerk when the turn states or implies a specific
-    time) wins over elapsed_minutes, provided it does not move the clock backwards. A target up to
-    one day *earlier* than the current time is assumed to mean the next occurrence of that time
-    (e.g. 'it's 5am' said at 23:00 -> 05:00 the next day).
+    time) wins over elapsed_minutes, provided it does not move the clock backwards or jump past
+    MAX_TURN_ELAPSED_MINUTES_SANITY. A target up to one day *earlier* than the current time is
+    assumed to mean the next occurrence of that time (e.g. 'it's 5am' said at 23:00 -> 05:00 the next day).
     """
+    bounded_elapsed = min(max(0, int(elapsed_minutes)), MAX_TURN_ELAPSED_MINUTES_SANITY)
     explicit = (explicit_timestamp or "").strip()
     if explicit:
         cur_dt = parse_world_timestamp(current_timestamp)
@@ -82,12 +85,41 @@ def resolve_turn_timestamp(
             if new_dt < cur_dt and cur_dt - new_dt <= _ROLLOVER_WINDOW:
                 new_dt += timedelta(days=1)
             if new_dt >= cur_dt:
-                return format_world_timestamp(new_dt)
-            # Large backwards jump (flashback / hallucination): ignore and fall back to elapsed.
+                diff_minutes = int((new_dt - cur_dt).total_seconds() // 60)
+                if diff_minutes <= MAX_TURN_ELAPSED_MINUTES_SANITY:
+                    return format_world_timestamp(new_dt)
+            # Large backwards jump or hallucinated multi-year typo: ignore and fall back to bounded elapsed.
         elif cur_dt is None:
             # Custom calendar: trust the Clerk's verbatim timestamp.
             return explicit
-    return advance_world_timestamp(current_timestamp, elapsed_minutes)
+    return advance_world_timestamp(current_timestamp, bounded_elapsed)
+
+
+def resolve_bounded_turn_elapsed_minutes(
+    *,
+    prev_timestamp: str,
+    new_timestamp: str,
+    clerk_elapsed_minutes: int,
+    raw_turn_text: str,
+    max_minutes_cap: int = MAX_TURN_ELAPSED_MINUTES_SANITY,
+) -> int:
+    """Compute calendar-agnostic Δt while rejecting hallucinated multi-year Clerk timestamp typos."""
+    cap = max(0, int(max_minutes_cap))
+    cur_dt = parse_world_timestamp(prev_timestamp)
+    nxt_dt = parse_world_timestamp(new_timestamp)
+    if cur_dt is not None and nxt_dt is not None:
+        diff = int((nxt_dt - cur_dt).total_seconds() // 60)
+        if 0 <= diff <= cap:
+            return diff
+
+    hint = extract_time_hint_minutes(raw_turn_text, prev_timestamp)
+    if clerk_elapsed_minutes and int(clerk_elapsed_minutes) > 0:
+        raw_dt = int(clerk_elapsed_minutes)
+    elif hint is not None and hint > 0:
+        raw_dt = int(hint)
+    else:
+        raw_dt = max(0, int(clerk_elapsed_minutes))
+    return min(max(0, raw_dt), cap)
 
 
 # --------------------------------------------------------------------------------------------

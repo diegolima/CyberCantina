@@ -8,6 +8,7 @@ from app.engine.world_clock import (
     advance_world_timestamp,
     describe_world_timestamp,
     extract_time_hint_minutes,
+    resolve_bounded_turn_elapsed_minutes,
     resolve_turn_timestamp,
 )
 
@@ -71,3 +72,25 @@ def test_resolve_ignores_large_backwards_jump_and_garbage():
 def test_resolve_custom_calendar_accepts_verbatim():
     assert resolve_turn_timestamp("Third Bell", 5, "Fourth Bell") == "Fourth Bell"
     assert resolve_turn_timestamp("Third Bell", 5, None) == "Third Bell (+5m)"
+    assert (
+        resolve_bounded_turn_elapsed_minutes(
+            prev_timestamp="Third Bell",
+            new_timestamp="Fourth Bell",
+            clerk_elapsed_minutes=12,
+            raw_turn_text="The fourth bell tolls.",
+        )
+        == 12
+    )
+
+
+def test_resolve_rejects_hallucinated_multi_year_forward_jump():
+    assert resolve_turn_timestamp(NOW, 4, "2099-11-14 23:19") == "2094-11-14 23:19"
+    assert (
+        resolve_bounded_turn_elapsed_minutes(
+            prev_timestamp=NOW,
+            new_timestamp="2099-11-14 23:19",
+            clerk_elapsed_minutes=4,
+            raw_turn_text="Quiet sip at the bar.",
+        )
+        == 4
+    )

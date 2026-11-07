@@ -43,11 +43,14 @@ import {
   LocationNodeDraft,
   LoreNode,
   MemoryShard,
+  TEMPERAMENT_ARCHETYPE_OPTIONS,
+  TemperamentArchetype,
   VoiceAnchor,
   WORLD_LORE_CATEGORIES,
   WorldGlobalRules,
   WorldLoreCategory,
   WorldRecord,
+  getTemperamentPresetMeta,
   WorldWizardDraft,
   hasItemFlag,
   normalizeItemList,
@@ -963,6 +966,153 @@ export const CharacterInspectorModal: React.FC<
                   />
                 </div>
               </div>
+
+              {/* CARE Temperament Preset & Layer 1 Initial Worldview */}
+              {(() => {
+                const activePreset = getTemperamentPresetMeta(
+                  baselinePsyche.temperament?.archetype
+                );
+                const wv =
+                  baselinePsyche.initial_worldview ?? activePreset.worldview;
+                return (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                      padding: "10px 12px",
+                      borderRadius: 6,
+                      background: "var(--bg-panel)",
+                      border: "1px solid var(--border-subtle)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "2fr 1fr 1fr 1fr",
+                        gap: 10,
+                        alignItems: "end",
+                      }}
+                    >
+                      <div className="field-group">
+                        <label>CARE Temperament Preset</label>
+                        <select
+                          className="field-select"
+                          disabled={viewingHistory}
+                          value={activePreset.archetype}
+                          onChange={(e) => {
+                            const nextMeta = getTemperamentPresetMeta(
+                              e.target.value as TemperamentArchetype
+                            );
+                            setBaselinePsyche({
+                              ...baselinePsyche,
+                              temperament: { ...nextMeta.temperament },
+                              initial_worldview: { ...nextMeta.worldview },
+                            });
+                            markDirty();
+                          }}
+                        >
+                          {TEMPERAMENT_ARCHETYPE_OPTIONS.map((opt) => (
+                            <option key={opt.archetype} value={opt.archetype}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="field-group">
+                        <label>Benevolence (-1 to +1)</label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="-1"
+                          max="1"
+                          disabled={viewingHistory}
+                          className="field-input"
+                          value={wv.benevolence}
+                          onChange={(e) => {
+                            setBaselinePsyche({
+                              ...baselinePsyche,
+                              temperament:
+                                baselinePsyche.temperament ?? {
+                                  ...activePreset.temperament,
+                                },
+                              initial_worldview: {
+                                ...wv,
+                                benevolence: Math.max(
+                                  -1,
+                                  Math.min(1, Number(e.target.value) || 0)
+                                ),
+                              },
+                            });
+                            markDirty();
+                          }}
+                        />
+                      </div>
+                      <div className="field-group">
+                        <label>Belonging (-1 to +1)</label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="-1"
+                          max="1"
+                          disabled={viewingHistory}
+                          className="field-input"
+                          value={wv.belonging}
+                          onChange={(e) => {
+                            setBaselinePsyche({
+                              ...baselinePsyche,
+                              temperament:
+                                baselinePsyche.temperament ?? {
+                                  ...activePreset.temperament,
+                                },
+                              initial_worldview: {
+                                ...wv,
+                                belonging: Math.max(
+                                  -1,
+                                  Math.min(1, Number(e.target.value) || 0)
+                                ),
+                              },
+                            });
+                            markDirty();
+                          }}
+                        />
+                      </div>
+                      <div className="field-group">
+                        <label>Agency (-1 to +1)</label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="-1"
+                          max="1"
+                          disabled={viewingHistory}
+                          className="field-input"
+                          value={wv.agency}
+                          onChange={(e) => {
+                            setBaselinePsyche({
+                              ...baselinePsyche,
+                              temperament:
+                                baselinePsyche.temperament ?? {
+                                  ...activePreset.temperament,
+                                },
+                              initial_worldview: {
+                                ...wv,
+                                agency: Math.max(
+                                  -1,
+                                  Math.min(1, Number(e.target.value) || 0)
+                                ),
+                              },
+                            });
+                            markDirty();
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <div style={{ fontSize: "0.73rem", color: "var(--text-muted)" }}>
+                      {activePreset.summary}
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div
                 style={{

@@ -310,6 +310,37 @@ async def auto_configure_ollama_models() -> OllamaStatusResponse:
     return actor_status
 
 
+def _inline_json_schema_defs(schema: dict[str, Any]) -> dict[str, Any]:
+    """Recursively inline Pydantic `$defs`/`$ref` blocks for fast llama.cpp/Ollama GBNF compilation."""
+    defs = schema.get("$defs")
+    if not isinstance(defs, dict) or not defs:
+        out = dict(schema)
+        out.pop("$defs", None)
+        return out
+
+    def _resolve(node: Any, seen: frozenset[str]) -> Any:
+        if isinstance(node, dict):
+            ref = node.get("$ref")
+            if isinstance(ref, str) and ref.startswith("#/$defs/"):
+                def_name = ref[len("#/$defs/") :]
+                if def_name in defs and def_name not in seen:
+                    resolved = _resolve(dict(defs[def_name]), seen | {def_name})
+                    for k, v in node.items():
+                        if k != "$ref" and k not in resolved:
+                            resolved[k] = _resolve(v, seen)
+                    return resolved
+            return {
+                k: _resolve(v, seen)
+                for k, v in node.items()
+                if k != "$defs"
+            }
+        if isinstance(node, list):
+            return [_resolve(item, seen) for item in node]
+        return node
+
+    return _resolve(schema, frozenset())
+
+
 class LLMClient:
     """Async client supporting both native Ollama (/api/chat) and OpenAI-compatible (/v1/chat/completions)."""
 
@@ -513,7 +544,9 @@ class LLMClient:
         """Call Ollama with native JSON Schema grammar enforcement and validate into a Pydantic model."""
         active_profile = profile or settings.clerk_profile
         effective_max_tokens = max(max_tokens or active_profile.max_tokens, 2048)
-        effective_schema = dict(json_schema) if json_schema is not None else schema_cls.model_json_schema()
+        effective_schema = _inline_json_schema_defs(
+            dict(json_schema) if json_schema is not None else schema_cls.model_json_schema()
+        )
         if required_properties is not None:
             effective_schema["required"] = required_properties
         try:
@@ -537,7 +570,7 @@ class LLMClient:
                 "role": "system",
                 "content": (
                     "Output ONLY a valid JSON object conforming strictly to this JSON Schema "
-                    f"(do not wrap in markdown or include extra keys):\n{json.dumps(json_schema)}"
+                    f"(do not wrap in markdown or include extra keys):\n{json.dumps(effective_schema)}"
                 ),
             }
             raw_retry = await self.complete_text(
