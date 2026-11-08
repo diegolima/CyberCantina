@@ -12,6 +12,7 @@ export interface TagChipsInputProps {
   maxTagLength?: number;
   accentVariant?: "cyan" | "amber" | "violet";
   helperText?: string;
+  suggestions?: string[];
 }
 
 export function normalizeTagList(
@@ -47,6 +48,7 @@ export const TagChipsInput: React.FC<TagChipsInputProps> = ({
   maxTagLength = 64,
   accentVariant = "cyan",
   helperText,
+  suggestions,
 }) => {
   const [draft, setDraft] = useState("");
   const [isFocused, setIsFocused] = useState(false);
@@ -172,6 +174,37 @@ export const TagChipsInput: React.FC<TagChipsInputProps> = ({
           />
         )}
       </div>
+
+      {suggestions && suggestions.length > 0 && (isFocused || draft.trim().length > 0) && !disabled && (
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4, marginTop: 4 }}>
+          <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginRight: 2 }}>
+            Suggestions:
+          </span>
+          {suggestions
+            .filter((s) => !value.some((v) => v.toLowerCase() === s.toLowerCase()))
+            .map((sug) => (
+              <button
+                key={sug}
+                type="button"
+                className="btn"
+                style={{
+                  padding: "1px 6px",
+                  fontSize: "0.68rem",
+                  borderRadius: 4,
+                  borderStyle: "dashed",
+                }}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  commitRawString(sug);
+                  inputRef.current?.focus();
+                }}
+              >
+                + {sug}
+              </button>
+            ))}
+        </div>
+      )}
+
       {isMissingRequired ? (
         <div className="tag-chips-validation-hint">
           At least 1 trigger keyword is required (type &amp; press Enter or comma).

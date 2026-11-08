@@ -2136,8 +2136,12 @@ export const App: React.FC = () => {
           character={inspectingCharacter}
           worlds={worlds}
           onClose={() => setInspectingCharacter(null)}
-          onSaved={async (updatedChar) => {
-            setInspectingCharacter(null);
+          onSaved={async (updatedChar, closeModal = true) => {
+            if (closeModal) {
+              setInspectingCharacter(null);
+            } else {
+              setInspectingCharacter(updatedChar);
+            }
             const cList = await api.listCharacters();
             setCharacters(cList);
             setActiveCharacter(updatedChar);

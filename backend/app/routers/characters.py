@@ -32,6 +32,10 @@ from app.dependencies import (
 from app.schemas.auth import UserProfile
 from app.schemas.character import (
     VALID_EMOTIONS,
+    CharacterFeatureExtractionRequest,
+    CharacterFeatureExtractionResponse,
+    CharacterPersonaExtractionRequest,
+    CharacterPersonaExtractionResponse,
     CharacterRecord,
     CharacterUpdatePayload,
     CharacterVersionSummary,
@@ -40,6 +44,10 @@ from app.schemas.character import (
     GalleryImage,
 )
 from app.schemas.world import WorldRecord, WorldWizardDraft
+from app.wizards.character_extractor import (
+    extract_features_from_bio,
+    extract_persona_traits_from_demeanor,
+)
 from app.wizards.character_wizard import generate_character_draft
 from app.wizards.sillytavern_distiller import (
     distill_sillytavern_card,
@@ -113,6 +121,27 @@ def get_character_version(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/api/characters/{character_id}/versions/{version}/restore",
+    response_model=CharacterRecord,
+)
+async def restore_character_version(
+    character_id: str,
+    version: int,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CharacterRecord:
+    """Restore a historical version snapshot as the latest version of the character."""
+    repo = get_repo()
+    try:
+        return await repo.arestore_character_version(
+            character_id, version, owner_id=current_user.id
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/api/wizards/character/draft", response_model=CharacterWizardDraft)
@@ -269,6 +298,48 @@ async def wizard_commit_character(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/api/wizards/character/extract-features",
+    response_model=CharacterFeatureExtractionResponse,
+)
+async def extract_character_features(
+    req: CharacterFeatureExtractionRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CharacterFeatureExtractionResponse:
+    eff_actor, *_ = get_effective_user_model_settings(current_user.id)
+    features, rewritten = await extract_features_from_bio(
+        character_bio=req.character_bio,
+        existing_features=req.existing_features,
+        profile=eff_actor,
+    )
+    return CharacterFeatureExtractionResponse(
+        extracted_features=features,
+        rewritten_bio=rewritten,
+    )
+
+
+@router.post(
+    "/api/wizards/character/extract-persona-traits",
+    response_model=CharacterPersonaExtractionResponse,
+)
+async def extract_character_persona_traits(
+    req: CharacterPersonaExtractionRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CharacterPersonaExtractionResponse:
+    eff_actor, *_ = get_effective_user_model_settings(current_user.id)
+    code, quirks, rewritten = await extract_persona_traits_from_demeanor(
+        core_persona=req.core_persona,
+        existing_moral_code=req.existing_moral_code,
+        existing_quirks_flaws=req.existing_quirks_flaws,
+        profile=eff_actor,
+    )
+    return CharacterPersonaExtractionResponse(
+        extracted_moral_code=code,
+        extracted_quirks_flaws=quirks,
+        rewritten_core_persona=rewritten,
+    )
 
 
 @router.put("/api/characters/{character_id}", response_model=CharacterRecord)

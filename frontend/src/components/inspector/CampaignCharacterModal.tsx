@@ -9,12 +9,14 @@ import {
   CirclePlus,
   Clock,
   Database,
+  Eye,
   FileText,
   HeartPulse,
   Image as ImageIcon,
   Lock,
   MapPin,
   Maximize2,
+  MessageSquare,
   Package,
   Pencil,
   Plus,
@@ -40,8 +42,22 @@ import {
 import { getCharacterEmotionPortrait } from "../../utils/entityImages";
 import { BASIC_EMOTIONS } from "../EntityEditorModals";
 import { CommaSeparatedInput } from "../CommaSeparatedInput";
+import {
+  CharacterBaseTab,
+  CharacterAppearanceTab,
+  CharacterPersonalityTab,
+  CharacterVoiceTab,
+} from "../character";
 
-type CampaignTab = "base" | "personality" | "memories" | "inventory" | "current" | "media";
+type CampaignTab =
+  | "base"
+  | "appearance"
+  | "personality"
+  | "voice"
+  | "memories"
+  | "inventory"
+  | "current"
+  | "media";
 
 interface CampaignCharacterModalProps {
   character: CharacterRecord;
@@ -59,35 +75,6 @@ interface CampaignCharacterModalProps {
   onItemAction: (payload: ItemEquipActionPayload) => Promise<void> | void;
   onSaveMemories: (characterId: string, shards: MemoryShard[]) => Promise<void>;
 }
-
-const ReadOnlyField: React.FC<{
-  label?: string;
-  value: string | number;
-  multiline?: boolean;
-  rows?: number;
-}> = ({ label, value, multiline = false, rows = 3 }) => (
-  <div className="field-group">
-    {label && <label>{label}</label>}
-    <div
-      className={multiline ? "field-textarea" : "field-input"}
-      style={{
-        background: "rgba(0, 0, 0, 0.25)",
-        borderColor: "var(--border-subtle)",
-        color: "var(--text-primary)",
-        whiteSpace: multiline ? "pre-wrap" : "normal",
-        cursor: "default",
-        userSelect: "text",
-        minHeight: multiline ? `${rows * 22}px` : undefined,
-      }}
-    >
-      {value || (
-        <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>
-          None specified
-        </span>
-      )}
-    </div>
-  </div>
-);
 
 export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
   character,
@@ -820,12 +807,32 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
           <button
             type="button"
             role="tab"
+            aria-selected={activeTab === "appearance"}
+            className={`modal-tab-btn ${activeTab === "appearance" ? "active" : ""}`}
+            onClick={() => setActiveTab("appearance")}
+          >
+            <Eye size={14} />
+            <span>Appearance</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
             aria-selected={activeTab === "personality"}
             className={`modal-tab-btn ${activeTab === "personality" ? "active" : ""}`}
             onClick={() => setActiveTab("personality")}
           >
             <Brain size={14} />
             <span>Personality</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "voice"}
+            className={`modal-tab-btn ${activeTab === "voice" ? "active" : ""}`}
+            onClick={() => setActiveTab("voice")}
+          >
+            <MessageSquare size={14} />
+            <span>Voice & Dialogue</span>
           </button>
           <button
             type="button"
@@ -911,43 +918,44 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
               <strong>Campaign Dossier · Read-Only Base Reference.</strong> These static traits define the character&apos;s baseline anatomy and opening scenario.
             </div>
 
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 12,
-              }}
-            >
-              <ReadOnlyField label="Character Name" value={character.name} />
-              <ReadOnlyField
-                label="Home World Association"
-                value={
-                  homeWorld
-                    ? `${homeWorld.name} (${homeWorld.global_rules.genre})`
-                    : "Standalone (No specific world)"
-                }
-              />
-            </div>
-
-            <ReadOnlyField label="Evocative Tagline" value={character.tagline} />
-
-            <ReadOnlyField
-              label="Physical Appearance (Zone 1 Static Anatomy & Features — Excludes Clothing/Items)"
-              value={character.physical_appearance}
-              multiline
-              rows={3}
-            />
-
-            <ReadOnlyField
-              label="Initial Message (Turn 0 Opening Scene Prose)"
-              value={character.initial_message}
-              multiline
-              rows={4}
+            <CharacterBaseTab
+              data={character}
+              readOnly={true}
+              worlds={worlds}
             />
           </div>
 
           {/* ========================================================================= */}
-          {/* 2. Personality Tab (Read-Only Reference)                                  */}
+          {/* 2. Appearance Tab (Read-Only Reference)                                   */}
+          {/* ========================================================================= */}
+          <div
+            style={{
+              display: activeTab === "appearance" ? "flex" : "none",
+              flexDirection: "column",
+              gap: 14,
+            }}
+          >
+            <div
+              style={{
+                fontSize: "0.76rem",
+                color: "var(--text-secondary)",
+                background: "var(--bg-card)",
+                padding: "8px 12px",
+                borderRadius: 6,
+                border: "1px solid var(--border-subtle)",
+              }}
+            >
+              <strong>Campaign Dossier · Read-Only Appearance Reference.</strong> Distinctive features, posture, mannerisms, and visual aesthetic.
+            </div>
+
+            <CharacterAppearanceTab
+              data={character}
+              readOnly={true}
+            />
+          </div>
+
+          {/* ========================================================================= */}
+          {/* 3. Personality Tab (Read-Only Reference)                                  */}
           {/* ========================================================================= */}
           <div
             style={{
@@ -966,185 +974,42 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
                 border: "1px solid var(--border-subtle)",
               }}
             >
-              <strong>Campaign Dossier · Read-Only Personality Reference.</strong> Core persona, voice anchors, and motivational baselines guiding narrative demeanor.
+              <strong>Campaign Dossier · Read-Only Personality Reference.</strong> Core persona, behavioral traits, moral code, and motivational baselines.
             </div>
 
-            <ReadOnlyField
-              label="Core Persona (Zone 1 Static Demeanor, Psychology & Speech Habits)"
-              value={character.core_persona}
-              multiline
-              rows={5}
+            <CharacterPersonalityTab
+              data={character}
+              readOnly={true}
             />
+          </div>
 
-            {/* Baseline Psyche & Motivational Drives */}
+          {/* ========================================================================= */}
+          {/* 4. Voice & Dialogue Tab (Read-Only Reference)                             */}
+          {/* ========================================================================= */}
+          <div
+            style={{
+              display: activeTab === "voice" ? "flex" : "none",
+              flexDirection: "column",
+              gap: 14,
+            }}
+          >
             <div
               style={{
+                fontSize: "0.76rem",
+                color: "var(--text-secondary)",
                 background: "var(--bg-card)",
+                padding: "8px 12px",
+                borderRadius: 6,
                 border: "1px solid var(--border-subtle)",
-                borderRadius: 8,
-                padding: 12,
-                display: "flex",
-                flexDirection: "column",
-                gap: 10,
               }}
             >
-              <div
-                className="sidebar-label"
-                style={{ display: "flex", alignItems: "center", gap: 6 }}
-              >
-                <HeartPulse size={13} color="#ec4899" />
-                Baseline Psyche &amp; Initial Drives
-              </div>
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "2fr 1fr 1fr",
-                  gap: 10,
-                }}
-              >
-                <ReadOnlyField
-                  label="Baseline Mood Label"
-                  value={character.baseline_psyche.mood_label}
-                />
-                <ReadOnlyField
-                  label="Baseline Valence"
-                  value={character.baseline_psyche.valence.toFixed(2)}
-                />
-                <ReadOnlyField
-                  label="Baseline Arousal"
-                  value={character.baseline_psyche.arousal.toFixed(2)}
-                />
-              </div>
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "2fr 1fr 1fr 1fr",
-                  gap: 10,
-                }}
-              >
-                <ReadOnlyField
-                  label="CARE Temperament Preset"
-                  value={`${temperamentMeta.label} (${temperamentMeta.archetype})`}
-                />
-                <ReadOnlyField
-                  label="Worldview · Benevolence"
-                  value={(
-                    character.baseline_psyche.initial_worldview?.benevolence ??
-                    temperamentMeta.worldview.benevolence
-                  ).toFixed(2)}
-                />
-                <ReadOnlyField
-                  label="Worldview · Belonging"
-                  value={(
-                    character.baseline_psyche.initial_worldview?.belonging ??
-                    temperamentMeta.worldview.belonging
-                  ).toFixed(2)}
-                />
-                <ReadOnlyField
-                  label="Worldview · Agency"
-                  value={(
-                    character.baseline_psyche.initial_worldview?.agency ??
-                    temperamentMeta.worldview.agency
-                  ).toFixed(2)}
-                />
-              </div>
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: 10,
-                }}
-              >
-                <ReadOnlyField
-                  label="Core Long-Term Drive"
-                  value={character.baseline_psyche.core_drive}
-                  multiline
-                  rows={2}
-                />
-                <ReadOnlyField
-                  label="Core Fear"
-                  value={character.baseline_psyche.core_fear}
-                  multiline
-                  rows={2}
-                />
-              </div>
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: 10,
-                }}
-              >
-                <ReadOnlyField
-                  label="Default Scene Want"
-                  value={character.baseline_psyche.default_want}
-                  multiline
-                  rows={2}
-                />
-                <ReadOnlyField
-                  label="Default Action Plan"
-                  value={character.baseline_psyche.default_plan}
-                  multiline
-                  rows={2}
-                />
-              </div>
+              <strong>Campaign Dossier · Read-Only Voice Reference.</strong> Communication style keywords and dialogue context snippets.
             </div>
 
-            {/* Voice Anchors */}
-            <div
-              style={{
-                background: "var(--bg-card)",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: 8,
-                padding: 12,
-                display: "flex",
-                flexDirection: "column",
-                gap: 10,
-              }}
-            >
-              <span className="sidebar-label">
-                Voice &amp; Dialogue Anchors ({character.voice_anchors.length})
-              </span>
-
-              {character.voice_anchors.length === 0 ? (
-                <div
-                  style={{
-                    fontSize: "0.75rem",
-                    color: "var(--text-muted)",
-                    fontStyle: "italic",
-                  }}
-                >
-                  No voice anchors specified.
-                </div>
-              ) : (
-                character.voice_anchors.map((va, idx) => (
-                  <div
-                    key={idx}
-                    style={{
-                      background: "var(--bg-panel)",
-                      border: "1px solid var(--border-subtle)",
-                      borderRadius: 6,
-                      padding: 10,
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 8,
-                    }}
-                  >
-                    <ReadOnlyField label="Context" value={va.context} />
-                    <ReadOnlyField
-                      label="Sample Dialogue & Action Snippet"
-                      value={va.snippet}
-                      multiline
-                      rows={2}
-                    />
-                  </div>
-                ))
-              )}
-            </div>
+            <CharacterVoiceTab
+              data={character}
+              readOnly={true}
+            />
           </div>
 
           {/* ========================================================================= */}

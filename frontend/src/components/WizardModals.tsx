@@ -1,14 +1,26 @@
 import React, { useMemo, useState } from "react";
-import { Sparkles, Globe, UserPlus, X, Check, Plus, Trash2 } from "lucide-react";
+import {
+  Brain,
+  Check,
+  Database,
+  Eye,
+  Globe,
+  MessageSquare,
+  Package,
+  Pencil,
+  Plus,
+  Sparkles,
+  Trash2,
+  User,
+  UserPlus,
+  X,
+} from "lucide-react";
 import { api } from "../api";
 import {
   CharacterRecord,
   CharacterWizardDraft,
-  TEMPERAMENT_ARCHETYPE_OPTIONS,
-  TemperamentArchetype,
   WorldRecord,
   WorldWizardDraft,
-  getTemperamentPresetMeta,
   normalizeItemInstance,
 } from "../types";
 import {
@@ -16,6 +28,12 @@ import {
   draftToWorldRecord,
   worldStateToDraft,
 } from "./EntityEditorModals";
+import {
+  CharacterBaseTab,
+  CharacterAppearanceTab,
+  CharacterPersonalityTab,
+  CharacterVoiceTab,
+} from "./character";
 
 export interface CharacterWizardModalProps {
   worlds: WorldRecord[];
@@ -53,8 +71,90 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
   const [importedWorldDraft, setImportedWorldDraft] = useState<WorldWizardDraft | null>(initialWorldDraft);
 
   const [draft, setDraft] = useState<CharacterWizardDraft | null>(initialDraft);
+  const [draftTab, setDraftTab] = useState<
+    "base" | "appearance" | "personality" | "voice" | "inventory" | "memories"
+  >("base");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  const handleManualCreate = () => {
+    const kwList = keywords
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const manualDraft: CharacterWizardDraft = {
+      name: name.trim() || "New Character",
+      tagline: archetype.trim() || "Independent Operative",
+      character_bio: roughNotes.trim() || `${name} is a ${archetype}.`,
+      physical_appearance: roughNotes.trim() || `${name} is a ${archetype}.`,
+      species: "Human",
+      sex: "",
+      pronouns: "",
+      age: "",
+      build_and_height: "",
+      distinctive_features: [],
+      posture: "",
+      mannerisms: [],
+      modifications: [],
+      visual_aesthetic: "",
+      personality_traits: kwList,
+      core_persona: `${name.trim() || "New Character"} is a ${archetype.trim() || "character"}, serving as ${roleInStory.trim() || "a key figure"}.`,
+      moral_code: [],
+      quirks_flaws: [],
+      communication_style: ["direct"],
+      initial_message: `*${name.trim() || "The character"} pauses, observing you with a measured, attentive gaze.*\n\n"What brings you here?"`,
+      equipped: [
+        normalizeItemInstance("Practical street jacket"),
+        normalizeItemInstance("Dark utility trousers"),
+      ],
+      inventory: [normalizeItemInstance("Personal comm-link")],
+      voice_anchors: [
+        {
+          context: "Calm / Conversational",
+          snippet: `*${name.trim() || "They"} speak in an unhurried, measured cadence.* "Tell me what's actually on your mind."`,
+        },
+      ],
+      baseline_psyche: {
+        mood_label: "Calm & Composed",
+        valence: 0.2,
+        arousal: 0.2,
+        core_drive: `Pursue goals as a ${archetype.trim() || "character"} while maintaining independence.`,
+        core_fear: "Losing autonomy or being compromised by past events.",
+        default_want: `Assess the situation and establish their dynamic as ${roleInStory.trim() || "an ally"}.`,
+        default_plan: "Engage in direct conversation and gauge the user's intent.",
+        temperament: {
+          archetype: "balanced",
+          relational_inertia: 0.8,
+          negativity_ratio: 3.5,
+          theta_pos_base: 0.15,
+          theta_neg_base: -0.12,
+          composure_resilience: 1.0,
+        },
+        initial_worldview: {
+          benevolence: 0.0,
+          belonging: 0.1,
+          agency: 0.2,
+        },
+      },
+      memory_shards: [
+        {
+          id: "shard_seed_0",
+          title: "Origins & Background",
+          content: roughNotes.trim() || `${name} began their journey in this region.`,
+          keywords: ["backstory", "origin"],
+          emotional_weight: 0.7,
+        },
+      ],
+      tags: kwList,
+      creator: "",
+      creator_notes: roughNotes.trim(),
+      portraits: {},
+      gallery: [],
+    };
+    setDraft(manualDraft);
+    setPreassignedCharId(null);
+    setImportedWorldDraft(null);
+  };
 
   const handleGenerateDraft = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -203,6 +303,14 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
                   Cancel
                 </button>
                 <button
+                  type="button"
+                  className="btn"
+                  onClick={handleManualCreate}
+                >
+                  <Pencil size={15} />
+                  Manually Create Character
+                </button>
+                <button
                   type="submit"
                   className="btn btn-amber"
                   disabled={loading}
@@ -272,433 +380,303 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
                 </div>
               )}
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <div className="field-group">
-                  <label>Creator / Author (Metadata)</label>
-                  <input
-                    className="field-input"
-                    placeholder="Author name, handle, or contact"
-                    value={draft.creator ?? ""}
-                    onChange={(e) => setDraft({ ...draft, creator: e.target.value })}
-                  />
-                </div>
-                <div className="field-group">
-                  <label>Tags (Comma-separated)</label>
-                  <input
-                    className="field-input"
-                    placeholder="e.g. cyberpunk, courier, infiltrator"
-                    value={(draft.tags ?? []).join(", ")}
-                    onChange={(e) =>
-                      setDraft({
-                        ...draft,
-                        tags: e.target.value
-                          .split(",")
-                          .map((s) => s.trim().replace(/^#/, ""))
-                          .filter(Boolean),
-                      })
-                    }
-                  />
-                </div>
-              </div>
-
-              <div className="field-group">
-                <label>Creator Notes (Built-in guidance; viewable in User Notes)</label>
-                <textarea
-                  className="field-textarea"
-                  rows={2}
-                  placeholder="Author notes, recommended settings, or guidance..."
-                  value={draft.creator_notes ?? ""}
-                  onChange={(e) =>
-                    setDraft({ ...draft, creator_notes: e.target.value })
-                  }
-                />
-              </div>
-
-              <div className="field-group">
-                <label>Physical Appearance (Zone 1 Immutable Anatomy & Features)</label>
-                <textarea
-                  className="field-textarea"
-                  rows={3}
-                  value={draft.physical_appearance}
-                  onChange={(e) =>
-                    setDraft({ ...draft, physical_appearance: e.target.value })
-                  }
-                />
-              </div>
-
-              <div className="field-group">
-                <label>Expanded Core Persona (Zone 1 Demeanor & Psychology)</label>
-                <textarea
-                  className="field-textarea"
-                  rows={4}
-                  value={draft.core_persona}
-                  onChange={(e) =>
-                    setDraft({ ...draft, core_persona: e.target.value })
-                  }
-                />
-              </div>
-
-              <div className="field-group">
-                <label>Initial Message (Turn 0 Opening Scene Prose)</label>
-                <textarea
-                  className="field-textarea"
-                  rows={4}
-                  value={draft.initial_message}
-                  onChange={(e) =>
-                    setDraft({ ...draft, initial_message: e.target.value })
-                  }
-                />
-              </div>
-
-              {/* Equipped Attire */}
-              <div
-                style={{
-                  background: "var(--bg-card)",
-                  border: "1px solid var(--border-subtle)",
-                  borderRadius: 8,
-                  padding: 10,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 8,
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                  }}
+              {/* Modal Tabs for Draft Preview & Fine-Grained Editing */}
+              <div className="modal-tabs" role="tablist">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={draftTab === "base"}
+                  className={`modal-tab-btn ${draftTab === "base" ? "active" : ""}`}
+                  onClick={() => setDraftTab("base")}
                 >
-                  <span className="sidebar-label">
-                    Equipped Attire &amp; Gear ({(draft.equipped ?? []).length})
-                  </span>
-                  <button
-                    type="button"
-                    className="btn"
-                    style={{ padding: "3px 8px", fontSize: "0.72rem" }}
-                    onClick={() =>
-                      setDraft({
-                        ...draft,
-                        equipped: [...(draft.equipped ?? []), "New equipped attire"],
-                      })
-                    }
-                  >
-                    <Plus size={12} /> Add Equipped
-                  </button>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {(draft.equipped ?? []).map((item, idx) => {
-                    const itemObj = normalizeItemInstance(item, idx);
-                    return (
-                      <div
-                        key={itemObj.id || idx}
-                        style={{ display: "flex", alignItems: "center", gap: 6 }}
-                      >
-                        <input
-                          className="field-input"
-                          style={{ flex: 1, padding: "5px 8px", fontSize: "0.78rem" }}
-                          value={typeof item === "string" ? item : item.name}
-                          placeholder="e.g. Leather jacket"
-                          onChange={(e) => {
-                            const next = [...(draft.equipped ?? [])];
-                            next[idx] =
-                              typeof item === "string"
-                                ? e.target.value
-                                : { ...item, name: e.target.value };
-                            setDraft({ ...draft, equipped: next });
-                          }}
-                        />
-                        <button
-                          type="button"
-                          className="item-remove-btn"
-                          onClick={() =>
-                            setDraft({
-                              ...draft,
-                              equipped: (draft.equipped ?? []).filter((_, i) => i !== idx),
-                            })
-                          }
-                          title="Remove equipped item"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-                    );
-                  })}
-                  {(draft.equipped ?? []).length === 0 && (
-                    <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontStyle: "italic" }}>
-                      No equipped gear specified.
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Carried Inventory */}
-              <div
-                style={{
-                  background: "var(--bg-card)",
-                  border: "1px solid var(--border-subtle)",
-                  borderRadius: 8,
-                  padding: 10,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 8,
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                  }}
+                  <User size={14} />
+                  <span>Base</span>
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={draftTab === "appearance"}
+                  className={`modal-tab-btn ${draftTab === "appearance" ? "active" : ""}`}
+                  onClick={() => setDraftTab("appearance")}
                 >
-                  <span className="sidebar-label">
-                    Carried Inventory ({draft.inventory.length})
+                  <Eye size={14} />
+                  <span>Appearance</span>
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={draftTab === "personality"}
+                  className={`modal-tab-btn ${draftTab === "personality" ? "active" : ""}`}
+                  onClick={() => setDraftTab("personality")}
+                >
+                  <Brain size={14} />
+                  <span>Personality</span>
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={draftTab === "voice"}
+                  className={`modal-tab-btn ${draftTab === "voice" ? "active" : ""}`}
+                  onClick={() => setDraftTab("voice")}
+                >
+                  <MessageSquare size={14} />
+                  <span>Voice &amp; Dialogue</span>
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={draftTab === "inventory"}
+                  className={`modal-tab-btn ${draftTab === "inventory" ? "active" : ""}`}
+                  onClick={() => setDraftTab("inventory")}
+                >
+                  <Package size={14} />
+                  <span>Inventory</span>
+                  <span className="modal-tab-badge">
+                    {(draft.equipped ?? []).length + draft.inventory.length}
                   </span>
-                  <button
-                    type="button"
-                    className="btn"
-                    style={{ padding: "3px 8px", fontSize: "0.72rem" }}
-                    onClick={() =>
-                      setDraft({
-                        ...draft,
-                        inventory: [...draft.inventory, "New carried item"],
-                      })
-                    }
-                  >
-                    <Plus size={12} /> Add Item
-                  </button>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {draft.inventory.map((item, idx) => {
-                    const itemObj = normalizeItemInstance(item, idx);
-                    return (
-                      <div
-                        key={itemObj.id || idx}
-                        style={{ display: "flex", alignItems: "center", gap: 6 }}
-                      >
-                        <input
-                          className="field-input"
-                          style={{ flex: 1, padding: "5px 8px", fontSize: "0.78rem" }}
-                          value={typeof item === "string" ? item : item.name}
-                          placeholder="e.g. Encrypted datapad"
-                          onChange={(e) => {
-                            const next = [...draft.inventory];
-                            next[idx] =
-                              typeof item === "string"
-                                ? e.target.value
-                                : { ...item, name: e.target.value };
-                            setDraft({ ...draft, inventory: next });
-                          }}
-                        />
-                        <button
-                          type="button"
-                          className="item-remove-btn"
-                          onClick={() =>
-                            setDraft({
-                              ...draft,
-                              inventory: draft.inventory.filter((_, i) => i !== idx),
-                            })
-                          }
-                          title="Remove item"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-                    );
-                  })}
-                  {draft.inventory.length === 0 && (
-                    <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontStyle: "italic" }}>
-                      No carried items specified.
-                    </div>
-                  )}
-                </div>
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={draftTab === "memories"}
+                  className={`modal-tab-btn ${draftTab === "memories" ? "active" : ""}`}
+                  onClick={() => setDraftTab("memories")}
+                >
+                  <Database size={14} />
+                  <span>Memories</span>
+                  <span className="modal-tab-badge">{draft.memory_shards.length}</span>
+                </button>
               </div>
 
-              {/* CARE Temperament Preset & Initial Worldview */}
-              {(() => {
-                const activePreset = getTemperamentPresetMeta(
-                  draft.baseline_psyche.temperament?.archetype
-                );
-                const wv =
-                  draft.baseline_psyche.initial_worldview ?? activePreset.worldview;
-                return (
-                  <div className="cog-step" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    <div className="cog-step-label">
-                      Psychological Temperament &amp; Worldview Priors
-                    </div>
+              {/* Tab Content */}
+              {draftTab === "base" && (
+                <CharacterBaseTab
+                  data={draft}
+                  onChange={(upd) => setDraft({ ...draft, ...upd })}
+                  readOnly={false}
+                  worlds={worlds}
+                />
+              )}
+
+              {draftTab === "appearance" && (
+                <CharacterAppearanceTab
+                  data={draft}
+                  onChange={(upd) => setDraft({ ...draft, ...upd })}
+                  readOnly={false}
+                />
+              )}
+
+              {draftTab === "personality" && (
+                <CharacterPersonalityTab
+                  data={draft}
+                  onChange={(upd) => setDraft({ ...draft, ...upd })}
+                  readOnly={false}
+                />
+              )}
+
+              {draftTab === "voice" && (
+                <CharacterVoiceTab
+                  data={draft}
+                  onChange={(upd) => setDraft({ ...draft, ...upd })}
+                  readOnly={false}
+                />
+              )}
+
+              {draftTab === "inventory" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  {/* Equipped Attire */}
+                  <div
+                    style={{
+                      background: "var(--bg-card)",
+                      border: "1px solid var(--border-subtle)",
+                      borderRadius: 8,
+                      padding: 10,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                    }}
+                  >
                     <div
                       style={{
-                        display: "grid",
-                        gridTemplateColumns: "2fr 1fr 1fr 1fr",
-                        gap: 8,
-                        alignItems: "end",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
                       }}
                     >
-                      <div className="field-group">
-                        <label>Temperament Archetype</label>
-                        <select
-                          className="field-select"
-                          value={activePreset.archetype}
-                          onChange={(e) => {
-                            const nextMeta = getTemperamentPresetMeta(
-                              e.target.value as TemperamentArchetype
-                            );
-                            setDraft({
-                              ...draft,
-                              baseline_psyche: {
-                                ...draft.baseline_psyche,
-                                temperament: { ...nextMeta.temperament },
-                                initial_worldview: { ...nextMeta.worldview },
-                              },
-                            });
-                          }}
-                        >
-                          {TEMPERAMENT_ARCHETYPE_OPTIONS.map((opt) => (
-                            <option key={opt.archetype} value={opt.archetype}>
-                              {opt.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="field-group">
-                        <label>Benevolence</label>
-                        <input
-                          type="number"
-                          step="0.1"
-                          min="-1"
-                          max="1"
-                          className="field-input"
-                          value={wv.benevolence}
-                          onChange={(e) =>
-                            setDraft({
-                              ...draft,
-                              baseline_psyche: {
-                                ...draft.baseline_psyche,
-                                temperament:
-                                  draft.baseline_psyche.temperament ?? {
-                                    ...activePreset.temperament,
-                                  },
-                                initial_worldview: {
-                                  ...wv,
-                                  benevolence: Math.max(
-                                    -1,
-                                    Math.min(1, Number(e.target.value) || 0)
-                                  ),
-                                },
-                              },
-                            })
-                          }
-                        />
-                      </div>
-                      <div className="field-group">
-                        <label>Belonging</label>
-                        <input
-                          type="number"
-                          step="0.1"
-                          min="-1"
-                          max="1"
-                          className="field-input"
-                          value={wv.belonging}
-                          onChange={(e) =>
-                            setDraft({
-                              ...draft,
-                              baseline_psyche: {
-                                ...draft.baseline_psyche,
-                                temperament:
-                                  draft.baseline_psyche.temperament ?? {
-                                    ...activePreset.temperament,
-                                  },
-                                initial_worldview: {
-                                  ...wv,
-                                  belonging: Math.max(
-                                    -1,
-                                    Math.min(1, Number(e.target.value) || 0)
-                                  ),
-                                },
-                              },
-                            })
-                          }
-                        />
-                      </div>
-                      <div className="field-group">
-                        <label>Agency</label>
-                        <input
-                          type="number"
-                          step="0.1"
-                          min="-1"
-                          max="1"
-                          className="field-input"
-                          value={wv.agency}
-                          onChange={(e) =>
-                            setDraft({
-                              ...draft,
-                              baseline_psyche: {
-                                ...draft.baseline_psyche,
-                                temperament:
-                                  draft.baseline_psyche.temperament ?? {
-                                    ...activePreset.temperament,
-                                  },
-                                initial_worldview: {
-                                  ...wv,
-                                  agency: Math.max(
-                                    -1,
-                                    Math.min(1, Number(e.target.value) || 0)
-                                  ),
-                                },
-                              },
-                            })
-                          }
-                        />
-                      </div>
+                      <span className="sidebar-label">
+                        Equipped Attire &amp; Gear ({(draft.equipped ?? []).length})
+                      </span>
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{ padding: "3px 8px", fontSize: "0.72rem" }}
+                        onClick={() =>
+                          setDraft({
+                            ...draft,
+                            equipped: [...(draft.equipped ?? []), "New equipped attire"],
+                          })
+                        }
+                      >
+                        <Plus size={12} /> Add Equipped
+                      </button>
                     </div>
-                    <div style={{ fontSize: "0.73rem", color: "var(--text-muted)" }}>
-                      {activePreset.summary}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {(draft.equipped ?? []).map((item, idx) => {
+                        const itemObj = normalizeItemInstance(item, idx);
+                        return (
+                          <div
+                            key={itemObj.id || idx}
+                            style={{ display: "flex", alignItems: "center", gap: 6 }}
+                          >
+                            <input
+                              className="field-input"
+                              style={{ flex: 1, padding: "5px 8px", fontSize: "0.78rem" }}
+                              value={typeof item === "string" ? item : item.name}
+                              placeholder="e.g. Leather jacket"
+                              onChange={(e) => {
+                                const next = [...(draft.equipped ?? [])];
+                                next[idx] =
+                                  typeof item === "string"
+                                    ? e.target.value
+                                    : { ...item, name: e.target.value };
+                                setDraft({ ...draft, equipped: next });
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="item-remove-btn"
+                              onClick={() =>
+                                setDraft({
+                                  ...draft,
+                                  equipped: (draft.equipped ?? []).filter((_, i) => i !== idx),
+                                })
+                              }
+                              title="Remove equipped item"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                      {(draft.equipped ?? []).length === 0 && (
+                        <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontStyle: "italic" }}>
+                          No equipped gear specified.
+                        </div>
+                      )}
                     </div>
                   </div>
-                );
-              })()}
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <div className="cog-step">
-                  <div className="cog-step-label">Core Drive</div>
-                  <div style={{ fontSize: "0.8rem" }}>{draft.baseline_psyche.core_drive}</div>
-                </div>
-                <div className="cog-step">
-                  <div className="cog-step-label">Core Fear</div>
-                  <div style={{ fontSize: "0.8rem" }}>{draft.baseline_psyche.core_fear}</div>
-                </div>
-              </div>
-
-              <div>
-                <div className="sidebar-label">
-                  Generated Voice Anchors ({draft.voice_anchors.length})
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {draft.voice_anchors.map((v, i) => (
-                    <div key={i} className="cog-step" style={{ fontSize: "0.78rem" }}>
-                      <strong style={{ color: "var(--accent-amber)" }}>[{v.context}]:</strong>{" "}
-                      {v.snippet}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <div className="sidebar-label">
-                  Atomic Backstory Memory Shards ({draft.memory_shards.length} — Indexed into Vector Store)
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {draft.memory_shards.map((m, i) => (
-                    <div key={i} className="cog-step" style={{ fontSize: "0.78rem" }}>
-                      <strong style={{ color: "var(--accent-cyan)" }}>{m.title}:</strong>{" "}
-                      {m.content}{" "}
-                      <span style={{ color: "var(--text-muted)" }}>
-                        [{m.keywords.join(", ")}]
+                  {/* Carried Inventory */}
+                  <div
+                    style={{
+                      background: "var(--bg-card)",
+                      border: "1px solid var(--border-subtle)",
+                      borderRadius: 8,
+                      padding: 10,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                      }}
+                    >
+                      <span className="sidebar-label">
+                        Carried Inventory ({draft.inventory.length})
                       </span>
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{ padding: "3px 8px", fontSize: "0.72rem" }}
+                        onClick={() =>
+                          setDraft({
+                            ...draft,
+                            inventory: [...draft.inventory, "New carried item"],
+                          })
+                        }
+                      >
+                        <Plus size={12} /> Add Item
+                      </button>
                     </div>
-                  ))}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {draft.inventory.map((item, idx) => {
+                        const itemObj = normalizeItemInstance(item, idx);
+                        return (
+                          <div
+                            key={itemObj.id || idx}
+                            style={{ display: "flex", alignItems: "center", gap: 6 }}
+                          >
+                            <input
+                              className="field-input"
+                              style={{ flex: 1, padding: "5px 8px", fontSize: "0.78rem" }}
+                              value={typeof item === "string" ? item : item.name}
+                              placeholder="e.g. Encrypted datapad"
+                              onChange={(e) => {
+                                const next = [...draft.inventory];
+                                next[idx] =
+                                  typeof item === "string"
+                                    ? e.target.value
+                                    : { ...item, name: e.target.value };
+                                setDraft({ ...draft, inventory: next });
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="item-remove-btn"
+                              onClick={() =>
+                                setDraft({
+                                  ...draft,
+                                  inventory: draft.inventory.filter((_, i) => i !== idx),
+                                })
+                              }
+                              title="Remove item"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                      {draft.inventory.length === 0 && (
+                        <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontStyle: "italic" }}>
+                          No carried items specified.
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {draftTab === "memories" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div className="sidebar-label">
+                    Atomic Backstory Memory Shards ({draft.memory_shards.length} — Indexed into Vector Store)
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {draft.memory_shards.map((m, i) => (
+                      <div key={i} className="cog-step" style={{ fontSize: "0.78rem", padding: "8px 12px" }}>
+                        <div style={{ fontWeight: 600, color: "var(--accent-cyan)", marginBottom: 4 }}>
+                          {m.title}
+                        </div>
+                        <div style={{ color: "var(--text-primary)", marginBottom: 4 }}>
+                          {m.content}
+                        </div>
+                        <div style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
+                          Keywords: [{m.keywords.join(", ")}]
+                        </div>
+                      </div>
+                    ))}
+                    {draft.memory_shards.length === 0 && (
+                      <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontStyle: "italic" }}>
+                        No backstory memory shards generated.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
                 <button

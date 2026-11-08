@@ -815,6 +815,69 @@ class CantinaRepository:
                 conn.execute(
                     "ALTER TABLE characters ADD COLUMN inventory_json TEXT NOT NULL DEFAULT '[]'"
                 )
+            if "species" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN species TEXT NOT NULL DEFAULT 'Human'"
+                )
+            if "sex" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN sex TEXT NOT NULL DEFAULT ''"
+                )
+            if "pronouns" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN pronouns TEXT NOT NULL DEFAULT ''"
+                )
+            if "age" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN age TEXT NOT NULL DEFAULT ''"
+                )
+            if "character_bio" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN character_bio TEXT NOT NULL DEFAULT ''"
+                )
+            if "build_and_height" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN build_and_height TEXT NOT NULL DEFAULT ''"
+                )
+            if "distinctive_features_json" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN distinctive_features_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "posture" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN posture TEXT NOT NULL DEFAULT ''"
+                )
+            if "mannerisms_json" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN mannerisms_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "modifications_json" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN modifications_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "visual_aesthetic" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN visual_aesthetic TEXT NOT NULL DEFAULT ''"
+                )
+            if "personality_traits_json" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN personality_traits_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "moral_code_json" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN moral_code_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "quirks_flaws_json" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN quirks_flaws_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "communication_style_json" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN communication_style_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            conn.execute(
+                "UPDATE characters SET character_bio = physical_appearance WHERE character_bio = '' AND physical_appearance != ''"
+            )
 
             tn_cols = {
                 r["name"]
@@ -3361,15 +3424,33 @@ class CantinaRepository:
                     _validate_world_artifact_lore_id(conn, world_id, it.lore_id)
             equipped_json = dump_items_json(draft.equipped)
             inventory_json = dump_items_json(draft.inventory)
+            distinctive_features_json = json.dumps(draft.distinctive_features)
+            mannerisms_json = json.dumps(draft.mannerisms)
+            modifications_json = json.dumps(draft.modifications)
+            personality_traits_json = json.dumps(draft.personality_traits)
+            moral_code_json = json.dumps(draft.moral_code)
+            quirks_flaws_json = json.dumps(draft.quirks_flaws)
+            communication_style_json = json.dumps(draft.communication_style)
             conn.execute(
                 """
                 INSERT INTO characters (
-                    id, owner_id, world_id, name, tagline, physical_appearance, core_persona,
-                    initial_message, equipped_json, inventory_json, voice_anchors_json,
-                    baseline_psyche_json, memory_shards_json, tags_json, creator, creator_notes,
-                    portraits_json, gallery_json, version, created_at
+                    id, owner_id, world_id, name, tagline, species, sex, pronouns, age,
+                    character_bio, physical_appearance, build_and_height, distinctive_features_json,
+                    posture, mannerisms_json, modifications_json, visual_aesthetic,
+                    personality_traits_json, core_persona, moral_code_json, quirks_flaws_json,
+                    communication_style_json, initial_message, equipped_json, inventory_json,
+                    voice_anchors_json, baseline_psyche_json, memory_shards_json, tags_json,
+                    creator, creator_notes, portraits_json, gallery_json, version, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?, ?, ?, 1, ?
+                )
                 """,
                 (
                     c_id,
@@ -3377,8 +3458,23 @@ class CantinaRepository:
                     world_id,
                     draft.name,
                     draft.tagline,
+                    draft.species,
+                    draft.sex,
+                    draft.pronouns,
+                    draft.age,
+                    draft.character_bio,
                     draft.physical_appearance,
+                    draft.build_and_height,
+                    distinctive_features_json,
+                    draft.posture,
+                    mannerisms_json,
+                    modifications_json,
+                    draft.visual_aesthetic,
+                    personality_traits_json,
                     draft.core_persona,
+                    moral_code_json,
+                    quirks_flaws_json,
+                    communication_style_json,
                     draft.initial_message,
                     equipped_json,
                     inventory_json,
@@ -3399,8 +3495,23 @@ class CantinaRepository:
                 "world_id": world_id,
                 "name": draft.name,
                 "tagline": draft.tagline,
+                "species": draft.species,
+                "sex": draft.sex,
+                "pronouns": draft.pronouns,
+                "age": draft.age,
+                "character_bio": draft.character_bio,
                 "physical_appearance": draft.physical_appearance,
+                "build_and_height": draft.build_and_height,
+                "distinctive_features": list(draft.distinctive_features),
+                "posture": draft.posture,
+                "mannerisms": list(draft.mannerisms),
+                "modifications": list(draft.modifications),
+                "visual_aesthetic": draft.visual_aesthetic,
+                "personality_traits": list(draft.personality_traits),
                 "core_persona": draft.core_persona,
+                "moral_code": list(draft.moral_code),
+                "quirks_flaws": list(draft.quirks_flaws),
+                "communication_style": list(draft.communication_style),
                 "initial_message": draft.initial_message,
                 "equipped": [it.model_dump() for it in draft.equipped],
                 "inventory": [it.model_dump() for it in draft.inventory],
@@ -3636,8 +3747,27 @@ class CantinaRepository:
             world_id=row["world_id"],
             name=row["name"],
             tagline=row["tagline"],
+            species=row["species"] if "species" in row_keys and row["species"] else "Human",
+            sex=row["sex"] if "sex" in row_keys and row["sex"] else "",
+            pronouns=row["pronouns"] if "pronouns" in row_keys and row["pronouns"] else "",
+            age=row["age"] if "age" in row_keys and row["age"] else "",
+            character_bio=(
+                row["character_bio"]
+                if "character_bio" in row_keys and row["character_bio"]
+                else (row["physical_appearance"] if "physical_appearance" in row_keys else "")
+            ),
             physical_appearance=row["physical_appearance"] if "physical_appearance" in row_keys else "",
+            build_and_height=row["build_and_height"] if "build_and_height" in row_keys and row["build_and_height"] else "",
+            distinctive_features=json.loads(row["distinctive_features_json"] or "[]") if "distinctive_features_json" in row_keys and row["distinctive_features_json"] else [],
+            posture=row["posture"] if "posture" in row_keys and row["posture"] else "",
+            mannerisms=json.loads(row["mannerisms_json"] or "[]") if "mannerisms_json" in row_keys and row["mannerisms_json"] else [],
+            modifications=json.loads(row["modifications_json"] or "[]") if "modifications_json" in row_keys and row["modifications_json"] else [],
+            visual_aesthetic=row["visual_aesthetic"] if "visual_aesthetic" in row_keys and row["visual_aesthetic"] else "",
+            personality_traits=json.loads(row["personality_traits_json"] or "[]") if "personality_traits_json" in row_keys and row["personality_traits_json"] else [],
             core_persona=row["core_persona"],
+            moral_code=json.loads(row["moral_code_json"] or "[]") if "moral_code_json" in row_keys and row["moral_code_json"] else [],
+            quirks_flaws=json.loads(row["quirks_flaws_json"] or "[]") if "quirks_flaws_json" in row_keys and row["quirks_flaws_json"] else [],
+            communication_style=json.loads(row["communication_style_json"] or "[]") if "communication_style_json" in row_keys and row["communication_style_json"] else [],
             initial_message=row["initial_message"] if "initial_message" in row_keys else "",
             equipped=json.loads(row["equipped_json"] or "[]") if "equipped_json" in row_keys else [],
             inventory=json.loads(row["inventory_json"] or "[]") if "inventory_json" in row_keys else [],
@@ -3908,14 +4038,25 @@ class CantinaRepository:
             gallery_json = json.dumps([img.model_dump() for img in clean_g])
             new_version = orig.version + 1
 
+            distinctive_features_json = json.dumps(payload.distinctive_features)
+            mannerisms_json = json.dumps(payload.mannerisms)
+            modifications_json = json.dumps(payload.modifications)
+            personality_traits_json = json.dumps(payload.personality_traits)
+            moral_code_json = json.dumps(payload.moral_code)
+            quirks_flaws_json = json.dumps(payload.quirks_flaws)
+            communication_style_json = json.dumps(payload.communication_style)
+
             if campaigns_using == 0:
                 # In-place update (zero active campaigns reference this character)
                 target_char_id = character_id
                 conn.execute(
                     """
                     UPDATE characters
-                    SET world_id = ?, name = ?, tagline = ?, physical_appearance = ?,
-                        core_persona = ?, initial_message = ?, equipped_json = ?, inventory_json = ?,
+                    SET world_id = ?, name = ?, tagline = ?, species = ?, sex = ?, pronouns = ?, age = ?,
+                        character_bio = ?, physical_appearance = ?, build_and_height = ?, distinctive_features_json = ?,
+                        posture = ?, mannerisms_json = ?, modifications_json = ?, visual_aesthetic = ?,
+                        personality_traits_json = ?, core_persona = ?, moral_code_json = ?, quirks_flaws_json = ?,
+                        communication_style_json = ?, initial_message = ?, equipped_json = ?, inventory_json = ?,
                         voice_anchors_json = ?, baseline_psyche_json = ?, memory_shards_json = ?,
                         tags_json = ?, creator = ?, creator_notes = ?,
                         portraits_json = ?, gallery_json = ?, version = ?
@@ -3925,8 +4066,23 @@ class CantinaRepository:
                         target_world_id,
                         payload.name,
                         payload.tagline,
+                        payload.species,
+                        payload.sex,
+                        payload.pronouns,
+                        payload.age,
+                        payload.character_bio,
                         payload.physical_appearance,
+                        payload.build_and_height,
+                        distinctive_features_json,
+                        payload.posture,
+                        mannerisms_json,
+                        modifications_json,
+                        payload.visual_aesthetic,
+                        personality_traits_json,
                         payload.core_persona,
+                        moral_code_json,
+                        quirks_flaws_json,
+                        communication_style_json,
                         payload.initial_message,
                         equipped_json,
                         inventory_json,
@@ -3952,8 +4108,23 @@ class CantinaRepository:
                     "world_id": target_world_id,
                     "name": payload.name,
                     "tagline": payload.tagline,
+                    "species": payload.species,
+                    "sex": payload.sex,
+                    "pronouns": payload.pronouns,
+                    "age": payload.age,
+                    "character_bio": payload.character_bio,
                     "physical_appearance": payload.physical_appearance,
+                    "build_and_height": payload.build_and_height,
+                    "distinctive_features": list(payload.distinctive_features),
+                    "posture": payload.posture,
+                    "mannerisms": list(payload.mannerisms),
+                    "modifications": list(payload.modifications),
+                    "visual_aesthetic": payload.visual_aesthetic,
+                    "personality_traits": list(payload.personality_traits),
                     "core_persona": payload.core_persona,
+                    "moral_code": list(payload.moral_code),
+                    "quirks_flaws": list(payload.quirks_flaws),
+                    "communication_style": list(payload.communication_style),
                     "initial_message": payload.initial_message,
                     "equipped": [it.model_dump() for it in clean_equipped_items],
                     "inventory": [it.model_dump() for it in clean_inventory_items],
@@ -3984,14 +4155,27 @@ class CantinaRepository:
                 conn.execute(
                     """
                     INSERT INTO characters (
-                        id, owner_id, world_id, name, tagline, physical_appearance, core_persona,
-                        initial_message, equipped_json, inventory_json, voice_anchors_json,
-                        baseline_psyche_json, memory_shards_json,
+                        id, owner_id, world_id, name, tagline, species, sex, pronouns, age,
+                        character_bio, physical_appearance, build_and_height, distinctive_features_json,
+                        posture, mannerisms_json, modifications_json, visual_aesthetic,
+                        personality_traits_json, core_persona, moral_code_json, quirks_flaws_json,
+                        communication_style_json, initial_message, equipped_json, inventory_json,
+                        voice_anchors_json, baseline_psyche_json, memory_shards_json,
                         tags_json, creator, creator_notes,
                         portraits_json, gallery_json, version,
                         pending_deletion, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                    VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?, ?,
+                        0, ?
+                    )
                     """,
                     (
                         target_char_id,
@@ -3999,8 +4183,23 @@ class CantinaRepository:
                         target_world_id,
                         payload.name,
                         payload.tagline,
+                        payload.species,
+                        payload.sex,
+                        payload.pronouns,
+                        payload.age,
+                        payload.character_bio,
                         payload.physical_appearance,
+                        payload.build_and_height,
+                        distinctive_features_json,
+                        payload.posture,
+                        mannerisms_json,
+                        modifications_json,
+                        payload.visual_aesthetic,
+                        personality_traits_json,
                         payload.core_persona,
+                        moral_code_json,
+                        quirks_flaws_json,
+                        communication_style_json,
                         payload.initial_message,
                         equipped_json,
                         inventory_json,
@@ -4045,8 +4244,23 @@ class CantinaRepository:
                     "world_id": target_world_id,
                     "name": payload.name,
                     "tagline": payload.tagline,
+                    "species": payload.species,
+                    "sex": payload.sex,
+                    "pronouns": payload.pronouns,
+                    "age": payload.age,
+                    "character_bio": payload.character_bio,
                     "physical_appearance": payload.physical_appearance,
+                    "build_and_height": payload.build_and_height,
+                    "distinctive_features": list(payload.distinctive_features),
+                    "posture": payload.posture,
+                    "mannerisms": list(payload.mannerisms),
+                    "modifications": list(payload.modifications),
+                    "visual_aesthetic": payload.visual_aesthetic,
+                    "personality_traits": list(payload.personality_traits),
                     "core_persona": payload.core_persona,
+                    "moral_code": list(payload.moral_code),
+                    "quirks_flaws": list(payload.quirks_flaws),
+                    "communication_style": list(payload.communication_style),
                     "initial_message": payload.initial_message,
                     "equipped": [it.model_dump() for it in clean_equipped_items],
                     "inventory": [it.model_dump() for it in clean_inventory_items],
@@ -4188,6 +4402,86 @@ class CantinaRepository:
             return CharacterRecord.model_validate(data)
         finally:
             conn.close()
+
+    def restore_character_version(
+        self, character_id: str, version: int, owner_id: str | None = None
+    ) -> CharacterRecord:
+        """Restore a historical snapshot as a new monotonically incremented version."""
+        snap = self.get_character_version(character_id, version, owner_id=owner_id)
+        payload = CharacterUpdatePayload(
+            name=snap.name,
+            tagline=snap.tagline,
+            character_bio=snap.character_bio,
+            physical_appearance=snap.physical_appearance,
+            species=snap.species,
+            sex=snap.sex,
+            pronouns=snap.pronouns,
+            age=snap.age,
+            build_and_height=snap.build_and_height,
+            distinctive_features=snap.distinctive_features,
+            posture=snap.posture,
+            mannerisms=snap.mannerisms,
+            modifications=snap.modifications,
+            visual_aesthetic=snap.visual_aesthetic,
+            personality_traits=snap.personality_traits,
+            core_persona=snap.core_persona,
+            moral_code=snap.moral_code,
+            quirks_flaws=snap.quirks_flaws,
+            communication_style=snap.communication_style,
+            initial_message=snap.initial_message,
+            equipped=snap.equipped,
+            inventory=snap.inventory,
+            voice_anchors=snap.voice_anchors,
+            baseline_psyche=snap.baseline_psyche,
+            memory_shards=snap.memory_shards,
+            tags=snap.tags,
+            creator=snap.creator,
+            creator_notes=snap.creator_notes,
+            portraits=snap.portraits,
+            gallery=snap.gallery,
+            world_id=snap.world_id,
+        )
+        return self.update_character(character_id, payload, owner_id=owner_id)
+
+    async def arestore_character_version(
+        self, character_id: str, version: int, owner_id: str | None = None
+    ) -> CharacterRecord:
+        """Asynchronously restore a historical snapshot as a new version."""
+        snap = self.get_character_version(character_id, version, owner_id=owner_id)
+        payload = CharacterUpdatePayload(
+            name=snap.name,
+            tagline=snap.tagline,
+            character_bio=snap.character_bio,
+            physical_appearance=snap.physical_appearance,
+            species=snap.species,
+            sex=snap.sex,
+            pronouns=snap.pronouns,
+            age=snap.age,
+            build_and_height=snap.build_and_height,
+            distinctive_features=snap.distinctive_features,
+            posture=snap.posture,
+            mannerisms=snap.mannerisms,
+            modifications=snap.modifications,
+            visual_aesthetic=snap.visual_aesthetic,
+            personality_traits=snap.personality_traits,
+            core_persona=snap.core_persona,
+            moral_code=snap.moral_code,
+            quirks_flaws=snap.quirks_flaws,
+            communication_style=snap.communication_style,
+            initial_message=snap.initial_message,
+            equipped=snap.equipped,
+            inventory=snap.inventory,
+            voice_anchors=snap.voice_anchors,
+            baseline_psyche=snap.baseline_psyche,
+            memory_shards=snap.memory_shards,
+            tags=snap.tags,
+            creator=snap.creator,
+            creator_notes=snap.creator_notes,
+            portraits=snap.portraits,
+            gallery=snap.gallery,
+            world_id=snap.world_id,
+        )
+        return await self.aupdate_character(character_id, payload, owner_id=owner_id)
 
     def update_character_portraits(
         self, character_id: str, portraits: dict[str, str], owner_id: str | None = None

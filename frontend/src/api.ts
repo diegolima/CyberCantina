@@ -728,6 +728,13 @@ export const api = {
     fetchJson<CharacterRecord>(
       `${API_BASE}/characters/${characterId}/versions/${version}`
     ),
+  restoreCharacterVersion: (characterId: string, version: number) =>
+    fetchJson<CharacterRecord>(
+      `${API_BASE}/characters/${characterId}/versions/${version}/restore`,
+      {
+        method: "POST",
+      }
+    ),
   draftCharacter: (seed: CharacterWizardSeed) =>
     fetchJson<CharacterWizardDraft>(`${API_BASE}/wizards/character/draft`, {
       method: "POST",
@@ -805,6 +812,37 @@ export const api = {
         draft,
         world_id: worldId ?? null,
         character_id: characterId ?? null,
+      }),
+    }),
+  extractCharacterFeatures: (
+    characterBio: string,
+    existingFeatures: string[]
+  ) =>
+    fetchJson<{
+      extracted_features: string[];
+      rewritten_bio: string;
+    }>(`${API_BASE}/wizards/character/extract-features`, {
+      method: "POST",
+      body: JSON.stringify({
+        character_bio: characterBio,
+        existing_features: existingFeatures,
+      }),
+    }),
+  extractCharacterPersonaTraits: (
+    corePersona: string,
+    existingMoralCode: string[],
+    existingQuirksFlaws: string[]
+  ) =>
+    fetchJson<{
+      extracted_moral_code: string[];
+      extracted_quirks_flaws: string[];
+      rewritten_core_persona: string;
+    }>(`${API_BASE}/wizards/character/extract-persona-traits`, {
+      method: "POST",
+      body: JSON.stringify({
+        core_persona: corePersona,
+        existing_moral_code: existingMoralCode,
+        existing_quirks_flaws: existingQuirksFlaws,
       }),
     }),
   updateCharacter: (

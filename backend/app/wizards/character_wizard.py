@@ -63,11 +63,26 @@ def _fallback_character_expansion(
     return CharacterWizardDraft(
         name=seed.name,
         tagline=f"{seed.archetype} ({kw_str})",
+        character_bio=seed.rough_notes.strip() if seed.rough_notes.strip() else f"{seed.name} is a {seed.archetype}.",
         physical_appearance=(
             f"{seed.name} has a weathered, observant presence shaped by life as a {seed.archetype}. "
             f"Sharp, attentive eyes, a composed athletic build, and subtle calluses and faint scars "
             f"along the hands and jawline mark years of hands-on experience."
         ),
+        species="Human",
+        sex="",
+        pronouns="",
+        age="",
+        build_and_height="Composed, athletic build",
+        distinctive_features=["sharp attentive eyes", "faint jawline scar"],
+        posture="composed, alert",
+        mannerisms=["subtle jaw tightening under pressure", "studies the room and exits before speaking"],
+        modifications=[],
+        visual_aesthetic="Practical street techwear",
+        personality_traits=list(seed.personality_keywords) if seed.personality_keywords else ["perceptive", "guarded", "dry-witted"],
+        moral_code=["protects trusted allies", "avoids unnecessary collateral damage"],
+        quirks_flaws=["slow to trust", "keeps secrets close"],
+        communication_style=["clipped", "measured", "direct"],
         core_persona=(
             f"{seed.name} is a {seed.archetype}{setting_note}, serving as {seed.role_in_story}. "
             f"Their demeanor is defined by being {kw_str}. In conversation, {seed.name} avoids "

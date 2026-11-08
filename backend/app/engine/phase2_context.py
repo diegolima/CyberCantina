@@ -683,14 +683,56 @@ def build_zone1_static_system_prompt(
     persona_snapshot: PersonaRecord | None = None,
 ) -> str:
     """Zone 1: Strictly static system prompt prefix to guarantee 100% KV-cache hits across turns."""
-    voice_lines = "\n".join(
-        f"- [{v.context}]: {v.snippet}" for v in character.voice_anchors
-    )
+    style_str = f"Communication Style: {', '.join(character.communication_style)}\n" if character.communication_style else ""
+    anchors_str = "\n".join(f"- [{v.context}]: {v.snippet}" for v in character.voice_anchors)
+    voice_lines = f"{style_str}{anchors_str}".strip() or "- None"
+
+    appearance_parts: list[str] = []
+    if character.build_and_height:
+        appearance_parts.append(f"- Build & Height: {character.build_and_height}")
+    if character.distinctive_features:
+        appearance_parts.append(f"- Distinctive Features: {', '.join(character.distinctive_features)}")
+    if character.posture:
+        appearance_parts.append(f"- Posture: {character.posture}")
+    if character.mannerisms:
+        mannerism_lines = "\n".join(f"  * {m}" for m in character.mannerisms)
+        appearance_parts.append(f"- Mannerisms & Behavioral Tells:\n{mannerism_lines}")
+    if character.visual_aesthetic:
+        appearance_parts.append(f"- Visual Aesthetic: {character.visual_aesthetic}")
+    if not appearance_parts and character.physical_appearance.strip():
+        appearance_parts.append(f"- Overview: {character.physical_appearance.strip()}")
+
     appearance_line = (
-        f"Physical Appearance (Immutable Anatomy & Features): {character.physical_appearance}\n"
-        if character.physical_appearance.strip()
+        f"Physical Appearance (Immutable Anatomy & Features):\n" + "\n".join(appearance_parts) + "\n"
+        if appearance_parts
         else ""
     )
+
+    identity_items: list[str] = []
+    if character.species and character.species.lower() != "human":
+        identity_items.append(f"Species: {character.species}")
+    if character.sex:
+        identity_items.append(f"Sex: {character.sex}")
+    if character.pronouns:
+        identity_items.append(f"Pronouns: {character.pronouns}")
+    if character.age:
+        identity_items.append(f"Age: {character.age}")
+    identity_prefix = f"Demographics: {', '.join(identity_items)}\n" if identity_items else ""
+    if character.character_bio and character.character_bio != character.physical_appearance:
+        identity_prefix += f"Bio: {character.character_bio}\n"
+
+    persona_parts: list[str] = []
+    if character.personality_traits:
+        persona_parts.append(f"Traits: {', '.join(character.personality_traits)}")
+    if character.moral_code:
+        persona_parts.append(f"Boundaries: {', '.join(character.moral_code)}")
+    if character.quirks_flaws:
+        persona_parts.append(f"Quirks & Flaws: {', '.join(character.quirks_flaws)}")
+    persona_parts.append(character.core_persona)
+    full_persona = "\n".join(persona_parts)
+
+    tagline_with_identity = f"{character.tagline}\n{identity_prefix}".strip() if identity_prefix else character.tagline
+
     template = prompt_template or get_default_prompt("actor_zone1_system")
     base = render_template(
         template,
@@ -700,10 +742,10 @@ def build_zone1_static_system_prompt(
         tone=world.global_rules.tone,
         setting_overview=world.global_rules.setting_overview,
         tech_or_magic_rules=world.global_rules.tech_or_magic_rules,
-        tagline=character.tagline,
+        tagline=tagline_with_identity,
         appearance_section=appearance_line,
         physical_appearance=character.physical_appearance,
-        core_persona=character.core_persona,
+        core_persona=full_persona,
         core_drive=character.baseline_psyche.core_drive,
         core_fear=character.baseline_psyche.core_fear,
         voice_lines=voice_lines,
@@ -732,13 +774,36 @@ def build_zone1_ensemble_system_prompt(
     sorted_cast = sorted(present_characters, key=lambda c: c.id)
     cast_sections: list[str] = []
     for c in sorted_cast:
-        v_lines = "\n".join(f"  - [{v.context}]: {v.snippet}" for v in c.voice_anchors) or "  - None"
-        app_text = f"  Physical Appearance: {c.physical_appearance}\n" if c.physical_appearance.strip() else ""
+        style_prefix = f"  - Style: {', '.join(c.communication_style)}\n" if c.communication_style else ""
+        v_lines = style_prefix + "\n".join(f"  - [{v.context}]: {v.snippet}" for v in c.voice_anchors)
+        v_lines = v_lines.strip() or "  - None"
+
+        appearance_parts: list[str] = []
+        if c.build_and_height:
+            appearance_parts.append(f"Build: {c.build_and_height}")
+        if c.distinctive_features:
+            appearance_parts.append(f"Features: {', '.join(c.distinctive_features)}")
+        if c.posture:
+            appearance_parts.append(f"Posture: {c.posture}")
+        if c.modifications:
+            appearance_parts.append(f"Cyberware: {', '.join(c.modifications)}")
+        if c.mannerisms:
+            appearance_parts.append(f"Tells: {', '.join(c.mannerisms)}")
+        if not appearance_parts and c.physical_appearance.strip():
+            appearance_parts.append(c.physical_appearance.strip())
+        app_text = f"  Appearance: {'; '.join(appearance_parts)}\n" if appearance_parts else ""
+
+        persona_parts = []
+        if c.personality_traits:
+            persona_parts.append(f"Traits: {', '.join(c.personality_traits)}")
+        persona_parts.append(c.core_persona)
+        c_persona = " | ".join(persona_parts)
+
         cast_sections.append(
             f"=== CHARACTER: {c.name} (id='{c.id}') ===\n"
             f"Tagline: {c.tagline}\n"
             f"{app_text}"
-            f"Persona: {c.core_persona}\n"
+            f"Persona: {c_persona}\n"
             f"Drive: {c.baseline_psyche.core_drive} | Fear: {c.baseline_psyche.core_fear}\n"
             f"Voice & Mannerism Anchors:\n{v_lines}"
         )

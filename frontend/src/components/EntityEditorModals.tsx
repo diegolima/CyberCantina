@@ -9,14 +9,15 @@ import {
   Compass,
   Database,
   Edit3,
+  Eye,
   FileText,
   Globe,
-  HeartPulse,
   History,
   Image as ImageIcon,
   Loader2,
   Lock,
   Maximize2,
+  MessageSquare,
   Package,
   Plus,
   Sparkles,
@@ -27,6 +28,16 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api";
+import {
+  CharacterBaseTab,
+  CharacterAppearanceTab,
+  CharacterPersonalityTab,
+  CharacterVoiceTab,
+  CharacterBaseData,
+  CharacterAppearanceData,
+  CharacterPersonalityData,
+  CharacterVoiceData,
+} from "./character";
 import {
   BasicEmotion,
   CharacterRecord,
@@ -43,14 +54,11 @@ import {
   LocationNodeDraft,
   LoreNode,
   MemoryShard,
-  TEMPERAMENT_ARCHETYPE_OPTIONS,
-  TemperamentArchetype,
   VoiceAnchor,
   WORLD_LORE_CATEGORIES,
   WorldGlobalRules,
   WorldLoreCategory,
   WorldRecord,
-  getTemperamentPresetMeta,
   WorldWizardDraft,
   hasItemFlag,
   normalizeItemList,
@@ -63,24 +71,28 @@ import {
 } from "./SpatialTopologyView";
 import { TagChipsInput, normalizeTagList } from "./TagChipsInput";
 
-interface ClickToEditFieldProps {
+export interface ClickToEditFieldProps {
   label?: string;
+  readOnlyLabel?: string;
   value: string;
   onChange: (next: string) => void;
   multiline?: boolean;
   rows?: number;
   placeholder?: string;
   readOnly?: boolean;
+  suggestions?: string[];
 }
 
-const ClickToEditField: React.FC<ClickToEditFieldProps> = ({
+export const ClickToEditField: React.FC<ClickToEditFieldProps> = ({
   label,
+  readOnlyLabel,
   value,
   onChange,
   multiline = false,
   rows = 3,
   placeholder = "Click to edit...",
   readOnly = false,
+  suggestions,
 }) => {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -91,54 +103,88 @@ const ClickToEditField: React.FC<ClickToEditFieldProps> = ({
     }
   }, [value, editing]);
 
-  const handleCommit = () => {
+  const handleCommit = (commitVal?: string) => {
     setEditing(false);
-    onChange(draft);
+    onChange(commitVal !== undefined ? commitVal : draft);
   };
+
+  const displayLabel = (readOnly && readOnlyLabel) ? readOnlyLabel : label;
 
   return (
     <div className="field-group">
-      {label && <label>{label}</label>}
+      {displayLabel && <label>{displayLabel}</label>}
       {editing && !readOnly ? (
-        multiline ? (
-          <textarea
-            className="field-textarea"
-            rows={rows}
-            autoFocus
-            value={draft}
-            placeholder={placeholder}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              onChange(e.target.value);
-            }}
-            onBlur={handleCommit}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") {
-                setDraft(value);
-                setEditing(false);
-              }
-            }}
-          />
-        ) : (
-          <input
-            className="field-input"
-            autoFocus
-            value={draft}
-            placeholder={placeholder}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              onChange(e.target.value);
-            }}
-            onBlur={handleCommit}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleCommit();
-              if (e.key === "Escape") {
-                setDraft(value);
-                setEditing(false);
-              }
-            }}
-          />
-        )
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {multiline ? (
+            <textarea
+              className="field-textarea"
+              rows={rows}
+              autoFocus
+              value={draft}
+              placeholder={placeholder}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                onChange(e.target.value);
+              }}
+              onBlur={() => handleCommit()}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setDraft(value);
+                  setEditing(false);
+                }
+              }}
+            />
+          ) : (
+            <input
+              className="field-input"
+              autoFocus
+              value={draft}
+              placeholder={placeholder}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                onChange(e.target.value);
+              }}
+              onBlur={() => handleCommit()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleCommit();
+                if (e.key === "Escape") {
+                  setDraft(value);
+                  setEditing(false);
+                }
+              }}
+            />
+          )}
+
+          {suggestions && suggestions.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 5, marginTop: 4 }}>
+              <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginRight: 2 }}>
+                Suggestions:
+              </span>
+              {suggestions.map((sug) => (
+                <button
+                  key={sug}
+                  type="button"
+                  className="btn"
+                  style={{
+                    padding: "2px 7px",
+                    fontSize: "0.68rem",
+                    borderRadius: 4,
+                    borderStyle: "dashed",
+                    background: draft.toLowerCase() === sug.toLowerCase() ? "var(--accent-amber)" : "transparent",
+                    color: draft.toLowerCase() === sug.toLowerCase() ? "#000" : "var(--text-secondary)",
+                  }}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    setDraft(sug);
+                    onChange(sug);
+                  }}
+                >
+                  + {sug}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       ) : (
         <div
           className={`editable-field-box ${readOnly ? "read-only" : ""}`}
@@ -160,7 +206,7 @@ const ClickToEditField: React.FC<ClickToEditFieldProps> = ({
             value
           ) : (
             <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>
-              {placeholder}
+              {readOnly ? "—" : placeholder}
             </span>
           )}
         </div>
@@ -228,10 +274,17 @@ interface CharacterInspectorModalProps {
   character: CharacterRecord;
   worlds: WorldRecord[];
   onClose: () => void;
-  onSaved: (updated: CharacterRecord) => void;
+  onSaved: (updated: CharacterRecord, closeModal?: boolean) => void;
 }
 
-type CharacterTab = "base" | "personality" | "memories" | "inventory" | "media";
+type CharacterTab =
+  | "base"
+  | "appearance"
+  | "personality"
+  | "voice"
+  | "memories"
+  | "inventory"
+  | "media";
 
 export const CharacterInspectorModal: React.FC<
   CharacterInspectorModalProps
@@ -240,10 +293,46 @@ export const CharacterInspectorModal: React.FC<
   const [name, setName] = useState(character.name);
   const [tagline, setTagline] = useState(character.tagline);
   const [worldId, setWorldId] = useState<string>(character.world_id ?? "");
+  const [characterBio, setCharacterBio] = useState(
+    character.character_bio ?? character.physical_appearance ?? ""
+  );
   const [physicalAppearance, setPhysicalAppearance] = useState(
     character.physical_appearance ?? ""
   );
+  const [species, setSpecies] = useState(character.species ?? "Human");
+  const [sex, setSex] = useState(character.sex ?? "");
+  const [pronouns, setPronouns] = useState(character.pronouns ?? "");
+  const [age, setAge] = useState(character.age ?? "");
+  const [buildAndHeight, setBuildAndHeight] = useState(
+    character.build_and_height ?? ""
+  );
+  const initialFeatures = [
+    ...(character.distinctive_features ?? []),
+    ...(character.modifications ?? []).filter(
+      (m) => !(character.distinctive_features ?? []).includes(m)
+    ),
+  ];
+  const [distinctiveFeatures, setDistinctiveFeatures] = useState<string[]>(initialFeatures);
+  const [posture, setPosture] = useState(character.posture ?? "");
+  const [mannerisms, setMannerisms] = useState<string[]>(
+    character.mannerisms ?? []
+  );
+  const [visualAesthetic, setVisualAesthetic] = useState(
+    character.visual_aesthetic ?? ""
+  );
+  const [personalityTraits, setPersonalityTraits] = useState<string[]>(
+    character.personality_traits ?? []
+  );
   const [corePersona, setCorePersona] = useState(character.core_persona);
+  const [moralCode, setMoralCode] = useState<string[]>(
+    character.moral_code ?? []
+  );
+  const [quirksFlaws, setQuirksFlaws] = useState<string[]>(
+    character.quirks_flaws ?? []
+  );
+  const [communicationStyle, setCommunicationStyle] = useState<string[]>(
+    character.communication_style ?? []
+  );
   const [initialMessage, setInitialMessage] = useState(
     character.initial_message ?? ""
   );
@@ -265,7 +354,6 @@ export const CharacterInspectorModal: React.FC<
   );
 
   const [tags, setTags] = useState<string[]>(character.tags ?? []);
-  const [tagInput, setTagInput] = useState<string>((character.tags ?? []).join(", "));
   const [creator, setCreator] = useState<string>(character.creator ?? "");
   const [creatorNotes, setCreatorNotes] = useState<string>(character.creator_notes ?? "");
   const [version, setVersion] = useState<number>(character.version ?? 1);
@@ -285,22 +373,30 @@ export const CharacterInspectorModal: React.FC<
   const [mediaError, setMediaError] = useState<string | null>(null);
 
   // Version history state
+  const [latestCharacter, setLatestCharacter] = useState<CharacterRecord>(character);
+  const [characterId, setCharacterId] = useState<string>(character.id);
   const [versions, setVersions] = useState<CharacterVersionSummary[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<number>(character.version ?? 1);
   const [viewingHistory, setViewingHistory] = useState<boolean>(false);
   const [historicalData, setHistoricalData] = useState<CharacterRecord | null>(null);
   const [loadingVersion, setLoadingVersion] = useState<boolean>(false);
+  const [restoringVersion, setRestoringVersion] = useState<boolean>(false);
 
   const [isDirty, setIsDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [exportingChar, setExportingChar] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    setLatestCharacter(character);
+    setCharacterId(character.id);
+  }, [character]);
+
   const handleExportCharacter = async () => {
     setExportingChar(true);
     try {
       const includeWorld = character.world_id ? window.confirm("Include associated world in this export package?") : false;
-      await api.exportCharacter(character.id, includeWorld);
+      await api.exportCharacter(characterId, includeWorld);
     } catch (err: any) {
       setError(err?.message || String(err));
     } finally {
@@ -319,50 +415,97 @@ export const CharacterInspectorModal: React.FC<
   }, []);
 
   useEffect(() => {
-    api.listCharacterVersions(character.id)
+    api.listCharacterVersions(characterId)
       .then((res) => {
         setVersions(res);
       })
       .catch((err) => console.warn("Failed to load versions", err));
-  }, [character.id]);
+  }, [characterId]);
 
   const handleSelectVersion = async (targetVer: number) => {
+    if (isDirty) {
+      if (!window.confirm("You have unsaved changes. Discard them to inspect a different version?")) {
+        return;
+      }
+    }
+
     if (targetVer === version) {
       setViewingHistory(false);
       setSelectedVersion(version);
       setHistoricalData(null);
-      setName(character.name);
-      setTagline(character.tagline);
-      setWorldId(character.world_id ?? "");
-      setPhysicalAppearance(character.physical_appearance ?? "");
-      setCorePersona(character.core_persona);
-      setInitialMessage(character.initial_message ?? "");
-      setEquipped(normalizeItemList(character.equipped));
-      setInventory(normalizeItemList(character.inventory));
-      setBaselinePsyche({ ...character.baseline_psyche });
-      setVoiceAnchors(character.voice_anchors.map((v) => ({ ...v })));
-      setMemoryShards(character.memory_shards.map((m) => ({ ...m, keywords: [...m.keywords] })));
-      setTags(character.tags ?? []);
-      setTagInput((character.tags ?? []).join(", "));
-      setCreator(character.creator ?? "");
-      setCreatorNotes(character.creator_notes ?? "");
-      setPortraits(character.portraits ?? {});
-      setGallery(character.gallery ?? []);
+      setIsDirty(false);
+      setName(latestCharacter.name);
+      setTagline(latestCharacter.tagline);
+      setWorldId(latestCharacter.world_id ?? "");
+      setCharacterBio(latestCharacter.character_bio ?? latestCharacter.physical_appearance ?? "");
+      setPhysicalAppearance(latestCharacter.physical_appearance ?? "");
+      setSpecies(latestCharacter.species ?? "Human");
+      setSex(latestCharacter.sex ?? "");
+      setPronouns(latestCharacter.pronouns ?? "");
+      setAge(latestCharacter.age ?? "");
+      setBuildAndHeight(latestCharacter.build_and_height ?? "");
+      const characterMergedFeatures = [
+        ...(latestCharacter.distinctive_features ?? []),
+        ...(latestCharacter.modifications ?? []).filter(
+          (m) => !(latestCharacter.distinctive_features ?? []).includes(m)
+        ),
+      ];
+      setDistinctiveFeatures(characterMergedFeatures);
+      setPosture(latestCharacter.posture ?? "");
+      setMannerisms(latestCharacter.mannerisms ?? []);
+      setVisualAesthetic(latestCharacter.visual_aesthetic ?? "");
+      setPersonalityTraits(latestCharacter.personality_traits ?? []);
+      setCorePersona(latestCharacter.core_persona);
+      setMoralCode(latestCharacter.moral_code ?? []);
+      setQuirksFlaws(latestCharacter.quirks_flaws ?? []);
+      setCommunicationStyle(latestCharacter.communication_style ?? []);
+      setInitialMessage(latestCharacter.initial_message ?? "");
+      setEquipped(normalizeItemList(latestCharacter.equipped));
+      setInventory(normalizeItemList(latestCharacter.inventory));
+      setBaselinePsyche({ ...latestCharacter.baseline_psyche });
+      setVoiceAnchors(latestCharacter.voice_anchors.map((v) => ({ ...v })));
+      setMemoryShards(latestCharacter.memory_shards.map((m) => ({ ...m, keywords: [...m.keywords] })));
+      setTags(latestCharacter.tags ?? []);
+      setCreator(latestCharacter.creator ?? "");
+      setCreatorNotes(latestCharacter.creator_notes ?? "");
+      setPortraits(latestCharacter.portraits ?? {});
+      setGallery(latestCharacter.gallery ?? []);
       return;
     }
 
     setLoadingVersion(true);
     setError(null);
     try {
-      const snap = await api.getCharacterVersion(character.id, targetVer);
+      const snap = await api.getCharacterVersion(characterId, targetVer);
       setHistoricalData(snap);
       setSelectedVersion(targetVer);
       setViewingHistory(true);
+      setIsDirty(false);
       setName(snap.name);
       setTagline(snap.tagline);
       setWorldId(snap.world_id ?? "");
+      setCharacterBio(snap.character_bio ?? snap.physical_appearance ?? "");
       setPhysicalAppearance(snap.physical_appearance ?? "");
+      setSpecies(snap.species ?? "Human");
+      setSex(snap.sex ?? "");
+      setPronouns(snap.pronouns ?? "");
+      setAge(snap.age ?? "");
+      setBuildAndHeight(snap.build_and_height ?? "");
+      const snapMergedFeatures = [
+        ...(snap.distinctive_features ?? []),
+        ...(snap.modifications ?? []).filter(
+          (m) => !(snap.distinctive_features ?? []).includes(m)
+        ),
+      ];
+      setDistinctiveFeatures(snapMergedFeatures);
+      setPosture(snap.posture ?? "");
+      setMannerisms(snap.mannerisms ?? []);
+      setVisualAesthetic(snap.visual_aesthetic ?? "");
+      setPersonalityTraits(snap.personality_traits ?? []);
       setCorePersona(snap.core_persona);
+      setMoralCode(snap.moral_code ?? []);
+      setQuirksFlaws(snap.quirks_flaws ?? []);
+      setCommunicationStyle(snap.communication_style ?? []);
       setInitialMessage(snap.initial_message ?? "");
       setEquipped(normalizeItemList(snap.equipped));
       setInventory(normalizeItemList(snap.inventory));
@@ -370,11 +513,10 @@ export const CharacterInspectorModal: React.FC<
       setVoiceAnchors(snap.voice_anchors.map((v) => ({ ...v })));
       setMemoryShards(snap.memory_shards.map((m) => ({ ...m, keywords: [...m.keywords] })));
       setTags(snap.tags ?? []);
-      setTagInput((snap.tags ?? []).join(", "));
       setCreator(snap.creator ?? "");
       setCreatorNotes(snap.creator_notes ?? "");
-      setPortraits(snap.portraits ?? character.portraits ?? {});
-      setGallery(snap.gallery ?? character.gallery ?? []);
+      setPortraits(snap.portraits ?? latestCharacter.portraits ?? {});
+      setGallery(snap.gallery ?? latestCharacter.gallery ?? []);
     } catch (err) {
       setError(`Failed to fetch version ${targetVer}: ${String(err)}`);
     } finally {
@@ -386,12 +528,67 @@ export const CharacterInspectorModal: React.FC<
     handleSelectVersion(version);
   };
 
-  const handleRestoreHistoricalVersion = () => {
+  const handleRestoreHistoricalVersion = async () => {
     if (!historicalData) return;
-    setViewingHistory(false);
-    setSelectedVersion(version);
-    setHistoricalData(null);
-    markDirty();
+    const targetVer = historicalData.version;
+    setRestoringVersion(true);
+    setError(null);
+    try {
+      const updated = await api.restoreCharacterVersion(characterId, targetVer);
+      setLatestCharacter(updated);
+      setCharacterId(updated.id);
+      setVersion(updated.version);
+      setSelectedVersion(updated.version);
+      setViewingHistory(false);
+      setHistoricalData(null);
+      setIsDirty(false);
+
+      setName(updated.name);
+      setTagline(updated.tagline);
+      setWorldId(updated.world_id ?? "");
+      setCharacterBio(updated.character_bio ?? updated.physical_appearance ?? "");
+      setPhysicalAppearance(updated.physical_appearance ?? "");
+      setSpecies(updated.species ?? "Human");
+      setSex(updated.sex ?? "");
+      setPronouns(updated.pronouns ?? "");
+      setAge(updated.age ?? "");
+      setBuildAndHeight(updated.build_and_height ?? "");
+      const updatedFeatures = [
+        ...(updated.distinctive_features ?? []),
+        ...(updated.modifications ?? []).filter(
+          (m) => !(updated.distinctive_features ?? []).includes(m)
+        ),
+      ];
+      setDistinctiveFeatures(updatedFeatures);
+      setPosture(updated.posture ?? "");
+      setMannerisms(updated.mannerisms ?? []);
+      setVisualAesthetic(updated.visual_aesthetic ?? "");
+      setPersonalityTraits(updated.personality_traits ?? []);
+      setCorePersona(updated.core_persona);
+      setMoralCode(updated.moral_code ?? []);
+      setQuirksFlaws(updated.quirks_flaws ?? []);
+      setCommunicationStyle(updated.communication_style ?? []);
+      setInitialMessage(updated.initial_message ?? "");
+      setEquipped(normalizeItemList(updated.equipped));
+      setInventory(normalizeItemList(updated.inventory));
+      setBaselinePsyche({ ...updated.baseline_psyche });
+      setVoiceAnchors(updated.voice_anchors.map((v) => ({ ...v })));
+      setMemoryShards(updated.memory_shards.map((m) => ({ ...m, keywords: [...m.keywords] })));
+      setTags(updated.tags ?? []);
+      setCreator(updated.creator ?? "");
+      setCreatorNotes(updated.creator_notes ?? "");
+      setPortraits(updated.portraits ?? {});
+      setGallery(updated.gallery ?? []);
+
+      const nextVersions = await api.listCharacterVersions(updated.id);
+      setVersions(nextVersions);
+
+      onSaved(updated, false);
+    } catch (err: any) {
+      setError(err?.message || `Failed to restore version ${targetVer}: ${String(err)}`);
+    } finally {
+      setRestoringVersion(false);
+    }
   };
 
   const markDirty = () => {
@@ -403,9 +600,11 @@ export const CharacterInspectorModal: React.FC<
     setMediaError(null);
     try {
       const blob = await cropToSquareBlob(file, 512);
-      const updated = await api.uploadCharacterPortrait(character.id, emotion, blob);
+      const updated = await api.uploadCharacterPortrait(characterId, emotion, blob);
+      setLatestCharacter(updated);
+      setCharacterId(updated.id);
       setPortraits(updated.portraits ?? {});
-      onSaved(updated);
+      onSaved(updated, false);
     } catch (err: any) {
       setMediaError(err?.message || "Failed to upload portrait");
     } finally {
@@ -418,9 +617,11 @@ export const CharacterInspectorModal: React.FC<
     setUploadingEmotion(emotion);
     setMediaError(null);
     try {
-      const updated = await api.deleteCharacterPortrait(character.id, emotion);
+      const updated = await api.deleteCharacterPortrait(characterId, emotion);
+      setLatestCharacter(updated);
+      setCharacterId(updated.id);
       setPortraits(updated.portraits ?? {});
-      onSaved(updated);
+      onSaved(updated, false);
     } catch (err: any) {
       setMediaError(err?.message || "Failed to delete portrait");
     } finally {
@@ -434,17 +635,19 @@ export const CharacterInspectorModal: React.FC<
     setIsUploadingGallery(true);
     setMediaError(null);
     try {
-      let latestChar = character;
+      let latestChar = latestCharacter;
       for (let i = 0; i < files.length; i++) {
         latestChar = await api.uploadCharacterGalleryImage(
-          character.id,
+          characterId,
           files[i],
           galleryCaptionInput.trim() || undefined
         );
       }
+      setLatestCharacter(latestChar);
+      setCharacterId(latestChar.id);
       setGallery(latestChar.gallery ?? []);
       setGalleryCaptionInput("");
-      onSaved(latestChar);
+      onSaved(latestChar, false);
     } catch (err: any) {
       setMediaError(err?.message || "Failed to upload photo to album");
     } finally {
@@ -457,12 +660,14 @@ export const CharacterInspectorModal: React.FC<
     if (!window.confirm("Delete this photo from the character's photo album?")) return;
     setMediaError(null);
     try {
-      const updated = await api.deleteCharacterGalleryImage(character.id, imageId);
+      const updated = await api.deleteCharacterGalleryImage(characterId, imageId);
+      setLatestCharacter(updated);
+      setCharacterId(updated.id);
       setGallery(updated.gallery ?? []);
       if (lightboxImage?.id === imageId) {
         setLightboxImage(null);
       }
-      onSaved(updated);
+      onSaved(updated, false);
     } catch (err: any) {
       setMediaError(err?.message || "Failed to delete photo");
     }
@@ -504,11 +709,26 @@ export const CharacterInspectorModal: React.FC<
     try {
       const cleanEquipped = sanitizeItemsForSave(equipped);
       const cleanInventory = sanitizeItemsForSave(inventory);
-      const updated = await api.updateCharacter(character.id, {
-        name: name.trim() || character.name,
+      const updated = await api.updateCharacter(characterId, {
+        name: name.trim() || latestCharacter.name,
         tagline: tagline.trim(),
-        physical_appearance: physicalAppearance.trim(),
+        character_bio: characterBio.trim(),
+        physical_appearance: (characterBio.trim() || physicalAppearance.trim()),
+        species: species.trim() || "Human",
+        sex: sex.trim(),
+        pronouns: pronouns.trim(),
+        age: age.trim(),
+        build_and_height: buildAndHeight.trim(),
+        distinctive_features: distinctiveFeatures,
+        posture: posture.trim(),
+        mannerisms: mannerisms.map((m) => m.trim()).filter(Boolean),
+        modifications: [],
+        visual_aesthetic: visualAesthetic.trim(),
+        personality_traits: personalityTraits,
         core_persona: corePersona.trim(),
+        moral_code: moralCode,
+        quirks_flaws: quirksFlaws,
+        communication_style: communicationStyle,
         initial_message: initialMessage.trim(),
         equipped: cleanEquipped,
         inventory: cleanInventory,
@@ -522,18 +742,97 @@ export const CharacterInspectorModal: React.FC<
         gallery: gallery,
         world_id: worldId || null,
       });
+      setLatestCharacter(updated);
+      setCharacterId(updated.id);
       setEquipped(normalizeItemList(updated.equipped));
       setInventory(normalizeItemList(updated.inventory));
       setVersion(updated.version);
       setSelectedVersion(updated.version);
       setIsDirty(false);
-      api.listCharacterVersions(character.id).then(setVersions).catch(() => {});
-      onSaved(updated);
+      api.listCharacterVersions(updated.id).then(setVersions).catch(() => {});
+      onSaved(updated, true);
     } catch (err) {
       setError(String(err));
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleBaseChange = (updated: Partial<CharacterBaseData>) => {
+    markDirty();
+    if (updated.name !== undefined) setName(updated.name);
+    if (updated.tagline !== undefined) setTagline(updated.tagline);
+    if (updated.character_bio !== undefined) {
+      setCharacterBio(updated.character_bio);
+      setPhysicalAppearance(updated.character_bio);
+    }
+    if (updated.physical_appearance !== undefined) {
+      setPhysicalAppearance(updated.physical_appearance);
+      setCharacterBio(updated.physical_appearance);
+    }
+    if (updated.species !== undefined) setSpecies(updated.species);
+    if (updated.sex !== undefined) setSex(updated.sex);
+    if (updated.pronouns !== undefined) setPronouns(updated.pronouns);
+    if (updated.age !== undefined) setAge(updated.age);
+    if (updated.initial_message !== undefined) setInitialMessage(updated.initial_message);
+    if (updated.creator !== undefined) setCreator(updated.creator);
+    if (updated.creator_notes !== undefined) setCreatorNotes(updated.creator_notes);
+    if (updated.tags !== undefined) {
+      setTags(updated.tags);
+    }
+    if (updated.world_id !== undefined) {
+      const nextWorldId = updated.world_id;
+      const nextWorld = worlds.find((w) => w.id === nextWorldId);
+      const nextArtIds = new Set(
+        (nextWorld?.lore_nodes ?? [])
+          .filter((ln) => ln.category === "artifact" && !ln.location_id)
+          .map((ln) => ln.id)
+      );
+      const unlinkForeignArtifacts = (items: ItemInstance[]): ItemInstance[] =>
+        items.map((it) => {
+          if (it.lore_id && nextArtIds.has(it.lore_id)) return it;
+          return {
+            ...it,
+            flags: it.flags.filter((f) => f !== "artifact"),
+            lore_id: null,
+          };
+        });
+      setWorldId(nextWorldId ?? "");
+      setEquipped((prev) => unlinkForeignArtifacts(prev));
+      setInventory((prev) => unlinkForeignArtifacts(prev));
+    }
+  };
+
+  const handleAppearanceChange = (updated: Partial<CharacterAppearanceData>) => {
+    markDirty();
+    if (updated.character_bio !== undefined) setCharacterBio(updated.character_bio);
+    if (updated.physical_appearance !== undefined) setPhysicalAppearance(updated.physical_appearance);
+    if (updated.build_and_height !== undefined) setBuildAndHeight(updated.build_and_height);
+    if (updated.distinctive_features !== undefined) setDistinctiveFeatures(updated.distinctive_features);
+    if (updated.posture !== undefined) setPosture(updated.posture);
+    if (updated.mannerisms !== undefined) setMannerisms(updated.mannerisms);
+    if (updated.modifications !== undefined && updated.modifications.length > 0) {
+      setDistinctiveFeatures((prev) => [
+        ...prev,
+        ...updated.modifications!.filter((m) => !prev.includes(m)),
+      ]);
+    }
+    if (updated.visual_aesthetic !== undefined) setVisualAesthetic(updated.visual_aesthetic);
+  };
+
+  const handlePersonalityChange = (updated: Partial<CharacterPersonalityData>) => {
+    markDirty();
+    if (updated.personality_traits !== undefined) setPersonalityTraits(updated.personality_traits);
+    if (updated.core_persona !== undefined) setCorePersona(updated.core_persona);
+    if (updated.moral_code !== undefined) setMoralCode(updated.moral_code);
+    if (updated.quirks_flaws !== undefined) setQuirksFlaws(updated.quirks_flaws);
+    if (updated.baseline_psyche !== undefined) setBaselinePsyche(updated.baseline_psyche);
+  };
+
+  const handleVoiceChange = (updated: Partial<CharacterVoiceData>) => {
+    markDirty();
+    if (updated.communication_style !== undefined) setCommunicationStyle(updated.communication_style);
+    if (updated.voice_anchors !== undefined) setVoiceAnchors(updated.voice_anchors);
   };
 
   return (
@@ -573,7 +872,7 @@ export const CharacterInspectorModal: React.FC<
                     width: "auto",
                   }}
                   value={selectedVersion}
-                  disabled={loadingVersion}
+                  disabled={loadingVersion || restoringVersion}
                   onChange={(e) => handleSelectVersion(Number(e.target.value))}
                 >
                   {versions.map((v) => (
@@ -615,6 +914,7 @@ export const CharacterInspectorModal: React.FC<
                 type="button"
                 className="btn"
                 style={{ fontSize: "0.72rem", padding: "3px 8px" }}
+                disabled={restoringVersion}
                 onClick={handleExitHistory}
               >
                 Back to Current (v{version})
@@ -622,10 +922,17 @@ export const CharacterInspectorModal: React.FC<
               <button
                 type="button"
                 className="btn btn-amber"
-                style={{ fontSize: "0.72rem", padding: "3px 8px" }}
+                style={{ fontSize: "0.72rem", padding: "3px 8px", display: "inline-flex", alignItems: "center", gap: 5 }}
+                disabled={restoringVersion}
                 onClick={handleRestoreHistoricalVersion}
               >
-                Restore as Latest
+                {restoringVersion ? (
+                  <>
+                    <Loader2 size={12} className="spin" /> Restoring...
+                  </>
+                ) : (
+                  "Restore as Latest"
+                )}
               </button>
             </div>
           </div>
@@ -645,12 +952,32 @@ export const CharacterInspectorModal: React.FC<
           <button
             type="button"
             role="tab"
+            aria-selected={activeTab === "appearance"}
+            className={`modal-tab-btn ${activeTab === "appearance" ? "active" : ""}`}
+            onClick={() => setActiveTab("appearance")}
+          >
+            <Eye size={14} />
+            <span>Appearance</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
             aria-selected={activeTab === "personality"}
             className={`modal-tab-btn ${activeTab === "personality" ? "active" : ""}`}
             onClick={() => setActiveTab("personality")}
           >
             <Brain size={14} />
             <span>Personality</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "voice"}
+            className={`modal-tab-btn ${activeTab === "voice" ? "active" : ""}`}
+            onClick={() => setActiveTab("voice")}
+          >
+            <MessageSquare size={14} />
+            <span>Voice & Dialogue</span>
           </button>
           <button
             type="button"
@@ -712,156 +1039,48 @@ export const CharacterInspectorModal: React.FC<
               character remain pinned to their original snapshot automatically.
             </div>
 
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 12,
+            <CharacterBaseTab
+              data={{
+                name,
+                tagline,
+                world_id: worldId,
+                character_bio: characterBio,
+                physical_appearance: physicalAppearance,
+                species,
+                sex,
+                pronouns,
+                age,
+                initial_message: initialMessage,
+                creator,
+                creator_notes: creatorNotes,
+                tags,
               }}
-            >
-              <ClickToEditField
-                label="Character Name"
-                value={name}
-                readOnly={viewingHistory}
-                onChange={(val) => {
-                  setName(val);
-                  markDirty();
-                }}
-              />
-              <div className="field-group">
-                <label>Home World Association</label>
-                <select
-                  className="field-select"
-                  value={worldId}
-                  disabled={viewingHistory}
-                  onChange={(e) => {
-                    const nextWorldId = e.target.value;
-                    const nextWorld = worlds.find((w) => w.id === nextWorldId);
-                    const nextArtIds = new Set(
-                      (nextWorld?.lore_nodes ?? [])
-                        .filter((ln) => ln.category === "artifact" && !ln.location_id)
-                        .map((ln) => ln.id)
-                    );
-                    const unlinkForeignArtifacts = (items: ItemInstance[]): ItemInstance[] =>
-                      items.map((it) => {
-                        if (it.lore_id && nextArtIds.has(it.lore_id)) return it;
-                        return {
-                          ...it,
-                          flags: it.flags.filter((f) => f !== "artifact"),
-                          lore_id: null,
-                        };
-                      });
-                    setWorldId(nextWorldId);
-                    setEquipped((prev) => unlinkForeignArtifacts(prev));
-                    setInventory((prev) => unlinkForeignArtifacts(prev));
-                    markDirty();
-                  }}
-                >
-                  <option value="">Standalone (No specific world)</option>
-                  {worlds.map((w) => (
-                    <option key={w.id} value={w.id}>
-                      {w.name} ({w.global_rules.genre})
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <ClickToEditField
-              label="Evocative Tagline"
-              value={tagline}
+              onChange={handleBaseChange}
               readOnly={viewingHistory}
-              onChange={(val) => {
-                setTagline(val);
-                markDirty();
-              }}
+              worlds={worlds}
             />
+          </div>
 
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 12,
+          {/* Appearance Tab */}
+          <div
+            style={{
+              display: activeTab === "appearance" ? "flex" : "none",
+              flexDirection: "column",
+              gap: 14,
+            }}
+          >
+            <CharacterAppearanceTab
+              data={{
+                character_bio: characterBio,
+                physical_appearance: physicalAppearance,
+                build_and_height: buildAndHeight,
+                distinctive_features: distinctiveFeatures,
+                posture,
+                mannerisms,
+                visual_aesthetic: visualAesthetic,
               }}
-            >
-              <ClickToEditField
-                label="Creator / Author"
-                placeholder="Author name, handle, or contact (for card export & SillyTavern)"
-                value={creator}
-                readOnly={viewingHistory}
-                onChange={(val) => {
-                  setCreator(val);
-                  markDirty();
-                }}
-              />
-              <div className="field-group">
-                <label>Character Tags (Comma-separated)</label>
-                {viewingHistory ? (
-                  <div className="editable-field-box read-only" style={{ cursor: "default" }}>
-                    {tags.length > 0 ? (
-                      tags.map((t) => `#${t}`).join(", ")
-                    ) : (
-                      <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>
-                        No tags
-                      </span>
-                    )}
-                  </div>
-                ) : (
-                  <input
-                    className="field-input"
-                    placeholder="e.g. cyberpunk, medic, ally"
-                    value={tagInput}
-                    onChange={(e) => {
-                      setTagInput(e.target.value);
-                      const parsed = e.target.value
-                        .split(",")
-                        .map((s) => s.trim().replace(/^#/, ""))
-                        .filter(Boolean);
-                      setTags(parsed);
-                      markDirty();
-                    }}
-                  />
-                )}
-              </div>
-            </div>
-
-            <ClickToEditField
-              label="Creator Notes (Built-in usage notes; viewable & searchable under User Notes)"
-              value={creatorNotes}
+              onChange={handleAppearanceChange}
               readOnly={viewingHistory}
-              multiline
-              rows={3}
-              placeholder="Add roleplay guidance, scenario hints, or recommended model settings..."
-              onChange={(val) => {
-                setCreatorNotes(val);
-                markDirty();
-              }}
-            />
-
-            <ClickToEditField
-              label="Physical Appearance (Zone 1 Static Anatomy & Features — Excludes Clothing/Items)"
-              value={physicalAppearance}
-              readOnly={viewingHistory}
-              multiline
-              rows={3}
-              placeholder="Describe build, facial features, hair, eyes, scars, or cyberware..."
-              onChange={(val) => {
-                setPhysicalAppearance(val);
-                markDirty();
-              }}
-            />
-
-            <ClickToEditField
-              label="Initial Message (Turn 0 Opening Scene Prose)"
-              value={initialMessage}
-              readOnly={viewingHistory}
-              multiline
-              rows={4}
-              placeholder="Opening scene narrative and dialogue when starting a campaign..."
-              onChange={(val) => {
-                setInitialMessage(val);
-                markDirty();
-              }}
             />
           </div>
 
@@ -873,429 +1092,35 @@ export const CharacterInspectorModal: React.FC<
               gap: 14,
             }}
           >
-            <ClickToEditField
-              label="Core Persona (Zone 1 Static Demeanor, Psychology & Speech Habits)"
-              value={corePersona}
+            <CharacterPersonalityTab
+              data={{
+                personality_traits: personalityTraits,
+                core_persona: corePersona,
+                moral_code: moralCode,
+                quirks_flaws: quirksFlaws,
+                baseline_psyche: baselinePsyche,
+              }}
+              onChange={handlePersonalityChange}
               readOnly={viewingHistory}
-              multiline
-              rows={5}
-              onChange={(val) => {
-                setCorePersona(val);
-                markDirty();
-              }}
             />
+          </div>
 
-            {/* Baseline Psyche & Motivational Drives */}
-            <div
-              style={{
-                background: "var(--bg-card)",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: 8,
-                padding: 12,
-                display: "flex",
-                flexDirection: "column",
-                gap: 10,
+          {/* Voice Tab */}
+          <div
+            style={{
+              display: activeTab === "voice" ? "flex" : "none",
+              flexDirection: "column",
+              gap: 14,
+            }}
+          >
+            <CharacterVoiceTab
+              data={{
+                communication_style: communicationStyle,
+                voice_anchors: voiceAnchors,
               }}
-            >
-              <div
-                className="sidebar-label"
-                style={{ display: "flex", alignItems: "center", gap: 6 }}
-              >
-                <HeartPulse size={13} color="#ec4899" />
-                Baseline Psyche & Initial Drives
-              </div>
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "2fr 1fr 1fr",
-                  gap: 10,
-                }}
-              >
-                <ClickToEditField
-                  label="Baseline Mood Label"
-                  value={baselinePsyche.mood_label}
-                  readOnly={viewingHistory}
-                  onChange={(val) => {
-                    setBaselinePsyche({ ...baselinePsyche, mood_label: val });
-                    markDirty();
-                  }}
-                />
-                <div className="field-group">
-                  <label>Valence (-1.0 to +1.0)</label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="-1"
-                    max="1"
-                    disabled={viewingHistory}
-                    className="field-input"
-                    value={baselinePsyche.valence}
-                    onChange={(e) => {
-                      setBaselinePsyche({
-                        ...baselinePsyche,
-                        valence: Math.max(
-                          -1,
-                          Math.min(1, Number(e.target.value) || 0)
-                        ),
-                      });
-                      markDirty();
-                    }}
-                  />
-                </div>
-                <div className="field-group">
-                  <label>Arousal (0.0 to 1.0)</label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0"
-                    max="1"
-                    disabled={viewingHistory}
-                    className="field-input"
-                    value={baselinePsyche.arousal}
-                    onChange={(e) => {
-                      setBaselinePsyche({
-                        ...baselinePsyche,
-                        arousal: Math.max(
-                          0,
-                          Math.min(1, Number(e.target.value) || 0)
-                        ),
-                      });
-                      markDirty();
-                    }}
-                  />
-                </div>
-              </div>
-
-              {/* CARE Temperament Preset & Layer 1 Initial Worldview */}
-              {(() => {
-                const activePreset = getTemperamentPresetMeta(
-                  baselinePsyche.temperament?.archetype
-                );
-                const wv =
-                  baselinePsyche.initial_worldview ?? activePreset.worldview;
-                return (
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 8,
-                      padding: "10px 12px",
-                      borderRadius: 6,
-                      background: "var(--bg-panel)",
-                      border: "1px solid var(--border-subtle)",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "2fr 1fr 1fr 1fr",
-                        gap: 10,
-                        alignItems: "end",
-                      }}
-                    >
-                      <div className="field-group">
-                        <label>CARE Temperament Preset</label>
-                        <select
-                          className="field-select"
-                          disabled={viewingHistory}
-                          value={activePreset.archetype}
-                          onChange={(e) => {
-                            const nextMeta = getTemperamentPresetMeta(
-                              e.target.value as TemperamentArchetype
-                            );
-                            setBaselinePsyche({
-                              ...baselinePsyche,
-                              temperament: { ...nextMeta.temperament },
-                              initial_worldview: { ...nextMeta.worldview },
-                            });
-                            markDirty();
-                          }}
-                        >
-                          {TEMPERAMENT_ARCHETYPE_OPTIONS.map((opt) => (
-                            <option key={opt.archetype} value={opt.archetype}>
-                              {opt.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="field-group">
-                        <label>Benevolence (-1 to +1)</label>
-                        <input
-                          type="number"
-                          step="0.1"
-                          min="-1"
-                          max="1"
-                          disabled={viewingHistory}
-                          className="field-input"
-                          value={wv.benevolence}
-                          onChange={(e) => {
-                            setBaselinePsyche({
-                              ...baselinePsyche,
-                              temperament:
-                                baselinePsyche.temperament ?? {
-                                  ...activePreset.temperament,
-                                },
-                              initial_worldview: {
-                                ...wv,
-                                benevolence: Math.max(
-                                  -1,
-                                  Math.min(1, Number(e.target.value) || 0)
-                                ),
-                              },
-                            });
-                            markDirty();
-                          }}
-                        />
-                      </div>
-                      <div className="field-group">
-                        <label>Belonging (-1 to +1)</label>
-                        <input
-                          type="number"
-                          step="0.1"
-                          min="-1"
-                          max="1"
-                          disabled={viewingHistory}
-                          className="field-input"
-                          value={wv.belonging}
-                          onChange={(e) => {
-                            setBaselinePsyche({
-                              ...baselinePsyche,
-                              temperament:
-                                baselinePsyche.temperament ?? {
-                                  ...activePreset.temperament,
-                                },
-                              initial_worldview: {
-                                ...wv,
-                                belonging: Math.max(
-                                  -1,
-                                  Math.min(1, Number(e.target.value) || 0)
-                                ),
-                              },
-                            });
-                            markDirty();
-                          }}
-                        />
-                      </div>
-                      <div className="field-group">
-                        <label>Agency (-1 to +1)</label>
-                        <input
-                          type="number"
-                          step="0.1"
-                          min="-1"
-                          max="1"
-                          disabled={viewingHistory}
-                          className="field-input"
-                          value={wv.agency}
-                          onChange={(e) => {
-                            setBaselinePsyche({
-                              ...baselinePsyche,
-                              temperament:
-                                baselinePsyche.temperament ?? {
-                                  ...activePreset.temperament,
-                                },
-                              initial_worldview: {
-                                ...wv,
-                                agency: Math.max(
-                                  -1,
-                                  Math.min(1, Number(e.target.value) || 0)
-                                ),
-                              },
-                            });
-                            markDirty();
-                          }}
-                        />
-                      </div>
-                    </div>
-                    <div style={{ fontSize: "0.73rem", color: "var(--text-muted)" }}>
-                      {activePreset.summary}
-                    </div>
-                  </div>
-                );
-              })()}
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: 10,
-                }}
-              >
-                <ClickToEditField
-                  label="Core Long-Term Drive"
-                  value={baselinePsyche.core_drive}
-                  readOnly={viewingHistory}
-                  multiline
-                  rows={2}
-                  onChange={(val) => {
-                    setBaselinePsyche({ ...baselinePsyche, core_drive: val });
-                    markDirty();
-                  }}
-                />
-                <ClickToEditField
-                  label="Core Fear"
-                  value={baselinePsyche.core_fear}
-                  readOnly={viewingHistory}
-                  multiline
-                  rows={2}
-                  onChange={(val) => {
-                    setBaselinePsyche({ ...baselinePsyche, core_fear: val });
-                    markDirty();
-                  }}
-                />
-              </div>
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: 10,
-                }}
-              >
-                <ClickToEditField
-                  label="Default Scene Want"
-                  value={baselinePsyche.default_want}
-                  readOnly={viewingHistory}
-                  multiline
-                  rows={2}
-                  onChange={(val) => {
-                    setBaselinePsyche({ ...baselinePsyche, default_want: val });
-                    markDirty();
-                  }}
-                />
-                <ClickToEditField
-                  label="Default Action Plan"
-                  value={baselinePsyche.default_plan}
-                  readOnly={viewingHistory}
-                  multiline
-                  rows={2}
-                  onChange={(val) => {
-                    setBaselinePsyche({ ...baselinePsyche, default_plan: val });
-                    markDirty();
-                  }}
-                />
-              </div>
-            </div>
-
-            {/* Voice Anchors */}
-            <div
-              style={{
-                background: "var(--bg-card)",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: 8,
-                padding: 12,
-                display: "flex",
-                flexDirection: "column",
-                gap: 10,
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                }}
-              >
-                <span className="sidebar-label">
-                  Voice & Dialogue Anchors ({voiceAnchors.length})
-                </span>
-                {!viewingHistory && (
-                  <button
-                    type="button"
-                    className="btn"
-                    style={{ padding: "3px 8px", fontSize: "0.72rem" }}
-                    onClick={() => {
-                      setVoiceAnchors([
-                        ...voiceAnchors,
-                        { context: "New Context", snippet: "Sample dialogue..." },
-                      ]);
-                      markDirty();
-                    }}
-                  >
-                    <Plus size={12} /> Add Anchor
-                  </button>
-                )}
-              </div>
-
-              {voiceAnchors.length === 0 ? (
-                <div
-                  style={{
-                    fontSize: "0.75rem",
-                    color: "var(--text-muted)",
-                    fontStyle: "italic",
-                  }}
-                >
-                  No voice anchors specified. Add anchors to guide speech cadence and mannerisms.
-                </div>
-              ) : (
-                voiceAnchors.map((va, idx) => (
-                  <div
-                    key={idx}
-                    style={{
-                      background: "var(--bg-panel)",
-                      border: "1px solid var(--border-subtle)",
-                      borderRadius: 6,
-                      padding: 10,
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 8,
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "flex-start",
-                        gap: 8,
-                      }}
-                    >
-                      <div style={{ flex: 1 }}>
-                        <ClickToEditField
-                          label="Context"
-                          value={va.context}
-                          readOnly={viewingHistory}
-                          onChange={(val) => {
-                            const next = [...voiceAnchors];
-                            next[idx] = { ...next[idx], context: val };
-                            setVoiceAnchors(next);
-                            markDirty();
-                          }}
-                        />
-                      </div>
-                      {!viewingHistory && (
-                        <button
-                          type="button"
-                          className="item-remove-btn"
-                          style={{ marginTop: 22 }}
-                          onClick={() => {
-                            setVoiceAnchors(
-                              voiceAnchors.filter((_, i) => i !== idx)
-                            );
-                            markDirty();
-                          }}
-                          title="Remove voice anchor"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      )}
-                    </div>
-                    <ClickToEditField
-                      label="Sample Dialogue & Action Snippet"
-                      value={va.snippet}
-                      readOnly={viewingHistory}
-                      multiline
-                      rows={2}
-                      onChange={(val) => {
-                        const next = [...voiceAnchors];
-                        next[idx] = { ...next[idx], snippet: val };
-                        setVoiceAnchors(next);
-                        markDirty();
-                      }}
-                    />
-                  </div>
-                ))
-              )}
-            </div>
+              onChange={handleVoiceChange}
+              readOnly={viewingHistory}
+            />
           </div>
 
           {/* Memories Tab */}

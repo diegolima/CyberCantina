@@ -360,6 +360,10 @@ class CharacterWizardLLMOutput(BaseModel):
 
     name: str
     tagline: str = Field(description="One-line evocative summary of the character.")
+    character_bio: str = Field(
+        default="",
+        description="High-level character concept, role, and public reputation (formerly physical_appearance).",
+    )
     physical_appearance: str = Field(
         default="",
         description=(
@@ -367,12 +371,26 @@ class CharacterWizardLLMOutput(BaseModel):
             "scars, permanent cyberware/augmentations) excluding temporary clothing or held items."
         ),
     )
+    species: str = Field(default="Human", description="Biological or mechanical origin.")
+    sex: str = Field(default="", description="Biological sex or presentation.")
+    pronouns: str = Field(default="", description="Grammatical pronouns (e.g. he/him, she/her, they/them).")
+    age: str = Field(default="", description="Chronological or apparent age.")
+    build_and_height: str = Field(default="", description="Physical frame and stature.")
+    distinctive_features: list[str] = Field(default_factory=list, description="High-salience visual features (chips).")
+    posture: str = Field(default="", description="Resting physical stance and presence.")
+    mannerisms: list[str] = Field(default_factory=list, description="Micro-actions and behavioral tells.")
+    modifications: list[str] = Field(default_factory=list, description="Cyberware, implants, tattoos, or scars.")
+    visual_aesthetic: str = Field(default="", description="General clothing style or visual vibe.")
+    personality_traits: list[str] = Field(default_factory=list, description="High-level tropes and traits (chips).")
     core_persona: str = Field(
         description=(
             "High-density persona block (~150-300 words) covering psychology, "
             "demeanor, speech habits, and behavioral rules for Zone 1 Static Prefix."
         )
     )
+    moral_code: list[str] = Field(default_factory=list, description="Boundaries and lines the character won't cross.")
+    quirks_flaws: list[str] = Field(default_factory=list, description="Behavioral flaws and quirks.")
+    communication_style: list[str] = Field(default_factory=list, description="Voice texture and speech constraints (chips).")
     initial_message: str = Field(
         default="",
         description=(
@@ -395,6 +413,20 @@ class CharacterWizardLLMOutput(BaseModel):
     creator: str = Field(default="")
     creator_notes: str = Field(default="")
 
+    @model_validator(mode="after")
+    def _sync_bio_and_appearance(self) -> "CharacterWizardLLMOutput":
+        if not self.character_bio and self.physical_appearance:
+            self.character_bio = self.physical_appearance
+        elif not self.physical_appearance and self.character_bio:
+            self.physical_appearance = self.character_bio
+        if self.modifications:
+            seen = {f.lower() for f in self.distinctive_features}
+            for m in self.modifications:
+                if m.strip() and m.strip().lower() not in seen:
+                    self.distinctive_features.append(m.strip())
+                    seen.add(m.strip().lower())
+        return self
+
     def to_draft(self) -> "CharacterWizardDraft":
         """Normalize '[Worn]'/'[Equipped]' string prefixes and convert to CharacterWizardDraft."""
         raw_eq = [s.strip() for s in self.equipped if isinstance(s, str) and s.strip()]
@@ -415,8 +447,23 @@ class CharacterWizardLLMOutput(BaseModel):
         return CharacterWizardDraft(
             name=self.name,
             tagline=self.tagline,
+            character_bio=self.character_bio,
             physical_appearance=self.physical_appearance,
+            species=self.species,
+            sex=self.sex,
+            pronouns=self.pronouns,
+            age=self.age,
+            build_and_height=self.build_and_height,
+            distinctive_features=list(self.distinctive_features),
+            posture=self.posture,
+            mannerisms=list(self.mannerisms),
+            modifications=list(self.modifications),
+            visual_aesthetic=self.visual_aesthetic,
+            personality_traits=list(self.personality_traits),
             core_persona=self.core_persona,
+            moral_code=list(self.moral_code),
+            quirks_flaws=list(self.quirks_flaws),
+            communication_style=list(self.communication_style),
             initial_message=self.initial_message,
             equipped=coerce_item_list(raw_eq),
             inventory=coerce_item_list(raw_inv),
@@ -434,6 +481,10 @@ class CharacterWizardDraft(BaseModel):
 
     name: str
     tagline: str = Field(description="One-line evocative summary of the character.")
+    character_bio: str = Field(
+        default="",
+        description="High-level character concept, role, and public reputation (formerly physical_appearance).",
+    )
     physical_appearance: str = Field(
         default="",
         description=(
@@ -441,12 +492,26 @@ class CharacterWizardDraft(BaseModel):
             "scars, permanent cyberware/augmentations) excluding temporary clothing or held items."
         ),
     )
+    species: str = Field(default="Human", description="Biological or mechanical origin.")
+    sex: str = Field(default="", description="Biological sex or presentation.")
+    pronouns: str = Field(default="", description="Grammatical pronouns (e.g. he/him, she/her, they/them).")
+    age: str = Field(default="", description="Chronological or apparent age.")
+    build_and_height: str = Field(default="", description="Physical frame and stature.")
+    distinctive_features: list[str] = Field(default_factory=list, description="High-salience visual features (chips).")
+    posture: str = Field(default="", description="Resting physical stance and presence.")
+    mannerisms: list[str] = Field(default_factory=list, description="Micro-actions and behavioral tells.")
+    modifications: list[str] = Field(default_factory=list, description="Cyberware, implants, tattoos, or scars.")
+    visual_aesthetic: str = Field(default="", description="General clothing style or visual vibe.")
+    personality_traits: list[str] = Field(default_factory=list, description="High-level tropes and traits (chips).")
     core_persona: str = Field(
         description=(
             "High-density persona block (~150-300 words) covering psychology, "
             "demeanor, speech habits, and behavioral rules for Zone 1 Static Prefix."
         )
     )
+    moral_code: list[str] = Field(default_factory=list, description="Boundaries and lines the character won't cross.")
+    quirks_flaws: list[str] = Field(default_factory=list, description="Behavioral flaws and quirks.")
+    communication_style: list[str] = Field(default_factory=list, description="Voice texture and speech constraints (chips).")
     initial_message: str = Field(
         default="",
         description=(
@@ -462,6 +527,20 @@ class CharacterWizardDraft(BaseModel):
         default_factory=list,
         description="Starting carried inventory of tools, personal items, or stashed objects.",
     )
+
+    @model_validator(mode="after")
+    def _sync_bio_and_appearance(self) -> "CharacterWizardDraft":
+        if not self.character_bio and self.physical_appearance:
+            self.character_bio = self.physical_appearance
+        elif not self.physical_appearance and self.character_bio:
+            self.physical_appearance = self.character_bio
+        if self.modifications:
+            seen = {f.lower() for f in self.distinctive_features}
+            for m in self.modifications:
+                if m.strip() and m.strip().lower() not in seen:
+                    self.distinctive_features.append(m.strip())
+                    seen.add(m.strip().lower())
+        return self
 
     @field_validator("equipped", "inventory", mode="before")
     @classmethod
@@ -720,3 +799,26 @@ class CharacterStateSnapshot(BaseModel):
     @classmethod
     def _coerce_state_items(cls, val: Any) -> list[ItemInstance]:
         return coerce_item_list(val)
+
+
+class CharacterFeatureExtractionRequest(BaseModel):
+    character_bio: str
+    existing_features: list[str] = Field(default_factory=list)
+
+
+class CharacterFeatureExtractionResponse(BaseModel):
+    extracted_features: list[str] = Field(default_factory=list)
+    rewritten_bio: str
+
+
+class CharacterPersonaExtractionRequest(BaseModel):
+    core_persona: str
+    existing_moral_code: list[str] = Field(default_factory=list)
+    existing_quirks_flaws: list[str] = Field(default_factory=list)
+
+
+class CharacterPersonaExtractionResponse(BaseModel):
+    extracted_moral_code: list[str] = Field(default_factory=list)
+    extracted_quirks_flaws: list[str] = Field(default_factory=list)
+    rewritten_core_persona: str
+

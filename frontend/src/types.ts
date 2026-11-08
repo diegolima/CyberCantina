@@ -355,11 +355,43 @@ export function hasItemFlag(item: ItemInstance, flag: ItemFlag): boolean {
   return item.flags.includes(flag);
 }
 
+export interface MoodPreset {
+  id: string;
+  label: string;
+  valence: number;
+  arousal: number;
+}
+
+export const BASELINE_MOOD_PRESETS: MoodPreset[] = [
+  { id: "calm_composed", label: "Calm & Composed", valence: 0.2, arousal: 0.2 },
+  { id: "wary_guarded", label: "Wary & Guarded", valence: -0.2, arousal: 0.4 },
+  { id: "melancholy_subdued", label: "Melancholy & Subdued", valence: -0.5, arousal: 0.2 },
+  { id: "hostile_tense", label: "Hostile & Tense", valence: -0.7, arousal: 0.8 },
+  { id: "uneasy_on_edge", label: "Uneasy & On-Edge", valence: -0.4, arousal: 0.6 },
+  { id: "warm_receptive", label: "Warm & Receptive", valence: 0.6, arousal: 0.3 },
+  { id: "elated_triumphant", label: "Elated & Triumphant", valence: 0.8, arousal: 0.7 },
+];
+
 export interface CharacterWizardDraft {
   name: string;
   tagline: string;
+  character_bio?: string;
   physical_appearance: string;
+  species?: string;
+  sex?: string;
+  pronouns?: string;
+  age?: string;
+  build_and_height?: string;
+  distinctive_features?: string[];
+  posture?: string;
+  mannerisms?: string[];
+  modifications?: string[];
+  visual_aesthetic?: string;
+  personality_traits?: string[];
   core_persona: string;
+  moral_code?: string[];
+  quirks_flaws?: string[];
+  communication_style?: string[];
   initial_message: string;
   equipped?: InventoryItemInput[];
   inventory: InventoryItemInput[];
