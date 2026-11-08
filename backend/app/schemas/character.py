@@ -362,7 +362,7 @@ class CharacterWizardLLMOutput(BaseModel):
     tagline: str = Field(description="One-line evocative summary of the character.")
     character_bio: str = Field(
         default="",
-        description="High-level character concept, role, and public reputation (formerly physical_appearance).",
+        description="High-level narrative concept, background origin, public reputation, occupation, and role. Strictly exclude physical anatomy, hair/eyes, scars, cyberware, clothing, or personality quirks.",
     )
     physical_appearance: str = Field(
         default="",
@@ -375,22 +375,38 @@ class CharacterWizardLLMOutput(BaseModel):
     sex: str = Field(default="", description="Biological sex or presentation.")
     pronouns: str = Field(default="", description="Grammatical pronouns (e.g. he/him, she/her, they/them).")
     age: str = Field(default="", description="Chronological or apparent age.")
-    build_and_height: str = Field(default="", description="Physical frame and stature.")
-    distinctive_features: list[str] = Field(default_factory=list, description="High-salience visual features (chips).")
-    posture: str = Field(default="", description="Resting physical stance and presence.")
-    mannerisms: list[str] = Field(default_factory=list, description="Micro-actions and behavioral tells.")
-    modifications: list[str] = Field(default_factory=list, description="Cyberware, implants, tattoos, or scars.")
-    visual_aesthetic: str = Field(default="", description="General clothing style or visual vibe.")
-    personality_traits: list[str] = Field(default_factory=list, description="High-level tropes and traits (chips).")
+    build_and_height: str = Field(default="", description="Physical frame and stature (e.g. '182 cm, lean wiry build').")
+    distinctive_features: list[str] = Field(
+        default_factory=list,
+        description="3-6 concise chips for concrete physical markers: eyes, hair, skin, scars, tattoos, or setting anomalies.",
+    )
+    posture: str = Field(default="", description="Habitual physical stance and bearing (e.g. 'composed and alert').")
+    mannerisms: list[str] = Field(
+        default_factory=list,
+        description="2-3 behavioral micro-actions and conversational tells (e.g. ['fidgets with signet ring when pressured']).",
+    )
+    modifications: list[str] = Field(default_factory=list, description="Cyberware, implants, tattoos, or scars (auto-merged into distinctive_features).")
+    visual_aesthetic: str = Field(default="", description="General clothing style or dress vibe (e.g. 'practical weathered techwear').")
+    personality_traits: list[str] = Field(default_factory=list, description="3-5 high-level tropes and traits (chips).")
     core_persona: str = Field(
         description=(
-            "High-density persona block (~150-300 words) covering psychology, "
-            "demeanor, speech habits, and behavioral rules for Zone 1 Static Prefix."
+            "High-density demeanor block (~100-180 words) covering conversational demeanor, "
+            "social defense mechanisms, speech cadence, and interpersonal attitude. "
+            "Strictly exclude items in moral_code and quirks_flaws, and exclude physical traits."
         )
     )
-    moral_code: list[str] = Field(default_factory=list, description="Boundaries and lines the character won't cross.")
-    quirks_flaws: list[str] = Field(default_factory=list, description="Behavioral flaws and quirks.")
-    communication_style: list[str] = Field(default_factory=list, description="Voice texture and speech constraints (chips).")
+    moral_code: list[str] = Field(
+        default_factory=list,
+        description="2-3 ethical boundaries or lines the character will not cross (e.g. ['never harms non-combatants']).",
+    )
+    quirks_flaws: list[str] = Field(
+        default_factory=list,
+        description="2-3 concrete behavioral flaws, vices, or neurotic habits (e.g. ['chain smoker under stress']).",
+    )
+    communication_style: list[str] = Field(
+        default_factory=list,
+        description="3-5 voice texture chips (e.g. ['clipped', 'monotone', 'dryly sarcastic']).",
+    )
     initial_message: str = Field(
         default="",
         description=(
@@ -483,7 +499,7 @@ class CharacterWizardDraft(BaseModel):
     tagline: str = Field(description="One-line evocative summary of the character.")
     character_bio: str = Field(
         default="",
-        description="High-level character concept, role, and public reputation (formerly physical_appearance).",
+        description="High-level narrative concept, background origin, public reputation, occupation, and role. Strictly exclude physical anatomy, hair/eyes, scars, cyberware, clothing, or personality quirks.",
     )
     physical_appearance: str = Field(
         default="",
@@ -496,22 +512,38 @@ class CharacterWizardDraft(BaseModel):
     sex: str = Field(default="", description="Biological sex or presentation.")
     pronouns: str = Field(default="", description="Grammatical pronouns (e.g. he/him, she/her, they/them).")
     age: str = Field(default="", description="Chronological or apparent age.")
-    build_and_height: str = Field(default="", description="Physical frame and stature.")
-    distinctive_features: list[str] = Field(default_factory=list, description="High-salience visual features (chips).")
-    posture: str = Field(default="", description="Resting physical stance and presence.")
-    mannerisms: list[str] = Field(default_factory=list, description="Micro-actions and behavioral tells.")
-    modifications: list[str] = Field(default_factory=list, description="Cyberware, implants, tattoos, or scars.")
-    visual_aesthetic: str = Field(default="", description="General clothing style or visual vibe.")
-    personality_traits: list[str] = Field(default_factory=list, description="High-level tropes and traits (chips).")
+    build_and_height: str = Field(default="", description="Physical frame and stature (e.g. '182 cm, lean wiry build').")
+    distinctive_features: list[str] = Field(
+        default_factory=list,
+        description="3-6 concise chips for concrete physical markers: eyes, hair, skin, scars, tattoos, or setting anomalies.",
+    )
+    posture: str = Field(default="", description="Habitual physical stance and bearing (e.g. 'composed and alert').")
+    mannerisms: list[str] = Field(
+        default_factory=list,
+        description="2-3 behavioral micro-actions and conversational tells (e.g. ['fidgets with signet ring when pressured']).",
+    )
+    modifications: list[str] = Field(default_factory=list, description="Cyberware, implants, tattoos, or scars (auto-merged into distinctive_features).")
+    visual_aesthetic: str = Field(default="", description="General clothing style or dress vibe (e.g. 'practical weathered techwear').")
+    personality_traits: list[str] = Field(default_factory=list, description="3-5 high-level tropes and traits (chips).")
     core_persona: str = Field(
         description=(
-            "High-density persona block (~150-300 words) covering psychology, "
-            "demeanor, speech habits, and behavioral rules for Zone 1 Static Prefix."
+            "High-density demeanor block (~100-180 words) covering conversational demeanor, "
+            "social defense mechanisms, speech cadence, and interpersonal attitude. "
+            "Strictly exclude items in moral_code and quirks_flaws, and exclude physical traits."
         )
     )
-    moral_code: list[str] = Field(default_factory=list, description="Boundaries and lines the character won't cross.")
-    quirks_flaws: list[str] = Field(default_factory=list, description="Behavioral flaws and quirks.")
-    communication_style: list[str] = Field(default_factory=list, description="Voice texture and speech constraints (chips).")
+    moral_code: list[str] = Field(
+        default_factory=list,
+        description="2-3 ethical boundaries or lines the character will not cross (e.g. ['never harms non-combatants']).",
+    )
+    quirks_flaws: list[str] = Field(
+        default_factory=list,
+        description="2-3 concrete behavioral flaws, vices, or neurotic habits (e.g. ['chain smoker under stress']).",
+    )
+    communication_style: list[str] = Field(
+        default_factory=list,
+        description="3-5 voice texture chips (e.g. ['clipped', 'monotone', 'dryly sarcastic']).",
+    )
     initial_message: str = Field(
         default="",
         description=(
@@ -822,3 +854,13 @@ class CharacterPersonaExtractionResponse(BaseModel):
     extracted_quirks_flaws: list[str] = Field(default_factory=list)
     rewritten_core_persona: str
 
+
+
+class CharacterQuirksExtractionRequest(BaseModel):
+    core_persona: str
+    existing_quirks: list[str] = Field(default_factory=list)
+
+
+class CharacterQuirksExtractionResponse(BaseModel):
+    extracted_quirks: list[str] = Field(default_factory=list)
+    rewritten_core_persona: str

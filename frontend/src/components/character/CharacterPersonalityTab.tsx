@@ -46,64 +46,52 @@ export const CharacterPersonalityTab: React.FC<CharacterPersonalityTabProps> = (
   const [isCustomMood, setIsCustomMood] = useState<boolean>(!matchedPreset && Boolean(psyche.mood_label));
   const [showAdvancedCare, setShowAdvancedCare] = useState<boolean>(false);
 
-  const [isExtractingPersona, setIsExtractingPersona] = useState<boolean>(false);
-  const [personaExtractError, setPersonaExtractError] = useState<string | null>(null);
-  const [personaUndoSnapshot, setPersonaUndoSnapshot] = useState<{
-    prevMoralCode: string[];
+  const [isExtractingQuirks, setIsExtractingQuirks] = useState<boolean>(false);
+  const [quirksExtractError, setQuirksExtractError] = useState<string | null>(null);
+  const [quirksUndoSnapshot, setQuirksUndoSnapshot] = useState<{
     prevQuirks: string[];
     prevCorePersona: string;
-    addedCodeCount: number;
-    addedQuirksCount: number;
+    addedCount: number;
   } | null>(null);
 
   const demeanorText = (data.core_persona || "").trim();
 
-  const handlePopulateFromPersona = async () => {
-    if (readOnly || !onChange || isExtractingPersona || !demeanorText) return;
-    setIsExtractingPersona(true);
-    setPersonaExtractError(null);
+  const handlePopulateQuirksFromDemeanor = async () => {
+    if (readOnly || !onChange || isExtractingQuirks || !demeanorText) return;
+    setIsExtractingQuirks(true);
+    setQuirksExtractError(null);
     try {
-      const res = await api.extractCharacterPersonaTraits(
-        demeanorText,
-        moralCode,
-        quirks
-      );
-      const newCode = res.extracted_moral_code || [];
-      const newQuirks = res.extracted_quirks_flaws || [];
-      if (newCode.length === 0 && newQuirks.length === 0) {
-        setPersonaExtractError("No new moral rules or quirks detected in demeanor prose.");
+      const res = await api.extractCharacterQuirks(demeanorText, quirks);
+      const newQuirks = res.extracted_quirks || [];
+      if (newQuirks.length === 0) {
+        setQuirksExtractError("No new behavioral quirks or flaws detected in demeanor prose.");
         return;
       }
-      setPersonaUndoSnapshot({
-        prevMoralCode: [...moralCode],
+      setQuirksUndoSnapshot({
         prevQuirks: [...quirks],
         prevCorePersona: demeanorText,
-        addedCodeCount: newCode.length,
-        addedQuirksCount: newQuirks.length,
+        addedCount: newQuirks.length,
       });
-      const nextMoralCode = [...moralCode, ...newCode];
       const nextQuirks = [...quirks, ...newQuirks];
       onChange({
-        moral_code: nextMoralCode,
         quirks_flaws: nextQuirks,
         core_persona: res.rewritten_core_persona,
       });
     } catch (err: any) {
-      setPersonaExtractError(err?.message || "Failed to extract traits from demeanor.");
+      setQuirksExtractError(err?.message || "Failed to extract quirks from demeanor.");
     } finally {
-      setIsExtractingPersona(false);
+      setIsExtractingQuirks(false);
     }
   };
 
-  const handleUndoPersonaExtraction = () => {
-    if (!personaUndoSnapshot || !onChange) return;
+  const handleUndoQuirksExtraction = () => {
+    if (!quirksUndoSnapshot || !onChange) return;
     onChange({
-      moral_code: personaUndoSnapshot.prevMoralCode,
-      quirks_flaws: personaUndoSnapshot.prevQuirks,
-      core_persona: personaUndoSnapshot.prevCorePersona,
+      quirks_flaws: quirksUndoSnapshot.prevQuirks,
+      core_persona: quirksUndoSnapshot.prevCorePersona,
     });
-    setPersonaUndoSnapshot(null);
-    setPersonaExtractError(null);
+    setQuirksUndoSnapshot(null);
+    setQuirksExtractError(null);
   };
 
   const handleFieldChange = <K extends keyof CharacterPersonalityData>(
@@ -157,6 +145,7 @@ export const CharacterPersonalityTab: React.FC<CharacterPersonalityTabProps> = (
               traits.map((t, i) => (
                 <span
                   key={i}
+                  title={t}
                   style={{
                     background: "rgba(168, 85, 247, 0.15)",
                     border: "1px solid var(--accent-violet, #a855f7)",
@@ -195,152 +184,156 @@ export const CharacterPersonalityTab: React.FC<CharacterPersonalityTabProps> = (
         onChange={(val) => handleFieldChange("core_persona", val)}
       />
 
-      {/* Moral Code & Boundaries and Quirks & Flaws with AI Extraction */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--text-secondary)" }}>
-            Behavioral Code &amp; Vulnerabilities
-          </div>
-          {!readOnly && demeanorText.length > 0 && (
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={isExtractingPersona}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 5,
-                fontSize: "0.72rem",
-                padding: "2px 8px",
-                color: "var(--accent-cyan)",
-                borderColor: "rgba(56, 189, 248, 0.4)",
-              }}
-              onClick={handlePopulateFromPersona}
-              title="Extract moral boundaries and quirks from demeanor prose and rewrite prose to remove them"
-            >
-              {isExtractingPersona ? (
-                <>
-                  <Loader2 size={12} className="animate-spin" />
-                  <span>Structuring Demeanor...</span>
-                </>
+      {/* Moral Code & Boundaries and Quirks & Flaws (Both Optional) */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        {/* Moral Code (Optional) */}
+        <div className="field-group">
+          <label>
+            {readOnly ? "Moral Code & Boundaries" : "Moral Code & Lines They Won't Cross (Optional)"}
+          </label>
+          {readOnly ? (
+            <div className="editable-field-box read-only" style={{ cursor: "default", display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {moralCode.length > 0 ? (
+                moralCode.map((m, i) => (
+                  <span
+                    key={i}
+                    title={m}
+                    style={{
+                      background: "rgba(34, 197, 94, 0.15)",
+                      border: "1px solid #22c55e",
+                      color: "#22c55e",
+                      borderRadius: 4,
+                      padding: "2px 8px",
+                      fontSize: "0.78rem",
+                    }}
+                  >
+                    {m}
+                  </span>
+                ))
               ) : (
-                <>
-                  <Sparkles size={12} />
-                  <span>Extract Code &amp; Quirks from Demeanor</span>
-                </>
+                <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>—</span>
               )}
-            </button>
+            </div>
+          ) : (
+            <TagChipsInput
+              value={moralCode}
+              onChange={(next) => handleFieldChange("moral_code", next)}
+              placeholder="e.g. never betrays a client, protects children..."
+              accentVariant="amber"
+            />
           )}
         </div>
 
-        {personaUndoSnapshot && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              background: "rgba(56, 189, 248, 0.12)",
-              border: "1px solid var(--accent-cyan)",
-              borderRadius: 6,
-              padding: "6px 10px",
-              fontSize: "0.76rem",
-              color: "var(--accent-cyan)",
-            }}
-          >
-            <span>
-              Extracted {personaUndoSnapshot.addedCodeCount} moral {personaUndoSnapshot.addedCodeCount === 1 ? "rule" : "rules"} and {personaUndoSnapshot.addedQuirksCount} {personaUndoSnapshot.addedQuirksCount === 1 ? "quirk" : "quirks"} from demeanor. Rewrote demeanor to exclude them.
-            </span>
-            <button
-              type="button"
-              className="btn btn-sm"
+        {/* Quirks & Flaws (Optional) with Dedicated Demeanor Extractor */}
+        <div className="field-group">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+            <label style={{ margin: 0 }}>
+              {readOnly ? "Quirks & Flaws" : "Quirks & Flaws (Optional)"}
+            </label>
+            {!readOnly && demeanorText.length > 0 && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={isExtractingQuirks}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 5,
+                  fontSize: "0.72rem",
+                  padding: "2px 8px",
+                  color: "var(--accent-rose)",
+                  borderColor: "rgba(244, 63, 94, 0.4)",
+                }}
+                onClick={handlePopulateQuirksFromDemeanor}
+                title="Extract behavioral quirks and flaws from demeanor prose and rewrite prose to remove them"
+              >
+                {isExtractingQuirks ? (
+                  <>
+                    <Loader2 size={12} className="animate-spin" />
+                    <span>Extracting Quirks...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles size={12} />
+                    <span>Populate from Demeanor</span>
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+
+          {quirksUndoSnapshot && (
+            <div
               style={{
-                display: "inline-flex",
+                display: "flex",
                 alignItems: "center",
-                gap: 4,
-                fontSize: "0.72rem",
-                padding: "2px 8px",
+                justifyContent: "space-between",
+                background: "rgba(244, 63, 94, 0.12)",
+                border: "1px solid var(--accent-rose)",
+                borderRadius: 6,
+                padding: "6px 10px",
+                marginBottom: 6,
+                fontSize: "0.76rem",
+                color: "var(--accent-rose)",
               }}
-              onClick={handleUndoPersonaExtraction}
             >
-              <Undo2 size={12} /> Undo
-            </button>
-          </div>
-        )}
+              <span>
+                Extracted {quirksUndoSnapshot.addedCount} {quirksUndoSnapshot.addedCount === 1 ? "quirk" : "quirks"} from demeanor. Rewrote demeanor to exclude {quirksUndoSnapshot.addedCount === 1 ? "it" : "them"}.
+              </span>
+              <button
+                type="button"
+                className="btn btn-sm"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  fontSize: "0.72rem",
+                  padding: "2px 8px",
+                }}
+                onClick={handleUndoQuirksExtraction}
+              >
+                <Undo2 size={12} /> Undo
+              </button>
+            </div>
+          )}
 
-        {personaExtractError && (
-          <div style={{ fontSize: "0.72rem", color: "var(--accent-rose)" }}>
-            {personaExtractError}
-          </div>
-        )}
+          {quirksExtractError && (
+            <div style={{ fontSize: "0.72rem", color: "var(--accent-rose)", marginBottom: 6 }}>
+              {quirksExtractError}
+            </div>
+          )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <div className="field-group">
-            <label>{readOnly ? "Moral Code & Boundaries" : "Moral Code & Lines They Won't Cross"}</label>
-            {readOnly ? (
-              <div className="editable-field-box read-only" style={{ cursor: "default", display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {moralCode.length > 0 ? (
-                  moralCode.map((m, i) => (
-                    <span
-                      key={i}
-                      style={{
-                        background: "rgba(34, 197, 94, 0.15)",
-                        border: "1px solid #22c55e",
-                        color: "#22c55e",
-                        borderRadius: 4,
-                        padding: "2px 8px",
-                        fontSize: "0.78rem",
-                      }}
-                    >
-                      {m}
-                    </span>
-                  ))
-                ) : (
-                  <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>—</span>
-                )}
-              </div>
-            ) : (
-              <TagChipsInput
-                value={moralCode}
-                onChange={(next) => handleFieldChange("moral_code", next)}
-                placeholder="e.g. never betrays a client, protects children..."
-                accentVariant="amber"
-              />
-            )}
-          </div>
-
-          <div className="field-group">
-            <label>Quirks &amp; Flaws</label>
-            {readOnly ? (
-              <div className="editable-field-box read-only" style={{ cursor: "default", display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {quirks.length > 0 ? (
-                  quirks.map((q, i) => (
-                    <span
-                      key={i}
-                      style={{
-                        background: "rgba(244, 63, 94, 0.15)",
-                        border: "1px solid var(--accent-rose)",
-                        color: "var(--accent-rose)",
-                        borderRadius: 4,
-                        padding: "2px 8px",
-                        fontSize: "0.78rem",
-                      }}
-                    >
-                      {q}
-                    </span>
-                  ))
-                ) : (
-                  <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>—</span>
-                )}
-              </div>
-            ) : (
-              <TagChipsInput
-                value={quirks}
-                onChange={(next) => handleFieldChange("quirks_flaws", next)}
-                placeholder="e.g. insomniac, chain smoker, distrusts authorities..."
-                accentVariant="amber"
-              />
-            )}
-          </div>
+          {readOnly ? (
+            <div className="editable-field-box read-only" style={{ cursor: "default", display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {quirks.length > 0 ? (
+                quirks.map((q, i) => (
+                  <span
+                    key={i}
+                    title={q}
+                    style={{
+                      background: "rgba(244, 63, 94, 0.15)",
+                      border: "1px solid var(--accent-rose)",
+                      color: "var(--accent-rose)",
+                      borderRadius: 4,
+                      padding: "2px 8px",
+                      fontSize: "0.78rem",
+                    }}
+                  >
+                    {q}
+                  </span>
+                ))
+              ) : (
+                <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>—</span>
+              )}
+            </div>
+          ) : (
+            <TagChipsInput
+              value={quirks}
+              onChange={(next) => handleFieldChange("quirks_flaws", next)}
+              placeholder="e.g. insomniac, chain smoker, distrusts authorities..."
+              accentVariant="amber"
+            />
+          )}
         </div>
       </div>
 

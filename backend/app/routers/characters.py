@@ -36,6 +36,8 @@ from app.schemas.character import (
     CharacterFeatureExtractionResponse,
     CharacterPersonaExtractionRequest,
     CharacterPersonaExtractionResponse,
+    CharacterQuirksExtractionRequest,
+    CharacterQuirksExtractionResponse,
     CharacterRecord,
     CharacterUpdatePayload,
     CharacterVersionSummary,
@@ -47,6 +49,7 @@ from app.schemas.world import WorldRecord, WorldWizardDraft
 from app.wizards.character_extractor import (
     extract_features_from_bio,
     extract_persona_traits_from_demeanor,
+    extract_quirks_from_demeanor,
 )
 from app.wizards.character_wizard import generate_character_draft
 from app.wizards.sillytavern_distiller import (
@@ -338,6 +341,26 @@ async def extract_character_persona_traits(
     return CharacterPersonaExtractionResponse(
         extracted_moral_code=code,
         extracted_quirks_flaws=quirks,
+        rewritten_core_persona=rewritten,
+    )
+
+
+@router.post(
+    "/api/wizards/character/extract-quirks",
+    response_model=CharacterQuirksExtractionResponse,
+)
+async def extract_character_quirks(
+    req: CharacterQuirksExtractionRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CharacterQuirksExtractionResponse:
+    eff_actor, *_ = get_effective_user_model_settings(current_user.id)
+    quirks, rewritten = await extract_quirks_from_demeanor(
+        core_persona=req.core_persona,
+        existing_quirks=req.existing_quirks,
+        profile=eff_actor,
+    )
+    return CharacterQuirksExtractionResponse(
+        extracted_quirks=quirks,
         rewritten_core_persona=rewritten,
     )
 

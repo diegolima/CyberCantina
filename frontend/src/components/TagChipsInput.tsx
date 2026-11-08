@@ -42,7 +42,7 @@ export const TagChipsInput: React.FC<TagChipsInputProps> = ({
   onChange,
   onDraftChange,
   placeholder = "Add keyword & press Enter...",
-  required = true,
+  required = false,
   disabled = false,
   maxTags = 20,
   maxTagLength = 64,
@@ -136,8 +136,9 @@ export const TagChipsInput: React.FC<TagChipsInputProps> = ({
           <span
             key={`${tag.toLowerCase()}-${idx}`}
             className={`tag-chip-pill tag-chip-pill--${accentVariant}`}
+            title={tag}
           >
-            <span className="tag-chip-text">{tag}</span>
+            <span className="tag-chip-text" title={tag}>{tag}</span>
             {!disabled && (
               <button
                 type="button"

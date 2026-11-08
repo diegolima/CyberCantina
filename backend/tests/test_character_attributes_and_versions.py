@@ -569,6 +569,8 @@ def test_character_modifications_auto_merge_and_extraction_endpoints(
         RewrittenBioLLMOutput,
         PersonaTraitsExtractionLLMOutput,
         RewrittenPersonaLLMOutput,
+        QuirksFlawsExtractionLLMOutput,
+        RewrittenDemeanorLLMOutput,
     )
 
     # 1. Test auto-merging modifications into distinctive_features
@@ -606,6 +608,14 @@ def test_character_modifications_auto_merge_and_extraction_endpoints(
             return RewrittenPersonaLLMOutput(
                 cleaned_core_persona="Speaks in low monotone with guarded caution.",
             )
+        elif output_schema == QuirksFlawsExtractionLLMOutput:
+            return QuirksFlawsExtractionLLMOutput(
+                quirks_flaws=["chain smokes under heavy fire", "avoids direct eye contact"],
+            )
+        elif output_schema == RewrittenDemeanorLLMOutput:
+            return RewrittenDemeanorLLMOutput(
+                cleaned_core_persona="Speaks in low monotone with guarded caution.",
+            )
         raise ValueError(f"Unexpected schema {output_schema}")
 
     monkeypatch.setattr(llm_client, "complete_structured", mock_complete_structured)
@@ -639,6 +649,35 @@ def test_character_modifications_auto_merge_and_extraction_endpoints(
         assert data2["extracted_moral_code"] == ["never leaves a comrade behind"]
         assert data2["extracted_quirks_flaws"] == ["chain smokes under heavy fire"]
         assert data2["rewritten_core_persona"] == "Speaks in low monotone with guarded caution."
+        # Test quirks extraction (dedicated 2-pass)
+        res3 = client.post(
+            "/api/wizards/character/extract-quirks",
+            json={
+                "core_persona": "Speaks in low monotone. Chain smokes under heavy fire. Avoids direct eye contact.",
+                "existing_quirks": [],
+            },
+        )
+        assert res3.status_code == 200
+        data3 = res3.json()
+        assert data3["extracted_quirks"] == ["chain smokes under heavy fire", "avoids direct eye contact"]
+        assert data3["rewritten_core_persona"] == "Speaks in low monotone with guarded caution."
+
+        # Test fallback / manual expansion has optional fields empty
+        from app.wizards.character_wizard import _fallback_character_expansion
+        from app.schemas.character import CharacterWizardSeed
+
+        manual_draft = _fallback_character_expansion(
+            CharacterWizardSeed(
+                name="Clean Slate",
+                archetype="Infiltrator",
+                role_in_story="Specialist",
+                personality_keywords=["stealthy"],
+                rough_notes="Quiet operative.",
+            )
+        )
+        assert manual_draft.distinctive_features == []
+        assert manual_draft.moral_code == []
+        assert manual_draft.quirks_flaws == []
     finally:
         main_module.app.dependency_overrides.clear()
 

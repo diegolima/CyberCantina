@@ -282,3 +282,128 @@ async def extract_persona_traits_from_demeanor(
         logger.warning("Pass 2 demeanor rewrite LLM call failed: %s", exc)
 
     return new_code, new_quirks, text
+
+
+
+# --- Schemas for Dedicated Quirks & Flaws Extraction (2-Pass Architecture) ---
+
+class QuirksFlawsExtractionLLMOutput(BaseModel):
+    quirks_flaws: list[str] = Field(
+        default_factory=list,
+        description="Behavioral flaws, neurotic ticks, habits, vices, or psychological vulnerabilities.",
+    )
+
+
+class RewrittenDemeanorLLMOutput(BaseModel):
+    cleaned_core_persona: str = Field(
+        description="The core persona rephrased to smoothly exclude the extracted quirks/flaws while preserving demeanor, speech cadence, and general personality.",
+    )
+
+
+async def extract_quirks_from_demeanor(
+    core_persona: str,
+    existing_quirks: list[str] | None = None,
+    profile: ModelProfile | None = None,
+) -> tuple[list[str], str]:
+    """Extract quirks and flaws from core persona prose using a 2-pass workflow.
+
+    Pass 1: Extract all concrete behavioral flaws, neurotic ticks, vices, and defense mechanisms into a structured list.
+    Pass 2: Rewrite the core persona to cleanly excise the extracted quirks as a bulleted checklist.
+    """
+    text = (core_persona or "").strip()
+    if not text:
+        return [], ""
+
+    existing = [q.strip() for q in (existing_quirks or []) if q.strip()]
+    actor_prof = profile or settings.actor_profile
+
+    # =========================================================================
+    # PASS 1: Comprehensive Quirks & Flaws Extraction
+    # =========================================================================
+    existing_str = (
+        f"Already extracted quirks/flaws to IGNORE (do not extract these again):\n"
+        + "\n".join(f"- {q}" for q in existing)
+        + "\n\n"
+        if existing
+        else ""
+    )
+
+    system_prompt_pass1 = (
+        "You are an expert character psychologist and roleplay sheet editor.\n"
+        "Analyze the provided Core Persona Demeanor text and identify all behavioral flaws, quirks, and psychological vulnerabilities.\n\n"
+        "Examine the text for traits across broad, genre-neutral categories such as:\n"
+        "- Nervous ticks, physical tells, and conversational habits (e.g. 'fidgets with signet ring', 'speaks in rapid monotone when cornered', 'avoids direct eye contact')\n"
+        "- Social defense mechanisms and interpersonal vulnerabilities (e.g. 'deflects vulnerability with dark humor', 'habitually suspicious of kindness', 'proud to a fault')\n"
+        "- Vices, compulsions, or addictions (e.g. 'chain smoker under pressure', 'compulsive gambler', 'bites fingernails')\n"
+        "- Cognitive blindspots, temperamental flaws, or emotional triggers (e.g. 'overestimates physical stamina', 'short-tempered when contradicted', 'holds grudges')\n\n"
+        "Guidelines:\n"
+        "1. Extract punchy, concise tag items (e.g. 'chain smoker under pressure', 'deflects with dark humor').\n"
+        "2. Be thorough: catch concrete behavioral flaws and eccentricities mentioned in the prose.\n"
+        "3. Do NOT extract items already listed in the existing quirks list.\n"
+        "4. Do NOT extract ethical rules, vows, or lines they won't cross (e.g. 'never harms children')—those belong in Moral Code.\n"
+        "5. Do NOT extract positive virtues or general profession/backstory.\n"
+        "6. If no quirks or behavioral flaws are present in the text, return an empty quirks_flaws list."
+    )
+    user_prompt_pass1 = f"{existing_str}Core Persona Demeanor:\n{text}"
+
+    new_quirks: list[str] = []
+    try:
+        pass1_out = await llm_client.complete_structured(
+            [
+                {"role": "system", "content": system_prompt_pass1},
+                {"role": "user", "content": user_prompt_pass1},
+            ],
+            QuirksFlawsExtractionLLMOutput,
+            profile=actor_prof,
+            max_tokens=1024,
+        )
+        if isinstance(pass1_out, QuirksFlawsExtractionLLMOutput):
+            new_quirks = [
+                q.strip()
+                for q in pass1_out.quirks_flaws
+                if q.strip() and q.strip().lower() not in {e.lower() for e in existing}
+            ]
+    except Exception as exc:
+        logger.warning("Pass 1 quirks extraction LLM call failed: %s", exc)
+        return [], text
+
+    # If no new quirks were found, skip Pass 2 and keep original text
+    if not new_quirks:
+        return [], text
+
+    # =========================================================================
+    # PASS 2: Surgical Prose Rewrite (Excise Extracted Quirks)
+    # =========================================================================
+    bullet_list = "\n".join(f"- {q}" for q in new_quirks)
+    system_prompt_pass2 = (
+        "You are an expert character psychologist and narrative copyeditor.\n"
+        "You are given a character's Core Persona prose and a bullet list of quirks and flaws that have been extracted into dedicated sheet fields.\n\n"
+        "Task:\n"
+        "Rewrite the Core Persona prose to completely remove all direct mentions and descriptions of the extracted quirks.\n\n"
+        "Extracted quirks to REMOVE:\n"
+        f"{bullet_list}\n\n"
+        "Critical Rules:\n"
+        "1. Remove every single extracted quirk listed above from the prose.\n"
+        "2. Ensure natural prose flow: rephrase surrounding sentences smoothly so that no grammatical gaps, missing subjects, or chopped clauses remain.\n"
+        "3. PRESERVE the character's general demeanor, conversational habits, social defense mechanisms, speech cadence, and interpersonal attitude.\n"
+        "4. Do NOT add new behavioral quirks or moral rules."
+    )
+    user_prompt_pass2 = f"Original Core Persona Demeanor:\n{text}"
+
+    try:
+        pass2_out = await llm_client.complete_structured(
+            [
+                {"role": "system", "content": system_prompt_pass2},
+                {"role": "user", "content": user_prompt_pass2},
+            ],
+            RewrittenDemeanorLLMOutput,
+            profile=actor_prof,
+            max_tokens=2048,
+        )
+        if isinstance(pass2_out, RewrittenDemeanorLLMOutput):
+            cleaned = (pass2_out.cleaned_core_persona or "").strip() or text
+            return new_quirks, cleaned
+    except Exception as exc:
+        logger.warning("Pass 2 demeanor rewrite LLM call failed: %s", exc)
+
+    return new_quirks, text

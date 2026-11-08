@@ -82,6 +82,7 @@ export const CharacterVoiceTab: React.FC<CharacterVoiceTabProps> = ({
               styleKeywords.map((s, i) => (
                 <span
                   key={i}
+                  title={s}
                   style={{
                     background: "rgba(56, 189, 248, 0.15)",
                     border: "1px solid var(--accent-cyan)",

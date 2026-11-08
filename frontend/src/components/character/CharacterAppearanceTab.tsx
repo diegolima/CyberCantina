@@ -217,6 +217,7 @@ export const CharacterAppearanceTab: React.FC<CharacterAppearanceTabProps> = ({
               featuresValue.map((f, i) => (
                 <span
                   key={i}
+                  title={f}
                   style={{
                     background: "rgba(245, 158, 11, 0.15)",
                     border: "1px solid var(--accent-amber)",

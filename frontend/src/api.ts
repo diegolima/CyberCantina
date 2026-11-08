@@ -845,6 +845,20 @@ export const api = {
         existing_quirks_flaws: existingQuirksFlaws,
       }),
     }),
+  extractCharacterQuirks: (
+    corePersona: string,
+    existingQuirks: string[]
+  ) =>
+    fetchJson<{
+      extracted_quirks: string[];
+      rewritten_core_persona: string;
+    }>(`${API_BASE}/wizards/character/extract-quirks`, {
+      method: "POST",
+      body: JSON.stringify({
+        core_persona: corePersona,
+        existing_quirks: existingQuirks,
+      }),
+    }),
   updateCharacter: (
     characterId: string,
     payload: CharacterWizardDraft & { world_id?: string | null }
