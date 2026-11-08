@@ -153,15 +153,49 @@ def test_character_edits_increment_version(temp_repo: CantinaRepository) -> None
     assert hist_v3.version == 3
     assert hist_v3.name == "Renna Kane (Master)"
 
-    # Restore version 1 -> should create version 4 with version 1 data
-    restored_v4 = temp_repo.restore_character_version(char_v1.id, 1, owner_id=user.id)
-    assert restored_v4.version == 4
-    assert restored_v4.name == "Renna Kane"
-    assert restored_v4.equipped == ["Stealth combat suit"]
+    # Revert to version 2 -> keeps version 2 active, retains version 3 in history
+    reverted_v2 = temp_repo.restore_character_version(char_v1.id, 2, owner_id=user.id)
+    assert reverted_v2.version == 2
+    assert reverted_v2.name == "Renna Kane (Armored)"
+    assert reverted_v2.equipped == ["Ceramic reinforced chestplate"]
 
+    # Version history still has all 3 versions [3, 2, 1] (v3 inactive but preserved)
     versions_after = temp_repo.list_character_versions(char_v1.id, owner_id=user.id)
-    assert len(versions_after) == 4
-    assert [v.version for v in versions_after] == [4, 3, 2, 1]
+    assert len(versions_after) == 3
+    assert [v.version for v in versions_after] == [3, 2, 1]
+
+    # Now make an edit from active v2 -> should branch to v4 (max+1)
+    branched_v4 = temp_repo.update_character(
+        char_v1.id,
+        CharacterUpdatePayload(
+            name="Renna Kane (Apex)",
+            tagline=char_v1.tagline,
+            physical_appearance=char_v1.physical_appearance,
+            core_persona=char_v1.core_persona,
+            initial_message=char_v1.initial_message,
+            equipped=["Nano-mesh weave"],
+            inventory=char_v1.inventory,
+            tags=char_v1.tags,
+            creator=char_v1.creator,
+            creator_notes=char_v1.creator_notes,
+            voice_anchors=char_v1.voice_anchors,
+            baseline_psyche=char_v1.baseline_psyche,
+            memory_shards=char_v1.memory_shards,
+            world_id=char_v1.world_id,
+        ),
+        owner_id=user.id,
+    )
+    assert branched_v4.version == 4
+    assert branched_v4.name == "Renna Kane (Apex)"
+
+    # History now has [4, 3, 2, 1]
+    versions_v4 = temp_repo.list_character_versions(char_v1.id, owner_id=user.id)
+    assert len(versions_v4) == 4
+    assert [v.version for v in versions_v4] == [4, 3, 2, 1]
+
+    # Historical v3 is still completely intact in history
+    hist_v3_again = temp_repo.get_character_version(char_v1.id, 3, owner_id=user.id)
+    assert hist_v3_again.name == "Renna Kane (Master)"
 
 
 def test_creator_notes_model_a_federation(temp_repo: CantinaRepository) -> None:
@@ -342,19 +376,48 @@ def test_character_versions_and_notes_api(
         assert v_note["character_id"] == char.id
         assert "vespera-scout-veteran" in v_note["tags"]
 
-        # 5. POST /api/characters/{id}/versions/1/restore -> restores v1 snapshot as v3
+        # 5. POST /api/characters/{id}/versions/1/restore -> restores v1 snapshot as active version (version stays 1)
         restore_resp = client.post(f"/api/characters/{char.id}/versions/1/restore")
         assert restore_resp.status_code == 200
         restored_char = restore_resp.json()
-        assert restored_char["version"] == 3
+        assert restored_char["version"] == 1
         assert restored_char["name"] == "Vespera Scout"
 
-        # Check version history now contains 3 versions
+        # Check version history retains both versions [2, 1] (v2 inactive but listed)
         vers_resp2 = client.get(f"/api/characters/{char.id}/versions")
         assert vers_resp2.status_code == 200
         vers_data2 = vers_resp2.json()
-        assert len(vers_data2) == 3
-        assert [v["version"] for v in vers_data2] == [3, 2, 1]
+        assert len(vers_data2) == 2
+        assert [v["version"] for v in vers_data2] == [2, 1]
+
+        # 6. Subsequent edit from active v1 creates v3 (max+1)
+        edit_resp = client.put(
+            f"/api/characters/{char.id}",
+            json={
+                "name": "Vespera Scout (Elite)",
+                "tagline": char.tagline,
+                "character_bio": char.character_bio,
+                "physical_appearance": char.physical_appearance,
+                "core_persona": char.core_persona,
+                "initial_message": char.initial_message,
+                "equipped": [],
+                "inventory": [],
+                "voice_anchors": [],
+                "baseline_psyche": char.baseline_psyche.model_dump(),
+                "memory_shards": [],
+            },
+        )
+        assert edit_resp.status_code == 200
+        edited_char = edit_resp.json()
+        assert edited_char["version"] == 3
+        assert edited_char["name"] == "Vespera Scout (Elite)"
+
+        # Check version history now contains 3 versions [3, 2, 1]
+        vers_resp3 = client.get(f"/api/characters/{char.id}/versions")
+        assert vers_resp3.status_code == 200
+        vers_data3 = vers_resp3.json()
+        assert len(vers_data3) == 3
+        assert [v["version"] for v in vers_data3] == [3, 2, 1]
     finally:
         main_module.app.dependency_overrides.clear()
 

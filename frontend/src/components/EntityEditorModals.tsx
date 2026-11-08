@@ -877,7 +877,7 @@ export const CharacterInspectorModal: React.FC<
                 >
                   {versions.map((v) => (
                     <option key={v.version} value={v.version}>
-                      v{v.version} {v.version === version ? "(Current)" : `(${new Date(v.created_at).toLocaleDateString()})`}
+                      v{v.version} {v.version === version ? "(Active)" : `(${new Date(v.created_at).toLocaleDateString()})`}
                     </option>
                   ))}
                 </select>
@@ -917,7 +917,7 @@ export const CharacterInspectorModal: React.FC<
                 disabled={restoringVersion}
                 onClick={handleExitHistory}
               >
-                Back to Current (v{version})
+                Back to Active (v{version})
               </button>
               <button
                 type="button"
@@ -928,10 +928,10 @@ export const CharacterInspectorModal: React.FC<
               >
                 {restoringVersion ? (
                   <>
-                    <Loader2 size={12} className="spin" /> Restoring...
+                    <Loader2 size={12} className="spin" /> Activating...
                   </>
                 ) : (
-                  "Restore as Latest"
+                  "Set as Active"
                 )}
               </button>
             </div>
@@ -2196,7 +2196,7 @@ export const CharacterInspectorModal: React.FC<
         <div className="modal-footer">
           <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
             {viewingHistory
-              ? `Viewing historical Version ${selectedVersion} (Read-Only). Use "Restore as Latest" at top to revert.`
+              ? `Viewing historical Version ${selectedVersion} (Read-Only). Use "Set as Active" at top to activate.`
               : isDirty
               ? "Unsaved edits ready. Saving increments character version."
               : "Click any field above to edit."}

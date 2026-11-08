@@ -4036,7 +4036,13 @@ class CantinaRepository:
             clean_p, clean_g = _sanitize_character_media(portraits_dict, gallery_list)
             portraits_json = json.dumps(clean_p)
             gallery_json = json.dumps([img.model_dump() for img in clean_g])
-            new_version = orig.version + 1
+
+            max_ver_row = conn.execute(
+                "SELECT COALESCE(MAX(version), 0) AS max_v FROM character_versions WHERE character_id = ?",
+                (character_id,),
+            ).fetchone()
+            highest_version = max(orig.version, max_ver_row["max_v"] if max_ver_row else 0)
+            new_version = highest_version + 1
 
             distinctive_features_json = json.dumps(payload.distinctive_features)
             mannerisms_json = json.dumps(payload.mannerisms)
@@ -4406,82 +4412,232 @@ class CantinaRepository:
     def restore_character_version(
         self, character_id: str, version: int, owner_id: str | None = None
     ) -> CharacterRecord:
-        """Restore a historical snapshot as a new monotonically incremented version."""
+        """Restore a historical snapshot by making it the active version without creating a new version entry."""
         snap = self.get_character_version(character_id, version, owner_id=owner_id)
-        payload = CharacterUpdatePayload(
-            name=snap.name,
-            tagline=snap.tagline,
-            character_bio=snap.character_bio,
-            physical_appearance=snap.physical_appearance,
-            species=snap.species,
-            sex=snap.sex,
-            pronouns=snap.pronouns,
-            age=snap.age,
-            build_and_height=snap.build_and_height,
-            distinctive_features=snap.distinctive_features,
-            posture=snap.posture,
-            mannerisms=snap.mannerisms,
-            modifications=snap.modifications,
-            visual_aesthetic=snap.visual_aesthetic,
-            personality_traits=snap.personality_traits,
-            core_persona=snap.core_persona,
-            moral_code=snap.moral_code,
-            quirks_flaws=snap.quirks_flaws,
-            communication_style=snap.communication_style,
-            initial_message=snap.initial_message,
-            equipped=snap.equipped,
-            inventory=snap.inventory,
-            voice_anchors=snap.voice_anchors,
-            baseline_psyche=snap.baseline_psyche,
-            memory_shards=snap.memory_shards,
-            tags=snap.tags,
-            creator=snap.creator,
-            creator_notes=snap.creator_notes,
-            portraits=snap.portraits,
-            gallery=snap.gallery,
-            world_id=snap.world_id,
-        )
-        return self.update_character(character_id, payload, owner_id=owner_id)
+        current_char = self.get_character(character_id, owner_id=owner_id)
+        now = utc_now_iso()
+
+        conn = self._connect()
+        try:
+            c_owner_row = conn.execute(
+                "SELECT owner_id FROM characters WHERE id = ?", (character_id,)
+            ).fetchone()
+            effective_owner_id = (
+                c_owner_row["owner_id"]
+                if c_owner_row and "owner_id" in c_owner_row.keys()
+                else owner_id
+            )
+
+            usage_row = conn.execute(
+                """
+                SELECT COUNT(DISTINCT campaign_id) AS cnt
+                FROM (
+                    SELECT campaign_id FROM campaign_characters WHERE character_id = ?
+                    UNION
+                    SELECT id AS campaign_id FROM campaigns WHERE character_id = ?
+                )
+                """,
+                (character_id, character_id),
+            ).fetchone()
+            campaigns_using = int(usage_row["cnt"]) if usage_row else 0
+
+            # Prepare serialized fields from snap
+            equipped_json = dump_items_json(snap.equipped)
+            inventory_json = dump_items_json(snap.inventory)
+            voice_json = json.dumps([v.model_dump() for v in snap.voice_anchors])
+            psyche_json = snap.baseline_psyche.model_dump_json()
+            shards_json = json.dumps([m.model_dump() for m in snap.memory_shards])
+            clean_tags = [slugify_tag(t) for t in snap.tags if t and t.strip()]
+            tags_json = json.dumps(clean_tags)
+            distinctive_features_json = json.dumps(snap.distinctive_features)
+            mannerisms_json = json.dumps(snap.mannerisms)
+            modifications_json = json.dumps(snap.modifications)
+            personality_traits_json = json.dumps(snap.personality_traits)
+            moral_code_json = json.dumps(snap.moral_code)
+            quirks_flaws_json = json.dumps(snap.quirks_flaws)
+            communication_style_json = json.dumps(snap.communication_style)
+            portraits_json = json.dumps(current_char.portraits)
+            gallery_json = json.dumps([img.model_dump() for img in current_char.gallery])
+
+            if campaigns_using == 0:
+                target_char_id = character_id
+                conn.execute(
+                    """
+                    UPDATE characters
+                    SET world_id = ?, name = ?, tagline = ?, species = ?, sex = ?, pronouns = ?, age = ?,
+                        character_bio = ?, physical_appearance = ?, build_and_height = ?, distinctive_features_json = ?,
+                        posture = ?, mannerisms_json = ?, modifications_json = ?, visual_aesthetic = ?,
+                        personality_traits_json = ?, core_persona = ?, moral_code_json = ?, quirks_flaws_json = ?,
+                        communication_style_json = ?, initial_message = ?, equipped_json = ?, inventory_json = ?,
+                        voice_anchors_json = ?, baseline_psyche_json = ?, memory_shards_json = ?,
+                        tags_json = ?, creator = ?, creator_notes = ?,
+                        portraits_json = ?, gallery_json = ?, version = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        snap.world_id,
+                        snap.name,
+                        snap.tagline,
+                        snap.species,
+                        snap.sex,
+                        snap.pronouns,
+                        snap.age,
+                        snap.character_bio,
+                        snap.physical_appearance,
+                        snap.build_and_height,
+                        distinctive_features_json,
+                        snap.posture,
+                        mannerisms_json,
+                        modifications_json,
+                        snap.visual_aesthetic,
+                        personality_traits_json,
+                        snap.core_persona,
+                        moral_code_json,
+                        quirks_flaws_json,
+                        communication_style_json,
+                        snap.initial_message,
+                        equipped_json,
+                        inventory_json,
+                        voice_json,
+                        psyche_json,
+                        shards_json,
+                        tags_json,
+                        snap.creator,
+                        snap.creator_notes,
+                        portraits_json,
+                        gallery_json,
+                        snap.version,
+                        target_char_id,
+                    ),
+                )
+                conn.execute(
+                    "DELETE FROM vector_entries WHERE character_id = ? AND source_type = 'character_shard'",
+                    (target_char_id,),
+                )
+            else:
+                # Copy-on-Write fork for running campaigns
+                conn.execute(
+                    "UPDATE characters SET pending_deletion = 1 WHERE id = ?",
+                    (character_id,),
+                )
+                target_char_id = f"char_{uuid.uuid4().hex[:10]}"
+                conn.execute(
+                    """
+                    INSERT INTO characters (
+                        id, owner_id, world_id, name, tagline, species, sex, pronouns, age,
+                        character_bio, physical_appearance, build_and_height, distinctive_features_json,
+                        posture, mannerisms_json, modifications_json, visual_aesthetic,
+                        personality_traits_json, core_persona, moral_code_json, quirks_flaws_json,
+                        communication_style_json, initial_message, equipped_json, inventory_json,
+                        voice_anchors_json, baseline_psyche_json, memory_shards_json,
+                        tags_json, creator, creator_notes,
+                        portraits_json, gallery_json, version,
+                        pending_deletion, created_at
+                    )
+                    VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?, ?,
+                        0, ?
+                    )
+                    """,
+                    (
+                        target_char_id,
+                        effective_owner_id,
+                        snap.world_id,
+                        snap.name,
+                        snap.tagline,
+                        snap.species,
+                        snap.sex,
+                        snap.pronouns,
+                        snap.age,
+                        snap.character_bio,
+                        snap.physical_appearance,
+                        snap.build_and_height,
+                        distinctive_features_json,
+                        snap.posture,
+                        mannerisms_json,
+                        modifications_json,
+                        snap.visual_aesthetic,
+                        personality_traits_json,
+                        snap.core_persona,
+                        moral_code_json,
+                        quirks_flaws_json,
+                        communication_style_json,
+                        snap.initial_message,
+                        equipped_json,
+                        inventory_json,
+                        voice_json,
+                        psyche_json,
+                        shards_json,
+                        tags_json,
+                        snap.creator,
+                        snap.creator_notes,
+                        portraits_json,
+                        gallery_json,
+                        snap.version,
+                        now,
+                    ),
+                )
+                try:
+                    old_media = Path(self.media_dir) / "characters" / character_id
+                    new_media = Path(self.media_dir) / "characters" / target_char_id
+                    if old_media.exists() and not new_media.exists():
+                        shutil.copytree(old_media, new_media)
+                except Exception:
+                    pass
+
+                # Copy all historical versions (including v3) to the new entity
+                old_vers = conn.execute(
+                    "SELECT version, data_json, created_at FROM character_versions WHERE character_id = ? ORDER BY version ASC",
+                    (character_id,),
+                ).fetchall()
+                for ov in old_vers:
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO character_versions (id, character_id, version, data_json, created_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (f"cver_{target_char_id}_{ov['version']}", target_char_id, ov["version"], ov["data_json"], ov["created_at"]),
+                    )
+
+            # Re-index vector entries for snap memory shards
+            for idx, shard in enumerate(snap.memory_shards):
+                shard_id = f"shard_{target_char_id}_{idx}"
+                conn.execute(
+                    """
+                    INSERT INTO vector_entries (
+                        id, source_type, world_id, character_id, campaign_id,
+                        anchor_turn_id, title, content, keywords_json, embedding_blob
+                    )
+                    VALUES (?, 'character_shard', ?, ?, NULL, NULL, ?, ?, ?, ?)
+                    """,
+                    (
+                        shard_id,
+                        snap.world_id,
+                        target_char_id,
+                        shard.title,
+                        shard.content,
+                        json.dumps(shard.keywords),
+                        b"",
+                    ),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return self.get_character(target_char_id, owner_id=owner_id)
 
     async def arestore_character_version(
         self, character_id: str, version: int, owner_id: str | None = None
     ) -> CharacterRecord:
-        """Asynchronously restore a historical snapshot as a new version."""
-        snap = self.get_character_version(character_id, version, owner_id=owner_id)
-        payload = CharacterUpdatePayload(
-            name=snap.name,
-            tagline=snap.tagline,
-            character_bio=snap.character_bio,
-            physical_appearance=snap.physical_appearance,
-            species=snap.species,
-            sex=snap.sex,
-            pronouns=snap.pronouns,
-            age=snap.age,
-            build_and_height=snap.build_and_height,
-            distinctive_features=snap.distinctive_features,
-            posture=snap.posture,
-            mannerisms=snap.mannerisms,
-            modifications=snap.modifications,
-            visual_aesthetic=snap.visual_aesthetic,
-            personality_traits=snap.personality_traits,
-            core_persona=snap.core_persona,
-            moral_code=snap.moral_code,
-            quirks_flaws=snap.quirks_flaws,
-            communication_style=snap.communication_style,
-            initial_message=snap.initial_message,
-            equipped=snap.equipped,
-            inventory=snap.inventory,
-            voice_anchors=snap.voice_anchors,
-            baseline_psyche=snap.baseline_psyche,
-            memory_shards=snap.memory_shards,
-            tags=snap.tags,
-            creator=snap.creator,
-            creator_notes=snap.creator_notes,
-            portraits=snap.portraits,
-            gallery=snap.gallery,
-            world_id=snap.world_id,
-        )
-        return await self.aupdate_character(character_id, payload, owner_id=owner_id)
+        """Asynchronously restore a historical snapshot as active version."""
+        return self.restore_character_version(character_id, version, owner_id=owner_id)
 
     def update_character_portraits(
         self, character_id: str, portraits: dict[str, str], owner_id: str | None = None
