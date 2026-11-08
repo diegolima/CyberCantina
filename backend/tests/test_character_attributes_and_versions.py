@@ -501,7 +501,12 @@ def test_character_modifications_auto_merge_and_extraction_endpoints(
     from fastapi.testclient import TestClient
     from app import main as main_module
     from app.engine.llm_client import llm_client
-    from app.wizards.character_extractor import ExtractedFeaturesLLMOutput, ExtractedPersonaLLMOutput
+    from app.wizards.character_extractor import (
+        DistinctiveFeaturesExtractionLLMOutput,
+        RewrittenBioLLMOutput,
+        PersonaTraitsExtractionLLMOutput,
+        RewrittenPersonaLLMOutput,
+    )
 
     # 1. Test auto-merging modifications into distinctive_features
     draft = _make_sample_draft("Augmented Jack")
@@ -521,15 +526,21 @@ def test_character_modifications_auto_merge_and_extraction_endpoints(
     main_module.app.dependency_overrides[main_module.get_current_user] = lambda: user_profile
 
     async def mock_complete_structured(messages, output_schema, **kwargs):
-        if output_schema == ExtractedFeaturesLLMOutput:
-            return ExtractedFeaturesLLMOutput(
+        if output_schema == DistinctiveFeaturesExtractionLLMOutput:
+            return DistinctiveFeaturesExtractionLLMOutput(
                 distinctive_features=["cybernetic gold eye", "shaved temples"],
+            )
+        elif output_schema == RewrittenBioLLMOutput:
+            return RewrittenBioLLMOutput(
                 cleaned_bio="A veteran operative wandering the perimeter.",
             )
-        elif output_schema == ExtractedPersonaLLMOutput:
-            return ExtractedPersonaLLMOutput(
+        elif output_schema == PersonaTraitsExtractionLLMOutput:
+            return PersonaTraitsExtractionLLMOutput(
                 moral_code=["never leaves a comrade behind"],
                 quirks_flaws=["chain smokes under heavy fire"],
+            )
+        elif output_schema == RewrittenPersonaLLMOutput:
+            return RewrittenPersonaLLMOutput(
                 cleaned_core_persona="Speaks in low monotone with guarded caution.",
             )
         raise ValueError(f"Unexpected schema {output_schema}")
