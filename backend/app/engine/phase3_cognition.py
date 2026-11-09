@@ -165,7 +165,7 @@ def parse_cognition_xml(
             impulse = impulse_from_legacy_floats(valence, arousal)
 
     recall = _sanitize_cognition_text(recall, field_type="recall", location_id=fallback_state.current_location_id)
-    recall = _format_cognition_bullets(recall, max_bullets=2, max_words_per_bullet=30)
+    recall = _format_cognition_bullets(recall, max_bullets=2, max_words_per_bullet=12)
     raw_want = want_match.group(1).strip() if want_match else fallback_state.active_want
     want = _sanitize_cognition_text(raw_want, field_type="want") or fallback_state.active_want
     choice_match = _SELECTED_CHOICE_RE.search(cognition_xml)
@@ -252,7 +252,7 @@ def _format_cognition_bullets(
 _PROMPT_LEAKAGE_RE = re.compile(
     r"(?:strictly\s*1-2\s*ultra-concise|critical\s*negative\s*constraint|"
     r"state\s*only\s*the\s*single\s*immediate|maximum\s*15-20\s*words|"
-    r"never\s*summarize\s*backstory|1\s*singular\s*sentence\s*defining|"
+    r"strictly\s*under\s*10\s*words|1\s*singular\s*sentence\s*defining|"
     r"2-3\s*brief\s*sequential\s*bullet|adhering\s*strictly\s*to\s*the\s*object|"
     r"output\s*only\s*the\s*<cognition>|following\s*this\s*exact\s*4-step|"
     r"output\s*only\s*the\s*requested\s*structured|never\s*echo,?\s*copy,?\s*or\s*quote|"
@@ -689,7 +689,7 @@ async def run_character_cognition_agent(
         f"- Subtext Interpretation: {pre_turn.subtext_interpretation}\n"
         f"{roll_text}\n"
         f"{choice_directive_text}"
-        f"Recalled Scoped Memories & Lore (Context for internal orientation only — do NOT transcribe into <recall>):\n"
+        f"Recalled Scoped Memories & Lore (Synthesize relevant beats into <recall> in under 10 words per bullet):\n"
         f"{recalled_text}\n\n"
     )
 
@@ -748,7 +748,7 @@ async def run_character_cognition_agent(
             field_type="recall",
             location_id=active_location.id,
         )
-        cog.recall = _format_cognition_bullets(cog.recall, max_bullets=2, max_words_per_bullet=30)
+        cog.recall = _format_cognition_bullets(cog.recall, max_bullets=2, max_words_per_bullet=12)
 
         cog.want = _sanitize_cognition_text(cog.want, field_type="want")
         if not cog.want:

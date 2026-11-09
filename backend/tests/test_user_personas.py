@@ -998,3 +998,41 @@ def test_per_user_default_persona_isolation(temp_repo: CantinaRepository) -> Non
     assert not any(p.id == p_a.id for p in bob_list)
 
 
+def test_persona_knowledge_provenance_sqlite_serialization(temp_repo: CantinaRepository) -> None:
+    """Verify that PersonaKnowledgeProvenance objects serialize cleanly to SQLite without JSON error."""
+    import json
+    from app.schemas.persona import PersonaKnowledgeProvenance
+    from app.db.repository import _dump_provenance_json
+    from app.schemas.character import CharacterStateSnapshot
+
+    prov_dict = {
+        "item_deck": PersonaKnowledgeProvenance(
+            unlocked_at_turn_id="turn_1",
+            learned_from="player",
+        )
+    }
+
+    # 1. Direct helper test
+    dumped = _dump_provenance_json(prov_dict)
+    loaded = json.loads(dumped)
+    assert loaded["item_deck"]["unlocked_at_turn_id"] == "turn_1"
+    assert loaded["item_deck"]["learned_from"] == "player"
+
+    # 2. Dump via _dump_provenance_json test
+    st = CharacterStateSnapshot(
+        turn_id="turn_1",
+        character_id="char_test",
+        current_location_id="loc_test",
+        mood_label="Alert",
+        valence=0.0,
+        arousal=0.5,
+        active_want="Watch",
+        active_plan="Observe",
+        persona_knowledge_provenance=prov_dict,
+    )
+    dumped_from_st = _dump_provenance_json(st.persona_knowledge_provenance)
+    assert "item_deck" in dumped_from_st
+    loaded_from_st = json.loads(dumped_from_st)
+    assert loaded_from_st["item_deck"]["learned_from"] == "player"
+
+

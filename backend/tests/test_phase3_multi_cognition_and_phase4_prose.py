@@ -741,15 +741,15 @@ def test_cognition_block_schema_and_prompt_relevance_constraints() -> None:
     schema = CognitionBlock.model_json_schema()
     props = schema["properties"]
 
-    assert "Strictly 1-2 ultra-concise bullet points" in props["recall"]["description"]
-    assert "Never summarize backstory" in props["recall"]["description"]
+    assert "strictly under 10 words per bullet" in props["recall"]["description"]
+    assert "key backstory or turn events" in props["recall"]["description"]
     assert "under 20 words" in props["feeling"]["description"]
     assert "under 20 words" in props["want"]["description"]
     assert "under 15 words" in props["plan"]["description"]
 
     # Verify prompt guidelines
     assert "=== 4-STEP COGNITIVE PROTOCOL ===" in DEFAULT_CHARACTER_COGNITION_SYSTEM
-    assert "Never summarize backstory" in DEFAULT_CHARACTER_COGNITION_SYSTEM
+    assert "strictly under 10 words per bullet" in DEFAULT_CHARACTER_COGNITION_SYSTEM
     assert "=== PHYSICAL ACTION & OBJECT INTERACTION HIERARCHY ===" in DEFAULT_CHARACTER_COGNITION_SYSTEM
 
 

@@ -88,6 +88,21 @@ def _dump_care_state_json(care_state: AffectiveCareState | None) -> str:
     return care_state.model_dump_json()
 
 
+def _dump_provenance_json(prov: dict[str, Any] | None) -> str:
+    """Serialize persona knowledge provenance dict for SQLite persistence."""
+    if not prov:
+        return "{}"
+    serializable: dict[str, Any] = {}
+    for k, v in prov.items():
+        if hasattr(v, "model_dump"):
+            serializable[k] = v.model_dump()
+        elif hasattr(v, "dict"):
+            serializable[k] = v.dict()
+        else:
+            serializable[k] = v
+    return json.dumps(serializable)
+
+
 def _validate_world_artifact_lore_id(
     conn: sqlite3.Connection,
     world_id: str | None,
@@ -5958,7 +5973,7 @@ class CantinaRepository:
                         dump_items_json(st.equipped),
                         dump_items_json(st.inventory),
                         json.dumps(st.unlocked_persona_keys),
-                        json.dumps(st.persona_knowledge_provenance),
+                        _dump_provenance_json(st.persona_knowledge_provenance),
                         _dump_care_state_json(st.care_state),
                     ),
                 )
@@ -6092,7 +6107,7 @@ class CantinaRepository:
                         dump_items_json(merged_eq),
                         dump_items_json(merged_inv),
                         json.dumps(st.unlocked_persona_keys),
-                        json.dumps(st.persona_knowledge_provenance),
+                        _dump_provenance_json(st.persona_knowledge_provenance),
                         _dump_care_state_json(eff_care),
                     ),
                 )
