@@ -666,9 +666,13 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
             className="modal-panel"
             style={{
               width: "min(1100px, 95vw)",
+              height: "min(900px, 92vh)",
               maxHeight: "92vh",
               display: "flex",
               flexDirection: "column",
+              padding: "16px",
+              boxSizing: "border-box",
+              overflow: "auto",
             }}
             onClick={(e) => e.stopPropagation()}
           >

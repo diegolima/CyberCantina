@@ -354,6 +354,25 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   const [editMinutes, setEditMinutes] = useState<string>("1");
   const [isUpdatingDistance, setIsUpdatingDistance] = useState(false);
 
+  // Refs for scrolling and container constraints
+  const linkFormRef = useRef<HTMLDivElement>(null);
+  const connectFormRef = useRef<HTMLDivElement>(null);
+  const inspectorScrollRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll new room form into view when opened
+  useEffect(() => {
+    if (showLinkForm && linkFormRef.current) {
+      linkFormRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [showLinkForm]);
+
+  // Auto-scroll connect room form into view when opened
+  useEffect(() => {
+    if (showConnectForm && connectFormRef.current) {
+      connectFormRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [showConnectForm]);
+
   // Removing edge state
   const [isRemovingEdgeId, setIsRemovingEdgeId] = useState<string | null>(null);
 
@@ -484,6 +503,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     setLinkError(null);
     setShowLinkForm(true);
     setShowConnectForm(false);
+    setTimeout(() => {
+      linkFormRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 50);
   };
 
   const submitLinkForm = async () => {
@@ -539,6 +561,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     setConnectError(null);
     setShowConnectForm(true);
     setShowLinkForm(false);
+    setTimeout(() => {
+      connectFormRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 50);
   };
 
   const submitConnectForm = async () => {
@@ -671,6 +696,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         flexDirection: "column",
         gap: 10,
         width: "100%",
+        height: "100%",
+        flex: 1,
+        minHeight: 0,
       }}
     >
       {/* Header Toolbar */}
@@ -681,6 +709,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
           alignItems: "center",
           flexWrap: "wrap",
           gap: 8,
+          flexShrink: 0,
         }}
       >
         <span
@@ -762,10 +791,14 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "1fr 375px",
+          gridTemplateColumns: "minmax(0, 1fr) minmax(320px, 375px)",
+          gridTemplateRows: "minmax(0, 1fr)",
           gap: 14,
-          minHeight: 520,
-          maxHeight: "calc(88vh - 120px)",
+          flex: 1,
+          minHeight: 400,
+          height: "calc(90vh - 120px)",
+          maxHeight: "100%",
+          overflow: "hidden",
         }}
       >
         {/* Left: Interactive Pan/Zoom SVG Canvas */}
@@ -777,14 +810,17 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             border: "1px solid var(--border-subtle)",
             overflow: "hidden",
             userSelect: "none",
-            minHeight: 520,
+            height: "100%",
+            minHeight: 0,
           }}
         >
           <svg
             width="100%"
             height="100%"
             style={{
-              minHeight: 520,
+              width: "100%",
+              height: "100%",
+              minHeight: 0,
               cursor: dragRef.current.dragging ? "grabbing" : "grab",
               display: "block",
             }}
@@ -968,6 +1004,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
 
         {/* Right: Selected Location Inspector & Editor Controls */}
         <div
+          ref={inspectorScrollRef}
           style={{
             background: "var(--bg-card)",
             borderRadius: 8,
@@ -977,6 +1014,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             flexDirection: "column",
             gap: 12,
             overflowY: "auto",
+            minHeight: 0,
+            height: "100%",
             maxHeight: "100%",
           }}
         >
@@ -2268,6 +2307,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
               ) : showLinkForm ? (
                 /* Link Creation Form */
                 <div
+                  ref={linkFormRef}
                   style={{
                     border: "1px solid rgba(6, 182, 212, 0.45)",
                     borderRadius: 6,
@@ -2414,6 +2454,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
               ) : (
                 /* Connect to Existing Room Form (Editor mode) */
                 <div
+                  ref={connectFormRef}
                   style={{
                     border: "1px solid rgba(168, 85, 247, 0.45)",
                     borderRadius: 6,

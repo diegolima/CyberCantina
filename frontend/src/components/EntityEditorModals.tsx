@@ -3190,6 +3190,8 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
               display: activeTab === "map" ? "flex" : "none",
               flexDirection: "column",
               gap: 10,
+              minHeight: 520,
+              height: "calc(88vh - 220px)",
             }}
           >
             {locations.length === 0 ? (
