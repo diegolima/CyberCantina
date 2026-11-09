@@ -649,7 +649,7 @@ class CognitionBlock(BaseModel):
 
     recall: str = Field(
         default="",
-        description="1-2 concise bullet points recalling key backstory or turn events relevant right now (strictly under 10 words per bullet).",
+        description="Up to 2-3 concise bullet points recalling immediate trigger, key backstory, or secret relevant right now (strictly under 12 words per bullet; never pad with filler).",
     )
     feeling: str = Field(
         default="",

@@ -728,6 +728,13 @@ def test_format_cognition_bullets_caps_and_word_limits() -> None:
     assert "Third bullet" not in formatted
     assert "Fourth bullet" not in formatted
 
+    # Test 3-bullet cap with 12 words
+    formatted_3 = _format_cognition_bullets(verbose_text, max_bullets=3, max_words_per_bullet=12)
+    lines_3 = formatted_3.splitlines()
+    assert len(lines_3) == 3
+    assert "Third bullet" in formatted_3
+    assert "Fourth bullet" not in formatted_3
+
     # Backward-compatible unconstrained formatting
     unconstrained = _format_cognition_bullets(verbose_text)
     assert len(unconstrained.splitlines()) == 4
@@ -741,15 +748,18 @@ def test_cognition_block_schema_and_prompt_relevance_constraints() -> None:
     schema = CognitionBlock.model_json_schema()
     props = schema["properties"]
 
-    assert "strictly under 10 words per bullet" in props["recall"]["description"]
-    assert "key backstory or turn events" in props["recall"]["description"]
+    assert "strictly under 12 words per bullet" in props["recall"]["description"]
+    assert "Up to 2-3 concise bullet points" in props["recall"]["description"]
+    assert "never pad with filler" in props["recall"]["description"]
     assert "under 20 words" in props["feeling"]["description"]
     assert "under 20 words" in props["want"]["description"]
     assert "under 15 words" in props["plan"]["description"]
 
     # Verify prompt guidelines
     assert "=== 4-STEP COGNITIVE PROTOCOL ===" in DEFAULT_CHARACTER_COGNITION_SYSTEM
-    assert "strictly under 10 words per bullet" in DEFAULT_CHARACTER_COGNITION_SYSTEM
+    assert "Up to 2-3 concise bullet points" in DEFAULT_CHARACTER_COGNITION_SYSTEM
+    assert "strictly under 12 words per bullet point" in DEFAULT_CHARACTER_COGNITION_SYSTEM
+    assert "never pad with filler" in DEFAULT_CHARACTER_COGNITION_SYSTEM
     assert "=== PHYSICAL ACTION & OBJECT INTERACTION HIERARCHY ===" in DEFAULT_CHARACTER_COGNITION_SYSTEM
 
 
