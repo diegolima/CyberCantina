@@ -707,3 +707,83 @@ async def test_multi_cognition_roll_outcome_and_zone4_prose_flow(
 
         cog_ev = next(e for e in stream_events if e["event"] == "cognition_complete")
         assert cog_ev["data"]["roll_outcome_tier"] == "Clean Success"
+
+
+def test_format_cognition_bullets_caps_and_word_limits() -> None:
+    """Verify that _format_cognition_bullets enforces max_bullets and max_words_per_bullet."""
+    from app.engine.phase3_cognition import _format_cognition_bullets
+
+    verbose_text = (
+        "- First bullet: The Syndicate had compromised our security codes three cycles ago during the raid on Neo-Vegas.\n"
+        "- Second bullet: Remembering how Marcus slipped through the checkpoint by bribing the dock master with illicit neuro-chips.\n"
+        "- Third bullet: An unnecessary third recollection that should be pruned entirely to save token budget.\n"
+        "- Fourth bullet: Another excessive bullet point."
+    )
+
+    formatted = _format_cognition_bullets(verbose_text, max_bullets=2, max_words_per_bullet=10)
+    lines = formatted.splitlines()
+    assert len(lines) == 2
+    assert lines[0].startswith("- First bullet: The Syndicate had compromised our security codes three...")
+    assert lines[1].startswith("- Second bullet: Remembering how Marcus slipped through the checkpoint by...")
+    assert "Third bullet" not in formatted
+    assert "Fourth bullet" not in formatted
+
+    # Backward-compatible unconstrained formatting
+    unconstrained = _format_cognition_bullets(verbose_text)
+    assert len(unconstrained.splitlines()) == 4
+
+
+def test_cognition_block_schema_and_prompt_relevance_constraints() -> None:
+    """Verify that CognitionBlock schema descriptions and DEFAULT_CHARACTER_COGNITION_SYSTEM contain strict boundaries."""
+    from app.schemas.character import CognitionBlock
+    from app.prompts.defaults import DEFAULT_CHARACTER_COGNITION_SYSTEM
+
+    schema = CognitionBlock.model_json_schema()
+    props = schema["properties"]
+
+    assert "Strictly 1-2 ultra-concise bullet points" in props["recall"]["description"]
+    assert "Never summarize backstory" in props["recall"]["description"]
+    assert "under 20 words" in props["feeling"]["description"]
+    assert "under 20 words" in props["want"]["description"]
+    assert "under 15 words" in props["plan"]["description"]
+
+    # Verify prompt guidelines
+    assert "=== 4-STEP COGNITIVE PROTOCOL ===" in DEFAULT_CHARACTER_COGNITION_SYSTEM
+    assert "Never summarize backstory" in DEFAULT_CHARACTER_COGNITION_SYSTEM
+    assert "=== PHYSICAL ACTION & OBJECT INTERACTION HIERARCHY ===" in DEFAULT_CHARACTER_COGNITION_SYSTEM
+
+
+def test_sanitize_cognition_text_strips_echoed_instructions_and_malformed_prefixes() -> None:
+    """Verify that _sanitize_cognition_text cleans prompt instruction echoes, XML tags, and malformed plan= prefixes."""
+    from app.engine.phase3_cognition import _sanitize_cognition_text
+
+    # 1. Echoed instruction in recall
+    echoed_recall = (
+        "- Strictly 1-2 ultra-concise bullet points (maximum 15-20 words per bullet). "
+        "- State ONLY the single immediate trigger or memory directly impacting this turn from Yva's perspective. "
+        "- CRITICAL NEGATIVE CONSTRAINT:..."
+    )
+    cleaned_recall = _sanitize_cognition_text(echoed_recall, field_type="recall", location_id="loc_test")
+    assert cleaned_recall == "- Sizing up the interaction in loc_test."
+    assert "Strictly 1-2" not in cleaned_recall
+
+    # 2. Tag prefix & template instruction in want
+    echoed_want = (
+        "want>1 singular sentence defining Yva's immediate objective in this scene. "
+        "Yva wants to gather information about the user's intentions and assess the room's layout without appearing confrontational."
+    )
+    cleaned_want = _sanitize_cognition_text(echoed_want, field_type="want")
+    assert cleaned_want == "Yva wants to gather information about the user's intentions and assess the room's layout without appearing confrontational."
+    assert "want>" not in cleaned_want
+    assert "1 singular sentence" not in cleaned_want
+
+    # 3. Malformed plan= / - plan= prefix
+    garbage_plan = "- plan="
+    cleaned_plan = _sanitize_cognition_text(garbage_plan, field_type="plan")
+    assert cleaned_plan == ""
+
+    valid_plan = "- plan=\"I will stand firm, mirroring the user's posture and stance.\""
+    cleaned_valid = _sanitize_cognition_text(valid_plan, field_type="plan")
+    assert "I will stand firm" in cleaned_valid
+    assert not cleaned_valid.startswith("- plan=")
+

@@ -164,10 +164,15 @@ def parse_cognition_xml(
                     pass
             impulse = impulse_from_legacy_floats(valence, arousal)
 
-    want = want_match.group(1).strip() if want_match else fallback_state.active_want
+    recall = _sanitize_cognition_text(recall, field_type="recall", location_id=fallback_state.current_location_id)
+    recall = _format_cognition_bullets(recall, max_bullets=2, max_words_per_bullet=30)
+    raw_want = want_match.group(1).strip() if want_match else fallback_state.active_want
+    want = _sanitize_cognition_text(raw_want, field_type="want") or fallback_state.active_want
     choice_match = _SELECTED_CHOICE_RE.search(cognition_xml)
     selected_choice = choice_match.group(1).strip() if choice_match else None
-    plan = plan_match.group(1).strip() if plan_match else fallback_state.active_plan
+    raw_plan = plan_match.group(1).strip() if plan_match else fallback_state.active_plan
+    plan = _sanitize_cognition_text(raw_plan, field_type="plan") or fallback_state.active_plan
+    plan = _format_cognition_bullets(plan, max_bullets=3, max_words_per_bullet=25)
 
     ro_m = _ROLL_OUTCOME_ATTR_RE.search(cognition_xml)
     roll_outcome_tier = ro_m.group(1).strip() if ro_m else None
@@ -190,7 +195,12 @@ def parse_cognition_xml(
     )
 
 
-def _format_cognition_bullets(text: str) -> str:
+def _format_cognition_bullets(
+    text: str,
+    *,
+    max_bullets: int | None = None,
+    max_words_per_bullet: int | None = None,
+) -> str:
     """Format cognition multi-item fields (recall, plan) into clean newline-separated bullet points."""
     if not text:
         return ""
@@ -207,7 +217,7 @@ def _format_cognition_bullets(text: str) -> str:
         parts = re.split(r"\s*(?:^|\b)[1-9][.)]\s+", t)
         items = [f"- {p.strip()}" for p in parts if p.strip()]
         if items:
-            return "\n".join(items)
+            t = "\n".join(items)
 
     lines: list[str] = []
     for line in t.splitlines():
@@ -217,12 +227,74 @@ def _format_cognition_bullets(text: str) -> str:
         cleaned = re.sub(r"^(?:[-*•]|\d+[.)])\s*", "- ", line)
         if not cleaned.startswith("- "):
             cleaned = f"- {cleaned}"
+        if max_words_per_bullet is not None and max_words_per_bullet > 0:
+            content = cleaned[2:].strip()
+            words = content.split()
+            if len(words) > max_words_per_bullet:
+                cleaned = f"- {' '.join(words[:max_words_per_bullet])}..."
         lines.append(cleaned)
+
+    if max_bullets is not None and max_bullets > 0:
+        lines = lines[:max_bullets]
 
     if lines:
         return "\n".join(lines)
 
-    return f"- {t}" if not t.startswith("- ") else t
+    fallback = f"- {t}" if not t.startswith("- ") else t
+    if max_words_per_bullet is not None and max_words_per_bullet > 0:
+        content = fallback[2:].strip()
+        words = content.split()
+        if len(words) > max_words_per_bullet:
+            fallback = f"- {' '.join(words[:max_words_per_bullet])}..."
+    return fallback
+
+
+_PROMPT_LEAKAGE_RE = re.compile(
+    r"(?:strictly\s*1-2\s*ultra-concise|critical\s*negative\s*constraint|"
+    r"state\s*only\s*the\s*single\s*immediate|maximum\s*15-20\s*words|"
+    r"never\s*summarize\s*backstory|1\s*singular\s*sentence\s*defining|"
+    r"2-3\s*brief\s*sequential\s*bullet|adhering\s*strictly\s*to\s*the\s*object|"
+    r"output\s*only\s*the\s*<cognition>|following\s*this\s*exact\s*4-step|"
+    r"output\s*only\s*the\s*requested\s*structured|never\s*echo,?\s*copy,?\s*or\s*quote|"
+    r"write\s*\{?character_name\}?'?s?\s*actual\s*in-character)",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_cognition_text(
+    text: str | None,
+    *,
+    field_type: str,
+    location_id: str | None = None,
+) -> str:
+    """Sanitize cognition text to remove prompt instruction leakage and malformed prefixes."""
+    if not text:
+        return ""
+    t = text.strip()
+
+    if field_type == "want":
+        t = re.sub(r"^(?:<want>|want>|\[want\]|\"want\"[:=]|\bwant[:=])\s*", "", t, flags=re.I)
+        t = re.sub(r"^1\s+singular\s+sentence\s+(?:defining\s+[^.]*\.\s*)?", "", t, flags=re.I)
+        t = re.sub(r"</want>$", "", t, flags=re.I).strip()
+    elif field_type == "plan":
+        cleaned_tokens = re.sub(r"^[-*•\s]*plan[=:\s]*$", "", t, flags=re.I).strip()
+        if not cleaned_tokens:
+            return ""
+        t = re.sub(r"^(?:[-*•\s]*(?:<plan>|plan>|\[plan\]|\"plan\"[:=]|\bplan[=:]))\s*", "", t, flags=re.I)
+        t = re.sub(r"</plan>$", "", t, flags=re.I).strip()
+    elif field_type == "recall":
+        t = re.sub(r"^(?:<recall>|recall>|\[recall\]|\"recall\"[:=]|\brecall[:=])\s*", "", t, flags=re.I)
+        t = re.sub(r"</recall>$", "", t, flags=re.I).strip()
+
+    if _PROMPT_LEAKAGE_RE.search(t):
+        if field_type == "recall":
+            loc_str = f" in {location_id}" if location_id else ""
+            return f"- Sizing up the interaction{loc_str}."
+        elif field_type in ("want", "plan"):
+            cleaned = _PROMPT_LEAKAGE_RE.sub("", t).strip()
+            return cleaned if len(cleaned) > 5 else ""
+
+    return t
 
 
 @dataclass(frozen=True)
@@ -459,9 +531,11 @@ async def run_character_cognition_agent(
         if m.id not in seen_recall_ids:
             seen_recall_ids.add(m.id)
             all_recalled.append(m)
+    # Tame recall bloat: select top 3 most relevant items for subconscious cognition
+    effective_recalled = all_recalled[:3]
     recalled_text = "\n".join(
         f"  - [{m.source_type.upper()}] {m.title}: {m.content}"
-        for m in all_recalled
+        for m in effective_recalled
     ) or "  - No specific background lore triggered this turn."
 
     char_roll = pre_turn.character_rolls.get(character.id) or (
@@ -577,6 +651,17 @@ async def run_character_cognition_agent(
             + "\n\n"
         )
 
+    clean_prev_want = (
+        _sanitize_cognition_text(previous_state.active_want, field_type="want")
+        or character.baseline_psyche.default_want
+        or "Assess the situation and respond."
+    )
+    clean_prev_plan = (
+        _sanitize_cognition_text(previous_state.active_plan, field_type="plan")
+        or character.baseline_psyche.default_plan
+        or "Observe surroundings and maintain stance."
+    )
+
     user_prompt = (
         f"Character: {character.name} (id='{character.id}', Role in scene: {role})\n"
         f"- Tagline: {character.tagline}\n"
@@ -586,8 +671,8 @@ async def run_character_cognition_agent(
         f"- Voice Quotes: {', '.join(voice_quotes) or 'None'}\n\n"
         f"Previous Psychological State (Emotional Anchor):\n"
         f"{affective_anchor_block}\n"
-        f"- Active Want: {previous_state.active_want}\n"
-        f"- Active Plan: {previous_state.active_plan}\n"
+        f"- Active Want: {clean_prev_want}\n"
+        f"- Active Plan: {clean_prev_plan}\n"
         f"{anchor_guideline}\n\n"
         f"Available Physical Affordances:\n"
         f"- [1] Equipped / In-Hand: {', '.join(format_item_names(previous_state.equipped)) or 'None'}\n"
@@ -604,7 +689,7 @@ async def run_character_cognition_agent(
         f"- Subtext Interpretation: {pre_turn.subtext_interpretation}\n"
         f"{roll_text}\n"
         f"{choice_directive_text}"
-        f"Recalled Scoped Memories & Lore:\n"
+        f"Recalled Scoped Memories & Lore (Context for internal orientation only — do NOT transcribe into <recall>):\n"
         f"{recalled_text}\n\n"
     )
 
@@ -658,8 +743,21 @@ async def run_character_cognition_agent(
             json_schema=eff_schema,
         )
 
-        cog.recall = _format_cognition_bullets(cog.recall)
-        cog.plan = _format_cognition_bullets(cog.plan)
+        cog.recall = _sanitize_cognition_text(
+            cog.recall,
+            field_type="recall",
+            location_id=active_location.id,
+        )
+        cog.recall = _format_cognition_bullets(cog.recall, max_bullets=2, max_words_per_bullet=30)
+
+        cog.want = _sanitize_cognition_text(cog.want, field_type="want")
+        if not cog.want:
+            cog.want = clean_prev_want
+
+        cog.plan = _sanitize_cognition_text(cog.plan, field_type="plan")
+        if not cog.plan:
+            cog.plan = clean_prev_plan
+        cog.plan = _format_cognition_bullets(cog.plan, max_bullets=3, max_words_per_bullet=25)
 
         val_match = re.search(r"valence:\s*([+-]?\d+(?:\.\d+)?)", cog.feeling, flags=re.I)
         ar_match = re.search(r"arousal:\s*([+-]?\d+(?:\.\d+)?)", cog.feeling, flags=re.I)
@@ -674,13 +772,11 @@ async def run_character_cognition_agent(
             except ValueError:
                 pass
         cog.feeling = re.sub(r"\s*\(Valence:.*?\)", "", cog.feeling, flags=re.I).strip()
+        cog.feeling = re.sub(r"^(?:<feeling[^>]*>|feeling>|\[feeling\])\s*", "", cog.feeling, flags=re.I)
+        cog.feeling = re.sub(r"</feeling>$", "", cog.feeling, flags=re.I).strip()
 
-        if not cog.feeling:
+        if not cog.feeling or cog.feeling.strip().lower() in ("neutral", "calibrating..."):
             cog.feeling = previous_state.mood_label or "Observant and measured."
-        if not cog.want:
-            cog.want = previous_state.active_want or "Assess the situation and respond."
-        if not cog.plan:
-            cog.plan = previous_state.active_plan or "Listen and react to the user."
 
         if choice_resolution:
             cog = coerce_choice_compliance(cog, choice_resolution, previous_state)

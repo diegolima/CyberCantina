@@ -649,11 +649,11 @@ class CognitionBlock(BaseModel):
 
     recall: str = Field(
         default="",
-        description="What the character remembers from history/lore relevant to this moment (1-3 bullet points starting with '- ' on separate lines).",
+        description="Strictly 1-2 ultra-concise bullet points (under 20 words each) identifying only the single immediate situational trigger. Never summarize backstory or reproduce lore.",
     )
     feeling: str = Field(
         default="",
-        description="How the character feels right now in response to the user's words/subtext (1 evocative sentence).",
+        description="1 concise evocative sentence (under 20 words) capturing internal emotional state right now, anchored to <internal_affective_state>.",
     )
     feeling_tone: FeelingTone = Field(
         default="neutral",
@@ -683,7 +683,7 @@ class CognitionBlock(BaseModel):
     )
     want: str = Field(
         default="",
-        description="What the character needs and wants in this immediate interaction (1 singular sentence).",
+        description="1 singular sentence (under 20 words) defining immediate scene objective.",
     )
     selected_choice: str | None = Field(
         default=None,
@@ -699,7 +699,7 @@ class CognitionBlock(BaseModel):
     )
     plan: str = Field(
         default="",
-        description="What the character plans to do or say right now (2-3 sequential bullet points starting with '- ' on separate lines).",
+        description="2-3 brief sequential bullet points (under 15 words each) outlining immediate physical action and dialogue, adhering strictly to the Object Interaction Hierarchy and roll outcome.",
     )
     skipped: bool = Field(
         default=False,
