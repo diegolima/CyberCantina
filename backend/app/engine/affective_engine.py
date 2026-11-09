@@ -651,6 +651,47 @@ def _edge_compact_summary(edge: RelationalEdge) -> str:
     return prefix
 
 
+def describe_edge_stance(edge: RelationalEdge) -> str:
+    """Return a concise stance label (e.g. 'Warm & Trusting', 'Cold & Distrustful', 'Measured & Neutral')."""
+    tags: list[str] = []
+    if edge.warmth >= 0.35:
+        tags.append("Warm")
+    elif edge.warmth <= -0.35:
+        tags.append("Cold")
+
+    if edge.trust >= 0.35:
+        tags.append("Trusting")
+    elif edge.trust <= -0.35:
+        tags.append("Distrustful")
+
+    if edge.respect >= 0.35:
+        tags.append("Respectful")
+    elif edge.respect <= -0.35:
+        tags.append("Contemptuous")
+
+    if edge.grievance >= 0.30:
+        tags.append("Aggrieved")
+    if edge.obligation >= 0.30:
+        tags.append("Indebted")
+    elif edge.obligation <= -0.30:
+        tags.append("Owed a debt")
+
+    return " & ".join(tags) if tags else "Measured & Neutral"
+
+
+def describe_trust_tier(trust: float) -> str:
+    """Classify scalar trust into a qualitative descriptor."""
+    if trust >= 0.60:
+        return "High"
+    if trust >= 0.20:
+        return "Moderate"
+    if trust <= -0.45:
+        return "Deep Distrust"
+    if trust <= -0.20:
+        return "Guarded"
+    return "Neutral"
+
+
 # ---------------------------------------------------------------------------
 # Seeding, Legacy Hydration, & Snapshot Materialization
 # ---------------------------------------------------------------------------

@@ -76,6 +76,7 @@ _INTENSITY_ATTR_RE = re.compile(r'intensity=["\']([^"\']+)["\']', re.IGNORECASE)
 _AGENCY_ATTR_RE = re.compile(r'agency=["\']([^"\']+)["\']', re.IGNORECASE)
 _THREAT_ATTR_RE = re.compile(r'threat=["\']([^"\']+)["\']', re.IGNORECASE)
 _COPING_ATTR_RE = re.compile(r'coping=["\']([^"\']+)["\']', re.IGNORECASE)
+_ROLL_OUTCOME_ATTR_RE = re.compile(r'roll_outcome=["\']([^"\']+)["\']', re.IGNORECASE)
 
 
 def _clamp(val: float, low: float, high: float) -> float:
@@ -168,6 +169,9 @@ def parse_cognition_xml(
     selected_choice = choice_match.group(1).strip() if choice_match else None
     plan = plan_match.group(1).strip() if plan_match else fallback_state.active_plan
 
+    ro_m = _ROLL_OUTCOME_ATTR_RE.search(cognition_xml)
+    roll_outcome_tier = ro_m.group(1).strip() if ro_m else None
+
     return CognitionBlock(
         recall=recall,
         feeling=feeling,
@@ -182,6 +186,7 @@ def parse_cognition_xml(
         want=want,
         selected_choice=selected_choice,
         plan=plan,
+        roll_outcome_tier=roll_outcome_tier,
     )
 
 
@@ -392,6 +397,7 @@ def heuristic_character_cognition(
         want=previous_state.active_want or character.baseline_psyche.default_want,
         plan="\n".join(plan_bullets),
         skipped=False,
+        roll_outcome_tier=char_roll.outcome_tier if char_roll else None,
     )
     if choice_resolution:
         from app.engine.choices import coerce_choice_compliance
@@ -678,6 +684,9 @@ async def run_character_cognition_agent(
 
         if choice_resolution:
             cog = coerce_choice_compliance(cog, choice_resolution, previous_state)
+
+        if char_roll and not cog.roll_outcome_tier:
+            cog.roll_outcome_tier = char_roll.outcome_tier
 
         cog.skipped = False
         return cog

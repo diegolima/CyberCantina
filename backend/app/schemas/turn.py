@@ -25,6 +25,7 @@ from app.schemas.affective import (
     coerce_threat_level,
 )
 from app.schemas.character import (
+    CanonicalOutcomeTier,
     CharacterRecord,
     CharacterStateSnapshot,
     CognitionBlock,
@@ -38,15 +39,6 @@ from app.schemas.world import (
     NeighborLocationView,
     normalize_compass_direction,
 )
-
-
-CanonicalOutcomeTier = Literal[
-    "Critical Failure",
-    "Failure with Consequences",
-    "Simple Failure",
-    "Clean Success",
-    "Critical Success",
-]
 
 CheckRole = Literal[
     "active_attempt",

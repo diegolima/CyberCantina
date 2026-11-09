@@ -359,6 +359,19 @@ def test_dual_feeling_xml_parser_and_flat_cognition_json_schema() -> None:
     assert "arousal" not in directed["properties"]
     assert "selected_choice" in directed["properties"]
 
+    # 4. Roll outcome attribute parsing
+    ro_xml = (
+        '<character_active_cognition character="Vesper" roll_outcome="Critical Failure">\n'
+        '  <feeling tone="anguished" intensity="extreme" agency="pressured">Disaster struck.</feeling>\n'
+        '  <want>Survive.</want>\n'
+        '  <plan>- Scramble.</plan>\n'
+        '</character_active_cognition>'
+    )
+    cog_ro = parse_cognition_xml(ro_xml, fallback)
+    assert cog_ro.roll_outcome_tier == "Critical Failure"
+    assert cog_ro.feeling_tone == "anguished"
+    assert cog_ro.feeling_agency == "pressured"
+
 
 @pytest.mark.asyncio()
 async def test_composure_masking_and_zero_floats_in_phase3_and_zone4() -> None:
@@ -535,3 +548,172 @@ async def test_composure_masking_and_zero_floats_in_phase3_and_zone4() -> None:
     # Jax (second in sequence) must NOT see Vesper's secret feeling ("Secretly livid at the threat")
     assert "Secretly livid at the threat" not in captured_p3_prompts[1]
     assert "Outwardly" in captured_p3_prompts[1]
+
+
+def test_zone4_categorical_serialization_and_dynamic_behavioral_anchors() -> None:
+    """Verify Zone 4 preserves categorical appraisal attributes, roll_outcome, and composure-aware anchors."""
+    world, vesper, jax, loc = _make_world_and_cast()
+
+    # 1. High composure anchor test
+    vesper_high_care = seed_initial_care_state(vesper.baseline_psyche).model_copy(
+        update={"composure": 0.85, "valence": -0.2, "arousal": 0.3}
+    )
+    vesper_high_snap = CharacterStateSnapshot(
+        turn_id="t1",
+        character_id=vesper.id,
+        current_location_id=loc.id,
+        mood_label="Disciplined",
+        valence=-0.2,
+        arousal=0.3,
+        active_want="Observe",
+        active_plan="Watch",
+        care_state=vesper_high_care,
+    )
+
+    pre_normal = PreTurnAnalysis(
+        user_sentiment="neutral",
+        subtext_interpretation="Casual greeting",
+        active_speaker_id=vesper.id,
+        mechanics_check=MechanicsTrigger(requires_roll=False),
+    )
+
+    cog_vesper = CognitionBlock(
+        recall="- Clear sightlines.",
+        feeling="Steady and watchful.",
+        feeling_tone="guarded",
+        feeling_intensity="moderate",
+        feeling_agency="commanding",
+        scene_threat="none",
+        scene_coping="adequate",
+        want="Determine intentions",
+        plan="- Await approach.",
+    )
+
+    z4_high = build_zone4_ephemeral_tail_frame(
+        user_message="Hello.",
+        character=vesper,
+        world_snapshot=WorldStateSnapshot(
+            turn_id="t1",
+            world_timestamp="2088-11-02 22:00",
+            campaign_elapsed_minutes=0,
+            active_location_id=loc.id,
+        ),
+        character_state=vesper_high_snap,
+        active_location=loc,
+        neighbors=[],
+        recalled_items=[],
+        pre_turn=pre_normal,
+        present_characters=[vesper],
+        all_character_states={vesper.id: vesper_high_snap},
+        established_cognition=cog_vesper,
+    )
+
+    assert "Behavioral Anchor: Composure is [DISCIPLINED/HIGH]" in z4_high
+    assert '<feeling tone="guarded" intensity="moderate" agency="commanding" threat="none" coping="adequate">Steady and watchful.</feeling>' in z4_high
+
+    # 2. Shattered composure anchor test with Critical Failure roll
+    from app.schemas.turn import DiceRollResult
+    from app.schemas.affective import RelationalEdge
+
+    jax_shattered_care = seed_initial_care_state(jax.baseline_psyche).model_copy(
+        update={
+            "composure": 0.20,
+            "valence": -0.7,
+            "arousal": 0.9,
+            "relations": {
+                "user": RelationalEdge(target_id="user", warmth=-0.4, trust=-0.5, episodic_note="Deeply suspicious"),
+                vesper.id: RelationalEdge(target_id=vesper.id, warmth=0.6, trust=0.6, respect=0.7),
+            },
+        }
+    )
+    jax_shattered_snap = CharacterStateSnapshot(
+        turn_id="t1",
+        character_id=jax.id,
+        current_location_id=loc.id,
+        mood_label="Panicking",
+        valence=-0.7,
+        arousal=0.9,
+        active_want="Flee",
+        active_plan="Run",
+        care_state=jax_shattered_care,
+    )
+
+    crit_fail_roll = DiceRollResult(
+        character_id=jax.id,
+        action_description="Slick dash to exit",
+        skill_or_approach="Agility",
+        difficulty_class=15,
+        total=4,
+        d20_raw=2,
+        modifier=2,
+        outcome_tier="Critical Failure",
+        narrative_directive="Trip over the hydraulic hose.",
+    )
+    pre_crit = PreTurnAnalysis(
+        user_sentiment="hostile",
+        subtext_interpretation="Attack",
+        active_speaker_id=jax.id,
+        resolved_roll=crit_fail_roll,
+        character_rolls={jax.id: crit_fail_roll},
+        mechanics_check=MechanicsTrigger(requires_roll=True),
+    )
+
+    cog_jax = CognitionBlock(
+        recall="- Exit blocked.",
+        feeling="Desperation spiking.",
+        feeling_tone="anguished",
+        feeling_intensity="extreme",
+        feeling_agency="helpless",
+        scene_threat="critical",
+        scene_coping="overwhelmed",
+        want="Avoid getting grabbed",
+        plan="- Stumble forward.",
+        roll_outcome_tier="Critical Failure",
+    )
+
+    z4_crit = build_zone4_ephemeral_tail_frame(
+        user_message="Halt!",
+        character=jax,
+        world_snapshot=WorldStateSnapshot(
+            turn_id="t1",
+            world_timestamp="2088-11-02 22:00",
+            campaign_elapsed_minutes=0,
+            active_location_id=loc.id,
+        ),
+        character_state=jax_shattered_snap,
+        active_location=loc,
+        neighbors=[],
+        recalled_items=[],
+        pre_turn=pre_crit,
+        present_characters=[jax, vesper],
+        all_character_states={jax.id: jax_shattered_snap, vesper.id: vesper_high_snap},
+        established_cognitions={jax.id: cog_jax, vesper.id: cog_vesper},
+    )
+
+    # Roll outcome takes highest priority in anchor when critical
+    assert "Behavioral Anchor: This turn resulted in a [Critical Failure]" in z4_crit
+    assert 'roll_outcome="Critical Failure"' in z4_crit
+    assert '<feeling tone="anguished" intensity="extreme" agency="helpless" threat="critical" coping="overwhelmed">Desperation spiking.</feeling>' in z4_crit
+
+    # 3. Verify co-present characters show dyadic stance from Vesper's perspective observing Jax
+    z4_vesper_view = build_zone4_ephemeral_tail_frame(
+        user_message="Halt!",
+        character=vesper,
+        world_snapshot=WorldStateSnapshot(
+            turn_id="t1",
+            world_timestamp="2088-11-02 22:00",
+            campaign_elapsed_minutes=0,
+            active_location_id=loc.id,
+        ),
+        character_state=vesper_high_snap,
+        active_location=loc,
+        neighbors=[],
+        recalled_items=[],
+        pre_turn=pre_crit,
+        present_characters=[vesper, jax],
+        all_character_states={jax.id: jax_shattered_snap, vesper.id: vesper_high_snap},
+        established_cognitions={jax.id: cog_jax, vesper.id: cog_vesper},
+    )
+
+    assert "Stance toward Player: Cold & Distrustful (Trust: Deep Distrust)" in z4_vesper_view
+    assert f"Stance toward {vesper.name}: Warm & Trusting & Respectful" in z4_vesper_view

@@ -569,3 +569,141 @@ async def test_full_turn_node_persists_multi_cognitions(
     assert kira_id in reloaded.cognitions
     assert reloaded.cognitions[kira_id].want == "Secure the perimeter"
     assert reloaded.cognition_character_names.get(kira_id) == "Kira Vance"
+
+
+@pytest.mark.asyncio()
+async def test_multi_cognition_roll_outcome_and_zone4_prose_flow(
+    sample_world_and_characters: tuple[WorldRecord, CharacterRecord, CharacterRecord, LocationNode],
+) -> None:
+    """Verify roll_outcome_tier propagates through multi-cognition into Zone 4 and Phase 4 stream."""
+    world, kira, malor, loc = sample_world_and_characters
+    from app.schemas.turn import DiceRollResult
+    from app.engine.phase2_context import TurnContextBundle
+
+    roll = DiceRollResult(
+        character_id=kira.id,
+        action_description="Hack the security sub-relay",
+        skill_or_approach="Tech",
+        difficulty_class=12,
+        total=17,
+        d20_raw=14,
+        modifier=3,
+        outcome_tier="Clean Success",
+        plan_directive="Bypass the secondary firewall cleanly.",
+        narrative_directive="Narrate the terminal lighting green on success.",
+    )
+
+    pre = PreTurnAnalysis(
+        user_sentiment="cooperative",
+        subtext_interpretation="Assisting the team",
+        active_speaker_id=kira.id,
+        speaker_order=[kira.id, malor.id],
+        resolved_roll=roll,
+        character_rolls={kira.id: roll},
+        mechanics_check=MechanicsTrigger(requires_roll=True),
+    )
+
+    kira_state = CharacterStateSnapshot(
+        turn_id="t0",
+        character_id=kira.id,
+        current_location_id=loc.id,
+        mood_label="Focused",
+        valence=0.1,
+        arousal=0.4,
+        active_want="Slice the terminal",
+        active_plan="Jack into the deck",
+    )
+    malor_state = CharacterStateSnapshot(
+        turn_id="t0",
+        character_id=malor.id,
+        current_location_id=loc.id,
+        mood_label="Vigilant",
+        valence=0.0,
+        arousal=0.3,
+        active_want="Cover the hallway",
+        active_plan="Watch the corridor",
+    )
+
+    leaf = TurnNodeRecord(
+        id="t0",
+        campaign_id="c_test",
+        parent_turn_id=None,
+        depth_index=0,
+        user_message="Slice it now!",
+        actor_id=kira.id,
+        raw_prose="Waiting.",
+        cognition=CognitionBlock(skipped=True),
+        pre_turn=pre,
+        world_snapshot=WorldStateSnapshot(
+            turn_id="t0",
+            world_timestamp="2026-11-02 00:00",
+            campaign_elapsed_minutes=0,
+            active_location_id=loc.id,
+        ),
+        character_state=kira_state,
+        character_states={kira.id: kira_state, malor.id: malor_state},
+        created_at="2026-11-02T00:00:00Z",
+    )
+
+    ctx = TurnContextBundle(
+        world=world,
+        branch_turns=[leaf],
+        leaf_turn=leaf,
+        active_location=loc,
+        neighbors=[],
+        present_characters=[kira, malor],
+        pre_turn=pre,
+        user_message="Slice it now!",
+        episodic_chunks=[],
+        shared_scene_items=[],
+        per_character_recalled_items={kira.id: [], malor.id: []},
+        all_character_states={kira.id: kira_state, malor.id: malor_state},
+        character_name_map={kira.id: kira.name, malor.id: malor.name},
+    )
+
+    # Run multi-cognition (fallback heuristic or mock)
+    with patch("app.engine.phase3_cognition.llm_client.complete_structured", side_effect=RuntimeError("Fast heuristic")):
+        cogs = await run_phase3_multi_cognition(context=ctx, dispatch_mode="sequential")
+    assert kira.id in cogs
+    assert cogs[kira.id].roll_outcome_tier == "Clean Success"
+
+    # Assemble Zone 4
+    zone4 = build_zone4_ephemeral_tail_frame(
+        user_message="Slice it now!",
+        character=kira,
+        world_snapshot=leaf.world_snapshot,
+        character_state=kira_state,
+        active_location=loc,
+        neighbors=[],
+        recalled_items=[],
+        pre_turn=pre,
+        present_characters=[kira, malor],
+        all_character_states={kira.id: kira_state, malor.id: malor_state},
+        established_cognitions=cogs,
+    )
+
+    assert 'roll_outcome="Clean Success"' in zone4
+    assert '<feeling tone="' in zone4
+    assert 'agency="' in zone4
+
+    # Test Phase 4 stream receives primary cognition with roll outcome
+    async def mock_stream(*args, **kwargs):
+        yield "*Kira's cyberdeck pulses cyan as the security grid unlocks.* \"We're in.\""
+
+    with patch("app.engine.phase4_prose.llm_client.stream_chat", side_effect=mock_stream):
+        stream_events = []
+        async for ev in stream_phase4_prose(
+            messages=[{"role": "user", "content": "Slice it now!"}],
+            user_message="Slice it now!",
+            character=kira,
+            previous_state=kira_state,
+            active_location=loc,
+            neighbors=[],
+            recalled_items=[],
+            pre_turn=pre,
+            established_cognitions=cogs,
+        ):
+            stream_events.append(ev)
+
+        cog_ev = next(e for e in stream_events if e["event"] == "cognition_complete")
+        assert cog_ev["data"]["roll_outcome_tier"] == "Clean Success"

@@ -39,6 +39,14 @@ MemorySignificance = Literal[
 ItemFlag = Literal["permanent", "artifact"]
 VALID_ITEM_FLAGS: tuple[ItemFlag, ...] = ("permanent", "artifact")
 
+CanonicalOutcomeTier = Literal[
+    "Critical Failure",
+    "Failure with Consequences",
+    "Simple Failure",
+    "Clean Success",
+    "Critical Success",
+]
+
 _ITEM_PREFIX_RE = re.compile(
     r"^\[(?:worn|carried|equipped|held|stashed|clothing|item|object)\]\s*",
     flags=re.IGNORECASE,
@@ -697,6 +705,25 @@ class CognitionBlock(BaseModel):
         default=False,
         description="True if the model omitted the <cognition> block and streamed prose directly.",
     )
+    roll_outcome_tier: CanonicalOutcomeTier | None = Field(
+        default=None,
+        description="Mechanical check outcome tier resolved for this character this turn.",
+    )
+
+    @field_validator("roll_outcome_tier", mode="before")
+    @classmethod
+    def _coerce_roll_outcome(cls, v: Any) -> CanonicalOutcomeTier | None:
+        if not v:
+            return None
+        s = str(v).strip().lower()
+        mapping: dict[str, CanonicalOutcomeTier] = {
+            "critical failure": "Critical Failure",
+            "failure with consequences": "Failure with Consequences",
+            "simple failure": "Simple Failure",
+            "clean success": "Clean Success",
+            "critical success": "Critical Success",
+        }
+        return mapping.get(s)
 
     @field_validator("feeling_tone", mode="before")
     @classmethod

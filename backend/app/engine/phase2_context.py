@@ -8,6 +8,8 @@ from typing import Any
 from app.config import settings
 from app.engine.affective_engine import (
     compute_provisional_cognition_preview,
+    describe_edge_stance,
+    describe_trust_tier,
     ensure_snapshot_care_state,
     materialize_snapshot_with_care,
     project_care_to_minute,
@@ -1225,6 +1227,8 @@ def build_zone4_ephemeral_tail_frame(
             for oc in others:
                 oc_state = (all_character_states or {}).get(oc.id)
                 demeanor_info = ""
+                player_stance = ""
+                speaker_stance = ""
                 if oc_state is not None:
                     oc_care = ensure_snapshot_care_state(
                         oc_state,
@@ -1240,6 +1244,16 @@ def build_zone4_ephemeral_tail_frame(
                             roll_outcome=oc_roll.outcome_tier if oc_roll else None,
                         )
                     demeanor_info = f" [Demeanor: {oc_care.outward_demeanor}]"
+                    player_edge = oc_care.relations.get("user")
+                    if player_edge:
+                        p_name = persona_snapshot.name.strip() if persona_snapshot and persona_snapshot.name.strip() else "Player"
+                        player_stance = f" [Stance toward {p_name}: {describe_edge_stance(player_edge)} (Trust: {describe_trust_tier(player_edge.trust)})]"
+                    if character.id != "user":
+                        speaker_edge = oc_care.relations.get(character.id)
+                        if speaker_edge:
+                            speaker_desc = describe_edge_stance(speaker_edge)
+                            if speaker_desc != "Measured & Neutral":
+                                speaker_stance = f" [Stance toward {character.name}: {speaker_desc}]"
                 app_info = (
                     f" | Appearance: {oc.physical_appearance}"
                     if oc.physical_appearance.strip()
@@ -1254,7 +1268,7 @@ def build_zone4_ephemeral_tail_frame(
                 eq_info = f" | Equipped: {', '.join(oc_eq_names)}" if oc_eq_names else ""
                 inv_info = f" | Carried: {', '.join(oc_inv_names)}" if oc_inv_names else ""
                 other_lines.append(
-                    f"    - {oc.name} ({oc.tagline}){demeanor_info}{app_info}{eq_info}{inv_info}"
+                    f"    - {oc.name} ({oc.tagline}){demeanor_info}{player_stance}{speaker_stance}{app_info}{eq_info}{inv_info}"
                 )
             co_present_section = (
                 "\n  <other_characters_in_room>\n"
@@ -1332,7 +1346,11 @@ def build_zone4_ephemeral_tail_frame(
         indented_affective = "\n".join("  " + ln for ln in affective_block.splitlines())
 
         if char_roll_for_anchor and char_roll_for_anchor.outcome_tier in ("Critical Failure", "Critical Success"):
-            anchor_line = f"    Behavioral Anchor: This turn resulted in a [{char_roll_for_anchor.outcome_tier}]—sharp emotional and behavioral shifts are warranted.\n"
+            anchor_line = f"    Behavioral Anchor: This turn resulted in a [{char_roll_for_anchor.outcome_tier}]—sharp emotional, physical, and behavioral shifts are explicitly required.\n"
+        elif active_care.composure <= 0.35:
+            anchor_line = "    Behavioral Anchor: Composure is [STRAINED/SHATTERED] (masking collapsed)—subconscious tension, micro-expressions, trembling, voice breaks, or involuntary defensive escalation MUST leak into dialogue and action.\n"
+        elif active_care.composure >= 0.70:
+            anchor_line = "    Behavioral Anchor: Composure is [DISCIPLINED/HIGH]—mask internal feelings behind controlled decorum and professional stillness; do NOT blurt out raw private thoughts.\n"
         else:
             anchor_line = "    Behavioral Anchor: Ground outward speech, cadence, and micro-expressions in the affective state and self-control directives above.\n"
 
@@ -1366,9 +1384,21 @@ def build_zone4_ephemeral_tail_frame(
                 if not cog or cog.skipped:
                     continue
                 role_label = "primary_speaker" if pc.id == primary_id else "co_present"
+                pc_roll = pre_turn.character_rolls.get(pc.id) or (
+                    pre_turn.resolved_roll
+                    if pre_turn.resolved_roll and pre_turn.resolved_roll.character_id in (None, pc.id)
+                    else None
+                )
+                effective_roll = cog.roll_outcome_tier or (pc_roll.outcome_tier if pc_roll else None)
+                roll_attr = f' roll_outcome="{effective_roll}"' if effective_roll else ""
+                tone_attr = f' tone="{cog.feeling_tone}"' if cog.feeling_tone else ""
+                int_attr = f' intensity="{cog.feeling_intensity}"' if cog.feeling_intensity else ""
+                agency_attr = f' agency="{cog.feeling_agency}"' if cog.feeling_agency else ""
+                threat_attr = f' threat="{cog.scene_threat}"' if cog.scene_threat else ""
+                coping_attr = f' coping="{cog.scene_coping}"' if cog.scene_coping else ""
                 cog_blocks.append(
-                    f"  <character_active_cognition character=\"{pc.name}\" character_id=\"{pc.id}\" role=\"{role_label}\">\n"
-                    f"    <feeling>{cog.feeling}</feeling>\n"
+                    f'  <character_active_cognition character="{pc.name}" character_id="{pc.id}" role="{role_label}"{roll_attr}>\n'
+                    f"    <feeling{tone_attr}{int_attr}{agency_attr}{threat_attr}{coping_attr}>{cog.feeling}</feeling>\n"
                     f"    <want>{cog.want}</want>\n"
                     f"    <plan>\n{cog.plan}\n    </plan>\n"
                     f"  </character_active_cognition>"
@@ -1383,10 +1413,22 @@ def build_zone4_ephemeral_tail_frame(
                     "  </actor_directive>"
                 )
         elif established_cognition:
+            ec_roll = pre_turn.character_rolls.get(character.id) or (
+                pre_turn.resolved_roll
+                if pre_turn.resolved_roll and pre_turn.resolved_roll.character_id in (None, character.id)
+                else None
+            )
+            effective_ec_roll = established_cognition.roll_outcome_tier or (ec_roll.outcome_tier if ec_roll else None)
+            ec_roll_attr = f' roll_outcome="{effective_ec_roll}"' if effective_ec_roll else ""
+            ec_tone_attr = f' tone="{established_cognition.feeling_tone}"' if established_cognition.feeling_tone else ""
+            ec_int_attr = f' intensity="{established_cognition.feeling_intensity}"' if established_cognition.feeling_intensity else ""
+            ec_agency_attr = f' agency="{established_cognition.feeling_agency}"' if established_cognition.feeling_agency else ""
+            ec_threat_attr = f' threat="{established_cognition.scene_threat}"' if established_cognition.scene_threat else ""
+            ec_coping_attr = f' coping="{established_cognition.scene_coping}"' if established_cognition.scene_coping else ""
             established_cognition_section = (
-                f"\n  <character_active_cognition character=\"{character.name}\">\n"
+                f'\n  <character_active_cognition character="{character.name}"{ec_roll_attr}>\n'
                 f"    <recall>\n{established_cognition.recall}\n    </recall>\n"
-                f"    <feeling>{established_cognition.feeling}</feeling>\n"
+                f"    <feeling{ec_tone_attr}{ec_int_attr}{ec_agency_attr}{ec_threat_attr}{ec_coping_attr}>{established_cognition.feeling}</feeling>\n"
                 f"    <want>{established_cognition.want}</want>\n"
                 f"    <plan>\n{established_cognition.plan}\n    </plan>\n"
                 f"  </character_active_cognition>\n"
