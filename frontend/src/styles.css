@@ -355,6 +355,28 @@ body {
   max-width: 85%;
 }
 
+.turn-card--editing {
+  border-color: rgba(245, 158, 11, 0.55) !important;
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.15);
+  position: relative;
+}
+
+.turn-editing-banner-pill {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 20px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent-amber);
+  margin-bottom: 2px;
+  animation: fadeIn 0.15s ease-out;
+}
+
 .user-bubble-editing {
   width: min(100%, 640px);
   display: flex;
@@ -1050,6 +1072,44 @@ body {
   flex-direction: column;
   gap: 8px;
   position: relative;
+}
+
+.composer-editing-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 8px;
+  font-size: 0.78rem;
+  color: #fef3c7;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.composer-editing-banner strong {
+  color: var(--accent-amber);
+}
+
+.composer-cancel-btn {
+  padding: 4px 12px;
+  font-size: 0.78rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(244, 63, 94, 0.16) !important;
+  border: 1px solid rgba(244, 63, 94, 0.45) !important;
+  color: #fda4af !important;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.composer-cancel-btn:hover:not(:disabled) {
+  background: rgba(244, 63, 94, 0.28) !important;
+  border-color: var(--accent-rose) !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 10px rgba(244, 63, 94, 0.25);
 }
 
 .composer-card {

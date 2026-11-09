@@ -164,10 +164,14 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const [selectedCognitionCharIdByTurn, setSelectedCognitionCharIdByTurn] = useState<Record<string, string>>({});
   const [selectedLiveCognitionCharId, setSelectedLiveCognitionCharId] = useState<string | null>(null);
   const [openMemoryIds, setOpenMemoryIds] = useState<Record<string, boolean>>({});
-  const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
-  const [editMessageText, setEditMessageText] = useState("");
-  const [editDiceMode, setEditDiceMode] = useState<DiceMode>("auto");
-  const [editDiceOverride, setEditDiceOverride] = useState<string>("");
+  const [editingTurn, setEditingTurn] = useState<TurnNodeRecord | null>(null);
+  const stashedDraftRef = useRef<{
+    inputText: string;
+    diceMode: DiceMode;
+    diceOverride: string;
+    stagedChoices: Record<string, CharacterChoiceSet>;
+  } | null>(null);
+  const handleCancelEditRef = useRef<() => void>(() => {});
   const [isDeletingTurn, setIsDeletingTurn] = useState(false);
   const [customDirectiveText, setCustomDirectiveText] = useState("");
   const [activeAgentModal, setActiveAgentModal] = useState<ActiveAgentModalTarget | null>(null);
@@ -191,9 +195,12 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   // Magic Wand Integration
   const lastBranchTurn =
     bundle.active_branch_turns[bundle.active_branch_turns.length - 1];
-  const wandContextKey = `${bundle.campaign.id}:${lastBranchTurn?.id ?? "root"}:${
+  const effectiveWandParentId = editingTurn
+    ? (editingTurn.parent_turn_id ?? null)
+    : (lastBranchTurn?.id ?? null);
+  const wandContextKey = `${bundle.campaign.id}:${effectiveWandParentId ?? "root"}:${
     pendingLocationOverrideId ?? bundle.active_location.id
-  }`;
+  }:${editingTurn ? `edit-${editingTurn.id}` : "new"}`;
 
   const magicWand = useMagicWand({
     fieldRole: "player_turn_prompt",
@@ -202,7 +209,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     contextRef: {
       scope: "campaign_turn",
       campaign_id: bundle.campaign.id,
-      parent_turn_id: lastBranchTurn?.id ?? null,
+      parent_turn_id: effectiveWandParentId,
       override_location_id: pendingLocationOverrideId ?? null,
     },
     contextKey: wandContextKey,
@@ -230,6 +237,8 @@ export const ChatStage: React.FC<ChatStageProps> = ({
           if (prev === "exits" && exitsBtnRef.current) exitsBtnRef.current.focus();
         } else if (activeTray !== "none") {
           setActiveTray("none");
+        } else if (editingTurn) {
+          handleCancelEditRef.current();
         }
       }
     };
@@ -239,7 +248,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       document.removeEventListener("mousedown", handleClickOutside);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [activePopover, activeTray]);
+  }, [activePopover, activeTray, editingTurn]);
 
   const presentCharacters = useMemo(() => {
     const rawIds =
@@ -669,10 +678,8 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   };
 
   useEffect(() => {
-    setEditingTurnId(null);
-    setEditMessageText("");
-    setEditDiceMode("auto");
-    setEditDiceOverride("");
+    setEditingTurn(null);
+    stashedDraftRef.current = null;
     setActivePopover("none");
     setActiveTray("none");
     setStagedChoices({});
@@ -770,6 +777,73 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     setActiveTray("none");
   };
 
+  const inferNarratorTurnOptions = (
+    turn: TurnNodeRecord,
+    customMessage?: string
+  ): {
+    isNarrator: boolean;
+    narrativeMode?: NarrativeMode;
+    narratorDirective?: string;
+    durationMinutes?: number;
+  } => {
+    if (turn.actor_id !== "__narrator__") {
+      return { isNarrator: false };
+    }
+
+    const msg = (customMessage ?? turn.user_message).trim();
+    const lower = msg.toLowerCase();
+
+    if (lower.includes("describe the current scene")) {
+      return { isNarrator: true, narrativeMode: "describe" };
+    }
+
+    if (
+      lower.includes("advance the story") ||
+      lower.includes("wait for") ||
+      lower.includes("minutes elapse")
+    ) {
+      const minMatch = msg.match(/(\d+)\s*minutes?/i);
+      const durationMinutes = minMatch ? parseInt(minMatch[1], 10) : undefined;
+      const directiveMatch = msg.match(/^\[Advance the story:\s*(.*?)\]$/i);
+      const directive = directiveMatch ? directiveMatch[1].trim() : undefined;
+      return {
+        isNarrator: true,
+        narrativeMode: "advance",
+        durationMinutes,
+        narratorDirective: directive,
+      };
+    }
+
+    if (lower.includes("complication")) {
+      const dirMatch = msg.match(/^\[Introduce a complication:\s*(.*?)\]$/i);
+      const directive = dirMatch ? dirMatch[1].trim() : undefined;
+      return {
+        isNarrator: true,
+        narrativeMode: "complication",
+        narratorDirective: directive,
+      };
+    }
+
+    if (lower.includes("perception") || lower.includes("examine the scene")) {
+      const dirMatch = msg.match(/^\[Perception check:\s*(.*?)\]$/i);
+      const directive = dirMatch
+        ? dirMatch[1].trim()
+        : msg.replace(/^\[|\]$/g, "").trim();
+      return {
+        isNarrator: true,
+        narrativeMode: "custom",
+        narratorDirective: directive,
+      };
+    }
+
+    // Custom directive
+    return {
+      isNarrator: true,
+      narrativeMode: "custom",
+      narratorDirective: msg.replace(/^\[|\]$/g, ""),
+    };
+  };
+
   const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
     const raw = inputText.trim();
@@ -839,12 +913,16 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         setDiceOverride("");
         magicWand.reset();
         if (arg) {
+          const targetParentId = editingTurn ? editingTurn.parent_turn_id : undefined;
           onSendTurn({
             userMessage: arg,
+            parentTurnId: targetParentId,
             diceMode: "disabled",
             narrativeMode: "custom",
             narratorDirective: arg,
           });
+          stashedDraftRef.current = null;
+          setEditingTurn(null);
         } else {
           setActiveTray("custom_directive");
         }
@@ -884,12 +962,36 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       }
     }
 
-    onSendTurn({
-      userMessage: raw,
-      diceMode,
-      manualDiceOverride: diceMode === "forced" ? parsedDice : null,
-      characterChoices: effectiveChoices,
-    });
+    const isEditMode = Boolean(editingTurn && editingTurn.parent_turn_id);
+    const targetParentId = isEditMode ? editingTurn!.parent_turn_id : undefined;
+
+    const narratorOpts = isEditMode && editingTurn
+      ? inferNarratorTurnOptions(editingTurn, raw)
+      : { isNarrator: false };
+
+    if (narratorOpts.isNarrator) {
+      onSendTurn({
+        userMessage: raw,
+        parentTurnId: targetParentId,
+        diceMode: "disabled",
+        narrativeMode: narratorOpts.narrativeMode,
+        narratorDirective: narratorOpts.narratorDirective || raw,
+        durationMinutes: narratorOpts.durationMinutes,
+      });
+    } else {
+      onSendTurn({
+        userMessage: raw,
+        parentTurnId: targetParentId,
+        diceMode,
+        manualDiceOverride: diceMode === "forced" ? parsedDice : null,
+        characterChoices: effectiveChoices,
+      });
+    }
+
+    // Post-send cleanup: discard the stashed draft once the edit is saved
+    stashedDraftRef.current = null;
+    setEditingTurn(null);
+
     setInputText("");
     setMentionPickerOpen(false);
     setMentionQuery("");
@@ -900,73 +1002,6 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     setActiveTray("none");
     setActivePopover("none");
     magicWand.reset();
-  };
-
-  const inferNarratorTurnOptions = (
-    turn: TurnNodeRecord,
-    customMessage?: string
-  ): {
-    isNarrator: boolean;
-    narrativeMode?: NarrativeMode;
-    narratorDirective?: string;
-    durationMinutes?: number;
-  } => {
-    if (turn.actor_id !== "__narrator__") {
-      return { isNarrator: false };
-    }
-
-    const msg = (customMessage ?? turn.user_message).trim();
-    const lower = msg.toLowerCase();
-
-    if (lower.includes("describe the current scene")) {
-      return { isNarrator: true, narrativeMode: "describe" };
-    }
-
-    if (
-      lower.includes("advance the story") ||
-      lower.includes("wait for") ||
-      lower.includes("minutes elapse")
-    ) {
-      const minMatch = msg.match(/(\d+)\s*minutes?/i);
-      const durationMinutes = minMatch ? parseInt(minMatch[1], 10) : undefined;
-      const directiveMatch = msg.match(/^\[Advance the story:\s*(.*?)\]$/i);
-      const directive = directiveMatch ? directiveMatch[1].trim() : undefined;
-      return {
-        isNarrator: true,
-        narrativeMode: "advance",
-        durationMinutes,
-        narratorDirective: directive,
-      };
-    }
-
-    if (lower.includes("complication")) {
-      const dirMatch = msg.match(/^\[Introduce a complication:\s*(.*?)\]$/i);
-      const directive = dirMatch ? dirMatch[1].trim() : undefined;
-      return {
-        isNarrator: true,
-        narrativeMode: "complication",
-        narratorDirective: directive,
-      };
-    }
-
-    if (lower.includes("perception") || lower.includes("examine the scene")) {
-      const dirMatch = msg.match(/^\[Perception check:\s*(.*?)\]$/i);
-      const directive = dirMatch
-        ? dirMatch[1].trim()
-        : msg.replace(/^\[|\]$/g, "").trim();
-      return {
-        isNarrator: true,
-        narrativeMode: "custom",
-        narratorDirective: directive,
-      };
-    }
-
-    // Custom directive
-    return {
-      isNarrator: true,
-      narrativeMode: "custom",
-      narratorDirective: msg.replace(/^\[|\]$/g, ""),
-    };
   };
 
   const handleSwipeRegenerate = (turn: TurnNodeRecord) => {
@@ -1002,73 +1037,81 @@ export const ChatStage: React.FC<ChatStageProps> = ({
 
   const handleStartEdit = (turn: TurnNodeRecord) => {
     if (isBusy || isDeletingTurn || !turn.parent_turn_id) return;
-    setEditingTurnId(turn.id);
-    setEditMessageText(turn.user_message);
+
+    // Stash current composer draft if not already in edit mode
+    if (!editingTurn && (inputText.trim() !== "" || Object.keys(stagedChoices).length > 0)) {
+      stashedDraftRef.current = {
+        inputText,
+        diceMode,
+        diceOverride,
+        stagedChoices: JSON.parse(JSON.stringify(stagedChoices)),
+      };
+    }
+
+    setEditingTurn(turn);
+    setInputText(turn.user_message);
+
     const legacyForced = turn.pre_turn?.resolved_roll?.is_manual_override;
     const initialMode: DiceMode =
       turn.pre_turn?.dice_mode ?? (legacyForced ? "forced" : "auto");
     const initialVal =
       turn.pre_turn?.manual_dice_value ??
       (legacyForced ? turn.pre_turn?.resolved_roll?.d20_raw ?? null : null);
-    setEditDiceMode(initialMode);
-    setEditDiceOverride(initialVal != null ? String(initialVal) : "");
+    setDiceMode(initialMode);
+    setDiceOverride(initialVal != null ? String(initialVal) : "");
+
+    // Hydrate choices: if active choices exist, auto-open drawer as requested
+    if (
+      turn.pre_turn?.character_choices &&
+      Object.keys(turn.pre_turn.character_choices).length > 0
+    ) {
+      setStagedChoices(
+        JSON.parse(JSON.stringify(turn.pre_turn.character_choices))
+      );
+      const firstCharId = Object.keys(turn.pre_turn.character_choices)[0];
+      if (firstCharId) {
+        setActiveChoiceCharId(firstCharId);
+      }
+      setActiveTray("choices");
+    } else {
+      setStagedChoices({});
+      if (activeTray === "choices") {
+        setActiveTray("none");
+      }
+    }
+
+    magicWand.reset();
+    setTimeout(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 0);
   };
 
   const handleCancelEdit = () => {
-    setEditingTurnId(null);
-    setEditMessageText("");
-    setEditDiceMode("auto");
-    setEditDiceOverride("");
-  };
+    setEditingTurn(null);
+    magicWand.reset();
 
-  const handleCommitEdit = (turn: TurnNodeRecord) => {
-    const trimmed = editMessageText.trim();
-    if (!trimmed || isBusy || isDeletingTurn || !turn.parent_turn_id) return;
-
-    const narratorOpts = inferNarratorTurnOptions(turn, trimmed);
-    if (narratorOpts.isNarrator) {
-      setEditingTurnId(null);
-      setEditMessageText("");
-      setEditDiceMode("auto");
-      setEditDiceOverride("");
-      onSendTurn({
-        userMessage: trimmed,
-        parentTurnId: turn.parent_turn_id,
-        diceMode: "disabled",
-        narrativeMode: narratorOpts.narrativeMode,
-        narratorDirective: narratorOpts.narratorDirective || trimmed,
-        durationMinutes: narratorOpts.durationMinutes,
-      });
-      return;
+    if (stashedDraftRef.current) {
+      setInputText(stashedDraftRef.current.inputText);
+      setDiceMode(stashedDraftRef.current.diceMode);
+      setDiceOverride(stashedDraftRef.current.diceOverride);
+      setStagedChoices(stashedDraftRef.current.stagedChoices);
+      stashedDraftRef.current = null;
+    } else {
+      setInputText("");
+      setDiceMode("auto");
+      setDiceOverride("");
+      setStagedChoices({});
+      setActiveTray("none");
     }
-
-    let parsedEditDice: number | null = null;
-    if (editDiceMode === "forced" && editDiceOverride.trim() !== "") {
-      const val = parseInt(editDiceOverride.trim(), 10);
-      if (isNaN(val) || val < 1 || val > 20) {
-        return;
-      }
-      parsedEditDice = val;
-    }
-
-    setEditingTurnId(null);
-    setEditMessageText("");
-    setEditDiceMode("auto");
-    setEditDiceOverride("");
-    onSendTurn({
-      userMessage: trimmed,
-      parentTurnId: turn.parent_turn_id,
-      diceMode: editDiceMode,
-      manualDiceOverride: editDiceMode === "forced" ? parsedEditDice : null,
-      characterChoices: turn.pre_turn?.character_choices,
-    });
   };
+  handleCancelEditRef.current = handleCancelEdit;
 
   const handleDeleteLast = async () => {
     if (isBusy || isDeletingTurn || !onDeleteLastTurn) return;
     setIsDeletingTurn(true);
     try {
-      setEditingTurnId(null);
+      handleCancelEdit();
       await onDeleteLastTurn();
     } finally {
       setIsDeletingTurn(false);
@@ -1234,7 +1277,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
           const isRoot = turn.depth_index === 0;
           const isLastTurn =
             !isRoot && turnIdx === bundle.active_branch_turns.length - 1;
-          const isEditingThisTurn = isLastTurn && editingTurnId === turn.id;
+          const isEditingThisTurn = isLastTurn && editingTurn?.id === turn.id;
           const isNarratorTurn = turn.actor_id === "__narrator__";
           const isCueMessage = turn.user_message.startsWith("[") && turn.user_message.endsWith("]");
           const cogOpen = openCognitionIds[turn.id] ?? (turn.depth_index === bundle.active_branch_turns.length - 1);
@@ -1242,124 +1285,39 @@ export const ChatStage: React.FC<ChatStageProps> = ({
           const siblings = siblingsByParent[turn.parent_turn_id ?? "ROOT"] || [];
 
           return (
-            <div key={turn.id} className={`turn-card ${isNarratorTurn ? "narrator-turn-card" : ""}`}>
-              {!isRoot &&
-                (isEditingThisTurn ? (
-                  <div className="user-bubble user-bubble-editing">
-                    <div className="user-bubble-edit-header">
-                      <Edit3 size={12} color="var(--accent-amber)" />
-                      <span>Edit message (generates a new swipe)</span>
+            <div key={turn.id} className={`turn-card ${isNarratorTurn ? "narrator-turn-card" : ""} ${isEditingThisTurn ? "turn-card--editing" : ""}`}>
+              {!isRoot && (
+                <>
+                  {isEditingThisTurn && (
+                    <div className="turn-editing-banner-pill">
+                      <Edit3 size={11} color="var(--accent-amber)" />
+                      <span>Editing in composer...</span>
                     </div>
-                    <textarea
-                      className="field-textarea user-bubble-edit-textarea"
-                      value={editMessageText}
-                      onChange={(e) => setEditMessageText(e.target.value)}
-                      rows={3}
-                      autoFocus
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault();
-                          handleCommitEdit(turn);
-                        } else if (e.key === "Escape") {
-                          e.preventDefault();
-                          handleCancelEdit();
-                        }
-                      }}
-                    />
-                    <div className="user-bubble-edit-actions">
-                      {!isNarratorTurn && (
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginRight: "auto" }}>
-                          <button
-                            type="button"
-                            className={`btn btn-dice-toggle btn-dice-toggle--${editDiceMode}`}
-                            onClick={() => {
-                              setEditDiceMode((prev) => {
-                                if (prev === "auto") return "forced";
-                                if (prev === "forced") {
-                                  setEditDiceOverride("");
-                                  return "disabled";
-                                }
-                                return "auto";
-                              });
-                            }}
-                            title="Toggle dice roll mode (auto / forced / disabled)"
-                          >
-                            <Dices size={12} />
-                            <span>{editDiceMode}</span>
-                          </button>
-                          {editDiceMode === "forced" && (
-                            <input
-                              type="number"
-                              min={1}
-                              max={20}
-                              placeholder="random"
-                              value={editDiceOverride}
-                              onChange={(e) => setEditDiceOverride(e.target.value)}
-                              className={`field-input ${
-                                editDiceOverride.trim() !== "" &&
-                                (isNaN(parseInt(editDiceOverride, 10)) ||
-                                  parseInt(editDiceOverride, 10) < 1 ||
-                                  parseInt(editDiceOverride, 10) > 20)
-                                  ? "dice-input-invalid"
-                                  : ""
-                              }`}
-                              style={{ width: 68, padding: "2px 6px", fontSize: "0.72rem" }}
-                              title="Manual d20 value (1-20), or leave blank for forced random roll"
-                            />
-                          )}
-                        </div>
-                      )}
-                      <button
-                        type="button"
-                        className="btn"
-                        style={{ padding: "3px 10px", fontSize: "0.74rem" }}
-                        onClick={handleCancelEdit}
-                      >
-                        <X size={12} />
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-amber"
-                        style={{ padding: "3px 10px", fontSize: "0.74rem" }}
-                        disabled={
-                          isStreaming ||
-                          !editMessageText.trim() ||
-                          (editDiceMode === "forced" &&
-                            editDiceOverride.trim() !== "" &&
-                            (isNaN(parseInt(editDiceOverride, 10)) ||
-                              parseInt(editDiceOverride, 10) < 1 ||
-                              parseInt(editDiceOverride, 10) > 20))
-                        }
-                        onClick={() => handleCommitEdit(turn)}
-                      >
-                        <RefreshCw size={12} />
-                        Save & Swipe
-                      </button>
-                    </div>
-                  </div>
-                ) : isCueMessage ? (
-                  turn.user_message.toLowerCase().includes("advance the story") ||
-                  turn.user_message.toLowerCase().includes("wait for") ||
-                  turn.user_message.toLowerCase().includes("minutes elapse") ? (
-                    <div className="user-bubble user-bubble-narrator-time">
-                      <Clock size={12} color="var(--accent-amber)" />
-                      <span>{turn.user_message.replace(/^\[|\]$/g, "")}</span>
-                    </div>
-                  ) : turn.user_message.toLowerCase().includes("complication") ? (
-                    <div className="user-bubble user-bubble-narrator-complication">
-                      <AlertTriangle size={12} color="var(--accent-rose)" />
-                      <span>{turn.user_message.replace(/^\[|\]$/g, "")}</span>
-                    </div>
+                  )}
+                  {isCueMessage ? (
+                    turn.user_message.toLowerCase().includes("advance the story") ||
+                    turn.user_message.toLowerCase().includes("wait for") ||
+                    turn.user_message.toLowerCase().includes("minutes elapse") ? (
+                      <div className="user-bubble user-bubble-narrator-time">
+                        <Clock size={12} color="var(--accent-amber)" />
+                        <span>{turn.user_message.replace(/^\[|\]$/g, "")}</span>
+                      </div>
+                    ) : turn.user_message.toLowerCase().includes("complication") ? (
+                      <div className="user-bubble user-bubble-narrator-complication">
+                        <AlertTriangle size={12} color="var(--accent-rose)" />
+                        <span>{turn.user_message.replace(/^\[|\]$/g, "")}</span>
+                      </div>
+                    ) : (
+                      <div className="user-bubble user-bubble-narrator-cue">
+                        <Sparkles size={12} color="var(--accent-cyan)" />
+                        <span>{turn.user_message}</span>
+                      </div>
+                    )
                   ) : (
-                    <div className="user-bubble user-bubble-narrator-cue">
-                      <Sparkles size={12} color="var(--accent-cyan)" />
-                      <span>{turn.user_message}</span>
-                    </div>
-                  )
-                ) : (
-                  renderUserMessageBubble(turn.user_message, turn.whispers)
-                ))}
+                    renderUserMessageBubble(turn.user_message, turn.whispers)
+                  )}
+                </>
+              )}
 
               {/* Staged Director Choices Badge Strip */}
               {!isRoot &&
@@ -2136,7 +2094,10 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                             }}
                             title={`Swipe v${idx + 1}: ${sib.user_message}`}
                             disabled={isBusy}
-                            onClick={() => onCheckoutTurn(sib.id)}
+                            onClick={() => {
+                              if (editingTurn) handleCancelEdit();
+                              onCheckoutTurn(sib.id);
+                            }}
                           >
                             v{idx + 1}
                           </button>
@@ -2147,14 +2108,24 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                     {isLastTurn && (
                       <button
                         type="button"
-                        className="btn"
+                        className={`btn ${isEditingThisTurn ? "btn-amber" : ""}`}
                         style={{ padding: "3px 8px", fontSize: "0.72rem" }}
                         disabled={isBusy || isDeletingTurn}
-                        onClick={() => handleStartEdit(turn)}
-                        title="Edit last message and generate a new swipe"
+                        onClick={() => {
+                          if (isEditingThisTurn) {
+                            handleCancelEdit();
+                          } else {
+                            handleStartEdit(turn);
+                          }
+                        }}
+                        title={
+                          isEditingThisTurn
+                            ? "Cancel editing this turn"
+                            : "Edit last message in composer and generate a new swipe"
+                        }
                       >
                         <Edit3 size={12} />
-                        Edit
+                        {isEditingThisTurn ? "Editing..." : "Edit"}
                       </button>
                     )}
 
@@ -2549,6 +2520,16 @@ export const ChatStage: React.FC<ChatStageProps> = ({
 
       {/* Quick Action Bar + Composer */}
       <form ref={composerBarRef} className="composer-bar" onSubmit={handleSend}>
+        {/* Active Edit Mode Banner */}
+        {editingTurn && (
+          <div className="composer-editing-banner">
+            <Edit3 size={13} color="var(--accent-amber)" />
+            <span>
+              Editing <strong>Last Turn</strong> — changes will generate a new swipe branch
+            </span>
+          </div>
+        )}
+
         {/* Quick Duration Picker Bar */}
         {activeTray === "pass_time" && (
           <div className="narrator-duration-picker">
@@ -3107,7 +3088,9 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               ref={textareaRef}
               className="composer-textarea"
               placeholder={
-                totalStagedOptionsCount > 0
+                editingTurn
+                  ? "Edit your action or dialogue... (Modify text, @whispers, dice, or staged choices)"
+                  : totalStagedOptionsCount > 0
                   ? "Optional user action / dialogue (Leave blank to let characters act on your staged choices)..."
                   : `Write your action or dialogue to ${character.name}... (Or try @Name:, /choice, /look, /wait 30m)`
               }
@@ -3153,6 +3136,18 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                   if (e.key === "Escape") {
                     e.preventDefault();
                     setMentionPickerOpen(false);
+                    return;
+                  }
+                }
+                if (e.key === "Escape") {
+                  if (activeTray !== "none") {
+                    e.preventDefault();
+                    setActiveTray("none");
+                    return;
+                  }
+                  if (editingTurn) {
+                    e.preventDefault();
+                    handleCancelEdit();
                     return;
                   }
                 }
@@ -3441,7 +3436,20 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                 />
               )}
 
-              {/* Send Button */}
+              {/* Cancel Edit Button (when editing) */}
+              {editingTurn && (
+                <button
+                  type="button"
+                  className="btn composer-cancel-btn"
+                  onClick={handleCancelEdit}
+                  title="Cancel editing and restore previous draft (Escape)"
+                >
+                  <X size={13} />
+                  <span>Cancel</span>
+                </button>
+              )}
+
+              {/* Send or Save & Swipe Button */}
               <button
                 type="submit"
                 className="btn btn-amber composer-send-btn"
@@ -3454,9 +3462,23 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                       parseInt(diceOverride, 10) < 1 ||
                       parseInt(diceOverride, 10) > 20))
                 }
+                title={
+                  editingTurn
+                    ? "Save modifications and generate a new swipe branch (Enter)"
+                    : "Send turn (Enter)"
+                }
               >
-                <Send size={14} />
-                <span>Send</span>
+                {editingTurn ? (
+                  <>
+                    <RefreshCw size={13} className={isBusy ? "spinning" : ""} />
+                    <span>Save &amp; Swipe</span>
+                  </>
+                ) : (
+                  <>
+                    <Send size={14} />
+                    <span>Send</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
