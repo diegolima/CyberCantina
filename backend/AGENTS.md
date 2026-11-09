@@ -20,3 +20,12 @@ When designing system prompts, actor directives, or specialized interaction prot
 - **Virtualenv Execution:** Always execute backend tests using `backend/.venv/bin/pytest`. Never invoke naked `pytest`.
 - **Async Fixtures:** Always decorate asynchronous test functions with `@pytest.mark.asyncio()`.
 - **Mock LLM Network Calls in Tests:** When testing Phase 3 multi-cognition or Phase 5 clerk fusion, patch `llm_client.complete_structured` or `llm_client.stream_chat` to avoid network delays or offline timeouts.
+
+## 4. Phase 3 Cognition & Prompt Architecture Invariants
+- **Ceiling-Not-Quota Prompting:** When constraining cognitive fields (`<recall>`, `<plan>`), always specify upper limits with explicit anti-filler directives (e.g., *"Up to 2–3 concise bullet points... strictly under 12 words each; never pad with filler"*). Small/medium LLMs treat unqualified bullet counts as quotas, inventing hallucinated trivia when fewer items suffice.
+- **No Blanket Memory Bans:** Never impose blanket negative bans like *"Never summarize backstory"* in cognition prompts. Absolute bans starve the model of narrative relevance. Allow concise, bounded recall of immediate triggers, backstory, or active secrets.
+- **Defensive Leakage Sanitization:** Always pipe LLM cognition outputs through schema-level bullet/word capping (`_format_cognition_bullets`) and regex prompt-leakage sanitization (`_sanitize_cognition_text`). Never allow raw LLM output or echoed prompt templates to persist into turn snapshots, preventing cross-turn prompt-leak poisoning loops.
+
+## 5. State Persistence & Pydantic Serialization Invariants
+- **In-Memory Attribute Integrity:** State snapshots (e.g. `CharacterStateSnapshot`) must preserve Pydantic model instances (e.g., `PersonaKnowledgeProvenance`, `ItemInstance`) in dictionary fields in memory. Do not coerce them to raw `dict` in schema validators if downstream code or tests rely on attribute access (`prov.learned_from`).
+- **Dedicated SQLite Serialization Helpers:** When persisting state snapshots with nested Pydantic objects to SQLite JSON columns, never rely on standard `json.dumps()`. Always route serialization through dedicated repository helpers (such as `_dump_provenance_json` or `dump_items_json`) that extract `.model_dump()` / `.dict()` prior to JSON encoding.
