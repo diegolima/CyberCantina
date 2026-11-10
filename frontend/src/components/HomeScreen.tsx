@@ -345,26 +345,26 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               <span>Control Deck</span>
             </div>
             <div className="home-subtitle">
-              Welcome to your central control deck. Manage characters, explore worlds, configure personas, or dive straight into active campaigns.
+              Welcome to your central control deck. Explore worlds, manage characters, configure personas, or dive straight into active campaigns.
             </div>
           </div>
 
           {/* Centralized Cards Deck Area */}
           <div className="home-deck-area">
             <div className="home-grid">
-              {/* 1. Personas */}
+              {/* 1. Worlds */}
               <HomeCard
-                category="personas"
-                title="Personas"
-                singular="Persona"
-                count={personas.length}
-                countLabel={personas.length === 1 ? "persona" : "personas"}
-                watermarkIcon={<UserCheck size={140} />}
-                accentColor="var(--accent-emerald)"
-                images={personaImages}
-                imagePosition="top"
-                onCardClick={() => handleOpenPicker("personas")}
-                onNewClick={onNewPersona}
+                category="worlds"
+                title="Worlds"
+                singular="World"
+                count={worlds.length}
+                countLabel={worlds.length === 1 ? "world" : "worlds"}
+                watermarkIcon={<Globe size={140} />}
+                accentColor="var(--accent-cyan)"
+                images={worldImages}
+                imagePosition="center"
+                onCardClick={() => handleOpenPicker("worlds")}
+                onNewClick={onNewWorld}
               />
 
               {/* 2. Characters */}
@@ -382,19 +382,19 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 onNewClick={onNewCharacter}
               />
 
-              {/* 3. Worlds */}
+              {/* 3. Personas */}
               <HomeCard
-                category="worlds"
-                title="Worlds"
-                singular="World"
-                count={worlds.length}
-                countLabel={worlds.length === 1 ? "world" : "worlds"}
-                watermarkIcon={<Globe size={140} />}
-                accentColor="var(--accent-cyan)"
-                images={worldImages}
-                imagePosition="center"
-                onCardClick={() => handleOpenPicker("worlds")}
-                onNewClick={onNewWorld}
+                category="personas"
+                title="Personas"
+                singular="Persona"
+                count={personas.length}
+                countLabel={personas.length === 1 ? "persona" : "personas"}
+                watermarkIcon={<UserCheck size={140} />}
+                accentColor="var(--accent-emerald)"
+                images={personaImages}
+                imagePosition="top"
+                onCardClick={() => handleOpenPicker("personas")}
+                onNewClick={onNewPersona}
               />
 
               {/* 4. Campaigns */}
