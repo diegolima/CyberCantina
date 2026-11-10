@@ -113,7 +113,7 @@ flowchart TD
 CyberCantina is designed for engineers who love systems programming, AI architecture, game design, and local computing sovereignty.
 
 ### Clean, Modern Tech Stack
-- **Backend:** Python 3.11+, FastAPI, Pydantic v2 schemas, SQLite with WAL mode, `fastembed` & `sqlite-vec` for local vector search, WebAuthn & Argon2 for credential-less local security.
+- **Backend:** Python 3.14+, FastAPI, Pydantic v2 schemas, SQLite with WAL mode, `fastembed` & `sqlite-vec` for local vector search, WebAuthn & Argon2 for credential-less local security.
 - **Frontend:** TypeScript, React, Vite, Tailwind CSS, Lucide icons, SSE event streaming, interactive spatial topology visualizers, and live inspector tools.
 - **Provider-Agnostic:** Full compatibility with any OpenAI-compatible API: Ollama, `llama.cpp` (`server`), vLLM, LM Studio, Aphrodite, OpenRouter, and commercial cloud APIs.
 - **Offline Mock / Heuristic Engine:** You can develop, test, and contribute to the entire 5-phase pipeline without needing an active GPU or LLM server.
