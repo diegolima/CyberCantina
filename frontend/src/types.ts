@@ -1504,9 +1504,16 @@ export interface PersonaRecord {
   id: string;
   owner_id: string;
   name: string;
+  species?: string;
   age?: string | null;
   age_is_secret: boolean;
-  physical_appearance: string;
+  sex?: string;
+  pronouns?: string;
+  persona_bio?: string;
+  tags?: string[];
+  build_and_height?: string;
+  distinctive_features?: string[];
+  physical_appearance?: string;
   equipped: PersonaItemInstance[];
   inventory: PersonaItemInstance[];
   lore_entries: PersonaLoreEntry[];
@@ -1516,8 +1523,15 @@ export interface PersonaRecord {
 
 export interface PersonaCreatePayload {
   name: string;
+  species?: string;
   age?: string | null;
   age_is_secret?: boolean;
+  sex?: string;
+  pronouns?: string;
+  persona_bio?: string;
+  tags?: string[];
+  build_and_height?: string;
+  distinctive_features?: string[];
   physical_appearance?: string;
   equipped?: PersonaItemInstance[];
   inventory?: PersonaItemInstance[];
@@ -1526,8 +1540,15 @@ export interface PersonaCreatePayload {
 
 export interface PersonaUpdatePayload {
   name?: string;
+  species?: string;
   age?: string | null;
   age_is_secret?: boolean;
+  sex?: string;
+  pronouns?: string;
+  persona_bio?: string;
+  tags?: string[];
+  build_and_height?: string;
+  distinctive_features?: string[];
   physical_appearance?: string;
   equipped?: PersonaItemInstance[];
   inventory?: PersonaItemInstance[];

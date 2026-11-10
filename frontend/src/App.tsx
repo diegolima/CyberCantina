@@ -376,6 +376,14 @@ export const App: React.FC = () => {
   } | null>(null);
 
   const ACTIVE_CAMPAIGN_STORAGE_KEY = "cybercantina_active_campaign_id";
+  const DEFAULT_PERSONA_STORAGE_KEY = "cybercantina_default_persona_id";
+
+  const handleSetDefaultPersona = (p: PersonaRecord) => {
+    setActivePersona(p);
+    try {
+      localStorage.setItem(DEFAULT_PERSONA_STORAGE_KEY, p.id);
+    } catch {}
+  };
 
   const loadCampaignBundle = async (campaignId: string) => {
     setPendingLocationOverrideId(null);
@@ -418,9 +426,11 @@ export const App: React.FC = () => {
     setAppSettings(cfg);
     setNotes(userNotes);
     setPersonas(personaList);
-    if (personaList.length > 0) {
-      setActivePersona(personaList[0]);
-    }
+    const storedPersonaId = localStorage.getItem(DEFAULT_PERSONA_STORAGE_KEY);
+    const matchedDefault = storedPersonaId
+      ? personaList.find((p) => p.id === storedPersonaId)
+      : null;
+    setActivePersona(matchedDefault || personaList[0] || null);
     const storedCampaignId = localStorage.getItem(ACTIVE_CAMPAIGN_STORAGE_KEY);
     const activeCamp = storedCampaignId ? camps.find((c) => c.id === storedCampaignId) : null;
     if (activeCamp) {
@@ -593,7 +603,15 @@ export const App: React.FC = () => {
         const updatedPersonas = await api.listPersonas();
         setPersonas(updatedPersonas);
         if (activePersona?.id === deleteTarget.persona.id) {
-          setActivePersona(updatedPersonas[0] ?? null);
+          const nextDefault = updatedPersonas[0] ?? null;
+          if (nextDefault) {
+            handleSetDefaultPersona(nextDefault);
+          } else {
+            setActivePersona(null);
+            try {
+              localStorage.removeItem(DEFAULT_PERSONA_STORAGE_KEY);
+            } catch {}
+          }
         }
       } else {
         const deletedCampId = deleteTarget.campaign.id;
@@ -1280,7 +1298,11 @@ export const App: React.FC = () => {
             const query = q.trim().toLowerCase();
             return Boolean(
               p.name.toLowerCase().includes(query) ||
-              p.physical_appearance.toLowerCase().includes(query) ||
+              (p.species && p.species.toLowerCase().includes(query)) ||
+              (p.persona_bio && p.persona_bio.toLowerCase().includes(query)) ||
+              (p.tags && p.tags.some((t) => t.toLowerCase().includes(query))) ||
+              (p.build_and_height && p.build_and_height.toLowerCase().includes(query)) ||
+              (p.physical_appearance && p.physical_appearance.toLowerCase().includes(query)) ||
               (p.inventory && p.inventory.some((i) => i.name.toLowerCase().includes(query))) ||
               (p.lore_entries && p.lore_entries.some((l) => l.title.toLowerCase().includes(query)))
             );
@@ -1800,7 +1822,7 @@ export const App: React.FC = () => {
             setEditingPersona(p);
             setShowPersonaModal(true);
           }}
-          onSetActivePersona={(p) => setActivePersona(p)}
+          onSetActivePersona={(p) => handleSetDefaultPersona(p)}
           onNewCampaign={() => {
             if (worlds.length > 0 && characters.length > 0) {
               setShowNewCampaignModal(true);
@@ -2233,21 +2255,33 @@ export const App: React.FC = () => {
       {showPersonaModal && (
         <PersonaEditorModal
           persona={editingPersona}
+          isDefault={Boolean(editingPersona && activePersona?.id === editingPersona.id)}
           onClose={() => {
             setShowPersonaModal(false);
             setEditingPersona(null);
           }}
+          onSetDefault={(p) => handleSetDefaultPersona(p)}
           onSaved={async (savedPersona) => {
             const list = await api.listPersonas();
             setPersonas(list);
-            setActivePersona(savedPersona);
+            if (!activePersona || activePersona.id === savedPersona.id) {
+              handleSetDefaultPersona(savedPersona);
+            }
             setShowPersonaModal(false);
             setEditingPersona(null);
           }}
           onDeleted={async () => {
             const list = await api.listPersonas();
             setPersonas(list);
-            setActivePersona(list[0] ?? null);
+            const nextDef = list[0] ?? null;
+            if (nextDef) {
+              handleSetDefaultPersona(nextDef);
+            } else {
+              setActivePersona(null);
+              try {
+                localStorage.removeItem(DEFAULT_PERSONA_STORAGE_KEY);
+              } catch {}
+            }
             setShowPersonaModal(false);
             setEditingPersona(null);
           }}

@@ -608,10 +608,17 @@ def resolve_character_known_persona(
         l for l in persona_snapshot.lore_entries if not l.is_secret or l.id in keys
     ]
 
+    app_parts: list[str] = []
+    if persona_snapshot.build_and_height and persona_snapshot.build_and_height.strip():
+        app_parts.append(persona_snapshot.build_and_height.strip())
+    if persona_snapshot.distinctive_features:
+        app_parts.append(f"Distinctive features: {', '.join(persona_snapshot.distinctive_features)}")
+    appearance_str = "; ".join(app_parts) if app_parts else persona_snapshot.physical_appearance
+
     return DiscoveredPersonaView(
         persona_id=persona_snapshot.id,
         name=persona_snapshot.name,
-        physical_appearance=persona_snapshot.physical_appearance,
+        physical_appearance=appearance_str,
         revealed_age=revealed_age,
         visible_equipped=visible_equipped,
         known_inventory=known_inventory,
@@ -642,22 +649,34 @@ def build_all_character_known_personas(
 def format_zone1_player_protagonist_block(persona_snapshot: PersonaRecord | None) -> str:
     """Format static protagonist identity block for Zone 1.
 
-    Guarantees 100% KV-cache reuse because player name and physical_appearance
+    Guarantees 100% KV-cache reuse because player attributes in Zone 1
     are immutable for the campaign.
     """
     if not persona_snapshot:
         return ""
-    app_text = (
-        f"Physical Appearance: {persona_snapshot.physical_appearance}\n"
-        if persona_snapshot.physical_appearance.strip()
-        else ""
-    )
-    return (
-        f"\n\n=== PLAYER / PROTAGONIST ===\n"
-        f"Name: {persona_snapshot.name}\n"
-        f"{app_text}"
-        f"Note: This is the player character. Do NOT speak, decide, or act on behalf of the player."
-    )
+    lines = ["\n\n=== PLAYER / PROTAGONIST ===", f"Name: {persona_snapshot.name}"]
+    demographics: list[str] = []
+    if persona_snapshot.species and persona_snapshot.species.strip():
+        demographics.append(f"Species: {persona_snapshot.species.strip()}")
+    if persona_snapshot.sex and persona_snapshot.sex.strip():
+        demographics.append(f"Sex: {persona_snapshot.sex.strip()}")
+    if persona_snapshot.pronouns and persona_snapshot.pronouns.strip():
+        demographics.append(f"Pronouns: {persona_snapshot.pronouns.strip()}")
+    if demographics:
+        lines.append(" | ".join(demographics))
+
+    if persona_snapshot.build_and_height and persona_snapshot.build_and_height.strip():
+        lines.append(f"Build & Height: {persona_snapshot.build_and_height.strip()}")
+    if persona_snapshot.distinctive_features:
+        lines.append(f"Distinctive Features: {', '.join(persona_snapshot.distinctive_features)}")
+
+    if persona_snapshot.persona_bio and persona_snapshot.persona_bio.strip():
+        lines.append(f"Persona Bio: {persona_snapshot.persona_bio.strip()}")
+    elif persona_snapshot.physical_appearance and persona_snapshot.physical_appearance.strip():
+        lines.append(f"Physical Appearance: {persona_snapshot.physical_appearance.strip()}")
+
+    lines.append("Note: This is the player character. Do NOT speak, decide, or act on behalf of the player.")
+    return "\n".join(lines)
 
 
 def build_zone1_narrator_system_prompt(

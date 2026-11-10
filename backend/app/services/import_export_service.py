@@ -702,8 +702,15 @@ async def commit_staged_import(
 
             persona_payload = PersonaCreatePayload(
                 name=final_name,
+                species=p.get("species", "Human"),
                 age=p.get("age"),
                 age_is_secret=bool(p.get("age_is_secret", True)),
+                sex=p.get("sex", ""),
+                pronouns=p.get("pronouns", ""),
+                persona_bio=p.get("persona_bio", ""),
+                tags=p.get("tags", []),
+                build_and_height=p.get("build_and_height", ""),
+                distinctive_features=p.get("distinctive_features", []),
                 physical_appearance=p.get("physical_appearance", ""),
                 equipped=p.get("equipped", []),
                 inventory=p.get("inventory", []),

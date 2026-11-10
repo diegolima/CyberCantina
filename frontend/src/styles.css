@@ -1937,6 +1937,12 @@ body {
   border-color: rgba(6, 182, 212, 0.35);
 }
 
+.modal-tabs-emerald .modal-tab-btn.active {
+  color: var(--accent-emerald);
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
 .modal-tab-badge {
   font-size: 0.68rem;
   font-weight: 600;
@@ -1958,6 +1964,12 @@ body {
   border-color: rgba(6, 182, 212, 0.5);
   color: var(--accent-cyan);
   background: rgba(6, 182, 212, 0.2);
+}
+
+.modal-tabs-emerald .modal-tab-btn.active .modal-tab-badge {
+  border-color: rgba(16, 185, 129, 0.5);
+  color: var(--accent-emerald);
+  background: rgba(16, 185, 129, 0.2);
 }
 
 .modal-body {

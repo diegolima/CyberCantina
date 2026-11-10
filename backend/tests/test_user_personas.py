@@ -121,8 +121,15 @@ def _get_or_create_test_user(repo: CantinaRepository) -> str:
 def _sample_persona_payload() -> PersonaCreatePayload:
     return PersonaCreatePayload(
         name="Deckard Shaw",
+        species="Cyborg",
         age="38",
         age_is_secret=True,
+        sex="Male",
+        pronouns="he/him",
+        persona_bio="Disgraced corporate security consultant working as an independent problem-solver.",
+        tags=["mercenary", "militech", "investigator"],
+        build_and_height="185 cm, muscular cybernetic frame",
+        distinctive_features=["sharp hazel eyes", "cyberware scar across left cheek"],
         physical_appearance="Weathered coat, sharp hazel eyes, visible cyberware scar across left cheek.",
         equipped=[
             PersonaItemInstance(
@@ -166,8 +173,15 @@ def _sample_persona_record(persona_id: str = "persona_test") -> PersonaRecord:
         id=persona_id,
         owner_id="default_user",
         name=payload.name,
+        species=payload.species,
         age=payload.age,
         age_is_secret=payload.age_is_secret,
+        sex=payload.sex,
+        pronouns=payload.pronouns,
+        persona_bio=payload.persona_bio,
+        tags=payload.tags,
+        build_and_height=payload.build_and_height,
+        distinctive_features=payload.distinctive_features,
         physical_appearance=payload.physical_appearance,
         equipped=payload.equipped,
         inventory=payload.inventory,
@@ -284,7 +298,9 @@ def test_zone1_kv_cache_byte_stability(temp_repo: CantinaRepository) -> None:
     # Turn 0: Nothing unlocked
     p0 = build_zone1_static_system_prompt(world, char, persona_snapshot=persona)
     assert "Deckard Shaw" in p0
-    assert "Weathered coat" in p0
+    assert "Cyborg" in p0
+    assert "185 cm, muscular cybernetic frame" in p0
+    assert "cyberware scar across left cheek" in p0
     # Dynamic secret attributes MUST NOT leak into Zone 1
     assert "Militech Cyberdeck" not in p0
     assert "Arasaka tower" not in p0

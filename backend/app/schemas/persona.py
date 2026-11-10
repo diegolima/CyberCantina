@@ -137,14 +137,33 @@ class PersonaRecord(BaseModel):
     id: str
     owner_id: str
     name: str = Field(..., min_length=1, max_length=100)
+    species: str = Field(default="Human", description="Biological or mechanical heritage.")
     age: str | None = None
     age_is_secret: bool = Field(
         default=True,
         description="Default True. If True, locked until user mentions or introduces age.",
     )
+    sex: str = Field(default="", description="Biological sex or presentation.")
+    pronouns: str = Field(default="", description="Grammatical pronouns (e.g. he/him, she/her, they/them).")
+    persona_bio: str = Field(
+        default="",
+        description="High-level narrative concept, role, occupation, and background concept.",
+    )
+    tags: list[str] = Field(
+        default_factory=list,
+        description="Keywords and tags for categorization and search.",
+    )
+    build_and_height: str = Field(
+        default="",
+        description="Physical frame and stature (e.g. '182 cm, lean wiry build').",
+    )
+    distinctive_features: list[str] = Field(
+        default_factory=list,
+        description="Discrete physical traits: hair, eyes, scars, tattoos, augmentations.",
+    )
     physical_appearance: str = Field(
         default="",
-        description="Immutable visible anatomy. Always public (cannot be marked secret).",
+        description="Legacy fallback anatomy block if build_and_height and distinctive_features are empty.",
     )
     equipped: list[PersonaItemInstance] = Field(
         default_factory=list,
@@ -184,8 +203,15 @@ def get_default_persona(owner_id: str = "default_user") -> PersonaRecord:
         id=p_id,
         owner_id=resolved_owner,
         name=DEFAULT_PERSONA_NAME,
+        species="Human",
         age=None,
         age_is_secret=False,
+        sex="",
+        pronouns="",
+        persona_bio="",
+        tags=[],
+        build_and_height="",
+        distinctive_features=[],
         physical_appearance="",
         equipped=[],
         inventory=[],
@@ -199,8 +225,15 @@ class PersonaCreatePayload(BaseModel):
     """Payload to create a new persona in the master gallery."""
 
     name: str = Field(..., min_length=1, max_length=100)
+    species: str = "Human"
     age: str | None = None
     age_is_secret: bool = True
+    sex: str = ""
+    pronouns: str = ""
+    persona_bio: str = ""
+    tags: list[str] = Field(default_factory=list)
+    build_and_height: str = ""
+    distinctive_features: list[str] = Field(default_factory=list)
     physical_appearance: str = ""
     equipped: list[PersonaItemInstance] = Field(default_factory=list)
     inventory: list[PersonaItemInstance] = Field(default_factory=list)
@@ -211,8 +244,15 @@ class PersonaUpdatePayload(BaseModel):
     """Payload to update an existing persona in the master gallery."""
 
     name: str | None = None
+    species: str | None = None
     age: str | None = None
     age_is_secret: bool | None = None
+    sex: str | None = None
+    pronouns: str | None = None
+    persona_bio: str | None = None
+    tags: list[str] | None = None
+    build_and_height: str | None = None
+    distinctive_features: list[str] | None = None
     physical_appearance: str | None = None
     equipped: list[PersonaItemInstance] | None = None
     inventory: list[PersonaItemInstance] | None = None

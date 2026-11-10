@@ -184,7 +184,18 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     }
     throw parseApiError(res.status, errText);
   }
-  return res.json() as Promise<T>;
+  if (res.status === 204 || res.headers.get("content-length") === "0") {
+    return {} as T;
+  }
+  const text = await res.text();
+  if (!text || !text.trim()) {
+    return {} as T;
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return {} as T;
+  }
 }
 
 async function fetchBlob(url: string, init?: RequestInit): Promise<{ blob: Blob; filename?: string }> {

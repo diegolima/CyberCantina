@@ -689,8 +689,15 @@ class CantinaRepository:
                     id TEXT PRIMARY KEY,
                     owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                     name TEXT NOT NULL CHECK(length(trim(name)) >= 1),
+                    species TEXT NOT NULL DEFAULT 'Human',
                     age TEXT NULL,
                     age_is_secret INTEGER NOT NULL DEFAULT 1,
+                    sex TEXT NOT NULL DEFAULT '',
+                    pronouns TEXT NOT NULL DEFAULT '',
+                    persona_bio TEXT NOT NULL DEFAULT '',
+                    tags_json TEXT NOT NULL DEFAULT '[]',
+                    build_and_height TEXT NOT NULL DEFAULT '',
+                    distinctive_features_json TEXT NOT NULL DEFAULT '[]',
                     physical_appearance TEXT NOT NULL DEFAULT '',
                     equipped_json TEXT NOT NULL DEFAULT '[]',
                     inventory_json TEXT NOT NULL DEFAULT '[]',
@@ -701,6 +708,25 @@ class CantinaRepository:
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_personas_owner ON personas(owner_id)")
+
+            persona_cols = {
+                r["name"]
+                for r in conn.execute("PRAGMA table_info(personas)").fetchall()
+            }
+            if "species" not in persona_cols:
+                conn.execute("ALTER TABLE personas ADD COLUMN species TEXT NOT NULL DEFAULT 'Human'")
+            if "sex" not in persona_cols:
+                conn.execute("ALTER TABLE personas ADD COLUMN sex TEXT NOT NULL DEFAULT ''")
+            if "pronouns" not in persona_cols:
+                conn.execute("ALTER TABLE personas ADD COLUMN pronouns TEXT NOT NULL DEFAULT ''")
+            if "persona_bio" not in persona_cols:
+                conn.execute("ALTER TABLE personas ADD COLUMN persona_bio TEXT NOT NULL DEFAULT ''")
+            if "tags_json" not in persona_cols:
+                conn.execute("ALTER TABLE personas ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'")
+            if "build_and_height" not in persona_cols:
+                conn.execute("ALTER TABLE personas ADD COLUMN build_and_height TEXT NOT NULL DEFAULT ''")
+            if "distinctive_features_json" not in persona_cols:
+                conn.execute("ALTER TABLE personas ADD COLUMN distinctive_features_json TEXT NOT NULL DEFAULT '[]'")
 
             # Purge any invalid legacy persona rows without an owner
             conn.execute("DELETE FROM personas WHERE owner_id IS NULL")
@@ -4790,23 +4816,34 @@ class CantinaRepository:
         equipped_json = json.dumps([it.model_dump() for it in draft.equipped])
         inventory_json = json.dumps([it.model_dump() for it in draft.inventory])
         lore_json = json.dumps([entry.model_dump() for entry in draft.lore_entries])
+        tags_json = json.dumps(draft.tags or [])
+        features_json = json.dumps(draft.distinctive_features or [])
 
         conn = self._connect()
         try:
             conn.execute(
                 """
                 INSERT INTO personas (
-                    id, owner_id, name, age, age_is_secret, physical_appearance,
-                    equipped_json, inventory_json, lore_entries_json, created_at, updated_at
+                    id, owner_id, name, species, age, age_is_secret, sex, pronouns,
+                    persona_bio, tags_json, build_and_height, distinctive_features_json,
+                    physical_appearance, equipped_json, inventory_json, lore_entries_json,
+                    created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     p_id,
                     owner_id,
                     draft.name.strip(),
+                    (draft.species or "Human").strip(),
                     draft.age.strip() if draft.age else None,
                     1 if draft.age_is_secret else 0,
+                    (draft.sex or "").strip(),
+                    (draft.pronouns or "").strip(),
+                    (draft.persona_bio or "").strip(),
+                    tags_json,
+                    (draft.build_and_height or "").strip(),
+                    features_json,
                     draft.physical_appearance.strip(),
                     equipped_json,
                     inventory_json,
@@ -4835,10 +4872,12 @@ class CantinaRepository:
         conn.execute(
             """
             INSERT OR IGNORE INTO personas (
-                id, owner_id, name, age, age_is_secret, physical_appearance,
-                equipped_json, inventory_json, lore_entries_json, created_at, updated_at
+                id, owner_id, name, species, age, age_is_secret, sex, pronouns,
+                persona_bio, tags_json, build_and_height, distinctive_features_json,
+                physical_appearance, equipped_json, inventory_json, lore_entries_json,
+                created_at, updated_at
             )
-            VALUES (?, ?, ?, NULL, 0, '', '[]', '[]', '[]', ?, ?)
+            VALUES (?, ?, ?, 'Human', NULL, 0, '', '', '', '[]', '', '[]', '', '[]', '[]', '[]', ?, ?)
             """,
             (
                 def_id,
@@ -4925,11 +4964,46 @@ class CantinaRepository:
 
         now = utc_now_iso()
         name = payload.name.strip() if payload.name is not None else existing.name
+        species = (
+            payload.species.strip()
+            if payload.species is not None
+            else getattr(existing, "species", "Human")
+        )
         age = payload.age.strip() if payload.age is not None else existing.age
         age_is_secret = (
             (1 if payload.age_is_secret else 0)
             if payload.age_is_secret is not None
             else (1 if existing.age_is_secret else 0)
+        )
+        sex = (
+            payload.sex.strip()
+            if payload.sex is not None
+            else getattr(existing, "sex", "")
+        )
+        pronouns = (
+            payload.pronouns.strip()
+            if payload.pronouns is not None
+            else getattr(existing, "pronouns", "")
+        )
+        persona_bio = (
+            payload.persona_bio.strip()
+            if payload.persona_bio is not None
+            else getattr(existing, "persona_bio", "")
+        )
+        tags = (
+            payload.tags
+            if payload.tags is not None
+            else getattr(existing, "tags", [])
+        )
+        build_and_height = (
+            payload.build_and_height.strip()
+            if payload.build_and_height is not None
+            else getattr(existing, "build_and_height", "")
+        )
+        distinctive_features = (
+            payload.distinctive_features
+            if payload.distinctive_features is not None
+            else getattr(existing, "distinctive_features", [])
         )
         physical_appearance = (
             payload.physical_appearance.strip()
@@ -4957,14 +5031,22 @@ class CantinaRepository:
             conn.execute(
                 """
                 UPDATE personas
-                SET name = ?, age = ?, age_is_secret = ?, physical_appearance = ?,
-                    equipped_json = ?, inventory_json = ?, lore_entries_json = ?, updated_at = ?
+                SET name = ?, species = ?, age = ?, age_is_secret = ?, sex = ?, pronouns = ?,
+                    persona_bio = ?, tags_json = ?, build_and_height = ?, distinctive_features_json = ?,
+                    physical_appearance = ?, equipped_json = ?, inventory_json = ?, lore_entries_json = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
                     name,
+                    species,
                     age,
                     age_is_secret,
+                    sex,
+                    pronouns,
+                    persona_bio,
+                    json.dumps(tags),
+                    build_and_height,
+                    json.dumps(distinctive_features),
                     physical_appearance,
                     json.dumps(equipped),
                     json.dumps(inventory),
@@ -5018,12 +5100,25 @@ class CantinaRepository:
         lore_raw = json.loads(
             r["lore_entries_json"] if "lore_entries_json" in r_keys and r["lore_entries_json"] else "[]"
         )
+        tags_raw = json.loads(
+            r["tags_json"] if "tags_json" in r_keys and r["tags_json"] else "[]"
+        )
+        features_raw = json.loads(
+            r["distinctive_features_json"] if "distinctive_features_json" in r_keys and r["distinctive_features_json"] else "[]"
+        )
         return PersonaRecord(
             id=r["id"],
             owner_id=r["owner_id"] if "owner_id" in r_keys else None,
             name=r["name"],
+            species=r["species"] if "species" in r_keys and r["species"] else "Human",
             age=r["age"] if "age" in r_keys else None,
             age_is_secret=bool(r["age_is_secret"]) if "age_is_secret" in r_keys else True,
+            sex=r["sex"] if "sex" in r_keys and r["sex"] else "",
+            pronouns=r["pronouns"] if "pronouns" in r_keys and r["pronouns"] else "",
+            persona_bio=r["persona_bio"] if "persona_bio" in r_keys and r["persona_bio"] else "",
+            tags=[str(t) for t in tags_raw if str(t).strip()],
+            build_and_height=r["build_and_height"] if "build_and_height" in r_keys and r["build_and_height"] else "",
+            distinctive_features=[str(f) for f in features_raw if str(f).strip()],
             physical_appearance=r["physical_appearance"] if "physical_appearance" in r_keys else "",
             equipped=[PersonaItemInstance.model_validate(it) for it in equipped_raw],
             inventory=[PersonaItemInstance.model_validate(it) for it in inventory_raw],

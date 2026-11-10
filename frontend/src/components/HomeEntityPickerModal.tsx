@@ -110,6 +110,10 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
           (p) =>
             !q ||
             p.name.toLowerCase().includes(q) ||
+            (p.species && p.species.toLowerCase().includes(q)) ||
+            (p.persona_bio && p.persona_bio.toLowerCase().includes(q)) ||
+            (p.tags && p.tags.some((t) => t.toLowerCase().includes(q))) ||
+            (p.build_and_height && p.build_and_height.toLowerCase().includes(q)) ||
             (p.physical_appearance && p.physical_appearance.toLowerCase().includes(q))
         );
       case "characters":
@@ -480,13 +484,14 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
                               alignItems: "center",
                               gap: 3,
                             }}
+                            title="Selected by default when starting new campaigns"
                           >
-                            <Check size={10} /> Active
+                            <Check size={10} /> Default
                           </span>
                         )}
                       </div>
                       <div className="home-picker-item-sub">
-                        {persona.physical_appearance || "Player Persona"}
+                        {persona.persona_bio || persona.build_and_height || persona.physical_appearance || `${persona.species || "Human"} Protagonist`}
                         {persona.lore_entries ? ` • ${persona.lore_entries.length} lore entries` : ""}
                       </div>
                     </div>
