@@ -31,7 +31,6 @@ import {
   LocationNode,
   LoreNode,
 } from "../types";
-import { CommaSeparatedInput } from "./CommaSeparatedInput";
 import { TagChipsInput, normalizeTagList } from "./TagChipsInput";
 
 export const COMPASS_ORDER: CompassDirection[] = [
@@ -1361,12 +1360,12 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
           {mode === "editor" && onUpdateLocation ? (
             <div className="field-group">
               <label style={{ fontSize: "0.72rem" }}>
-                Environmental Tags (comma-separated)
+                Environmental Tags
               </label>
-              <CommaSeparatedInput
-                className="field-input"
+              <TagChipsInput
                 value={selectedLocation.environmental_tags}
-                placeholder="e.g. dim, noisy, neon, smoke"
+                placeholder="e.g. dim, noisy, neon, smoke (press comma or enter)"
+                accentVariant="cyan"
                 onChange={(tags) =>
                   onUpdateLocation({
                     ...selectedLocation,

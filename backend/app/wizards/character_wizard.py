@@ -22,6 +22,370 @@ from app.schemas.world import WorldRecord
 from app.db.repository import slugify_tag
 
 
+GENRE_PROFILES = [
+    {
+        "id": "fantasy",
+        "keywords": [
+            "fantasy", "medieval", "sword", "magic", "sorcer", "wizard", "elf", "dwarf",
+            "d&d", "tavern", "castle", "bard", "paladin", "rogue", "dragon", "cleric",
+            "warlock", "ranger", "enchant", "kingdom", "realm", "dungeon", "crusade"
+        ],
+        "equipped": lambda arch: [
+            f"Tailored traveling cloak and tunic suited for a {arch}",
+            "Reinforced leather breeches and sturdy brass-buckled belt",
+            "High-cuff weathered riding boots",
+        ],
+        "inventory": lambda note: [
+            "Embroidered coin pouch with local minted silver",
+            f"Signature keepsake ({note[:42].rstrip('.')})" if note else "Weathered traveler's journal and charcoal quill",
+        ],
+        "features": [
+            "Weathered traveling attire with braided trim",
+            "Keen, observant gaze with weathered crow's feet",
+            "Hair bound back with a durable leather cord",
+            "Faint dueling scar along the left jawline",
+            "Broad, grounded posture accustomed to long roads",
+            "Quirky silver ring bearing an unidentifiable guild seal",
+        ],
+        "visual_aesthetic": "Practical layered leather, linen, and travel-worn wool",
+    },
+    {
+        "id": "scifi_space",
+        "keywords": [
+            "space", "starship", "sci-fi", "scifi", "galactic", "orbit", "planetary",
+            "station", "pilot", "astro", "alien", "vacuum", "federation", "colony",
+            "warp", "freighter", "cosmos", "zero-g", "stardrive"
+        ],
+        "equipped": lambda arch: [
+            f"Pressurized flight jumpsuit with utility thermal lining suited for a {arch}",
+            "Magnetic-clamp utility harness and seal gloves",
+            "Reinforced deck boots with magnetic grip soles",
+        ],
+        "inventory": lambda note: [
+            "Compact handheld spectrum scanner",
+            f"Encrypted data-chit ({note[:42].rstrip('.')})" if note else "Digital flight manifest and auxiliary power cell",
+        ],
+        "features": [
+            "Slight pallor from extended cycles under artificial ship lighting",
+            "Sharp, calculating gaze practiced at monitoring telemetry",
+            "Close-trimmed hair designed for helmet seals",
+            "Hydraulic pressure grease stain on wrist cuff",
+            "Steady, zero-gravity accustomed gait",
+            "Unusual brass astronomical compass kept as an analog good luck charm",
+        ],
+        "visual_aesthetic": "Sealed utilitarian flightwear with thermal insulation and magnetic fasteners",
+    },
+    {
+        "id": "cyberpunk",
+        "keywords": [
+            "cyberpunk", "netrunner", "cyborg", "neural", "megacorp", "spire", "neon",
+            "hacker", "augment", "street samurai", "eddie", "subdermal", "braindance",
+            "chrome", "deck", "corpo", "fixer", "slum"
+        ],
+        "equipped": lambda arch: [
+            f"Reinforced utility jacket suited for a {arch}",
+            "Dark cargo trousers with concealed equipment pockets",
+            "Scuffed composite work boots",
+        ],
+        "inventory": lambda note: [
+            "Encrypted personal comm-link",
+            f"Signature gear ({note[:42].rstrip('.')})" if note else "Multi-channel pocket diagnostic tool and patch cables",
+        ],
+        "features": [
+            "Subdermal neural port or port cover behind left ear",
+            "Piercing, alert eyes with faint reflective sheen",
+            "Cropped dark hair styled for utility",
+            "Faint electrical burn scar across right knuckles",
+            "Lean, wiry athletic frame",
+            "Mismatched chrome-plated thumb ring or finger casing",
+        ],
+        "visual_aesthetic": "Weathered high-tech streetwear with moisture-sealed cabling channels",
+    },
+    {
+        "id": "horror_gothic",
+        "keywords": [
+            "horror", "gothic", "eldritch", "occult", "lovecraft", "supernatural", "curse",
+            "haunt", "investigator", "asylum", "coven", "vampire", "werewolf", "dread",
+            "tomb", "manor", "crypt", "sanity", "shadow over"
+        ],
+        "equipped": lambda arch: [
+            f"Heavy charcoal wool greatcoat with high upturned collar suited for a {arch}",
+            "Dark pressed waistcoat, collared shirt, and sturdy trousers",
+            "Treaded leather boots stained with damp earth",
+        ],
+        "inventory": lambda note: [
+            "Tarnished silver talisman engraved with warding sigils",
+            f"Occult dossier ({note[:42].rstrip('.')})" if note else "Leatherbound pocket ledger with cryptic handwritten notes and wax matches",
+        ],
+        "features": [
+            "Hollow, sleep-deprived eyes carrying a haunted wariness",
+            "Prematurely silvered streaks through dark hair",
+            "Nervous, hyper-attentive posture constantly checking shadows",
+            "Faint claw or ritual scar concealed beneath the collar",
+            "Faint scent of old parchment, sulfur, or sweet pipe tobacco",
+            "Curious tarnished talisman that seems faintly cold to the touch",
+        ],
+        "visual_aesthetic": "Dark Victorian tailoring and heavy layered wool with weathered hemlines",
+    },
+    {
+        "id": "western",
+        "keywords": [
+            "western", "cowboy", "gunslinger", "frontier", "outlaw", "sheriff", "saloon",
+            "steed", "desert", "bounty", "revolver", "wasteland west", "ranch", "posse",
+            "badlands", "wild west"
+        ],
+        "equipped": lambda arch: [
+            f"Dust-caked canvas duster coat suited for a {arch}",
+            "Faded denim work shirt and reinforced riding pants with utility gunbelt",
+            "Spurred leather boots with worn riding heels",
+        ],
+        "inventory": lambda note: [
+            "Scratched tin canteen of water and pouch of dried jerky",
+            f"Pocket heirloom ({note[:42].rstrip('.')})" if note else "Brass pocket compass with a dented lid",
+        ],
+        "features": [
+            "Sun-weathered skin with deep squint lines from the frontier glare",
+            "Dusty wide-brimmed hat casting a shadow over watchful eyes",
+            "Coarse stubble along a square jaw",
+            "Faint powder burn mark on trigger finger",
+            "Slow, relaxed drawl masking coiled physical reflexes",
+            "Unusual silver half-dollar coin with a bullet dent carried in pocket",
+        ],
+        "visual_aesthetic": "Weather-beaten canvas, denim, and sun-cured leather with brass hardware",
+    },
+    {
+        "id": "post_apocalyptic",
+        "keywords": [
+            "post-apocalyptic", "apocalypse", "apocalyptic", "wasteland", "fallout",
+            "scavenger", "ruin", "radiation", "mutant", "scrap", "survivalist", "collapse",
+            "bunker", "doomsday", "nuclear"
+        ],
+        "equipped": lambda arch: [
+            f"Layered scavenger coat patched with salvaged tire rubber and fabric suited for a {arch}",
+            "Stitched canvas cargo pants with reinforced knee guards",
+            "Reinforced combat boots bound with wire and duct tape",
+        ],
+        "inventory": lambda note: [
+            "Analog radiation dosimeter or Geiger needle badge",
+            f"Salvaged artifact ({note[:42].rstrip('.')})" if note else "Canteen with charcoal filter and roll of reinforced adhesive tape",
+        ],
+        "features": [
+            "Respirator strap indentations along cheekbones and bridge of nose",
+            "Alert, hungry eyes trained on perimeter movement",
+            "Patchy hair cut short with a combat knife",
+            "Mottled chemical burn scar along forearm",
+            "Low, economical center of gravity and quiet footfalls",
+            "Quirky necklace made of deactivated pre-collapse circuitry and animal bone",
+        ],
+        "visual_aesthetic": "Scavenged protective layers, reinforced patches, and modular gear webbing",
+    },
+    {
+        "id": "noir_detective",
+        "keywords": [
+            "noir", "detective", "hardboiled", "gumshoe", "1920", "1930", "1940", "1950",
+            "mobster", "gangster", "speakeasy", "private eye", "syndicate crime", "corrupt city"
+        ],
+        "equipped": lambda arch: [
+            f"Heavy wool trenchcoat favored by this {arch}",
+            "Dark collared shirt, loosened tie, and pressed slacks",
+            "Polished leather brogues showing street wear",
+        ],
+        "inventory": lambda note: [
+            "Brass pocket lighter and half-empty cigarette case",
+            f"Notepad dossier ({note[:42].rstrip('.')})" if note else "Moleskine notebook and fountain pen",
+        ],
+        "features": [
+            "Shadowed, watchful eyes beneath a lowered brow",
+            "Slicked-back dark hair silvering at the temples",
+            "Faint razor nick near the collar",
+            "Upright yet weary posture",
+            "Calloused fingertips stained with tobacco or ink",
+            "Curious vintage pocket watch that ticks slightly out of tempo",
+        ],
+        "visual_aesthetic": "Classic mid-century monochrome tailoring, trenchcoat, and felt fedora",
+    },
+    {
+        "id": "modern_espionage",
+        "keywords": [
+            "modern", "espionage", "agent", "thriller", "contemporary", "heist",
+            "tactical", "conspiracy", "covert", "cia", "fbi", "interpol", "operator", "hitman"
+        ],
+        "equipped": lambda arch: [
+            f"Weather-resistant dark softshell jacket suited for a {arch}",
+            "Fitted tactical cargo pants or dark durable denim",
+            "Low-profile trail running shoes with grip soles",
+        ],
+        "inventory": lambda note: [
+            "Burner smartphone with encrypted offline maps",
+            f"Tactical dossier ({note[:42].rstrip('.')})" if note else "Compact multi-tool and small tactical penlight",
+        ],
+        "features": [
+            "Clean-cut, forgettably generic appearance designed to blend into crowds",
+            "Sharp, scanning eyes that instinctively track exits and CCTV domes",
+            "Neatly groomed hair with zero identifying fashion statements",
+            "Faint surgical scar behind the hairline",
+            "Calm, measured neutral posture",
+            "Unusual scarred knuckle or customized wristwatch with dual-timezone bezel",
+        ],
+        "visual_aesthetic": "Low-profile civilian technical apparel designed for crowd concealment",
+    },
+    {
+        "id": "steampunk",
+        "keywords": [
+            "steampunk", "gaslamp", "clockwork", "dirigible", "airship", "victorian science",
+            "brass", "cog", "inventor", "aether", "alchemical", "boiler"
+        ],
+        "equipped": lambda arch: [
+            f"Leather-trimmed tweed coat or brass-buckled mechanic's apron suited for a {arch}",
+            "High-waisted trousers with reinforced tool loops",
+            "Oil-treated leather work boots with brass lace eyelets",
+        ],
+        "inventory": lambda note: [
+            "Pocket clockwork chronometer with exposed balance wheel",
+            f"Component pouch ({note[:42].rstrip('.')})" if note else "Foldable brass loupe and velvet pouch of miniature gears",
+        ],
+        "features": [
+            "Soot smudges near temples and grease under fingernails",
+            "Intense, calculating gaze analyzing structural tolerances",
+            "Wild hair tied loosely with an oiled string",
+            "Brass-rimmed goggles pushed up on forehead or neck",
+            "Erect, energetic posture with rapid hand gestures",
+            "Odd mechanical pocket gadget that whirs and clicks at random intervals",
+        ],
+        "visual_aesthetic": "Victorian industrial leather, tweed, brass fittings, and utilitarian tool aprons",
+    },
+    {
+        "id": "swashbuckling",
+        "keywords": [
+            "pirate", "swashbuckler", "naval", "sail", "ocean", "ship", "sea", "buccaneer",
+            "privateer", "cutlass", "caribbean", "corsair", "maritime", "islands"
+        ],
+        "equipped": lambda arch: [
+            f"Weather-beaten captain's coat or linen deck shirt suited for a {arch}",
+            "Tough sailcloth breeches bound with a wide leather sash",
+            "Salt-stained leather deck boots with brass buckles",
+        ],
+        "inventory": lambda note: [
+            "Brass navigational spyglass or pocket compass",
+            f"Sealed navigation chart ({note[:42].rstrip('.')})" if note else "Pouch of dried ship's tobacco and steel striker",
+        ],
+        "features": [
+            "Sun-bleached hair and deeply tanned, weather-hardened face",
+            "Piercing, wind-squinting gaze conditioned by open seas",
+            "Faint rope-burn scarring along palms and wrists",
+            "Balanced sea-legs stance swaying instinctively with movement",
+            "Small gold hoop earring worn in left earlobe",
+            "Curious carved whalebone scrimshaw token depicting a sea creature",
+        ],
+        "visual_aesthetic": "Weathered sailcloth, linen deck shirts, wide leather belts, and brass hardware",
+    },
+    {
+        "id": "antiquity_feudal",
+        "keywords": [
+            "ancient", "rome", "gladiator", "spartan", "greek", "antiquity", "samurai",
+            "feudal", "ronin", "wuxia", "dynasty", "pharaoh", "bronze", "legion", "sparta"
+        ],
+        "equipped": lambda arch: [
+            f"Traditional woven tunic or layered silk and leather robe suited for a {arch}",
+            "Sturdy hide-wrapped girdle and fastened leg wraps",
+            "Laced leather sandals or wrapped straw waraji",
+        ],
+        "inventory": lambda note: [
+            "Clay water flask or bamboo gourd",
+            f"Inscribed tablet ({note[:42].rstrip('.')})" if note else "Polished jade carving or stamped bronze drachma",
+        ],
+        "features": [
+            "Sun-bronzed skin with disciplined, dignified posture",
+            "Severe, focused gaze disciplined by classical training",
+            "Topknot or braided hair bound with iron pin or cord",
+            "Old sparring scars across forearms and shoulders",
+            "Economy of motion; never fidgets or wastes movement",
+            "Quirky ceremonial bronze ring etched with archaic glyphs",
+        ],
+        "visual_aesthetic": "Traditional woven fabrics, wrapped leather armor, and classical ceremonial draping",
+    },
+    {
+        "id": "superhero",
+        "keywords": [
+            "superhero", "vigilante", "superpower", "hero", "cape", "masked", "villain",
+            "mutant power", "crimefighter", "costumed", "nemesis"
+        ],
+        "equipped": lambda arch: [
+            f"Reinforced ballistic weave bodysuit or customized street vigilante jacket suited for a {arch}",
+            "Reinforced tactical trousers with hidden padding",
+            "Impact-resistant athletic combat boots",
+        ],
+        "inventory": lambda note: [
+            "Compact grappling line or specialized tool dispenser",
+            f"Signature gadget ({note[:42].rstrip('.')})" if note else "Miniature secure communicator and medical trauma patch",
+        ],
+        "features": [
+            "Mask line or subtle tan line across upper face",
+            "Hyper-alert, scanning gaze tracking high perimeters",
+            "Athletic, coiled posture ready to spring into motion",
+            "Faint electrical or chemical singe marks on collar",
+            "Fingers taped or reinforced with lightweight composite",
+            "Curious customized emblem pin with hidden miniature compartment",
+        ],
+        "visual_aesthetic": "Reinforced impact-resistant textiles with personalized insignia or cowl",
+    },
+    {
+        "id": "universal",
+        "keywords": [],
+        "equipped": lambda arch: [
+            f"Durable all-weather travel coat suited for a {arch}",
+            "Tailored utility garments with secure fastenings and sturdy belt",
+            "Hard-wearing, all-terrain travel boots",
+        ],
+        "inventory": lambda note: [
+            "Durable personal journal with writing stylus or pencil",
+            f"Keepsake token ({note[:42].rstrip('.')})" if note else "Compact multi-purpose pocket utility tool and sturdy water canteen",
+        ],
+        "features": [
+            "Keen, observant gaze taking in every detail of the room",
+            "Carefully trimmed hair styled for practicality",
+            "Athletic, measured bearing that commands quiet respect",
+            "Distinctive pale scar across left brow",
+            "Calloused hands accustomed to hard work and skilled craft",
+            "Curious carved stone talisman or coin carried as a personal touchstone",
+        ],
+        "visual_aesthetic": "Timeless, durable travel attire designed for utility across diverse realms",
+    },
+]
+
+
+def resolve_genre_fallback_profile(
+    genre_text: str,
+    archetype: str,
+    rough_notes: str,
+) -> dict[str, Any]:
+    """Score all standard genres and return genre-coherent equipment, inventory, features, and aesthetic."""
+    combined = f"{genre_text} {archetype} {rough_notes}".lower()
+    genre_lower = genre_text.lower()
+    best_profile = GENRE_PROFILES[-1]  # universal fallback
+    best_score = 0
+
+    for prof in GENRE_PROFILES[:-1]:
+        score = 0
+        for kw in prof["keywords"]:
+            if kw in combined:
+                score += 3 if kw in genre_lower else 1
+        if score > best_score:
+            best_score = score
+            best_profile = prof
+
+    clean_arch = archetype.strip() or "traveler"
+    clean_notes = rough_notes.strip()
+
+    return {
+        "id": best_profile["id"],
+        "equipped": best_profile["equipped"](clean_arch),
+        "inventory": best_profile["inventory"](clean_notes),
+        "distinctive_features": list(best_profile["features"]),
+        "visual_aesthetic": best_profile["visual_aesthetic"],
+    }
+
+
 def _fallback_character_expansion(
     seed: CharacterWizardSeed,
     world: WorldRecord | None = None,
@@ -42,16 +406,56 @@ def _fallback_character_expansion(
         else " Shadows stretch across the room as ambient noise hums in the background."
     )
 
-    default_equipped = [
-        f"Practical {seed.archetype.split()[0].lower() if seed.archetype.split() else 'street'} jacket",
-        "Dark utility shirt and reinforced trousers",
-        "Scuffed work boots",
+    world_genre = (
+        world.global_rules.genre
+        if (world and world.global_rules and world.global_rules.genre)
+        else ""
+    )
+
+    profile_data = resolve_genre_fallback_profile(
+        world_genre,
+        seed.archetype,
+        seed.rough_notes,
+    )
+
+    default_equipped = profile_data["equipped"]
+    default_inventory = profile_data["inventory"]
+    distinctive_features = profile_data["distinctive_features"]
+    visual_aesthetic = profile_data["visual_aesthetic"]
+
+    mannerisms = [
+        "Clenches jaw and briefly slows breathing when under sudden pressure",
+        "Habitually sweeps gaze toward entrances and tracks weapon hands before speaking",
+        "Subtly taps fingertips against thigh in measured four-beat intervals when calculating odds",
+        "Pauses deliberately before answering direct personal inquiries, holding unbroken eye contact",
     ]
-    default_inventory = [
-        "Encrypted personal comm-link",
+
+    raw_traits = [k.strip() for k in seed.personality_keywords if k.strip()]
+    fallback_archetype_traits = ["hyper-observant", "cynical", "fiercely autonomous", "dry-witted", "calculating"]
+    for t in fallback_archetype_traits:
+        if len(raw_traits) >= 5:
+            break
+        if t not in raw_traits:
+            raw_traits.append(t)
+    personality_traits = raw_traits
+
+    moral_code = [
+        "Never betrays an ally or employer who has kept their word in good faith",
+        "Refuses to exploit or intentionally harm vulnerable non-combatants",
+        "Will never sacrifice personal autonomy or sell out core principles for empty promises",
     ]
-    if seed.rough_notes.strip():
-        default_inventory.append(f"Signature item ({seed.rough_notes.strip()[:48].rstrip('.')})")
+
+    quirks_flaws = [
+        "Habitually suspicious of unsolicited kindness, immediately searching for hidden leverage",
+        "Deflects genuine vulnerability with caustic, dry humor or tactical distractions",
+        "Sleeps with a weapon within arm's reach and insists on sitting with back to a wall",
+    ]
+
+    default_plan = (
+        "- Observe the immediate threshold and identify all viable exit paths.\n"
+        "- Test the user's motives with a measured, probing question.\n"
+        "- Maintain tactical distance and safeguard autonomy until reliability is proven."
+    )
 
     inferred_temp, inferred_wv = infer_temperament_and_worldview_from_text(
         seed.archetype,
@@ -59,6 +463,18 @@ def _fallback_character_expansion(
         " ".join(seed.personality_keywords),
         seed.rough_notes,
     )
+
+    temp_arch = getattr(inferred_temp, "archetype", "balanced")
+    if temp_arch in ("stoic", "balanced"):
+        mood_label, val, ar = "Calm & Composed", 0.2, 0.2
+    elif temp_arch in ("paranoiac", "proud_rival"):
+        mood_label, val, ar = "Wary & Guarded", -0.2, 0.4
+    elif temp_arch == "confidant":
+        mood_label, val, ar = "Warm & Receptive", 0.6, 0.3
+    elif temp_arch == "volatile":
+        mood_label, val, ar = "Uneasy & On-Edge", -0.4, 0.6
+    else:
+        mood_label, val, ar = "Wary & Guarded", -0.2, 0.4
 
     return CharacterWizardDraft(
         name=seed.name,
@@ -70,15 +486,15 @@ def _fallback_character_expansion(
         pronouns="",
         age="",
         build_and_height="",
-        distinctive_features=[],
-        posture="",
-        mannerisms=[],
+        distinctive_features=distinctive_features,
+        posture="Alert, composed bearing",
+        mannerisms=mannerisms,
         modifications=[],
-        visual_aesthetic="",
-        personality_traits=list(seed.personality_keywords) if seed.personality_keywords else [],
-        moral_code=[],
-        quirks_flaws=[],
-        communication_style=[],
+        visual_aesthetic="Practical, functional attire suited to role and environment",
+        personality_traits=personality_traits,
+        moral_code=moral_code,
+        quirks_flaws=quirks_flaws,
+        communication_style=["measured", "direct", "guarded"],
         core_persona=(
             f"{seed.name} is a {seed.archetype}{setting_note}, serving as {seed.role_in_story}. "
             f"Their demeanor is defined by being {kw_str}. In conversation, {seed.name} avoids "
@@ -117,13 +533,13 @@ def _fallback_character_expansion(
             ),
         ],
         baseline_psyche=BaselinePsyche(
-            mood_label=f"Alert and {seed.personality_keywords[0] if seed.personality_keywords else 'composed'}",
-            valence=0.05,
-            arousal=0.45,
+            mood_label=mood_label,
+            valence=val,
+            arousal=ar,
             core_drive=f"Fulfill their purpose as {seed.archetype} while protecting their autonomy.",
             core_fear="Being compromised by past mistakes or losing the few allies they trust.",
             default_want=f"Assess the user's intentions and establish their dynamic as {seed.role_in_story}.",
-            default_plan="Engage in measured conversation and test the user's reliability with a pointed question.",
+            default_plan=default_plan,
             initial_worldview=inferred_wv,
             temperament=inferred_temp,
         ),
@@ -220,6 +636,16 @@ async def generate_character_draft(
             draft.physical_appearance = fallback.physical_appearance
         if not draft.initial_message.strip():
             draft.initial_message = fallback.initial_message
+        if not draft.distinctive_features:
+            draft.distinctive_features = fallback.distinctive_features
+        if not draft.mannerisms:
+            draft.mannerisms = fallback.mannerisms
+        if not draft.personality_traits:
+            draft.personality_traits = fallback.personality_traits
+        if not draft.moral_code:
+            draft.moral_code = fallback.moral_code
+        if not draft.quirks_flaws:
+            draft.quirks_flaws = fallback.quirks_flaws
         if not draft.equipped and not draft.inventory:
             draft.equipped = fallback.equipped
             draft.inventory = fallback.inventory

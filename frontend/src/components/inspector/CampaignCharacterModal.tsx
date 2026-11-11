@@ -41,7 +41,7 @@ import {
 } from "../../types";
 import { getCharacterEmotionPortrait } from "../../utils/entityImages";
 import { BASIC_EMOTIONS } from "../EntityEditorModals";
-import { CommaSeparatedInput } from "../CommaSeparatedInput";
+import { TagChipsInput } from "../TagChipsInput";
 import {
   CharacterBaseTab,
   CharacterAppearanceTab,
@@ -1263,11 +1263,11 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
                       </div>
 
                       <div className="field-group">
-                        <label>Trigger Keywords (comma-separated)</label>
-                        <CommaSeparatedInput
-                          className="field-input"
+                        <label>Trigger Keywords (min 1)</label>
+                        <TagChipsInput
                           value={shard.keywords}
-                          placeholder="e.g. dragon, betrayal, upper spire"
+                          placeholder="Add keyword & press comma or Enter..."
+                          accentVariant="violet"
                           onChange={(newKeywords) => {
                             const next = [...memoryShards];
                             next[idx] = {

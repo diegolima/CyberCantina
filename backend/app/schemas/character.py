@@ -386,16 +386,16 @@ class CharacterWizardLLMOutput(BaseModel):
     build_and_height: str = Field(default="", description="Physical frame and stature (e.g. '182 cm, lean wiry build').")
     distinctive_features: list[str] = Field(
         default_factory=list,
-        description="3-6 concise chips for concrete physical markers: eyes, hair, skin, scars, tattoos, or setting anomalies.",
+        description="Exactly 6 concise chips for concrete physical markers: eyes, hair, skin, scars, tattoos, or setting anomalies. At least 1 chip must be an unusual or quirky feature.",
     )
     posture: str = Field(default="", description="Habitual physical stance and bearing (e.g. 'composed and alert').")
     mannerisms: list[str] = Field(
         default_factory=list,
-        description="2-3 behavioral micro-actions and conversational tells (e.g. ['fidgets with signet ring when pressured']).",
+        description="At least 4 behavioral micro-actions and conversational tells (e.g. 1 under pressure, 1 when guarded, 1 idle, 1 speech tic).",
     )
     modifications: list[str] = Field(default_factory=list, description="Cyberware, implants, tattoos, or scars (auto-merged into distinctive_features).")
     visual_aesthetic: str = Field(default="", description="General clothing style or dress vibe (e.g. 'practical weathered techwear').")
-    personality_traits: list[str] = Field(default_factory=list, description="3-5 high-level tropes and traits (chips).")
+    personality_traits: list[str] = Field(default_factory=list, description="4-6 high-level tropes and traits (chips).")
     core_persona: str = Field(
         description=(
             "High-density demeanor block (~100-180 words) covering conversational demeanor, "
@@ -424,11 +424,11 @@ class CharacterWizardLLMOutput(BaseModel):
     )
     equipped: list[str] = Field(
         default_factory=list,
-        description="Starting equipped attire, armor, cyberware, or wielded weapons.",
+        description="Starting equipped attire, armor, cyberware, or wielded weapons consistent with world genre.",
     )
     inventory: list[str] = Field(
         default_factory=list,
-        description="Starting carried inventory of tools, personal items, or stashed objects.",
+        description="Starting carried inventory of tools, personal items, or stashed objects consistent with world genre.",
     )
     voice_anchors: list[VoiceAnchor] = Field(default_factory=list)
     baseline_psyche: BaselinePsyche

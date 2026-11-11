@@ -675,10 +675,68 @@ def test_character_modifications_auto_merge_and_extraction_endpoints(
                 rough_notes="Quiet operative.",
             )
         )
-        assert manual_draft.distinctive_features == []
-        assert manual_draft.moral_code == []
-        assert manual_draft.quirks_flaws == []
+        assert len(manual_draft.distinctive_features) == 6
+        assert len(manual_draft.moral_code) >= 2
+        assert len(manual_draft.quirks_flaws) >= 2
+        assert len(manual_draft.mannerisms) >= 4
+        assert manual_draft.baseline_psyche.default_plan.startswith("- ")
+        assert manual_draft.baseline_psyche.mood_label in [
+            "Calm & Composed",
+            "Wary & Guarded",
+            "Warm & Receptive",
+            "Melancholy & Subdued",
+            "Hostile & Tense",
+            "Uneasy & On-Edge",
+            "Elated & Triumphant",
+        ]
     finally:
         main_module.app.dependency_overrides.clear()
+
+
+def test_resolve_genre_fallback_profile_all_genres():
+    """Verify resolve_genre_fallback_profile accurately covers all common RPG genres and neutral fallback."""
+    from app.wizards.character_wizard import resolve_genre_fallback_profile
+
+    test_cases = [
+        ("High Fantasy", "Elven Bard", "Wandering tavern singer", "fantasy"),
+        ("Space Opera", "Starship Pilot", "Freighter runner in orbit", "scifi_space"),
+        ("Cyberpunk 2077", "Netrunner", "Neon megaspire hacker", "cyberpunk"),
+        ("Gothic Horror", "Occult Investigator", "Eldritch hauntings in a dark manor", "horror_gothic"),
+        ("Weird West", "Gunslinger", "Dusty frontier saloon bounty hunter", "western"),
+        ("Post-Apocalyptic Wasteland", "Scavenger", "Nuclear fallout bunker survivor", "post_apocalyptic"),
+        ("1930s Film Noir", "Private Eye", "Hardboiled detective investigating syndicate mobsters", "noir_detective"),
+        ("Modern Espionage", "Covert Operator", "Interpol intelligence operative", "modern_espionage"),
+        ("Gaslamp Steampunk", "Airship Mechanic", "Clockwork boiler and brass dirigibles", "steampunk"),
+        ("Swashbuckling Caribbean", "Pirate Captain", "Privateer sailing high seas", "swashbuckling"),
+        ("Ancient Feudal Japan", "Ronin Samurai", "Honor-bound warrior in bronze dynasty wars", "antiquity_feudal"),
+        ("Superhero Vigilante", "Costumed Crimefighter", "Masked vigilante tracking city villains", "superhero"),
+        ("", "Wandering Philosopher", "Solitary thinker contemplating the stars", "universal"),
+    ]
+
+    for genre, arch, notes, expected_id in test_cases:
+        profile = resolve_genre_fallback_profile(genre, arch, notes)
+        assert profile["id"] == expected_id, f"Failed for {genre}/{arch}/{notes}: got {profile['id']}, expected {expected_id}"
+        assert len(profile["distinctive_features"]) == 6, f"Features count != 6 for {expected_id}"
+        assert len(profile["equipped"]) >= 2, f"Equipped items < 2 for {expected_id}"
+        assert len(profile["inventory"]) >= 1, f"Inventory items < 1 for {expected_id}"
+        assert profile["visual_aesthetic"], f"Missing aesthetic for {expected_id}"
+
+        # Additional coherence assertions:
+        # A fantasy character must not have a comm-link, dosimeter, or blaster
+        if expected_id == "fantasy":
+            equipped_and_inv = " ".join(profile["equipped"] + profile["inventory"]).lower()
+            assert "comm-link" not in equipped_and_inv
+            assert "dosimeter" not in equipped_and_inv
+            assert "smartphone" not in equipped_and_inv
+            assert "cloak" in equipped_and_inv or "coin pouch" in equipped_and_inv
+
+        # Universal neutral fallback must have no modern electronic items
+        if expected_id == "universal":
+            equipped_and_inv = " ".join(profile["equipped"] + profile["inventory"]).lower()
+            assert "comm-link" not in equipped_and_inv
+            assert "smartphone" not in equipped_and_inv
+            assert "dosimeter" not in equipped_and_inv
+            assert "journal" in equipped_and_inv
+
 
 

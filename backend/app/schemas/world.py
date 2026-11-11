@@ -340,7 +340,7 @@ class LocationLoreNodeDraft(BaseLoreNodeInput):
 class WizardLoreNodeLLMOutput(BaseModel):
     """Lenient LLM-ingestion schema for World Wizard generation; salvages legacy categories & missing tags."""
 
-    title: str = Field(default="World Lore")
+    title: str = Field(default="")
     category: str = Field(
         default="faction",
         description="One of: history, culture, faction, rumor, artifact.",
@@ -351,16 +351,50 @@ class WizardLoreNodeLLMOutput(BaseModel):
         description="At least 1-5 trigger keywords linking this lore entry to dialogue mentions.",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _remap_llm_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            # Remap name/topic/header -> title
+            if not data.get("title") and data.get("name"):
+                data["title"] = data["name"]
+            elif not data.get("title") and data.get("topic"):
+                data["title"] = data["topic"]
+            elif not data.get("title") and data.get("header"):
+                data["title"] = data["header"]
+
+            # Remap description/text/body/summary/lore -> content
+            if not data.get("content"):
+                data["content"] = (
+                    data.get("description")
+                    or data.get("text")
+                    or data.get("body")
+                    or data.get("summary")
+                    or data.get("lore")
+                    or ""
+                )
+        return data
+
     def to_strict_draft(self) -> WorldLoreNodeDraft:
-        clean_title = (self.title or "").strip()[:120] or "World Lore"
-        clean_content = (self.content or "").strip()[:2000] or clean_title
+        clean_title = (self.title or "").strip()[:120]
         clean_cat = normalize_lore_category(self.category, allow_secret=False, strict=False)
         clean_tags = normalize_and_validate_entity_tags(
             self.entity_tags,
             strict=False,
-            fallback_title=clean_title,
-            fallback_content=clean_content,
+            fallback_title=clean_title or f"{clean_cat.capitalize()} Lore",
+            fallback_content=(self.content or "").strip()[:2000],
         )
+        if not clean_title or clean_title.lower() == "world lore":
+            if clean_tags:
+                clean_title = f"{clean_cat.capitalize()}: {', '.join(t.capitalize() for t in clean_tags[:2])}"
+            else:
+                clean_title = f"{clean_cat.capitalize()} Lore"
+
+        clean_content = (self.content or "").strip()[:2000]
+        if not clean_content or clean_content.lower() == "world lore":
+            tag_summary = f" relating to {', '.join(clean_tags)}" if clean_tags else ""
+            clean_content = f"Key {clean_cat} lore shaping regional history and events{tag_summary}."
+
         return WorldLoreNodeDraft(
             title=clean_title,
             category=clean_cat,  # type: ignore[arg-type]

@@ -116,14 +116,30 @@ def _fallback_sillytavern_distillation(
         card.scenario,
         " ".join(card.tags),
     )
+    temp_arch = getattr(inferred_temp, "archetype", "balanced")
+    if temp_arch in ("stoic", "balanced"):
+        mood_label, val, ar = "Calm & Composed", 0.2, 0.2
+    elif temp_arch in ("paranoiac", "proud_rival"):
+        mood_label, val, ar = "Wary & Guarded", -0.2, 0.4
+    elif temp_arch == "confidant":
+        mood_label, val, ar = "Warm & Receptive", 0.6, 0.3
+    elif temp_arch == "volatile":
+        mood_label, val, ar = "Uneasy & On-Edge", -0.4, 0.6
+    else:
+        mood_label, val, ar = "Wary & Guarded", -0.2, 0.4
+
     baseline_psyche = BaselinePsyche(
-        mood_label="Alert and observant",
-        valence=0.1,
-        arousal=0.5,
+        mood_label=mood_label,
+        valence=val,
+        arousal=ar,
         core_drive=f"Accomplish their mission and protect what matters to them.",
         core_fear=f"Being cornered, manipulated, or losing control in critical moments.",
         default_want=f"Assess the immediate surroundings and the user's motives.",
-        default_plan=f"Engage in guarded conversation while keeping exits in sight.",
+        default_plan=(
+            "- Assess the immediate surroundings and note all available exits.\n"
+            "- Gauge the user's motives through cautious, guarded interaction.\n"
+            "- Protect personal autonomy and avoid committing to promises prematurely."
+        ),
         initial_worldview=inferred_wv,
         temperament=inferred_temp,
     )

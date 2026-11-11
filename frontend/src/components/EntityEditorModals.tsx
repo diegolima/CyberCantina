@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
   BookOpen,
@@ -1218,24 +1218,37 @@ export const CharacterInspectorModal: React.FC<
                           markDirty();
                         }}
                       />
-                      <ClickToEditField
-                        label="Trigger Keywords (comma-separated)"
-                        value={shard.keywords.join(", ")}
-                        placeholder="e.g. dragon, betrayal, upper spire"
-                        readOnly={viewingHistory}
-                        onChange={(val) => {
-                          const next = [...memoryShards];
-                          next[idx] = {
-                            ...next[idx],
-                            keywords: val
-                              .split(",")
-                              .map((k) => k.trim())
-                              .filter(Boolean),
-                          };
-                          setMemoryShards(next);
-                          markDirty();
-                        }}
-                      />
+                      <div className="field-group">
+                        <label>Trigger Keywords (min 1)</label>
+                        {viewingHistory ? (
+                          <div className="editable-field-box read-only" style={{ cursor: "default", display: "flex", flexWrap: "wrap", gap: 4 }}>
+                            {shard.keywords.length > 0 ? (
+                              shard.keywords.map((kw, ki) => (
+                                <span key={ki} className="badge" style={{ fontSize: "0.72rem", padding: "2px 6px" }}>
+                                  {kw}
+                                </span>
+                              ))
+                            ) : (
+                              <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>—</span>
+                            )}
+                          </div>
+                        ) : (
+                          <TagChipsInput
+                            value={shard.keywords}
+                            placeholder="Add keyword & press comma or Enter..."
+                            accentVariant="violet"
+                            onChange={(nextKw) => {
+                              const next = [...memoryShards];
+                              next[idx] = {
+                                ...next[idx],
+                                keywords: nextKw,
+                              };
+                              setMemoryShards(next);
+                              markDirty();
+                            }}
+                          />
+                        )}
+                      </div>
                       {!viewingHistory && (
                         <button
                           type="button"
@@ -2620,6 +2633,32 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   const [saving, setSaving] = useState(false);
   const [exportingWorld, setExportingWorld] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const loreListBottomRef = useRef<HTMLDivElement | null>(null);
+
+  const handleAddWorldLoreNode = () => {
+    const newId = `new_lore_${Date.now()}`;
+    setLoreNodes((prev) => [
+      ...prev,
+      {
+        id: newId,
+        world_id: world.id,
+        title: "New Lore Entry",
+        category: "faction",
+        content:
+          "Describe a macro faction, historical event, cultural norm, or world rumor...",
+        entity_tags: [],
+      },
+    ]);
+    markDirty();
+    setTimeout(() => {
+      loreListBottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      const el = document.getElementById(`lore-node-${newId}`);
+      if (el) {
+        const input = el.querySelector("input, textarea") as HTMLElement;
+        if (input) input.focus();
+      }
+    }, 60);
+  };
 
   const handleExportWorld = async () => {
     setExportingWorld(true);
@@ -3288,6 +3327,13 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                   display: "flex",
                   justifyContent: "space-between",
                   alignItems: "center",
+                  position: "sticky",
+                  top: -18,
+                  zIndex: 10,
+                  background: "var(--bg-card)",
+                  padding: "8px 0",
+                  margin: "-4px 0 0 0",
+                  borderBottom: "1px solid var(--border-subtle)",
                 }}
               >
                 <span
@@ -3301,21 +3347,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                   type="button"
                   className="btn"
                   style={{ padding: "3px 8px", fontSize: "0.72rem" }}
-                  onClick={() => {
-                    setLoreNodes([
-                      ...loreNodes,
-                      {
-                        id: `new_lore_${Date.now()}`,
-                        world_id: world.id,
-                        title: "New Lore Entry",
-                        category: "faction",
-                        content:
-                          "Describe a macro faction, historical event, cultural norm, or world rumor...",
-                        entity_tags: [],
-                      },
-                    ]);
-                    markDirty();
-                  }}
+                  onClick={handleAddWorldLoreNode}
                 >
                   <Plus size={12} /> Add Lore Node
                 </button>
@@ -3342,6 +3374,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                   return (
                     <div
                       key={lore.id}
+                      id={`lore-node-${lore.id}`}
                       style={{
                         background: "var(--bg-panel)",
                         border: isEntryInvalid
@@ -3451,6 +3484,19 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                     </div>
                   );
                 })
+              )}
+              <div ref={loreListBottomRef} />
+              {loreNodes.length > 0 && (
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.74rem" }}
+                    onClick={handleAddWorldLoreNode}
+                  >
+                    <Plus size={13} /> Add Another Lore Node
+                  </button>
+                </div>
               )}
             </div>
           </div>

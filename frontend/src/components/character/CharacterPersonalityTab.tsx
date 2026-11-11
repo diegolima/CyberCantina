@@ -241,8 +241,8 @@ export const CharacterPersonalityTab: React.FC<CharacterPersonalityTabProps> = (
                   gap: 5,
                   fontSize: "0.72rem",
                   padding: "2px 8px",
-                  color: "var(--accent-rose)",
-                  borderColor: "rgba(244, 63, 94, 0.4)",
+                  color: "var(--accent-amber)",
+                  borderColor: "rgba(245, 158, 11, 0.4)",
                 }}
                 onClick={handlePopulateQuirksFromDemeanor}
                 title="Extract behavioral quirks and flaws from demeanor prose and rewrite prose to remove them"
@@ -608,11 +608,13 @@ export const CharacterPersonalityTab: React.FC<CharacterPersonalityTabProps> = (
             onChange={(val) => handlePsycheChange({ default_want: val })}
           />
           <ClickToEditField
-            label="Default Action Plan"
+            label="Default Action Plan (Step-by-step bullet list)"
+            readOnlyLabel="Default Action Plan"
             value={psyche.default_plan}
+            placeholder={"- Step 1: Observe immediate exits and threats\n- Step 2: Gauge motives with a direct question\n- Step 3: Maintain tactical distance"}
             readOnly={readOnly}
             multiline
-            rows={2}
+            rows={3}
             onChange={(val) => handlePsycheChange({ default_plan: val })}
           />
         </div>

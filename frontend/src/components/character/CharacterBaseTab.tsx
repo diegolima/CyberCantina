@@ -1,6 +1,7 @@
 import React from "react";
 import { WorldRecord } from "../../types";
 import { ClickToEditField } from "../EntityEditorModals";
+import { TagChipsInput } from "../TagChipsInput";
 
 export interface CharacterBaseData {
   name: string;
@@ -180,27 +181,29 @@ export const CharacterBaseTab: React.FC<CharacterBaseTabProps> = ({
           onChange={(val) => handleFieldChange("creator", val)}
         />
         <div className="field-group">
-          <label>{readOnly ? "Character Tags" : "Character Tags (Comma-separated)"}</label>
+          <label>Character Tags</label>
           {readOnly ? (
-            <div className="editable-field-box read-only" style={{ cursor: "default" }}>
+            <div className="editable-field-box read-only" style={{ cursor: "default", display: "flex", flexWrap: "wrap", gap: 6 }}>
               {tagsValue.length > 0 ? (
-                tagsValue.map((t) => `#${t}`).join(", ")
+                tagsValue.map((t, idx) => (
+                  <span
+                    key={idx}
+                    className="badge"
+                    style={{ fontSize: "0.75rem", padding: "2px 8px" }}
+                  >
+                    #{t}
+                  </span>
+                ))
               ) : (
                 <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>—</span>
               )}
             </div>
           ) : (
-            <input
-              className="field-input"
-              placeholder="e.g. cyberpunk, medic, ally"
-              value={tagsValue.join(", ")}
-              onChange={(e) => {
-                const parsed = e.target.value
-                  .split(",")
-                  .map((s) => s.trim().replace(/^#/, ""))
-                  .filter(Boolean);
-                handleFieldChange("tags", parsed);
-              }}
+            <TagChipsInput
+              value={tagsValue}
+              onChange={(next) => handleFieldChange("tags", next)}
+              placeholder="e.g. cyberpunk, medic, ally (press comma or enter)"
+              accentVariant="cyan"
             />
           )}
         </div>
