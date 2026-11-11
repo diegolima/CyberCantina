@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { MAX_TOKENS_HARD_MAX, MAX_TOKENS_HARD_MIN, TEMPERATURE_SPEC, maxTokensSpec } from "../modelLimits";
+import {
+  CONTEXT_SIZE_HARD_MAX,
+  CONTEXT_SIZE_HARD_MIN,
+  DEFAULT_ACTOR_CONTEXT_SIZE,
+  DEFAULT_CLERK_CONTEXT_SIZE,
+  MAX_TOKENS_HARD_MAX,
+  MAX_TOKENS_HARD_MIN,
+  TEMPERATURE_SPEC,
+  contextSizeSpec,
+  formatContextTokens,
+  maxTokensSpec,
+} from "../modelLimits";
 import {
   clamp,
   formatValue,
@@ -91,5 +102,35 @@ describe("max tokens slider (log scale, clamped track)", () => {
       expect(v).toBeGreaterThanOrEqual(actor.trackMin);
       expect(v).toBeLessThanOrEqual(actor.trackMax);
     }
+  });
+});
+
+describe("context size slider (log scale, 1k increments)", () => {
+  const actorCtx = contextSizeSpec("actor");
+  const clerkCtx = contextSizeSpec("clerk");
+
+  it("places both role defaults (12k Actor, 8k Clerk) directly on track notches", () => {
+    expect(actorCtx.notches.some((n) => n.value === DEFAULT_ACTOR_CONTEXT_SIZE)).toBe(true);
+    expect(isOutsideTrack(DEFAULT_ACTOR_CONTEXT_SIZE, actorCtx)).toBe(false);
+    expect(clerkCtx.notches.some((n) => n.value === DEFAULT_CLERK_CONTEXT_SIZE)).toBe(true);
+    expect(isOutsideTrack(DEFAULT_CLERK_CONTEXT_SIZE, clerkCtx)).toBe(false);
+    expect(valueToPosition(DEFAULT_CLERK_CONTEXT_SIZE, clerkCtx)).toBeCloseTo(0.5, 6);
+  });
+
+  it("round-trips notches and supports manual values up to CONTEXT_SIZE_HARD_MAX", () => {
+    for (const n of actorCtx.notches) {
+      expect(positionToValue(valueToPosition(n.value, actorCtx), actorCtx)).toBe(n.value);
+    }
+    expect(parseDraft(String(CONTEXT_SIZE_HARD_MIN - 1), actorCtx)).toBeNull();
+    expect(parseDraft(String(CONTEXT_SIZE_HARD_MAX + 1), actorCtx)).toBeNull();
+    expect(parseDraft("131072", actorCtx)).toBe(131072);
+    expect(isOutsideTrack(131072, actorCtx)).toBe(true);
+    expect(valueToPosition(131072, actorCtx)).toBe(1);
+  });
+
+  it("formats token counts cleanly for card summaries", () => {
+    expect(formatContextTokens(12288)).toBe("12k");
+    expect(formatContextTokens(8192)).toBe("8k");
+    expect(formatContextTokens(10000)).toBe("10000");
   });
 });

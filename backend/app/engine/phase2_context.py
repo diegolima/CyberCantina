@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+import logging
+import math
 import re
 from typing import Any
-from app.config import settings
+from app.config import ModelProfile, settings
 from app.engine.affective_engine import (
     compute_provisional_cognition_preview,
     describe_edge_stance,
@@ -48,6 +51,42 @@ from app.schemas.turn import (
 from app.schemas.world import LocationNode, LoreNode, NeighborLocationView, WorldRecord
 
 _WORD_TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
+logger = logging.getLogger("cybercantina.engine.phase2_context")
+
+_CHAT_MSG_OVERHEAD_TOKENS = 12
+_PROMPT_SAFETY_MARGIN_TOKENS = 256
+
+
+def estimate_text_tokens(text: str) -> int:
+    """Conservative char-based token estimate (~3.3 chars/token) without a model-specific BPE tokenizer."""
+    if not text:
+        return 0
+    return max(1, math.ceil(len(text) / 3.3))
+
+
+def estimate_messages_tokens(messages: Sequence[Mapping[str, str]]) -> int:
+    """Estimate prompt tokens across chat messages including per-message framing overhead."""
+    return sum(
+        estimate_text_tokens(m.get("content", "")) + _CHAT_MSG_OVERHEAD_TOKENS
+        for m in messages
+    )
+
+
+def resolve_actor_context_ceiling(actor_profile: ModelProfile) -> tuple[int | None, int]:
+    """Return (max_context_tokens, reserved_output_tokens) for native Ollama; (None, 0) for server-managed providers."""
+    ctx = getattr(actor_profile, "context_size", None)
+    if ctx is None:
+        return None, 0
+    endpoint = getattr(actor_profile, "resolved", None)
+    if endpoint is not None:
+        if endpoint.type in ("openrouter", "aihorde"):
+            return None, 0
+        if endpoint.type == "ollama":
+            from app.providers.probe import probe_service
+
+            if probe_service.get_cached_protocol(endpoint.provider_id) == "openai_compat":
+                return None, 0
+    return int(ctx), int(getattr(actor_profile, "max_tokens", 0) or 0)
 _DISCOVERY_CHECK_STEMS = (
     "search",
     "investigat",
@@ -1552,6 +1591,8 @@ def assemble_four_zone_messages(
     persona_snapshot: PersonaRecord | None = None,
     current_player_state: PersonaTurnStateSnapshot | None = None,
     decomposed_message: DecomposedUserMessage | None = None,
+    max_context_tokens: int | None = None,
+    reserved_output_tokens: int = 0,
 ) -> list[dict[str, str]]:
     """Construct the complete 4-Zone OpenAI messages array for the Main Actor Model."""
     if is_narrator:
@@ -1560,17 +1601,10 @@ def assemble_four_zone_messages(
         zone1_prompt = build_zone1_ensemble_system_prompt(world, present_characters, prompt_template=actor_system_prompt_template, persona_snapshot=persona_snapshot)
     else:
         zone1_prompt = build_zone1_static_system_prompt(world, character, prompt_template=actor_system_prompt_template, persona_snapshot=persona_snapshot)
-    messages: list[dict[str, str]] = [
-        {
-            "role": "system",
-            "content": zone1_prompt,
-        }
-    ]
-
-    # Zone 2: Chunked episodic summaries
-    zone2 = build_zone2_episodic_summary(episodic_chunks)
-    if zone2:
-        messages.append({"role": "system", "content": zone2})
+    zone1_msg = {
+        "role": "system",
+        "content": zone1_prompt,
+    }
 
     # Determine where Working Memory (Zone 3) starts, filtering to turns where character was in the room
     max_summarized_depth = max((c.end_turn_depth for c in episodic_chunks), default=-1)
@@ -1595,6 +1629,7 @@ def assemble_four_zone_messages(
     name_lookup[character.id] = character.name
 
     active_actor_id = "__narrator__" if is_narrator else character.id
+    zone3_turn_entries: list[list[dict[str, str]]] = []
     for turn in working_window:
         prose_text = turn.raw_prose
         if turn.actor_id != active_actor_id and turn.actor_id in name_lookup:
@@ -1613,10 +1648,14 @@ def assemble_four_zone_messages(
         )
 
         if turn.depth_index == 0 and turn.user_message == "[Scene Start]":
-            messages.append({"role": "assistant", "content": prose_text})
+            zone3_turn_entries.append([{"role": "assistant", "content": prose_text}])
         else:
-            messages.append({"role": "user", "content": filtered_user_msg})
-            messages.append({"role": "assistant", "content": prose_text})
+            zone3_turn_entries.append(
+                [
+                    {"role": "user", "content": filtered_user_msg},
+                    {"role": "assistant", "content": prose_text},
+                ]
+            )
 
     # Zone 4: Ephemeral Turn Frame + latest user message at the very tail
     leaf_turn = branch_turns[-1]
@@ -1655,5 +1694,68 @@ def assemble_four_zone_messages(
         current_player_state=current_player_state,
         decomposed_message=decomposed_message,
     )
-    messages.append({"role": "user", "content": zone4_content})
+    zone4_msg = {"role": "user", "content": zone4_content}
+
+    # Zone 2 + context ceiling enforcement: trim oldest Zone 3 turns (then oldest Zone 2 chunks if needed)
+    # so native Ollama never silently truncates Zone 1 from the front of the prompt.
+    active_chunks = list(episodic_chunks)
+    zone2 = build_zone2_episodic_summary(active_chunks)
+    if max_context_tokens is not None and max_context_tokens > 0:
+        input_budget = max(
+            0,
+            int(max_context_tokens)
+            - max(0, int(reserved_output_tokens))
+            - _PROMPT_SAFETY_MARGIN_TOKENS,
+        )
+        base_tokens = estimate_messages_tokens([zone1_msg, zone4_msg])
+        zone2_tokens = (
+            estimate_messages_tokens([{"role": "system", "content": zone2}])
+            if zone2
+            else 0
+        )
+        turn_costs = [estimate_messages_tokens(entry) for entry in zone3_turn_entries]
+        zone3_tokens = sum(turn_costs)
+
+        dropped_zone3 = 0
+        while zone3_turn_entries and (base_tokens + zone2_tokens + zone3_tokens) > input_budget:
+            zone3_turn_entries.pop(0)
+            zone3_tokens -= turn_costs.pop(0)
+            dropped_zone3 += 1
+
+        dropped_zone2 = 0
+        while active_chunks and (base_tokens + zone2_tokens) > input_budget:
+            active_chunks.pop(0)
+            zone2 = build_zone2_episodic_summary(active_chunks)
+            zone2_tokens = (
+                estimate_messages_tokens([{"role": "system", "content": zone2}])
+                if zone2
+                else 0
+            )
+            dropped_zone2 += 1
+
+        if dropped_zone3 or dropped_zone2:
+            logger.warning(
+                "Actor prompt exceeded context budget (%d ctx - %d output - %d margin = %d input tok); "
+                "trimmed %d oldest Zone 3 turn(s) and %d oldest Zone 2 chunk(s) to protect Zone 1.",
+                max_context_tokens,
+                max(0, int(reserved_output_tokens)),
+                _PROMPT_SAFETY_MARGIN_TOKENS,
+                input_budget,
+                dropped_zone3,
+                dropped_zone2,
+            )
+        if (base_tokens + zone2_tokens) > input_budget:
+            logger.warning(
+                "Zone 1 + Zone 4 alone (~%d tok) exceed Actor input budget (%d tok); "
+                "increase Actor context_size or switch to Fast & Concise preset.",
+                base_tokens + zone2_tokens,
+                input_budget,
+            )
+
+    messages: list[dict[str, str]] = [zone1_msg]
+    if zone2:
+        messages.append({"role": "system", "content": zone2})
+    for entry in zone3_turn_entries:
+        messages.extend(entry)
+    messages.append(zone4_msg)
     return messages

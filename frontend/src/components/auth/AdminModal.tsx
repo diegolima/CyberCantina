@@ -22,6 +22,10 @@ import { FeedbackModal } from "./FeedbackModal";
 import { ProvidersManager } from "../providers/ProvidersManager";
 import { ProvidersProvider, useProviders } from "../providers/ProvidersContext";
 import { ModelDeck } from "../models/ModelDeck";
+import {
+  DEFAULT_ACTOR_CONTEXT_SIZE,
+  DEFAULT_CLERK_CONTEXT_SIZE,
+} from "../models/modelLimits";
 
 export interface AdminModalProps {
   currentUser: UserProfile;
@@ -1091,6 +1095,13 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
                         actor_profile: { ...appSettingsForm.actor_profile, keep_alive_minutes: v },
                       })
                     }
+                    actorContextSize={appSettingsForm.actor_profile.context_size ?? DEFAULT_ACTOR_CONTEXT_SIZE}
+                    onActorContextSize={(v) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        actor_profile: { ...appSettingsForm.actor_profile, context_size: v },
+                      })
+                    }
                     clerkSelection={{
                       providerId: appSettingsForm.clerk_profile.provider_id ?? null,
                       model: appSettingsForm.clerk_profile.model,
@@ -1127,6 +1138,13 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
                       setAppSettingsForm({
                         ...appSettingsForm,
                         clerk_profile: { ...appSettingsForm.clerk_profile, keep_alive_minutes: v },
+                      })
+                    }
+                    clerkContextSize={appSettingsForm.clerk_profile.context_size ?? DEFAULT_CLERK_CONTEXT_SIZE}
+                    onClerkContextSize={(v) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        clerk_profile: { ...appSettingsForm.clerk_profile, context_size: v },
                       })
                     }
                     clerkMirrorsActor={!!appSettingsForm.clerk_mirrors_actor}

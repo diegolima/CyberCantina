@@ -1161,6 +1161,7 @@ export interface ModelProfile {
   timeout_seconds: number;
   run_on_cpu?: boolean;
   keep_alive_minutes?: number;
+  context_size?: number | null;
 }
 
 export interface AppSettings {

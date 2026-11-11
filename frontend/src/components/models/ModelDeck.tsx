@@ -1,8 +1,16 @@
 import React, { useEffect, useState } from "react";
+import { AlertTriangle } from "lucide-react";
 import { useProviders } from "../providers/ProvidersContext";
 import { IntegerField } from "./IntegerField";
 import { ModelCard } from "./ModelCard";
-import { TEMPERATURE_SPEC, maxTokensSpec } from "./modelLimits";
+import {
+  DEFAULT_ACTOR_CONTEXT_SIZE,
+  DEFAULT_CLERK_CONTEXT_SIZE,
+  TEMPERATURE_SPEC,
+  contextSizeSpec,
+  formatContextTokens,
+  maxTokensSpec,
+} from "./modelLimits";
 import { RoleSelection } from "./modelPickerLogic";
 import { NumericSliderField } from "./NumericSliderField";
 import { formatValue } from "./sliderMath";
@@ -20,6 +28,8 @@ export interface ModelDeckProps {
   onActorTokens?: (v: number) => void;
   actorKeepAlive?: number;
   onActorKeepAlive?: (v: number) => void;
+  actorContextSize?: number;
+  onActorContextSize?: (v: number) => void;
   actorOverridden?: boolean;
   onResetActor?: () => void;
 
@@ -32,6 +42,8 @@ export interface ModelDeckProps {
   onClerkTokens?: (v: number) => void;
   clerkKeepAlive?: number;
   onClerkKeepAlive?: (v: number) => void;
+  clerkContextSize?: number;
+  onClerkContextSize?: (v: number) => void;
   clerkMirrorsActor?: boolean;
   onToggleClerkMirror?: (val: boolean) => void;
   clerkRunOnCpu?: boolean;
@@ -71,6 +83,8 @@ export const ModelDeck: React.FC<ModelDeckProps> = ({
   onActorTokens,
   actorKeepAlive = 30,
   onActorKeepAlive,
+  actorContextSize = DEFAULT_ACTOR_CONTEXT_SIZE,
+  onActorContextSize,
   actorOverridden = false,
   onResetActor,
 
@@ -82,6 +96,8 @@ export const ModelDeck: React.FC<ModelDeckProps> = ({
   onClerkTokens,
   clerkKeepAlive = 30,
   onClerkKeepAlive,
+  clerkContextSize = DEFAULT_CLERK_CONTEXT_SIZE,
+  onClerkContextSize,
   clerkMirrorsActor = false,
   onToggleClerkMirror,
   clerkRunOnCpu = false,
@@ -113,33 +129,33 @@ export const ModelDeck: React.FC<ModelDeckProps> = ({
   const [actorTempValid, setActorTempValid] = useState(true);
   const [actorTokensValid, setActorTokensValid] = useState(true);
   const [actorKeepAliveValid, setActorKeepAliveValid] = useState(true);
+  const [actorContextValid, setActorContextValid] = useState(true);
 
   // Validity tracking for Clerk
   const [clerkTempValid, setClerkTempValid] = useState(true);
   const [clerkTokensValid, setClerkTokensValid] = useState(true);
   const [clerkKeepAliveValid, setClerkKeepAliveValid] = useState(true);
+  const [clerkContextValid, setClerkContextValid] = useState(true);
 
   // Validity tracking for Vectors
   const [memNValid, setMemNValid] = useState(true);
   const [memKValid, setMemKValid] = useState(true);
   const [memFlagsValid, setMemFlagsValid] = useState(true);
 
-  const actorInvalid = (actorTempValid ? 0 : 1) + (actorTokensValid ? 0 : 1) + (actorKeepAliveValid ? 0 : 1);
-  const clerkInvalid = (clerkTempValid ? 0 : 1) + (clerkTokensValid ? 0 : 1) + (clerkKeepAliveValid ? 0 : 1);
-  const vectorInvalid = (memNValid ? 0 : 1) + (memKValid ? 0 : 1) + (memFlagsValid ? 0 : 1);
-
-  const totalInvalid = actorInvalid + clerkInvalid + vectorInvalid;
-
-  useEffect(() => {
-    onInvalidChange?.(totalInvalid);
-  }, [totalInvalid, onInvalidChange]);
-
   // Provider details
   const actorProvider = store.byId(actorSelection.providerId);
   const isActorOllama = !actorProvider || actorProvider.type === "ollama";
+  const actorProbeProtocol = actorSelection.providerId
+    ? store.status[actorSelection.providerId]?.result?.protocol
+    : undefined;
+  const isActorNativeOllama = isActorOllama && actorProbeProtocol !== "openai_compat";
 
   const clerkProvider = store.byId(clerkSelection.providerId);
   const isClerkOllama = !clerkProvider || clerkProvider.type === "ollama";
+  const clerkProbeProtocol = clerkSelection.providerId
+    ? store.status[clerkSelection.providerId]?.result?.protocol
+    : undefined;
+  const isClerkNativeOllama = isClerkOllama && clerkProbeProtocol !== "openai_compat";
 
   // Check if Clerk uses same model as Actor
   const normTag = (m: string) => {
@@ -149,11 +165,76 @@ export const ModelDeck: React.FC<ModelDeckProps> = ({
   const isSameModelAsActor =
     normTag(clerkSelection.model) === normTag(actorSelection.model) &&
     (clerkSelection.providerId ?? null) === (actorSelection.providerId ?? null);
+  const clerkContextMatchesActor = clerkMirrorsActor || isSameModelAsActor;
+  const effectiveClerkContext = clerkContextMatchesActor ? actorContextSize : clerkContextSize;
+
+  useEffect(() => {
+    if (!isActorNativeOllama) setActorContextValid(true);
+  }, [isActorNativeOllama]);
+
+  useEffect(() => {
+    if (!isClerkNativeOllama || clerkContextMatchesActor) setClerkContextValid(true);
+  }, [isClerkNativeOllama, clerkContextMatchesActor]);
+
+  const actorInvalid =
+    (actorTempValid ? 0 : 1) +
+    (actorTokensValid ? 0 : 1) +
+    (isActorOllama && onActorKeepAlive && !actorKeepAliveValid ? 1 : 0) +
+    (isActorNativeOllama && onActorContextSize && !actorContextValid ? 1 : 0);
+  const clerkInvalid =
+    (clerkTempValid ? 0 : 1) +
+    (clerkTokensValid ? 0 : 1) +
+    (isClerkOllama && onClerkKeepAlive && !clerkMirrorsActor && !clerkKeepAliveValid ? 1 : 0) +
+    (isClerkNativeOllama && !clerkContextMatchesActor && onClerkContextSize && !clerkContextValid ? 1 : 0);
+  const vectorInvalid = (memNValid ? 0 : 1) + (memKValid ? 0 : 1) + (memFlagsValid ? 0 : 1);
+
+  const totalInvalid = actorInvalid + clerkInvalid + vectorInvalid;
+
+  useEffect(() => {
+    onInvalidChange?.(totalInvalid);
+  }, [totalInvalid, onInvalidChange]);
 
   // Summaries
-  const actorSummary = `Temp ${formatValue(actorTemp, 2)} · ${actorTokens} max tokens`;
-  const clerkSummary = `Temp ${formatValue(clerkTemp, 2)} · ${clerkTokens} max tokens`;
+  const actorSummary = isActorNativeOllama
+    ? `Temp ${formatValue(actorTemp, 2)} · ${actorTokens} max tokens · ${formatContextTokens(actorContextSize)} ctx`
+    : `Temp ${formatValue(actorTemp, 2)} · ${actorTokens} max tokens`;
+  const clerkSummary = isClerkNativeOllama
+    ? `Temp ${formatValue(clerkTemp, 2)} · ${clerkTokens} max tokens · ${formatContextTokens(effectiveClerkContext)} ctx`
+    : `Temp ${formatValue(clerkTemp, 2)} · ${clerkTokens} max tokens`;
   const vectorSummary = `Turns N=${workingMemoryTurns} · Chunks K=${episodicChunkSize} · Flags=${maxSceneFlags}`;
+
+  const actorHints: string[] = [];
+  if (isActorNativeOllama) {
+    if (actorContextSize - actorTokens < 2048) {
+      actorHints.push(
+        `Leaves under 2,048 tokens for prompt input (${actorTokens} max tokens in ${formatContextTokens(actorContextSize)} ctx); Zone 1–4 context may truncate.`
+      );
+    }
+    if (actorContextSize <= 12288 && workingMemoryTurns > 20) {
+      actorHints.push(
+        `Working Memory N=${workingMemoryTurns} often exceeds ${formatContextTokens(actorContextSize)} Actor context; consider 16k–32k+.`
+      );
+    }
+  }
+
+  const clerkHints: string[] = [];
+  if (isClerkNativeOllama) {
+    if (effectiveClerkContext - clerkTokens < 2048) {
+      clerkHints.push(
+        `Leaves under 2,048 tokens for Clerk prompts (${clerkTokens} max tokens in ${formatContextTokens(effectiveClerkContext)} ctx).`
+      );
+    }
+    if (!clerkContextMatchesActor && effectiveClerkContext <= 8192 && episodicChunkSize > 8) {
+      clerkHints.push(
+        `Chunk size K=${episodicChunkSize} episodic summaries can exceed an 8k Clerk context; consider 16k+ or K ≤ 8.`
+      );
+    }
+    if (!clerkContextMatchesActor && effectiveClerkContext <= 8192 && actorTokens >= 2048) {
+      clerkHints.push(
+        `Long Actor outputs (${actorTokens} max tokens) plus Clerk schema retries may crowd an 8k Clerk context.`
+      );
+    }
+  }
 
   return (
     <div className="model-deck-container">
@@ -189,6 +270,17 @@ export const ModelDeck: React.FC<ModelDeckProps> = ({
                 onCommit={onActorTokens || (() => {})}
                 onValidityChange={setActorTokensValid}
               />
+              {isActorNativeOllama && onActorContextSize && (
+                <NumericSliderField
+                  label="Context size (num_ctx)"
+                  value={actorContextSize}
+                  spec={contextSizeSpec("actor")}
+                  unit="tokens"
+                  disabled={isLocked}
+                  onCommit={onActorContextSize}
+                  onValidityChange={setActorContextValid}
+                />
+              )}
               {isActorOllama && onActorKeepAlive && (
                 <IntegerField
                   label="Ollama keep-alive"
@@ -201,6 +293,16 @@ export const ModelDeck: React.FC<ModelDeckProps> = ({
                   onValidityChange={setActorKeepAliveValid}
                 />
               )}
+              {actorHints.map((hint, idx) => (
+                <div
+                  key={idx}
+                  className="auth-warning-box"
+                  style={{ padding: "6px 8px", fontSize: "0.71rem", display: "flex", alignItems: "flex-start", gap: 6 }}
+                >
+                  <AlertTriangle size={13} style={{ color: "var(--accent-amber)", flexShrink: 0, marginTop: 1 }} />
+                  <span>{hint}</span>
+                </div>
+              ))}
             </div>
           }
         />
@@ -241,6 +343,23 @@ export const ModelDeck: React.FC<ModelDeckProps> = ({
                 onCommit={onClerkTokens || (() => {})}
                 onValidityChange={setClerkTokensValid}
               />
+              {isClerkNativeOllama && onClerkContextSize && (
+                clerkContextMatchesActor ? (
+                  <div className="provider-note" style={{ fontSize: "0.72rem", padding: "6px 8px" }}>
+                    Context size matches Primary Actor ({formatContextTokens(actorContextSize)} / {actorContextSize} tokens) to prevent Ollama model reloads.
+                  </div>
+                ) : (
+                  <NumericSliderField
+                    label="Context size (num_ctx)"
+                    value={clerkContextSize}
+                    spec={contextSizeSpec("clerk")}
+                    unit="tokens"
+                    disabled={isLocked}
+                    onCommit={onClerkContextSize}
+                    onValidityChange={setClerkContextValid}
+                  />
+                )
+              )}
               {isClerkOllama && onClerkKeepAlive && !clerkMirrorsActor && (
                 <IntegerField
                   label="Ollama keep-alive"
@@ -253,6 +372,16 @@ export const ModelDeck: React.FC<ModelDeckProps> = ({
                   onValidityChange={setClerkKeepAliveValid}
                 />
               )}
+              {clerkHints.map((hint, idx) => (
+                <div
+                  key={idx}
+                  className="auth-warning-box"
+                  style={{ padding: "6px 8px", fontSize: "0.71rem", display: "flex", alignItems: "flex-start", gap: 6 }}
+                >
+                  <AlertTriangle size={13} style={{ color: "var(--accent-amber)", flexShrink: 0, marginTop: 1 }} />
+                  <span>{hint}</span>
+                </div>
+              ))}
             </div>
           }
         />

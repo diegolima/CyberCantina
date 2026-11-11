@@ -34,6 +34,7 @@ from app.engine.mentions import decompose_user_message
 from app.engine.phase1_pre import run_phase1_pre_analysis
 from app.engine.phase2_context import (
     assemble_four_zone_messages,
+    resolve_actor_context_ceiling,
     resolve_character_previous_state,
     resolve_phase2_turn_context,
     was_character_present_on_turn,
@@ -987,6 +988,7 @@ async def _execute_turn_stream_events_unlocked(
             await asyncio.shield(p3_task)
 
     # PHASE 4: Narrative Prose Generation & Streaming
+    actor_ctx_ceiling, actor_reserved_out = resolve_actor_context_ceiling(eff_actor)
     messages = assemble_four_zone_messages(
         world=world,
         character=character,
@@ -1012,6 +1014,8 @@ async def _execute_turn_stream_events_unlocked(
         persona_snapshot=persona_snapshot,
         current_player_state=current_player_state,
         decomposed_message=decomposed_msg,
+        max_context_tokens=actor_ctx_ceiling,
+        reserved_output_tokens=actor_reserved_out,
     )
 
     primary_cognition = (

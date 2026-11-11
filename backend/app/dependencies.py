@@ -16,7 +16,13 @@ from app.auth import (
     SESSION_IDLE_TIMEOUT_SECONDS,
     generate_session_token,
 )
-from app.config import AgentDispatchMode, ModelProfile, settings
+from app.config import (
+    DEFAULT_ACTOR_CONTEXT_SIZE,
+    DEFAULT_CLERK_CONTEXT_SIZE,
+    AgentDispatchMode,
+    ModelProfile,
+    settings,
+)
 from app.db.repository import CantinaRepository
 from app.providers.resolver import ProviderUnavailableError, attach_endpoint, resolve_endpoint
 from app.schemas.auth import AuthSessionResponse, EffectiveWarning, UserProfile
@@ -172,8 +178,12 @@ def resolve_effective_models(user_id: str | None) -> EffectiveModels:
     actor = _finalize_profile(
         actor_src, "actor", user_id=user_id, from_user=actor_from_user, default=default_actor, warnings=warnings
     )
+    default_actor_ctx = default_actor.context_size or DEFAULT_ACTOR_CONTEXT_SIZE
+    if actor.context_size is None:
+        actor = actor.model_copy(update={"context_size": default_actor_ctx})
+
     if mirror:
-        # Mirroring covers provider + model only; the Clerk keeps its own sampling parameters.
+        # Mirroring shares provider, model, and Ollama context window to avoid runner reload thrashing.
         clerk = clerk_src.model_copy(
             update={
                 "provider_id": actor.provider_id,
@@ -182,14 +192,23 @@ def resolve_effective_models(user_id: str | None) -> EffectiveModels:
                 "api_key": actor.api_key,
                 "resolved": actor.resolved,
                 "run_on_cpu": False,
+                "context_size": actor.context_size,
             }
         )
     else:
         clerk = _finalize_profile(
             clerk_src, "clerk", user_id=user_id, from_user=clerk_from_user, default=default_clerk, warnings=warnings
         )
-        if clerk.run_on_cpu and not is_separate_clerk_model(actor, clerk, mirror):
-            clerk = clerk.model_copy(update={"run_on_cpu": False})
+        default_clerk_ctx = default_clerk.context_size or DEFAULT_CLERK_CONTEXT_SIZE
+        if clerk.context_size is None:
+            clerk = clerk.model_copy(update={"context_size": default_clerk_ctx})
+        if not is_separate_clerk_model(actor, clerk, mirror):
+            clerk = clerk.model_copy(
+                update={
+                    "run_on_cpu": False,
+                    "context_size": actor.context_size,
+                }
+            )
     return EffectiveModels(actor, clerk, wm_turns, delegate, max_flags, mirror, warnings)
 
 

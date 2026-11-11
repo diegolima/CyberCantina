@@ -221,6 +221,16 @@ class ProbeService:
         for key in [k for k in self._cache if k[0] == provider_id]:
             self._cache.pop(key, None)
 
+    def get_cached_protocol(self, provider_id: str) -> str | None:
+        """Return the last probed protocol ('ollama_native' | 'openai_compat') for a provider, if cached."""
+        latest_version = -1
+        latest_proto: str | None = None
+        for (pid, ver), (_ts, resp) in self._cache.items():
+            if pid == provider_id and ver >= latest_version:
+                latest_version = ver
+                latest_proto = resp.protocol
+        return latest_proto
+
     async def probe(
         self, record: ProviderRecord, store: ProviderStore, *, force: bool = False
     ) -> ProviderProbeResponse:

@@ -699,10 +699,53 @@ def test_ui_limits_match_backend_bounds() -> None:
     fields = ModelProfile.model_fields
     temp_meta = {type(m).__name__: m for m in fields["temperature"].metadata}
     tokens_meta = {type(m).__name__: m for m in fields["max_tokens"].metadata}
+    ctx_meta = {type(m).__name__: m for m in fields["context_size"].metadata}
     assert const("TEMPERATURE_HARD_MIN") == temp_meta["Ge"].ge
     assert const("TEMPERATURE_HARD_MAX") == temp_meta["Le"].le
     assert const("MAX_TOKENS_HARD_MIN") == tokens_meta["Ge"].ge
     assert const("MAX_TOKENS_HARD_MAX") == tokens_meta["Le"].le
+    assert const("CONTEXT_SIZE_HARD_MIN") == ctx_meta["Ge"].ge
+    assert const("CONTEXT_SIZE_HARD_MAX") == ctx_meta["Le"].le
+
+
+def test_role_context_defaults_and_legacy_backfill(env) -> None:
+    client, _repo, admin_h, make_user = env
+    fresh = AppSettings()
+    assert fresh.actor_profile.context_size == 12288
+    assert fresh.clerk_profile.context_size == 8192
+
+    legacy = AppSettings.model_validate(
+        {
+            "actor_profile": {"model": "llama3.1:8b"},
+            "clerk_profile": {"model": "qwen2.5:3b"},
+        }
+    )
+    assert legacy.actor_profile.context_size == 12288
+    assert legacy.clerk_profile.context_size == 8192
+
+    # Legacy user override row lacking context_size still receives role defaults on API read
+    alice_h, alice_id = make_user("alice")
+    prov = _create(client, admin_h, name="Sys").json()
+    with sqlite3.connect(settings.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO user_model_settings (user_id, actor_profile_json, clerk_profile_json, updated_at)
+            VALUES (?, ?, ?, '2026-01-01T00:00:00Z')
+            """,
+            (
+                alice_id,
+                json.dumps({"provider_id": prov["id"], "model": "llama3.1:8b"}),
+                json.dumps({"provider_id": prov["id"], "model": "qwen2.5:3b"}),
+            ),
+        )
+        conn.commit()
+    res = client.get("/api/profile/models", headers=alice_h)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["user_actor_profile"]["context_size"] == 12288
+    assert body["user_clerk_profile"]["context_size"] == 8192
+    assert body["effective_actor_profile"]["context_size"] == 12288
+    assert body["effective_clerk_profile"]["context_size"] == 8192
 
 
 # ------------------------------------------------- system providers are read-only for users

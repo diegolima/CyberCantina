@@ -1822,3 +1822,179 @@ async def test_scene_flags_fifo_cap_and_teleport_reset(
     finally:
         settings.memory_config.max_scene_flags = old_max
 
+
+def test_assemble_four_zone_trims_oldest_zone3_turns_to_protect_zone1(
+    temp_repo: CantinaRepository,
+) -> None:
+    """When context budget is tight, oldest Zone 3 turns drop first while Zone 1, Zone 2, and Zone 4 stay intact."""
+    from app.engine.phase2_context import (
+        estimate_messages_tokens,
+        resolve_actor_context_ceiling,
+    )
+    from app.schemas.turn import EpisodicChunkRecord
+
+    camp = temp_repo.get_campaign("camp_neon_rust_default")
+    bundle = temp_repo.get_campaign_state_bundle(camp.id)
+    world = temp_repo.get_world(camp.world_id)
+    char = bundle.character_records[camp.character_id]
+    turn0 = bundle.active_branch_turns[0]
+
+    chunk = EpisodicChunkRecord(
+        id="chunk_1",
+        campaign_id=camp.id,
+        start_turn_depth=0,
+        end_turn_depth=0,
+        leaf_turn_id=turn0.id,
+        summary_text="Opening scene established inside The Neon Rust.",
+        created_at="2026-01-01T00:00:00Z",
+    )
+
+    filler = "Neon rain drums against armored shutters along Sector 9. " * 25
+    turns = [turn0]
+    for idx in range(1, 6):
+        turns.append(
+            turn0.model_copy(
+                update={
+                    "id": f"turn_trim_{idx}",
+                    "depth_index": idx,
+                    "user_message": f"UNIQUE_USER_TURN_{idx}: {filler}",
+                    "raw_prose": f"UNIQUE_PROSE_TURN_{idx}: {filler}",
+                }
+            )
+        )
+
+    untrimmed = assemble_four_zone_messages(
+        world=world,
+        character=char,
+        branch_turns=turns,
+        episodic_chunks=[chunk],
+        active_location=bundle.active_location,
+        neighbors=bundle.neighbor_locations,
+        recalled_items=[],
+        pre_turn=turn0.pre_turn,
+        user_message="Latest user prompt.",
+        working_memory_turns=12,
+    )
+
+    # Pick a budget that fits Zone 1 + Zone 2 + Zone 4 + 2 newest Zone 3 turns, but NOT all 5 turns
+    base_and_two_newest = [
+        untrimmed[0],
+        untrimmed[1],
+        *untrimmed[-5:],  # 2 turns (4 msgs) + Zone 4
+    ]
+    target_input = estimate_messages_tokens(base_and_two_newest) + 50
+    max_ctx = target_input + 1024 + 256
+
+    trimmed = assemble_four_zone_messages(
+        world=world,
+        character=char,
+        branch_turns=turns,
+        episodic_chunks=[chunk],
+        active_location=bundle.active_location,
+        neighbors=bundle.neighbor_locations,
+        recalled_items=[],
+        pre_turn=turn0.pre_turn,
+        user_message="Latest user prompt.",
+        working_memory_turns=12,
+        max_context_tokens=max_ctx,
+        reserved_output_tokens=1024,
+    )
+
+    assert trimmed[0] == untrimmed[0]  # Zone 1 completely untouched
+    assert trimmed[1] == untrimmed[1]  # Zone 2 preserved
+    assert trimmed[-1] == untrimmed[-1]  # Zone 4 untouched
+    joined_z3 = "\n".join(m["content"] for m in trimmed[2:-1])
+    assert "UNIQUE_USER_TURN_1" not in joined_z3
+    assert "UNIQUE_USER_TURN_2" not in joined_z3
+    assert "UNIQUE_USER_TURN_5" in joined_z3
+    assert estimate_messages_tokens(trimmed) + 1024 + 256 <= max_ctx
+
+    # Impossible tiny budget drops Zone 3 & Zone 2 fallback, yet NEVER drops Zone 1 or Zone 4
+    tiny = assemble_four_zone_messages(
+        world=world,
+        character=char,
+        branch_turns=turns,
+        episodic_chunks=[chunk],
+        active_location=bundle.active_location,
+        neighbors=bundle.neighbor_locations,
+        recalled_items=[],
+        pre_turn=turn0.pre_turn,
+        user_message="Latest user prompt.",
+        working_memory_turns=12,
+        max_context_tokens=4096,
+        reserved_output_tokens=3000,
+    )
+    assert tiny == [untrimmed[0], untrimmed[-1]]
+    assert resolve_actor_context_ceiling is not None
+
+
+def test_resolve_actor_context_ceiling_skips_non_native_ollama_providers() -> None:
+    from app.config import ModelProfile
+    from app.engine.phase2_context import resolve_actor_context_ceiling
+    from app.providers.endpoint import ResolvedEndpoint
+    from app.providers.probe import probe_service
+    from app.schemas.provider import ProviderProbeResponse
+
+    # Legacy / native Ollama applies ceiling
+    native_p = ModelProfile(model="llama3.1:8b", context_size=12288, max_tokens=1024)
+    assert resolve_actor_context_ceiling(native_p) == (12288, 1024)
+
+    native_resolved = native_p.model_copy(
+        update={
+            "resolved": ResolvedEndpoint(
+                provider_id="prov_oll_native",
+                type="ollama",
+                root_url="http://localhost:11434",
+            )
+        }
+    )
+    assert resolve_actor_context_ceiling(native_resolved) == (12288, 1024)
+
+    # OpenRouter / AI Horde skip ceiling (hidden slider keeps default 12288 in JSON)
+    or_p = native_p.model_copy(
+        update={
+            "resolved": ResolvedEndpoint(
+                provider_id="prov_or",
+                type="openrouter",
+                root_url="https://openrouter.ai/api/v1",
+            )
+        }
+    )
+    assert resolve_actor_context_ceiling(or_p) == (None, 0)
+
+    horde_p = native_p.model_copy(
+        update={
+            "resolved": ResolvedEndpoint(
+                provider_id="prov_horde",
+                type="aihorde",
+                root_url="https://oai.stablehorde.net/v1",
+            )
+        }
+    )
+    assert resolve_actor_context_ceiling(horde_p) == (None, 0)
+
+    # Generic OpenAI-compat endpoint saved under type='ollama' skips ceiling when probed as openai_compat
+    probe_service._cache[("prov_vllm", 1)] = (
+        9999999999.0,
+        ProviderProbeResponse(
+            provider_id="prov_vllm",
+            reachable=True,
+            protocol="openai_compat",
+            probed_at="2026-01-01T00:00:00Z",
+        ),
+    )
+    try:
+        vllm_p = native_p.model_copy(
+            update={
+                "resolved": ResolvedEndpoint(
+                    provider_id="prov_vllm",
+                    type="ollama",
+                    root_url="http://localhost:8000",
+                )
+            }
+        )
+        assert resolve_actor_context_ceiling(vllm_p) == (None, 0)
+    finally:
+        probe_service.invalidate("prov_vllm")
+
+

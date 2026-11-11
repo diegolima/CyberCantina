@@ -22,6 +22,9 @@ SETTINGS_FILE_PATH = Path(
 
 AgentDispatchMode = Literal["sequential", "parallel"]
 
+DEFAULT_ACTOR_CONTEXT_SIZE = 12288
+DEFAULT_CLERK_CONTEXT_SIZE = 8192
+
 
 class ModelProfile(BaseModel):
     """Model role profile for Actor or Clerk: which provider + model, and sampling parameters.
@@ -68,6 +71,12 @@ class ModelProfile(BaseModel):
         ge=-1,
         le=1440,
         description="Ollama keep_alive duration in minutes (-1 for indefinite, 0 to unload immediately, default 30).",
+    )
+    context_size: int | None = Field(
+        default=None,
+        ge=4096,
+        le=262144,
+        description="Ollama context window (num_ctx) in tokens; None uses the role default (12288 Actor, 8192 Clerk).",
     )
 
 
@@ -151,6 +160,7 @@ class AppSettings(BaseModel):
             model=os.environ.get("ACTOR_MODEL", "llama3.1:8b"),
             temperature=0.8,
             max_tokens=1024,
+            context_size=DEFAULT_ACTOR_CONTEXT_SIZE,
         )
     )
     clerk_profile: ModelProfile = Field(
@@ -160,6 +170,7 @@ class AppSettings(BaseModel):
             model=os.environ.get("CLERK_MODEL", "llama3.1:8b"),
             temperature=0.2,
             max_tokens=768,
+            context_size=DEFAULT_CLERK_CONTEXT_SIZE,
         )
     )
     embedding_profile: EmbeddingProfile = Field(default_factory=EmbeddingProfile)
@@ -203,9 +214,13 @@ class AppSettings(BaseModel):
 
     @model_validator(mode="after")
     def enforce_byop_coupling(self) -> "AppSettings":
-        """BYOP implies per-user model overrides (a provider is useless without selectable models)."""
+        """BYOP implies per-user model overrides and backfills legacy missing role context defaults."""
         if self.allow_user_providers and not self.allow_user_model_overrides:
             self.allow_user_model_overrides = True
+        if self.actor_profile.context_size is None:
+            self.actor_profile.context_size = DEFAULT_ACTOR_CONTEXT_SIZE
+        if self.clerk_profile.context_size is None:
+            self.clerk_profile.context_size = DEFAULT_CLERK_CONTEXT_SIZE
         return self
 
 

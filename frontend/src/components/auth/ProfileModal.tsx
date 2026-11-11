@@ -27,6 +27,10 @@ import {
 } from "../../types";
 import { FeedbackModal } from "./FeedbackModal";
 import { ModelDeck } from "../models/ModelDeck";
+import {
+  DEFAULT_ACTOR_CONTEXT_SIZE,
+  DEFAULT_CLERK_CONTEXT_SIZE,
+} from "../models/modelLimits";
 import { ProvidersManager } from "../providers/ProvidersManager";
 import { ProvidersProvider, useProviders } from "../providers/ProvidersContext";
 
@@ -91,11 +95,13 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
   const [userActorTemp, setUserActorTemp] = useState(0.75);
   const [userActorTokens, setUserActorTokens] = useState(1024);
   const [userActorKeepAlive, setUserActorKeepAlive] = useState(30);
+  const [userActorContextSize, setUserActorContextSize] = useState(DEFAULT_ACTOR_CONTEXT_SIZE);
 
   const [userClerkModel, setUserClerkModel] = useState("");
   const [userClerkTemp, setUserClerkTemp] = useState(0.2);
   const [userClerkTokens, setUserClerkTokens] = useState(768);
   const [userClerkKeepAlive, setUserClerkKeepAlive] = useState(30);
+  const [userClerkContextSize, setUserClerkContextSize] = useState(DEFAULT_CLERK_CONTEXT_SIZE);
   const [userClerkRunOnCpu, setUserClerkRunOnCpu] = useState(false);
   const [userDelegateCognition, setUserDelegateCognition] = useState<boolean>(false);
 
@@ -160,11 +166,21 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
       setUserActorTemp(activeActor.temperature);
       setUserActorTokens(activeActor.max_tokens);
       setUserActorKeepAlive(activeActor.keep_alive_minutes ?? 30);
+      setUserActorContextSize(
+        activeActor.context_size ??
+          data.default_actor_profile.context_size ??
+          DEFAULT_ACTOR_CONTEXT_SIZE
+      );
 
       setUserClerkModel(activeClerk.model);
       setUserClerkTemp(activeClerk.temperature);
       setUserClerkTokens(activeClerk.max_tokens);
       setUserClerkKeepAlive(activeClerk.keep_alive_minutes ?? 30);
+      setUserClerkContextSize(
+        activeClerk.context_size ??
+          data.default_clerk_profile.context_size ??
+          DEFAULT_CLERK_CONTEXT_SIZE
+      );
       setUserClerkRunOnCpu(activeClerk.run_on_cpu ?? false);
 
       setUserWmTurns(
@@ -215,6 +231,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
           temperature: userActorTemp,
           max_tokens: userActorTokens,
           keep_alive_minutes: userActorKeepAlive,
+          context_size: userActorContextSize,
         },
         clerk_profile: {
           ...modelSettings.effective_clerk_profile,
@@ -224,6 +241,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
           max_tokens: userClerkTokens,
           run_on_cpu: userClerkRunOnCpu,
           keep_alive_minutes: userClerkKeepAlive,
+          context_size: userClerkContextSize,
         },
         working_memory_turns: userWmTurns,
         active_prompt_preset_id: userActivePresetId,
@@ -250,6 +268,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
     setUserActorTemp(modelSettings.default_actor_profile.temperature);
     setUserActorTokens(modelSettings.default_actor_profile.max_tokens);
     setUserActorKeepAlive(modelSettings.default_actor_profile.keep_alive_minutes ?? 30);
+    setUserActorContextSize(modelSettings.default_actor_profile.context_size ?? DEFAULT_ACTOR_CONTEXT_SIZE);
   };
 
   const handleResetClerk = () => {
@@ -259,6 +278,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
     setUserClerkTemp(modelSettings.default_clerk_profile.temperature);
     setUserClerkTokens(modelSettings.default_clerk_profile.max_tokens);
     setUserClerkKeepAlive(modelSettings.default_clerk_profile.keep_alive_minutes ?? 30);
+    setUserClerkContextSize(modelSettings.default_clerk_profile.context_size ?? DEFAULT_CLERK_CONTEXT_SIZE);
     setUserClerkMirrors(modelSettings.default_clerk_mirrors_actor ?? false);
     setUserClerkRunOnCpu(modelSettings.default_clerk_profile.run_on_cpu ?? false);
   };
@@ -268,7 +288,8 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
     userActorModel !== modelSettings?.default_actor_profile.model ||
     (userActorProviderId ?? null) !== (modelSettings?.default_actor_profile.provider_id ?? null) ||
     userActorTemp !== modelSettings?.default_actor_profile.temperature ||
-    userActorTokens !== modelSettings?.default_actor_profile.max_tokens;
+    userActorTokens !== modelSettings?.default_actor_profile.max_tokens ||
+    userActorContextSize !== (modelSettings?.default_actor_profile.context_size ?? DEFAULT_ACTOR_CONTEXT_SIZE);
 
   const isClerkOverridden =
     !!modelSettings?.user_clerk_profile ||
@@ -276,6 +297,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
     (userClerkProviderId ?? null) !== (modelSettings?.default_clerk_profile.provider_id ?? null) ||
     userClerkTemp !== modelSettings?.default_clerk_profile.temperature ||
     userClerkTokens !== modelSettings?.default_clerk_profile.max_tokens ||
+    userClerkContextSize !== (modelSettings?.default_clerk_profile.context_size ?? DEFAULT_CLERK_CONTEXT_SIZE) ||
     userClerkMirrors !== (modelSettings?.default_clerk_mirrors_actor ?? false);
 
   const handleResetModelOverrides = async () => {
@@ -292,10 +314,12 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
       setUserActorTemp(res.default_actor_profile.temperature);
       setUserActorTokens(res.default_actor_profile.max_tokens);
       setUserActorKeepAlive(res.default_actor_profile.keep_alive_minutes ?? 30);
+      setUserActorContextSize(res.default_actor_profile.context_size ?? DEFAULT_ACTOR_CONTEXT_SIZE);
       setUserClerkModel(res.default_clerk_profile.model);
       setUserClerkTemp(res.default_clerk_profile.temperature);
       setUserClerkTokens(res.default_clerk_profile.max_tokens);
       setUserClerkKeepAlive(res.default_clerk_profile.keep_alive_minutes ?? 30);
+      setUserClerkContextSize(res.default_clerk_profile.context_size ?? DEFAULT_CLERK_CONTEXT_SIZE);
       setUserClerkRunOnCpu(res.default_clerk_profile.run_on_cpu ?? false);
       setUserWmTurns(res.default_working_memory_turns);
       setUserDelegateCognition(res.default_delegate_cognition_to_clerk);
@@ -1779,6 +1803,8 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
                     onActorTokens={setUserActorTokens}
                     actorKeepAlive={userActorKeepAlive}
                     onActorKeepAlive={setUserActorKeepAlive}
+                    actorContextSize={userActorContextSize}
+                    onActorContextSize={setUserActorContextSize}
                     actorOverridden={isActorOverridden}
                     onResetActor={handleResetActor}
                     clerkSelection={{
@@ -1799,6 +1825,8 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
                     onClerkTokens={setUserClerkTokens}
                     clerkKeepAlive={userClerkKeepAlive}
                     onClerkKeepAlive={setUserClerkKeepAlive}
+                    clerkContextSize={userClerkContextSize}
+                    onClerkContextSize={setUserClerkContextSize}
                     clerkMirrorsActor={userClerkMirrors}
                     onToggleClerkMirror={setUserClerkMirrors}
                     clerkRunOnCpu={userClerkRunOnCpu}

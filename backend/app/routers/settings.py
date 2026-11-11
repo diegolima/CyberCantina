@@ -6,7 +6,14 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import get_current_user, require_admin
-from app.config import AppSettings, ModelProfile, persist_settings, settings
+from app.config import (
+    DEFAULT_ACTOR_CONTEXT_SIZE,
+    DEFAULT_CLERK_CONTEXT_SIZE,
+    AppSettings,
+    ModelProfile,
+    persist_settings,
+    settings,
+)
 from app.db.vector_store import current_embedding_fingerprint
 from app.dependencies import (
     get_effective_agent_dispatch_mode,
@@ -135,11 +142,20 @@ async def reindex_embeddings(_admin: UserProfile = Depends(require_admin)) -> di
     return {"reindexed": updated}
 
 
-def _public_profile(profile: ModelProfile, user: UserProfile) -> ModelProfile:
-    """Endpoint URLs are only for admins; everyone else identifies the endpoint by provider_id."""
-    if user.role == "admin":
+def _with_role_context_default(profile: ModelProfile, fallback_ctx: int) -> ModelProfile:
+    if profile.context_size is not None:
         return profile
-    return profile.model_copy(update={"base_url": "", "resolved": None})
+    return profile.model_copy(update={"context_size": fallback_ctx})
+
+
+def _public_profile(
+    profile: ModelProfile, user: UserProfile, *, fallback_ctx: int | None = None
+) -> ModelProfile:
+    """Endpoint URLs are only for admins; everyone else identifies the endpoint by provider_id."""
+    resolved = _with_role_context_default(profile, fallback_ctx) if fallback_ctx is not None else profile
+    if user.role == "admin":
+        return resolved
+    return resolved.model_copy(update={"base_url": "", "resolved": None})
 
 
 def _sanitize_user_profile(
@@ -151,12 +167,17 @@ def _sanitize_user_profile(
     path), a missing provider inherits the system default's, and the provider must be visible to
     the caller right now.
     """
+    fallback_ctx = (
+        default.context_size
+        or (DEFAULT_ACTOR_CONTEXT_SIZE if role == "actor" else DEFAULT_CLERK_CONTEXT_SIZE)
+    )
     clean = profile.model_copy(
         update={
             "base_url": default.base_url,
             "api_key": default.api_key,
             "resolved": None,
             "provider_id": profile.provider_id or default.provider_id,
+            "context_size": profile.context_size if profile.context_size is not None else fallback_ctx,
         }
     )
     if clean.provider_id:
@@ -190,21 +211,23 @@ def get_profile_models(
         or user_override.persona_disclosure_mode is not None
         or user_override.clerk_mirrors_actor is not None
     )
+    actor_ctx_fallback = settings.actor_profile.context_size or DEFAULT_ACTOR_CONTEXT_SIZE
+    clerk_ctx_fallback = settings.clerk_profile.context_size or DEFAULT_CLERK_CONTEXT_SIZE
     return ProfileModelSettingsResponse(
         allow_user_model_overrides=settings.allow_user_model_overrides,
         allow_user_providers=settings.allow_user_providers,
         warnings=eff.warnings,
         has_override=has_override,
-        effective_actor_profile=_public_profile(eff.actor, current_user),
-        effective_clerk_profile=_public_profile(eff.clerk, current_user),
+        effective_actor_profile=_public_profile(eff.actor, current_user, fallback_ctx=actor_ctx_fallback),
+        effective_clerk_profile=_public_profile(eff.clerk, current_user, fallback_ctx=clerk_ctx_fallback),
         effective_working_memory_turns=eff.working_memory_turns,
         effective_delegate_cognition_to_clerk=eff.delegate_cognition_to_clerk,
         effective_max_scene_flags=eff.max_scene_flags,
         effective_agent_dispatch_mode=eff_dispatch,
         effective_persona_disclosure_mode=eff_pdm,
         effective_clerk_mirrors_actor=eff.clerk_mirrors_actor,
-        user_actor_profile=_public_profile(user_override.actor_profile, current_user) if user_override and user_override.actor_profile else None,
-        user_clerk_profile=_public_profile(user_override.clerk_profile, current_user) if user_override and user_override.clerk_profile else None,
+        user_actor_profile=_public_profile(user_override.actor_profile, current_user, fallback_ctx=actor_ctx_fallback) if user_override and user_override.actor_profile else None,
+        user_clerk_profile=_public_profile(user_override.clerk_profile, current_user, fallback_ctx=clerk_ctx_fallback) if user_override and user_override.clerk_profile else None,
         user_working_memory_turns=user_override.working_memory_turns if user_override else None,
         user_delegate_cognition_to_clerk=user_override.delegate_cognition_to_clerk if user_override else None,
         user_max_scene_flags=user_override.max_scene_flags if user_override else None,
@@ -212,8 +235,8 @@ def get_profile_models(
         user_persona_disclosure_mode=user_override.persona_disclosure_mode if user_override else None,
         user_clerk_mirrors_actor=user_override.clerk_mirrors_actor if user_override else None,
         active_prompt_preset_id=user_override.active_prompt_preset_id if user_override else None,
-        default_actor_profile=_public_profile(settings.actor_profile, current_user),
-        default_clerk_profile=_public_profile(settings.clerk_profile, current_user),
+        default_actor_profile=_public_profile(settings.actor_profile, current_user, fallback_ctx=actor_ctx_fallback),
+        default_clerk_profile=_public_profile(settings.clerk_profile, current_user, fallback_ctx=clerk_ctx_fallback),
         default_working_memory_turns=settings.memory_config.working_memory_turns,
         default_delegate_cognition_to_clerk=settings.delegate_cognition_to_clerk,
         default_max_scene_flags=settings.memory_config.max_scene_flags,
