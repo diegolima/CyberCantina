@@ -1,103 +1,108 @@
 # CyberCantina
 
-**CyberCantina** is an agentic AI roleplay framework designed as a next-generation successor to SillyTavern. Instead of treating LLMs as stateless text-completion wrappers, CyberCantina orchestrates a **5-Phase Canonical Cognitive Turn Pipeline**, a **Branch-Safe Spatial & World State Graph**, **3-Tier Episodic + Vector Memory**, and **AI Creation Wizards**.
+**CyberCantina** is a local-first, self-hosted AI roleplay engine built around living worlds, persistent character psychology, and tabletop storytelling tools.
 
-📖 **Read our [Core Vision & Philosophy](VISION.md)** for an in-depth breakdown of our architectural tenets, KV-cache optimization strategy, multi-agent interiority model, and open-source roadmap.
+> **Alpha Release:** CyberCantina is in active public alpha. Features, interfaces, and schemas are evolving quickly—feedback and bug reports are welcome in [GitHub Issues](https://github.com/diegolima/CyberCantina/issues).
 
-## Core Architecture
+---
 
-### Authoring Layer: AI Wizards
-- **Character Wizard (`1.1 Character`):** Expands brief character concepts into a static `core_persona`, `voice_anchors`, baseline psychological state (`valence`, `arousal`, `core_drive`, `core_fear`), and atomic `memory_shards` indexed directly into the semantic vector store.
-- **World & Spatial Graph Wizard (`1.2 World Graph`):** Generates world rules, custom/ISO calendars, lore entries, and an initial topology of interconnected `LocationNode` and `LocationEdge` objects.
+## A Different Approach to AI Roleplay
 
-### Runtime Pipeline: 5-Phase Canonical Turn Execution
-1. **Phase 1: Auxiliary Pre-Processor & Mechanics Engine (`phase1_pre.py`)**
-   - Analyzes user sentiment/subtext, extracts referenced entities, generates semantic RAG queries, detects spatial movement intent, and triggers native **d20 RNG / Dice Mechanics** when risky actions are attempted.
-2. **Phase 2: 4-Zone KV-Cache-Preserving Context Assembler (`phase2_context.py`)**
-   - Keeps **Zone 1 (Static Prefix)** and **Zone 2 (Chunked Episodic Summaries)** strictly stable at the top of the prompt while injecting dynamic turn state (World Clock, 1-hop Spatial Neighbors, RAG memories, RNG results, and previous affect state) in **Zone 4 (Ephemeral Tail Frame)** to maximize KV-cache hit rates.
-3. **Phase 3: Per-Character Multi-Cognition Swarm (`phase3_cognition.py`)**
-   - Runs independent, concurrent cognitive evaluations for present characters emitting structured `<cognition>` blocks (`<recall>`, `<feeling>`, `<want>`, `<plan>`) before dialogue or action takes place.
-4. **Phase 4: Narrative Prose Generation & Dual SSE Streaming (`phase4_prose.py`)**
-   - Synthesizes rich literary prose guided by established character cognitions and choices, streaming both interior thoughts and narrative prose over independent channels.
-5. **Phase 5: Async Post-Turn Clerk & State Engine (`phase5_clerk.py` & `character_agent.py`)**
-   - Runs asynchronously after generation to advance the **World Clock**, update character locations (or dynamically improvise and link newly discovered `LocationNode` rooms in the spatial graph), arbitrate inventory transactions, extract memory shards into vector storage, and compress overflowing working memory turns into **Episodic Chunks**.
-   - Every state snapshot, improvised location, and episodic memory is indexed to the **Turn Tree**, so swiping (regenerating), rewinding, or branching rolls back world state and memories instantaneously without corruption.
+Most AI roleplay interfaces rely solely on a chat transcript and a single prompt—so inventories, locations, passage of time, and character emotions only exist for as long as they stay inside recent text.
 
-## Quick Start
+CyberCantina takes a different approach by giving your models a persistent world around the conversation:
 
-### Option 1: Docker (Alpha Test / Pre-Built Images)
+* **Characters Think & Feel Over Time:** Behind every reply, characters evaluate the scene privately, carry persistent goals, and shift in mood, composure, trust, and grievances across your campaign rather than resetting emotionally every few messages.
+* **Room Privacy & Private Whispers:** Characters only perceive events in the room they are standing in. Address specific characters privately or over remote comms with `@Character:` without leaking secrets to the rest of the cast.
+* **Real State Outside the Prose:** Equipped items, carried inventory, connected rooms, travel times, and an advancing in-world clock stay tracked independently of the narrative text.
+* **Branch-Safe Timelines:** Rewind, edit, or swipe any turn to explore *"what if"* paths without corrupting character memories, inventories, or relationships across branches.
+* **Tabletop Directing Tools:** Let `d20` checks decide risky actions (`Auto`, `Forced`, or `Disabled`), steer character decisions with gated **Director Choices** (`/choice`), or pace scenes neutrally with **Narrator** commands (`/look`, `/wait`, `/complication`).
 
-The easiest way to test CyberCantina without installing Python or Node development environments is using our pre-built alpha containers. Note that at this stage, releases do not follow a fixed schedule—new images may be published months, weeks, or minutes apart as features and fixes land.
+---
+
+## Key Features
+
+* **Built-In Showcase Campaign:** Start playing immediately with *Midnight at the Neon Rust* (Sector 9 & Kira Vance) already set up on first launch.
+* **AI Creation Wizards & Magic Wand:** Turn brief concepts into interconnected multi-room worlds and deep characters with voice anchors, memories, and 8 dynamic emotion portrait slots.
+* **Player Personas with Secrets:** Create player identities with custom gear and hidden backstory/items that characters only learn when revealed in-scene (or spread through witness gossip).
+* **Import & Share:** Share exact, lossless `.zcc` bundles of worlds, characters, and personas—or import existing `.png` / `.json` character cards (experimental).
+* **Live Inspector & Interactive Map:** Watch character moods, stances, recalled memories, and timeline branches in real time, or expand the zoomable map to edit rooms and fix drift.
+* **Local, Cloud, or Hybrid Models:** Run 100% locally via Ollama or OpenAI-compatible servers, connect OpenRouter or AI Horde, mix a cloud **Actor** with a local `3B–8B` Ollama **Clerk** to cut token costs, or test without a GPU using built-in offline simulation.
+* **Self-Hosted & Multi-User Ready:** Use passwordless single-user local mode or enable multi-user accounts with Argon2id passwords, WebAuthn Passkeys, and optional Bring Your Own Provider (BYOP) policies.
+
+---
+
+## Quick Start (Docker)
+
+### 1. Download and Start
 
 ```bash
-docker compose up -d
-```
-
-Or run directly without cloning the repository:
-```bash
-curl -O https://raw.githubusercontent.com/diegolima/cybercantina/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/diegolima/CyberCantina/main/docker-compose.yml
 docker compose up -d
 ```
 
 Open **`http://localhost:3000`** in your browser.
 
-To pull the latest alpha release at any time:
+To update to the latest alpha images later:
+
 ```bash
 docker compose pull && docker compose up -d
 ```
 
----
+### 2. First Launch Setup
 
-### Option 2: Local Development (Build from Source)
+1. **Create Your Admin Account:** Complete the **Initial Admin Setup** screen (leave the password blank for local single-user mode, or set a password for multi-user logins and passkeys).
+2. **Connect a Provider:** Open **Admin Settings → Providers** and add your LLM server (Ollama, an OpenAI-compatible server, OpenRouter, or AI Horde).
+3. **Pick Your Models:** Open **Admin Settings → Models** and select models for the **Actor** (prose) and **Clerk** (background state and character thinking).
+   * *No LLM server yet?* Enable **Allow heuristic offline simulation if a provider is unreachable** under **Admin Settings → Models → LLM Resilience & Fallback** to explore the full interface offline.
+4. **Start Playing:** Launch the built-in *Midnight at the Neon Rust* campaign from the Home screen, or create your own world and cast.
 
-#### With Docker Compose:
+### Recommended Ollama Setup
+
+CyberCantina pairs a creative **Actor** model with a lightweight **Clerk** model (for example `qwen2.5:3b` or `llama3.2:3b`). Keeping **at least two models loaded in memory** avoids slow model-swapping delays on every turn:
+
 ```bash
-docker compose -f docker-compose.dev.yml up --build
-```
-Open **`http://localhost:3000`**.
-
-#### Without Docker:
-
-**1. Backend (Python / FastAPI)**
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-uvicorn app.main:app --reload --port 8000
+OLLAMA_MAX_LOADED_MODELS=2 ollama serve
 ```
 
-**2. Frontend (React / TypeScript / Vite)**
-```bash
-cd frontend
-npm install
-npm run dev
-```
-Open **`http://localhost:5173`**.
+* **Linux Docker note:** Allow your container to reach Ollama on the host with:
+  ```bash
+  OLLAMA_HOST=0.0.0.0:11434 OLLAMA_MAX_LOADED_MODELS=2 ollama serve
+  ```
+* **Tight VRAM or hybrid setups:** You can enable **Clerk Mirrors Actor** to share one model, offload the Clerk to CPU, or pair a cloud Actor with a local `3B–8B` Ollama Clerk (requiring only 1 local model loaded).
+
+> Building from source or customizing `.env`? See **[Installation & Setup](https://github.com/diegolima/CyberCantina/wiki/Installation-and-Setup)** in the Wiki.
 
 ---
 
-### Model Setup & Ollama Recommendations
+## Documentation & Wiki
 
-1. **Accessing the Studio:** Open `http://localhost:3000` (Docker) or `http://localhost:5173` (Vite dev).
-2. **Configure Providers:** Go to **Admin Settings → Providers** to connect your model servers (e.g., local Ollama or hosted OpenAI-compatible endpoints), then pick a provider and model for the **Actor** and **Clerk** in **Models**. Admins can let users bring their own private providers (BYOP).
-3. **Allow Two Simultaneous Models (Crucial for CPU SLM + Actor):**
-   CyberCantina's 5-phase pipeline pairs a creative **Actor** (narrative prose) with an analytical **Clerk** (state updates, memory extraction, and character cognition, often running on a lightweight CPU SLM like `qwen2.5:3b` or `llama3.2:3b`).
-   To avoid costly model-swapping latency on every turn, ensure your model server keeps **at least two models loaded in memory simultaneously**:
-   * For **Ollama**, launch with:
-     ```bash
-     OLLAMA_MAX_LOADED_MODELS=2 ollama serve
-     ```
-   * **Linux Docker Note:** If running CyberCantina inside Docker with a host Ollama instance on Linux, configure Ollama to bind to all interfaces so the container can reach it via `host.docker.internal`:
-     ```bash
-     OLLAMA_HOST=0.0.0.0:11434 OLLAMA_MAX_LOADED_MODELS=2 ollama serve
-     ```
-4. **Security & Secrets:** Provider tokens are encrypted at rest with an auto-generated key (`/data/.cantina_secret.key` in Docker, or `backend/.cantina_secret.key` in local dev, configurable via `CYBERCANTINA_SECRET_KEY`). Back this key up alongside your database.
-5. **Offline Mock Mode:** You can also enable the built-in **Heuristic / Mock Offline Fallback** in Settings to test the full 5-phase pipeline without an active LLM server.
+Explore the **[CyberCantina Wiki](https://github.com/diegolima/CyberCantina/wiki)** for full user guides, hosting instructions, and technical architecture docs:
+
+### Getting Started & Hosting
+* [Installation & Setup](https://github.com/diegolima/CyberCantina/wiki/Installation-and-Setup) — Docker, building from source (`Python >= 3.14` & Node 22), environment variables, and backups.
+* [Providers, Models & Embeddings](https://github.com/diegolima/CyberCantina/wiki/Providers-Models-and-Embeddings) — Ollama, OpenRouter, AI Horde, hybrid setups, and vector search tuning.
+* [Authentication, Multi-User & Security](https://github.com/diegolima/CyberCantina/wiki/Authentication-Multi-User-and-Security) — Passwords, passkeys, BYOP policies, encryption at rest, and network safety.
+
+### Playing & Authoring
+* [First Campaign & Interface Tour](https://github.com/diegolima/CyberCantina/wiki/First-Campaign-and-Interface-Tour) — Home Deck, built-in showcase campaign, and workspace tour.
+* [Authoring Worlds, Characters & Personas](https://github.com/diegolima/CyberCantina/wiki/Authoring-Worlds-Characters-and-Personas) — AI Wizards, Magic Wand, emotion portraits, lore, and player secrets.
+* [Importing & Exporting](https://github.com/diegolima/CyberCantina/wiki/Importing-and-Exporting) — Experimental character card imports and lossless `.zcc` archives.
+* [Playing, Directing & Mechanics](https://github.com/diegolima/CyberCantina/wiki/Playing-Directing-and-Mechanics) — `@Character:` whispers, Narrator slash commands, `/choice` directing, and `d20` tiers.
+* [Live Inspector, Map & Timeline](https://github.com/diegolima/CyberCantina/wiki/Live-Inspector-Map-and-Timeline) — Interactive map editing, character dossiers, episodic summaries, and branch checkout.
+* [Prompt Customization & Presets](https://github.com/diegolima/CyberCantina/wiki/Prompt-Customization-and-Presets) — Customizing templates and prompt presets.
+
+### Architecture & Contributing
+* [Core Vision & Philosophy](VISION.md) — High-level design tenets and community principles.
+* [Architecture: 5-Phase Turn Pipeline](https://github.com/diegolima/CyberCantina/wiki/Architecture-Turn-Pipeline)
+* [Architecture: Context, Memory & State](https://github.com/diegolima/CyberCantina/wiki/Architecture-Context-Memory-and-State)
+* [Architecture: CARE Affective Engine](https://github.com/diegolima/CyberCantina/wiki/Architecture-CARE-Affective-Engine)
+* [Developer Guide & Roadmap](https://github.com/diegolima/CyberCantina/wiki/Developer-Guide-and-Roadmap)
+
+---
 
 ## License
 
 This project is licensed under the **GNU Affero General Public License v3.0 or later** ([AGPL-3.0-or-later](LICENSE)).
 
 Commercial use is permitted under the terms of the AGPLv3: anyone who distributes or runs CyberCantina over a network must provide the complete source code, including all modifications and customizations.
-
