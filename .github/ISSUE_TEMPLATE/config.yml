@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: CyberCantina Documentation & Wiki
+    url: https://github.com/diegolima/CyberCantina/wiki
+    about: Setup guides, Ollama/Docker tips, and architecture docs before opening a report.

@@ -1,0 +1,113 @@
+name: Bug Report
+description: Report a crash, UI issue, import error, or broken campaign/character behavior
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug during CyberCantina's alpha!
+        Fill in what you know—if something doesn't apply (e.g., an install error has no models yet), leave it blank or pick **N/A**.
+        **Privacy check:** Never paste API keys, `.cantina_secret.key`, passwords, or raw `cybercantina.db` files.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected Area
+      description: Which part of CyberCantina was involved?
+      options:
+        - Turn Pipeline & Replies (prose streaming, swipes, branches)
+        - Character Mind, CARE Psychology & Privacy (moods, trust, recall, @whispers, rooms)
+        - World State, Spatial Map, Items & d20 Mechanics (inventory, clock, /choice, /look)
+        - AI Wizards & Magic Wand (character/world creation)
+        - Import / Export (.zcc bundles or SillyTavern .png / .json cards)
+        - Providers, Models & Embeddings (Ollama, OpenRouter, AI Horde, offline mode)
+        - Prompts & Presets
+        - UI, Live Inspector & Modals
+        - Auth, Passkeys, Multi-User & BYOP
+        - Installation, Docker & Startup
+        - Other / Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running CyberCantina?
+      options:
+        - Docker Compose (prebuilt alpha images)
+        - Docker Compose (local build / docker-compose.dev.yml)
+        - From source (Python + Node)
+        - Other / Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Impact
+      options:
+        - Won't start / completely blocked
+        - Campaign state or branch corrupted / data lost
+        - Feature fails or AI state drifts (workaround exists)
+        - UI / visual / minor annoyance
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened vs. what you expected
+      description: Briefly describe what went wrong. If this happened during play, note whether the issue is in the **rendered prose**, the **Live Inspector / Agent Changes**, or both.
+      placeholder: |
+        Actual: Character replied as if she still held the keycard even though I took it last turn, and Live Inspector still shows it in her inventory.
+        Expected: Keycard transfers to player inventory after Phase 5 clerk arbitration.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal steps for someone else (or an agent) to trigger the same issue. Note if you used the built-in *Midnight at the Neon Rust* campaign or a custom world/card.
+      placeholder: |
+        1. Start a campaign in Midnight at the Neon Rust
+        2. Send "@Kira: Meet me outside" or trigger /choice
+        3. Swipe/branch or inspect the turn...
+    validations:
+      required: true
+
+  - type: input
+    id: models
+    attributes:
+      label: Provider & Model Setup (Actor / Clerk / Embeddings)
+      description: Leave blank if not applicable (e.g., startup/UI-only bugs). Mention if **Clerk Mirrors Actor**, **Clerk CPU offload**, or **Offline heuristic fallback** is enabled.
+      placeholder: "e.g., Ollama | Actor: gemma3:12b | Clerk: qwen2.5:3b | Embeddings: nomic-embed-text"
+
+  - type: input
+    id: environment
+    attributes:
+      label: OS, Browser & Image/Commit (optional)
+      placeholder: "e.g., Ubuntu 24.04 / Firefox 132 / alpha image pulled 2026-11-12 or git SHA"
+
+  - type: textarea
+    id: inspector_state
+    attributes:
+      label: Live Inspector, Cognition, or Agent Changes Snapshot (optional)
+      description: If relevant, paste character cognition (`feeling` / `recall` / `plan`), Agent Changes modal output, or `.zcc` / card details (redacted).
+      render: text
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Backend Logs or Browser Console Errors (optional)
+      description: "Docker tip: `docker compose logs cybercantina-backend --tail=100` (remove any sensitive text first)."
+      render: text
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Confirmation
+      options:
+        - label: I removed any API keys, credentials, or private data I don't want published publicly.
+          required: true

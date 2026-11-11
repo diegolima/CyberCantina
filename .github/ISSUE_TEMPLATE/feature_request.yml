@@ -1,0 +1,53 @@
+name: Feature Request
+description: Propose a new capability, workflow improvement, or simulation mechanic
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Target Domain
+      options:
+        - Turn Pipeline & Tabletop Mechanics (d20, /commands, choices, pacing)
+        - Character Psychology & Memory (CARE, RAG, room privacy, gossip)
+        - World Graph, Spatial Map & Inventory
+        - AI Wizards, Magic Wand & Import/Export
+        - Providers, Local Performance & KV-Cache
+        - UI, Live Inspector & Authoring Editors
+        - Auth, Multi-User, Security & Backups
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem or storytelling friction does this solve?
+      description: Describe the pain point or missing capability before jumping to a specific UI/API design.
+      placeholder: "e.g., In long campaigns it's hard to see when a prompt is close to my local model's context limit before summaries start clipping."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Behavior / Experience
+      description: How should this work from a player's, world-author's, or admin's perspective?
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: invariants
+    attributes:
+      label: Design Fit (optional — helps triage against CyberCantina's architecture)
+      options:
+        - label: Needs to stay branch-safe across turn swipes, edits, and timeline checkouts
+        - label: Must respect room isolation / private whispers / hidden persona secrets
+        - label: Should work 100% locally (Ollama / OpenAI-compatible) without requiring cloud APIs
+        - label: Must avoid breaking small local Clerk models (3B–8B) or prefix KV-cache stability
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives, Mockups, or Examples (optional)
+      description: Links, screenshots, or workarounds you've tried.
