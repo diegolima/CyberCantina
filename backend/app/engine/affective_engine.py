@@ -282,14 +282,21 @@ def derive_active_emotion(
     dominance: float,
     ambiguity: float = 0.0,
     primary_edge: RelationalEdge | None = None,
+    prior_emotion: ValidEmotion = "default",
 ) -> ValidEmotion:
-    """Deterministically derive a VALID_EMOTIONS portrait key from PAD + appraisal + target edge."""
+    """Deterministically derive a VALID_EMOTIONS portrait key from PAD + appraisal + target edge.
+
+    Includes Schmitt-trigger hysteresis bands when `prior_emotion` is provided so coordinates
+    hovering near decision boundaries do not flicker rapidly between expressions.
+    """
     mag = pad_radial_magnitude(valence, arousal, dominance)
     edge_w = primary_edge.warmth if primary_edge is not None else 0.0
     edge_r = primary_edge.respect if primary_edge is not None else 0.0
 
-    # High-shock surprise overrides when ambiguity and activation both spike
+    # High-shock surprise overrides when ambiguity and activation both spike (with hold hysteresis)
     if ambiguity >= 0.65 and arousal >= 0.58:
+        return "surprised"
+    if prior_emotion == "surprised" and ambiguity >= 0.48 and arousal >= 0.50:
         return "surprised"
 
     # Strong interpersonal contempt / disgust even at moderate somatic arousal
@@ -299,17 +306,29 @@ def derive_active_emotion(
         return "contempt"
 
     # Calm / neutral core prevents near-zero coordinates from flickering extreme expressions
-    if mag < 0.25:
+    neutral_cutoff = 0.20 if prior_emotion != "default" else 0.25
+    if mag < neutral_cutoff:
         return "default"
 
-    if valence >= 0.26:
+    happy_cutoff = 0.19 if prior_emotion == "happy" else 0.26
+    if valence >= happy_cutoff:
         return "happy"
 
-    if valence <= -0.20:
-        if arousal >= 0.52:
-            # Dominance cleanly separates Anger (+D) from Fear (-D)
+    neg_cutoff = (
+        -0.15
+        if prior_emotion in ("angry", "afraid", "sad", "contempt", "disgusted")
+        else -0.20
+    )
+    if valence <= neg_cutoff:
+        high_arousal_cutoff = 0.46 if prior_emotion in ("angry", "afraid") else 0.52
+        if arousal >= high_arousal_cutoff:
+            # Dominance cleanly separates Anger (+D) from Fear (-D) with hysteresis dead-band
+            if prior_emotion == "angry":
+                return "angry" if dominance >= -0.04 else "afraid"
+            if prior_emotion == "afraid":
+                return "angry" if dominance >= 0.14 else "afraid"
             return "angry" if dominance >= 0.05 else "afraid"
-        if dominance >= 0.25:
+        if dominance >= (0.18 if prior_emotion == "contempt" else 0.25):
             return "contempt"
         if dominance <= -0.45 and arousal >= 0.40:
             return "afraid"
@@ -353,6 +372,29 @@ def describe_pad_disposition(
     pos_v = valence >= 0.0
     high_a = arousal >= 0.48
     pos_d = dominance >= 0.0
+
+    # Near-zero valence axis buffer (-0.08 < V < 0.08) prevents small coordinate jitter
+    # from flipping between exuberant warmth and combative irritation.
+    if abs(valence) < 0.08:
+        if high_a:
+            if pos_d:
+                return (
+                    "Focused and alert",
+                    "Heightened, alert focus; actively commanding the pace of the exchange without hostility.",
+                )
+            return (
+                "Taut and watchful",
+                "Keyed up and closely watching every movement in the room with cautious intensity.",
+            )
+        if pos_d:
+            return (
+                "Measured and self-possessed",
+                "Even-tempered, observant, and quietly self-possessed.",
+            )
+        return (
+            "Quiet and guarded",
+            "Subdued, observant, and keeping a careful, measured distance.",
+        )
 
     if pos_v and high_a and pos_d:
         if intense:
@@ -718,6 +760,7 @@ def _refresh_derived_care_fields(
         dominance=care.dominance,
         ambiguity=care.appraisal.ambiguity,
         primary_edge=primary_edge,
+        prior_emotion=care.active_emotion,
     )
     demeanor = describe_outward_demeanor(
         valence=care.valence,
@@ -1189,9 +1232,14 @@ def _gottman_influence(
     return 0.0
 
 
-def _weber_fechner_step(current: float, delta: float) -> float:
+def _weber_fechner_step(
+    current: float,
+    delta: float,
+    *,
+    max_step: float = 0.88,
+) -> float:
     """Asymmetric boundary-damped integration ('betrayal from a trusted ally cuts deepest')."""
-    clamped_delta = _clamp(delta, -0.88, 0.88)
+    clamped_delta = _clamp(delta, -max_step, max_step)
     if clamped_delta >= 0.0:
         return _clamp(current + (1.0 - current) * clamped_delta, -1.0, 1.0)
     return _clamp(current + (1.0 + current) * clamped_delta, -1.0, 1.0)
@@ -1222,7 +1270,7 @@ def apply_gottman_relational_event(
         s_pos=s_pos,
         s_neg=s_neg * 0.75,
     )
-    new_r = _weber_fechner_step(edge.respect, one_minus_r * inf_r)
+    new_r = _weber_fechner_step(edge.respect, one_minus_r * inf_r, max_step=0.55)
 
     eff_u_w = u_w
     if temperament.archetype == "proud_rival" and u_w > 0.0 and new_r < 0.10:
@@ -1236,7 +1284,7 @@ def apply_gottman_relational_event(
         s_pos=s_pos,
         s_neg=s_neg,
     )
-    new_w = _weber_fechner_step(edge.warmth, one_minus_r * inf_w)
+    new_w = _weber_fechner_step(edge.warmth, one_minus_r * inf_w, max_step=0.55)
 
     inf_t = _gottman_influence(
         u_t,
@@ -1246,7 +1294,7 @@ def apply_gottman_relational_event(
         s_pos=s_pos,
         s_neg=s_neg,
     )
-    new_t = _weber_fechner_step(edge.trust, one_minus_r * inf_t)
+    new_t = _weber_fechner_step(edge.trust, one_minus_r * inf_t, max_step=0.55)
 
     # Power dynamic uses symmetric slope (leverage shifts directly without negativity bias)
     inf_p = _gottman_influence(
@@ -1257,7 +1305,7 @@ def apply_gottman_relational_event(
         s_pos=2.20,
         s_neg=2.20,
     )
-    new_p = _weber_fechner_step(edge.power, one_minus_r * inf_p)
+    new_p = _weber_fechner_step(edge.power, one_minus_r * inf_p, max_step=0.55)
 
     # Orthogonal Grievance in [0, 1]
     u_g = GRIEVANCE_TO_STIMULUS[event.grievance_shift]
@@ -1322,7 +1370,7 @@ def compute_provisional_cognition_preview(
     kappa = COPING_TO_KAPPA[impulse.coping]
 
     u_mech, shock_drain, is_shock = _mechanical_roll_impulse(roll_outcome)
-    blend = 0.55 if is_shock else (0.35 + 0.20 * (1.0 - committed_care.composure))
+    blend = 0.52 if is_shock else (0.22 + 0.16 * (1.0 - committed_care.composure))
 
     v_prev = _clamp(
         committed_care.valence + blend * (v_obs - committed_care.valence) + u_mech[0],
@@ -1340,9 +1388,15 @@ def compute_provisional_cognition_preview(
         1.0,
     )
 
+    phi_app = math.exp(-LAMBDA_APPRAISAL_DECAY * 1.0)
+    eff_tau = (
+        tau
+        if tau >= committed_care.appraisal.threat
+        else (tau + (committed_care.appraisal.threat - tau) * phi_app)
+    )
     c_prev = update_composure_step(
         committed_care.composure,
-        threat=tau,
+        threat=eff_tau,
         coping=kappa,
         dt_minutes=1,
         composure_resilience=1.0,
@@ -1350,7 +1404,7 @@ def compute_provisional_cognition_preview(
     )
     preview_appraisal = committed_care.appraisal.model_copy(
         update={
-            "threat": round(tau, 4),
+            "threat": round(eff_tau, 4),
             "coping": round(kappa, 4),
             "ambiguity": round(0.70 if is_shock else committed_care.appraisal.ambiguity, 4),
         }
@@ -1622,6 +1676,195 @@ def _observation_pad_from_delta(
     return (v_obs, a_obs, d_obs)
 
 
+_SEVERE_RUPTURE_NOTE_KEYWORDS: Final[tuple[str, ...]] = (
+    "betray",
+    "stole",
+    "stolen",
+    "seiz",
+    "attack",
+    "shot",
+    "shoot",
+    "stab",
+    "poison",
+    "sabotag",
+    "strand",
+    "kill",
+    "murder",
+    "lied",
+    "sold",
+    "threaten",
+    "ambush",
+    "robbed",
+    "wrench",
+    "snatch",
+    "hostil",
+    "cruel",
+)
+
+
+def _has_explicit_affect_observation(
+    delta: CharacterAgentDelta,
+    cognition_impulse: CategoricalFeelingImpulse | None,
+    signals: MechanicalTurnSignals,
+    is_shock: bool,
+) -> bool:
+    """Return True when the turn provides an explicit affective observation for the Kalman filter."""
+    return (
+        delta.affect_tone is not None
+        or delta.affect_intensity is not None
+        or delta.affect_agency is not None
+        or abs(delta.valence_delta) > 1e-4
+        or abs(delta.arousal_delta) > 1e-4
+        or cognition_impulse is not None
+        or signals.roll_outcome is not None
+        or is_shock
+    )
+
+
+def _compute_turn_salience(
+    *,
+    delta: CharacterAgentDelta,
+    cognition_impulse: CategoricalFeelingImpulse | None,
+    signals: MechanicalTurnSignals,
+    is_shock: bool,
+    has_memories: bool,
+    tau_obs: float,
+    alpha_surp: float,
+) -> float:
+    """Estimate turn affective salience in [0.10, 1.00] to gate non-shock PAD slew velocity."""
+    if is_shock:
+        return 1.0
+    roll_sal = 0.0
+    if signals.roll_outcome in ("Failure with Consequences", "Clean Success"):
+        roll_sal = 0.55
+    elif signals.roll_outcome == "Simple Failure":
+        roll_sal = 0.35
+
+    eff_intensity = (
+        delta.affect_intensity
+        or (cognition_impulse.intensity if cognition_impulse is not None else None)
+    )
+    int_sal = (
+        0.65
+        if eff_intensity == "extreme"
+        else (0.40 if eff_intensity == "high" else 0.0)
+    )
+    eff_tone = (
+        delta.affect_tone
+        or (cognition_impulse.tone if cognition_impulse is not None else None)
+    )
+    tone_sal = 0.50 if eff_tone in ("anguished", "hostile", "elated") else 0.0
+    mem_sal = 0.65 if has_memories else 0.0
+    rel_sal = (
+        0.65
+        if any(
+            ev.warmth_shift in ("strong_neg", "strong_pos")
+            or ev.trust_shift in ("strong_neg", "strong_pos")
+            or ev.grievance_shift in ("grave_wrong", "reconciled")
+            for ev in delta.relational_events
+        )
+        else 0.0
+    )
+    return _clamp(
+        max(
+            0.10,
+            roll_sal,
+            tau_obs * 0.85,
+            alpha_surp * 0.85,
+            int_sal,
+            tone_sal,
+            mem_sal,
+            rel_sal,
+        ),
+        0.10,
+        1.0,
+    )
+
+
+def _apply_salience_slew_bound(
+    prior_pad: tuple[float, float, float],
+    raw_pad: tuple[float, float, float],
+    resting_tilde: tuple[float, float, float],
+    *,
+    salience: float,
+    is_shock: bool,
+) -> tuple[float, float, float]:
+    """Bound single-turn PAD step velocity on low-salience turns with a homeostatic return exemption."""
+    if is_shock or salience >= 0.95:
+        return raw_pad
+
+    base_max = 0.09 + 0.51 * salience  # 0.141 at S=0.10, up to 0.60 at S=1.0
+    rest_pad = (
+        resting_tilde[0],
+        _tilde_to_arousal(resting_tilde[1]),
+        resting_tilde[2],
+    )
+    bounded: list[float] = []
+    for idx in range(3):
+        p_val = prior_pad[idx]
+        r_val = raw_pad[idx]
+        diff = r_val - p_val
+        scale = 0.55 if idx == 1 else 1.0
+        axis_max = base_max * scale
+        moving_to_rest = abs(r_val - rest_pad[idx]) < abs(p_val - rest_pad[idx])
+        if moving_to_rest:
+            axis_max = max(axis_max, 0.22 * scale)
+        if abs(diff) > axis_max:
+            r_val = p_val + math.copysign(axis_max, diff)
+        lo = 0.0 if idx == 1 else -1.0
+        bounded.append(round(_clamp(r_val, lo, 1.0), 4))
+    return (bounded[0], bounded[1], bounded[2])
+
+
+def _corroborate_relational_event_severity(
+    spec: RelationalEventSpec,
+    *,
+    delta: CharacterAgentDelta,
+    cognition_impulse: CategoricalFeelingImpulse | None,
+    is_shock: bool,
+    tau_obs: float,
+    alpha_surp: float,
+) -> RelationalEventSpec:
+    """Soften uncorroborated strong_neg / grave_wrong LLM over-classifications in calm banter."""
+    has_severe_neg = (
+        spec.warmth_shift == "strong_neg"
+        or spec.trust_shift == "strong_neg"
+        or spec.respect_shift == "strong_neg"
+        or spec.grievance_shift == "grave_wrong"
+    )
+    if not has_severe_neg:
+        return spec
+
+    eff_tone = (
+        delta.affect_tone
+        or (cognition_impulse.tone if cognition_impulse is not None else None)
+    )
+    eff_intensity = (
+        delta.affect_intensity
+        or (cognition_impulse.intensity if cognition_impulse is not None else None)
+    )
+    note_low = spec.note.lower()
+    is_corroborated = (
+        is_shock
+        or tau_obs >= 0.45
+        or alpha_surp >= 0.75
+        or eff_tone in ("hostile", "anguished", "bitter")
+        or eff_intensity in ("high", "extreme")
+        or any(k in note_low for k in _SEVERE_RUPTURE_NOTE_KEYWORDS)
+    )
+    if is_corroborated:
+        return spec
+
+    return spec.model_copy(
+        update={
+            "warmth_shift": "mild_neg" if spec.warmth_shift == "strong_neg" else spec.warmth_shift,
+            "trust_shift": "mild_neg" if spec.trust_shift == "strong_neg" else spec.trust_shift,
+            "respect_shift": "mild_neg" if spec.respect_shift == "strong_neg" else spec.respect_shift,
+            "grievance_shift": "slighted" if spec.grievance_shift == "grave_wrong" else spec.grievance_shift,
+        }
+    )
+
+
 def resolve_post_turn_care_state(
     committed_prior: AffectiveCareState,
     *,
@@ -1665,16 +1908,55 @@ def resolve_post_turn_care_state(
         base_state.active_worldview, dedup_memories
     )
 
-    # 2. Layer 3: Tactical Appraisal
-    tau = THREAT_TO_TAU[delta.scene_threat]
-    kappa = COPING_TO_KAPPA[delta.scene_coping]
+    # 2. Layer 3: Asymmetric Tactical Appraisal (instant attack, exponential time decay)
+    eff_threat_level = (
+        cognition_impulse.threat
+        if (
+            "scene_threat" not in delta.model_fields_set
+            and delta.scene_threat == "none"
+            and cognition_impulse is not None
+        )
+        else delta.scene_threat
+    )
+    eff_coping_level = (
+        cognition_impulse.coping
+        if (
+            "scene_coping" not in delta.model_fields_set
+            and delta.scene_coping == "adequate"
+            and cognition_impulse is not None
+        )
+        else delta.scene_coping
+    )
+    tau_obs = THREAT_TO_TAU[eff_threat_level]
+    kappa_obs = COPING_TO_KAPPA[eff_coping_level]
     gamma_goal = ORDINAL_TO_GOAL_CONGRUENCE[delta.goal_congruence]
     alpha_surp = INTENSITY_TO_AMBIGUITY[delta.scene_surprise]
+
+    dt_eff = max(1, turn_dt)
+    phi_app = math.exp(-LAMBDA_APPRAISAL_DECAY * dt_eff)
+    prior_app = base_state.appraisal
+
+    tau = (
+        tau_obs
+        if tau_obs >= prior_app.threat
+        else (tau_obs + (prior_app.threat - tau_obs) * phi_app)
+    )
+    amb_new = (
+        alpha_surp
+        if alpha_surp >= prior_app.ambiguity
+        else (alpha_surp + (prior_app.ambiguity - alpha_surp) * phi_app)
+    )
+    if kappa_obs <= prior_app.coping or tau < 0.20:
+        kappa = kappa_obs
+    else:
+        phi_cop = math.exp(-LAMBDA_APPRAISAL_DECAY * max(dt_eff, 6))
+        kappa = kappa_obs + (prior_app.coping - kappa_obs) * phi_cop
+
     new_appraisal = SituationalAppraisal(
         threat=round(tau, 4),
         coping=round(kappa, 4),
         goal_congruence=round(gamma_goal, 4),
-        ambiguity=round(alpha_surp, 4),
+        ambiguity=round(amb_new, 4),
     )
 
     # 3. Layer 2: Composure & Discretized OU-Kalman Mood Filter
@@ -1691,19 +1973,44 @@ def resolve_post_turn_care_state(
         shock_drain=roll_shock_drain + seizure_shock,
     )
 
-    obs_pad = _observation_pad_from_delta(base_state, delta, cognition_impulse)
     resting_tilde = _resting_pad_baseline(psyche, new_worldview)
-    new_pad, new_variance, _ = kalman_mood_step(
-        prior_pad=(base_state.valence, base_state.arousal, base_state.dominance),
-        prior_variance=base_state.mood_variance,
-        resting_pad_tilde=resting_tilde,
-        observation_pad=obs_pad,
-        composure=new_composure,
-        composure_resilience=psyche.temperament.composure_resilience,
-        dt_minutes=turn_dt,
-        mech_impulse_tilde=u_mech,
-        is_shock_rupture=is_shock,
-    )
+    if not _has_explicit_affect_observation(delta, cognition_impulse, signals, is_shock):
+        ou_only = project_care_to_minute(
+            base_state.model_copy(update={"active_worldview": new_worldview}),
+            target_elapsed_minutes=base_state.state_elapsed_minutes + turn_dt,
+            psyche=psyche,
+        )
+        new_pad = (ou_only.valence, ou_only.arousal, ou_only.dominance)
+        new_variance = ou_only.mood_variance
+    else:
+        obs_pad = _observation_pad_from_delta(base_state, delta, cognition_impulse)
+        raw_pad, new_variance, _ = kalman_mood_step(
+            prior_pad=(base_state.valence, base_state.arousal, base_state.dominance),
+            prior_variance=base_state.mood_variance,
+            resting_pad_tilde=resting_tilde,
+            observation_pad=obs_pad,
+            composure=new_composure,
+            composure_resilience=psyche.temperament.composure_resilience,
+            dt_minutes=turn_dt,
+            mech_impulse_tilde=u_mech,
+            is_shock_rupture=is_shock,
+        )
+        salience = _compute_turn_salience(
+            delta=delta,
+            cognition_impulse=cognition_impulse,
+            signals=signals,
+            is_shock=is_shock,
+            has_memories=bool(dedup_memories),
+            tau_obs=tau_obs,
+            alpha_surp=alpha_surp,
+        )
+        new_pad = _apply_salience_slew_bound(
+            (base_state.valence, base_state.arousal, base_state.dominance),
+            raw_pad,
+            resting_tilde,
+            salience=salience,
+            is_shock=is_shock,
+        )
 
     # 4. Layer 4: Normalize relational events & fuse mechanical item seizures
     vis_ceiling = signals.visibility_ceiling_by_target or {}
@@ -1743,9 +2050,17 @@ def resolve_post_turn_care_state(
 
     for spec, scope in normalized:
         tid = spec.target
+        corroborated_spec = _corroborate_relational_event_severity(
+            spec,
+            delta=delta,
+            cognition_impulse=cognition_impulse,
+            is_shock=is_shock,
+            tau_obs=tau_obs,
+            alpha_surp=alpha_surp,
+        )
         prior_edge = relations.get(tid) or build_stranger_edge(tid, new_worldview)
         updated_edge, (u_w, u_r, u_t) = apply_gottman_relational_event(
-            prior_edge, spec, psyche.temperament
+            prior_edge, corroborated_spec, psyche.temperament
         )
         if consolidate_anchor:
             updated_edge = updated_edge.model_copy(
@@ -1797,6 +2112,7 @@ def resolve_post_turn_care_state(
         dominance=new_pad[2],
         composure=new_composure,
         mood_variance=new_variance,
+        active_emotion=base_state.active_emotion,
         active_worldview=new_worldview,
         appraisal=new_appraisal,
         relations=relations,
@@ -1921,6 +2237,49 @@ def _edge_salience_score(edge: RelationalEdge) -> float:
     )
 
 
+def summarize_categorical_care_anchor(care_state: AffectiveCareState) -> str:
+    """Project continuous AffectiveCareState onto canonical zero-float categorical tokens."""
+    imp = impulse_from_legacy_floats(care_state.valence, care_state.arousal)
+    dom = care_state.dominance
+    if dom <= -0.64:
+        agency: AgencyLevel = "helpless"
+    elif dom <= -0.20:
+        agency = "pressured"
+    elif dom < 0.26:
+        agency = "steady"
+    elif dom < 0.66:
+        agency = "assured"
+    else:
+        agency = "commanding"
+
+    tau = care_state.appraisal.threat
+    if tau < 0.10:
+        threat: ThreatLevel = "none"
+    elif tau < 0.32:
+        threat = "low"
+    elif tau < 0.60:
+        threat = "moderate"
+    elif tau < 0.85:
+        threat = "high"
+    else:
+        threat = "critical"
+
+    kap = care_state.appraisal.coping
+    if kap <= -0.60:
+        coping: CopingLevel = "overwhelmed"
+    elif kap < 0.0:
+        coping = "strained"
+    elif kap < 0.60:
+        coping = "adequate"
+    else:
+        coping = "mastery"
+
+    return (
+        f"tone={imp.tone}, intensity={imp.intensity}, agency={agency}, "
+        f"threat={threat}, coping={coping}"
+    )
+
+
 def render_zone4_affective_block(
     care_state: AffectiveCareState,
     *,
@@ -1938,6 +2297,7 @@ def render_zone4_affective_block(
     _, full_disposition = describe_pad_disposition(
         care_state.valence, care_state.arousal, care_state.dominance
     )
+    anchor_tokens = summarize_categorical_care_anchor(care_state)
     composure_line = _describe_composure_directive(
         care_state.composure, care_state.arousal
     )
@@ -1947,6 +2307,7 @@ def render_zone4_affective_block(
     lines = [
         f'<internal_affective_state character="{character_name}">',
         f"  - Active Mood ({care_state.short_mood_label}): {full_disposition}",
+        f"  - Categorical Baseline Anchor: {anchor_tokens}",
         f"  - Self-Control & Masking: {composure_line}",
         f"  - Tactical Scene Appraisal: {appraisal_line}",
     ]

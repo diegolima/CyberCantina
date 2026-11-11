@@ -516,3 +516,222 @@ def test_legacy_hydration_memory_worldview_shift_and_item_seizure_fusion():
     materialized = materialize_snapshot_with_care(legacy_snap, updated)
     assert materialized.care_state == updated
     assert materialized.valence == pytest.approx(updated.valence, abs=1e-3)
+
+
+def test_asymmetric_appraisal_instant_attack_and_gradual_decay():
+    """Verify threat spikes immediately on danger, retains >90% on a 1m bystander turn, and decays on 8h rest."""
+    psyche = _make_psyche("balanced")
+    prior = seed_initial_care_state(psyche)
+
+    # Turn 1: Acute ambush -> instant threat attack to 0.75 ('high')
+    t1, _ = resolve_post_turn_care_state(
+        prior,
+        psyche=psyche,
+        delta=CharacterAgentDelta(
+            affect_tone="uneasy",
+            affect_intensity="high",
+            scene_threat="high",
+            scene_coping="strained",
+            scene_surprise="high",
+        ),
+        cognition_impulse=None,
+        signals=MechanicalTurnSignals(),
+        turn_elapsed_minutes=1,
+        target_elapsed_minutes=1,
+        self_id="c1",
+        self_name="Vesper",
+        persona_name="Kaelen",
+        allowed_target_ids={"user"},
+    )
+    assert t1.appraisal.threat == pytest.approx(0.75, abs=1e-3)
+    assert t1.appraisal.ambiguity == pytest.approx(0.75, abs=1e-3)
+
+    # Turn 2: Passive 1-minute bystander fast-path (default scene_threat='none', no affect observation)
+    # Threat must decay gradually (retaining > 95%), NOT snap to 0.0!
+    t2, _ = resolve_post_turn_care_state(
+        t1,
+        psyche=psyche,
+        delta=CharacterAgentDelta(mood_label=t1.short_mood_label),
+        cognition_impulse=None,
+        signals=MechanicalTurnSignals(),
+        turn_elapsed_minutes=1,
+        target_elapsed_minutes=2,
+        self_id="c1",
+        self_name="Vesper",
+        persona_name="Kaelen",
+        allowed_target_ids={"user"},
+    )
+    assert t2.appraisal.threat > 0.70
+    assert t2.appraisal.ambiguity > 0.70
+
+    # Turn 3: 480-minute (8-hour) Narrator rest -> threat decays to ~0 and composure recovers
+    t3, _ = resolve_post_turn_care_state(
+        t2,
+        psyche=psyche,
+        delta=CharacterAgentDelta(mood_label=t2.short_mood_label),
+        cognition_impulse=None,
+        signals=MechanicalTurnSignals(),
+        turn_elapsed_minutes=480,
+        target_elapsed_minutes=482,
+        self_id="c1",
+        self_name="Vesper",
+        persona_name="Kaelen",
+        allowed_target_ids={"user"},
+    )
+    assert t3.appraisal.threat < 0.01
+    assert t3.composure > 0.85
+
+
+def test_salience_gated_slew_damps_routine_jitter_but_permits_shock_and_recovery():
+    """Verify low-salience tone jitter is slew-bounded while shock turns and homeostatic recovery move freely."""
+    psyche = _make_psyche("balanced")
+    state = seed_initial_care_state(psyche).model_copy(update={"composure": 0.45})
+
+    # Routine low-salience turn where LLM over-selects 'warm' (+0.55) from neutral (0.0)
+    calm_jump, _ = resolve_post_turn_care_state(
+        state,
+        psyche=psyche,
+        delta=CharacterAgentDelta(
+            affect_tone="warm",
+            affect_intensity="low",
+            scene_threat="none",
+            scene_surprise="calm",
+        ),
+        cognition_impulse=None,
+        signals=MechanicalTurnSignals(),
+        turn_elapsed_minutes=1,
+        target_elapsed_minutes=1,
+        self_id="c1",
+        self_name="Vesper",
+        persona_name="Kaelen",
+        allowed_target_ids={"user"},
+    )
+    assert abs(calm_jump.valence - state.valence) <= 0.145
+
+    # High-salience shock turn (Critical Failure + extreme anguish) bypasses slew clamp
+    shock_jump, _ = resolve_post_turn_care_state(
+        state,
+        psyche=psyche,
+        delta=CharacterAgentDelta(
+            affect_tone="anguished",
+            affect_intensity="extreme",
+            scene_threat="critical",
+            scene_surprise="extreme",
+        ),
+        cognition_impulse=None,
+        signals=MechanicalTurnSignals(roll_outcome="Critical Failure"),
+        turn_elapsed_minutes=1,
+        target_elapsed_minutes=1,
+        self_id="c1",
+        self_name="Vesper",
+        persona_name="Kaelen",
+        allowed_target_ids={"user"},
+    )
+    assert shock_jump.valence < -0.35
+
+    # Homeostatic return exemption: recovering from extreme distress (-0.75) toward baseline (0.0)
+    distressed = state.model_copy(update={"valence": -0.75, "composure": 0.25})
+    recovered, _ = resolve_post_turn_care_state(
+        distressed,
+        psyche=psyche,
+        delta=CharacterAgentDelta(
+            affect_tone="content",
+            affect_intensity="low",
+            scene_threat="none",
+            scene_surprise="calm",
+        ),
+        cognition_impulse=None,
+        signals=MechanicalTurnSignals(),
+        turn_elapsed_minutes=1,
+        target_elapsed_minutes=2,
+        self_id="c1",
+        self_name="Vesper",
+        persona_name="Kaelen",
+        allowed_target_ids={"user"},
+    )
+    assert (recovered.valence - distressed.valence) > 0.16
+
+
+def test_uncorroborated_banter_strong_neg_softened_while_true_betrayal_pierces():
+    """Verify uncorroborated strong_neg/grave_wrong in calm banter is softened to mild_neg/slighted."""
+    psyche = _make_psyche("balanced")
+    ally_edge = RelationalEdge(target_id="user", warmth=0.82, respect=0.70, trust=0.85)
+    prior = seed_initial_care_state(psyche).model_copy(update={"relations": {"user": ally_edge}})
+
+    # 1. Calm, low-intensity banter where LLM over-classifies a nosy question as strong_neg/grave_wrong
+    after_banter, _ = resolve_post_turn_care_state(
+        prior,
+        psyche=psyche,
+        delta=CharacterAgentDelta(
+            affect_tone="guarded",
+            affect_intensity="low",
+            scene_threat="none",
+            scene_surprise="calm",
+            relational_events=[
+                RelationalEventSpec(
+                    target="user",
+                    warmth_shift="strong_neg",
+                    trust_shift="strong_neg",
+                    grievance_shift="grave_wrong",
+                    note="Asked an intrusive question about the cargo manifest.",
+                )
+            ],
+        ),
+        cognition_impulse=None,
+        signals=MechanicalTurnSignals(),
+        turn_elapsed_minutes=1,
+        target_elapsed_minutes=1,
+        self_id="c1",
+        self_name="Vesper",
+        persona_name="Kaelen",
+        allowed_target_ids={"user"},
+    )
+    # Softened to mild_neg -> absorbed by ally's Positive Sentiment Override!
+    assert after_banter.relations["user"].warmth == pytest.approx(ally_edge.warmth, abs=1e-4)
+    assert after_banter.relations["user"].trust == pytest.approx(ally_edge.trust, abs=1e-4)
+    assert after_banter.relations["user"].grievance < 0.35
+
+    # 2. Corroborated high-intensity hostile betrayal pierces Positive Sentiment Override
+    after_betrayal, _ = resolve_post_turn_care_state(
+        prior,
+        psyche=psyche,
+        delta=CharacterAgentDelta(
+            affect_tone="hostile",
+            affect_intensity="high",
+            scene_threat="high",
+            relational_events=[
+                RelationalEventSpec(
+                    target="user",
+                    warmth_shift="strong_neg",
+                    trust_shift="strong_neg",
+                    grievance_shift="grave_wrong",
+                    note="Betrayed the safehouse coordinates to the Syndicate.",
+                )
+            ],
+        ),
+        cognition_impulse=None,
+        signals=MechanicalTurnSignals(),
+        turn_elapsed_minutes=1,
+        target_elapsed_minutes=1,
+        self_id="c1",
+        self_name="Vesper",
+        persona_name="Kaelen",
+        allowed_target_ids={"user"},
+    )
+    assert after_betrayal.relations["user"].trust < 0.0
+    assert after_betrayal.relations["user"].grievance > 0.65
+
+
+def test_portrait_emotion_hysteresis_prevents_boundary_flicker():
+    """Verify Schmitt-trigger hysteresis prevents active_emotion flicker across V and D boundaries."""
+    # Entering happy requires V >= 0.26, but once happy, V = 0.22 stays happy (exits below 0.19)
+    assert derive_active_emotion(valence=0.22, arousal=0.45, dominance=0.10, prior_emotion="default") == "default"
+    assert derive_active_emotion(valence=0.22, arousal=0.45, dominance=0.10, prior_emotion="happy") == "happy"
+    assert derive_active_emotion(valence=0.15, arousal=0.45, dominance=0.10, prior_emotion="happy") == "default"
+
+    # Anger vs Fear boundary at D = 0.05 has dead-band [-0.04, 0.14]
+    assert derive_active_emotion(valence=-0.45, arousal=0.65, dominance=0.01, prior_emotion="angry") == "angry"
+    assert derive_active_emotion(valence=-0.45, arousal=0.65, dominance=0.01, prior_emotion="afraid") == "afraid"
+    assert derive_active_emotion(valence=-0.45, arousal=0.65, dominance=-0.10, prior_emotion="angry") == "afraid"
+    assert derive_active_emotion(valence=-0.45, arousal=0.65, dominance=0.20, prior_emotion="afraid") == "angry"
+
