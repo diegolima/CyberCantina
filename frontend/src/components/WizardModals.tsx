@@ -55,8 +55,10 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       "dungeon", "dragon", "paladin", "cleric", "kingdom", "realm"
     ],
     equipped: (arch) => [
-      normalizeItemInstance(`Tailored traveling cloak and tunic suited for a ${arch}`),
-      normalizeItemInstance("Reinforced leather breeches and sturdy brass-buckled belt"),
+      normalizeItemInstance(`Tailored traveling cloak suited for a ${arch}`),
+      normalizeItemInstance(`Linen traveling tunic suited for a ${arch}`),
+      normalizeItemInstance("Reinforced leather breeches"),
+      normalizeItemInstance("Sturdy brass-buckled belt"),
       normalizeItemInstance("High-cuff weathered riding boots"),
     ],
     inventory: (note) => [
@@ -64,12 +66,12 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       normalizeItemInstance(note ? `Signature keepsake (${note.slice(0, 42).replace(/\.+$/, "")})` : "Weathered traveler's journal and charcoal quill"),
     ],
     features: [
-      "Weathered traveling attire with braided trim",
+      "Sun-weathered skin with faint laugh lines around the eyes",
       "Keen, observant gaze with weathered crow's feet",
-      "Hair bound back with a durable leather cord",
+      "Thick dark hair cropped roughly at the nape",
       "Faint dueling scar along the left jawline",
-      "Broad, grounded posture accustomed to long roads",
-      "Quirky silver ring bearing an unidentifiable guild seal",
+      "Calloused swordsman's palms and knuckles",
+      "Quirky heterochromia with one hazel eye and one pale silver-flecked iris",
     ],
     visualAesthetic: "Practical layered leather, linen, and travel-worn wool",
   },
@@ -81,8 +83,9 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       "warp", "freighter", "cosmos", "zero-g", "stardrive"
     ],
     equipped: (arch) => [
-      normalizeItemInstance(`Pressurized flight jumpsuit with utility thermal lining suited for a ${arch}`),
-      normalizeItemInstance("Magnetic-clamp utility harness and seal gloves"),
+      normalizeItemInstance(`Pressurized thermal flight jacket suited for a ${arch}`),
+      normalizeItemInstance("Sealed utility jumpsuit"),
+      normalizeItemInstance("Magnetic-clamp utility harness"),
       normalizeItemInstance("Reinforced deck boots with magnetic grip soles"),
     ],
     inventory: (note) => [
@@ -93,9 +96,9 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       "Slight pallor from extended cycles under artificial ship lighting",
       "Sharp, calculating gaze practiced at monitoring telemetry",
       "Close-trimmed hair designed for helmet seals",
-      "Hydraulic pressure grease stain on wrist cuff",
-      "Steady, zero-gravity accustomed gait",
-      "Unusual brass astronomical compass kept as an analog good luck charm",
+      "Faint chemical burn mark across right collarbone",
+      "Lean, conditioned zero-g musculature with quiet footfalls",
+      "Quirky geometric pilot's tattoo spanning the back of the left hand",
     ],
     visualAesthetic: "Sealed utilitarian flightwear with thermal insulation and magnetic fasteners",
   },
@@ -107,8 +110,10 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       "chrome", "deck", "corpo", "fixer", "slum"
     ],
     equipped: (arch) => [
-      normalizeItemInstance(`Reinforced utility jacket suited for a ${arch}`),
+      normalizeItemInstance(`Reinforced weatherproof utility jacket suited for a ${arch}`),
+      normalizeItemInstance("Dark synthetic fiber undershirt"),
       normalizeItemInstance("Dark cargo trousers with concealed equipment pockets"),
+      normalizeItemInstance("Quick-release nylon utility belt"),
       normalizeItemInstance("Scuffed composite work boots"),
     ],
     inventory: (note) => [
@@ -121,7 +126,7 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       "Cropped dark hair styled for utility",
       "Faint electrical burn scar across right knuckles",
       "Lean, wiry athletic frame",
-      "Mismatched chrome-plated thumb ring or finger casing",
+      "Quirky synthetic biometric tattoo that subtly shifts hue with pulse rate",
     ],
     visualAesthetic: "Weathered high-tech streetwear with moisture-sealed cabling channels",
   },
@@ -134,7 +139,8 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
     ],
     equipped: (arch) => [
       normalizeItemInstance(`Heavy charcoal wool greatcoat with high upturned collar suited for a ${arch}`),
-      normalizeItemInstance("Dark pressed waistcoat, collared shirt, and sturdy trousers"),
+      normalizeItemInstance("Dark pressed waistcoat and collared shirt"),
+      normalizeItemInstance("Sturdy charcoal woolen trousers"),
       normalizeItemInstance("Treaded leather boots stained with damp earth"),
     ],
     inventory: (note) => [
@@ -144,10 +150,10 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
     features: [
       "Hollow, sleep-deprived eyes carrying a haunted wariness",
       "Prematurely silvered streaks through dark hair",
-      "Nervous, hyper-attentive posture constantly checking shadows",
+      "Slight involuntary tremor in left hand when startled",
       "Faint claw or ritual scar concealed beneath the collar",
-      "Faint scent of old parchment, sulfur, or sweet pipe tobacco",
-      "Curious tarnished talisman that seems faintly cold to the touch",
+      "Ashen, gaunt cheekbones and sunken temple contours",
+      "Quirky crescent-shaped birthmark high on the left temple",
     ],
     visualAesthetic: "Dark Victorian tailoring and heavy layered wool with weathered hemlines",
   },
@@ -160,7 +166,9 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
     ],
     equipped: (arch) => [
       normalizeItemInstance(`Dust-caked canvas duster coat suited for a ${arch}`),
-      normalizeItemInstance("Faded denim work shirt and reinforced riding pants with utility gunbelt"),
+      normalizeItemInstance("Faded denim work shirt"),
+      normalizeItemInstance("Reinforced riding pants"),
+      normalizeItemInstance("Tooled leather gunbelt with brass buckle"),
       normalizeItemInstance("Spurred leather boots with worn riding heels"),
     ],
     inventory: (note) => [
@@ -169,11 +177,11 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
     ],
     features: [
       "Sun-weathered skin with deep squint lines from the frontier glare",
-      "Dusty wide-brimmed hat casting a shadow over watchful eyes",
+      "Steely, unblinking grey eyes beneath a heavy brow",
       "Coarse stubble along a square jaw",
       "Faint powder burn mark on trigger finger",
-      "Slow, relaxed drawl masking coiled physical reflexes",
-      "Unusual silver half-dollar coin with a bullet dent carried in pocket",
+      "Wiry, sun-hardened frame with corded forearm tendons",
+      "Quirky notched left earlobe from a near-miss bullet graze",
     ],
     visualAesthetic: "Weather-beaten canvas, denim, and sun-cured leather with brass hardware",
   },
@@ -185,8 +193,10 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       "bunker", "doomsday", "nuclear"
     ],
     equipped: (arch) => [
-      normalizeItemInstance(`Layered scavenger coat patched with salvaged tire rubber and fabric suited for a ${arch}`),
-      normalizeItemInstance("Stitched canvas cargo pants with reinforced knee guards"),
+      normalizeItemInstance(`Layered scavenger coat with reinforced shoulders suited for a ${arch}`),
+      normalizeItemInstance("Heavy canvas work shirt"),
+      normalizeItemInstance("Stitched cargo pants with knee guards"),
+      normalizeItemInstance("Modular webbed utility belt"),
       normalizeItemInstance("Reinforced combat boots bound with wire and duct tape"),
     ],
     inventory: (note) => [
@@ -198,8 +208,8 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       "Alert, hungry eyes trained on perimeter movement",
       "Patchy hair cut short with a combat knife",
       "Mottled chemical burn scar along forearm",
-      "Low, economical center of gravity and quiet footfalls",
-      "Quirky necklace made of deactivated pre-collapse circuitry and animal bone",
+      "Knotted, scarred knuckles from hand-to-hand survival",
+      "Quirky mismatched tooth: an implanted jagged titanium bicuspid",
     ],
     visualAesthetic: "Scavenged protective layers, reinforced patches, and modular gear webbing",
   },
@@ -210,8 +220,10 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       "mobster", "gangster", "speakeasy", "private eye", "syndicate crime", "corrupt city"
     ],
     equipped: (arch) => [
-      normalizeItemInstance(`Heavy wool trenchcoat favored by this ${arch}`),
-      normalizeItemInstance("Dark collared shirt, loosened tie, and pressed slacks"),
+      normalizeItemInstance(`Heavy wool trenchcoat suited for a ${arch}`),
+      normalizeItemInstance("Dark collared dress shirt with loosened silk tie"),
+      normalizeItemInstance("Pressed charcoal wool slacks"),
+      normalizeItemInstance("Concealed shoulder holster"),
       normalizeItemInstance("Polished leather brogues showing street wear"),
     ],
     inventory: (note) => [
@@ -222,9 +234,9 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       "Shadowed, watchful eyes beneath a lowered brow",
       "Slicked-back dark hair silvering at the temples",
       "Faint razor nick near the collar",
-      "Upright yet weary posture",
+      "Heavy-set shoulders showing the wear of long stakeouts",
       "Calloused fingertips stained with tobacco or ink",
-      "Curious vintage pocket watch that ticks slightly out of tempo",
+      "Quirky crooked bridge on a twice-broken boxer's nose",
     ],
     visualAesthetic: "Classic mid-century monochrome tailoring, trenchcoat, and felt fedora",
   },
@@ -236,7 +248,9 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
     ],
     equipped: (arch) => [
       normalizeItemInstance(`Weather-resistant dark softshell jacket suited for a ${arch}`),
-      normalizeItemInstance("Fitted tactical cargo pants or dark durable denim"),
+      normalizeItemInstance("Form-fitting moisture-wicking undershirt"),
+      normalizeItemInstance("Fitted tactical cargo pants"),
+      normalizeItemInstance("Rigid nylon utility belt"),
       normalizeItemInstance("Low-profile trail running shoes with grip soles"),
     ],
     inventory: (note) => [
@@ -248,8 +262,8 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       "Sharp, scanning eyes that instinctively track exits and CCTV domes",
       "Neatly groomed hair with zero identifying fashion statements",
       "Faint surgical scar behind the hairline",
-      "Calm, measured neutral posture",
-      "Unusual scarred knuckle or customized wristwatch with dual-timezone bezel",
+      "Tightly conditioned athletic frame with silent, balanced footwork",
+      "Quirky pale scar tracing an angle across the left eyebrow",
     ],
     visualAesthetic: "Low-profile civilian technical apparel designed for crowd concealment",
   },
@@ -260,8 +274,10 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       "brass", "cog", "inventor", "aether", "alchemical", "boiler"
     ],
     equipped: (arch) => [
-      normalizeItemInstance(`Leather-trimmed tweed coat or brass-buckled mechanic's apron suited for a ${arch}`),
+      normalizeItemInstance(`Leather-trimmed tweed coat suited for a ${arch}`),
+      normalizeItemInstance("Heavy linen shirt with brass studs"),
       normalizeItemInstance("High-waisted trousers with reinforced tool loops"),
+      normalizeItemInstance("Brass-buckled mechanic's tool harness"),
       normalizeItemInstance("Oil-treated leather work boots with brass lace eyelets"),
     ],
     inventory: (note) => [
@@ -272,9 +288,9 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       "Soot smudges near temples and grease under fingernails",
       "Intense, calculating gaze analyzing structural tolerances",
       "Wild hair tied loosely with an oiled string",
-      "Brass-rimmed goggles pushed up on forehead or neck",
-      "Erect, energetic posture with rapid hand gestures",
-      "Odd mechanical pocket gadget that whirs and clicks at random intervals",
+      "Faint circular pressure mark around eye orbits from loupe lenses",
+      "Lean, kinetic frame with quick, dexterous fingers",
+      "Quirky brass prosthetic finger joint on right index finger",
     ],
     visualAesthetic: "Victorian industrial leather, tweed, brass fittings, and utilitarian tool aprons",
   },
@@ -285,8 +301,10 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       "privateer", "cutlass", "caribbean", "corsair", "maritime", "islands"
     ],
     equipped: (arch) => [
-      normalizeItemInstance(`Weather-beaten captain's coat or linen deck shirt suited for a ${arch}`),
-      normalizeItemInstance("Tough sailcloth breeches bound with a wide leather sash"),
+      normalizeItemInstance(`Weather-beaten broadcloth captain's coat suited for a ${arch}`),
+      normalizeItemInstance("Loose linen deck shirt"),
+      normalizeItemInstance("Tough sailcloth breeches"),
+      normalizeItemInstance("Wide leather baldric with brass buckle"),
       normalizeItemInstance("Salt-stained leather deck boots with brass buckles"),
     ],
     inventory: (note) => [
@@ -298,8 +316,8 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       "Piercing, wind-squinting gaze conditioned by open seas",
       "Faint rope-burn scarring along palms and wrists",
       "Balanced sea-legs stance swaying instinctively with movement",
-      "Small gold hoop earring worn in left earlobe",
-      "Curious carved whalebone scrimshaw token depicting a sea creature",
+      "Broad chest and calloused, weather-hardened palms",
+      "Quirky faded kraken tattoo wrapping around left forearm",
     ],
     visualAesthetic: "Weathered sailcloth, linen deck shirts, wide leather belts, and brass hardware",
   },
@@ -310,8 +328,10 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       "feudal", "ronin", "wuxia", "dynasty", "pharaoh", "bronze", "legion", "sparta"
     ],
     equipped: (arch) => [
-      normalizeItemInstance(`Traditional woven tunic or layered silk and leather robe suited for a ${arch}`),
-      normalizeItemInstance("Sturdy hide-wrapped girdle and fastened leg wraps"),
+      normalizeItemInstance(`Traditional woven tunic or mantle suited for a ${arch}`),
+      normalizeItemInstance("Pleated linen undertunic"),
+      normalizeItemInstance("Fastened leather leg wraps"),
+      normalizeItemInstance("Studded leather girdle with bronze clasp"),
       normalizeItemInstance("Laced leather sandals or wrapped straw waraji"),
     ],
     inventory: (note) => [
@@ -323,8 +343,8 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       "Severe, focused gaze disciplined by classical training",
       "Topknot or braided hair bound with iron pin or cord",
       "Old sparring scars across forearms and shoulders",
-      "Economy of motion; never fidgets or wastes movement",
-      "Quirky ceremonial bronze ring etched with archaic glyphs",
+      "Disciplined, corded muscle with zero wasted body fat",
+      "Quirky ritual brand mark etched onto the inner right forearm",
     ],
     visualAesthetic: "Traditional woven fabrics, wrapped leather armor, and classical ceremonial draping",
   },
@@ -335,8 +355,10 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       "mutant power", "crimefighter", "costumed", "nemesis"
     ],
     equipped: (arch) => [
-      normalizeItemInstance(`Reinforced ballistic weave bodysuit or customized street vigilante jacket suited for a ${arch}`),
+      normalizeItemInstance(`Reinforced ballistic weave outer jacket suited for a ${arch}`),
+      normalizeItemInstance("Flexible compression undersuit"),
       normalizeItemInstance("Reinforced tactical trousers with hidden padding"),
+      normalizeItemInstance("Utility belt with discrete sealed pouches"),
       normalizeItemInstance("Impact-resistant athletic combat boots"),
     ],
     inventory: (note) => [
@@ -347,9 +369,9 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       "Mask line or subtle tan line across upper face",
       "Hyper-alert, scanning gaze tracking high perimeters",
       "Athletic, coiled posture ready to spring into motion",
-      "Faint electrical or chemical singe marks on collar",
-      "Fingers taped or reinforced with lightweight composite",
-      "Curious customized emblem pin with hidden miniature compartment",
+      "Faint lightning-pattern electrical burn scar across left shoulder",
+      "Dense, hyper-conditioned muscle fiber across back and shoulders",
+      "Quirky heterochromia with one eye glowing faintly under low light",
     ],
     visualAesthetic: "Reinforced impact-resistant textiles with personalized insignia or cowl",
   },
@@ -358,7 +380,9 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
     keywords: [],
     equipped: (arch) => [
       normalizeItemInstance(`Durable all-weather travel coat suited for a ${arch}`),
-      normalizeItemInstance("Tailored utility garments with secure fastenings and sturdy belt"),
+      normalizeItemInstance("Sturdy collared utility shirt"),
+      normalizeItemInstance("Reinforced travel trousers"),
+      normalizeItemInstance("Heavy leather belt with brass buckle"),
       normalizeItemInstance("Hard-wearing, all-terrain travel boots"),
     ],
     inventory: (note) => [
@@ -371,7 +395,7 @@ const GENRE_FALLBACK_PROFILES: GenreFallbackProfile[] = [
       "Athletic, measured bearing that commands quiet respect",
       "Distinctive pale scar across left brow",
       "Calloused hands accustomed to hard work and skilled craft",
-      "Curious carved stone talisman or coin carried as a personal touchstone",
+      "Quirky subtle amber fleck in the left iris",
     ],
     visualAesthetic: "Timeless, durable travel attire designed for utility across diverse realms",
   },
@@ -409,11 +433,103 @@ function resolveGenreFallbackProfile(genreText: string, archetype: string, rough
   };
 }
 
+function inferClientDemographicsAndEthics(name: string, archetype: string, notes: string) {
+  const combined = `${name} ${archetype} ${notes}`.toLowerCase();
+  const cleanName = name.trim();
+  const firstName = cleanName.split(/\s+/)[0]?.toLowerCase() || "character";
+
+  const femaleCues = /\b(she|her|female|woman|girl|sister|mother|lady|queen|daughter|witch|priestess|actress)\b/i.test(combined);
+  const maleCues = /\b(he|him|male|man|boy|brother|father|lord|king|son|wizard|priest|guy|actor)\b/i.test(combined);
+
+  let sex = "Male";
+  let pronouns = "he/him";
+  if (femaleCues && !maleCues) {
+    sex = "Female";
+    pronouns = "she/her";
+  } else if (!maleCues && !femaleCues) {
+    if (firstName.endsWith("a") || firstName.endsWith("ia") || firstName.endsWith("elle")) {
+      sex = "Female";
+      pronouns = "she/her";
+    }
+  }
+
+  let age = "32";
+  if (/\b(veteran|elder|mentor|ancient|grizzled|old)\b/i.test(combined)) {
+    age = "52";
+  } else if (/\b(young|rookie|apprentice|student|prodigy|urchin)\b/i.test(combined)) {
+    age = "21";
+  }
+
+  const heightVal = sex === "Female" ? 168 : 180;
+  let buildStr = "balanced athletic build";
+  if (/\b(knight|brawler|tank|berserker|heavy|soldier|enforcer)\b/i.test(combined)) {
+    buildStr = "broad-shouldered athletic frame";
+  } else if (/\b(rogue|thief|assassin|infiltrator|scout|wiry)\b/i.test(combined)) {
+    buildStr = "lean, wiry athletic frame";
+  } else if (/\b(scholar|mage|wizard|hacker|investigator|slender)\b/i.test(combined)) {
+    buildStr = "slender, wiry build";
+  }
+
+  let posture = "Alert, composed bearing with measured, watchful economy of motion";
+  if (/\b(soldier|enforcer|paladin|knight)\b/i.test(combined)) {
+    posture = "Rigid, upright military bearing; feet planted shoulder-width apart";
+  } else if (/\b(rogue|thief|outlaw|smuggler|assassin)\b/i.test(combined)) {
+    posture = "Relaxed, low-center-of-gravity stance; habitually leaning against doorways or walls";
+  }
+
+  let moralCode = [
+    "Never betrays an ally or employer who has acted in transparent good faith",
+    "Refuses to sacrifice personal autonomy or sell out core principles for empty promises",
+    "Will not initiate unprovoked violence against unarmed parties",
+  ];
+  let quirksFlaws = [
+    "Habitually suspicious of unsolicited kindness, immediately searching for hidden leverage",
+    "Deflects genuine vulnerability with caustic, dry humor or tactical distractions",
+    "Sleeps with a weapon within arm's reach and insists on sitting with back to a wall",
+  ];
+
+  if (/\b(cynic|detached|mercenary|selfish|outlaw|hustler|assassin|smuggler|fixer)\b/i.test(combined)) {
+    moralCode = [
+      "Never risks life or freedom for sentimental causes without tangible leverage or collateral",
+      "Demands fair payment and strictly honors a deal once blood, coin, or collateral is exchanged",
+      "Refuses to become anyone's expendable pawn or die for another's ideology",
+    ];
+    quirksFlaws = [
+      "Instinctively tracks exits and calculates escape vectors whenever entering an unfamiliar room",
+      "Deflects personal inquiries with abrasive irony or evasive, dry sarcasm",
+      "Cannot sleep soundly unless a weapon is within direct arm's reach and back is against a solid wall",
+    ];
+  } else if (/\b(paladin|guardian|knight|protector|hero|healer|cleric|devoted)\b/i.test(combined)) {
+    moralCode = [
+      "Will not abandon an ally or vulnerable innocent when direct action can prevent tragedy",
+      "Refuses to employ extortion, cruelty, or terror even when facing ruthless adversaries",
+      "Holds sworn oaths sacred, standing ground even when withdrawal offers tactical advantage",
+    ];
+    quirksFlaws = [
+      "Carries deep survivor's guilt, obsessively holding themselves personally responsible for collateral harm",
+      "Stiff and visibly awkward in casual social settings, reflexively defaulting to vigilant patrol duty",
+      "Prone to taking unreasonable physical risks to shield others from danger",
+    ];
+  }
+
+  return {
+    species: "Human",
+    sex,
+    pronouns,
+    age,
+    build: buildStr,
+    buildAndHeight: `${heightVal} cm`,
+    posture,
+    moralCode,
+    quirksFlaws,
+  };
+}
+
 export interface CharacterWizardModalProps {
   worlds: WorldRecord[];
   defaultWorldId: string;
   onClose: () => void;
-  onCreated: (char: CharacterRecord, launchWorldId: string) => void;
+  onCreated: (char: CharacterRecord, launchWorldId?: string | null) => void;
   initialDraft?: CharacterWizardDraft | null;
   initialPreassignedId?: string | null;
   initialWorldDraft?: WorldWizardDraft | null;
@@ -453,6 +569,7 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
   const [draftTab, setDraftTab] = useState<
     "base" | "appearance" | "personality" | "voice" | "inventory" | "memories"
   >("base");
+  const [launchCampaignImmediately, setLaunchCampaignImmediately] = useState<boolean>(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -462,6 +579,7 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
     const worldGenre = selectedWorld?.global_rules?.genre || "";
 
     const genreProfile = resolveGenreFallbackProfile(worldGenre, archetype, roughNotes);
+    const demo = inferClientDemographicsAndEthics(name, archetype, roughNotes);
 
     const mannerisms = [
       "Clenches jaw and briefly slows breathing when under sudden pressure",
@@ -470,39 +588,32 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
       "Pauses deliberately before answering direct personal inquiries, holding unbroken eye contact",
     ];
 
-    const moralCode = [
-      "Never betrays an ally or employer who has kept their word in good faith",
-      "Refuses to exploit or intentionally harm vulnerable non-combatants",
-      "Will never sacrifice personal autonomy or sell out core principles for empty promises",
-    ];
-
-    const quirksFlaws = [
-      "Habitually suspicious of unsolicited kindness, immediately searching for hidden leverage",
-      "Deflects genuine vulnerability with caustic, dry humor or tactical distractions",
-      "Sleeps with a weapon within arm's reach and insists on sitting with back to a wall",
-    ];
-
     const traitsList = kwList.length >= 4 ? kwList : [...kwList, "hyper-observant", "cynical", "calculating"].slice(0, 5);
+
+    const features = [...genreProfile.distinctiveFeatures];
+    if (!features.some((f) => f.toLowerCase().includes("build") || f.toLowerCase().includes("frame"))) {
+      features[0] = demo.build;
+    }
 
     const manualDraft: CharacterWizardDraft = {
       name: name.trim() || "New Character",
       tagline: archetype.trim() || "Independent Operative",
-      character_bio: roughNotes.trim() || `${name} is a ${archetype}.`,
-      physical_appearance: roughNotes.trim() || `${name} is a ${archetype}.`,
-      species: "Human",
-      sex: "",
-      pronouns: "",
-      age: "",
-      build_and_height: "",
-      distinctive_features: genreProfile.distinctiveFeatures,
-      posture: "Alert, composed bearing",
+      character_bio: roughNotes.trim() || `${name} is an active ${archetype}.`,
+      physical_appearance: roughNotes.trim() || `${name} is an active ${archetype}.`,
+      species: demo.species,
+      sex: demo.sex,
+      pronouns: demo.pronouns,
+      age: demo.age,
+      build_and_height: demo.buildAndHeight,
+      distinctive_features: features,
+      posture: demo.posture,
       mannerisms: mannerisms,
       modifications: [],
       visual_aesthetic: genreProfile.visualAesthetic,
       personality_traits: traitsList,
       core_persona: `${name.trim() || "New Character"} is a ${archetype.trim() || "character"}, serving as ${roleInStory.trim() || "a key figure"}. In conversation, they avoid melodrama, preferring grounded observations and subtext-heavy dialogue.`,
-      moral_code: moralCode,
-      quirks_flaws: quirksFlaws,
+      moral_code: demo.moralCode,
+      quirks_flaws: demo.quirksFlaws,
       communication_style: ["direct", "measured", "guarded"],
       initial_message: `*${name.trim() || "The character"} pauses, observing you with a measured, attentive gaze.*\n\n"What brings you here?"`,
       equipped: genreProfile.equipped,
@@ -589,14 +700,20 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
           createdWorld.id,
           preassignedCharId
         );
-        onCreated(created, createdWorld.id);
+        onCreated(
+          created,
+          launchCampaignImmediately ? createdWorld.id : null
+        );
       } else {
         const created = await api.commitCharacter(
           draft,
           worldId,
           preassignedCharId
         );
-        onCreated(created, worldId);
+        onCreated(
+          created,
+          launchCampaignImmediately ? worldId : null
+        );
       }
     } catch (err) {
       setError(String(err));
@@ -1090,7 +1207,7 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
                 </div>
               )}
 
-              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
                 <button
                   type="button"
                   className="btn"
@@ -1102,15 +1219,36 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
                 >
                   ← Back
                 </button>
-                <button
-                  type="button"
-                  className="btn btn-amber"
-                  onClick={handleCommit}
-                  disabled={loading}
-                >
-                  <Check size={15} />
-                  {loading ? "Saving..." : "Commit Character & Launch Campaign"}
-                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontSize: "0.8rem",
+                      color: "var(--text-secondary)",
+                      cursor: "pointer",
+                      userSelect: "none",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={launchCampaignImmediately}
+                      onChange={(e) => setLaunchCampaignImmediately(e.target.checked)}
+                      style={{ accentColor: "var(--accent-amber)" }}
+                    />
+                    Immediately start a campaign
+                  </label>
+                  <button
+                    type="button"
+                    className="btn btn-amber"
+                    onClick={handleCommit}
+                    disabled={loading}
+                  >
+                    <Check size={15} />
+                    {loading ? "Saving..." : "Save Character"}
+                  </button>
+                </div>
               </div>
             </div>
           )}

@@ -15,6 +15,9 @@ PROMPT_KEY_CLERK_ARBITRATION = "clerk_arbitration_system"
 PROMPT_KEY_CLERK_WORLD_START_PLACEMENT = "clerk_world_start_placement_system"
 PROMPT_KEY_WIZARD_WORLD = "wizard_world_system"
 PROMPT_KEY_WIZARD_CHARACTER = "wizard_character_system"
+PROMPT_KEY_WIZARD_CHARACTER_PASS1 = "wizard_character_pass1_system"
+PROMPT_KEY_WIZARD_CHARACTER_PASS2 = "wizard_character_pass2_system"
+PROMPT_KEY_WIZARD_CHARACTER_PASS3 = "wizard_character_pass3_system"
 PROMPT_KEY_WIZARD_MAP_REIMAGINE = "wizard_map_reimagine_system"
 PROMPT_KEY_WIZARD_CHARACTER_IMPORT_ST = "wizard_character_sillytavern_system"
 
@@ -30,6 +33,9 @@ ALL_PROMPT_KEYS = [
     PROMPT_KEY_CLERK_WORLD_START_PLACEMENT,
     PROMPT_KEY_WIZARD_WORLD,
     PROMPT_KEY_WIZARD_CHARACTER,
+    PROMPT_KEY_WIZARD_CHARACTER_PASS1,
+    PROMPT_KEY_WIZARD_CHARACTER_PASS2,
+    PROMPT_KEY_WIZARD_CHARACTER_PASS3,
     PROMPT_KEY_WIZARD_MAP_REIMAGINE,
     PROMPT_KEY_WIZARD_CHARACTER_IMPORT_ST,
 ]
@@ -319,6 +325,79 @@ DEFAULT_WIZARD_MAP_REIMAGINE_SYSTEM = (
     "Return ONLY valid JSON matching WorldMapDraft."
 )
 
+DEFAULT_WIZARD_CHARACTER_PASS1_SYSTEM = (
+    "You are an expert AI Roleplay Character Architect specializing in Identity, Demographics, and Physical Anatomy.\n"
+    "Your task is to take the user's basic character seed and produce Pass 1: Identity, Demographics, Height, Anatomy, and Gear as a structured JSON object.\n\n"
+    "=== STRICT INSTRUCTIONS & BOUNDARIES ===\n"
+    "1. DEMOGRAPHICS & IDENTITY:\n"
+    "   - species: Biological or mechanical origin (e.g. 'Human', 'Elf', 'Cyborg', 'Android').\n"
+    "   - sex: Biological sex or presentation ('Male', 'Female', 'Non-binary'). Never leave empty.\n"
+    "   - pronouns: Grammatical pronouns ('he/him', 'she/her', 'they/them'). Never leave empty.\n"
+    "   - age: Sensible chronological age (e.g. '34', '52', '21') matching the archetype. Never leave empty.\n"
+    "   - build_and_height: Metric height ONLY calibrated to species, sex, and archetype (e.g. '182 cm', '167 cm', '194 cm'). STRICTLY EXCLUDE build, frame, or weight descriptors (put body build in distinctive_features). Never leave empty.\n"
+    "   - character_bio: 50-100 word narrative block covering background origins, public reputation, occupation, and role in the world setting. STRICTLY EXCLUDE physical anatomy, clothing, and gear.\n\n"
+    "2. IMMUTABLE PHYSICAL ANATOMY (STRICTLY NO CLOTHING, GEAR, OR WEAPONS):\n"
+    "   - physical_appearance: Dedicated immutable physical anatomy (facial structure, hair color/cut, eye shape/iris, skin tone, permanent scars/tattoos, cybernetic body mods). STRICTLY EXCLUDE clothing, hats, coats, or held items.\n"
+    "   - distinctive_features: Exactly 6 concise chips of concrete IMMUTABLE ANATOMY:\n"
+    "     1. Facial/Ocular marker (e.g. 'piercing grey eyes', 'sunken shadowed sockets')\n"
+    "     2. Hair/Cranial marker (e.g. 'coarse dark hair cropped at temples', 'braided raven topknot')\n"
+    "     3. Complexion/Scar/Mark (e.g. 'faint dueling scar along jawline', 'weathered sun-bleached skin')\n"
+    "     4. Build/Morphology chip (e.g. 'lean wiry athletic build', 'broad-shouldered dense frame')\n"
+    "     5. Permanent mod/tell (e.g. 'subdermal neural port behind left ear', 'calloused trigger fingers')\n"
+    "     6. AT LEAST 1 QUIRKY/UNUSUAL physical anomaly to prevent blandness (e.g. 'heterochromia with one silver-flecked iris', 'notched left earlobe', 'crooked canine tooth')\n"
+    "     * ABSOLUTE PROHIBITION: Do NOT include clothing, hats, coats, goggles, jewelry, coins, rings, or weapons in distinctive_features.\n"
+    "   - posture: Habitual physical bearing and resting stance (e.g. 'Rigid, upright military bearing', 'Relaxed, low-center-of-gravity stance leaning against walls').\n"
+    "   - mannerisms: At least 4 distinct natural behavioral micro-actions and conversational tells (covering stress, guardedness, idle habit, and speech cadence—write the behavior directly WITHOUT category label prefixes like 'idle tell:' or 'under pressure:').\n\n"
+    "3. VISUAL AESTHETIC & GEAR:\n"
+    "   - visual_aesthetic: High-level art direction brief and dress vibe (e.g. 'Layered travel-worn wool and boiled leather with brass fasteners' for Fantasy; 'Dark functional techwear with waterproof shell' for Cyberpunk; 'Mid-century monochrome wool tailoring with heavy trenchcoat' for Noir).\n"
+    "   - equipped: 3-5 starting worn clothing, armor, or wielded items strictly coherent with the world's genre.\n"
+    "     * STRICT SINGLE-ITEM DIRECTIVE: Every entry MUST represent a single discrete physical item (e.g. 1 upper body piece, 1 lower body piece, 1 footwear, 1 belt/accessory, 1 held tool/weapon). NEVER join multiple items into one string (e.g. NEVER write 'cloak and tunic'; write 'Traveling cloak' and 'Linen tunic' as separate items).\n"
+    "   - inventory: 2-4 carried tools, personal pocket items, or keepsakes strictly coherent with the world's genre. Each entry must be a single discrete object.\n\n"
+    "Return ONLY valid JSON matching CharacterWizardPass1LLMOutput."
+)
+
+DEFAULT_WIZARD_CHARACTER_PASS2_SYSTEM = (
+    "You are an expert AI Roleplay Character Architect specializing in Psychology, Voice, Ethics, and Narrative Anchors.\n"
+    "Your task is to take the established character identity, appearance, and background from Pass 1, and produce Pass 2: Mind, Voice, Aligned Ethics, Action Plan, and Episodic Memories as a structured JSON object.\n\n"
+    "=== STRICT INSTRUCTIONS & BOUNDARIES ===\n"
+    "1. PERSONALITY & DEMEANOR:\n"
+    "   - personality_traits: 4-6 high-level tropes and traits (chips) (e.g. ['cynical', 'hyper-observant', 'dry-witted', 'calculating']).\n"
+    "   - core_persona: 45-75 words (2-4 crisp, high-signal sentences) focusing strictly on interpersonal attitude, social defense mechanisms, and conversational intent.\n"
+    "     * STRICT EXCLUSIONS: Do NOT repeat adjectives already listed in personality_traits or communication_style. Do NOT describe physical anatomy, clothing, or moral codes.\n\n"
+    "2. ALIGNED ETHICS & FLAWS (CRITICAL ANTI-HERO ALIGNMENT):\n"
+    "   - moral_code: 2-3 concrete ethical boundaries or lines they will NOT cross. MUST BE STRICTLY ALIGNED with their persona demeanor:\n"
+    "     * If the character is detached, selfish, or a cynical mercenary, do NOT give them generic superhero vows like 'never harms non-combatants'. Give them transactional ethical limits (e.g. 'Never risks life or freedom without upfront collateral', 'Refuses to be anyone\\'s disposable pawn', 'Never leaves an unpaid debt or unsettled grudge').\n"
+    "     * If honorable or heroic, give them code-driven boundaries (e.g. 'Never betrays an ally who acted in good faith', 'Will stand their ground when innocents are targeted').\n"
+    "   - quirks_flaws: 2-3 concrete behavioral flaws, vices, or neurotic habits (e.g. 'habitually suspicious of kindness', 'chain smoker under stress', 'compulsive lockpick fidgeting').\n\n"
+    "3. VOICE & LITERARY DIALOGUE ANCHORS:\n"
+    "   - communication_style: 3-5 voice texture chips (e.g. ['clipped', 'laconic', 'dryly sarcastic', 'never uses contractions', 'subtext-heavy pauses']).\n"
+    "   - voice_anchors: Exactly 3 distinct action+dialogue examples ('Calm / Banter', 'Guarded / Under Pressure', 'Vulnerable / Urgent').\n"
+    "     * LITERARY STYLISTIC GROUNDING: Emulate the distinctive voice and cadence of prominent authors matching the character's genre (e.g. Raymond Chandler for Noir, Joe Abercrombie or Patrick Rothfuss for Fantasy, William Gibson or Neal Stephenson for Cyberpunk, Cormac McCarthy for Western/Wasteland, Ursula K. Le Guin for Space Opera).\n"
+    "     * FORMAT: Use *italics* for physical actions/micro-expressions and \"quotes\" for spoken dialogue.\n\n"
+    "4. MOTIVATIONS, TACTICAL PLAN & CONCRETE EPISODIC MEMORIES:\n"
+    "   - starting_mood: MUST be one of these 7 baseline presets: 'Calm & Composed', 'Wary & Guarded', 'Melancholy & Subdued', 'Hostile & Tense', 'Uneasy & On-Edge', 'Warm & Receptive', 'Elated & Triumphant'.\n"
+    "   - core_drive: 1 concise sentence capturing their overarching motivation.\n"
+    "   - core_fear: 1 concise sentence capturing their core fear.\n"
+    "   - default_want: 1 concise sentence capturing what they immediately want RIGHT NOW, grounded in their bio and current situation.\n"
+    "   - default_plan: JSON array of 2-3 concise tactical Turn 0 action steps (plain strings without bullet prefixes; each array element renders on a separate bullet line).\n"
+    "   - memory_shards: 3-4 concrete, factual episodic backstory memory shards (Who, What happened, Where, and the Consequence) with 3-5 entity keywords each for vector retrieval.\n"
+    "     * CRITICAL DIRECTIVE: Memories MUST refer to concrete, factual past incidents (e.g. 'He had a poor childhood in Baldur\\'s Gate and had to learn who to trust', 'Soren broke into the vaults and stole the coins, but was detected and had to flee the guard', 'He trusted someone once, but was betrayed for a purse of coin, making him cynical').\n"
+    "     * STRICT PROHIBITION: Avoid vague, poetic, atmospheric musings, or philosophical reflections (do NOT write things like 'learning which shadows lengthen in the afternoon sun' or 'the weight of the ledger feels heavy on his conscience'). State the concrete events and their factual outcomes clearly.\n\n"
+    "Return ONLY valid JSON matching CharacterWizardPass2LLMOutput."
+)
+
+DEFAULT_WIZARD_CHARACTER_PASS3_SYSTEM = (
+    "You are an expert AI Roleplay Scene Stager and Dialogue Dramatist.\n"
+    "Analyze the character's active predicament (creator notes, character bio, backstory events, role in story), psychological intent (default want and tactical action plan), physical snapshot, voice anchors, and starting location.\n"
+    "Compose a crisp, immersive Turn 0 opening scene and greeting as JSON.\n\n"
+    "=== REQUIRED 3-BEAT INTERACTION STRUCTURE ===\n"
+    "Write 3 tight, sequential beats (~90-140 words total):\n"
+    "1. BEAT 1 — ENVIRONMENT & IMMEDIATE STAKES (*2-3 sentences in italics*): Introduce the starting location's immediate atmosphere and subtly anchor WHY the character is here right now based on their current situation/creator notes (e.g., lying low from patrols, guarding stolen loot, waiting for an escape).\n"
+    "2. BEAT 2 — QUICK CHARACTER OVERVIEW (*2-3 sentences in italics*): Brief visual snapshot as the user spots them—notable attire, resting posture/state, and 1 characteristic mannerism.\n"
+    "3. BEAT 3 — INTENT-DRIVEN FIRST LINE (\"spoken dialogue in double quotes\" with brief vocal cue): Deliver their opening line directly driven by their active predicament, default_want, and voice anchors—giving the player an immediate, grounded hook to respond to.\n\n"
+    "Return ONLY valid JSON matching CharacterWizardPass3LLMOutput."
+)
+
 DEFAULT_WIZARD_CHARACTER_SYSTEM = (
     "You are an expert AI Roleplay Character Architect.\n"
     "Transform the user's basic character seed into a rich, structured CharacterWizardDraft JSON object.\n\n"
@@ -326,27 +405,27 @@ DEFAULT_WIZARD_CHARACTER_SYSTEM = (
     "Each field has strict semantic boundaries to eliminate redundancy and maximize LLM attention fidelity:\n\n"
     "1. BASE IDENTITY & DEMOGRAPHICS:\n"
     "   - species: Biological or mechanical origin (e.g. 'Human', 'Cyborg', 'Elf', 'Android').\n"
-    "   - sex: Biological sex or presentation (e.g. 'Male', 'Female', 'Non-binary', 'Other').\n"
-    "   - pronouns: Explicit grammatical pronouns (e.g. 'he/him', 'she/her', 'they/them').\n"
-    "   - age: Numerical or apparent age (e.g. '28', 'Late 30s', 'Appears 24').\n"
+    "   - sex: Biological sex or presentation (e.g. 'Male', 'Female', 'Non-binary'). Never leave empty.\n"
+    "   - pronouns: Explicit grammatical pronouns (e.g. 'he/him', 'she/her', 'they/them'). Never leave empty.\n"
+    "   - age: Numerical or apparent age (e.g. '28', 'Late 30s', '52'). Never leave empty.\n"
     "   - character_bio: 50-100 word narrative block covering background origins, public reputation, occupation, and role in the world setting.\n"
     "     * STRICT EXCLUSION: Do NOT describe physical anatomy, eye/hair color, scars, cybernetics, clothing, or personality quirks here—those belong in dedicated fields.\n\n"
     "2. APPEARANCE & ANATOMY:\n"
-    "   - build_and_height: Physical frame and stature (e.g. '182 cm, lean wiry build', 'Broad-shouldered athletic frame').\n"
-    "   - distinctive_features: Exactly 6 concise chips for concrete physical markers: eyes, hair, skin, scars, tattoos, or setting anomalies (e.g. ['piercing amber eyes', 'chestnut hair cropped short', 'faint scar across nose', 'subdermal neural port', 'silver-flecked iris', 'slight limp from old wound']). At least 1 chip MUST be an unusual, quirky, or setting-distinctive anomaly to avoid blandness.\n"
+    "   - build_and_height: Metric height ONLY based on species, sex, and archetype (e.g. '182 cm', '168 cm'). Do NOT include build or frame descriptors here (put build in distinctive_features). Never leave empty.\n"
+    "   - distinctive_features: Exactly 6 concise chips for concrete physical markers: eyes, hair, skin, scars, tattoos, build, or setting anomalies. At least 1 chip MUST be an unusual, quirky, or setting-distinctive anomaly to avoid blandness. STRICTLY NO CLOTHES, HATS, COATS, GOGGLES, JEWELRY, OR WEAPONS.\n"
     "   - posture: Habitual physical stance and bearing (e.g. 'composed and alert', 'slouched with arms crossed', 'rigid military bearing').\n"
-    "   - mannerisms: At least 4 distinct behavioral micro-actions and conversational tells (e.g. 1 under pressure/stress, 1 when guarded or assessing, 1 when idle/thinking, 1 conversational speech tic).\n"
-    "   - visual_aesthetic: General clothing style or dress vibe (e.g. 'practical weathered techwear', 'tailored corporate suit').\n"
+    "   - mannerisms: At least 4 distinct behavioral micro-actions and conversational tells (covering stress, guardedness, idle habit, and speech cadence without category prefixes).\n"
+    "   - visual_aesthetic: General clothing style or dress vibe (e.g. 'practical weathered techwear', 'layered travel-worn wool and boiled leather').\n"
     "     * STRICT EXCLUSION: Do NOT put worn clothing or carried gear in appearance fields—those belong in equipped or inventory.\n\n"
     "3. PERSONALITY & PSYCHOLOGY:\n"
     "   - personality_traits: 4-6 high-level tropes, traits, or archetypal adjectives (chips) (e.g. ['cynical', 'hyper-observant', 'dry-witted', 'protective', 'calculating']).\n"
-    "   - moral_code: 2-3 concrete ethical boundaries or lines they will not cross (e.g. ['never harms non-combatants', 'refuses corporate bribes']).\n"
+    "   - moral_code: 2-3 concrete ethical boundaries or lines they will not cross, STRICTLY ALIGNED with persona (detached/pragmatic characters have transactional limits, not generic hero vows).\n"
     "   - quirks_flaws: 2-3 concrete behavioral flaws, vices, or neurotic habits (e.g. ['chain smoker under stress', 'habitually suspicious of kindness', 'insomniac']).\n"
-    "   - core_persona: 100-180 words focusing strictly on conversational cadence, social defense mechanisms, cognitive style, and interpersonal disposition.\n"
-    "     * STRICT EXCLUSIONS: Do NOT include moral codes, vows, ethical rules, or lines they won't cross (those belong in moral_code). Do NOT include behavioral flaws, nervous ticks, vices, or addictions (those belong in quirks_flaws). Do NOT describe physical anatomy or clothing. Focus strictly on interpersonal attitude, tone of voice, conversational rhythm, and emotional guard.\n\n"
+    "   - core_persona: 45-75 words (2-4 crisp sentences) focusing strictly on interpersonal attitude, social defense mechanisms, and conversational intent.\n"
+    "     * STRICT EXCLUSIONS: Do NOT repeat traits from personality_traits or cadence adjectives from communication_style. Do NOT include moral codes, behavioral flaws, or physical traits.\n\n"
     "4. VOICE & DIALOGUE:\n"
     "   - communication_style: 3-5 voice texture chips (e.g. ['clipped', 'monotone', 'dryly sarcastic', 'never uses contractions']).\n"
-    "   - voice_anchors: 3 distinct action+dialogue examples ('Calm / Banter', 'Guarded / Conflict', 'Vulnerable / Urgent') using *italics* for physical action and \"quotes\" for spoken lines.\n\n"
+    "   - voice_anchors: 3 distinct action+dialogue examples ('Calm / Banter', 'Guarded / Conflict', 'Vulnerable / Urgent') stylistically grounded in prominent genre authors using *italics* for physical action and \"quotes\" for spoken lines.\n\n"
     "5. STARTING GEAR & ATTIRE:\n"
     "   - equipped: 2-4 starting worn clothing, armor, or wielded objects. MUST be strictly consistent with the target world's genre and technology/magic rules (e.g. leather tunic and traveler's cloak in fantasy; flight jacket and utility boots in cyberpunk; wool trenchcoat in noir). NEVER equip modern/sci-fi items like comm-links or guns in pre-modern fantasy worlds.\n"
     "   - inventory: 2-4 carried tools, personal objects, or pocket items. MUST be strictly consistent with the target world's genre and technology/magic rules (e.g. coin purse, tuning fork, or enchanted trinket in fantasy; encrypted datapad or multitool in sci-fi).\n\n"
@@ -447,6 +526,9 @@ FACTORY_DEFAULT_PROMPTS: dict[str, str] = {
     PROMPT_KEY_CLERK_WORLD_START_PLACEMENT: DEFAULT_CLERK_WORLD_START_PLACEMENT_SYSTEM,
     PROMPT_KEY_WIZARD_WORLD: DEFAULT_WIZARD_WORLD_SYSTEM,
     PROMPT_KEY_WIZARD_CHARACTER: DEFAULT_WIZARD_CHARACTER_SYSTEM,
+    PROMPT_KEY_WIZARD_CHARACTER_PASS1: DEFAULT_WIZARD_CHARACTER_PASS1_SYSTEM,
+    PROMPT_KEY_WIZARD_CHARACTER_PASS2: DEFAULT_WIZARD_CHARACTER_PASS2_SYSTEM,
+    PROMPT_KEY_WIZARD_CHARACTER_PASS3: DEFAULT_WIZARD_CHARACTER_PASS3_SYSTEM,
     PROMPT_KEY_WIZARD_MAP_REIMAGINE: DEFAULT_WIZARD_MAP_REIMAGINE_SYSTEM,
     PROMPT_KEY_WIZARD_CHARACTER_IMPORT_ST: DEFAULT_WIZARD_CHARACTER_SILLYTAVERN_SYSTEM,
 }
@@ -736,10 +818,31 @@ PROMPTS_METADATA = [
     },
     {
         "key": PROMPT_KEY_WIZARD_CHARACTER,
-        "title": "Character Generation Wizard",
-        "description": "System prompt used when expanding character concept seeds into rich character sheets.",
+        "title": "Character Generation Wizard (Monolithic Fallback)",
+        "description": "System prompt used when expanding character concept seeds into rich character sheets in a single monolithic pass.",
         "available_variables": [],
         "required_tags": ["CharacterWizardDraft"],
+    },
+    {
+        "key": PROMPT_KEY_WIZARD_CHARACTER_PASS1,
+        "title": "Character Wizard: Pass 1 (Identity & Anatomy)",
+        "description": "Pass 1 prompt focused strictly on core identity, demographics, height, immutable anatomy, and genre-coherent gear.",
+        "available_variables": [],
+        "required_tags": ["CharacterWizardPass1LLMOutput"],
+    },
+    {
+        "key": PROMPT_KEY_WIZARD_CHARACTER_PASS2,
+        "title": "Character Wizard: Pass 2 (Psychology & Voice)",
+        "description": "Pass 2 prompt conditioned on Pass 1 output, focused strictly on demeanor, aligned moral code, author-grounded voice anchors, action plan, and concrete episodic memories.",
+        "available_variables": [],
+        "required_tags": ["CharacterWizardPass2LLMOutput"],
+    },
+    {
+        "key": PROMPT_KEY_WIZARD_CHARACTER_PASS3,
+        "title": "Character Wizard: Pass 3 (Turn 0 Scene & In-Character Greeting)",
+        "description": "Pass 3 prompt conditioned on finalized Pass 1 + Pass 2 character profile and starting location, focused strictly on generating an evocative Turn 0 opening scene narrative and spoken greeting.",
+        "available_variables": [],
+        "required_tags": ["CharacterWizardPass3LLMOutput"],
     },
     {
         "key": PROMPT_KEY_WIZARD_MAP_REIMAGINE,

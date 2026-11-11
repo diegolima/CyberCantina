@@ -710,7 +710,8 @@ def build_zone1_static_system_prompt(
 
     appearance_parts: list[str] = []
     if character.build_and_height:
-        appearance_parts.append(f"- Build & Height: {character.build_and_height}")
+        height_label = "Build & Height" if "," in character.build_and_height else "Height"
+        appearance_parts.append(f"- {height_label}: {character.build_and_height}")
     if character.distinctive_features:
         appearance_parts.append(f"- Distinctive Features: {', '.join(character.distinctive_features)}")
     if character.posture:

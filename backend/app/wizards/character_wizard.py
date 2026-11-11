@@ -2,24 +2,97 @@
 
 from __future__ import annotations
 
+import logging
 import re
+from typing import Any
 
 from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
 from app.prompts import get_default_prompt, render_template
 from app.schemas.affective import infer_temperament_and_worldview_from_text
 from app.schemas.character import (
+    BASELINE_MOOD_PRESETS,
     BaselinePsyche,
     CharacterWizardDraft,
     CharacterWizardLLMOutput,
+    CharacterWizardPass1LLMOutput,
+    CharacterWizardPass2LLMOutput,
+    CharacterWizardPass3LLMOutput,
     CharacterWizardSeed,
     ItemInstance,
     MemoryShard,
     VoiceAnchor,
     coerce_item_list,
+    normalize_bullet_plan,
+    normalize_starting_mood,
+    sanitize_character_markup,
 )
 from app.schemas.world import WorldRecord
 from app.db.repository import slugify_tag
+
+logger = logging.getLogger(__name__)
+
+
+def _sanitize_height_only(raw_val: str, fallback_height: str) -> str:
+    """Extract only linear height (preferring metric cm), stripping build/frame descriptors."""
+    clean = (raw_val or "").strip()
+    if not clean:
+        return fallback_height
+    cm_match = re.search(r"(\d{2,3}(?:\.\d+)?)\s*cm\b", clean, re.IGNORECASE)
+    if cm_match:
+        return f"{round(float(cm_match.group(1)))} cm"
+    m_match = re.search(r"\b(\d)\.(\d{2})\s*m\b", clean, re.IGNORECASE)
+    if m_match:
+        return f"{int(m_match.group(1)) * 100 + int(m_match.group(2))} cm"
+    ft_match = re.search(r"\b(\d)\s*['’]\s*(\d{1,2})\s*(?:\"|”|in)?", clean)
+    if ft_match:
+        inches = int(ft_match.group(1)) * 12 + int(ft_match.group(2))
+        return f"{round(inches * 2.54)} cm"
+    head = re.split(r"[,;—–-]", clean)[0].strip()
+    if any(ch.isdigit() for ch in head):
+        return head
+    return fallback_height
+
+
+def _clean_mannerism(raw_text: str) -> str:
+    """Strip redundant slot category labels such as 'idle tell: ' or 'when under pressure: '."""
+    cleaned = re.sub(
+        r"^(?:when\s+(?:under\s+pressure|guarded|idle|stressed)|under\s+pressure|guarded\s+tell|idle\s+tell|stress\s+tell|speech\s+cadence(?:\s+tic)?|conversational\s+tell)\s*[:\-]\s*",
+        "",
+        (raw_text or "").strip(),
+        flags=re.IGNORECASE,
+    ).strip()
+    if cleaned and cleaned[0].islower():
+        cleaned = cleaned[0].upper() + cleaned[1:]
+    return cleaned
+
+
+def _split_compound_items(items: list[str]) -> list[str]:
+    """Split compound item strings like 'Cloak and linen tunic' into single discrete items."""
+    result: list[str] = []
+    compound_regex = re.compile(r"^(.*?)\s+(?:and|&)\s+(.*)$", re.IGNORECASE)
+    color_adjectives = {
+        "black", "white", "red", "blue", "green", "grey", "gray",
+        "worn", "torn", "old", "new", "gold", "silver", "dark", "light"
+    }
+    for it in items:
+        cleaned = it.strip()
+        if not cleaned:
+            continue
+        match = compound_regex.match(cleaned)
+        if match:
+            left, right = match.group(1).strip(), match.group(2).strip()
+            if (
+                len(left) >= 4
+                and len(right) >= 4
+                and left.lower() not in color_adjectives
+                and right.lower() not in color_adjectives
+            ):
+                result.append(left)
+                result.append(right.capitalize() if right and right[0].islower() else right)
+                continue
+        result.append(cleaned)
+    return result
 
 
 GENRE_PROFILES = [
@@ -31,8 +104,10 @@ GENRE_PROFILES = [
             "warlock", "ranger", "enchant", "kingdom", "realm", "dungeon", "crusade"
         ],
         "equipped": lambda arch: [
-            f"Tailored traveling cloak and tunic suited for a {arch}",
-            "Reinforced leather breeches and sturdy brass-buckled belt",
+            f"Tailored traveling cloak suited for a {arch}",
+            f"Linen traveling tunic suited for a {arch}",
+            "Reinforced leather breeches",
+            "Sturdy brass-buckled belt",
             "High-cuff weathered riding boots",
         ],
         "inventory": lambda note: [
@@ -40,12 +115,12 @@ GENRE_PROFILES = [
             f"Signature keepsake ({note[:42].rstrip('.')})" if note else "Weathered traveler's journal and charcoal quill",
         ],
         "features": [
-            "Weathered traveling attire with braided trim",
+            "Sun-weathered skin with faint laugh lines around the eyes",
             "Keen, observant gaze with weathered crow's feet",
-            "Hair bound back with a durable leather cord",
+            "Thick dark hair cropped roughly at the nape",
             "Faint dueling scar along the left jawline",
-            "Broad, grounded posture accustomed to long roads",
-            "Quirky silver ring bearing an unidentifiable guild seal",
+            "Calloused swordsman's palms and knuckles",
+            "Quirky heterochromia with one hazel eye and one pale silver-flecked iris",
         ],
         "visual_aesthetic": "Practical layered leather, linen, and travel-worn wool",
     },
@@ -57,8 +132,9 @@ GENRE_PROFILES = [
             "warp", "freighter", "cosmos", "zero-g", "stardrive"
         ],
         "equipped": lambda arch: [
-            f"Pressurized flight jumpsuit with utility thermal lining suited for a {arch}",
-            "Magnetic-clamp utility harness and seal gloves",
+            f"Pressurized thermal flight jacket suited for a {arch}",
+            "Sealed utility jumpsuit",
+            "Magnetic-clamp utility harness",
             "Reinforced deck boots with magnetic grip soles",
         ],
         "inventory": lambda note: [
@@ -69,9 +145,9 @@ GENRE_PROFILES = [
             "Slight pallor from extended cycles under artificial ship lighting",
             "Sharp, calculating gaze practiced at monitoring telemetry",
             "Close-trimmed hair designed for helmet seals",
-            "Hydraulic pressure grease stain on wrist cuff",
-            "Steady, zero-gravity accustomed gait",
-            "Unusual brass astronomical compass kept as an analog good luck charm",
+            "Faint chemical burn mark across right collarbone",
+            "Lean, conditioned zero-g musculature with quiet footfalls",
+            "Quirky geometric pilot's tattoo spanning the back of the left hand",
         ],
         "visual_aesthetic": "Sealed utilitarian flightwear with thermal insulation and magnetic fasteners",
     },
@@ -83,8 +159,10 @@ GENRE_PROFILES = [
             "chrome", "deck", "corpo", "fixer", "slum"
         ],
         "equipped": lambda arch: [
-            f"Reinforced utility jacket suited for a {arch}",
+            f"Reinforced weatherproof utility jacket suited for a {arch}",
+            "Dark synthetic fiber undershirt",
             "Dark cargo trousers with concealed equipment pockets",
+            "Quick-release nylon utility belt",
             "Scuffed composite work boots",
         ],
         "inventory": lambda note: [
@@ -97,7 +175,7 @@ GENRE_PROFILES = [
             "Cropped dark hair styled for utility",
             "Faint electrical burn scar across right knuckles",
             "Lean, wiry athletic frame",
-            "Mismatched chrome-plated thumb ring or finger casing",
+            "Quirky synthetic biometric tattoo that subtly shifts hue with pulse rate",
         ],
         "visual_aesthetic": "Weathered high-tech streetwear with moisture-sealed cabling channels",
     },
@@ -110,7 +188,8 @@ GENRE_PROFILES = [
         ],
         "equipped": lambda arch: [
             f"Heavy charcoal wool greatcoat with high upturned collar suited for a {arch}",
-            "Dark pressed waistcoat, collared shirt, and sturdy trousers",
+            "Dark pressed waistcoat and collared shirt",
+            "Sturdy charcoal woolen trousers",
             "Treaded leather boots stained with damp earth",
         ],
         "inventory": lambda note: [
@@ -120,10 +199,10 @@ GENRE_PROFILES = [
         "features": [
             "Hollow, sleep-deprived eyes carrying a haunted wariness",
             "Prematurely silvered streaks through dark hair",
-            "Nervous, hyper-attentive posture constantly checking shadows",
+            "Slight involuntary tremor in left hand when startled",
             "Faint claw or ritual scar concealed beneath the collar",
-            "Faint scent of old parchment, sulfur, or sweet pipe tobacco",
-            "Curious tarnished talisman that seems faintly cold to the touch",
+            "Ashen, gaunt cheekbones and sunken temple contours",
+            "Quirky crescent-shaped birthmark high on the left temple",
         ],
         "visual_aesthetic": "Dark Victorian tailoring and heavy layered wool with weathered hemlines",
     },
@@ -136,7 +215,9 @@ GENRE_PROFILES = [
         ],
         "equipped": lambda arch: [
             f"Dust-caked canvas duster coat suited for a {arch}",
-            "Faded denim work shirt and reinforced riding pants with utility gunbelt",
+            "Faded denim work shirt",
+            "Reinforced riding pants",
+            "Tooled leather gunbelt with brass buckle",
             "Spurred leather boots with worn riding heels",
         ],
         "inventory": lambda note: [
@@ -145,11 +226,11 @@ GENRE_PROFILES = [
         ],
         "features": [
             "Sun-weathered skin with deep squint lines from the frontier glare",
-            "Dusty wide-brimmed hat casting a shadow over watchful eyes",
+            "Steely, unblinking grey eyes beneath a heavy brow",
             "Coarse stubble along a square jaw",
             "Faint powder burn mark on trigger finger",
-            "Slow, relaxed drawl masking coiled physical reflexes",
-            "Unusual silver half-dollar coin with a bullet dent carried in pocket",
+            "Wiry, sun-hardened frame with corded forearm tendons",
+            "Quirky notched left earlobe from a near-miss bullet graze",
         ],
         "visual_aesthetic": "Weather-beaten canvas, denim, and sun-cured leather with brass hardware",
     },
@@ -161,8 +242,10 @@ GENRE_PROFILES = [
             "bunker", "doomsday", "nuclear"
         ],
         "equipped": lambda arch: [
-            f"Layered scavenger coat patched with salvaged tire rubber and fabric suited for a {arch}",
-            "Stitched canvas cargo pants with reinforced knee guards",
+            f"Layered scavenger coat with reinforced shoulders suited for a {arch}",
+            "Heavy canvas work shirt",
+            "Stitched cargo pants with knee guards",
+            "Modular webbed utility belt",
             "Reinforced combat boots bound with wire and duct tape",
         ],
         "inventory": lambda note: [
@@ -174,8 +257,8 @@ GENRE_PROFILES = [
             "Alert, hungry eyes trained on perimeter movement",
             "Patchy hair cut short with a combat knife",
             "Mottled chemical burn scar along forearm",
-            "Low, economical center of gravity and quiet footfalls",
-            "Quirky necklace made of deactivated pre-collapse circuitry and animal bone",
+            "Knotted, scarred knuckles from hand-to-hand survival",
+            "Quirky mismatched tooth: an implanted jagged titanium bicuspid",
         ],
         "visual_aesthetic": "Scavenged protective layers, reinforced patches, and modular gear webbing",
     },
@@ -186,8 +269,10 @@ GENRE_PROFILES = [
             "mobster", "gangster", "speakeasy", "private eye", "syndicate crime", "corrupt city"
         ],
         "equipped": lambda arch: [
-            f"Heavy wool trenchcoat favored by this {arch}",
-            "Dark collared shirt, loosened tie, and pressed slacks",
+            f"Heavy wool trenchcoat suited for a {arch}",
+            "Dark collared dress shirt with loosened silk tie",
+            "Pressed charcoal wool slacks",
+            "Concealed shoulder holster",
             "Polished leather brogues showing street wear",
         ],
         "inventory": lambda note: [
@@ -198,9 +283,9 @@ GENRE_PROFILES = [
             "Shadowed, watchful eyes beneath a lowered brow",
             "Slicked-back dark hair silvering at the temples",
             "Faint razor nick near the collar",
-            "Upright yet weary posture",
+            "Heavy-set shoulders showing the wear of long stakeouts",
             "Calloused fingertips stained with tobacco or ink",
-            "Curious vintage pocket watch that ticks slightly out of tempo",
+            "Quirky crooked bridge on a twice-broken boxer's nose",
         ],
         "visual_aesthetic": "Classic mid-century monochrome tailoring, trenchcoat, and felt fedora",
     },
@@ -212,7 +297,9 @@ GENRE_PROFILES = [
         ],
         "equipped": lambda arch: [
             f"Weather-resistant dark softshell jacket suited for a {arch}",
-            "Fitted tactical cargo pants or dark durable denim",
+            "Form-fitting moisture-wicking undershirt",
+            "Fitted tactical cargo pants",
+            "Rigid nylon utility belt",
             "Low-profile trail running shoes with grip soles",
         ],
         "inventory": lambda note: [
@@ -224,8 +311,8 @@ GENRE_PROFILES = [
             "Sharp, scanning eyes that instinctively track exits and CCTV domes",
             "Neatly groomed hair with zero identifying fashion statements",
             "Faint surgical scar behind the hairline",
-            "Calm, measured neutral posture",
-            "Unusual scarred knuckle or customized wristwatch with dual-timezone bezel",
+            "Tightly conditioned athletic frame with silent, balanced footwork",
+            "Quirky pale scar tracing an angle across the left eyebrow",
         ],
         "visual_aesthetic": "Low-profile civilian technical apparel designed for crowd concealment",
     },
@@ -236,8 +323,10 @@ GENRE_PROFILES = [
             "brass", "cog", "inventor", "aether", "alchemical", "boiler"
         ],
         "equipped": lambda arch: [
-            f"Leather-trimmed tweed coat or brass-buckled mechanic's apron suited for a {arch}",
+            f"Leather-trimmed tweed coat suited for a {arch}",
+            "Heavy linen shirt with brass studs",
             "High-waisted trousers with reinforced tool loops",
+            "Brass-buckled mechanic's tool harness",
             "Oil-treated leather work boots with brass lace eyelets",
         ],
         "inventory": lambda note: [
@@ -248,9 +337,9 @@ GENRE_PROFILES = [
             "Soot smudges near temples and grease under fingernails",
             "Intense, calculating gaze analyzing structural tolerances",
             "Wild hair tied loosely with an oiled string",
-            "Brass-rimmed goggles pushed up on forehead or neck",
-            "Erect, energetic posture with rapid hand gestures",
-            "Odd mechanical pocket gadget that whirs and clicks at random intervals",
+            "Faint circular pressure mark around eye orbits from loupe lenses",
+            "Lean, kinetic frame with quick, dexterous fingers",
+            "Quirky brass prosthetic finger joint on right index finger",
         ],
         "visual_aesthetic": "Victorian industrial leather, tweed, brass fittings, and utilitarian tool aprons",
     },
@@ -261,8 +350,10 @@ GENRE_PROFILES = [
             "privateer", "cutlass", "caribbean", "corsair", "maritime", "islands"
         ],
         "equipped": lambda arch: [
-            f"Weather-beaten captain's coat or linen deck shirt suited for a {arch}",
-            "Tough sailcloth breeches bound with a wide leather sash",
+            f"Weather-beaten broadcloth captain's coat suited for a {arch}",
+            "Loose linen deck shirt",
+            "Tough sailcloth breeches",
+            "Wide leather baldric with brass buckle",
             "Salt-stained leather deck boots with brass buckles",
         ],
         "inventory": lambda note: [
@@ -274,8 +365,8 @@ GENRE_PROFILES = [
             "Piercing, wind-squinting gaze conditioned by open seas",
             "Faint rope-burn scarring along palms and wrists",
             "Balanced sea-legs stance swaying instinctively with movement",
-            "Small gold hoop earring worn in left earlobe",
-            "Curious carved whalebone scrimshaw token depicting a sea creature",
+            "Broad chest and calloused, weather-hardened palms",
+            "Quirky faded kraken tattoo wrapping around left forearm",
         ],
         "visual_aesthetic": "Weathered sailcloth, linen deck shirts, wide leather belts, and brass hardware",
     },
@@ -286,8 +377,10 @@ GENRE_PROFILES = [
             "feudal", "ronin", "wuxia", "dynasty", "pharaoh", "bronze", "legion", "sparta"
         ],
         "equipped": lambda arch: [
-            f"Traditional woven tunic or layered silk and leather robe suited for a {arch}",
-            "Sturdy hide-wrapped girdle and fastened leg wraps",
+            f"Traditional woven tunic or mantle suited for a {arch}",
+            "Pleated linen undertunic",
+            "Fastened leather leg wraps",
+            "Studded leather girdle with bronze clasp",
             "Laced leather sandals or wrapped straw waraji",
         ],
         "inventory": lambda note: [
@@ -299,8 +392,8 @@ GENRE_PROFILES = [
             "Severe, focused gaze disciplined by classical training",
             "Topknot or braided hair bound with iron pin or cord",
             "Old sparring scars across forearms and shoulders",
-            "Economy of motion; never fidgets or wastes movement",
-            "Quirky ceremonial bronze ring etched with archaic glyphs",
+            "Disciplined, corded muscle with zero wasted body fat",
+            "Quirky ritual brand mark etched onto the inner right forearm",
         ],
         "visual_aesthetic": "Traditional woven fabrics, wrapped leather armor, and classical ceremonial draping",
     },
@@ -311,8 +404,10 @@ GENRE_PROFILES = [
             "mutant power", "crimefighter", "costumed", "nemesis"
         ],
         "equipped": lambda arch: [
-            f"Reinforced ballistic weave bodysuit or customized street vigilante jacket suited for a {arch}",
+            f"Reinforced ballistic weave outer jacket suited for a {arch}",
+            "Flexible compression undersuit",
             "Reinforced tactical trousers with hidden padding",
+            "Utility belt with discrete sealed pouches",
             "Impact-resistant athletic combat boots",
         ],
         "inventory": lambda note: [
@@ -323,9 +418,9 @@ GENRE_PROFILES = [
             "Mask line or subtle tan line across upper face",
             "Hyper-alert, scanning gaze tracking high perimeters",
             "Athletic, coiled posture ready to spring into motion",
-            "Faint electrical or chemical singe marks on collar",
-            "Fingers taped or reinforced with lightweight composite",
-            "Curious customized emblem pin with hidden miniature compartment",
+            "Faint lightning-pattern electrical burn scar across left shoulder",
+            "Dense, hyper-conditioned muscle fiber across back and shoulders",
+            "Quirky heterochromia with one eye glowing faintly under low light",
         ],
         "visual_aesthetic": "Reinforced impact-resistant textiles with personalized insignia or cowl",
     },
@@ -334,7 +429,9 @@ GENRE_PROFILES = [
         "keywords": [],
         "equipped": lambda arch: [
             f"Durable all-weather travel coat suited for a {arch}",
-            "Tailored utility garments with secure fastenings and sturdy belt",
+            "Sturdy collared utility shirt",
+            "Reinforced travel trousers",
+            "Heavy leather belt with brass buckle",
             "Hard-wearing, all-terrain travel boots",
         ],
         "inventory": lambda note: [
@@ -347,7 +444,7 @@ GENRE_PROFILES = [
             "Athletic, measured bearing that commands quiet respect",
             "Distinctive pale scar across left brow",
             "Calloused hands accustomed to hard work and skilled craft",
-            "Curious carved stone talisman or coin carried as a personal touchstone",
+            "Quirky subtle amber fleck in the left iris",
         ],
         "visual_aesthetic": "Timeless, durable travel attire designed for utility across diverse realms",
     },
@@ -386,11 +483,366 @@ def resolve_genre_fallback_profile(
     }
 
 
+def infer_demographics_and_anatomy(
+    name: str,
+    archetype: str,
+    rough_notes: str = "",
+    species: str = "Human",
+) -> dict[str, str]:
+    """Deterministically infer sex, pronouns, age, metric height, frame, and posture."""
+    combined = f"{name} {archetype} {rough_notes}".lower()
+
+    # Species inference
+    spec = species.strip() or "Human"
+    if spec.lower() == "human":
+        for candidate in ("elf", "elven", "dwarf", "dwarven", "tiefling", "android", "cyborg", "orc", "halfling", "gnome", "synthetic", "vampire", "alien"):
+            if re.search(rf"\b{candidate}\b", combined):
+                spec = candidate.capitalize()
+                if spec in ("Elven", "Elf"):
+                    spec = "Elf"
+                elif spec in ("Dwarven", "Dwarf"):
+                    spec = "Dwarf"
+                break
+
+    # Sex and Pronouns inference
+    female_cues = re.search(r"\b(she|her|hers|female|woman|girl|sister|mother|lady|queen|matriarch|heroine|witch|priestess|sorceress|daughter|actress)\b", combined)
+    male_cues = re.search(r"\b(he|him|his|male|man|boy|brother|father|lord|king|patriarch|hero|wizard|priest|son|guy|actor)\b", combined)
+    nonbinary_cues = re.search(r"\b(they|them|theirs|non-binary|nonbinary|enby|synthetic|construct|golem|drone|automaton|ageless|neuter)\b", combined)
+
+    name_clean = name.strip()
+    first_name = name_clean.split()[0].lower() if name_clean else "character"
+
+    male_names = {"soren", "marcus", "john", "deckard", "victor", "arthur", "bruce", "roland", "kane", "lucas", "ethan", "dante", "felix", "leo", "cyril", "kael", "torin", "ren"}
+    female_names = {"lyra", "sarah", "elena", "mia", "diana", "renna", "anya", "talia", "kira", "selene", "valeria", "mara", "seraphina", "chloe", "naomi", "freya"}
+
+    if female_cues and not male_cues:
+        sex, pronouns = "Female", "she/her"
+    elif male_cues and not female_cues:
+        sex, pronouns = "Male", "he/him"
+    elif nonbinary_cues or spec.lower() in ("android", "synthetic", "automaton", "construct", "drone"):
+        sex, pronouns = "Non-binary", "they/them"
+    elif first_name in female_names or (first_name.endswith(("a", "ia", "ina", "ette", "elle")) and first_name not in ("joshua", "luca")):
+        sex, pronouns = "Female", "she/her"
+    elif first_name in male_names or first_name.endswith(("o", "us", "en", "or", "ard", "on")):
+        sex, pronouns = "Male", "he/him"
+    else:
+        h = sum(ord(c) for c in first_name) % 10
+        if h in (0, 1):
+            sex, pronouns = "Non-binary", "they/them"
+        elif h in (2, 3, 4, 5):
+            sex, pronouns = "Male", "he/him"
+        else:
+            sex, pronouns = "Female", "she/her"
+
+    # Age inference
+    explicit_age_match = re.search(r"\b(\d{2})\s*(?:years? old|yo|y/o)?\b", rough_notes)
+    if explicit_age_match:
+        age = explicit_age_match.group(1)
+    elif any(k in combined for k in ("veteran", "elder", "mentor", "retired", "ancient", "grizzled", "patriarch", "matriarch", "gray", "silver")):
+        age = "52"
+    elif any(k in combined for k in ("young", "rookie", "student", "apprentice", "prodigy", "urchin", "novice", "initiate", "youth")):
+        age = "21"
+    elif any(k in combined for k in ("seasoned", "infiltrator", "investigator", "captain", "detective", "smuggler", "specialist", "agent", "operative")):
+        age = "34"
+    else:
+        age = "29"
+
+    # Height and Build inference
+    spec_lower = spec.lower()
+    if "dwarf" in spec_lower:
+        height_val = 140
+    elif "elf" in spec_lower:
+        height_val = 188
+    elif any(k in spec_lower for k in ("halfling", "gnome")):
+        height_val = 106
+    elif any(k in spec_lower for k in ("orc", "giant", "goliath")):
+        height_val = 214
+    else:
+        if sex == "Female":
+            height_val = 168
+        elif sex == "Male":
+            height_val = 180
+        else:
+            height_val = 174
+
+    if any(k in combined for k in ("knight", "brawler", "tank", "berserker", "soldier", "enforcer", "blacksmith", "heavy", "warrior")):
+        build_str = "broad-shouldered athletic frame"
+    elif any(k in combined for k in ("rogue", "thief", "assassin", "infiltrator", "dancer", "scout", "ranger", "wiry", "slender")):
+        build_str = "lean, wiry athletic frame"
+    elif any(k in combined for k in ("scholar", "mage", "wizard", "hacker", "clerk", "alchemist", "investigator", "slight")):
+        build_str = "slender, wiry build"
+    else:
+        build_str = "balanced athletic build"
+
+    build_and_height = f"{height_val} cm"
+
+    # Posture inference
+    if any(k in combined for k in ("soldier", "enforcer", "paladin", "guard", "officer", "knight")):
+        posture = "Rigid, upright military bearing; feet planted shoulder-width apart"
+    elif any(k in combined for k in ("rogue", "thief", "outlaw", "smuggler", "assassin", "scavenger")):
+        posture = "Relaxed, low-center-of-gravity stance; habitually leaning against doorways or walls"
+    elif any(k in combined for k in ("scholar", "mage", "hacker", "clerk", "alchemist", "detective", "investigator")):
+        posture = "Slight forward hunch; shoulders rounded with hands clasped behind back or in pockets"
+    elif any(k in combined for k in ("noble", "diplomat", "bard", "performer", "captain", "courtier")):
+        posture = "Poised, deliberate posture with chin slightly raised and fluid, confident gestures"
+    else:
+        posture = "Alert, composed bearing with measured, watchful economy of motion"
+
+    return {
+        "species": spec,
+        "sex": sex,
+        "pronouns": pronouns,
+        "age": age,
+        "height": f"{height_val} cm",
+        "build": build_str,
+        "build_and_height": build_and_height,
+        "posture": posture,
+    }
+
+
+def infer_moral_code_and_quirks(
+    archetype: str,
+    personality_keywords: list[str],
+    rough_notes: str = "",
+    core_persona: str = "",
+) -> tuple[list[str], list[str]]:
+    """Generate persona-aligned moral boundaries and concrete behavioral quirks."""
+    combined = f"{archetype} {' '.join(personality_keywords)} {rough_notes} {core_persona}".lower()
+
+    if any(k in combined for k in ("cynic", "detached", "mercenary", "selfish", "outlaw", "hustler", "assassin", "criminal", "smuggler", "fixer", "cold", "ruthless", "pragmat")):
+        moral_code = [
+            "Never risks life or freedom for sentimental causes without tangible leverage or collateral",
+            "Demands fair payment and strictly honors a deal once blood, coin, or collateral is exchanged",
+            "Refuses to become anyone's expendable pawn or die for another's ideology",
+        ]
+        quirks_flaws = [
+            "Instinctively tracks exits and calculates escape vectors whenever entering an unfamiliar room",
+            "Deflects personal inquiries with abrasive irony or evasive, dry sarcasm",
+            "Cannot sleep soundly unless a weapon is within direct arm's reach and back is against a solid wall",
+        ]
+    elif any(k in combined for k in ("paladin", "guardian", "knight", "protector", "hero", "healer", "cleric", "devoted", "altruist")):
+        moral_code = [
+            "Will not abandon an ally or vulnerable innocent when direct action can prevent tragedy",
+            "Refuses to employ extortion, cruelty, or terror even when facing ruthless adversaries",
+            "Holds sworn oaths sacred, standing ground even when withdrawal offers tactical advantage",
+        ]
+        quirks_flaws = [
+            "Carries deep survivor's guilt, obsessively holding themselves personally responsible for collateral harm",
+            "Stiff and visibly awkward in casual social settings, reflexively defaulting to vigilant patrol duty",
+            "Prone to taking unreasonable physical risks to shield others from danger",
+        ]
+    elif any(k in combined for k in ("scholar", "mage", "scientist", "investigator", "detective", "hacker", "curious", "analyst")):
+        moral_code = [
+            "Refuses to destroy unique knowledge, historical records, or documented evidence under political pressure",
+            "Will not test untested theories or hazardous arcana on unwitting subjects",
+            "Stands by verified empirical fact even when confronting hostile, dogmatic authority",
+        ]
+        quirks_flaws = [
+            "Becomes dangerously hyperfocused on unsolved enigmas, neglecting basic rest and immediate threats",
+            "Speaks in overly dense analytical jargon when under stress, alienating non-specialists",
+            "Struggles to process subtle emotional subtext, often taking figurative sarcasm as literal inquiry",
+        ]
+    elif any(k in combined for k in ("rogue", "thief", "trickster", "scavenger", "rebel", "drifter")):
+        moral_code = [
+            "Never steals from or exploits those who have already lost everything",
+            "Never betrays a fellow fugitive or street partner who has kept their word",
+            "Always secures an emergency exit for themselves and a clean escape path for companions",
+        ]
+        quirks_flaws = [
+            "Compulsively fidgets with small lockpicks, coins, or trinkets when forced to stay still",
+            "Has a visceral aversion to rigid authority, visibly bristling whenever given a direct order",
+            "Maintains hidden emergency supply stashes in multiple locations out of perpetual distrust",
+        ]
+    else:
+        moral_code = [
+            "Never betrays an ally or employer who has acted in transparent good faith",
+            "Refuses to sacrifice personal autonomy or sell out core principles for empty promises",
+            "Will not initiate unprovoked violence against unarmed parties",
+        ]
+        quirks_flaws = [
+            "Habitually suspicious of unsolicited kindness, immediately searching for hidden leverage",
+            "Subtly checks weapon holster or belt fastenings when conversation turns tense",
+            "Pauses deliberately before answering direct personal questions, studying the listener's eyes",
+        ]
+
+    return moral_code, quirks_flaws
+
+
+def infer_dialogue_anchors_and_style(
+    name: str,
+    archetype: str,
+    genre: str = "",
+    rough_notes: str = "",
+) -> tuple[list[str], list[VoiceAnchor]]:
+    """Derive literary-grounded voice anchors and communication style chips."""
+    combined = f"{archetype} {genre} {rough_notes}".lower()
+
+    if any(k in combined for k in ("noir", "detective", "gumshoe", "hardboiled", "speakeasy", "crime")):
+        style = ["clipped", "laconic", "dryly sarcastic", "low gravel tone", "elliptical pauses"]
+        anchors = [
+            VoiceAnchor(
+                context="Calm / Conversational (Chandler style)",
+                snippet=(
+                    f"*{name} strikes a wooden match against the doorframe, letting the sulfur burn down before speaking.* "
+                    f"\"If you came to hire a miracle, you're at the wrong address. If you came to buy trouble, sit down.\""
+                ),
+            ),
+            VoiceAnchor(
+                context="Guarded / Under Pressure (Hammett style)",
+                snippet=(
+                    f"*{name}'s jaw sets hard, eyes narrowing beneath the brim of their collar.* "
+                    f"\"Drop the poker face. In this town, anyone playing that innocent already has blood on their cuffs.\""
+                ),
+            ),
+            VoiceAnchor(
+                context="Vulnerable / Urgent",
+                snippet=(
+                    f"*{name} exhales a slow, ragged breath, running calloused fingers along the desk edge.* "
+                    f"\"I don't give a damn about the money anymore. What they found in that warehouse—it changes everything.\""
+                ),
+            ),
+        ]
+    elif any(k in combined for k in ("fantasy", "medieval", "sword", "magic", "bard", "d&d", "tavern")):
+        style = ["measured cadence", "dry wit", "subtext-heavy", "grounded vernacular", "economical phrasing"]
+        anchors = [
+            VoiceAnchor(
+                context="Calm / Conversational (Abercrombie style)",
+                snippet=(
+                    f"*{name} tests the edge of a pewter tankard with one calloused thumb, gaze lingering on the hearth.* "
+                    f"\"You have to be realistic about these things. Heroes get statues, and sensible folk get tomorrow.\""
+                ),
+            ),
+            VoiceAnchor(
+                context="Guarded / Under Pressure (Rothfuss style)",
+                snippet=(
+                    f"*{name}'s expression cools into still stone, posture coiling imperceptibly.* "
+                    f"\"Step back. Words once spoken cannot be gathered back into the throat, and some names carry teeth.\""
+                ),
+            ),
+            VoiceAnchor(
+                context="Vulnerable / Urgent",
+                snippet=(
+                    f"*{name} lets out an uncharacteristically raw sigh, holding unbroken eye contact.* "
+                    f"\"I swore I wouldn't go back to that ruin. But if they've taken the seal... God help us, I have to.\""
+                ),
+            ),
+        ]
+    elif any(k in combined for k in ("cyberpunk", "netrunner", "hacker", "cyborg", "neon", "spire", "high-tech")):
+        style = ["clipped", "street techwear slang", "deadpan delivery", "no wasted words", "cynical undercurrent"]
+        anchors = [
+            VoiceAnchor(
+                context="Calm / Conversational (Gibson style)",
+                snippet=(
+                    f"*{name} taps two fingers against the neural jack behind their ear, listening to the static fade.* "
+                    f"\"The street finds its own uses for things. If your fix isn't dirty, you're paying twice what it's worth.\""
+                ),
+            ),
+            VoiceAnchor(
+                context="Guarded / Under Pressure (Stephenson style)",
+                snippet=(
+                    f"*{name}'s optics track a passing surveillance drone before their gaze snaps back.* "
+                    f"\"Burn that chip right now. You don't ping an ICE firewall like that without leaving a flare behind you.\""
+                ),
+            ),
+            VoiceAnchor(
+                context="Vulnerable / Urgent",
+                snippet=(
+                    f"*{name}'s synthetic knuckles clench with a quiet metallic chime.* "
+                    f"\"They didn't just wipe the server. They scrubbed the backup node where Ren was running. I need to get back in.\""
+                ),
+            ),
+        ]
+    elif any(k in combined for k in ("western", "wasteland", "post-apocalyptic", "frontier", "desert", "fallout")):
+        style = ["sparse drawl", "unflinching eye contact", "poetic bluntness", "low timber", "unhurried cadence"]
+        anchors = [
+            VoiceAnchor(
+                context="Calm / Conversational (McCarthy style)",
+                snippet=(
+                    f"*{name} squats on the heels of their boots, sifting dry dust through weathered fingers.* "
+                    f"\"Out here a man carries what he is and nothing more. What brought you across the dry creek?\""
+                ),
+            ),
+            VoiceAnchor(
+                context="Guarded / Under Pressure (Leonard style)",
+                snippet=(
+                    f"*{name}'s right hand rests casually two inches above their holster.* "
+                    f"\"I told you once to keep your hands where the sun hits them. I don't generally make a habit of saying things twice.\""
+                ),
+            ),
+            VoiceAnchor(
+                context="Vulnerable / Urgent",
+                snippet=(
+                    f"*{name} looks out toward the blackened ridge, jaw clenching tight.* "
+                    f"\"The well went dry three nights ago. If we don't clear that pass before sundown, nobody makes the winter.\""
+                ),
+            ),
+        ]
+    else:
+        style = ["measured", "direct", "guarded", "deliberate cadence", "quiet authority"]
+        anchors = [
+            VoiceAnchor(
+                context="Calm / Conversational (Le Guin style)",
+                snippet=(
+                    f"*{name} pauses, leaning back against the bulkhead with an unhurried, attentive gaze.* "
+                    f"\"You don't cross half the quadrant just for pleasantries. Tell me what's actually on your mind.\""
+                ),
+            ),
+            VoiceAnchor(
+                context="Guarded / Under Pressure",
+                snippet=(
+                    f"*{name}'s posture stiffens almost imperceptibly, voice dropping into a quiet, cold register.* "
+                    f"\"Careful. Those who push that hard on airlock seals usually don't like what they find on the other side.\""
+                ),
+            ),
+            VoiceAnchor(
+                context="Vulnerable / Urgent",
+                snippet=(
+                    f"*{name} exhales slowly, lowering their guard for a brief, candid breath.* "
+                    f"\"Cards on the table—I've kept this quiet as long as I could. But I can't navigate this alone.\""
+                ),
+            ),
+        ]
+
+    return style, anchors
+
+
+def _normalize_distinctive_features(
+    raw_features: list[str],
+    build_str: str,
+    fallback_features: list[str],
+) -> list[str]:
+    """Ensure exactly 6 immutable anatomical features, including the build chip and strictly zero clothing/gear."""
+    gear_pattern = re.compile(
+        r"\b(attire|clothes|clothing|jacket|coat|duster|trenchcoat|tunic|breeches|boots|hat|cap|fedora|goggles|ring|pocket watch|watch|necklace|amulet|talisman|compass|canteen|holster|belt|gloves|apron)\b",
+        re.IGNORECASE,
+    )
+    cleaned: list[str] = []
+    for f in raw_features:
+        trimmed = f.strip()
+        if trimmed and not gear_pattern.search(trimmed):
+            if trimmed not in cleaned:
+                cleaned.append(trimmed)
+
+    # Ensure build frame is present in features
+    has_build = any(b in " ".join(cleaned).lower() for b in ("build", "frame", "stature", "musculature", "physique", "slender", "wiry", "athletic", "muscular"))
+    if not has_build and build_str:
+        cleaned.insert(0, build_str)
+
+    # Backfill up to 6 from fallback_features
+    for fb in fallback_features:
+        if len(cleaned) >= 6:
+            break
+        if fb not in cleaned:
+            cleaned.append(fb)
+
+    return cleaned[:6]
+
+
 def _fallback_character_expansion(
     seed: CharacterWizardSeed,
     world: WorldRecord | None = None,
 ) -> CharacterWizardDraft:
-    """Seed-adaptive fallback builder when the LLM server is unreachable."""
+    """Seed-adaptive fallback builder with procedural demographics, aligned ethics, and genre-coherent gear."""
     kw_str = ", ".join(seed.personality_keywords) if seed.personality_keywords else "perceptive, guarded, dry-witted"
     setting_note = f" within {world.name}" if world else ""
     notes_suffix = f" Additional details: {seed.rough_notes.strip()}" if seed.rough_notes.strip() else ""
@@ -412,6 +864,12 @@ def _fallback_character_expansion(
         else ""
     )
 
+    demo = infer_demographics_and_anatomy(
+        seed.name,
+        seed.archetype,
+        seed.rough_notes,
+    )
+
     profile_data = resolve_genre_fallback_profile(
         world_genre,
         seed.archetype,
@@ -420,7 +878,11 @@ def _fallback_character_expansion(
 
     default_equipped = profile_data["equipped"]
     default_inventory = profile_data["inventory"]
-    distinctive_features = profile_data["distinctive_features"]
+    distinctive_features = _normalize_distinctive_features(
+        profile_data["distinctive_features"],
+        demo["build"],
+        profile_data["distinctive_features"],
+    )
     visual_aesthetic = profile_data["visual_aesthetic"]
 
     mannerisms = [
@@ -439,17 +901,26 @@ def _fallback_character_expansion(
             raw_traits.append(t)
     personality_traits = raw_traits
 
-    moral_code = [
-        "Never betrays an ally or employer who has kept their word in good faith",
-        "Refuses to exploit or intentionally harm vulnerable non-combatants",
-        "Will never sacrifice personal autonomy or sell out core principles for empty promises",
-    ]
+    core_persona = (
+        f"{seed.name} is a {seed.archetype}{setting_note}, recognized as {seed.role_in_story}. "
+        f"Their demeanor is defined by being {kw_str}. In conversation, {seed.name} avoids "
+        f"melodrama, preferring grounded observations, physical micro-actions, and subtext-heavy "
+        f"dialogue.{notes_suffix}"
+    )
 
-    quirks_flaws = [
-        "Habitually suspicious of unsolicited kindness, immediately searching for hidden leverage",
-        "Deflects genuine vulnerability with caustic, dry humor or tactical distractions",
-        "Sleeps with a weapon within arm's reach and insists on sitting with back to a wall",
-    ]
+    moral_code, quirks_flaws = infer_moral_code_and_quirks(
+        seed.archetype,
+        seed.personality_keywords,
+        seed.rough_notes,
+        core_persona,
+    )
+
+    comm_style, voice_anchors = infer_dialogue_anchors_and_style(
+        seed.name,
+        seed.archetype,
+        world_genre,
+        seed.rough_notes,
+    )
 
     default_plan = (
         "- Observe the immediate threshold and identify all viable exit paths.\n"
@@ -466,41 +937,38 @@ def _fallback_character_expansion(
 
     temp_arch = getattr(inferred_temp, "archetype", "balanced")
     if temp_arch in ("stoic", "balanced"):
-        mood_label, val, ar = "Calm & Composed", 0.2, 0.2
+        raw_mood = "Calm & Composed"
     elif temp_arch in ("paranoiac", "proud_rival"):
-        mood_label, val, ar = "Wary & Guarded", -0.2, 0.4
+        raw_mood = "Wary & Guarded"
     elif temp_arch == "confidant":
-        mood_label, val, ar = "Warm & Receptive", 0.6, 0.3
+        raw_mood = "Warm & Receptive"
     elif temp_arch == "volatile":
-        mood_label, val, ar = "Uneasy & On-Edge", -0.4, 0.6
+        raw_mood = "Uneasy & On-Edge"
     else:
-        mood_label, val, ar = "Wary & Guarded", -0.2, 0.4
+        raw_mood = "Wary & Guarded"
+
+    mood_label, val, ar = normalize_starting_mood(raw_mood)
 
     return CharacterWizardDraft(
         name=seed.name,
         tagline=f"{seed.archetype} ({kw_str})",
         character_bio=seed.rough_notes.strip() if seed.rough_notes.strip() else f"{seed.name} is an active {seed.archetype}{setting_note}, recognized as {seed.role_in_story}.",
         physical_appearance=seed.rough_notes.strip() if seed.rough_notes.strip() else f"{seed.name} is an active {seed.archetype}{setting_note}, recognized as {seed.role_in_story}.",
-        species="Human",
-        sex="",
-        pronouns="",
-        age="",
-        build_and_height="",
+        species=demo["species"],
+        sex=demo["sex"],
+        pronouns=demo["pronouns"],
+        age=demo["age"],
+        build_and_height=demo["build_and_height"],
         distinctive_features=distinctive_features,
-        posture="Alert, composed bearing",
+        posture=demo["posture"],
         mannerisms=mannerisms,
         modifications=[],
-        visual_aesthetic="Practical, functional attire suited to role and environment",
+        visual_aesthetic=visual_aesthetic,
         personality_traits=personality_traits,
         moral_code=moral_code,
         quirks_flaws=quirks_flaws,
-        communication_style=["measured", "direct", "guarded"],
-        core_persona=(
-            f"{seed.name} is a {seed.archetype}{setting_note}, serving as {seed.role_in_story}. "
-            f"Their demeanor is defined by being {kw_str}. In conversation, {seed.name} avoids "
-            f"melodrama, preferring grounded observations, physical micro-actions, and subtext-heavy "
-            f"dialogue.{notes_suffix}"
-        ),
+        communication_style=comm_style,
+        core_persona=core_persona,
         initial_message=(
             f"*Inside {loc_name},{loc_desc} {seed.name} pauses, scanning the entrance with a practiced, "
             f"unhurried gaze before noticing your arrival.*\n\n"
@@ -509,29 +977,7 @@ def _fallback_character_expansion(
         ),
         equipped=default_equipped,
         inventory=default_inventory,
-        voice_anchors=[
-            VoiceAnchor(
-                context="Calm / Conversational",
-                snippet=(
-                    f"*{seed.name} leans back slightly, studying the room before speaking in an even, "
-                    f"unhurried cadence.* \"You don't come all this way just for small talk. Tell me what's actually on your mind.\""
-                ),
-            ),
-            VoiceAnchor(
-                context="Under Pressure / Guarded",
-                snippet=(
-                    f"*{seed.name}'s posture stiffens almost imperceptibly, voice dropping half an octave.* "
-                    f"\"Careful. People who push that hard usually don't like what they find on the other side.\""
-                ),
-            ),
-            VoiceAnchor(
-                context="Trusting / Candid",
-                snippet=(
-                    f"*A rare, genuine exhale softens {seed.name}'s expression.* "
-                    f"\"Alright—cards on the table. I've been keeping this quiet, but I can't handle it alone.\""
-                ),
-            ),
-        ],
+        voice_anchors=voice_anchors,
         baseline_psyche=BaselinePsyche(
             mood_label=mood_label,
             valence=val,
@@ -545,30 +991,31 @@ def _fallback_character_expansion(
         ),
         memory_shards=[
             MemoryShard(
-                title=f"Formative Turning Point of {seed.name}",
+                title=f"Formative Incident: Escape from the Old Order",
                 content=(
-                    f"Before becoming known as a {seed.archetype}, {seed.name} walked away from an institution "
-                    "that demanded they compromise their principles, leaving behind status for independence."
+                    f"During their earlier years in {world.name if world else 'their home settlement'}, {seed.name} "
+                    f"was caught defying local authorities while operating as a {seed.archetype}. "
+                    "They were forced to flee overnight, abandoning their possessions and learning never to place blind trust in any institution."
                 ),
-                keywords=[seed.name.lower(), "past", "origin", "choice"],
+                keywords=[seed.name.lower(), "past", "origin", "escape"],
                 emotional_weight=0.85,
             ),
             MemoryShard(
-                title="Unsettled Debt & Secret",
+                title="The Broken Contract",
                 content=(
-                    f"{seed.name} still carries an unresolved obligation tied to their past work. "
-                    f"{seed.rough_notes or 'They keep an emergency contingency plan hidden from almost everyone.'}"
+                    f"{seed.name} took on a high-stakes contract with a partner who betrayed them for a purse of coin. "
+                    "They barely escaped the ambush, and the experience left them permanently cynical and vigilant about hidden motives."
                 ),
-                keywords=["debt", "secret", "contingency", "trust"],
+                keywords=["contract", "betrayal", "ambush", "cynicism"],
                 emotional_weight=0.8,
             ),
             MemoryShard(
-                title="First Impression of the Protagonist",
+                title="The Heist at Highwall",
                 content=(
-                    f"As {seed.role_in_story}, {seed.name} recognizes that the user is someone who can "
-                    "either tip the balance in their favor or bring dangerous heat to their doorstep."
+                    f"{seed.name} broke into a heavily guarded vault to recover critical documents. "
+                    "When the alarm sounded, they had to scale the outer parapet under crossbow fire to evade the garrison."
                 ),
-                keywords=["ally", "history", "protagonist", "reputation"],
+                keywords=["vault", "heist", "alarm", "evasion"],
                 emotional_weight=0.75,
             ),
         ],
@@ -584,8 +1031,9 @@ async def generate_character_draft(
     profile: ModelProfile | None = None,
     prompt_template: str | None = None,
 ) -> CharacterWizardDraft:
-    """Use the LLM to expand a CharacterWizardSeed into an optimized CharacterWizardDraft."""
+    """Use a 3-Pass Pipelined LLM generation to expand a CharacterWizardSeed into a rich, coherent draft."""
     world_context = ""
+    start_loc = None
     if world:
         start_loc = next(
             (loc for loc in world.locations if loc.is_starting_location),
@@ -603,73 +1051,387 @@ async def generate_character_draft(
             f"{loc_line}"
         )
 
-    system_prompt = render_template(
-        prompt_template or get_default_prompt("wizard_character_system")
-    )
-    user_prompt = (
-        f"Name: {seed.name}\n"
-        f"Archetype / Concept: {seed.archetype}\n"
-        f"Role in Story: {seed.role_in_story}\n"
-        f"Personality Keywords: {', '.join(seed.personality_keywords)}\n"
-        f"Rough Notes: {seed.rough_notes}\n"
-        f"{world_context}"
+    loc_name = start_loc.name if start_loc else "the starting district"
+    loc_desc = (
+        f" {start_loc.summary}"
+        if start_loc
+        else " Shadows stretch across the room as ambient noise hums in the background."
     )
 
     fallback = _fallback_character_expansion(seed, world)
     actor_prof = profile or settings.actor_profile
+
+    # If user provided a custom prompt_template, run single-pass legacy path
+    if prompt_template:
+        system_prompt = render_template(prompt_template)
+        user_prompt = (
+            f"Name: {seed.name}\n"
+            f"Archetype / Concept: {seed.archetype}\n"
+            f"Role in Story: {seed.role_in_story}\n"
+            f"Personality Keywords: {', '.join(seed.personality_keywords)}\n"
+            f"Rough Notes: {seed.rough_notes}\n"
+            f"{world_context}"
+        )
+        try:
+            llm_out = await llm_client.complete_structured(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                CharacterWizardLLMOutput,
+                profile=actor_prof,
+                max_tokens=4096,
+            )
+            draft = (
+                llm_out.to_draft()
+                if isinstance(llm_out, CharacterWizardLLMOutput)
+                else llm_out
+            )
+            # Heal single pass omissions
+            demo = infer_demographics_and_anatomy(draft.name, seed.archetype, seed.rough_notes, draft.species or "Human")
+            if not draft.species:
+                draft.species = fallback.species
+            draft.sex = draft.sex or demo["sex"]
+            draft.pronouns = draft.pronouns or demo["pronouns"]
+            draft.age = draft.age or demo["age"]
+            draft.build_and_height = _sanitize_height_only(draft.build_and_height, demo["height"])
+            draft.posture = draft.posture or demo["posture"]
+            if not draft.distinctive_features or len(draft.distinctive_features) < 6:
+                draft.distinctive_features = _normalize_distinctive_features(
+                    draft.distinctive_features,
+                    demo["build"],
+                    fallback.distinctive_features,
+                )
+            if not draft.character_bio:
+                world_note = f" in {world.name}" if world else ""
+                notes_part = f" {seed.rough_notes.strip()}" if seed.rough_notes.strip() else ""
+                draft.character_bio = f"{draft.name} is an active {seed.archetype}{world_note}, operating as {seed.role_in_story}.{notes_part}".strip()
+            if not draft.physical_appearance:
+                draft.physical_appearance = f"{draft.name} has an {demo['build']}, standing at {draft.build_and_height}, featuring {', '.join(draft.distinctive_features[:3])}."
+            if not draft.mannerisms:
+                draft.mannerisms = fallback.mannerisms
+            else:
+                draft.mannerisms = [_clean_mannerism(m) for m in draft.mannerisms if _clean_mannerism(m)] or fallback.mannerisms
+            if not draft.visual_aesthetic:
+                draft.visual_aesthetic = fallback.visual_aesthetic
+            if not draft.personality_traits:
+                draft.personality_traits = fallback.personality_traits
+            if not draft.moral_code:
+                aligned_m, aligned_q = infer_moral_code_and_quirks(seed.archetype, seed.personality_keywords, seed.rough_notes, draft.core_persona)
+                draft.moral_code = aligned_m
+                draft.quirks_flaws = draft.quirks_flaws or aligned_q
+            if not draft.communication_style or not draft.voice_anchors:
+                c_style, v_anchors = infer_dialogue_anchors_and_style(draft.name, seed.archetype, world.global_rules.genre if world else "", seed.rough_notes)
+                draft.communication_style = draft.communication_style or c_style
+                draft.voice_anchors = draft.voice_anchors or v_anchors
+            if not draft.equipped and not draft.inventory:
+                draft.equipped = fallback.equipped
+                draft.inventory = fallback.inventory
+            if not draft.initial_message:
+                draft.initial_message = fallback.initial_message
+            draft.baseline_psyche.default_plan = (
+                normalize_bullet_plan(draft.baseline_psyche.default_plan)
+                or fallback.baseline_psyche.default_plan
+            )
+            # Snap mood
+            m_label, m_val, m_ar = normalize_starting_mood(
+                draft.baseline_psyche.mood_label,
+                draft.baseline_psyche.valence,
+                draft.baseline_psyche.arousal,
+            )
+            draft.baseline_psyche.mood_label = m_label
+            draft.baseline_psyche.valence = m_val
+            draft.baseline_psyche.arousal = m_ar
+            return draft
+        except Exception:
+            if not settings.allow_offline_fallback:
+                raise
+            return fallback
+
+    # --- 3-PASS PIPELINED GENERATION ---
     try:
-        llm_out = await llm_client.complete_structured(
+        # PASS 1: Identity, Demographics, Height, Anatomy, and Gear
+        pass1_system = render_template(get_default_prompt("wizard_character_pass1_system"))
+        pass1_user = (
+            f"Name: {seed.name}\n"
+            f"Archetype / Concept: {seed.archetype}\n"
+            f"Role in Story: {seed.role_in_story}\n"
+            f"Personality Keywords: {', '.join(seed.personality_keywords)}\n"
+            f"Rough Notes: {seed.rough_notes}\n"
+            f"{world_context}"
+        )
+
+        p1_out: CharacterWizardPass1LLMOutput = await llm_client.complete_structured(
             [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "system", "content": pass1_system},
+                {"role": "user", "content": pass1_user},
             ],
-            CharacterWizardLLMOutput,
+            CharacterWizardPass1LLMOutput,
             profile=actor_prof,
-            max_tokens=4096,
+            max_tokens=2048,
+            required_properties=list(CharacterWizardPass1LLMOutput.model_fields.keys()),
         )
-        draft = (
-            llm_out.to_draft()
-            if isinstance(llm_out, CharacterWizardLLMOutput)
-            else llm_out
+
+        # Heal Pass 1 output using procedural demographics and anatomy
+        demo = infer_demographics_and_anatomy(
+            p1_out.name or seed.name,
+            seed.archetype,
+            seed.rough_notes,
+            p1_out.species or "Human",
         )
-        if not draft.physical_appearance.strip():
-            draft.physical_appearance = fallback.physical_appearance
-        if not draft.initial_message.strip():
-            draft.initial_message = fallback.initial_message
-        if not draft.distinctive_features:
-            draft.distinctive_features = fallback.distinctive_features
-        if not draft.mannerisms:
-            draft.mannerisms = fallback.mannerisms
-        if not draft.personality_traits:
-            draft.personality_traits = fallback.personality_traits
-        if not draft.moral_code:
-            draft.moral_code = fallback.moral_code
-        if not draft.quirks_flaws:
-            draft.quirks_flaws = fallback.quirks_flaws
-        if not draft.equipped and not draft.inventory:
-            draft.equipped = fallback.equipped
-            draft.inventory = fallback.inventory
-        elif not draft.equipped:
-            # If LLM put [Worn] items into inventory, separate them while preserving ItemInstance metadata
-            new_inv: list[ItemInstance] = []
-            new_eq: list[ItemInstance] = []
-            for it in draft.inventory:
-                raw_label = str(it)
-                if re.match(r"^\[(?:worn|equipped)\]\s*", raw_label, re.IGNORECASE):
-                    cleaned = re.sub(
-                        r"^\[(?:worn|equipped)\]\s*", "", raw_label, flags=re.IGNORECASE
-                    ).strip()
-                    if cleaned:
-                        new_eq.extend(coerce_item_list([cleaned]))
-                else:
-                    new_inv.append(it)
-            draft.equipped = new_eq or fallback.equipped
-            draft.inventory = new_inv or fallback.inventory
+        name = sanitize_character_markup(p1_out.name or seed.name, single_line=True) or fallback.name
+        tagline = sanitize_character_markup(p1_out.tagline or "", single_line=True) or fallback.tagline
+        species = sanitize_character_markup(p1_out.species or "", single_line=True) or demo["species"]
+        sex = sanitize_character_markup(p1_out.sex or "", single_line=True) or demo["sex"]
+        pronouns = sanitize_character_markup(p1_out.pronouns or "", single_line=True) or demo["pronouns"]
+        age = sanitize_character_markup(p1_out.age or "", single_line=True) or demo["age"]
 
-        # Media assets must strictly be managed by user uploads or the media pipeline, not LLM
-        draft.portraits = {}
-        draft.gallery = []
+        raw_height_field = sanitize_character_markup(p1_out.build_and_height or "", single_line=True)
+        build_and_height = _sanitize_height_only(raw_height_field, demo["height"])
+        # Preserve any trailing build descriptor if the LLM put one in build_and_height
+        build_hint = demo["build"]
+        if "," in raw_height_field:
+            trailing_build = raw_height_field.split(",", 1)[1].strip()
+            if trailing_build:
+                build_hint = trailing_build
 
+        posture = sanitize_character_markup(p1_out.posture or "", single_line=True) or demo["posture"]
+        visual_aesthetic = sanitize_character_markup(p1_out.visual_aesthetic or "", single_line=True) or fallback.visual_aesthetic
+
+        raw_features = [
+            s
+            for s in (sanitize_character_markup(f, single_line=True) for f in p1_out.distinctive_features)
+            if s
+        ]
+        features = _normalize_distinctive_features(raw_features, build_hint, fallback.distinctive_features)
+
+        character_bio = sanitize_character_markup(p1_out.character_bio or "")
+        if not character_bio:
+            world_note = f" within {world.name}" if world else ""
+            notes_part = f" {seed.rough_notes.strip()}" if seed.rough_notes.strip() else ""
+            character_bio = f"{name} is an active {seed.archetype}{world_note}, operating as {seed.role_in_story}.{notes_part}".strip() or fallback.character_bio
+
+        physical_appearance = sanitize_character_markup(p1_out.physical_appearance or "")
+        if not physical_appearance:
+            physical_appearance = f"{name} has an {build_hint}, standing at {build_and_height}, featuring {', '.join(features[:3])}."
+
+        mannerisms = [
+            _clean_mannerism(sanitize_character_markup(m, single_line=True))
+            for m in p1_out.mannerisms
+            if _clean_mannerism(sanitize_character_markup(m, single_line=True))
+        ] or list(fallback.mannerisms)
+        if len(mannerisms) < 4:
+            for m in fallback.mannerisms:
+                if len(mannerisms) >= 4:
+                    break
+                if m not in mannerisms:
+                    mannerisms.append(m)
+
+        raw_equipped = _split_compound_items(
+            [
+                s
+                for s in (sanitize_character_markup(it, single_line=True) for it in p1_out.equipped)
+                if s
+            ]
+            or [str(it) for it in fallback.equipped]
+        )
+        raw_inventory = _split_compound_items(
+            [
+                s
+                for s in (sanitize_character_markup(it, single_line=True) for it in p1_out.inventory)
+                if s
+            ]
+            or [str(it) for it in fallback.inventory]
+        )
+
+        # PASS 2: Psychology, Demeanor, Aligned Ethics, Voice Anchors, Plan, and Shards
+        pass2_system = render_template(get_default_prompt("wizard_character_pass2_system"))
+        pass2_user = (
+            f"=== ESTABLISHED PASS 1 IDENTITY & PHYSICALITY ===\n"
+            f"Name: {name}\n"
+            f"Tagline: {tagline}\n"
+            f"Demographics: {species}, {sex} ({pronouns}), Age: {age}, Height: {build_and_height}\n"
+            f"Resting Posture: {posture}\n"
+            f"Distinctive Physical Features: {', '.join(features)}\n"
+            f"Mannerisms / Tells: {'; '.join(mannerisms)}\n"
+            f"Visual Aesthetic: {visual_aesthetic}\n"
+            f"Starting Gear: Equipped: {', '.join(raw_equipped)} | Inventory: {', '.join(raw_inventory)}\n"
+            f"Character Bio / Concept: {character_bio}\n\n"
+            f"=== ORIGINAL USER SEED & CONTEXT ===\n"
+            f"Archetype / Concept: {seed.archetype}\n"
+            f"Role in Story: {seed.role_in_story}\n"
+            f"Personality Keywords: {', '.join(seed.personality_keywords)}\n"
+            f"Rough Notes: {seed.rough_notes}\n"
+            f"{world_context}"
+        )
+
+        p2_out: CharacterWizardPass2LLMOutput = await llm_client.complete_structured(
+            [
+                {"role": "system", "content": pass2_system},
+                {"role": "user", "content": pass2_user},
+            ],
+            CharacterWizardPass2LLMOutput,
+            profile=actor_prof,
+            max_tokens=2560,
+            required_properties=list(CharacterWizardPass2LLMOutput.model_fields.keys()),
+        )
+
+        personality_traits = [
+            s
+            for s in (sanitize_character_markup(t, single_line=True) for t in p2_out.personality_traits)
+            if s
+        ] or fallback.personality_traits
+        core_persona = sanitize_character_markup(p2_out.core_persona or "") or fallback.core_persona
+
+        aligned_moral, aligned_quirks = infer_moral_code_and_quirks(
+            seed.archetype,
+            seed.personality_keywords,
+            seed.rough_notes,
+            core_persona,
+        )
+        moral_code = [
+            s
+            for s in (sanitize_character_markup(m, single_line=True) for m in p2_out.moral_code)
+            if s
+        ] or aligned_moral
+        quirks_flaws = [
+            s
+            for s in (sanitize_character_markup(q, single_line=True) for q in p2_out.quirks_flaws)
+            if s
+        ] or aligned_quirks
+
+        genre_text = (world.global_rules.genre if (world and world.global_rules) else "")
+        style_fallback, anchors_fallback = infer_dialogue_anchors_and_style(name, seed.archetype, genre_text, seed.rough_notes)
+        communication_style = [
+            s
+            for s in (sanitize_character_markup(c, single_line=True) for c in p2_out.communication_style)
+            if s
+        ] or style_fallback
+        voice_anchors = p2_out.voice_anchors or anchors_fallback
+        for va in voice_anchors:
+            va.context = sanitize_character_markup(va.context, single_line=True)
+            va.snippet = sanitize_character_markup(va.snippet, preserve_italics=True)
+
+        core_drive = sanitize_character_markup(p2_out.core_drive or "", single_line=True) or fallback.baseline_psyche.core_drive
+        core_fear = sanitize_character_markup(p2_out.core_fear or "", single_line=True) or fallback.baseline_psyche.core_fear
+        default_want = sanitize_character_markup(p2_out.default_want or "", single_line=True) or fallback.baseline_psyche.default_want
+        default_plan = normalize_bullet_plan(
+            [sanitize_character_markup(s) for s in p2_out.default_plan]
+        ) or fallback.baseline_psyche.default_plan
+
+        memory_shards = p2_out.memory_shards or fallback.memory_shards
+        for ms in memory_shards:
+            ms.title = sanitize_character_markup(ms.title, single_line=True)
+            ms.content = sanitize_character_markup(ms.content)
+
+        mood_label, val, ar = normalize_starting_mood(p2_out.starting_mood)
+
+        inferred_temp, inferred_wv = infer_temperament_and_worldview_from_text(
+            character_bio,
+            core_persona,
+            " ".join(seed.personality_keywords),
+            seed.rough_notes,
+        )
+
+        # PASS 3: Dedicated 3-Beat Turn 0 Opening Scene & Intent-Driven Greeting
+        pass3_system = render_template(get_default_prompt("wizard_character_pass3_system"))
+        anchors_summary = "\n".join(
+            f"- [{va.context}]: {va.snippet}" for va in voice_anchors[:2]
+        )
+        memories_summary = "\n".join(
+            f"- {ms.title}: {ms.content}" for ms in memory_shards[:3]
+        )
+        pass3_user = (
+            f"=== CHARACTER SITUATION, BIO & INTENT ===\n"
+            f"Name: {name} ({tagline})\n"
+            f"Role in Story: {seed.role_in_story}\n"
+            f"Creator Notes / Current Predicament: {seed.rough_notes.strip() or 'None specified'}\n"
+            f"Character Bio: {character_bio}\n"
+            f"Core Drive: {core_drive}\n"
+            f"Immediate Want: {default_want}\n"
+            f"Immediate Tactical Plan:\n{default_plan}\n"
+            f"Recent Backstory Context:\n{memories_summary}\n\n"
+            f"=== APPEARANCE, VOICE & GEAR ===\n"
+            f"Demographics: {species}, {sex} ({pronouns}), Age: {age}, Height: {build_and_height}\n"
+            f"Distinctive Features: {', '.join(features)}\n"
+            f"Resting Posture: {posture}\n"
+            f"Mannerisms / Tells: {'; '.join(mannerisms)}\n"
+            f"Equipped Attire & Gear: {', '.join(raw_equipped)}\n"
+            f"Carried Inventory: {', '.join(raw_inventory)}\n"
+            f"Persona & Defense Mechanisms: {core_persona}\n"
+            f"Communication Style: {', '.join(communication_style)}\n"
+            f"Active Starting Mood: {mood_label}\n"
+            f"Voice Anchors:\n{anchors_summary}\n\n"
+            f"=== STARTING LOCATION ===\n"
+            f"Location: {loc_name}\n"
+            f"Atmosphere & Sensory Details: {loc_desc}\n\n"
+            f"Compose the 3-beat Turn 0 opening scene:\n"
+            f"1. *Environment & Stakes* grounded in why {name} is here right now.\n"
+            f"2. *Quick Character Overview* (key visual details, posture/state, and a tell).\n"
+            f"3. \"First spoken line driven by their current predicament and immediate intent.\""
+        )
+
+        try:
+            p3_out: CharacterWizardPass3LLMOutput = await llm_client.complete_structured(
+                [
+                    {"role": "system", "content": pass3_system},
+                    {"role": "user", "content": pass3_user},
+                ],
+                CharacterWizardPass3LLMOutput,
+                profile=actor_prof,
+                max_tokens=1024,
+                required_properties=["initial_message"],
+            )
+            initial_message = (p3_out.initial_message or "").strip()
+        except Exception as p3_exc:
+            logger.warning("Pass 3 scene generation failed (%s); falling back to location-aware template.", p3_exc)
+            initial_message = ""
+
+        if not initial_message:
+            initial_message = fallback.initial_message
+
+        draft = CharacterWizardDraft(
+            name=name,
+            tagline=tagline,
+            character_bio=character_bio,
+            physical_appearance=physical_appearance,
+            species=species,
+            sex=sex,
+            pronouns=pronouns,
+            age=age,
+            build_and_height=build_and_height,
+            distinctive_features=features,
+            posture=posture,
+            mannerisms=mannerisms,
+            modifications=[],
+            visual_aesthetic=visual_aesthetic,
+            personality_traits=personality_traits,
+            core_persona=core_persona,
+            moral_code=moral_code,
+            quirks_flaws=quirks_flaws,
+            communication_style=communication_style,
+            initial_message=initial_message,
+            equipped=coerce_item_list(raw_equipped),
+            inventory=coerce_item_list(raw_inventory),
+            voice_anchors=voice_anchors,
+            baseline_psyche=BaselinePsyche(
+                mood_label=mood_label,
+                valence=val,
+                arousal=ar,
+                core_drive=core_drive,
+                core_fear=core_fear,
+                default_want=default_want,
+                default_plan=default_plan,
+                initial_worldview=inferred_wv,
+                temperament=inferred_temp,
+            ),
+            memory_shards=memory_shards,
+            tags=[slugify_tag(kw) for kw in seed.personality_keywords if kw.strip()] or fallback.tags,
+            creator="",
+            creator_notes=seed.rough_notes.strip() if seed.rough_notes else "",
+            portraits={},
+            gallery=[],
+        )
         return draft
     except Exception:
         if not settings.allow_offline_fallback:

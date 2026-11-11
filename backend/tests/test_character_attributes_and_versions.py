@@ -739,4 +739,350 @@ def test_resolve_genre_fallback_profile_all_genres():
             assert "journal" in equipped_and_inv
 
 
+def test_procedural_demographics_and_aligned_ethics():
+    """Verify procedural demographic heuristics and persona-aligned moral codes."""
+    from app.wizards.character_wizard import (
+        infer_demographics_and_anatomy,
+        infer_moral_code_and_quirks,
+        infer_dialogue_anchors_and_style,
+        _fallback_character_expansion,
+    )
+    from app.schemas.character import CharacterWizardSeed, normalize_starting_mood, BASELINE_MOOD_PRESETS
+
+    # 1. Test Demographics & Anatomy Inference
+    soren = infer_demographics_and_anatomy("Soren Kael", "Rogue Courier", "Veteran operative, 36 years old.")
+    assert soren["sex"] == "Male"
+    assert soren["pronouns"] == "he/him"
+    assert soren["age"] == "36"
+    assert "180 cm" in soren["height"]
+    assert "wiry" in soren["build"]
+    assert "doorway" in soren["posture"].lower() or "wall" in soren["posture"].lower()
+
+    lyra = infer_demographics_and_anatomy("Lyra Valen", "Novice Apprentice", "Young prodigy.")
+    assert lyra["sex"] == "Female"
+    assert lyra["pronouns"] == "she/her"
+    assert lyra["age"] == "21"
+    assert "168 cm" in lyra["height"]
+
+    synth = infer_demographics_and_anatomy("Unit-7", "Synthetic Infiltrator", "Cyborg construct.")
+    assert synth["sex"] == "Non-binary"
+    assert synth["pronouns"] == "they/them"
+
+    # 2. Test Moral Code Alignment (Anti-hero vs Hero)
+    cynic_code, cynic_quirks = infer_moral_code_and_quirks(
+        "Cynical Fixer",
+        ["detached", "selfish", "calculating"],
+        "Cares only about their own agenda and survival.",
+        "Detached mercenary who keeps emotional distance.",
+    )
+    cynic_code_str = " ".join(cynic_code).lower()
+    # Must NOT have generic hero code:
+    assert "never harms non-combatants" not in cynic_code_str
+    assert "sentimental" in cynic_code_str or "collateral" in cynic_code_str or "pawn" in cynic_code_str
+
+    paladin_code, paladin_quirks = infer_moral_code_and_quirks(
+        "Holy Knight",
+        ["honorable", "protective"],
+        "Devoted paladin of the sacred order.",
+        "Noble protector.",
+    )
+    paladin_code_str = " ".join(paladin_code).lower()
+    assert "vulnerable" in paladin_code_str or "innocent" in paladin_code_str or "oath" in paladin_code_str
+
+    # 3. Test Mood Snapping
+    for raw in ["Guarded", "wary and suspicious", "Calm", "melancholy", "hostile", "nervous and on edge", "warm", "triumphant"]:
+        canonical_label, val, ar = normalize_starting_mood(raw)
+        assert canonical_label in BASELINE_MOOD_PRESETS
+
+    # 4. Test Dialogue Anchors & Communication Style
+    style, anchors = infer_dialogue_anchors_and_style("Soren", "Hardboiled Detective", "1930s Film Noir", "Rainy city.")
+    assert len(style) >= 3
+    assert len(anchors) == 3
+    assert any("Chandler" in a.context for a in anchors)
+    assert "*" in anchors[0].snippet and "\"" in anchors[0].snippet
+
+    # 5. Full Fallback Draft Completeness
+    draft = _fallback_character_expansion(
+        CharacterWizardSeed(
+            name="Soren Test",
+            archetype="Rogue Courier",
+            role_in_story="Informant",
+            personality_keywords=["cynical", "guarded"],
+            rough_notes="Detached operative.",
+        )
+    )
+    assert draft.sex == "Male"
+    assert draft.pronouns == "he/him"
+    assert draft.age != ""
+    assert "cm" in draft.build_and_height
+    assert draft.posture != ""
+    assert len(draft.distinctive_features) == 6
+    # Distinctive features MUST NOT contain clothing or gear
+    features_str = " ".join(draft.distinctive_features).lower()
+    for banned in ["attire", "jacket", "coat", "hat", "fedora", "goggles", "ring", "watch", "necklace"]:
+        assert banned not in features_str, f"Banned attire/item '{banned}' found in distinctive features: {draft.distinctive_features}"
+    assert len(draft.communication_style) >= 3
+    assert len(draft.voice_anchors) == 3
+    assert draft.baseline_psyche.mood_label in BASELINE_MOOD_PRESETS
+    assert draft.baseline_psyche.default_plan.startswith("- ")
+
+
+@pytest.mark.asyncio
+async def test_3pass_pipelined_generation_mocked(monkeypatch):
+    """Verify generate_character_draft calls Pass 1, Pass 2, and Pass 3 in sequence and heals missing fields."""
+    from app.wizards.character_wizard import generate_character_draft
+    from app.schemas.character import (
+        CharacterWizardSeed,
+        CharacterWizardPass1LLMOutput,
+        CharacterWizardPass2LLMOutput,
+        CharacterWizardPass3LLMOutput,
+        normalize_bullet_plan,
+    )
+    from app.engine.llm_client import llm_client
+
+    call_count = 0
+    pass3_user_prompt = ""
+
+    async def mock_complete_structured(messages, output_schema, profile=None, max_tokens=4096, required_properties=None):
+        nonlocal call_count, pass3_user_prompt
+        call_count += 1
+        if output_schema == CharacterWizardPass1LLMOutput:
+            return CharacterWizardPass1LLMOutput(
+                name="Soren Test",
+                tagline="Courier with a secret",
+                character_bio="Soren operates in the lower district.",
+                species="Human",
+                sex="",  # Leave empty to test procedural healing!
+                pronouns="",  # Leave empty
+                age="",  # Leave empty
+                build_and_height="178 cm, lithe athletic build",  # Verify build stripped into features while height-only retained!
+                distinctive_features=["Piercing grey eyes", "Faint scar along jawline"],
+                posture="",
+                mannerisms=["when under pressure: taps fingers rapidly when thinking"],
+                visual_aesthetic="",
+                equipped=["Traveling cloak and linen tunic suited for an operative", "High-cuff riding boots"],
+                inventory=["Pocket datapad"],
+            )
+        elif output_schema == CharacterWizardPass2LLMOutput:
+            return CharacterWizardPass2LLMOutput(
+                personality_traits=["cynical", "hyper-observant"],
+                core_persona="Speaks with an unhurried guard, keeping targets off balance while assessing leverage.",
+                moral_code=[],  # Leave empty to test persona-aligned healing!
+                quirks_flaws=[],  # Leave empty
+                communication_style=[],
+                voice_anchors=[],
+                starting_mood="Guarded",  # Non-canonical to test snapping!
+                core_drive="Unload the hot bio-drive before corporate hunters catch up.",
+                core_fear="Being cornered without an exit route.",
+                default_want="Secure safe passage out of the district immediately.",
+                # Test single-line merged bullets coerced into newline-separated bullet items
+                default_plan="- Scan perimeter exits. - Probe the contact with caution. - Secure an immediate escape route.",
+                memory_shards=[],
+            )
+        elif output_schema == CharacterWizardPass3LLMOutput:
+            pass3_user_prompt = messages[1]["content"]
+            return CharacterWizardPass3LLMOutput(
+                initial_message="*Soren steps out from the shadows, scanning the room before locking eyes with you.* \"You made it.\"",
+            )
+        raise ValueError(f"Unexpected schema: {output_schema}")
+
+    monkeypatch.setattr(llm_client, "complete_structured", mock_complete_structured)
+
+    seed = CharacterWizardSeed(
+        name="Soren Test",
+        archetype="Cynical Infiltrator",
+        role_in_story="Key Informant",
+        personality_keywords=["cynical", "guarded"],
+        rough_notes="Detached operative carrying a locked bio-drive.",
+    )
+
+    draft = await generate_character_draft(seed)
+
+    assert call_count == 3
+    # Verify procedural healing & height-only sanitization of Pass 1
+    assert draft.sex == "Male"
+    assert draft.pronouns == "he/him"
+    assert draft.age != ""
+    assert draft.build_and_height == "178 cm"
+    assert draft.posture != ""
+    assert len(draft.distinctive_features) == 6
+    assert "lithe athletic build" in " ".join(draft.distinctive_features).lower()
+    assert len(draft.mannerisms) >= 4
+    assert not draft.mannerisms[0].lower().startswith("when under pressure:")
+    assert draft.mannerisms[0].startswith("Taps fingers")
+    # Verify compound item splitting in Pass 1
+    equipped_names = [it.name for it in draft.equipped]
+    assert "Traveling cloak" in equipped_names
+    assert "Linen tunic suited for an operative" in equipped_names
+    # Verify aligned healing of Pass 2
+    assert len(draft.moral_code) >= 2
+    assert "never harms non-combatants" not in " ".join(draft.moral_code).lower()
+    assert len(draft.quirks_flaws) >= 2
+    assert len(draft.communication_style) >= 3
+    assert len(draft.voice_anchors) == 3
+    assert draft.baseline_psyche.core_drive == "Unload the hot bio-drive before corporate hunters catch up."
+    assert draft.baseline_psyche.default_want == "Secure safe passage out of the district immediately."
+    # Verify concrete episodic memory shards
+    assert len(draft.memory_shards) >= 3
+    # Verify mood snapped to canonical preset
+    assert draft.baseline_psyche.mood_label == "Wary & Guarded"
+    assert draft.baseline_psyche.valence == -0.2
+    assert draft.baseline_psyche.arousal == 0.4
+    # Verify multiline bullet formatting
+    plan_lines = draft.baseline_psyche.default_plan.splitlines()
+    assert len(plan_lines) == 3
+    assert all(line.startswith("- ") for line in plan_lines)
+    # Verify Pass 3 received bio, rough_notes/predicament, and immediate want
+    assert "Detached operative carrying a locked bio-drive." in pass3_user_prompt
+    assert "Soren operates in the lower district." in pass3_user_prompt
+    assert "Secure safe passage out of the district immediately." in pass3_user_prompt
+    # Verify Pass 3 initial message
+    assert "Soren steps out from the shadows" in draft.initial_message
+    # Direct test of normalize_bullet_plan with inline bullets
+    assert normalize_bullet_plan("- One step. - Two step. - Three step") == "- One step.\n- Two step.\n- Three step"
+    assert normalize_bullet_plan(["First action", "- Second action"]) == "- First action\n- Second action"
+
+
+@pytest.mark.asyncio
+async def test_character_html_xml_markup_sanitization(monkeypatch):
+    """Verify HTML/XML tags and entities are cleaned across all character fields without prompt changes."""
+    from app.wizards.character_wizard import generate_character_draft
+    from app.schemas.character import (
+        CharacterWizardSeed,
+        CharacterWizardPass1LLMOutput,
+        CharacterWizardPass2LLMOutput,
+        CharacterWizardPass3LLMOutput,
+        MemoryShard,
+        VoiceAnchor,
+        sanitize_character_markup,
+    )
+    from app.engine.llm_client import llm_client
+
+    # 1. Unit assertions for prose vs plain-text modes & edge cases
+    prose_raw = (
+        "<!-- comment --><think>brainstorming scene</think>"
+        "<i>The salt-crusted docks are quiet.</i>\n\n"
+        "<em>He leans against a crate &amp; watches.</em>\n\n"
+        "\"Step closer,\" *he murmurs.* \"If odds &lt; 5, we run.\""
+    )
+    # Wait: escaped &lt; turns into '<' after tag stripping, preserving legitimate comparisons!
+    prose_clean = sanitize_character_markup(prose_raw, preserve_italics=True)
+    assert "<i>" not in prose_clean and "</i>" not in prose_clean
+    assert "<em>" not in prose_clean and "</em>" not in prose_clean
+    assert "brainstorming scene" not in prose_clean
+    assert "*The salt-crusted docks are quiet.*" in prose_clean
+    assert "*He leans against a crate & watches.*" in prose_clean
+    assert "odds < 5" in prose_clean
+
+    # Multi-paragraph <i> block wraps each paragraph cleanly in *...*
+    multi_p = sanitize_character_markup("<i><p>Para one.</p><p>Para two.</p></i>", preserve_italics=True)
+    assert multi_p == "*Para one.*\n\n*Para two.*"
+
+    # Plain-text / chip mode strips tags WITHOUT converting <i> into asterisks, and preserves math '<'
+    chip_clean = sanitize_character_markup("<b>Piercing</b> <i>hazel</i> eyes (risk < 10%)", single_line=True)
+    assert chip_clean == "Piercing hazel eyes (risk < 10%)"
+
+    # 2. Full 3-pass pipeline test with markup emitted across all passes
+    async def mock_complete_structured(messages, output_schema, profile=None, max_tokens=4096, required_properties=None):
+        if output_schema == CharacterWizardPass1LLMOutput:
+            return CharacterWizardPass1LLMOutput(
+                name="<b>Soren Zaren</b>",
+                tagline="<i>Smooth-talking</i> fugitive &amp; thief",
+                character_bio="<p>Born in the Lower City.</p><p>On the run after a <b>noble heist</b>.</p>",
+                species="<species>Human</species>",
+                sex="Male",
+                pronouns="he/him",
+                age="28",
+                build_and_height="<span>178 cm</span>",
+                physical_appearance="<thought>internal note</thought>Sharp jawline with a <i>white scar</i>.",
+                distinctive_features=[
+                    "<i>sultry</i> hazel eyes",
+                    "<b>tousled</b> dark hair",
+                    "lean athletic frame",
+                    "pale brow scar",
+                    "calloused fingers",
+                    "crooked canine",
+                ],
+                posture="<posture>Leans against harbor posts</posture>",
+                mannerisms=[
+                    "<i>taps fingers</i> against thigh",
+                    "scans dockside exits",
+                    "smooths hair back",
+                    "drops into low drawl",
+                ],
+                visual_aesthetic="Dark green &amp; charcoal leather",
+                equipped=["<span>Fitted leather doublet</span>", "Traveling cloak"],
+                inventory=["<i>Silver</i> signet ring", "Brass key"],
+            )
+        elif output_schema == CharacterWizardPass2LLMOutput:
+            return CharacterWizardPass2LLMOutput(
+                personality_traits=["<i>charming</i>", "guarded", "opportunistic", "observant"],
+                core_persona="<think>reasoning here</think><persona>Weaponizes warmth as a tactical shield.</persona>",
+                moral_code=["Never works without leverage", "Keeps a clean escape route"],
+                quirks_flaws=["Compulsive charm under pressure", "Distrusts free favors"],
+                communication_style=["honeyed drawl", "<em>subtext-heavy</em>"],
+                voice_anchors=[
+                    VoiceAnchor(
+                        context="<b>Calm / Banter</b>",
+                        snippet="<i>Spins a coin slowly.</i> \"Watch your pocket &quot;friend&quot;.\"",
+                    ),
+                ],
+                starting_mood="Wary & Guarded",
+                core_drive="Acquire coin to buy freedom.",
+                core_fear="Being recognized by the Watch.",
+                default_want="<i>Find quiet shelter</i> before dusk.",
+                default_plan="<ul><li>Check harbor patrols</li><li>Swap coats</li></ul>",
+                memory_shards=[
+                    MemoryShard(
+                        title="<title>The Villa Heist</title>",
+                        content="<p>Stole a <b>ruby signet</b> and fled the Flaming Fist.</p>",
+                        keywords=["<i>heist</i>", "guard"],
+                    )
+                ],
+            )
+        elif output_schema == CharacterWizardPass3LLMOutput:
+            return CharacterWizardPass3LLMOutput(
+                initial_message=(
+                    "<scene>"
+                    "<i>The salt-crusted docks groan under the mist, patrols sweeping the pier.</i>\n\n"
+                    "<i>Soren leans beside a spice crate, tracing the <b>faint</b> scar on his brow.</i>\n\n"
+                    "\"You look like someone with a short memory,\" *he murmurs softly.*"
+                    "</scene>"
+                ),
+            )
+        raise ValueError(f"Unexpected schema: {output_schema}")
+
+    monkeypatch.setattr(llm_client, "complete_structured", mock_complete_structured)
+
+    seed = CharacterWizardSeed(
+        name="Soren Zaren",
+        archetype="Rogue",
+        role_in_story="Fugitive",
+        personality_keywords=["charming", "guarded"],
+        rough_notes="On the run from the guard.",
+    )
+    draft = await generate_character_draft(seed)
+
+    assert draft.name == "Soren Zaren"
+    assert draft.tagline == "Smooth-talking fugitive & thief"
+    assert draft.character_bio == "Born in the Lower City.\n\nOn the run after a noble heist."
+    assert draft.physical_appearance == "Sharp jawline with a white scar."
+    assert draft.core_persona == "Weaponizes warmth as a tactical shield."
+    assert draft.distinctive_features[0] == "sultry hazel eyes"
+    assert draft.equipped[0].name == "Fitted leather doublet"
+    assert draft.inventory[0].name == "Silver signet ring"
+    assert draft.voice_anchors[0].context == "Calm / Banter"
+    assert draft.voice_anchors[0].snippet == '*Spins a coin slowly.* "Watch your pocket "friend"."'
+    assert draft.baseline_psyche.default_want == "Find quiet shelter before dusk."
+    assert draft.baseline_psyche.default_plan == "- Check harbor patrols\n- Swap coats"
+    assert draft.memory_shards[0].title == "The Villa Heist"
+    assert draft.memory_shards[0].content == "Stole a ruby signet and fled the Flaming Fist."
+    assert draft.memory_shards[0].keywords == ["heist", "guard"]
+    assert "<" not in draft.initial_message and ">" not in draft.initial_message
+    assert "*The salt-crusted docks groan under the mist, patrols sweeping the pier.*" in draft.initial_message
+    assert "*Soren leans beside a spice crate, tracing the faint scar on his brow.*" in draft.initial_message
+    assert "*he murmurs softly.*" in draft.initial_message
+
+
+
 

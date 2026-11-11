@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 import hashlib
+import html
 import json
 import re
 from typing import Any, Literal
@@ -363,6 +364,301 @@ class CharacterWizardSeed(BaseModel):
     )
 
 
+BASELINE_MOOD_PRESETS: dict[str, tuple[float, float]] = {
+    "Calm & Composed": (0.2, 0.2),
+    "Wary & Guarded": (-0.2, 0.4),
+    "Melancholy & Subdued": (-0.5, 0.2),
+    "Hostile & Tense": (-0.7, 0.8),
+    "Uneasy & On-Edge": (-0.4, 0.6),
+    "Warm & Receptive": (0.6, 0.3),
+    "Elated & Triumphant": (0.8, 0.7),
+}
+
+
+def normalize_starting_mood(
+    raw_mood: str | None,
+    valence: float | None = None,
+    arousal: float | None = None,
+) -> tuple[str, float, float]:
+    """Snap any raw mood string or coords to one of the 7 canonical baseline presets."""
+    if raw_mood and raw_mood in BASELINE_MOOD_PRESETS:
+        preset_v, preset_a = BASELINE_MOOD_PRESETS[raw_mood]
+        v = valence if valence is not None else preset_v
+        a = arousal if arousal is not None else preset_a
+        return raw_mood, v, a
+
+    clean = (raw_mood or "").strip().lower()
+    if any(k in clean for k in ("wary", "guard", "suspicio", "skeptic", "cautio", "defens")):
+        label = "Wary & Guarded"
+    elif any(k in clean for k in ("calm", "compos", "steady", "serene", "poised", "relax")):
+        label = "Calm & Composed"
+    elif any(k in clean for k in ("melanchol", "subdue", "sad", "gloom", "depress", "weary", "sorrow")):
+        label = "Melancholy & Subdued"
+    elif any(k in clean for k in ("hostil", "tense", "angr", "furious", "aggres", "fuming")):
+        label = "Hostile & Tense"
+    elif any(k in clean for k in ("uneas", "edge", "nervous", "anxious", "restless", "fear", "alarm")):
+        label = "Uneasy & On-Edge"
+    elif any(k in clean for k in ("warm", "receptiv", "friend", "kind", "open", "welcom")):
+        label = "Warm & Receptive"
+    elif any(k in clean for k in ("elat", "triumphant", "joy", "excite", "cheer", "proud")):
+        label = "Elated & Triumphant"
+    elif valence is not None and arousal is not None:
+        best_label = "Calm & Composed"
+        best_dist = float("inf")
+        for p_label, (pv, pa) in BASELINE_MOOD_PRESETS.items():
+            dist = ((valence - pv) ** 2 + (arousal - pa) ** 2) ** 0.5
+            if dist < best_dist:
+                best_dist = dist
+                best_label = p_label
+        label = best_label
+    else:
+        label = "Calm & Composed"
+
+    v, a = BASELINE_MOOD_PRESETS[label]
+    return label, v, a
+
+
+def _split_plan_steps(raw: Any) -> list[str]:
+    """Split a string or sequence of tactical plan items into clean standalone step strings."""
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple)):
+        items: list[str] = []
+        for entry in raw:
+            items.extend(_split_plan_steps(str(entry)))
+        return items
+
+    text = sanitize_character_markup(str(raw))
+    if not text:
+        return []
+    items = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        # Split inline merged bullets such as '. - Next step', ' * Next', or ' - Step'
+        parts = re.split(
+            r"(?<=[.!?;:])\s+-\s+|\s+[•*]\s+|\s+-\s+(?=[A-Z])|\s+(?=\d+[.)]\s+[A-Z])",
+            line,
+        )
+        for part in parts:
+            p = part.strip()
+            if p:
+                items.append(p)
+    cleaned: list[str] = []
+    for item in items:
+        step = re.sub(r"^(?:[-*•]+|\d+[.)])\s*", "", item).strip()
+        if step:
+            cleaned.append(step)
+    return cleaned
+
+
+def normalize_bullet_plan(plan: str | Sequence[str] | None) -> str:
+    """Normalize an action plan into newline-separated '- ' markdown bullet points."""
+    steps = _split_plan_steps(plan)
+    if not steps:
+        return ""
+    return "\n".join(f"- {step}" for step in steps)
+
+
+_HTML_COMMENT_RE = re.compile(r"<!--[\s\S]*?-->")
+_REASONING_BLOCK_RE = re.compile(
+    r"<(?P<tag>think|thought|reasoning|scratchpad)\b[^>]*>[\s\S]*?</(?P=tag)\s*>",
+    re.IGNORECASE,
+)
+_ITALIC_TAG_RE = re.compile(
+    r"<(?P<tag>i|em)\b[^>]*>([\s\S]*?)</(?P=tag)\s*>",
+    re.IGNORECASE,
+)
+_PARAGRAPH_BOUNDARY_RE = re.compile(r"</p\s*>\s*<p\b[^>]*>", re.IGNORECASE)
+_PARAGRAPH_TAG_RE = re.compile(r"</?p\b[^>]*>", re.IGNORECASE)
+_BR_TAG_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+_LIST_ITEM_OPEN_RE = re.compile(r"<li\b[^>]*>", re.IGNORECASE)
+_LIST_ITEM_CLOSE_RE = re.compile(r"</li\s*>", re.IGNORECASE)
+_ANY_MARKUP_TAG_RE = re.compile(r"</?[a-zA-Z][a-zA-Z0-9_:-]*(?:\s+[^<>]*?)?/?>")
+
+
+def _italic_match_to_markdown(match: re.Match[str]) -> str:
+    """Convert an HTML <i>/<em> match into paragraph-safe Markdown *italics*."""
+    raw_inner = match.group(2)
+    if not raw_inner or not raw_inner.strip():
+        return ""
+    lead_ws_match = re.match(r"^\s*", raw_inner)
+    trail_ws_match = re.search(r"\s*$", raw_inner)
+    lead_ws = lead_ws_match.group(0) if lead_ws_match else ""
+    trail_ws = trail_ws_match.group(0) if trail_ws_match else ""
+    core = raw_inner.strip()
+
+    paragraphs = re.split(r"\n{2,}", core)
+    wrapped_paras: list[str] = []
+    for para in paragraphs:
+        p = para.strip()
+        if not p:
+            continue
+        if p.startswith("*") and p.endswith("*") and len(p) > 2:
+            wrapped_paras.append(p)
+        else:
+            p_clean = p.replace("*", "")
+            if p_clean:
+                wrapped_paras.append(f"*{p_clean}*")
+    if not wrapped_paras:
+        return ""
+    return f"{lead_ws}" + "\n\n".join(wrapped_paras) + f"{trail_ws}"
+
+
+def sanitize_character_markup(
+    text: str,
+    *,
+    preserve_italics: bool = False,
+    single_line: bool = False,
+) -> str:
+    """Strip LLM-generated HTML/XML tags & entities while preserving prose *italics* when requested."""
+    if not text:
+        return ""
+    cleaned = _HTML_COMMENT_RE.sub("", text)
+    cleaned = _REASONING_BLOCK_RE.sub("", cleaned)
+
+    cleaned = _PARAGRAPH_BOUNDARY_RE.sub("\n\n", cleaned)
+    cleaned = _PARAGRAPH_TAG_RE.sub("\n\n", cleaned)
+    cleaned = _BR_TAG_RE.sub(" " if single_line else "\n", cleaned)
+    cleaned = _LIST_ITEM_OPEN_RE.sub("- ", cleaned)
+    cleaned = _LIST_ITEM_CLOSE_RE.sub("\n", cleaned)
+
+    if preserve_italics:
+        prev = None
+        while prev != cleaned:
+            prev = cleaned
+            cleaned = _ITALIC_TAG_RE.sub(_italic_match_to_markdown, cleaned)
+
+    cleaned = _ANY_MARKUP_TAG_RE.sub("", cleaned)
+    cleaned = html.unescape(cleaned).replace("\xa0", " ")
+
+    if single_line:
+        return re.sub(r"\s+", " ", cleaned).strip()
+
+    lines = [ln.rstrip() for ln in cleaned.splitlines()]
+    cleaned = "\n".join(lines)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+class CharacterWizardPass1LLMOutput(BaseModel):
+    """Pass 1 target: Core narrative identity, demographics, metric height, immutable anatomy, and gear."""
+
+    name: str = Field(default="New Character")
+    tagline: str = Field(default="", description="One-line evocative summary of the character.")
+    character_bio: str = Field(
+        default="",
+        description="High-level narrative concept, background origin, public reputation, occupation, and role in world. Strictly exclude physical anatomy and clothing.",
+    )
+    species: str = Field(default="Human", description="Biological or mechanical origin.")
+    sex: str = Field(default="", description="Biological sex or presentation ('Male', 'Female', 'Non-binary'). Never leave empty.")
+    pronouns: str = Field(default="", description="Grammatical pronouns ('he/him', 'she/her', 'they/them'). Never leave empty.")
+    age: str = Field(default="", description="Chronological or apparent age (e.g. '34', '52', '21'). Never leave empty.")
+    build_and_height: str = Field(
+        default="",
+        description="Metric height ONLY calibrated to species, sex, and archetype (e.g. '182 cm', '168 cm', '194 cm'). STRICTLY EXCLUDE build, frame, or weight descriptors. Never leave empty.",
+    )
+    physical_appearance: str = Field(
+        default="",
+        description="Dedicated immutable physical appearance (facial features, hair, eyes, scars, permanent mods) strictly excluding clothing/held gear.",
+    )
+    distinctive_features: list[str] = Field(
+        default_factory=list,
+        description="Exactly 6 concise chips of concrete immutable physical markers: eyes, hair, skin, scars, tattoos, build, or anomalies. At least 1 chip MUST be unusual or quirky. STRICTLY NO CLOTHES OR GEAR.",
+    )
+    posture: str = Field(default="", description="Habitual physical stance and bearing.")
+    mannerisms: list[str] = Field(
+        default_factory=list,
+        description="4 natural behavioral micro-actions and conversational tells (covering stress, guardedness, idle habit, and speech cadence, written directly without category labels).",
+    )
+    visual_aesthetic: str = Field(
+        default="",
+        description="High-level clothing style or dress vibe brief (e.g. 'practical weathered techwear', 'travel-worn boiled leather').",
+    )
+    equipped: list[str] = Field(
+        default_factory=list,
+        description="3-5 starting equipped clothing, armor, or wielded items strictly consistent with world genre. Each entry MUST be a single discrete object (1 upper body, 1 lower body, 1 footwear, 1 belt/accessory). Never join multiple items with 'and'.",
+    )
+    inventory: list[str] = Field(
+        default_factory=list,
+        description="2-4 starting carried tools, personal pocket items, or keepsakes strictly consistent with world genre. Each entry must be a single discrete object.",
+    )
+    tags: list[str] = Field(default_factory=list)
+
+
+class CharacterWizardPass2LLMOutput(BaseModel):
+    """Pass 2 target: Demeanor, aligned moral code & flaws, literary voice anchors, action plan, and episodic vector memories."""
+
+    personality_traits: list[str] = Field(
+        default_factory=list,
+        description="4-6 high-level tropes, traits, or archetypal adjectives (chips).",
+    )
+    core_persona: str = Field(
+        default="",
+        description="High-signal, concise demeanor block (45-75 words, 2-4 crisp sentences) covering interpersonal attitude, social defense mechanisms, and conversational intent. Do NOT repeat personality_traits, communication_style, moral code, or physical traits.",
+    )
+    moral_code: list[str] = Field(
+        default_factory=list,
+        description="2-3 ethical boundaries or lines they will not cross, STRICTLY ALIGNED with their persona (e.g. a detached cynic has transactional boundaries, NOT generic heroic vows).",
+    )
+    quirks_flaws: list[str] = Field(
+        default_factory=list,
+        description="2-3 concrete behavioral flaws, vices, or neurotic habits.",
+    )
+    communication_style: list[str] = Field(
+        default_factory=list,
+        description="3-5 voice texture chips (e.g. ['clipped', 'monotone', 'dryly sarcastic', 'mid-Atlantic cadence']).",
+    )
+    voice_anchors: list[VoiceAnchor] = Field(
+        default_factory=list,
+        description="3 distinct action+dialogue examples ('Calm / Banter', 'Guarded / Under Pressure', 'Vulnerable / Urgent') stylistically grounded in prominent genre authors.",
+    )
+    starting_mood: str = Field(
+        default="Calm & Composed",
+        description="One of: 'Calm & Composed', 'Wary & Guarded', 'Melancholy & Subdued', 'Hostile & Tense', 'Uneasy & On-Edge', 'Warm & Receptive', 'Elated & Triumphant'.",
+    )
+    core_drive: str = Field(
+        default="",
+        description="One concise sentence capturing the character's underlying life motivation.",
+    )
+    core_fear: str = Field(
+        default="",
+        description="One concise sentence capturing the character's deep emotional or existential fear.",
+    )
+    default_want: str = Field(
+        default="",
+        description="One concise sentence capturing their immediate short-term objective right now, grounded in their bio and current predicament.",
+    )
+    default_plan: list[str] = Field(
+        default_factory=list,
+        description="2-3 concise tactical Turn 0 action steps (plain strings without bullet dashes; each element renders on its own line).",
+    )
+    memory_shards: list[MemoryShard] = Field(
+        default_factory=list,
+        description="3-4 concrete episodic backstory memory shards (Who, What happened, Where, Consequence) with entity keywords for vector retrieval. Strictly avoid poetic or abstract scene painting.",
+    )
+
+    @field_validator("default_plan", mode="before")
+    @classmethod
+    def _coerce_default_plan(cls, v: Any) -> list[str]:
+        return _split_plan_steps(v)
+
+
+class CharacterWizardPass3LLMOutput(BaseModel):
+    """Pass 3 target: Structured 3-beat Turn 0 opening scene and in-character greeting."""
+
+    initial_message: str = Field(
+        default="",
+        description=(
+            "Focused 3-beat Turn 0 scene (~90-140 words): "
+            "(1) *Environment & immediate stakes* grounded in current situation, "
+            "(2) *Quick visual character overview* & tell, "
+            "(3) \"Intent-driven opening dialogue\" matching their predicament and voice anchors."
+        ),
+    )
+
+
 class CharacterWizardLLMOutput(BaseModel):
     """LLM-only structured output target for character generation & SillyTavern distillation (keeps list[str] gear)."""
 
@@ -383,10 +679,10 @@ class CharacterWizardLLMOutput(BaseModel):
     sex: str = Field(default="", description="Biological sex or presentation.")
     pronouns: str = Field(default="", description="Grammatical pronouns (e.g. he/him, she/her, they/them).")
     age: str = Field(default="", description="Chronological or apparent age.")
-    build_and_height: str = Field(default="", description="Physical frame and stature (e.g. '182 cm, lean wiry build').")
+    build_and_height: str = Field(default="", description="Metric height ONLY (e.g. '182 cm'). Put physical build in distinctive_features.")
     distinctive_features: list[str] = Field(
         default_factory=list,
-        description="Exactly 6 concise chips for concrete physical markers: eyes, hair, skin, scars, tattoos, or setting anomalies. At least 1 chip must be an unusual or quirky feature.",
+        description="Exactly 6 concise chips for concrete physical markers: eyes, hair, skin, scars, tattoos, or setting anomalies. At least 1 chip must be an unusual or quirky feature. STRICTLY NO CLOTHES OR GEAR.",
     )
     posture: str = Field(default="", description="Habitual physical stance and bearing (e.g. 'composed and alert').")
     mannerisms: list[str] = Field(
@@ -398,9 +694,9 @@ class CharacterWizardLLMOutput(BaseModel):
     personality_traits: list[str] = Field(default_factory=list, description="4-6 high-level tropes and traits (chips).")
     core_persona: str = Field(
         description=(
-            "High-density demeanor block (~100-180 words) covering conversational demeanor, "
-            "social defense mechanisms, speech cadence, and interpersonal attitude. "
-            "Strictly exclude items in moral_code and quirks_flaws, and exclude physical traits."
+            "High-signal, concise demeanor block (45-75 words, 2-4 crisp sentences) covering "
+            "interpersonal attitude, social defense mechanisms, and conversational intent. "
+            "Strictly exclude items in personality_traits, communication_style, moral_code, quirks_flaws, and physical traits."
         )
     )
     moral_code: list[str] = Field(
@@ -520,7 +816,7 @@ class CharacterWizardDraft(BaseModel):
     sex: str = Field(default="", description="Biological sex or presentation.")
     pronouns: str = Field(default="", description="Grammatical pronouns (e.g. he/him, she/her, they/them).")
     age: str = Field(default="", description="Chronological or apparent age.")
-    build_and_height: str = Field(default="", description="Physical frame and stature (e.g. '182 cm, lean wiry build').")
+    build_and_height: str = Field(default="", description="Metric height ONLY (e.g. '182 cm'). Put physical build in distinctive_features.")
     distinctive_features: list[str] = Field(
         default_factory=list,
         description="3-6 concise chips for concrete physical markers: eyes, hair, skin, scars, tattoos, or setting anomalies.",
@@ -535,9 +831,9 @@ class CharacterWizardDraft(BaseModel):
     personality_traits: list[str] = Field(default_factory=list, description="3-5 high-level tropes and traits (chips).")
     core_persona: str = Field(
         description=(
-            "High-density demeanor block (~100-180 words) covering conversational demeanor, "
-            "social defense mechanisms, speech cadence, and interpersonal attitude. "
-            "Strictly exclude items in moral_code and quirks_flaws, and exclude physical traits."
+            "High-signal, concise demeanor block (45-75 words, 2-4 crisp sentences) covering "
+            "interpersonal attitude, social defense mechanisms, and conversational intent. "
+            "Strictly exclude items in personality_traits, communication_style, moral_code, quirks_flaws, and physical traits."
         )
     )
     moral_code: list[str] = Field(
@@ -569,7 +865,89 @@ class CharacterWizardDraft(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _sync_bio_and_appearance(self) -> "CharacterWizardDraft":
+    def _sanitize_and_sync_fields(self) -> "CharacterWizardDraft":
+        for field_name in (
+            "name",
+            "tagline",
+            "species",
+            "sex",
+            "pronouns",
+            "age",
+            "build_and_height",
+            "posture",
+            "visual_aesthetic",
+            "creator",
+        ):
+            val = getattr(self, field_name, "")
+            if val:
+                setattr(self, field_name, sanitize_character_markup(val, single_line=True))
+
+        for field_name in (
+            "character_bio",
+            "physical_appearance",
+            "core_persona",
+            "creator_notes",
+        ):
+            val = getattr(self, field_name, "")
+            if val:
+                setattr(self, field_name, sanitize_character_markup(val))
+
+        if self.initial_message:
+            self.initial_message = sanitize_character_markup(
+                self.initial_message, preserve_italics=True
+            )
+
+        for list_field in (
+            "distinctive_features",
+            "mannerisms",
+            "modifications",
+            "personality_traits",
+            "moral_code",
+            "quirks_flaws",
+            "communication_style",
+            "tags",
+        ):
+            raw_list = getattr(self, list_field, [])
+            if raw_list:
+                cleaned_list = [
+                    s
+                    for s in (
+                        sanitize_character_markup(x, single_line=True)
+                        for x in raw_list
+                        if isinstance(x, str)
+                    )
+                    if s
+                ]
+                setattr(self, list_field, cleaned_list)
+
+        for va in self.voice_anchors:
+            va.context = sanitize_character_markup(va.context, single_line=True)
+            va.snippet = sanitize_character_markup(va.snippet, preserve_italics=True)
+
+        if self.baseline_psyche:
+            bp = self.baseline_psyche
+            bp.mood_label = sanitize_character_markup(bp.mood_label, single_line=True)
+            bp.core_drive = sanitize_character_markup(bp.core_drive, single_line=True)
+            bp.core_fear = sanitize_character_markup(bp.core_fear, single_line=True)
+            bp.default_want = sanitize_character_markup(bp.default_want, single_line=True)
+            bp.default_plan = sanitize_character_markup(bp.default_plan)
+
+        for ms in self.memory_shards:
+            ms.title = sanitize_character_markup(ms.title, single_line=True)
+            ms.content = sanitize_character_markup(ms.content)
+            ms.keywords = [
+                k
+                for k in (
+                    sanitize_character_markup(kw, single_line=True)
+                    for kw in ms.keywords
+                )
+                if k
+            ]
+
+        for item in (*self.equipped, *self.inventory):
+            item.name = sanitize_character_markup(item.name, single_line=True)
+            item.note = sanitize_character_markup(item.note, single_line=True)
+
         if not self.character_bio and self.physical_appearance:
             self.character_bio = self.physical_appearance
         elif not self.physical_appearance and self.character_bio:

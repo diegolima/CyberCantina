@@ -110,13 +110,21 @@ export const CharacterAppearanceTab: React.FC<CharacterAppearanceTabProps> = ({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      {/* Build & Height and Posture */}
+      {/* Height and Posture */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <ClickToEditField
-          label="Build & Height"
+          label="Height"
           value={buildValue}
-          placeholder="Click to set build & height (e.g. 185 cm, athletic...)"
+          placeholder="Click to set height (e.g. 180 cm...)"
           readOnly={readOnly}
+          suggestions={[
+            "180 cm",
+            "175 cm",
+            "185 cm",
+            "168 cm",
+            "190 cm",
+            "162 cm",
+          ]}
           onChange={(val) => handleFieldChange("build_and_height", val)}
         />
 

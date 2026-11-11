@@ -15,6 +15,8 @@ from app.schemas.character import (
     CharacterWizardLLMOutput,
     MemoryShard,
     VoiceAnchor,
+    normalize_bullet_plan,
+    normalize_starting_mood,
 )
 from app.schemas.world import WorldRecord, WorldWizardSeed
 from app.wizards.sillytavern_parser import SillyTavernRawCard
@@ -273,6 +275,20 @@ async def distill_sillytavern_card(
             draft.voice_anchors = fallback.voice_anchors
         if not draft.memory_shards:
             draft.memory_shards = fallback.memory_shards
+
+        # Snap mood to canonical preset
+        m_label, m_val, m_ar = normalize_starting_mood(
+            draft.baseline_psyche.mood_label,
+            draft.baseline_psyche.valence,
+            draft.baseline_psyche.arousal,
+        )
+        draft.baseline_psyche.mood_label = m_label
+        draft.baseline_psyche.valence = m_val
+        draft.baseline_psyche.arousal = m_ar
+        draft.baseline_psyche.default_plan = (
+            normalize_bullet_plan(draft.baseline_psyche.default_plan)
+            or fallback.baseline_psyche.default_plan
+        )
 
         # Media assets must strictly be managed by the media pipeline, not hallucinated by the LLM
         draft.portraits = {}

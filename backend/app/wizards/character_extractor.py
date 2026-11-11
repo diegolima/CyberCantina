@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
+from app.schemas.character import sanitize_character_markup
 
 logger = logging.getLogger("cybercantina.wizards.character_extractor")
 
@@ -112,9 +113,12 @@ async def extract_features_from_bio(
         )
         if isinstance(pass1_out, DistinctiveFeaturesExtractionLLMOutput):
             new_feats = [
-                f.strip()
-                for f in pass1_out.distinctive_features
-                if f.strip() and f.strip().lower() not in {e.lower() for e in existing}
+                cleaned_f
+                for cleaned_f in (
+                    sanitize_character_markup(f, single_line=True)
+                    for f in pass1_out.distinctive_features
+                )
+                if cleaned_f and cleaned_f.lower() not in {e.lower() for e in existing}
             ]
     except Exception as exc:
         logger.warning("Pass 1 feature extraction LLM call failed: %s", exc)
@@ -154,7 +158,7 @@ async def extract_features_from_bio(
             max_tokens=2048,
         )
         if isinstance(pass2_out, RewrittenBioLLMOutput):
-            cleaned = (pass2_out.cleaned_bio or "").strip() or text
+            cleaned = sanitize_character_markup(pass2_out.cleaned_bio or "") or text
             return new_feats, cleaned
     except Exception as exc:
         logger.warning("Pass 2 bio rewrite LLM call failed: %s", exc)
@@ -224,14 +228,20 @@ async def extract_persona_traits_from_demeanor(
         )
         if isinstance(pass1_out, PersonaTraitsExtractionLLMOutput):
             new_code = [
-                m.strip()
-                for m in pass1_out.moral_code
-                if m.strip() and m.strip().lower() not in {e.lower() for e in existing_code}
+                cleaned_m
+                for cleaned_m in (
+                    sanitize_character_markup(m, single_line=True)
+                    for m in pass1_out.moral_code
+                )
+                if cleaned_m and cleaned_m.lower() not in {e.lower() for e in existing_code}
             ]
             new_quirks = [
-                q.strip()
-                for q in pass1_out.quirks_flaws
-                if q.strip() and q.strip().lower() not in {e.lower() for e in existing_quirks}
+                cleaned_q
+                for cleaned_q in (
+                    sanitize_character_markup(q, single_line=True)
+                    for q in pass1_out.quirks_flaws
+                )
+                if cleaned_q and cleaned_q.lower() not in {e.lower() for e in existing_quirks}
             ]
     except Exception as exc:
         logger.warning("Pass 1 persona extraction LLM call failed: %s", exc)
@@ -276,7 +286,7 @@ async def extract_persona_traits_from_demeanor(
             max_tokens=2048,
         )
         if isinstance(pass2_out, RewrittenPersonaLLMOutput):
-            cleaned = (pass2_out.cleaned_core_persona or "").strip() or text
+            cleaned = sanitize_character_markup(pass2_out.cleaned_core_persona or "") or text
             return new_code, new_quirks, cleaned
     except Exception as exc:
         logger.warning("Pass 2 demeanor rewrite LLM call failed: %s", exc)
@@ -359,9 +369,12 @@ async def extract_quirks_from_demeanor(
         )
         if isinstance(pass1_out, QuirksFlawsExtractionLLMOutput):
             new_quirks = [
-                q.strip()
-                for q in pass1_out.quirks_flaws
-                if q.strip() and q.strip().lower() not in {e.lower() for e in existing}
+                cleaned_q
+                for cleaned_q in (
+                    sanitize_character_markup(q, single_line=True)
+                    for q in pass1_out.quirks_flaws
+                )
+                if cleaned_q and cleaned_q.lower() not in {e.lower() for e in existing}
             ]
     except Exception as exc:
         logger.warning("Pass 1 quirks extraction LLM call failed: %s", exc)
@@ -401,7 +414,7 @@ async def extract_quirks_from_demeanor(
             max_tokens=2048,
         )
         if isinstance(pass2_out, RewrittenDemeanorLLMOutput):
-            cleaned = (pass2_out.cleaned_core_persona or "").strip() or text
+            cleaned = sanitize_character_markup(pass2_out.cleaned_core_persona or "") or text
             return new_quirks, cleaned
     except Exception as exc:
         logger.warning("Pass 2 demeanor rewrite LLM call failed: %s", exc)

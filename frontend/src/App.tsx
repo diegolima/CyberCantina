@@ -2118,24 +2118,26 @@ export const App: React.FC = () => {
             setCharacters(cList);
             setWorlds(wList);
             setActiveCharacter(createdChar);
-            const targetWorld =
-              wList.find((w) => w.id === launchWorldId) ?? wList[0];
-            if (targetWorld) {
-              const newBundle = await api.createCampaign({
-                name: `${createdChar.name} in ${targetWorld.name}`,
-                world_id: targetWorld.id,
-                character_id: createdChar.id,
-                persona_id: activePersona?.id,
-              });
-              const allCamps = await api.listCampaigns();
-              setCampaigns(allCamps);
-              setBundle(newBundle);
-              try {
-                localStorage.setItem(ACTIVE_CAMPAIGN_STORAGE_KEY, newBundle.campaign.id);
-              } catch {}
-              setCampaignWorld(targetWorld);
-              setCampaignCharacter(createdChar);
-              setActiveWorld(targetWorld);
+            if (launchWorldId) {
+              const targetWorld =
+                wList.find((w) => w.id === launchWorldId) ?? wList[0];
+              if (targetWorld) {
+                const newBundle = await api.createCampaign({
+                  name: `${createdChar.name} in ${targetWorld.name}`,
+                  world_id: targetWorld.id,
+                  character_id: createdChar.id,
+                  persona_id: activePersona?.id,
+                });
+                const allCamps = await api.listCampaigns();
+                setCampaigns(allCamps);
+                setBundle(newBundle);
+                try {
+                  localStorage.setItem(ACTIVE_CAMPAIGN_STORAGE_KEY, newBundle.campaign.id);
+                } catch {}
+                setCampaignWorld(targetWorld);
+                setCampaignCharacter(createdChar);
+                setActiveWorld(targetWorld);
+              }
             }
           }}
         />

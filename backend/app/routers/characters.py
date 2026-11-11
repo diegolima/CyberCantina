@@ -160,13 +160,11 @@ async def wizard_draft_character(
         except KeyError:
             world = None
     eff_actor, *_ = get_effective_user_model_settings(current_user.id)
-    effective_prompts = repo.resolve_effective_prompts(user_id=current_user.id)
     try:
         return await generate_character_draft(
             seed,
             world=world,
             profile=eff_actor,
-            prompt_template=effective_prompts.get("wizard_character_system"),
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
