@@ -15,6 +15,10 @@
 - **Semantic Accents**: Reserve `--accent-rose` / red strictly for errors, validation failures, and destructive actions. Assistive AI extract/populate actions must use `--accent-amber` or `--accent-violet` with `Sparkles`.
 - **Dynamic Node Modals & Creation Flows**: Keep primary `+ Add` headers sticky inside long node editors and scroll/focus newly appended entries into view. Separate catalog saving (`Save Character`) from optional session launch toggles (`Immediately start a campaign`).
 
+## Feature Specifications & Lifecycle Artifacts
+- **Feature Packages (`docs/features/<target_version>-<feature-slug>/`)**: Active feature requirements (`FRD.md`), architectural designs (`ARCHITECTURE.md`), pre-implementation reviews (`REVIEW.md`), and execution plans (`PLAN.md`) are colocated in versioned directories.
+- **Pre-Implementation Review**: When starting work on a feature, inspect `FRD.md`, `REVIEW.md`, and `PLAN.md` in its feature folder before generating code to avoid known architectural traps and edge cases.
+
 ## Verification & Debugging
 - **Character Media Path & Log Boundaries**: All character ID validation and media filesystem operations (`shutil.copytree`, `shutil.rmtree`, `FileResponse`, `unlink`, image saves) must route through `backend/app/security/media_path.py` (`validate_safe_character_id`, `safe_resolve_character_media_dir`, `safe_resolve_media_file_path`) rather than raw `Path(self.media_dir)` joins, and client-influenced log values must pass through `sanitize_log_value` (`backend/app/security/log_sanitize.py`).
 - **Live Output Diagnostics**: When debugging user-reported generation issues, inspect saved rows directly in `backend/cybercantina.db` via `sqlite3` to verify whether defects stem from LLM output, fallback imputation, or frontend rendering.
