@@ -63,6 +63,12 @@ class EffectiveModels:
     max_scene_flags: int
     clerk_mirrors_actor: bool
     warnings: list[EffectiveWarning] = field(default_factory=list)
+    min_working_memory_turns: int = 4
+    lod_summary_chunks: int = 6
+    lod_importance_bonus: int = 2
+    zone2_budget_share_pct: int = 45
+    recall_budget_prose_tokens: int = 450
+    recall_budget_cognition_tokens: int = 220
 
 
 def _finalize_profile(
@@ -152,6 +158,12 @@ def resolve_effective_models(user_id: str | None) -> EffectiveModels:
     delegate = settings.delegate_cognition_to_clerk
     max_flags = settings.memory_config.max_scene_flags
     mirror = settings.clerk_mirrors_actor
+    min_wm_turns = settings.memory_config.min_working_memory_turns
+    lod_chunks = settings.memory_config.lod_summary_chunks
+    lod_bonus = settings.memory_config.lod_importance_bonus
+    z2_share = settings.memory_config.zone2_budget_share_pct
+    recall_prose = settings.memory_config.recall_budget_prose_tokens
+    recall_cog = settings.memory_config.recall_budget_cognition_tokens
 
     user_settings = (
         get_repo().get_user_model_settings(user_id)
@@ -173,6 +185,18 @@ def resolve_effective_models(user_id: str | None) -> EffectiveModels:
             max_flags = user_settings.max_scene_flags
         if user_settings.clerk_mirrors_actor is not None:
             mirror = user_settings.clerk_mirrors_actor
+        if user_settings.min_working_memory_turns is not None:
+            min_wm_turns = user_settings.min_working_memory_turns
+        if user_settings.lod_summary_chunks is not None:
+            lod_chunks = user_settings.lod_summary_chunks
+        if user_settings.lod_importance_bonus is not None:
+            lod_bonus = user_settings.lod_importance_bonus
+        if user_settings.zone2_budget_share_pct is not None:
+            z2_share = user_settings.zone2_budget_share_pct
+        if user_settings.recall_budget_prose_tokens is not None:
+            recall_prose = user_settings.recall_budget_prose_tokens
+        if user_settings.recall_budget_cognition_tokens is not None:
+            recall_cog = user_settings.recall_budget_cognition_tokens
 
     warnings: list[EffectiveWarning] = []
     actor = _finalize_profile(
@@ -209,7 +233,21 @@ def resolve_effective_models(user_id: str | None) -> EffectiveModels:
                     "context_size": actor.context_size,
                 }
             )
-    return EffectiveModels(actor, clerk, wm_turns, delegate, max_flags, mirror, warnings)
+    return EffectiveModels(
+        actor,
+        clerk,
+        wm_turns,
+        delegate,
+        max_flags,
+        mirror,
+        warnings,
+        min_working_memory_turns=min_wm_turns,
+        lod_summary_chunks=lod_chunks,
+        lod_importance_bonus=lod_bonus,
+        zone2_budget_share_pct=z2_share,
+        recall_budget_prose_tokens=recall_prose,
+        recall_budget_cognition_tokens=recall_cog,
+    )
 
 
 def get_effective_user_model_settings(

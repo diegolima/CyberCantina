@@ -210,6 +210,12 @@ def get_profile_models(
         or user_override.agent_dispatch_mode is not None
         or user_override.persona_disclosure_mode is not None
         or user_override.clerk_mirrors_actor is not None
+        or user_override.min_working_memory_turns is not None
+        or user_override.lod_summary_chunks is not None
+        or user_override.lod_importance_bonus is not None
+        or user_override.zone2_budget_share_pct is not None
+        or user_override.recall_budget_prose_tokens is not None
+        or user_override.recall_budget_cognition_tokens is not None
     )
     actor_ctx_fallback = settings.actor_profile.context_size or DEFAULT_ACTOR_CONTEXT_SIZE
     clerk_ctx_fallback = settings.clerk_profile.context_size or DEFAULT_CLERK_CONTEXT_SIZE
@@ -226,6 +232,12 @@ def get_profile_models(
         effective_agent_dispatch_mode=eff_dispatch,
         effective_persona_disclosure_mode=eff_pdm,
         effective_clerk_mirrors_actor=eff.clerk_mirrors_actor,
+        effective_min_working_memory_turns=eff.min_working_memory_turns,
+        effective_lod_summary_chunks=eff.lod_summary_chunks,
+        effective_lod_importance_bonus=eff.lod_importance_bonus,
+        effective_zone2_budget_share_pct=eff.zone2_budget_share_pct,
+        effective_recall_budget_prose_tokens=eff.recall_budget_prose_tokens,
+        effective_recall_budget_cognition_tokens=eff.recall_budget_cognition_tokens,
         user_actor_profile=_public_profile(user_override.actor_profile, current_user, fallback_ctx=actor_ctx_fallback) if user_override and user_override.actor_profile else None,
         user_clerk_profile=_public_profile(user_override.clerk_profile, current_user, fallback_ctx=clerk_ctx_fallback) if user_override and user_override.clerk_profile else None,
         user_working_memory_turns=user_override.working_memory_turns if user_override else None,
@@ -234,6 +246,12 @@ def get_profile_models(
         user_agent_dispatch_mode=user_override.agent_dispatch_mode if user_override else None,
         user_persona_disclosure_mode=user_override.persona_disclosure_mode if user_override else None,
         user_clerk_mirrors_actor=user_override.clerk_mirrors_actor if user_override else None,
+        user_min_working_memory_turns=user_override.min_working_memory_turns if user_override else None,
+        user_lod_summary_chunks=user_override.lod_summary_chunks if user_override else None,
+        user_lod_importance_bonus=user_override.lod_importance_bonus if user_override else None,
+        user_zone2_budget_share_pct=user_override.zone2_budget_share_pct if user_override else None,
+        user_recall_budget_prose_tokens=user_override.recall_budget_prose_tokens if user_override else None,
+        user_recall_budget_cognition_tokens=user_override.recall_budget_cognition_tokens if user_override else None,
         active_prompt_preset_id=user_override.active_prompt_preset_id if user_override else None,
         default_actor_profile=_public_profile(settings.actor_profile, current_user, fallback_ctx=actor_ctx_fallback),
         default_clerk_profile=_public_profile(settings.clerk_profile, current_user, fallback_ctx=clerk_ctx_fallback),
@@ -243,6 +261,12 @@ def get_profile_models(
         default_agent_dispatch_mode=settings.agent_dispatch_mode,
         default_persona_disclosure_mode="llm_intent",
         default_clerk_mirrors_actor=settings.clerk_mirrors_actor,
+        default_min_working_memory_turns=settings.memory_config.min_working_memory_turns,
+        default_lod_summary_chunks=settings.memory_config.lod_summary_chunks,
+        default_lod_importance_bonus=settings.memory_config.lod_importance_bonus,
+        default_zone2_budget_share_pct=settings.memory_config.zone2_budget_share_pct,
+        default_recall_budget_prose_tokens=settings.memory_config.recall_budget_prose_tokens,
+        default_recall_budget_cognition_tokens=settings.memory_config.recall_budget_cognition_tokens,
         default_embedding_profile=settings.embedding_profile,
     )
 

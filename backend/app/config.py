@@ -136,6 +136,42 @@ class MemoryTierConfig(BaseModel):
         le=50,
         description="Maximum number of active scene flags kept in world snapshots via sliding FIFO.",
     )
+    min_working_memory_turns: int = Field(
+        default=4,
+        ge=1,
+        le=32,
+        description="Minimum verbatim Zone 3 turns protected before Zone 2 LOD summaries are trimmed or dropped.",
+    )
+    lod_summary_chunks: int = Field(
+        default=6,
+        ge=1,
+        le=32,
+        description="Number of newest/salient Zone 2 episodic chunks rendered at full summary tier before demoting older chunks to 1-line synopsis tier.",
+    )
+    lod_importance_bonus: int = Field(
+        default=2,
+        ge=0,
+        le=10,
+        description="Effective-age bonus granted to high-salience (salience_score >= 8) episodic chunks in the Zone 2 LOD cascade.",
+    )
+    zone2_budget_share_pct: int = Field(
+        default=45,
+        ge=10,
+        le=80,
+        description="Maximum percentage of remaining history token budget allocated to Zone 2 episodic LOD summaries.",
+    )
+    recall_budget_prose_tokens: int = Field(
+        default=450,
+        ge=100,
+        le=2000,
+        description="Token budget for Zone 4 mixed full+short recalled memories in Phase 4 Actor Prose.",
+    )
+    recall_budget_cognition_tokens: int = Field(
+        default=220,
+        ge=60,
+        le=1000,
+        description="Token budget for mixed full+short recalled memories in Phase 3 Character Cognition.",
+    )
 
 
 class AppSettings(BaseModel):

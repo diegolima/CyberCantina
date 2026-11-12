@@ -64,6 +64,18 @@ export interface ModelDeckProps {
   onMaxSceneFlags?: (v: number) => void;
   ephemeralLifespan?: number;
   onEphemeralLifespan?: (v: number) => void;
+  minWorkingMemoryTurns?: number;
+  onMinWorkingMemoryTurns?: (v: number) => void;
+  lodSummaryChunks?: number;
+  onLodSummaryChunks?: (v: number) => void;
+  lodImportanceBonus?: number;
+  onLodImportanceBonus?: (v: number) => void;
+  zone2BudgetSharePct?: number;
+  onZone2BudgetSharePct?: (v: number) => void;
+  recallBudgetProseTokens?: number;
+  onRecallBudgetProseTokens?: (v: number) => void;
+  recallBudgetCognitionTokens?: number;
+  onRecallBudgetCognitionTokens?: (v: number) => void;
   staleEmbeddingsCount?: number;
   reindexing?: boolean;
   onReindex?: () => void;
@@ -117,6 +129,18 @@ export const ModelDeck: React.FC<ModelDeckProps> = ({
   onMaxSceneFlags,
   ephemeralLifespan = 40,
   onEphemeralLifespan,
+  minWorkingMemoryTurns = 4,
+  onMinWorkingMemoryTurns,
+  lodSummaryChunks = 6,
+  onLodSummaryChunks,
+  lodImportanceBonus = 2,
+  onLodImportanceBonus,
+  zone2BudgetSharePct = 45,
+  onZone2BudgetSharePct,
+  recallBudgetProseTokens = 450,
+  onRecallBudgetProseTokens,
+  recallBudgetCognitionTokens = 220,
+  onRecallBudgetCognitionTokens,
   staleEmbeddingsCount = 0,
   reindexing = false,
   onReindex,
@@ -443,6 +467,66 @@ export const ModelDeck: React.FC<ModelDeckProps> = ({
                   value={ephemeralLifespan}
                   disabled={isLocked || scope === "user"}
                   onCommit={onEphemeralLifespan}
+                />
+              )}
+              {onMinWorkingMemoryTurns && (
+                <IntegerField
+                  label="Zone 3 Min Protected Turns"
+                  min={1}
+                  max={32}
+                  value={minWorkingMemoryTurns}
+                  disabled={isLocked || scope === "user"}
+                  onCommit={onMinWorkingMemoryTurns}
+                />
+              )}
+              {onLodSummaryChunks && (
+                <IntegerField
+                  label="Zone 2 LOD Summary Chunks"
+                  min={1}
+                  max={32}
+                  value={lodSummaryChunks}
+                  disabled={isLocked || scope === "user"}
+                  onCommit={onLodSummaryChunks}
+                />
+              )}
+              {onLodImportanceBonus && (
+                <IntegerField
+                  label="Zone 2 Salience Bonus"
+                  min={0}
+                  max={10}
+                  value={lodImportanceBonus}
+                  disabled={isLocked || scope === "user"}
+                  onCommit={onLodImportanceBonus}
+                />
+              )}
+              {onZone2BudgetSharePct && (
+                <IntegerField
+                  label="Zone 2 History Budget Share (%)"
+                  min={10}
+                  max={80}
+                  value={zone2BudgetSharePct}
+                  disabled={isLocked || scope === "user"}
+                  onCommit={onZone2BudgetSharePct}
+                />
+              )}
+              {onRecallBudgetProseTokens && (
+                <IntegerField
+                  label="Zone 4 Prose Recall Budget (tok)"
+                  min={100}
+                  max={2000}
+                  value={recallBudgetProseTokens}
+                  disabled={isLocked || scope === "user"}
+                  onCommit={onRecallBudgetProseTokens}
+                />
+              )}
+              {onRecallBudgetCognitionTokens && (
+                <IntegerField
+                  label="Phase 3 Cognition Recall Budget (tok)"
+                  min={60}
+                  max={1000}
+                  value={recallBudgetCognitionTokens}
+                  disabled={isLocked || scope === "user"}
+                  onCommit={onRecallBudgetCognitionTokens}
                 />
               )}
             </div>

@@ -1216,6 +1216,48 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
                         memory_config: { ...appSettingsForm.memory_config, ephemeral_memory_lifespan_turns: v },
                       })
                     }
+                    minWorkingMemoryTurns={appSettingsForm.memory_config.min_working_memory_turns ?? 4}
+                    onMinWorkingMemoryTurns={(v) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        memory_config: { ...appSettingsForm.memory_config, min_working_memory_turns: v },
+                      })
+                    }
+                    lodSummaryChunks={appSettingsForm.memory_config.lod_summary_chunks ?? 6}
+                    onLodSummaryChunks={(v) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        memory_config: { ...appSettingsForm.memory_config, lod_summary_chunks: v },
+                      })
+                    }
+                    lodImportanceBonus={appSettingsForm.memory_config.lod_importance_bonus ?? 2}
+                    onLodImportanceBonus={(v) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        memory_config: { ...appSettingsForm.memory_config, lod_importance_bonus: v },
+                      })
+                    }
+                    zone2BudgetSharePct={appSettingsForm.memory_config.zone2_budget_share_pct ?? 45}
+                    onZone2BudgetSharePct={(v) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        memory_config: { ...appSettingsForm.memory_config, zone2_budget_share_pct: v },
+                      })
+                    }
+                    recallBudgetProseTokens={appSettingsForm.memory_config.recall_budget_prose_tokens ?? 450}
+                    onRecallBudgetProseTokens={(v) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        memory_config: { ...appSettingsForm.memory_config, recall_budget_prose_tokens: v },
+                      })
+                    }
+                    recallBudgetCognitionTokens={appSettingsForm.memory_config.recall_budget_cognition_tokens ?? 220}
+                    onRecallBudgetCognitionTokens={(v) =>
+                      setAppSettingsForm({
+                        ...appSettingsForm,
+                        memory_config: { ...appSettingsForm.memory_config, recall_budget_cognition_tokens: v },
+                      })
+                    }
                     staleEmbeddingsCount={staleEmbeddings}
                     reindexing={reindexing}
                     onReindex={handleReindex}

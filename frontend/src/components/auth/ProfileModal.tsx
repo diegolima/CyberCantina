@@ -107,6 +107,12 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
 
   const [userWmTurns, setUserWmTurns] = useState<number>(10);
   const [userMaxSceneFlags, setUserMaxSceneFlags] = useState<number>(10);
+  const [userMinWmTurns, setUserMinWmTurns] = useState<number>(4);
+  const [userLodSummaryChunks, setUserLodSummaryChunks] = useState<number>(6);
+  const [userLodImportanceBonus, setUserLodImportanceBonus] = useState<number>(2);
+  const [userZone2BudgetSharePct, setUserZone2BudgetSharePct] = useState<number>(45);
+  const [userRecallBudgetProseTokens, setUserRecallBudgetProseTokens] = useState<number>(450);
+  const [userRecallBudgetCognitionTokens, setUserRecallBudgetCognitionTokens] = useState<number>(220);
   const [userAgentDispatchMode, setUserAgentDispatchMode] = useState<"sequential" | "parallel">("sequential");
   const [userPersonaDisclosureMode, setUserPersonaDisclosureMode] = useState<DisclosureDetectionMode>("llm_intent");
   const [userActivePresetId, setUserActivePresetId] = useState<string | null>(null);
@@ -189,6 +195,24 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
       setUserMaxSceneFlags(
         data.user_max_scene_flags ?? data.default_max_scene_flags ?? 10
       );
+      setUserMinWmTurns(
+        data.user_min_working_memory_turns ?? data.default_min_working_memory_turns ?? 4
+      );
+      setUserLodSummaryChunks(
+        data.user_lod_summary_chunks ?? data.default_lod_summary_chunks ?? 6
+      );
+      setUserLodImportanceBonus(
+        data.user_lod_importance_bonus ?? data.default_lod_importance_bonus ?? 2
+      );
+      setUserZone2BudgetSharePct(
+        data.user_zone2_budget_share_pct ?? data.default_zone2_budget_share_pct ?? 45
+      );
+      setUserRecallBudgetProseTokens(
+        data.user_recall_budget_prose_tokens ?? data.default_recall_budget_prose_tokens ?? 450
+      );
+      setUserRecallBudgetCognitionTokens(
+        data.user_recall_budget_cognition_tokens ?? data.default_recall_budget_cognition_tokens ?? 220
+      );
 
       const activeDelegate =
         data.user_delegate_cognition_to_clerk ??
@@ -250,6 +274,12 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
         agent_dispatch_mode: userAgentDispatchMode,
         persona_disclosure_mode: userPersonaDisclosureMode,
         clerk_mirrors_actor: userClerkMirrors,
+        min_working_memory_turns: userMinWmTurns,
+        lod_summary_chunks: userLodSummaryChunks,
+        lod_importance_bonus: userLodImportanceBonus,
+        zone2_budget_share_pct: userZone2BudgetSharePct,
+        recall_budget_prose_tokens: userRecallBudgetProseTokens,
+        recall_budget_cognition_tokens: userRecallBudgetCognitionTokens,
       };
       const res = await api.updateProfileModels(payload);
       setModelSettings(res);
@@ -324,6 +354,12 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
       setUserWmTurns(res.default_working_memory_turns);
       setUserDelegateCognition(res.default_delegate_cognition_to_clerk);
       setUserMaxSceneFlags(res.default_max_scene_flags ?? 10);
+      setUserMinWmTurns(res.default_min_working_memory_turns ?? 4);
+      setUserLodSummaryChunks(res.default_lod_summary_chunks ?? 6);
+      setUserLodImportanceBonus(res.default_lod_importance_bonus ?? 2);
+      setUserZone2BudgetSharePct(res.default_zone2_budget_share_pct ?? 45);
+      setUserRecallBudgetProseTokens(res.default_recall_budget_prose_tokens ?? 450);
+      setUserRecallBudgetCognitionTokens(res.default_recall_budget_cognition_tokens ?? 220);
       setUserAgentDispatchMode(res.default_agent_dispatch_mode ?? "sequential");
       setUserPersonaDisclosureMode(res.default_persona_disclosure_mode ?? "llm_intent");
       setStatusMsg("Reverted to system default preferences.");
@@ -1614,6 +1650,171 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
                       episodic compression (System Default:{" "}
                       {modelSettings?.default_working_memory_turns ?? 12}).
                     </span>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: 10,
+                    }}
+                  >
+                    <div className="form-group">
+                      <label className="form-label">
+                        Zone 3 Min Protected Turns
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={32}
+                        className="form-input"
+                        value={userMinWmTurns}
+                        disabled={!modelSettings?.allow_user_model_overrides}
+                        onChange={(e) =>
+                          setUserMinWmTurns(parseInt(e.target.value, 10) || 4)
+                        }
+                      />
+                      <span
+                        style={{
+                          fontSize: "0.71rem",
+                          color: "var(--text-muted)",
+                        }}
+                      >
+                        Minimum verbatim turns protected before Zone 2 LOD trims (Default:{" "}
+                        {modelSettings?.default_min_working_memory_turns ?? 4}).
+                      </span>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label">
+                        Zone 2 LOD Summary Chunks
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={32}
+                        className="form-input"
+                        value={userLodSummaryChunks}
+                        disabled={!modelSettings?.allow_user_model_overrides}
+                        onChange={(e) =>
+                          setUserLodSummaryChunks(parseInt(e.target.value, 10) || 6)
+                        }
+                      />
+                      <span
+                        style={{
+                          fontSize: "0.71rem",
+                          color: "var(--text-muted)",
+                        }}
+                      >
+                        Newest/salient episodes kept at full paragraph before 1-line synopsis (Default:{" "}
+                        {modelSettings?.default_lod_summary_chunks ?? 6}).
+                      </span>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label">
+                        Zone 2 Salience Bonus
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={10}
+                        className="form-input"
+                        value={userLodImportanceBonus}
+                        disabled={!modelSettings?.allow_user_model_overrides}
+                        onChange={(e) => {
+                          const parsed = parseInt(e.target.value, 10);
+                          setUserLodImportanceBonus(Number.isNaN(parsed) ? 2 : parsed);
+                        }}
+                      />
+                      <span
+                        style={{
+                          fontSize: "0.71rem",
+                          color: "var(--text-muted)",
+                        }}
+                      >
+                        Effective-age bonus for high-salience (≥8) episodes (Default:{" "}
+                        {modelSettings?.default_lod_importance_bonus ?? 2}).
+                      </span>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label">
+                        Zone 2 History Budget Share (%)
+                      </label>
+                      <input
+                        type="number"
+                        min={10}
+                        max={80}
+                        className="form-input"
+                        value={userZone2BudgetSharePct}
+                        disabled={!modelSettings?.allow_user_model_overrides}
+                        onChange={(e) =>
+                          setUserZone2BudgetSharePct(parseInt(e.target.value, 10) || 45)
+                        }
+                      />
+                      <span
+                        style={{
+                          fontSize: "0.71rem",
+                          color: "var(--text-muted)",
+                        }}
+                      >
+                        Max percentage of history token budget for Zone 2 LOD (Default:{" "}
+                        {modelSettings?.default_zone2_budget_share_pct ?? 45}%).
+                      </span>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label">
+                        Zone 4 Prose Recall Budget (tokens)
+                      </label>
+                      <input
+                        type="number"
+                        min={100}
+                        max={2000}
+                        className="form-input"
+                        value={userRecallBudgetProseTokens}
+                        disabled={!modelSettings?.allow_user_model_overrides}
+                        onChange={(e) =>
+                          setUserRecallBudgetProseTokens(parseInt(e.target.value, 10) || 450)
+                        }
+                      />
+                      <span
+                        style={{
+                          fontSize: "0.71rem",
+                          color: "var(--text-muted)",
+                        }}
+                      >
+                        Token cap for mixed full+short recalled memories in Phase 4 (Default:{" "}
+                        {modelSettings?.default_recall_budget_prose_tokens ?? 450}).
+                      </span>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label">
+                        Phase 3 Cognition Recall Budget (tokens)
+                      </label>
+                      <input
+                        type="number"
+                        min={60}
+                        max={1000}
+                        className="form-input"
+                        value={userRecallBudgetCognitionTokens}
+                        disabled={!modelSettings?.allow_user_model_overrides}
+                        onChange={(e) =>
+                          setUserRecallBudgetCognitionTokens(parseInt(e.target.value, 10) || 220)
+                        }
+                      />
+                      <span
+                        style={{
+                          fontSize: "0.71rem",
+                          color: "var(--text-muted)",
+                        }}
+                      >
+                        Token cap for recalled memories in Phase 3 Cognition (Default:{" "}
+                        {modelSettings?.default_recall_budget_cognition_tokens ?? 220}).
+                      </span>
+                    </div>
                   </div>
 
 

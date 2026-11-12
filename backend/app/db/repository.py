@@ -855,6 +855,30 @@ class CantinaRepository:
                 conn.execute(
                     "ALTER TABLE user_model_settings ADD COLUMN persona_disclosure_mode TEXT NOT NULL DEFAULT 'llm_intent'"
                 )
+            if "min_working_memory_turns" not in ums_cols:
+                conn.execute(
+                    "ALTER TABLE user_model_settings ADD COLUMN min_working_memory_turns INTEGER NULL"
+                )
+            if "lod_summary_chunks" not in ums_cols:
+                conn.execute(
+                    "ALTER TABLE user_model_settings ADD COLUMN lod_summary_chunks INTEGER NULL"
+                )
+            if "lod_importance_bonus" not in ums_cols:
+                conn.execute(
+                    "ALTER TABLE user_model_settings ADD COLUMN lod_importance_bonus INTEGER NULL"
+                )
+            if "zone2_budget_share_pct" not in ums_cols:
+                conn.execute(
+                    "ALTER TABLE user_model_settings ADD COLUMN zone2_budget_share_pct INTEGER NULL"
+                )
+            if "recall_budget_prose_tokens" not in ums_cols:
+                conn.execute(
+                    "ALTER TABLE user_model_settings ADD COLUMN recall_budget_prose_tokens INTEGER NULL"
+                )
+            if "recall_budget_cognition_tokens" not in ums_cols:
+                conn.execute(
+                    "ALTER TABLE user_model_settings ADD COLUMN recall_budget_cognition_tokens INTEGER NULL"
+                )
 
             # Seed / ensure built-in prompt presets
             now_iso = utc_now_iso()
@@ -1037,6 +1061,31 @@ class CantinaRepository:
             if "superseded_at_turn_id" not in vec_cols:
                 conn.execute(
                     "ALTER TABLE vector_entries ADD COLUMN superseded_at_turn_id TEXT NULL"
+                )
+
+            ep_cols = {
+                r["name"]
+                for r in conn.execute("PRAGMA table_info(episodic_chunks)").fetchall()
+            }
+            if "title" not in ep_cols:
+                conn.execute(
+                    "ALTER TABLE episodic_chunks ADD COLUMN title TEXT NOT NULL DEFAULT ''"
+                )
+            if "synopsis_text" not in ep_cols:
+                conn.execute(
+                    "ALTER TABLE episodic_chunks ADD COLUMN synopsis_text TEXT NOT NULL DEFAULT ''"
+                )
+            if "keywords_json" not in ep_cols:
+                conn.execute(
+                    "ALTER TABLE episodic_chunks ADD COLUMN keywords_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "witness_character_ids_json" not in ep_cols:
+                conn.execute(
+                    "ALTER TABLE episodic_chunks ADD COLUMN witness_character_ids_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "salience_score" not in ep_cols:
+                conn.execute(
+                    "ALTER TABLE episodic_chunks ADD COLUMN salience_score INTEGER NOT NULL DEFAULT 5"
                 )
 
             # Backfill compass_direction for any pre-existing location_edges missing it
@@ -1678,11 +1727,19 @@ class CantinaRepository:
         conn = self._connect()
         try:
             row = conn.execute(
-                "SELECT actor_profile_json, clerk_profile_json, working_memory_turns, active_prompt_preset_id, delegate_cognition_to_clerk, max_scene_flags, agent_dispatch_mode, persona_disclosure_mode, clerk_mirrors_actor FROM user_model_settings WHERE user_id = ?",
+                """
+                SELECT actor_profile_json, clerk_profile_json, working_memory_turns,
+                       active_prompt_preset_id, delegate_cognition_to_clerk, max_scene_flags,
+                       agent_dispatch_mode, persona_disclosure_mode, clerk_mirrors_actor,
+                       min_working_memory_turns, lod_summary_chunks, lod_importance_bonus,
+                       zone2_budget_share_pct, recall_budget_prose_tokens, recall_budget_cognition_tokens
+                FROM user_model_settings WHERE user_id = ?
+                """,
                 (user_id,),
             ).fetchone()
             if not row:
                 return None
+            rkeys = row.keys()
             actor = (
                 ModelProfile.model_validate_json(row["actor_profile_json"])
                 if row["actor_profile_json"]
@@ -1700,7 +1757,7 @@ class CantinaRepository:
             )
             raw_dispatch = (
                 row["agent_dispatch_mode"]
-                if "agent_dispatch_mode" in row.keys()
+                if "agent_dispatch_mode" in rkeys
                 else None
             )
             dispatch_mode = (
@@ -1708,7 +1765,7 @@ class CantinaRepository:
             )
             raw_pdm = (
                 row["persona_disclosure_mode"]
-                if "persona_disclosure_mode" in row.keys()
+                if "persona_disclosure_mode" in rkeys
                 else None
             )
             pdm = raw_pdm if raw_pdm in ("llm_intent", "token_matching", "hybrid") else "llm_intent"
@@ -1724,6 +1781,12 @@ class CantinaRepository:
                 clerk_mirrors_actor=(
                     bool(row["clerk_mirrors_actor"]) if row["clerk_mirrors_actor"] is not None else None
                 ),
+                min_working_memory_turns=row["min_working_memory_turns"] if "min_working_memory_turns" in rkeys else None,
+                lod_summary_chunks=row["lod_summary_chunks"] if "lod_summary_chunks" in rkeys else None,
+                lod_importance_bonus=row["lod_importance_bonus"] if "lod_importance_bonus" in rkeys else None,
+                zone2_budget_share_pct=row["zone2_budget_share_pct"] if "zone2_budget_share_pct" in rkeys else None,
+                recall_budget_prose_tokens=row["recall_budget_prose_tokens"] if "recall_budget_prose_tokens" in rkeys else None,
+                recall_budget_cognition_tokens=row["recall_budget_cognition_tokens"] if "recall_budget_cognition_tokens" in rkeys else None,
             )
         finally:
             conn.close()
@@ -1756,8 +1819,15 @@ class CantinaRepository:
             )
             conn.execute(
                 """
-                INSERT INTO user_model_settings (user_id, actor_profile_json, clerk_profile_json, working_memory_turns, active_prompt_preset_id, delegate_cognition_to_clerk, max_scene_flags, agent_dispatch_mode, persona_disclosure_mode, clerk_mirrors_actor, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO user_model_settings (
+                    user_id, actor_profile_json, clerk_profile_json, working_memory_turns,
+                    active_prompt_preset_id, delegate_cognition_to_clerk, max_scene_flags,
+                    agent_dispatch_mode, persona_disclosure_mode, clerk_mirrors_actor,
+                    min_working_memory_turns, lod_summary_chunks, lod_importance_bonus,
+                    zone2_budget_share_pct, recall_budget_prose_tokens, recall_budget_cognition_tokens,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     actor_profile_json = excluded.actor_profile_json,
                     clerk_profile_json = excluded.clerk_profile_json,
@@ -1768,9 +1838,33 @@ class CantinaRepository:
                     agent_dispatch_mode = excluded.agent_dispatch_mode,
                     persona_disclosure_mode = excluded.persona_disclosure_mode,
                     clerk_mirrors_actor = excluded.clerk_mirrors_actor,
+                    min_working_memory_turns = excluded.min_working_memory_turns,
+                    lod_summary_chunks = excluded.lod_summary_chunks,
+                    lod_importance_bonus = excluded.lod_importance_bonus,
+                    zone2_budget_share_pct = excluded.zone2_budget_share_pct,
+                    recall_budget_prose_tokens = excluded.recall_budget_prose_tokens,
+                    recall_budget_cognition_tokens = excluded.recall_budget_cognition_tokens,
                     updated_at = excluded.updated_at
                 """,
-                (user_id, actor_json, clerk_json, payload.working_memory_turns, payload.active_prompt_preset_id, del_cog_val, payload.max_scene_flags, payload.agent_dispatch_mode, pdm_val, mirror_val, now),
+                (
+                    user_id,
+                    actor_json,
+                    clerk_json,
+                    payload.working_memory_turns,
+                    payload.active_prompt_preset_id,
+                    del_cog_val,
+                    payload.max_scene_flags,
+                    payload.agent_dispatch_mode,
+                    pdm_val,
+                    mirror_val,
+                    payload.min_working_memory_turns,
+                    payload.lod_summary_chunks,
+                    payload.lod_importance_bonus,
+                    payload.zone2_budget_share_pct,
+                    payload.recall_budget_prose_tokens,
+                    payload.recall_budget_cognition_tokens,
+                    now,
+                ),
             )
             conn.commit()
             return payload
@@ -6253,21 +6347,40 @@ class CantinaRepository:
         end_turn_depth: int,
         leaf_turn_id: str,
         summary_text: str,
+        title: str = "",
+        synopsis_text: str = "",
         keywords: list[str] | None = None,
+        witness_character_ids: list[str] | None = None,
+        salience_score: int = 5,
         embedding: np.ndarray | None = None,
     ) -> EpisodicChunkRecord:
         """Persist a compressed episodic summary and index it in the VectorStore with branch anchor."""
         chunk_id = f"ep_{uuid.uuid4().hex[:10]}"
         now = utc_now_iso()
+        clean_title = " ".join((title or "").replace("\r", " ").replace("\n", " ").split()).strip()
+        clean_synopsis = " ".join((synopsis_text or "").replace("\r", " ").replace("\n", " ").split()).strip()
+        if not clean_synopsis and summary_text:
+            first_sent = summary_text.strip().split(". ")[0].strip()
+            if first_sent and not first_sent.endswith((".", "!", "?")):
+                first_sent += "."
+            clean_synopsis = first_sent[:220]
+        kw_list = [k.strip() for k in (keywords or []) if isinstance(k, str) and k.strip()]
+        witness_list = [w.strip() for w in (witness_character_ids or []) if isinstance(w, str) and w.strip()]
+        clamped_salience = max(1, min(10, int(salience_score or 5)))
+        vec_title = f"Episode Turns {start_turn_depth}-{end_turn_depth}"
+        if clean_title and not clean_title.lower().startswith("episode turns"):
+            vec_title = f"Episode Turns {start_turn_depth}-{end_turn_depth} — {clean_title}"
+
         conn = self._connect()
         try:
             conn.execute(
                 """
                 INSERT INTO episodic_chunks (
                     id, campaign_id, start_turn_depth, end_turn_depth,
-                    leaf_turn_id, summary_text, created_at
+                    leaf_turn_id, title, synopsis_text, summary_text,
+                    keywords_json, witness_character_ids_json, salience_score, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chunk_id,
@@ -6275,7 +6388,12 @@ class CantinaRepository:
                     start_turn_depth,
                     end_turn_depth,
                     leaf_turn_id,
+                    clean_title,
+                    clean_synopsis,
                     summary_text,
+                    json.dumps(kw_list),
+                    json.dumps(witness_list),
+                    clamped_salience,
                     now,
                 ),
             )
@@ -6286,9 +6404,9 @@ class CantinaRepository:
                 character_id=character_id,
                 campaign_id=campaign_id,
                 anchor_turn_id=leaf_turn_id,
-                title=f"Episode Turns {start_turn_depth}-{end_turn_depth}",
+                title=vec_title,
                 content=summary_text,
-                keywords=keywords or [],
+                keywords=kw_list,
                 embedding=embedding,
                 conn=conn,
             )
@@ -6302,7 +6420,12 @@ class CantinaRepository:
             start_turn_depth=start_turn_depth,
             end_turn_depth=end_turn_depth,
             leaf_turn_id=leaf_turn_id,
+            title=clean_title,
+            synopsis_text=clean_synopsis,
             summary_text=summary_text,
+            keywords=kw_list,
+            witness_character_ids=witness_list,
+            salience_score=clamped_salience,
             created_at=now,
         )
 
@@ -6316,15 +6439,22 @@ class CantinaRepository:
         end_turn_depth: int,
         leaf_turn_id: str,
         summary_text: str,
+        title: str = "",
+        synopsis_text: str = "",
         keywords: list[str] | None = None,
+        witness_character_ids: list[str] | None = None,
+        salience_score: int = 5,
         embedding: np.ndarray | None = None,
     ) -> EpisodicChunkRecord:
         """Asynchronously compute the embedding using embed_text and persist the episodic chunk."""
-        title = f"Episode Turns {start_turn_depth}-{end_turn_depth}"
+        clean_title = " ".join((title or "").replace("\r", " ").replace("\n", " ").split()).strip()
+        vec_title = f"Episode Turns {start_turn_depth}-{end_turn_depth}"
+        if clean_title and not clean_title.lower().startswith("episode turns"):
+            vec_title = f"Episode Turns {start_turn_depth}-{end_turn_depth} — {clean_title}"
         vec = (
             embedding
             if embedding is not None
-            else await embed_text(combine_entry_text(title, summary_text, keywords))
+            else await embed_text(combine_entry_text(vec_title, summary_text, keywords))
         )
         return self.save_episodic_chunk(
             campaign_id=campaign_id,
@@ -6334,7 +6464,11 @@ class CantinaRepository:
             end_turn_depth=end_turn_depth,
             leaf_turn_id=leaf_turn_id,
             summary_text=summary_text,
+            title=clean_title,
+            synopsis_text=synopsis_text,
             keywords=keywords,
+            witness_character_ids=witness_character_ids,
+            salience_score=salience_score,
             embedding=vec,
         )
 
@@ -6360,6 +6494,22 @@ class CantinaRepository:
         chunks: list[EpisodicChunkRecord] = []
         for r in rows:
             if r["leaf_turn_id"] in valid_turn_ids:
+                rkeys = r.keys()
+                raw_kw = r["keywords_json"] if "keywords_json" in rkeys and r["keywords_json"] else "[]"
+                raw_wit = (
+                    r["witness_character_ids_json"]
+                    if "witness_character_ids_json" in rkeys and r["witness_character_ids_json"]
+                    else "[]"
+                )
+                try:
+                    kw_list = [str(k) for k in json.loads(raw_kw) if k]
+                except Exception:
+                    kw_list = []
+                try:
+                    wit_list = [str(w) for w in json.loads(raw_wit) if w]
+                except Exception:
+                    wit_list = []
+                raw_salience = r["salience_score"] if "salience_score" in rkeys and r["salience_score"] is not None else 5
                 chunks.append(
                     EpisodicChunkRecord(
                         id=r["id"],
@@ -6367,7 +6517,12 @@ class CantinaRepository:
                         start_turn_depth=r["start_turn_depth"],
                         end_turn_depth=r["end_turn_depth"],
                         leaf_turn_id=r["leaf_turn_id"],
+                        title=r["title"] if "title" in rkeys and r["title"] else "",
+                        synopsis_text=r["synopsis_text"] if "synopsis_text" in rkeys and r["synopsis_text"] else "",
                         summary_text=r["summary_text"],
+                        keywords=kw_list,
+                        witness_character_ids=wit_list,
+                        salience_score=max(1, min(10, int(raw_salience))),
                         created_at=r["created_at"],
                     )
                 )

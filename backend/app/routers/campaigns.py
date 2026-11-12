@@ -23,6 +23,7 @@ from app.dependencies import (
     get_effective_persona_disclosure_mode,
     get_effective_user_model_settings,
     get_repo,
+    resolve_effective_models,
     run_entity_pruner,
 )
 from app.engine.affective_engine import (
@@ -725,6 +726,7 @@ async def _execute_turn_stream_events_unlocked(
             known_entities.append(cleaned_ent)
 
     eff_actor, eff_clerk, eff_wm_turns, eff_delegate_cognition, eff_max_flags = get_effective_user_model_settings(owner_id)
+    eff_models = resolve_effective_models(owner_id)
     eff_dispatch_mode = get_effective_agent_dispatch_mode(owner_id)
     eff_disclosure_mode = get_effective_persona_disclosure_mode(owner_id)
     effective_prompts = repo.resolve_effective_prompts(user_id=owner_id, campaign_id=campaign.id)
@@ -931,6 +933,7 @@ async def _execute_turn_stream_events_unlocked(
         persona_snapshot=persona_snapshot,
         current_player_state=current_player_state,
         decomposed_message=decomposed_msg,
+        recall_budget_cognition_tokens=eff_models.recall_budget_cognition_tokens,
     )
 
     seen_recall_ids: set[str] = set()
@@ -1018,6 +1021,11 @@ async def _execute_turn_stream_events_unlocked(
         decomposed_message=decomposed_msg,
         max_context_tokens=actor_ctx_ceiling,
         reserved_output_tokens=actor_reserved_out,
+        min_working_memory_turns=eff_models.min_working_memory_turns,
+        lod_summary_chunks=eff_models.lod_summary_chunks,
+        lod_importance_bonus=eff_models.lod_importance_bonus,
+        zone2_budget_share_pct=eff_models.zone2_budget_share_pct,
+        recall_budget_prose_tokens=eff_models.recall_budget_prose_tokens,
     )
 
     primary_cognition = (

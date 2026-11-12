@@ -1181,6 +1181,12 @@ export interface AppSettings {
     rag_top_k: number;
     ephemeral_memory_lifespan_turns?: number;
     max_scene_flags?: number;
+    min_working_memory_turns?: number;
+    lod_summary_chunks?: number;
+    lod_importance_bonus?: number;
+    zone2_budget_share_pct?: number;
+    recall_budget_prose_tokens?: number;
+    recall_budget_cognition_tokens?: number;
   };
   allow_offline_fallback: boolean;
   allow_user_model_overrides: boolean;
@@ -1371,6 +1377,12 @@ export interface UserModelSettingsPayload {
   agent_dispatch_mode?: AgentDispatchMode | null;
   persona_disclosure_mode?: DisclosureDetectionMode | null;
   clerk_mirrors_actor?: boolean | null;
+  min_working_memory_turns?: number | null;
+  lod_summary_chunks?: number | null;
+  lod_importance_bonus?: number | null;
+  zone2_budget_share_pct?: number | null;
+  recall_budget_prose_tokens?: number | null;
+  recall_budget_cognition_tokens?: number | null;
 }
 
 export interface ProfileModelSettingsResponse {
@@ -1388,6 +1400,12 @@ export interface ProfileModelSettingsResponse {
   effective_max_scene_flags?: number;
   effective_agent_dispatch_mode?: AgentDispatchMode;
   effective_persona_disclosure_mode?: DisclosureDetectionMode;
+  effective_min_working_memory_turns?: number;
+  effective_lod_summary_chunks?: number;
+  effective_lod_importance_bonus?: number;
+  effective_zone2_budget_share_pct?: number;
+  effective_recall_budget_prose_tokens?: number;
+  effective_recall_budget_cognition_tokens?: number;
   user_actor_profile?: ModelProfile | null;
   user_clerk_profile?: ModelProfile | null;
   user_working_memory_turns?: number | null;
@@ -1395,6 +1413,12 @@ export interface ProfileModelSettingsResponse {
   user_max_scene_flags?: number | null;
   user_agent_dispatch_mode?: AgentDispatchMode | null;
   user_persona_disclosure_mode?: DisclosureDetectionMode | null;
+  user_min_working_memory_turns?: number | null;
+  user_lod_summary_chunks?: number | null;
+  user_lod_importance_bonus?: number | null;
+  user_zone2_budget_share_pct?: number | null;
+  user_recall_budget_prose_tokens?: number | null;
+  user_recall_budget_cognition_tokens?: number | null;
   active_prompt_preset_id?: string | null;
   default_actor_profile: ModelProfile;
   default_clerk_profile: ModelProfile;
@@ -1403,6 +1427,12 @@ export interface ProfileModelSettingsResponse {
   default_max_scene_flags?: number;
   default_agent_dispatch_mode?: AgentDispatchMode;
   default_persona_disclosure_mode?: DisclosureDetectionMode;
+  default_min_working_memory_turns?: number;
+  default_lod_summary_chunks?: number;
+  default_lod_importance_bonus?: number;
+  default_zone2_budget_share_pct?: number;
+  default_recall_budget_prose_tokens?: number;
+  default_recall_budget_cognition_tokens?: number;
   default_embedding_profile?: AppSettings["embedding_profile"];
 }
 

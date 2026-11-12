@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from dataclasses import dataclass
 import logging
 import re
@@ -18,6 +19,7 @@ from app.engine.mentions import CharacterWhisper, DecomposedUserMessage, decompo
 from app.engine.phase2_context import (
     DiscoveredPersonaView,
     TurnContextBundle,
+    pack_recalled_items_to_budget,
     resolve_character_previous_state,
     select_active_location_lore_for_turn,
 )
@@ -545,6 +547,72 @@ def heuristic_character_cognition(
     return cog
 
 
+def select_cognition_recalled_items(
+    shared_scene_items: Sequence[RecalledMemoryItem],
+    character_recalled_items: Sequence[RecalledMemoryItem],
+    *,
+    token_budget: int | None = None,
+    personal_shard_quota: int = 2,
+) -> list[RecalledMemoryItem]:
+    """Merge shared scene items and character-scoped memories with personal shard quota protection.
+
+    Prevents shared world/location lore from starving a character's personal `character_shard`
+    memories, then packs the prioritized list into `token_budget` using two-form (full + short) packing.
+    """
+    eff_budget = (
+        token_budget
+        if token_budget is not None
+        else settings.memory_config.recall_budget_cognition_tokens
+    )
+    personal_shards: list[RecalledMemoryItem] = []
+    other_items: list[RecalledMemoryItem] = []
+    seen_ids: set[str] = set()
+
+    for m in character_recalled_items:
+        if m.id in seen_ids:
+            continue
+        seen_ids.add(m.id)
+        if m.source_type == "character_shard":
+            personal_shards.append(m)
+        else:
+            other_items.append(m)
+
+    for m in shared_scene_items:
+        if m.id in seen_ids:
+            continue
+        seen_ids.add(m.id)
+        other_items.append(m)
+
+    personal_shards.sort(key=lambda x: x.score, reverse=True)
+    other_items.sort(key=lambda x: x.score, reverse=True)
+
+    reserved_shards = personal_shards[: max(0, personal_shard_quota)]
+    reserved_ids = {m.id for m in reserved_shards}
+    remaining_pool = [
+        m for m in (*personal_shards[len(reserved_shards) :], *other_items) if m.id not in reserved_ids
+    ]
+    remaining_pool.sort(key=lambda x: x.score, reverse=True)
+
+    prioritized: list[RecalledMemoryItem] = []
+    if reserved_shards and remaining_pool:
+        if reserved_shards[0].score >= remaining_pool[0].score:
+            prioritized.append(reserved_shards[0])
+            prioritized.append(remaining_pool[0])
+            prioritized.extend(reserved_shards[1:])
+            prioritized.extend(remaining_pool[1:])
+        else:
+            prioritized.append(remaining_pool[0])
+            prioritized.extend(reserved_shards)
+            prioritized.extend(remaining_pool[1:])
+    else:
+        prioritized = [*reserved_shards, *remaining_pool]
+
+    if not prioritized:
+        return []
+
+    return pack_recalled_items_to_budget(prioritized, eff_budget)
+
+
 async def run_character_cognition_agent(
     *,
     user_message: str,
@@ -566,6 +634,7 @@ async def run_character_cognition_agent(
     known_persona: DiscoveredPersonaView | None = None,
     public_message: str | None = None,
     char_whisper: CharacterWhisper | None = None,
+    recall_budget_cognition_tokens: int | None = None,
 ) -> CognitionBlock:
     """Execute a single character subconscious cognition agent turn."""
     template = system_prompt_template or get_default_prompt(
@@ -592,17 +661,14 @@ async def run_character_cognition_agent(
         core_fear=character.baseline_psyche.core_fear,
     )
 
-    # Scoped recalled items: shared room items + character's isolated memories (deduplicated by ID)
-    seen_recall_ids: set[str] = set()
-    all_recalled: list[RecalledMemoryItem] = []
-    for m in (*shared_scene_items, *character_recalled_items):
-        if m.id not in seen_recall_ids:
-            seen_recall_ids.add(m.id)
-            all_recalled.append(m)
-    # Tame recall bloat: select top 3 most relevant items for subconscious cognition
-    effective_recalled = all_recalled[:3]
+    # Scoped recalled items with personal character_shard quota protection + two-form budget packing
+    effective_recalled = select_cognition_recalled_items(
+        shared_scene_items,
+        character_recalled_items,
+        token_budget=recall_budget_cognition_tokens,
+    )
     recalled_text = "\n".join(
-        f"  - [{m.source_type.upper()}] {m.title}: {m.content}"
+        f"  - [{m.source_type.upper()}] {m.title}: {m.short_content if (m.render_form == 'short' and m.short_content) else m.content}"
         for m in effective_recalled
     ) or "  - No specific background lore triggered this turn."
 
@@ -988,6 +1054,7 @@ async def run_phase3_multi_cognition(
                         known_persona=known_p,
                         public_message=pub_text,
                         char_whisper=char_w,
+                        recall_budget_cognition_tokens=context.recall_budget_cognition_tokens,
                     )
                 used_fallback = False
             except Exception as err:
@@ -1079,6 +1146,7 @@ async def run_phase3_multi_cognition(
                     known_persona=known_p,
                     public_message=pub_text,
                     char_whisper=char_w,
+                    recall_budget_cognition_tokens=context.recall_budget_cognition_tokens,
                 )
                 used_fallback = False
             except Exception as err:

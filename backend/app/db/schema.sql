@@ -66,6 +66,12 @@ CREATE TABLE IF NOT EXISTS user_model_settings (
     agent_dispatch_mode TEXT NULL,
     persona_disclosure_mode TEXT NOT NULL DEFAULT 'llm_intent',
     clerk_mirrors_actor INTEGER NULL,
+    min_working_memory_turns INTEGER NULL,
+    lod_summary_chunks INTEGER NULL,
+    lod_importance_bonus INTEGER NULL,
+    zone2_budget_share_pct INTEGER NULL,
+    recall_budget_prose_tokens INTEGER NULL,
+    recall_budget_cognition_tokens INTEGER NULL,
     updated_at TEXT NOT NULL
 );
 
@@ -304,7 +310,12 @@ CREATE TABLE IF NOT EXISTS episodic_chunks (
     start_turn_depth INTEGER NOT NULL,
     end_turn_depth INTEGER NOT NULL,
     leaf_turn_id TEXT NOT NULL REFERENCES turn_nodes(id) ON DELETE CASCADE,
+    title TEXT NOT NULL DEFAULT '',
+    synopsis_text TEXT NOT NULL DEFAULT '',
     summary_text TEXT NOT NULL,
+    keywords_json TEXT NOT NULL DEFAULT '[]',
+    witness_character_ids_json TEXT NOT NULL DEFAULT '[]',
+    salience_score INTEGER NOT NULL DEFAULT 5,
     created_at TEXT NOT NULL
 );
 

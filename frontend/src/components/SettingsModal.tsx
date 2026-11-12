@@ -353,6 +353,82 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 }
               />
             </div>
+            <div className="field-group">
+              <label>Zone 3 Min Protected Turns</label>
+              <input
+                type="number"
+                min={1}
+                max={32}
+                className="field-input"
+                value={form.memory_config.min_working_memory_turns ?? 4}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    memory_config: {
+                      ...form.memory_config,
+                      min_working_memory_turns: Number(e.target.value) || 4,
+                    },
+                  })
+                }
+              />
+            </div>
+            <div className="field-group">
+              <label>Zone 2 LOD Summary Chunks</label>
+              <input
+                type="number"
+                min={1}
+                max={32}
+                className="field-input"
+                value={form.memory_config.lod_summary_chunks ?? 6}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    memory_config: {
+                      ...form.memory_config,
+                      lod_summary_chunks: Number(e.target.value) || 6,
+                    },
+                  })
+                }
+              />
+            </div>
+            <div className="field-group">
+              <label>Zone 4 Prose Recall Budget (tok)</label>
+              <input
+                type="number"
+                min={100}
+                max={2000}
+                className="field-input"
+                value={form.memory_config.recall_budget_prose_tokens ?? 450}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    memory_config: {
+                      ...form.memory_config,
+                      recall_budget_prose_tokens: Number(e.target.value) || 450,
+                    },
+                  })
+                }
+              />
+            </div>
+            <div className="field-group">
+              <label>Phase 3 Cognition Recall Budget (tok)</label>
+              <input
+                type="number"
+                min={60}
+                max={1000}
+                className="field-input"
+                value={form.memory_config.recall_budget_cognition_tokens ?? 220}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    memory_config: {
+                      ...form.memory_config,
+                      recall_budget_cognition_tokens: Number(e.target.value) || 220,
+                    },
+                  })
+                }
+              />
+            </div>
           </div>
 
           <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.82rem", marginTop: 4 }}>

@@ -140,6 +140,12 @@ class UserModelSettingsPayload(BaseModel):
     agent_dispatch_mode: AgentDispatchMode | None = None
     persona_disclosure_mode: Literal["llm_intent", "token_matching", "hybrid"] | None = None
     clerk_mirrors_actor: bool | None = None
+    min_working_memory_turns: int | None = Field(default=None, ge=1, le=32)
+    lod_summary_chunks: int | None = Field(default=None, ge=1, le=32)
+    lod_importance_bonus: int | None = Field(default=None, ge=0, le=10)
+    zone2_budget_share_pct: int | None = Field(default=None, ge=10, le=80)
+    recall_budget_prose_tokens: int | None = Field(default=None, ge=100, le=2000)
+    recall_budget_cognition_tokens: int | None = Field(default=None, ge=60, le=1000)
 
 
 class EffectiveWarning(BaseModel):
@@ -165,6 +171,12 @@ class ProfileModelSettingsResponse(BaseModel):
     effective_max_scene_flags: int = 10
     effective_agent_dispatch_mode: AgentDispatchMode = "sequential"
     effective_persona_disclosure_mode: str = "llm_intent"
+    effective_min_working_memory_turns: int = 4
+    effective_lod_summary_chunks: int = 6
+    effective_lod_importance_bonus: int = 2
+    effective_zone2_budget_share_pct: int = 45
+    effective_recall_budget_prose_tokens: int = 450
+    effective_recall_budget_cognition_tokens: int = 220
     user_actor_profile: ModelProfile | None = None
     user_clerk_profile: ModelProfile | None = None
     user_working_memory_turns: int | None = None
@@ -172,6 +184,12 @@ class ProfileModelSettingsResponse(BaseModel):
     user_max_scene_flags: int | None = None
     user_agent_dispatch_mode: AgentDispatchMode | None = None
     user_persona_disclosure_mode: str | None = None
+    user_min_working_memory_turns: int | None = None
+    user_lod_summary_chunks: int | None = None
+    user_lod_importance_bonus: int | None = None
+    user_zone2_budget_share_pct: int | None = None
+    user_recall_budget_prose_tokens: int | None = None
+    user_recall_budget_cognition_tokens: int | None = None
     active_prompt_preset_id: str | None = None
     default_actor_profile: ModelProfile
     default_clerk_profile: ModelProfile
@@ -180,4 +198,10 @@ class ProfileModelSettingsResponse(BaseModel):
     default_max_scene_flags: int = 10
     default_agent_dispatch_mode: AgentDispatchMode = "sequential"
     default_persona_disclosure_mode: str = "llm_intent"
+    default_min_working_memory_turns: int = 4
+    default_lod_summary_chunks: int = 6
+    default_lod_importance_bonus: int = 2
+    default_zone2_budget_share_pct: int = 45
+    default_recall_budget_prose_tokens: int = 450
+    default_recall_budget_cognition_tokens: int = 220
     default_embedding_profile: EmbeddingProfile | None = None

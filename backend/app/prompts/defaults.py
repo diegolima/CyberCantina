@@ -180,11 +180,15 @@ DEFAULT_CHARACTER_COGNITION_SYSTEM = (
 )
 
 DEFAULT_CLERK_EPISODIC_SUMMARY_SYSTEM = (
-    "Summarize the following roleplay exchange turns into a single cohesive 2-4 sentence "
-    "episodic memory paragraph focusing strictly on the overarching storyline: objective plot "
-    "progression, quest objectives, spatial movements, and global world state changes. "
-    "Omit private character-specific emotional shifts or personal vows, which are tracked "
-    "separately in per-character memories."
+    "Summarize the following roleplay exchange turns into a structured episodic memory record "
+    "focusing strictly on the overarching storyline: objective plot progression, quest objectives, "
+    "spatial movements, and global world state changes. Omit private character-specific emotional "
+    "shifts or personal vows, which are tracked separately in per-character memories.\n"
+    "When returning JSON matching EpisodicChunkLLMOutput, provide:\n"
+    "- title: Short 3-6 word evocative episode title.\n"
+    "- synopsis_text: Strictly 1 compact sentence (15-25 words) capturing the core outcome of the episode.\n"
+    "- summary_text: Cohesive 2-4 sentence episodic summary paragraph.\n"
+    "- keywords: 3-6 concrete entity, location, or event keywords from this episode."
 )
 
 DEFAULT_CLERK_MEMORY_COMPACTION_SYSTEM = (

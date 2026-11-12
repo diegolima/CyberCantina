@@ -9,6 +9,10 @@ import math
 import re
 from typing import Any
 from app.config import ModelProfile, settings
+from app.db.vector_store import (
+    build_short_memory_content,
+    extract_context_activations,
+)
 from app.engine.affective_engine import (
     compute_provisional_cognition_preview,
     describe_edge_stance,
@@ -921,17 +925,321 @@ class TurnContextBundle:
     current_player_state: PersonaTurnStateSnapshot | None = None
     per_character_known_personas: dict[str, DiscoveredPersonaView] = field(default_factory=dict)
     decomposed_message: DecomposedUserMessage | None = None
+    recall_budget_cognition_tokens: int | None = None
 
 
-def build_zone2_episodic_summary(chunks: list[EpisodicChunkRecord]) -> str | None:
-    """Zone 2: Semi-static episodic summary block (updated only at chunk checkpoints)."""
+def _chunk_synopsis_fallback(chunk: EpisodicChunkRecord) -> str:
+    """Return the chunk's 1-line synopsis_text, or derive one from summary_text for legacy chunks."""
+    if chunk.synopsis_text and chunk.synopsis_text.strip():
+        return chunk.synopsis_text.strip()
+    first_sent = chunk.summary_text.strip().split(". ")[0].strip()
+    if first_sent and not first_sent.endswith((".", "!", "?")):
+        first_sent += "."
+    return first_sent[:200] if first_sent else chunk.summary_text.strip()[:200]
+
+
+def render_zone2_lod_episodic_summary(
+    chunks: Sequence[EpisodicChunkRecord],
+    *,
+    budget_tokens: int | None = None,
+    lod_summary_chunks: int | None = None,
+    lod_importance_bonus: int | None = None,
+) -> tuple[str | None, dict[str, Literal["summary", "synopsis", "dropped"]]]:
+    """Zone 2: Sealed-Episode Level-of-Detail (LOD) cascade (summary -> synopsis -> dropped).
+
+    Preserves shared campaign storyline prefix for KV-cache efficiency across characters.
+    """
     if not chunks:
-        return None
-    lines = [
-        f"[Episode Turns {c.start_turn_depth}–{c.end_turn_depth}]: {c.summary_text}"
-        for c in chunks
+        return None, {}
+
+    eff_summary_cap = (
+        lod_summary_chunks
+        if lod_summary_chunks is not None
+        else settings.memory_config.lod_summary_chunks
+    )
+    eff_bonus = (
+        lod_importance_bonus
+        if lod_importance_bonus is not None
+        else settings.memory_config.lod_importance_bonus
+    )
+
+    ordered = sorted(chunks, key=lambda c: (c.start_turn_depth, c.end_turn_depth))
+    total = len(ordered)
+
+    # Calculate effective age with salience bonus (salience_score >= 8 stays in summary longer)
+    scored_ages: list[tuple[int, int, str]] = []
+    for idx, c in enumerate(ordered):
+        pos_from_end = (total - 1) - idx
+        bonus = eff_bonus if getattr(c, "salience_score", 5) >= 8 else 0
+        eff_age = max(0, pos_from_end - bonus)
+        scored_ages.append((eff_age, pos_from_end, c.id))
+
+    scored_ages.sort(key=lambda t: (t[0], t[1]))
+    summary_winner_ids = {cid for _ea, _pos, cid in scored_ages[: max(0, eff_summary_cap)]}
+
+    tiers: dict[str, Literal["summary", "synopsis", "dropped"]] = {
+        c.id: ("summary" if c.id in summary_winner_ids else "synopsis")
+        for c in ordered
+    }
+
+    def _render_from_tiers() -> str | None:
+        lines: list[str] = []
+        for c in ordered:
+            tier = tiers[c.id]
+            if tier == "dropped":
+                continue
+            if tier == "summary":
+                lines.append(
+                    f"[Episode Turns {c.start_turn_depth}–{c.end_turn_depth}]: {c.summary_text}"
+                )
+            else:
+                lines.append(
+                    f"[Episode Turns {c.start_turn_depth}–{c.end_turn_depth} (Synopsis)]: {_chunk_synopsis_fallback(c)}"
+                )
+        if not lines:
+            return None
+        return "=== STORY SO FAR (EPISODIC MEMORY) ===\n" + "\n".join(lines)
+
+    rendered = _render_from_tiers()
+    if budget_tokens is not None and rendered is not None:
+        if budget_tokens <= 0:
+            for c in ordered:
+                tiers[c.id] = "dropped"
+            return None, tiers
+
+        def _cost(txt: str | None) -> int:
+            if not txt:
+                return 0
+            return estimate_messages_tokens([{"role": "system", "content": txt}])
+
+        # Pass 1: Demote oldest 'summary' -> 'synopsis' one by one
+        for c in ordered:
+            if _cost(rendered) <= budget_tokens:
+                break
+            if tiers[c.id] == "summary":
+                tiers[c.id] = "synopsis"
+                rendered = _render_from_tiers()
+
+        # Pass 2: Drop oldest 'synopsis' -> 'dropped' one by one
+        for c in ordered:
+            if _cost(rendered) <= budget_tokens:
+                break
+            if tiers[c.id] != "dropped":
+                tiers[c.id] = "dropped"
+                rendered = _render_from_tiers()
+
+    return rendered, tiers
+
+
+def build_zone2_episodic_summary(
+    chunks: list[EpisodicChunkRecord],
+    *,
+    budget_tokens: int | None = None,
+    lod_summary_chunks: int | None = None,
+    lod_importance_bonus: int | None = None,
+) -> str | None:
+    """Zone 2: Semi-static episodic summary block with LOD degradation."""
+    rendered, _tiers = render_zone2_lod_episodic_summary(
+        chunks,
+        budget_tokens=budget_tokens,
+        lod_summary_chunks=lod_summary_chunks,
+        lod_importance_bonus=lod_importance_bonus,
+    )
+    return rendered
+
+
+def pack_recalled_items_to_budget(
+    items: Sequence[RecalledMemoryItem],
+    token_budget: int,
+) -> list[RecalledMemoryItem]:
+    """Best-first two-form (full + short) token budget packer for Zone 4 and Phase 3 recall.
+
+    - Rank 0 (strongest consensus match) is always rendered in 'full' form.
+    - Subsequent items reserve their 'short' 1-line synopsis cost first so more distinct memories
+      fit, then upgrade from 'short' to 'full' in priority order as unreserved budget allows.
+    """
+    if not items or token_budget <= 0:
+        return []
+
+    prepared: list[tuple[RecalledMemoryItem, str, int, int]] = []
+    for m in items:
+        short_txt = (
+            m.short_content.strip()
+            if (m.short_content and m.short_content.strip())
+            else build_short_memory_content(m.title, m.content)
+        )
+        full_line = f"  - [{m.source_type.upper()}] {m.title}: {m.content}"
+        short_line = f"  - [{m.source_type.upper()}] {m.title}: {short_txt}"
+        full_cost = max(1, estimate_text_tokens(full_line))
+        short_cost = max(1, min(full_cost, estimate_text_tokens(short_line)))
+        prepared.append((m, short_txt, full_cost, short_cost))
+
+    # Always admit Rank 0 in full form
+    first_item, first_short, first_full_cost, _first_short_cost = prepared[0]
+    admitted: list[tuple[RecalledMemoryItem, str, int, int]] = [
+        (first_item, first_short, first_full_cost, first_full_cost)
     ]
-    return "=== STORY SO FAR (EPISODIC MEMORY) ===\n" + "\n".join(lines)
+    used_short_sum = first_full_cost
+
+    for entry in prepared[1:]:
+        _m, _stxt, _fcost, scost = entry
+        if used_short_sum + scost <= token_budget:
+            admitted.append(entry)
+            used_short_sum += scost
+
+    # Upgrade admitted[1:] from short to full in best-first rank order when unreserved budget permits
+    spare_tokens = max(0, token_budget - used_short_sum)
+    packed: list[RecalledMemoryItem] = [
+        first_item.model_copy(
+            update={"short_content": first_short, "render_form": "full"}
+        )
+    ]
+    for m, short_txt, full_cost, short_cost in admitted[1:]:
+        upgrade_delta = max(0, full_cost - short_cost)
+        if upgrade_delta <= spare_tokens:
+            spare_tokens -= upgrade_delta
+            packed.append(
+                m.model_copy(update={"short_content": short_txt, "render_form": "full"})
+            )
+        else:
+            packed.append(
+                m.model_copy(update={"short_content": short_txt, "render_form": "short"})
+            )
+
+    return packed
+
+
+def elevate_compacted_episode_turns(
+    *,
+    recalled_items: Sequence[RecalledMemoryItem],
+    episodic_chunks: Sequence[EpisodicChunkRecord],
+    branch_turns: Sequence[TurnNodeRecord],
+    queries: Sequence[str],
+    mentioned_entities: Sequence[str],
+    recent_turn_texts: Sequence[str] | None = None,
+    target_character_id: str | None = None,
+    present_characters: Sequence[CharacterRecord] | None = None,
+    character_name_map: Mapping[str, str] | None = None,
+    working_memory_turns: int | None = None,
+    is_narrator: bool = False,
+) -> list[RecalledMemoryItem]:
+    """Dynamic Turn Elevation + Slotted Witness RAG for compacted episodic chunks.
+
+    When a recalled `episodic_chunk` refers to turns already compacted out of the character's
+    Zone 3 working window, searches the chunk's underlying `branch_turns` (strictly filtered by
+    `was_character_present_on_turn` for `target_character_id`) and attaches the highest-matching
+    verbatim exchange without mutating Zone 2.
+    """
+    if not recalled_items or not episodic_chunks or not branch_turns:
+        return list(recalled_items)
+
+    chunks_by_id = {c.id: c for c in episodic_chunks}
+    max_sum_depth = max((c.end_turn_depth for c in episodic_chunks), default=-1)
+    wm_limit = (
+        working_memory_turns
+        if working_memory_turns is not None
+        else settings.memory_config.working_memory_turns
+    )
+    if target_character_id and not is_narrator:
+        unsummarized = [
+            t
+            for t in branch_turns
+            if t.depth_index > max_sum_depth
+            and was_character_present_on_turn(t, target_character_id)
+        ]
+    else:
+        unsummarized = [t for t in branch_turns if t.depth_index > max_sum_depth]
+    active_wm_ids = {t.id for t in unsummarized[-wm_limit:]}
+
+    token_weights, entity_phrases = extract_context_activations(
+        queries, mentioned_entities, recent_turn_texts
+    )
+    name_lookup = dict(character_name_map or {})
+    name_lookup["__narrator__"] = "Narrator"
+    for pc in present_characters or []:
+        name_lookup.setdefault(pc.id, pc.name)
+
+    elevated_list: list[RecalledMemoryItem] = []
+    for item in recalled_items:
+        if item.source_type != "episodic_chunk" or item.id not in chunks_by_id:
+            elevated_list.append(item)
+            continue
+
+        chunk = chunks_by_id[item.id]
+        chunk_turns = [
+            t
+            for t in branch_turns
+            if chunk.start_turn_depth <= t.depth_index <= chunk.end_turn_depth
+            and t.id not in active_wm_ids
+            and (
+                is_narrator
+                or target_character_id is None
+                or was_character_present_on_turn(t, target_character_id)
+            )
+        ]
+        if not chunk_turns:
+            elevated_list.append(item)
+            continue
+
+        scored_turns: list[tuple[float, TurnNodeRecord]] = []
+        for t in chunk_turns:
+            vis_user = (
+                t.user_message
+                if (is_narrator or target_character_id is None)
+                else filter_user_message_for_character(
+                    t.user_message,
+                    target_character_id=target_character_id,
+                    campaign_characters=list(present_characters or []),
+                )
+            )
+            combined_txt = f"{vis_user} {t.raw_prose}".lower()
+            t_score = 0.0
+            for ent in entity_phrases:
+                if ent and ent in combined_txt:
+                    t_score += 2.0
+            for tok, w in token_weights.items():
+                if tok in combined_txt:
+                    t_score += w
+            if t_score > 0.0:
+                scored_turns.append((t_score, t))
+
+        if not scored_turns:
+            elevated_list.append(item)
+            continue
+
+        scored_turns.sort(key=lambda pair: (pair[0], pair[1].depth_index), reverse=True)
+        best_turn = scored_turns[0][1]
+        best_user = (
+            best_turn.user_message
+            if (is_narrator or target_character_id is None)
+            else filter_user_message_for_character(
+                best_turn.user_message,
+                target_character_id=target_character_id,
+                campaign_characters=list(present_characters or []),
+            )
+        )
+        u_clean = " ".join(best_user.replace("\r", " ").replace("\n", " ").split()).strip()[:110]
+        p_clean = " ".join(best_turn.raw_prose.replace("\r", " ").replace("\n", " ").split()).strip()[:160]
+        speaker_label = name_lookup.get(best_turn.actor_id, best_turn.actor_id)
+
+        base_synopsis = _chunk_synopsis_fallback(chunk)
+        elevated_full = (
+            f"{item.content} "
+            f"[Elevated Turn {best_turn.depth_index} Recall — User: \"{u_clean}\" | {speaker_label}: \"{p_clean}\"]"
+        )
+        elevated_short = (
+            f"{base_synopsis} [Turn {best_turn.depth_index}: \"{p_clean[:85]}\"]"
+        )
+        elevated_list.append(
+            item.model_copy(
+                update={
+                    "content": elevated_full,
+                    "short_content": elevated_short,
+                }
+            )
+        )
+
+    return elevated_list
 
 
 def was_character_present_on_turn(turn: TurnNodeRecord, character_id: str) -> bool:
@@ -1112,6 +1420,7 @@ async def resolve_phase2_turn_context(
     persona_snapshot: PersonaRecord | None = None,
     current_player_state: PersonaTurnStateSnapshot | None = None,
     decomposed_message: DecomposedUserMessage | None = None,
+    recall_budget_cognition_tokens: int | None = None,
 ) -> TurnContextBundle:
     """Phase 2: Scoped RAG & Context Resolution.
     Computes query embeddings once and partitions memory items between shared scene items
@@ -1129,14 +1438,28 @@ async def resolve_phase2_turn_context(
     }
     char_ids = [c.id for c in present_characters]
 
+    wm_limit = (
+        working_memory_turns
+        if working_memory_turns is not None
+        else settings.memory_config.working_memory_turns
+    )
+    recent_turn_texts = [
+        f"{t.user_message}\n{t.raw_prose}" for t in branch_turns[-wm_limit:]
+    ]
+    effective_queries = list(pre_turn.memory_search_queries)
+    if user_message and user_message.strip():
+        effective_queries.append(user_message.strip())
+
     recall_bundle = await repo.vector_store.search_memories_for_characters(
-        queries=pre_turn.memory_search_queries,
+        queries=effective_queries,
         mentioned_entities=pre_turn.mentioned_entities,
         world_id=world.id,
         character_ids=char_ids,
         campaign_id=campaign_id,
         valid_branch_turn_ids=valid_branch_turn_ids,
         character_witnessed_turn_ids=character_witnessed_turn_ids,
+        recent_turn_texts=recent_turn_texts,
+        use_dynamic_max=True,
         top_k=rag_top_k,
         exclude_location_id=active_location.id,
     )
@@ -1167,6 +1490,37 @@ async def resolve_phase2_turn_context(
         working_memory_turns=working_memory_turns,
     )
 
+    # Phase D: Dynamic Turn Elevation for compacted episodic chunks (epistemically scoped per character)
+    shared_items = elevate_compacted_episode_turns(
+        recalled_items=shared_items,
+        episodic_chunks=episodic_chunks,
+        branch_turns=branch_turns,
+        queries=effective_queries,
+        mentioned_entities=pre_turn.mentioned_entities,
+        recent_turn_texts=recent_turn_texts,
+        target_character_id=None,
+        present_characters=present_characters,
+        character_name_map=character_name_map,
+        working_memory_turns=working_memory_turns,
+        is_narrator=is_narrator,
+    )
+    per_char_items = {
+        cid: elevate_compacted_episode_turns(
+            recalled_items=items,
+            episodic_chunks=episodic_chunks,
+            branch_turns=branch_turns,
+            queries=effective_queries,
+            mentioned_entities=pre_turn.mentioned_entities,
+            recent_turn_texts=recent_turn_texts,
+            target_character_id=cid,
+            present_characters=present_characters,
+            character_name_map=character_name_map,
+            working_memory_turns=working_memory_turns,
+            is_narrator=is_narrator,
+        )
+        for cid, items in per_char_items.items()
+    }
+
     per_char_known = build_all_character_known_personas(
         persona_snapshot=persona_snapshot,
         current_player_state=current_player_state,
@@ -1196,6 +1550,7 @@ async def resolve_phase2_turn_context(
         current_player_state=current_player_state,
         per_character_known_personas=per_char_known,
         decomposed_message=decomp,
+        recall_budget_cognition_tokens=recall_budget_cognition_tokens,
     )
 
 
@@ -1229,7 +1584,7 @@ def build_zone4_ephemeral_tail_frame(
     ) or "  - None visible"
 
     memories_text = "\n".join(
-        f"  - [{m.source_type.upper()}] {m.title}: {m.content}"
+        f"  - [{m.source_type.upper()}] {m.title}: {m.short_content if (m.render_form == 'short' and m.short_content) else m.content}"
         for m in recalled_items
     ) or "  - No specific background lore triggered this turn."
 
@@ -1593,6 +1948,11 @@ def assemble_four_zone_messages(
     decomposed_message: DecomposedUserMessage | None = None,
     max_context_tokens: int | None = None,
     reserved_output_tokens: int = 0,
+    min_working_memory_turns: int | None = None,
+    lod_summary_chunks: int | None = None,
+    lod_importance_bonus: int | None = None,
+    zone2_budget_share_pct: int | None = None,
+    recall_budget_prose_tokens: int | None = None,
 ) -> list[dict[str, str]]:
     """Construct the complete 4-Zone OpenAI messages array for the Main Actor Model."""
     if is_narrator:
@@ -1673,6 +2033,16 @@ def assemble_four_zone_messages(
         )
         for c in (present_characters or [character])
     }
+    eff_recall_prose_budget = (
+        recall_budget_prose_tokens
+        if recall_budget_prose_tokens is not None
+        else settings.memory_config.recall_budget_prose_tokens
+    )
+    packed_recalled_items = (
+        pack_recalled_items_to_budget(recalled_items, eff_recall_prose_budget)
+        if recalled_items
+        else []
+    )
     zone4_content = build_zone4_ephemeral_tail_frame(
         user_message=user_message,
         character=character,
@@ -1680,7 +2050,7 @@ def assemble_four_zone_messages(
         character_state=char_state,
         active_location=active_location,
         neighbors=neighbors,
-        recalled_items=recalled_items,
+        recalled_items=packed_recalled_items,
         pre_turn=pre_turn,
         present_characters=present_characters,
         all_character_states=resolved_all_states,
@@ -1696,10 +2066,37 @@ def assemble_four_zone_messages(
     )
     zone4_msg = {"role": "user", "content": zone4_content}
 
-    # Zone 2 + context ceiling enforcement: trim oldest Zone 3 turns (then oldest Zone 2 chunks if needed)
-    # so native Ollama never silently truncates Zone 1 from the front of the prompt.
+    # Zone 2 Sealed-Episode LOD Cascade + Zone 3 Floor Protection:
+    # 1. Render Zone 2 using LOD tiers (newest/salient chunks in 'summary', older chunks in 1-line 'synopsis').
+    # 2. Protect at least `min_working_memory_turns` in Zone 3 before cascading Zone 2 LOD (summary -> synopsis -> dropped).
+    # 3. Only trim Zone 3 below `min_working_memory_turns` if Zone 2 is completely dropped and budget is still exceeded.
+    eff_min_wm = (
+        min_working_memory_turns
+        if min_working_memory_turns is not None
+        else settings.memory_config.min_working_memory_turns
+    )
+    eff_lod_chunks = (
+        lod_summary_chunks
+        if lod_summary_chunks is not None
+        else settings.memory_config.lod_summary_chunks
+    )
+    eff_lod_bonus = (
+        lod_importance_bonus
+        if lod_importance_bonus is not None
+        else settings.memory_config.lod_importance_bonus
+    )
+    eff_z2_share_pct = (
+        zone2_budget_share_pct
+        if zone2_budget_share_pct is not None
+        else settings.memory_config.zone2_budget_share_pct
+    )
+
     active_chunks = list(episodic_chunks)
-    zone2 = build_zone2_episodic_summary(active_chunks)
+    zone2, lod_tiers = render_zone2_lod_episodic_summary(
+        active_chunks,
+        lod_summary_chunks=eff_lod_chunks,
+        lod_importance_bonus=eff_lod_bonus,
+    )
     if max_context_tokens is not None and max_context_tokens > 0:
         input_budget = max(
             0,
@@ -1708,35 +2105,88 @@ def assemble_four_zone_messages(
             - _PROMPT_SAFETY_MARGIN_TOKENS,
         )
         base_tokens = estimate_messages_tokens([zone1_msg, zone4_msg])
+        turn_costs = [estimate_messages_tokens(entry) for entry in zone3_turn_entries]
+        zone3_tokens = sum(turn_costs)
+
+        remaining_history_budget = max(0, input_budget - base_tokens)
+        z2_share_cap = int(remaining_history_budget * (eff_z2_share_pct / 100.0))
         zone2_tokens = (
             estimate_messages_tokens([{"role": "system", "content": zone2}])
             if zone2
             else 0
         )
-        turn_costs = [estimate_messages_tokens(entry) for entry in zone3_turn_entries]
-        zone3_tokens = sum(turn_costs)
 
-        dropped_zone3 = 0
-        while zone3_turn_entries and (base_tokens + zone2_tokens + zone3_tokens) > input_budget:
-            zone3_turn_entries.pop(0)
-            zone3_tokens -= turn_costs.pop(0)
-            dropped_zone3 += 1
+        # Guaranteed Zone 3 budget is at least (100 - eff_z2_share_pct)% of remaining_history_budget,
+        # plus any unused portion of Zone 2's share cap.
+        guaranteed_z3_budget = max(
+            0, remaining_history_budget - min(zone2_tokens, z2_share_cap)
+        )
+        protected_floor_count = 0
+        protected_z3_tokens = 0
+        for cost in reversed(turn_costs):
+            if protected_floor_count >= max(1, eff_min_wm):
+                break
+            if protected_z3_tokens + cost <= guaranteed_z3_budget:
+                protected_floor_count += 1
+                protected_z3_tokens += cost
+            else:
+                break
 
-        dropped_zone2 = 0
-        while active_chunks and (base_tokens + zone2_tokens) > input_budget:
-            active_chunks.pop(0)
-            zone2 = build_zone2_episodic_summary(active_chunks)
+        # If Zone 2 exceeds its share cap while total prompt exceeds budget, cascade Zone 2 LOD first
+        if (
+            active_chunks
+            and zone2_tokens > z2_share_cap
+            and (base_tokens + zone2_tokens + zone3_tokens) > input_budget
+        ):
+            zone2, lod_tiers = render_zone2_lod_episodic_summary(
+                active_chunks,
+                budget_tokens=z2_share_cap,
+                lod_summary_chunks=eff_lod_chunks,
+                lod_importance_bonus=eff_lod_bonus,
+            )
             zone2_tokens = (
                 estimate_messages_tokens([{"role": "system", "content": zone2}])
                 if zone2
                 else 0
             )
-            dropped_zone2 += 1
+
+        # Step 1: Trim oldest Zone 3 turns ONLY down to protected_floor_count
+        dropped_zone3 = 0
+        while (
+            len(zone3_turn_entries) > protected_floor_count
+            and (base_tokens + zone2_tokens + zone3_tokens) > input_budget
+        ):
+            zone3_turn_entries.pop(0)
+            zone3_tokens -= turn_costs.pop(0)
+            dropped_zone3 += 1
+
+        # Step 2: If still over budget, cascade Zone 2 LOD (summary -> synopsis -> dropped)
+        if active_chunks and (base_tokens + zone2_tokens + zone3_tokens) > input_budget:
+            allowed_z2 = max(0, input_budget - base_tokens - zone3_tokens)
+            zone2, lod_tiers = render_zone2_lod_episodic_summary(
+                active_chunks,
+                budget_tokens=allowed_z2,
+                lod_summary_chunks=eff_lod_chunks,
+                lod_importance_bonus=eff_lod_bonus,
+            )
+            zone2_tokens = (
+                estimate_messages_tokens([{"role": "system", "content": zone2}])
+                if zone2
+                else 0
+            )
+
+        # Step 3: Last-resort trim below protected_floor_count only if Zone 2 is empty and budget is still exceeded
+        while zone3_turn_entries and (base_tokens + zone2_tokens + zone3_tokens) > input_budget:
+            zone3_turn_entries.pop(0)
+            zone3_tokens -= turn_costs.pop(0)
+            dropped_zone3 += 1
+
+        dropped_zone2 = sum(1 for t in lod_tiers.values() if t == "dropped")
 
         if dropped_zone3 or dropped_zone2:
             logger.warning(
                 "Actor prompt exceeded context budget (%d ctx - %d output - %d margin = %d input tok); "
-                "trimmed %d oldest Zone 3 turn(s) and %d oldest Zone 2 chunk(s) to protect Zone 1.",
+                "trimmed %d oldest Zone 3 turn(s) and dropped %d oldest Zone 2 chunk(s) via LOD cascade to protect Zone 1.",
                 max_context_tokens,
                 max(0, int(reserved_output_tokens)),
                 _PROMPT_SAFETY_MARGIN_TOKENS,

@@ -317,6 +317,8 @@ class RecalledMemoryItem(BaseModel):
     source_type: RecallSourceType
     title: str
     content: str
+    short_content: str | None = None
+    render_form: Literal["full", "short"] = "full"
     score: float = 1.0
 
 
@@ -836,6 +838,44 @@ Phase5ProgressCallback = Callable[[Phase5ProgressEvent], Awaitable[None]]
 Phase4ProgressCallback = Phase5ProgressCallback
 
 
+class EpisodicChunkLLMOutput(BaseModel):
+    """Structured LLM output for Phase 5 episodic compaction."""
+
+    title: str = Field(
+        default="",
+        description="Short 3-6 word evocative title for the episode.",
+    )
+    synopsis_text: str = Field(
+        default="",
+        description="Strictly 1 compact sentence (15-25 words) capturing the core outcome of the episode for LOD synopsis.",
+    )
+    summary_text: str = Field(
+        default="",
+        description="Cohesive 2-4 sentence episodic summary paragraph focusing on objective storyline progression.",
+    )
+    keywords: list[str] = Field(
+        default_factory=list,
+        description="3-6 concrete entity or event keywords from this episode for lexical retrieval.",
+    )
+
+    @model_validator(mode="after")
+    def _sanitize_fields(self) -> EpisodicChunkLLMOutput:
+        self.title = " ".join(self.title.replace("\r", " ").replace("\n", " ").split()).strip()[:120]
+        self.synopsis_text = " ".join(self.synopsis_text.replace("\r", " ").replace("\n", " ").split()).strip()
+        self.summary_text = " ".join(self.summary_text.replace("\r", " ").replace("\n", " ").split()).strip()
+        cleaned_kw: list[str] = []
+        seen_kw: set[str] = set()
+        for kw in self.keywords:
+            if not isinstance(kw, str):
+                continue
+            c = " ".join(kw.replace("\r", " ").replace("\n", " ").split()).strip()
+            if c and c.lower() not in seen_kw:
+                seen_kw.add(c.lower())
+                cleaned_kw.append(c)
+        self.keywords = cleaned_kw[:8]
+        return self
+
+
 class EpisodicChunkRecord(BaseModel):
     """Compressed episodic summary for Zone 2 & semantic vector retrieval."""
 
@@ -844,7 +884,12 @@ class EpisodicChunkRecord(BaseModel):
     start_turn_depth: int
     end_turn_depth: int
     leaf_turn_id: str
+    title: str = ""
+    synopsis_text: str = ""
     summary_text: str
+    keywords: list[str] = Field(default_factory=list)
+    witness_character_ids: list[str] = Field(default_factory=list)
+    salience_score: int = Field(default=5, ge=1, le=10)
     created_at: str
 
 

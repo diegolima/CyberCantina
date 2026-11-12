@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable, Iterable, Mapping, Sequence
 import hashlib
 import json
+import math
 import re
 import sqlite3
 from dataclasses import dataclass
-from typing import Callable, Iterable, Mapping
 
 import httpx
 import numpy as np
@@ -30,9 +31,198 @@ class ScopedMemoryRecallBundle:
 _WORD_RE = re.compile(r"[a-z0-9_']+", re.IGNORECASE)
 _FASTEMBED_MODEL = None
 
+_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "a", "about", "above", "after", "again", "against", "all", "am", "an", "and",
+        "any", "are", "as", "at", "be", "because", "been", "before", "being", "below",
+        "between", "both", "but", "by", "can", "could", "did", "do", "does", "doing",
+        "down", "during", "each", "few", "for", "from", "further", "had", "has", "have",
+        "having", "he", "her", "here", "hers", "herself", "him", "himself", "his", "how",
+        "i", "if", "in", "into", "is", "it", "its", "itself", "just", "me", "more",
+        "most", "my", "myself", "no", "nor", "not", "now", "of", "off", "on", "once",
+        "only", "or", "other", "our", "ours", "ourselves", "out", "over", "own", "same",
+        "she", "should", "so", "some", "such", "than", "that", "the", "their", "theirs",
+        "them", "themselves", "then", "there", "these", "they", "this", "those", "through",
+        "to", "too", "under", "until", "up", "very", "was", "we", "were", "what", "when",
+        "where", "which", "while", "who", "whom", "why", "will", "with", "would", "you",
+        "your", "yours", "yourself", "yourselves",
+    }
+)
+
 
 def _tokenize(text: str) -> list[str]:
     return [tok.lower() for tok in _WORD_RE.findall(text)]
+
+
+def build_short_memory_content(title: str, content: str, max_chars: int = 140) -> str:
+    """Extract a compact 1-line synopsis from memory content for two-form budget packing."""
+    cleaned = " ".join((content or "").replace("\r", " ").replace("\n", " ").split()).strip()
+    if not cleaned:
+        return (title or "").strip()[:max_chars]
+    first_sent = cleaned.split(". ")[0].strip()
+    if first_sent and not first_sent.endswith((".", "!", "?")):
+        first_sent += "."
+    candidate = first_sent if first_sent else cleaned
+    if len(candidate) <= max_chars:
+        return candidate
+    return candidate[: max_chars - 1].rstrip() + "…"
+
+
+def compute_corpus_idf(doc_token_sets: Sequence[set[str]]) -> dict[str, float]:
+    """Compute BM25-style inverse document frequency across candidate documents."""
+    n_docs = len(doc_token_sets)
+    if n_docs == 0:
+        return {}
+    df_counts: dict[str, int] = {}
+    for tok_set in doc_token_sets:
+        for tok in tok_set:
+            df_counts[tok] = df_counts.get(tok, 0) + 1
+    idf: dict[str, float] = {}
+    for tok, df in df_counts.items():
+        idf[tok] = math.log(1.0 + (n_docs - df + 0.5) / (df + 0.5))
+    return idf
+
+
+def extract_context_activations(
+    queries: Sequence[str],
+    mentioned_entities: Sequence[str],
+    recent_turn_texts: Sequence[str] | None = None,
+) -> tuple[dict[str, float], set[str]]:
+    """Build recency-graded lexical activation weights across entities, queries, and recent turns.
+
+    Weights:
+    - Mentioned entities: 1.5
+    - Explicit search queries & current user message: 1.0
+    - Recent 2 turns: 0.65
+    - Older working window turns: 0.25
+    """
+    token_weights: dict[str, float] = {}
+    entity_phrases: set[str] = set()
+
+    def _add_tokens(text: str, weight: float, allow_stopwords: bool = False) -> None:
+        for tok in _tokenize(text):
+            if len(tok) < 2:
+                continue
+            if not allow_stopwords and tok in _STOPWORDS:
+                continue
+            if weight > token_weights.get(tok, 0.0):
+                token_weights[tok] = weight
+
+    for ent in mentioned_entities:
+        clean_ent = ent.strip().lower()
+        if not clean_ent:
+            continue
+        entity_phrases.add(clean_ent)
+        _add_tokens(clean_ent, 1.5, allow_stopwords=False)
+
+    for q in queries:
+        if q and q.strip():
+            _add_tokens(q, 1.0, allow_stopwords=False)
+
+    if recent_turn_texts:
+        older_turns = recent_turn_texts[:-2]
+        recent_two = recent_turn_texts[-2:]
+        for txt in older_turns:
+            if txt:
+                _add_tokens(txt, 0.25, allow_stopwords=False)
+        for txt in recent_two:
+            if txt:
+                _add_tokens(txt, 0.65, allow_stopwords=False)
+
+    return token_weights, entity_phrases
+
+
+def mmr_select(
+    pool: Sequence[tuple[str, float, np.ndarray]],
+    top_k: int,
+    lambda_mult: float = 0.7,
+) -> list[tuple[str, float]]:
+    """Greedy Maximal Marginal Relevance (MMR) selection over (entry_id, cosine_sim, unit_vec).
+
+    Always seeds with the top-1 cosine similarity item so the strongest semantic match is never lost.
+    """
+    if not pool or top_k <= 0:
+        return []
+    ordered_pool = sorted(pool, key=lambda x: x[1], reverse=True)
+    selected: list[tuple[str, float, np.ndarray]] = [ordered_pool[0]]
+    remaining = list(ordered_pool[1:])
+
+    while remaining and len(selected) < top_k:
+        best_idx = 0
+        best_mmr = -1e9
+        for idx, (_cid, cos_sim, vec) in enumerate(remaining):
+            max_sim_to_selected = 0.0
+            for _scid, _scos, svec in selected:
+                if vec.shape == svec.shape:
+                    sim = float(np.dot(vec, svec))
+                    if sim > max_sim_to_selected:
+                        max_sim_to_selected = sim
+            mmr_val = lambda_mult * cos_sim - (1.0 - lambda_mult) * max_sim_to_selected
+            if mmr_val > best_mmr:
+                best_mmr = mmr_val
+                best_idx = idx
+        selected.append(remaining.pop(best_idx))
+
+    return [(cid, cos_sim) for cid, cos_sim, _vec in selected]
+
+
+def fuse_rrf(
+    keyword_ranked: Sequence[str],
+    embedding_ranked: Sequence[str],
+    k: int = 60,
+    kw_weight: float = 1.0,
+    emb_weight: float = 1.0,
+) -> list[tuple[str, float]]:
+    """Reciprocal Rank Fusion (RRF) combining lexical and semantic rank lists without weight-tuning brittleness."""
+    scores: dict[str, float] = {}
+    first_rank: dict[str, int] = {}
+
+    for rank_idx, doc_id in enumerate(keyword_ranked, start=1):
+        scores[doc_id] = scores.get(doc_id, 0.0) + kw_weight / float(k + rank_idx)
+        first_rank[doc_id] = min(first_rank.get(doc_id, rank_idx), rank_idx)
+
+    for rank_idx, doc_id in enumerate(embedding_ranked, start=1):
+        scores[doc_id] = scores.get(doc_id, 0.0) + emb_weight / float(k + rank_idx)
+        first_rank[doc_id] = min(first_rank.get(doc_id, rank_idx), rank_idx)
+
+    fused = sorted(
+        scores.items(),
+        key=lambda pair: (pair[1], -first_rank.get(pair[0], 9999)),
+        reverse=True,
+    )
+    return fused
+
+
+def compute_dynamic_max(
+    keyword_ranked: Sequence[str],
+    embedding_ranked: Sequence[str],
+    base_top_k: int,
+    top_keyword_score: float,
+) -> int:
+    """Consensus-driven recall ceiling based on agreement between lexical and embedding rankers."""
+    if base_top_k <= 0:
+        return 0
+    if not keyword_ranked and not embedding_ranked:
+        return base_top_k
+
+    if (
+        keyword_ranked
+        and embedding_ranked
+        and keyword_ranked[0] == embedding_ranked[0]
+        and top_keyword_score >= 3.0
+    ):
+        return min(base_top_k + 2, 10)
+
+    kw_top3 = set(keyword_ranked[:3])
+    emb_top3 = set(embedding_ranked[:3])
+    overlap_top3 = len(kw_top3 & emb_top3)
+    if overlap_top3 >= 2:
+        return min(base_top_k + 1, 8)
+
+    if top_keyword_score < 1.2 and overlap_top3 == 0 and base_top_k > 2:
+        return max(2, base_top_k - 1)
+
+    return base_top_k
 
 
 def compute_local_hash_embedding(text: str, dims: int = 384) -> np.ndarray:
@@ -365,6 +555,160 @@ class VectorStore:
         except sqlite3.OperationalError:
             return set()
 
+    def _rank_candidate_rows_hybrid(
+        self,
+        candidate_rows: list[sqlite3.Row],
+        *,
+        query_text: str,
+        query_vec: np.ndarray,
+        queries: Sequence[str],
+        mentioned_entities: Sequence[str],
+        recent_turn_texts: Sequence[str] | None = None,
+    ) -> tuple[list[tuple[RecalledMemoryItem, sqlite3.Row]], list[str], list[str], float]:
+        """Rank pre-filtered SQLite candidate rows using BM25/IDF lexical scoring + MMR cosine diversity + RRF (k=60)."""
+        if not candidate_rows:
+            return [], [], [], 0.0
+
+        token_weights, entity_phrases = extract_context_activations(
+            queries, mentioned_entities, recent_turn_texts
+        )
+        # Ensure raw query tokens also participate even if stopword-heavy
+        for qtok in _tokenize(query_text):
+            if qtok not in token_weights and qtok not in _STOPWORDS:
+                token_weights[qtok] = 1.0
+
+        pre_scored: list[dict] = []
+        for row in candidate_rows:
+            stype = row["source_type"]
+            vec = np.frombuffer(row["embedding_blob"], dtype=np.float32)
+            if vec.shape == query_vec.shape:
+                cosine_sim = float(np.dot(query_vec, vec))
+            else:
+                fallback_q = compute_local_hash_embedding(query_text, dims=vec.shape[0])
+                cosine_sim = float(np.dot(fallback_q, vec))
+
+            keywords: list[str] = json.loads(row["keywords_json"] or "[]")
+            kw_lower = {k.lower() for k in keywords if isinstance(k, str)}
+            title_str = row["title"] or ""
+            content_str = row["content"] or ""
+            kw_or_title_tokens = set(_tokenize(title_str)) | {
+                tok for kw in keywords if isinstance(kw, str) for tok in _tokenize(kw)
+            }
+            doc_tokens = set(_tokenize(f"{title_str} {content_str}")) | kw_lower | kw_or_title_tokens
+
+            entity_boost = 0.0
+            title_low = title_str.lower()
+            content_low = content_str.lower()
+            for ent in entity_phrases:
+                if ent in kw_lower or ent in title_low or ent in content_low:
+                    entity_boost += 0.35
+
+            overlap_count = len(set(token_weights.keys()) & doc_tokens)
+
+            # Remote location lore is surfaced ONLY when brought up during conversation/interaction
+            if stype == "location_lore" and entity_boost == 0.0 and overlap_count == 0 and cosine_sim < 0.35:
+                continue
+
+            pre_scored.append(
+                {
+                    "id": row["id"],
+                    "row": row,
+                    "vec": vec,
+                    "cosine_sim": cosine_sim,
+                    "doc_tokens": doc_tokens,
+                    "kw_or_title_tokens": kw_or_title_tokens,
+                    "entity_boost": entity_boost,
+                    "overlap_count": overlap_count,
+                }
+            )
+
+        if not pre_scored:
+            return [], [], [], 0.0
+
+        idf_map = compute_corpus_idf([c["doc_tokens"] for c in pre_scored])
+
+        for c in pre_scored:
+            matched_tokens = c["doc_tokens"] & set(token_weights.keys())
+            bm25_idf_sum = 0.0
+            for tok in matched_tokens:
+                w = token_weights[tok]
+                tok_idf = max(0.35, idf_map.get(tok, 0.5))
+                field_mult = 1.35 if tok in c["kw_or_title_tokens"] else 1.0
+                bm25_idf_sum += w * tok_idf * field_mult
+            c["bm25_idf_sum"] = bm25_idf_sum
+            c["lexical_rank_score"] = bm25_idf_sum + (c["entity_boost"] * 4.0)
+
+        # Ranker 1: BM25/IDF + Entity Match
+        lexical_pool = [c for c in pre_scored if c["lexical_rank_score"] > 0.0]
+        lexical_pool.sort(
+            key=lambda c: (c["lexical_rank_score"], c["cosine_sim"]),
+            reverse=True,
+        )
+        keyword_ranked = [c["id"] for c in lexical_pool]
+        top_keyword_score = lexical_pool[0]["lexical_rank_score"] if lexical_pool else 0.0
+
+        # Ranker 2: Cosine Similarity + MMR Diversity
+        cosine_sorted = sorted(pre_scored, key=lambda c: c["cosine_sim"], reverse=True)
+        mmr_pool_size = min(len(cosine_sorted), 16)
+        mmr_target_k = min(mmr_pool_size, 10)
+        mmr_selected = mmr_select(
+            [(c["id"], c["cosine_sim"], c["vec"]) for c in cosine_sorted[:mmr_pool_size]],
+            top_k=mmr_target_k,
+            lambda_mult=0.7,
+        )
+        mmr_ids = [cid for cid, _sim in mmr_selected]
+        mmr_seen = set(mmr_ids)
+        embedding_ranked = mmr_ids + [
+            c["id"] for c in cosine_sorted if c["id"] not in mmr_seen
+        ]
+
+        # Reciprocal Rank Fusion (k=60)
+        fused_pairs = fuse_rrf(keyword_ranked, embedding_ranked, k=60)
+        rrf_map = {cid: rrf_val for cid, rrf_val in fused_pairs}
+        rrf_rank_map = {cid: idx for idx, (cid, _val) in enumerate(fused_pairs)}
+        max_rrf = 2.0 / 61.0
+
+        by_id = {c["id"]: c for c in pre_scored}
+        ordered_candidates = sorted(
+            pre_scored,
+            key=lambda c: (
+                -rrf_rank_map.get(c["id"], 99999),
+                c["lexical_rank_score"],
+                c["cosine_sim"],
+            ),
+            reverse=True,
+        )
+
+        results: list[tuple[RecalledMemoryItem, sqlite3.Row]] = []
+        prev_score: float | None = None
+        for c in ordered_candidates:
+            row = c["row"]
+            rrf_norm = rrf_map.get(c["id"], 0.0) / max_rrf
+            lexical_boost = min(0.30, c["bm25_idf_sum"] * 0.06 + c["overlap_count"] * 0.03)
+            raw_score = (
+                0.45 * c["cosine_sim"]
+                + 0.55 * rrf_norm
+                + c["entity_boost"]
+                + lexical_boost
+            )
+            if prev_score is not None and raw_score >= prev_score:
+                raw_score = max(0.0001, prev_score - 0.0001)
+            final_score = round(raw_score, 4)
+            prev_score = final_score
+
+            item = RecalledMemoryItem(
+                id=row["id"],
+                source_type=row["source_type"],
+                title=row["title"],
+                content=row["content"],
+                short_content=build_short_memory_content(row["title"], row["content"]),
+                render_form="full",
+                score=final_score,
+            )
+            results.append((item, row))
+
+        return results, keyword_ranked, embedding_ranked, top_keyword_score
+
     async def search_memories(
         self,
         *,
@@ -377,9 +721,11 @@ class VectorStore:
         exclude_location_id: str | None = None,
         overridden_location_ids: set[str] | None = None,
         character_present_turn_ids: Iterable[str] | None = None,
+        recent_turn_texts: Sequence[str] | None = None,
+        use_dynamic_max: bool = False,
         top_k: int = 4,
     ) -> list[RecalledMemoryItem]:
-        """Perform branch-safe hybrid semantic + entity-tag search across world, location, shard, and episodic scopes."""
+        """Perform branch-safe hybrid BM25/IDF + MMR + RRF search across world, location, shard, and episodic scopes."""
         valid_turns = set(valid_branch_turn_ids)
         present_turns = (
             set(character_present_turn_ids)
@@ -393,8 +739,6 @@ class VectorStore:
             return []
 
         query_vec = await embed_text(query_text)
-        query_tokens = set(_tokenize(query_text))
-        entity_tokens = {e.lower().strip() for e in mentioned_entities if e.strip()}
 
         conn = self._connect()
         try:
@@ -434,7 +778,7 @@ class VectorStore:
         finally:
             conn.close()
 
-        scored: list[RecalledMemoryItem] = []
+        candidate_rows: list[sqlite3.Row] = []
         current_fp = current_embedding_fingerprint()
         for row in rows:
             row_fp = row["embedding_fingerprint"]
@@ -477,44 +821,22 @@ class VectorStore:
             ):
                 continue
 
-            vec = np.frombuffer(row["embedding_blob"], dtype=np.float32)
-            if vec.shape == query_vec.shape:
-                cosine_sim = float(np.dot(query_vec, vec))
-            else:
-                # Dimension mismatch fallback if embedding profile changed mid-campaign
-                fallback_q = compute_local_hash_embedding(query_text, dims=vec.shape[0])
-                cosine_sim = float(np.dot(fallback_q, vec))
+            candidate_rows.append(row)
 
-            keywords: list[str] = json.loads(row["keywords_json"] or "[]")
-            kw_lower = {k.lower() for k in keywords}
-            doc_tokens = set(_tokenize(f"{row['title']} {row['content']}")) | kw_lower
-
-            # Hybrid entity & keyword boost (GraphRAG link matching)
-            entity_boost = 0.0
-            for ent in entity_tokens:
-                if ent in kw_lower or ent in row["title"].lower() or ent in row["content"].lower():
-                    entity_boost += 0.35
-
-            overlap_count = len(query_tokens & doc_tokens)
-            lexical_boost = min(0.25, overlap_count * 0.05)
-
-            # Remote location lore is surfaced ONLY when brought up during conversation/interaction
-            if stype == "location_lore" and entity_boost == 0.0 and overlap_count == 0 and cosine_sim < 0.35:
-                continue
-
-            total_score = round(cosine_sim + entity_boost + lexical_boost, 4)
-            scored.append(
-                RecalledMemoryItem(
-                    id=row["id"],
-                    source_type=stype,
-                    title=row["title"],
-                    content=row["content"],
-                    score=total_score,
-                )
-            )
-
-        scored.sort(key=lambda item: item.score, reverse=True)
-        return scored[:top_k]
+        ranked_pairs, kw_ranked, emb_ranked, top_kw_score = self._rank_candidate_rows_hybrid(
+            candidate_rows,
+            query_text=query_text,
+            query_vec=query_vec,
+            queries=queries,
+            mentioned_entities=mentioned_entities,
+            recent_turn_texts=recent_turn_texts,
+        )
+        eff_limit = (
+            compute_dynamic_max(kw_ranked, emb_ranked, top_k, top_kw_score)
+            if use_dynamic_max
+            else top_k
+        )
+        return [item for item, _row in ranked_pairs[:eff_limit]]
 
     async def search_memories_for_characters(
         self,
@@ -529,6 +851,8 @@ class VectorStore:
         overridden_location_ids: set[str] | None = None,
         present_turn_ids_by_char: Mapping[str, set[str]] | None = None,
         character_witnessed_turn_ids: Mapping[str, set[str]] | None = None,
+        recent_turn_texts: Sequence[str] | None = None,
+        use_dynamic_max: bool = False,
         top_k: int = 4,
     ) -> ScopedMemoryRecallBundle:
         """
@@ -552,8 +876,6 @@ class VectorStore:
             )
 
         query_vec = await embed_text(query_text)
-        query_tokens = set(_tokenize(query_text))
-        entity_tokens = {e.lower().strip() for e in mentioned_entities if e.strip()}
 
         conn = self._connect()
         try:
@@ -587,8 +909,7 @@ class VectorStore:
         finally:
             conn.close()
 
-        # Score all candidates once
-        scored_candidates: list[tuple[RecalledMemoryItem, sqlite3.Row]] = []
+        candidate_rows: list[sqlite3.Row] = []
         current_fp = current_embedding_fingerprint()
         for row in rows:
             row_fp = row["embedding_fingerprint"]
@@ -628,40 +949,21 @@ class VectorStore:
                     if row_camp:
                         continue
 
-            vec = np.frombuffer(row["embedding_blob"], dtype=np.float32)
-            if vec.shape == query_vec.shape:
-                cosine_sim = float(np.dot(query_vec, vec))
-            else:
-                fallback_q = compute_local_hash_embedding(query_text, dims=vec.shape[0])
-                cosine_sim = float(np.dot(fallback_q, vec))
+            candidate_rows.append(row)
 
-            keywords: list[str] = json.loads(row["keywords_json"] or "[]")
-            kw_lower = {k.lower() for k in keywords}
-            doc_tokens = set(_tokenize(f"{row['title']} {row['content']}")) | kw_lower
-
-            entity_boost = 0.0
-            for ent in entity_tokens:
-                if ent in kw_lower or ent in row["title"].lower() or ent in row["content"].lower():
-                    entity_boost += 0.35
-
-            overlap_count = len(query_tokens & doc_tokens)
-            lexical_boost = min(0.25, overlap_count * 0.05)
-
-            if stype == "location_lore" and entity_boost == 0.0 and overlap_count == 0 and cosine_sim < 0.35:
-                continue
-
-            total_score = round(cosine_sim + entity_boost + lexical_boost, 4)
-
-            item = RecalledMemoryItem(
-                id=row["id"],
-                source_type=stype,
-                title=row["title"],
-                content=row["content"],
-                score=total_score,
-            )
-            scored_candidates.append((item, row))
-
-        scored_candidates.sort(key=lambda pair: pair[0].score, reverse=True)
+        scored_candidates, kw_ranked, emb_ranked, top_kw_score = self._rank_candidate_rows_hybrid(
+            candidate_rows,
+            query_text=query_text,
+            query_vec=query_vec,
+            queries=queries,
+            mentioned_entities=mentioned_entities,
+            recent_turn_texts=recent_turn_texts,
+        )
+        eff_limit = (
+            compute_dynamic_max(kw_ranked, emb_ranked, top_k, top_kw_score)
+            if use_dynamic_max
+            else top_k
+        )
 
         # 1. Shared scene items: world lore + referenced remote location lore + witnessed episodic chunks
         shared_scene_items: list[RecalledMemoryItem] = []
@@ -675,7 +977,7 @@ class VectorStore:
                 anchor_turn = row["anchor_turn_id"]
                 if anchor_turn is None or anchor_turn in all_present_turn_ids:
                     shared_scene_items.append(item)
-            if len(shared_scene_items) >= top_k:
+            if len(shared_scene_items) >= eff_limit:
                 break
 
         # 2. Per-character items: strictly partitioned by character epistemic scope
@@ -695,7 +997,7 @@ class VectorStore:
                     anchor_turn = row["anchor_turn_id"]
                     if anchor_turn is None or anchor_turn in char_witnessed_turns or row_cid == cid:
                         c_items.append(item)
-                if len(c_items) >= top_k:
+                if len(c_items) >= eff_limit:
                     break
             by_char[cid] = c_items
 
