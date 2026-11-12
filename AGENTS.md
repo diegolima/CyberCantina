@@ -16,6 +16,7 @@
 - **Dynamic Node Modals & Creation Flows**: Keep primary `+ Add` headers sticky inside long node editors and scroll/focus newly appended entries into view. Separate catalog saving (`Save Character`) from optional session launch toggles (`Immediately start a campaign`).
 
 ## Verification & Debugging
+- **Character Media Path & Log Boundaries**: All character ID validation and media filesystem operations (`shutil.copytree`, `shutil.rmtree`, `FileResponse`, `unlink`, image saves) must route through `backend/app/security/media_path.py` (`validate_safe_character_id`, `safe_resolve_character_media_dir`, `safe_resolve_media_file_path`) rather than raw `Path(self.media_dir)` joins, and client-influenced log values must pass through `sanitize_log_value` (`backend/app/security/log_sanitize.py`).
 - **Live Output Diagnostics**: When debugging user-reported generation issues, inspect saved rows directly in `backend/cybercantina.db` via `sqlite3` to verify whether defects stem from LLM output, fallback imputation, or frontend rendering.
 - **Required Checks Before Completion**:
   - Backend: `backend/.venv/bin/pytest backend/tests`
