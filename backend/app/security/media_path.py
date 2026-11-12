@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -21,18 +22,31 @@ def validate_safe_character_id(character_id: str) -> str:
     return character_id
 
 
+def _resolve_within_base(base_dir: str | Path, relative_subpath: str) -> Path:
+    """Normalize base_dir + relative_subpath and ensure canonical target stays inside base_dir."""
+    base_norm = os.path.normpath(os.path.abspath(str(base_dir)))
+    if base_norm.endswith(os.sep):
+        raise PathTraversalError("Path traversal forbidden.")
+
+    target_norm = os.path.normpath(os.path.join(base_norm, relative_subpath))
+    if not target_norm.startswith(base_norm + os.sep):
+        raise PathTraversalError("Path traversal forbidden.")
+
+    real_base = os.path.realpath(base_norm)
+    if real_base.endswith(os.sep):
+        raise PathTraversalError("Path traversal forbidden.")
+
+    real_target = os.path.realpath(target_norm)
+    if not real_target.startswith(real_base + os.sep):
+        raise PathTraversalError("Path traversal forbidden.")
+    return Path(real_target)
+
+
 def safe_resolve_character_media_dir(media_dir: str | Path, character_id: str) -> Path:
     """Resolve and verify a character's media folder stays within media_dir/characters."""
     clean_id = validate_safe_character_id(character_id)
-    media_root = Path(media_dir).resolve()
-    characters_root = (media_root / "characters").resolve()
-    if not characters_root.is_relative_to(media_root):
-        raise PathTraversalError("Path traversal forbidden.")
-
-    target = (characters_root / clean_id).resolve()
-    if target == characters_root or not target.is_relative_to(characters_root):
-        raise PathTraversalError("Path traversal forbidden.")
-    return target
+    characters_root = _resolve_within_base(media_dir, "characters")
+    return _resolve_within_base(characters_root, clean_id)
 
 
 def safe_resolve_media_file_path(
@@ -53,11 +67,4 @@ def safe_resolve_media_file_path(
         raise ValueError("Invalid filename.")
 
     char_dir = safe_resolve_character_media_dir(media_dir, clean_id)
-    cat_dir = (char_dir / category).resolve()
-    if not cat_dir.is_relative_to(char_dir):
-        raise PathTraversalError("Path traversal forbidden.")
-
-    target = (cat_dir / filename).resolve()
-    if target == cat_dir or not target.is_relative_to(cat_dir):
-        raise PathTraversalError("Path traversal forbidden.")
-    return target
+    return _resolve_within_base(char_dir, os.path.join(category, filename))
