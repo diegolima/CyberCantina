@@ -983,6 +983,13 @@ def _heuristic_spatial_and_inventory_delta(
         raw_room = room_match.group(1).strip().title() if room_match else "Uncharted Annex"
         room_name = raw_room if len(raw_room) >= 4 else "Uncharted Annex"
         inferred_dir = normalize_compass_direction(None, f"{user_message} {raw_prose}")
+        is_exterior_heuristic = bool(
+            re.search(
+                r"\b(step(?:s|ped)?\s+outside|exit(?:s|ed)?\s+(?:into|to|the)|out\s+into\s+the\s+street|outside\s+the\s+(?:building|club|bar|tavern|compound)|onto\s+the\s+(?:street|road|alley|plaza))\b",
+                f"{user_message} {raw_prose}",
+                re.I,
+            )
+        )
         return PostTurnStateDelta(
             elapsed_minutes=4,
             transition_type="improvise_new",
@@ -998,6 +1005,7 @@ def _heuristic_spatial_and_inventory_delta(
                 return_direction_label=f"Doorway back to {active_location.name}",
                 compass_direction=inferred_dir,
                 travel_minutes=2,
+                is_exterior=is_exterior_heuristic,
             ),
             notable_event_summary=f"Discovered and entered {room_name} from {active_location.name}.",
             scene_flags_updated=[f"Discovered {room_name}"],

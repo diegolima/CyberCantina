@@ -511,6 +511,7 @@ export interface LoreNode {
   id: string;
   world_id: string;
   location_id?: string | null;
+  container_id?: string | null;
   campaign_id?: string | null;
   title: string;
   category: AnyLoreCategory;
@@ -518,10 +519,23 @@ export interface LoreNode {
   entity_tags: string[];
 }
 
+export interface LocationContainer {
+  id: string;
+  world_id: string;
+  parent_container_id?: string | null;
+  depth: 1 | 2 | 3 | 4;
+  name: string;
+  description: string;
+  environmental_tags: string[];
+  lore_nodes?: LoreNode[];
+}
+
 export interface LocationNode {
   id: string;
   world_id: string;
   created_at_turn_id?: string | null;
+  container_id?: string | null;
+  is_entry_exit?: boolean;
   name: string;
   summary: string;
   description: string;
@@ -560,6 +574,7 @@ export interface WorldRecord {
   global_rules: WorldGlobalRules;
   pending_deletion?: boolean;
   created_at: string;
+  containers?: LocationContainer[];
   locations: LocationNode[];
   edges: LocationEdge[];
   lore_nodes: LoreNode[];
@@ -756,6 +771,7 @@ export interface RecalledMemoryItem {
   source_type:
     | "lore"
     | "location_lore"
+    | "container_lore"
     | "character_shard"
     | "episodic_chunk"
     | "item_lore";
@@ -1147,6 +1163,7 @@ export interface CampaignStateBundle {
   neighbor_locations: NeighborLocationView[];
   visible_locations: LocationNode[];
   visible_edges?: LocationEdge[];
+  containers?: LocationContainer[];
   episodic_chunks: EpisodicChunkRecord[];
 }
 

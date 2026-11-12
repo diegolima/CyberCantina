@@ -384,6 +384,7 @@ def inspect_uploaded_file(
                 name=str(w.get("name") or "Unnamed World"),
                 category="world",
                 extra_info={
+                    "containers_count": len(w.get("containers", [])),
                     "locations_count": len(w.get("locations", [])),
                     "lore_count": len(w.get("lore_nodes", [])),
                 },
@@ -537,30 +538,114 @@ async def commit_staged_import(
                     (new_world_id, user_id, final_name, json.dumps(w.get("global_rules", {})), now),
                 )
 
+                # Containers (topological order: depth 4 down to 1 so parent_container_id FK always exists)
+                raw_containers = sorted(
+                    w.get("containers", []),
+                    key=lambda c: int(c.get("depth", 1)),
+                    reverse=True,
+                )
+                for cont in raw_containers:
+                    old_cont_id = cont.get("id")
+                    new_cont_id = f"cont_{uuid.uuid4().hex[:10]}"
+                    if old_cont_id:
+                        id_remap[old_cont_id] = new_cont_id
+                    old_parent_id = cont.get("parent_container_id")
+                    mapped_parent_id = (
+                        id_remap.get(old_parent_id) if old_parent_id else None
+                    )
+                    c_depth = int(cont.get("depth", 1))
+                    conn.execute(
+                        """
+                        INSERT INTO location_containers (
+                            id, world_id, parent_container_id, depth, name,
+                            description, environmental_tags_json, created_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            new_cont_id,
+                            new_world_id,
+                            mapped_parent_id,
+                            c_depth,
+                            cont.get("name", "Unnamed Container"),
+                            cont.get("description", ""),
+                            json.dumps(cont.get("environmental_tags", [])),
+                            cont.get("created_at") or now,
+                        ),
+                    )
+                    if c_depth == 1:
+                        for c_lore in cont.get("lore_nodes", []):
+                            old_cl_id = c_lore.get("id")
+                            new_cl_id = f"lore_{uuid.uuid4().hex[:10]}"
+                            if old_cl_id:
+                                id_remap[old_cl_id] = new_cl_id
+                            conn.execute(
+                                """
+                                INSERT INTO lore_nodes (
+                                    id, world_id, location_id, container_id, campaign_id,
+                                    title, category, content, entity_tags_json
+                                )
+                                VALUES (?, ?, NULL, ?, NULL, ?, ?, ?, ?)
+                                """,
+                                (
+                                    new_cl_id,
+                                    new_world_id,
+                                    new_cont_id,
+                                    c_lore.get("title", "Container Lore"),
+                                    c_lore.get("category", "history"),
+                                    c_lore.get("content", ""),
+                                    json.dumps(c_lore.get("entity_tags", [])),
+                                ),
+                            )
+                            if c_lore.get("category") != "secret":
+                                vec_title, vec_kws = _location_lore_vector_fields(
+                                    cont.get("name", ""),
+                                    c_lore.get("title", ""),
+                                    c_lore.get("entity_tags", []),
+                                )
+                                repo.vector_store.upsert_entry(
+                                    entry_id=new_cl_id,
+                                    source_type="container_lore",
+                                    world_id=new_world_id,
+                                    container_id=new_cont_id,
+                                    title=vec_title,
+                                    content=c_lore.get("content", ""),
+                                    keywords=vec_kws,
+                                    embedding=None,
+                                    conn=conn,
+                                )
+
                 # Locations
                 for loc in w.get("locations", []):
                     old_loc_id = loc.get("id")
                     new_loc_id = f"loc_{uuid.uuid4().hex[:10]}"
                     if old_loc_id:
                         id_remap[old_loc_id] = new_loc_id
+                    old_loc_cont_id = loc.get("container_id")
+                    mapped_loc_cont_id = (
+                        id_remap.get(old_loc_cont_id) if old_loc_cont_id else None
+                    )
 
                     conn.execute(
                         """
                         INSERT INTO location_nodes (
-                            id, world_id, created_at_turn_id, name, summary,
-                            description, environmental_tags_json, is_starting_location, is_hub, starting_message
+                            id, world_id, created_at_turn_id, container_id, name, summary,
+                            description, environmental_tags_json, is_starting_location, is_hub,
+                            is_entry_exit, starting_message
                         )
-                        VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             new_loc_id,
                             new_world_id,
+                            mapped_loc_cont_id,
                             loc.get("name", "Unnamed Location"),
                             loc.get("summary", ""),
                             loc.get("description", ""),
                             json.dumps(loc.get("environmental_tags", [])),
                             1 if loc.get("is_starting_location") else 0,
                             1 if loc.get("is_hub") else 0,
+                            1 if loc.get("is_entry_exit") else 0,
                             loc.get("starting_message", "") or "",
                         ),
                     )

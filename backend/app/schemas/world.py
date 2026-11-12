@@ -531,11 +531,12 @@ class WorldMapDraft(BaseModel):
 
 
 class LoreNode(BaseModel):
-    """Persisted lore node (world-scoped when location_id is None, location-scoped when set)."""
+    """Persisted lore node (world-scoped when both location_id and container_id are None)."""
 
     id: str
     world_id: str
     location_id: str | None = None
+    container_id: str | None = None
     campaign_id: str | None = None
     title: str = Field(..., min_length=1, max_length=120)
     category: AnyLoreCategory
@@ -561,17 +562,81 @@ class LoreNode(BaseModel):
 
     @model_validator(mode="after")
     def _enforce_scope_invariants(self) -> "LoreNode":
-        if self.location_id is None and self.category == "secret":
+        if self.location_id is None and self.container_id is None and self.category == "secret":
             raise ValueError(
-                "Category 'secret' is only allowed on location lore entries, not world lore."
+                "Category 'secret' is only allowed on location or container lore entries, not world lore."
             )
-        if self.location_id is not None and self.category == "artifact":
+        if (self.location_id is not None or self.container_id is not None) and self.category == "artifact":
             raise ValueError(
-                "Category 'artifact' is only allowed on world lore entries, not location lore."
+                "Category 'artifact' is only allowed on world lore entries, not location or container lore."
             )
-        if self.campaign_id is not None and self.location_id is None:
+        if self.campaign_id is not None and self.location_id is None and self.container_id is None:
             raise ValueError(
-                "Campaign-scoped lore overrides must belong to a specific location."
+                "Campaign-scoped lore overrides must belong to a specific location or container."
+            )
+        if self.location_id is not None and self.container_id is not None:
+            raise ValueError("Lore entry cannot be scoped to both a location and a container.")
+        return self
+
+
+class LocationContainer(BaseModel):
+    """Hierarchical spatial container node (Level 1=Building/Dungeon w/ Lore; Levels 2-4=Macro Org)."""
+
+    id: str
+    world_id: str = ""
+    parent_container_id: str | None = None
+    depth: int = Field(
+        ...,
+        ge=1,
+        le=4,
+        description="1=Building/Complex (supports lore), 2=District, 3=City/Region, 4=Planet/Realm",
+    )
+    name: str = Field(..., min_length=1, max_length=160)
+    description: str = ""
+    environmental_tags: list[str] = Field(default_factory=list)
+    lore_nodes: list[LoreNode] = Field(
+        default_factory=list,
+        description="Scoped lore entries (strictly allowed only on depth=1 containers).",
+    )
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _validate_name(cls, v: Any) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("Container name cannot be empty.")
+        return v.strip()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _bind_nested_container_lore(cls, data: Any) -> Any:
+        """Bind container_id and world_id to raw nested lore dicts before field validation runs."""
+        if isinstance(data, dict) and isinstance(data.get("lore_nodes"), list):
+            cont_id = data.get("id")
+            w_id = data.get("world_id") or ""
+            if cont_id:
+                bound: list[Any] = []
+                for idx, entry in enumerate(data["lore_nodes"]):
+                    if isinstance(entry, dict):
+                        patched = dict(entry)
+                        patched["container_id"] = patched.get("container_id") or cont_id
+                        patched["world_id"] = patched.get("world_id") or w_id
+                        patched["location_id"] = None
+                        patched["id"] = patched.get("id") or f"new_cont_lore_{idx}"
+                        bound.append(patched)
+                    elif isinstance(entry, LoreNode):
+                        bound.append(
+                            entry.model_copy(update={"container_id": cont_id, "location_id": None})
+                        )
+                    else:
+                        bound.append(entry)
+                data = {**data, "lore_nodes": bound}
+        return data
+
+    @model_validator(mode="after")
+    def validate_lore_depth(self) -> "LocationContainer":
+        if self.depth > 1 and self.lore_nodes:
+            raise ValueError(
+                f"Lore nodes are strictly forbidden on macro containers (depth={self.depth}). Lore is only allowed on Level 1 containers."
             )
         return self
 
@@ -582,6 +647,8 @@ class LocationNode(BaseModel):
     id: str
     world_id: str
     created_at_turn_id: str | None = None
+    container_id: str | None = None
+    is_entry_exit: bool = False
     name: str
     summary: str
     description: str
@@ -606,11 +673,14 @@ class LocationNode(BaseModel):
                     if isinstance(entry, dict):
                         patched = dict(entry)
                         patched["location_id"] = patched.get("location_id") or loc_id
+                        patched["container_id"] = None
                         patched["world_id"] = patched.get("world_id") or w_id
                         patched["id"] = patched.get("id") or f"new_loc_lore_{idx}"
                         bound.append(patched)
-                    elif isinstance(entry, LoreNode) and entry.location_id != loc_id:
-                        bound.append(entry.model_copy(update={"location_id": loc_id}))
+                    elif isinstance(entry, LoreNode):
+                        bound.append(
+                            entry.model_copy(update={"location_id": loc_id, "container_id": None})
+                        )
                     else:
                         bound.append(entry)
                 data = {**data, "lore_nodes": bound}
@@ -645,13 +715,58 @@ class NeighborLocationView(BaseModel):
 
 def _enforce_world_level_lore_nodes(nodes: list[LoreNode]) -> list[LoreNode]:
     for node in nodes:
-        if node.location_id is not None:
+        if node.location_id is not None or node.container_id is not None:
             raise ValueError(
-                "World-level lore_nodes must not set location_id; attach location lore to LocationNode.lore_nodes."
+                "World-level lore_nodes must not set location_id or container_id; attach scoped lore to LocationNode or LocationContainer."
             )
         if node.category == "secret":
             raise ValueError("Category 'secret' is not allowed on world-level lore entries.")
     return nodes
+
+
+def validate_container_hierarchy_integrity(
+    *,
+    world_id: str | None,
+    containers: list[LocationContainer],
+    locations: list[LocationNode],
+) -> None:
+    """Validate container ID uniqueness, world scoping, dangling references, depth monotonicity, and absence of cycles."""
+    c_by_id: dict[str, LocationContainer] = {}
+    for c in containers:
+        if c.id in c_by_id:
+            raise ValueError(f"Duplicate container ID '{c.id}'.")
+        if world_id and c.world_id and c.world_id != world_id:
+            raise ValueError(
+                f"Container '{c.name}' world_id '{c.world_id}' does not match world '{world_id}'."
+            )
+        c_by_id[c.id] = c
+
+    for loc in locations:
+        if loc.container_id and loc.container_id not in c_by_id:
+            raise ValueError(
+                f"Location '{loc.name}' references non-existent container '{loc.container_id}'."
+            )
+
+    for c in containers:
+        if c.parent_container_id:
+            if c.parent_container_id not in c_by_id:
+                raise ValueError(
+                    f"Container '{c.name}' references non-existent parent '{c.parent_container_id}'."
+                )
+            parent = c_by_id[c.parent_container_id]
+            if parent.depth <= c.depth:
+                raise ValueError(
+                    f"Container '{c.name}' (depth {c.depth}) parent '{parent.name}' must have strictly higher depth (found {parent.depth})."
+                )
+
+    for c in containers:
+        curr = c
+        visited: set[str] = set()
+        while curr.parent_container_id:
+            if curr.id in visited:
+                raise ValueError(f"Cycle detected in container hierarchy involving '{curr.name}'.")
+            visited.add(curr.id)
+            curr = c_by_id[curr.parent_container_id]
 
 
 class WorldRecord(BaseModel):
@@ -662,6 +777,7 @@ class WorldRecord(BaseModel):
     global_rules: WorldGlobalRules
     pending_deletion: bool = False
     created_at: str
+    containers: list[LocationContainer] = Field(default_factory=list)
     locations: list[LocationNode] = Field(default_factory=list)
     edges: list[LocationEdge] = Field(default_factory=list)
     lore_nodes: list[LoreNode] = Field(default_factory=list)
@@ -670,6 +786,15 @@ class WorldRecord(BaseModel):
     @classmethod
     def _validate_world_lore(cls, v: list[LoreNode]) -> list[LoreNode]:
         return _enforce_world_level_lore_nodes(v)
+
+    @model_validator(mode="after")
+    def _validate_containers(self) -> "WorldRecord":
+        validate_container_hierarchy_integrity(
+            world_id=self.id,
+            containers=self.containers,
+            locations=self.locations,
+        )
+        return self
 
 
 class WorldUpdatePayload(BaseModel):
@@ -677,6 +802,7 @@ class WorldUpdatePayload(BaseModel):
 
     name: str
     global_rules: WorldGlobalRules
+    containers: list[LocationContainer] = Field(default_factory=list)
     locations: list[LocationNode] = Field(default_factory=list)
     edges: list[LocationEdge] = Field(default_factory=list)
     lore_nodes: list[LoreNode] = Field(default_factory=list)
@@ -686,8 +812,23 @@ class WorldUpdatePayload(BaseModel):
     def _validate_world_lore(cls, v: list[LoreNode]) -> list[LoreNode]:
         return _enforce_world_level_lore_nodes(v)
 
+    @model_validator(mode="after")
+    def _validate_containers(self) -> "WorldUpdatePayload":
+        validate_container_hierarchy_integrity(
+            world_id=None,
+            containers=self.containers,
+            locations=self.locations,
+        )
+        return self
+
 
 class CampaignLocationLoreUpdatePayload(BaseModel):
     """Atomic Copy-on-Write location lore replacement payload during an active campaign."""
+
+    lore_nodes: list[LocationLoreNodeDraft] = Field(default_factory=list)
+
+
+class CampaignContainerLoreUpdatePayload(BaseModel):
+    """Atomic Copy-on-Write Level 1 container lore replacement payload during an active campaign."""
 
     lore_nodes: list[LocationLoreNodeDraft] = Field(default_factory=list)

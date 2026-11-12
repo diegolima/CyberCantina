@@ -35,6 +35,7 @@ import { CampaignCharacterModal } from "./inspector/CampaignCharacterModal";
 import { LoreIndexModal } from "./inspector/LoreIndexModal";
 import {
   COMPASS_ANGLES,
+  buildContainerBreadcrumbChain,
   pickCompassSlot,
   SpatialTopologyView,
 } from "./SpatialTopologyView";
@@ -42,6 +43,7 @@ import {
 const RECALL_SOURCE_LABEL: Record<RecalledMemoryItem["source_type"], string> = {
   lore: "Lore",
   location_lore: "Loc Lore",
+  container_lore: "Cont Lore",
   character_shard: "Shard",
   episodic_chunk: "Episode",
   item_lore: "Item",
@@ -103,6 +105,10 @@ interface LiveInspectorProps {
     locationId: string,
     loreNodes: LocationLoreNodeDraft[]
   ) => Promise<void> | void;
+  onSaveCampaignContainerLore?: (
+    containerId: string,
+    loreNodes: LocationLoreNodeDraft[]
+  ) => Promise<void> | void;
   onCheckoutTurn?: (turnId: string) => Promise<void> | void;
   isMutatingLocked?: boolean;
   worlds?: WorldRecord[];
@@ -123,6 +129,7 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   onToggleItemEquip,
   onUpdateCampaignMemories,
   onSaveCampaignLocationLore,
+  onSaveCampaignContainerLore,
   onCheckoutTurn,
   isMutatingLocked = false,
   worlds = [],
@@ -237,11 +244,37 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
     () => characterRows.map((r) => r.record),
     [characterRows]
   );
+  const presentCharacterLocations = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const row of characterRows) {
+      map[row.record.id] = row.state.current_location_id || activeLoc.id;
+    }
+    return map;
+  }, [characterRows, activeLoc.id]);
+
+  const effectiveContainers = useMemo(
+    () => bundle.containers ?? world.containers ?? [],
+    [bundle.containers, world.containers]
+  );
+
+  const activeBreadcrumbChain = useMemo(
+    () => buildContainerBreadcrumbChain(activeLoc.container_id, effectiveContainers),
+    [activeLoc.container_id, effectiveContainers]
+  );
+
   const indexedCount =
     world.lore_nodes.length +
     (bundle.visible_locations ?? []).reduce(
       (n, loc) =>
         n + (loc.lore_nodes ?? []).filter((l) => l.category !== "secret").length,
+      0
+    ) +
+    effectiveContainers.reduce(
+      (n, cont) =>
+        n +
+        (cont.depth === 1
+          ? (cont.lore_nodes ?? []).filter((l) => l.category !== "secret").length
+          : 0),
       0
     ) +
     indexedCharacters.reduce((n, c) => n + c.memory_shards.length, 0);
@@ -507,6 +540,27 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
           </div>
         )}
 
+        {activeBreadcrumbChain.length > 0 && (
+          <div
+            style={{
+              fontSize: "0.69rem",
+              color: "var(--accent-cyan)",
+              background: "rgba(6, 182, 212, 0.08)",
+              border: "1px solid rgba(6, 182, 212, 0.25)",
+              borderRadius: 5,
+              padding: "3px 8px",
+              marginBottom: 8,
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              flexWrap: "wrap",
+            }}
+            title="Spatial hierarchy breadcrumbs for active scene"
+          >
+            {activeBreadcrumbChain.map((c) => c.name).join(" > ")}
+          </div>
+        )}
+
         {/* Selected Node Details & Override Current Location Action */}
         <div
           style={{
@@ -678,10 +732,12 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
           >
             <SpatialTopologyView
               title={`${world.name} — Full Spatial Topology (${bundle.visible_locations.length} Locations)`}
+              containers={effectiveContainers}
               locations={bundle.visible_locations}
               edges={activeEdges}
               activeLocationId={activeLoc.id}
               defaultSelectedLocationId={selectedLocId}
+              presentCharacterLocations={presentCharacterLocations}
               mode="campaign"
               onClose={() => setShowFullMap(false)}
               onOverrideLocation={handleOverrideClick}
@@ -691,6 +747,7 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
               onDeleteEdge={onDeleteEdge}
               onUpdateEdgeDistance={onUpdateEdgeDistance}
               onSaveCampaignLocationLore={onSaveCampaignLocationLore}
+              onSaveCampaignContainerLore={onSaveCampaignContainerLore}
               isMutatingLocked={isMutatingLocked}
             />
           </div>
@@ -1021,6 +1078,7 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
           world={world}
           characters={indexedCharacters}
           locations={bundle.visible_locations}
+          containers={effectiveContainers}
           activeLocationId={activeLoc.id}
           recalledItems={recalledItems}
           onClose={() => setShowLoreIndex(false)}

@@ -52,7 +52,13 @@ from app.schemas.turn import (
     TurnNodeRecord,
     WorldStateSnapshot,
 )
-from app.schemas.world import LocationNode, LoreNode, NeighborLocationView, WorldRecord
+from app.schemas.world import (
+    LocationContainer,
+    LocationNode,
+    LoreNode,
+    NeighborLocationView,
+    WorldRecord,
+)
 
 _WORD_TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
 logger = logging.getLogger("cybercantina.engine.phase2_context")
@@ -504,20 +510,20 @@ def resolve_triggered_item_lore(
     return updated_shared, updated_per_char
 
 
-def select_active_location_lore_for_turn(
-    active_location: LocationNode,
+def _select_scoped_lore_for_turn(
+    lore_nodes: Sequence[LoreNode],
     *,
     user_message: str = "",
     pre_turn: PreTurnAnalysis | None = None,
     narrator_directive: str | None = None,
     max_ambient_entries: int = 5,
 ) -> list[LoreNode]:
-    """Select active-location lore for prompt injection with hard Python secret gating."""
-    if not active_location.lore_nodes:
+    """Shared scorer & hard Python secret gate for location_lore and Level 1 container_lore."""
+    if not lore_nodes:
         return []
 
-    ambient_entries = [n for n in active_location.lore_nodes if n.category != "secret"]
-    secret_entries = [n for n in active_location.lore_nodes if n.category == "secret"]
+    ambient_entries = [n for n in lore_nodes if n.category != "secret"]
+    secret_entries = [n for n in lore_nodes if n.category == "secret"]
 
     mentioned = list(pre_turn.mentioned_entities) if pre_turn else []
     queries = list(pre_turn.memory_search_queries) if pre_turn else []
@@ -605,6 +611,130 @@ def select_active_location_lore_for_turn(
             selected.append(secret)
 
     return selected
+
+
+def select_active_location_lore_for_turn(
+    active_location: LocationNode,
+    *,
+    user_message: str = "",
+    pre_turn: PreTurnAnalysis | None = None,
+    narrator_directive: str | None = None,
+    max_ambient_entries: int = 5,
+) -> list[LoreNode]:
+    """Select active-location lore for prompt injection with hard Python secret gating."""
+    return _select_scoped_lore_for_turn(
+        active_location.lore_nodes,
+        user_message=user_message,
+        pre_turn=pre_turn,
+        narrator_directive=narrator_directive,
+        max_ambient_entries=max_ambient_entries,
+    )
+
+
+def select_active_container_lore_for_turn(
+    container: LocationContainer,
+    *,
+    user_message: str = "",
+    pre_turn: PreTurnAnalysis | None = None,
+    narrator_directive: str | None = None,
+    max_ambient_entries: int = 2,
+) -> list[LoreNode]:
+    """Select Level 1 immediate container lore for prompt injection (strictly capped, secret-gated)."""
+    if container.depth != 1 or not container.lore_nodes:
+        return []
+    return _select_scoped_lore_for_turn(
+        container.lore_nodes,
+        user_message=user_message,
+        pre_turn=pre_turn,
+        narrator_directive=narrator_directive,
+        max_ambient_entries=max_ambient_entries,
+    )
+
+
+def build_container_chain(
+    location: LocationNode,
+    containers: Sequence[LocationContainer],
+) -> list[LocationContainer]:
+    """Resolve root-to-leaf ancestor chain [OuterRealm (L4), ..., ImmediateParent] for a location."""
+    if not location.container_id or not containers:
+        return []
+    by_id = {c.id: c for c in containers}
+    chain_rev: list[LocationContainer] = []
+    seen: set[str] = set()
+    curr_id: str | None = location.container_id
+    while curr_id and curr_id in by_id and curr_id not in seen:
+        seen.add(curr_id)
+        cont = by_id[curr_id]
+        chain_rev.append(cont)
+        curr_id = cont.parent_container_id
+    chain_rev.reverse()
+    return chain_rev
+
+
+def get_immediate_level1_container(
+    location: LocationNode,
+    world: WorldRecord | None,
+) -> LocationContainer | None:
+    """Return the location's immediate parent container iff it is a Level 1 container."""
+    if world is None or not location.container_id:
+        return None
+    for cont in world.containers:
+        if cont.id == location.container_id:
+            return cont if cont.depth == 1 else None
+    return None
+
+
+def _truncate_cue_text(text: str, limit: int = 200) -> str:
+    """Clamp narrative threshold cues strictly within the 200-char prompt budget."""
+    clean = " ".join(text.split()).strip()
+    if len(clean) <= limit:
+        return clean
+    clipped = clean[: max(1, limit - 1)].rsplit(" ", 1)[0].rstrip(" ,;:")
+    if len(clipped) < max(1, limit // 2):
+        clipped = clean[: max(1, limit - 1)].rstrip()
+    return f"{clipped}…"
+
+
+def compute_lca_transition_cue(
+    origin_location: LocationNode | None,
+    target_location: LocationNode,
+    containers: Sequence[LocationContainer],
+) -> str:
+    """Compute Zone 4 threshold cue via Lowest Common Ancestor with Entry Precedence & Turn 0/1 suppression."""
+    if origin_location is None or origin_location.id == target_location.id:
+        return ""
+
+    origin_chain = build_container_chain(origin_location, containers)
+    target_chain = build_container_chain(target_location, containers)
+
+    lca_len = 0
+    while (
+        lca_len < len(origin_chain)
+        and lca_len < len(target_chain)
+        and origin_chain[lca_len].id == target_chain[lca_len].id
+    ):
+        lca_len += 1
+
+    departed = origin_chain[lca_len:]
+    entered = target_chain[lca_len:]
+
+    # Entry Precedence: whenever Entered is non-empty, suppress <narrative_exit_cue> completely
+    if entered:
+        leaf = entered[-1]
+        summary_note = f" — {leaf.description}" if leaf.description else ""
+        if len(entered) == 1:
+            raw = f"You cross into {leaf.name}{summary_note}"
+        else:
+            path_str = " > ".join(c.name for c in entered)
+            raw = f"You enter {path_str}{summary_note}"
+        return f"\n  <narrative_entry_cue>{_truncate_cue_text(raw, 200)}</narrative_entry_cue>"
+
+    if departed:
+        names = ", ".join(c.name for c in reversed(departed))
+        raw = f"You step out of {names} into {target_location.name}."
+        return f"\n  <narrative_exit_cue>{_truncate_cue_text(raw, 200)}</narrative_exit_cue>"
+
+    return ""
 
 
 @dataclass(frozen=True)
@@ -1455,6 +1585,7 @@ async def resolve_phase2_turn_context(
     if user_message and user_message.strip():
         effective_queries.append(user_message.strip())
 
+    imm_container = get_immediate_level1_container(active_location, world)
     recall_bundle = await repo.vector_store.search_memories_for_characters(
         queries=effective_queries,
         mentioned_entities=pre_turn.mentioned_entities,
@@ -1467,6 +1598,7 @@ async def resolve_phase2_turn_context(
         use_dynamic_max=True,
         top_k=rag_top_k,
         exclude_location_id=active_location.id,
+        exclude_container_id=imm_container.id if imm_container else None,
     )
 
     leaf_turn = branch_turns[-1]
@@ -1580,6 +1712,8 @@ def build_zone4_ephemeral_tail_frame(
     persona_snapshot: PersonaRecord | None = None,
     current_player_state: PersonaTurnStateSnapshot | None = None,
     decomposed_message: DecomposedUserMessage | None = None,
+    world: WorldRecord | None = None,
+    origin_location_id: str | None = None,
 ) -> str:
     """Zone 4: Dynamic turn-specific context injected at the tail of the prompt."""
     exits_text = "\n".join(
@@ -1871,6 +2005,56 @@ def build_zone4_ephemeral_tail_frame(
         )
         local_lore_block = f"\n    <local_lore>\n{local_lore_lines}\n    </local_lore>"
 
+    container_chain = build_container_chain(active_location, world.containers) if world else []
+    spatial_hierarchy_block = ""
+    if container_chain:
+        spatial_hierarchy_block = (
+            f"\n    <spatial_hierarchy>{' > '.join(c.name for c in container_chain)}</spatial_hierarchy>"
+        )
+
+    parent_container_block = ""
+    if container_chain and container_chain[-1].depth == 1:
+        imm_cont = container_chain[-1]
+        cont_body = (imm_cont.description or "").strip()
+        cont_env = (
+            ", ".join(imm_cont.environmental_tags)
+            if imm_cont.environmental_tags
+            else "None"
+        )
+        selected_cont_lore = select_active_container_lore_for_turn(
+            imm_cont,
+            user_message=user_message,
+            pre_turn=pre_turn,
+            narrator_directive=narrator_directive,
+            max_ambient_entries=2,
+        )
+        cont_lore_block = ""
+        if selected_cont_lore:
+            cont_lore_lines = "\n".join(
+                f"        - [{'SECRET — DISCOVERED' if ln.category == 'secret' else ln.category.upper()}] {ln.title}: {ln.content}"
+                for ln in selected_cont_lore
+            )
+            cont_lore_block = f"\n      <container_lore>\n{cont_lore_lines}\n      </container_lore>"
+        parent_container_block = (
+            f'\n    <parent_container name="{imm_cont.name}">\n'
+            f"      {cont_body}\n"
+            f"      Atmosphere: {cont_env}\n"
+            f"      *(Ground container ambiance subtly on entry; avoid repeating verbatim on subsequent turns.)*"
+            f"{cont_lore_block}\n"
+            f"    </parent_container>"
+        )
+
+    transition_cue_block = ""
+    if world and origin_location_id:
+        origin_loc = next(
+            (loc for loc in world.locations if loc.id == origin_location_id),
+            None,
+        )
+        if origin_loc is not None:
+            transition_cue_block = compute_lca_transition_cue(
+                origin_loc, active_location, world.containers
+            )
+
     player_gear_section = ""
     if persona_snapshot:
         eq_items = (
@@ -1907,10 +2091,10 @@ def build_zone4_ephemeral_tail_frame(
         "<scene_context>\n"
         f"  <world_clock>{describe_world_timestamp(world_snapshot.world_timestamp)}</world_clock>\n"
         f"  <scene_flags>{scene_flags_text}</scene_flags>\n"
-        f"  <active_location name=\"{active_location.name}\">\n"
+        f"  <active_location name=\"{active_location.name}\">{spatial_hierarchy_block}{parent_container_block}\n"
         f"    {active_location.description}\n"
         f"    Props & Atmosphere: {env_tags}{local_lore_block}\n"
-        f"  </active_location>{co_present_section}\n"
+        f"  </active_location>{transition_cue_block}{co_present_section}\n"
         f"  <connected_locations>\n{exits_text}\n  </connected_locations>\n"
         f"  <recalled_memories_and_lore>\n{memories_text}\n  </recalled_memories_and_lore>\n"
         f"  <auxiliary_prompt_analysis>\n"
@@ -1951,6 +2135,7 @@ def assemble_four_zone_messages(
     persona_snapshot: PersonaRecord | None = None,
     current_player_state: PersonaTurnStateSnapshot | None = None,
     decomposed_message: DecomposedUserMessage | None = None,
+    origin_location_id: str | None = None,
     max_context_tokens: int | None = None,
     reserved_output_tokens: int = 0,
     min_working_memory_turns: int | None = None,
@@ -2068,6 +2253,8 @@ def assemble_four_zone_messages(
         persona_snapshot=persona_snapshot,
         current_player_state=current_player_state,
         decomposed_message=decomposed_message,
+        world=world,
+        origin_location_id=origin_location_id,
     )
     zone4_msg = {"role": "user", "content": zone4_content}
 

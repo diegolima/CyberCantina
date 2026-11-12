@@ -72,7 +72,10 @@ from app.schemas.turn import (
     WorldStateSnapshot,
 )
 from app.security.log_sanitize import sanitize_log_value
-from app.schemas.world import CampaignLocationLoreUpdatePayload
+from app.schemas.world import (
+    CampaignContainerLoreUpdatePayload,
+    CampaignLocationLoreUpdatePayload,
+)
 
 logger = logging.getLogger("cybercantina.routers.campaigns")
 router = APIRouter(tags=["campaigns"])
@@ -427,6 +430,30 @@ async def update_campaign_location_lore(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.put(
+    "/api/campaigns/{campaign_id}/containers/{container_id}/lore",
+    response_model=CampaignStateBundle,
+)
+async def update_campaign_container_lore(
+    campaign_id: str,
+    container_id: str,
+    req: CampaignContainerLoreUpdatePayload,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Update campaign-scoped Copy-on-Write lore entries for a Level 1 container."""
+    try:
+        return await get_repo().aupdate_campaign_container_lore(
+            campaign_id,
+            container_id,
+            req.lore_nodes,
+            owner_id=current_user.id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/api/campaigns/{campaign_id}/location-override", response_model=CampaignStateBundle)
 def override_campaign_location(
     campaign_id: str,
@@ -717,6 +744,18 @@ async def _execute_turn_stream_events_unlocked(
         for loc_lore in loc.lore_nodes:
             if loc_lore.category != "secret":
                 raw_known_entities.extend(loc_lore.entity_tags)
+    for cont in world.containers:
+        raw_known_entities.append(cont.name)
+        for cont_lore in cont.lore_nodes:
+            if cont_lore.category != "secret":
+                raw_known_entities.extend(cont_lore.entity_tags)
+
+    # Resolve origin location prior to transition for LCA Zone 4 entry/exit cues
+    origin_location_id: str | None = None
+    if req.override_location_id and req.override_location_id != parent_active_loc_id:
+        origin_location_id = parent_active_loc_id
+    elif len(branch_turns) >= 2:
+        origin_location_id = branch_turns[-2].world_snapshot.active_location_id
 
     known_entities: list[str] = []
     seen_known_lower: set[str] = set()
@@ -1002,6 +1041,7 @@ async def _execute_turn_stream_events_unlocked(
         episodic_chunks=episodic_chunks,
         active_location=active_location,
         neighbors=neighbors,
+        origin_location_id=origin_location_id,
         recalled_items=recalled_items,
         pre_turn=pre_turn,
         user_message=effective_user_message,

@@ -125,13 +125,14 @@ def _validate_world_artifact_lore_id(
             "Cannot link a world artifact lore entry to a character without an assigned world."
         )
     row = conn.execute(
-        "SELECT world_id, location_id, category FROM lore_nodes WHERE id = ?",
+        "SELECT world_id, location_id, container_id, category FROM lore_nodes WHERE id = ?",
         (lore_id,),
     ).fetchone()
     if (
         not row
         or row["world_id"] != world_id
         or row["location_id"] is not None
+        or row["container_id"] is not None
         or row["category"] != "artifact"
     ):
         raise ValueError(
@@ -280,7 +281,9 @@ from app.schemas.world import (
     COMPASS_DIRECTIONS,
     COMPASS_PASSAGE_NAMES,
     OPPOSITE_COMPASS,
+    CampaignContainerLoreUpdatePayload,
     CompassDirection,
+    LocationContainer,
     LocationEdge,
     LocationLoreNodeDraft,
     LocationNode,
@@ -405,6 +408,7 @@ class CantinaRepository:
         if (
             "campaign_id" in ddl_sql
             and "location_id" in ddl_sql
+            and "container_id" in ddl_sql
             and "json_array_length(entity_tags_json)" in ddl_sql
             and "'artifact'" in ddl_sql
         ):
@@ -420,6 +424,14 @@ class CantinaRepository:
         valid_loc_ids = (
             {r["id"] for r in conn.execute("SELECT id FROM location_nodes").fetchall()}
             if has_locs
+            else set()
+        )
+        has_containers = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='location_containers'"
+        ).fetchone()
+        valid_container_ids = (
+            {r["id"] for r in conn.execute("SELECT id FROM location_containers").fetchall()}
+            if has_containers
             else set()
         )
         has_camps = conn.execute(
@@ -453,13 +465,15 @@ class CantinaRepository:
                     id TEXT PRIMARY KEY,
                     world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
                     location_id TEXT NULL REFERENCES location_nodes(id) ON DELETE CASCADE,
+                    container_id TEXT NULL REFERENCES location_containers(id) ON DELETE CASCADE,
                     campaign_id TEXT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
                     title TEXT NOT NULL CHECK(length(trim(title)) >= 1),
                     category TEXT NOT NULL CHECK(
                         category IN ('history', 'culture', 'faction', 'rumor', 'artifact', 'secret')
-                        AND (location_id IS NULL OR category != 'artifact')
-                        AND (location_id IS NOT NULL OR category != 'secret')
-                        AND (campaign_id IS NULL OR location_id IS NOT NULL)
+                        AND ((location_id IS NULL AND container_id IS NULL) OR category != 'artifact')
+                        AND ((location_id IS NOT NULL OR container_id IS NOT NULL) OR category != 'secret')
+                        AND (location_id IS NULL OR container_id IS NULL)
+                        AND (campaign_id IS NULL OR location_id IS NOT NULL OR container_id IS NOT NULL)
                     ),
                     content TEXT NOT NULL CHECK(length(trim(content)) >= 1),
                     entity_tags_json TEXT NOT NULL CHECK(
@@ -479,14 +493,19 @@ class CantinaRepository:
                 loc_id = r["location_id"] if "location_id" in r_keys else None
                 if loc_id and loc_id not in valid_loc_ids:
                     continue
+                cont_id = r["container_id"] if "container_id" in r_keys else None
+                if cont_id and cont_id not in valid_container_ids:
+                    continue
+                if loc_id and cont_id:
+                    cont_id = None
                 camp_id = r["campaign_id"] if "campaign_id" in r_keys else None
-                if camp_id and (not loc_id or camp_id not in valid_camp_ids):
+                if camp_id and ((not loc_id and not cont_id) or camp_id not in valid_camp_ids):
                     camp_id = None
 
                 clean_title = (r["title"] or "").strip()[:120] or "World Lore"
                 clean_content = (r["content"] or "").strip()[:2000] or clean_title
                 clean_cat = normalize_lore_category(
-                    r["category"], allow_secret=bool(loc_id), strict=False
+                    r["category"], allow_secret=bool(loc_id or cont_id), strict=False
                 )
                 try:
                     parsed_tags = json.loads(r["entity_tags_json"] or "[]")
@@ -502,14 +521,15 @@ class CantinaRepository:
                 conn.execute(
                     """
                     INSERT INTO lore_nodes_migrated (
-                        id, world_id, location_id, campaign_id, title, category, content, entity_tags_json
+                        id, world_id, location_id, container_id, campaign_id, title, category, content, entity_tags_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         r["id"],
                         w_id,
                         loc_id,
+                        cont_id,
                         camp_id,
                         clean_title,
                         clean_cat,
@@ -544,6 +564,45 @@ class CantinaRepository:
         sql = schema_path.read_text(encoding="utf-8")
         conn = self._connect()
         try:
+            # Ensure location_containers exists on pre-existing DBs before migrating location_nodes/lore_nodes
+            worlds_table_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='worlds'"
+            ).fetchone()
+            if worlds_table_exists:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS location_containers (
+                        id TEXT PRIMARY KEY,
+                        world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+                        parent_container_id TEXT NULL REFERENCES location_containers(id) ON DELETE CASCADE,
+                        depth INTEGER NOT NULL CHECK(depth BETWEEN 1 AND 4),
+                        name TEXT NOT NULL,
+                        description TEXT NOT NULL DEFAULT '',
+                        environmental_tags_json TEXT NOT NULL DEFAULT '[]',
+                        created_at TEXT NOT NULL DEFAULT ''
+                    )
+                    """
+                )
+                conn.commit()
+
+            loc_table_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='location_nodes'"
+            ).fetchone()
+            if loc_table_exists:
+                existing_loc_cols = {
+                    r["name"]
+                    for r in conn.execute("PRAGMA table_info(location_nodes)").fetchall()
+                }
+                if "container_id" not in existing_loc_cols:
+                    conn.execute(
+                        "ALTER TABLE location_nodes ADD COLUMN container_id TEXT NULL REFERENCES location_containers(id) ON DELETE SET NULL"
+                    )
+                if "is_entry_exit" not in existing_loc_cols:
+                    conn.execute(
+                        "ALTER TABLE location_nodes ADD COLUMN is_entry_exit INTEGER NOT NULL DEFAULT 0 CHECK(is_entry_exit IN (0, 1))"
+                    )
+                conn.commit()
+
             # Upgrade pre-existing lore_nodes and vector_entries before executescript creates new indexes
             self._migrate_lore_schema_and_legacy_rows(conn)
             vec_table_exists = conn.execute(
@@ -556,6 +615,9 @@ class CantinaRepository:
                 }
                 if "location_id" not in existing_vec_cols:
                     conn.execute("ALTER TABLE vector_entries ADD COLUMN location_id TEXT NULL")
+                    conn.commit()
+                if "container_id" not in existing_vec_cols:
+                    conn.execute("ALTER TABLE vector_entries ADD COLUMN container_id TEXT NULL")
                     conn.commit()
                 if "embedding_fingerprint" not in existing_vec_cols:
                     conn.execute("ALTER TABLE vector_entries ADD COLUMN embedding_fingerprint TEXT NULL")
@@ -2171,6 +2233,64 @@ class CantinaRepository:
     # Worlds & Spatial Graph
     # ------------------------------------------------------------------
 
+    def _resolve_scoped_lore_map(
+        self,
+        conn: sqlite3.Connection,
+        scope_col: str,
+        scope_ids: list[str] | set[str],
+        override_table: str,
+        campaign_id: str | None = None,
+    ) -> dict[str, list[LoreNode]]:
+        """Hydrate per-entity LoreNodes (location_id or container_id) with Copy-on-Write campaign override precedence."""
+        clean_ids = [sid for sid in scope_ids if sid]
+        if not clean_ids:
+            return {}
+
+        placeholders = ",".join("?" for _ in clean_ids)
+        overridden_ids: set[str] = set()
+        if campaign_id:
+            ov_rows = conn.execute(
+                f"""
+                SELECT {scope_col} FROM {override_table}
+                WHERE campaign_id = ? AND {scope_col} IN ({placeholders})
+                """,
+                [campaign_id, *clean_ids],
+            ).fetchall()
+            overridden_ids = {r[scope_col] for r in ov_rows}
+            lore_rows = conn.execute(
+                f"""
+                SELECT * FROM lore_nodes
+                WHERE {scope_col} IN ({placeholders})
+                  AND (campaign_id IS NULL OR campaign_id = ?)
+                ORDER BY rowid ASC
+                """,
+                [*clean_ids, campaign_id],
+            ).fetchall()
+        else:
+            lore_rows = conn.execute(
+                f"""
+                SELECT * FROM lore_nodes
+                WHERE {scope_col} IN ({placeholders})
+                  AND campaign_id IS NULL
+                ORDER BY rowid ASC
+                """,
+                clean_ids,
+            ).fetchall()
+
+        result: dict[str, list[LoreNode]] = {sid: [] for sid in clean_ids}
+        for r in lore_rows:
+            sid = r[scope_col]
+            if not sid or sid not in result:
+                continue
+            r_camp = r["campaign_id"]
+            if sid in overridden_ids:
+                if r_camp == campaign_id:
+                    result[sid].append(self._row_to_lore_node(r))
+            else:
+                if r_camp is None:
+                    result[sid].append(self._row_to_lore_node(r))
+        return result
+
     def _resolve_location_lore_map(
         self,
         conn: sqlite3.Connection,
@@ -2178,54 +2298,28 @@ class CantinaRepository:
         campaign_id: str | None = None,
     ) -> dict[str, list[LoreNode]]:
         """Hydrate per-location LoreNodes with Copy-on-Write campaign override precedence."""
-        loc_list = [lid for lid in location_ids if lid]
-        if not loc_list:
-            return {}
+        return self._resolve_scoped_lore_map(
+            conn,
+            "location_id",
+            location_ids,
+            "campaign_location_lore_overrides",
+            campaign_id=campaign_id,
+        )
 
-        placeholders = ",".join("?" for _ in loc_list)
-        overridden_loc_ids: set[str] = set()
-        if campaign_id:
-            ov_rows = conn.execute(
-                f"""
-                SELECT location_id FROM campaign_location_lore_overrides
-                WHERE campaign_id = ? AND location_id IN ({placeholders})
-                """,
-                [campaign_id, *loc_list],
-            ).fetchall()
-            overridden_loc_ids = {r["location_id"] for r in ov_rows}
-            lore_rows = conn.execute(
-                f"""
-                SELECT * FROM lore_nodes
-                WHERE location_id IN ({placeholders})
-                  AND (campaign_id IS NULL OR campaign_id = ?)
-                ORDER BY rowid ASC
-                """,
-                [*loc_list, campaign_id],
-            ).fetchall()
-        else:
-            lore_rows = conn.execute(
-                f"""
-                SELECT * FROM lore_nodes
-                WHERE location_id IN ({placeholders})
-                  AND campaign_id IS NULL
-                ORDER BY rowid ASC
-                """,
-                loc_list,
-            ).fetchall()
-
-        result: dict[str, list[LoreNode]] = {lid: [] for lid in loc_list}
-        for r in lore_rows:
-            lid = r["location_id"]
-            if not lid or lid not in result:
-                continue
-            r_camp = r["campaign_id"]
-            if lid in overridden_loc_ids:
-                if r_camp == campaign_id:
-                    result[lid].append(self._row_to_lore_node(r))
-            else:
-                if r_camp is None:
-                    result[lid].append(self._row_to_lore_node(r))
-        return result
+    def _resolve_container_lore_map(
+        self,
+        conn: sqlite3.Connection,
+        container_ids: list[str] | set[str],
+        campaign_id: str | None = None,
+    ) -> dict[str, list[LoreNode]]:
+        """Hydrate per-container LoreNodes with Copy-on-Write campaign override precedence."""
+        return self._resolve_scoped_lore_map(
+            conn,
+            "container_id",
+            container_ids,
+            "campaign_container_lore_overrides",
+            campaign_id=campaign_id,
+        )
 
     def create_world_from_draft(
         self,
@@ -2508,6 +2602,14 @@ class CantinaRepository:
             if not w_row:
                 raise KeyError(f"World '{world_id}' not found")
 
+            container_rows = conn.execute(
+                """
+                SELECT * FROM location_containers
+                WHERE world_id = ?
+                ORDER BY depth DESC, rowid ASC
+                """,
+                (world_id,),
+            ).fetchall()
             loc_rows = conn.execute(
                 "SELECT * FROM location_nodes WHERE world_id = ?", (world_id,)
             ).fetchall()
@@ -2517,11 +2619,21 @@ class CantinaRepository:
             lore_rows = conn.execute(
                 """
                 SELECT * FROM lore_nodes
-                WHERE world_id = ? AND location_id IS NULL AND campaign_id IS NULL
+                WHERE world_id = ? AND location_id IS NULL AND container_id IS NULL AND campaign_id IS NULL
                 ORDER BY rowid ASC
                 """,
                 (world_id,),
             ).fetchall()
+
+            containers = [self._row_to_container(r) for r in container_rows]
+            cont_lore_map = self._resolve_container_lore_map(
+                conn,
+                [c.id for c in containers if c.depth == 1],
+                campaign_id=None if base_only else campaign_id,
+            )
+            for c in containers:
+                if c.depth == 1:
+                    c.lore_nodes = cont_lore_map.get(c.id, [])
 
             locations: list[LocationNode] = []
             for r in loc_rows:
@@ -2568,6 +2680,7 @@ class CantinaRepository:
             global_rules=WorldGlobalRules.model_validate_json(w_row["global_rules_json"]),
             pending_deletion=bool(w_row["pending_deletion"]) if "pending_deletion" in w_row.keys() else False,
             created_at=w_row["created_at"],
+            containers=containers,
             locations=locations,
             edges=edges,
             lore_nodes=lore_nodes,
@@ -2601,13 +2714,13 @@ class CantinaRepository:
             ).fetchone()
             campaigns_using = int(usage_row["cnt"]) if usage_row else 0
 
-            # Cache existing world & location lore vector blobs so unchanged lore nodes don't re-run embeddings
+            # Cache existing world, location, and container lore vector blobs so unchanged lore nodes don't re-run embeddings
             vec_rows = conn.execute(
                 """
                 SELECT title, content, keywords_json, embedding_blob
                 FROM vector_entries
                 WHERE world_id = ?
-                  AND source_type IN ('lore', 'location_lore')
+                  AND source_type IN ('lore', 'location_lore', 'container_lore')
                   AND (campaign_id IS NULL OR campaign_id = '')
                 """,
                 (world_id,),
@@ -2621,10 +2734,16 @@ class CantinaRepository:
             if not base_locations:
                 base_locations = orig.locations
             base_edges = [edge for edge in payload.edges if not edge.created_at_turn_id]
+            sorted_containers = sorted(
+                payload.containers,
+                key=lambda c: c.depth,
+                reverse=True,
+            )
 
             has_start = any(loc.is_starting_location for loc in base_locations)
+            reuse_ids = campaigns_using == 0
 
-            if campaigns_using == 0:
+            if reuse_ids:
                 # In-place update (zero active campaigns reference this world)
                 target_world_id = world_id
                 conn.execute(
@@ -2644,75 +2763,18 @@ class CantinaRepository:
                     (target_world_id,),
                 )
                 conn.execute(
+                    "DELETE FROM location_containers WHERE world_id = ?",
+                    (target_world_id,),
+                )
+                conn.execute(
                     """
                     DELETE FROM vector_entries
                     WHERE world_id = ?
-                      AND source_type IN ('lore', 'location_lore')
+                      AND source_type IN ('lore', 'location_lore', 'container_lore')
                       AND (campaign_id IS NULL OR campaign_id = '')
                     """,
                     (target_world_id,),
                 )
-
-                loc_id_map: dict[str, str] = {}
-                for idx, loc in enumerate(base_locations):
-                    new_loc_id = loc.id if loc.id and not loc.id.startswith("new_") else f"loc_{uuid.uuid4().hex[:10]}"
-                    loc_id_map[loc.id] = new_loc_id
-                    is_start = 1 if (loc.is_starting_location or (not has_start and idx == 0)) else 0
-                    is_hub = 1 if getattr(loc, "is_hub", False) else 0
-                    starting_msg = getattr(loc, "starting_message", "") or ""
-                    conn.execute(
-                        """
-                        INSERT INTO location_nodes (
-                            id, world_id, created_at_turn_id, name, summary,
-                            description, environmental_tags_json, is_starting_location, is_hub, starting_message
-                        )
-                        VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            new_loc_id,
-                            target_world_id,
-                            loc.name,
-                            loc.summary,
-                            loc.description,
-                            json.dumps(loc.environmental_tags),
-                            is_start,
-                            is_hub,
-                            starting_msg,
-                        ),
-                    )
-
-                occupied_from: dict[str, set[str]] = {}
-                for edge in base_edges:
-                    from_id = loc_id_map.get(edge.from_location_id)
-                    to_id = loc_id_map.get(edge.to_location_id)
-                    if not from_id or not to_id:
-                        continue
-                    new_edge_id = edge.id if edge.id and not edge.id.startswith("new_") else f"edge_{uuid.uuid4().hex[:10]}"
-                    occ = occupied_from.setdefault(from_id, set())
-                    cdir = pick_available_compass_direction(
-                        normalize_compass_direction(edge.compass_direction, edge.direction_label),
-                        occ,
-                    )
-                    occ.add(cdir)
-                    conn.execute(
-                        """
-                        INSERT INTO location_edges (
-                            id, world_id, from_location_id, to_location_id,
-                            direction_label, compass_direction, travel_minutes, is_locked_or_hidden, created_at_turn_id
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
-                        """,
-                        (
-                            new_edge_id,
-                            target_world_id,
-                            from_id,
-                            to_id,
-                            edge.direction_label,
-                            cdir,
-                            edge.travel_minutes,
-                            1 if edge.is_locked_or_hidden else 0,
-                        ),
-                    )
             else:
                 # Silent Copy-on-Write fork: freeze old world for running campaigns & mark pending_deletion = 1
                 conn.execute(
@@ -2734,67 +2796,134 @@ class CantinaRepository:
                     ),
                 )
 
-                loc_id_map = {}
-                for idx, loc in enumerate(base_locations):
-                    new_loc_id = f"loc_{uuid.uuid4().hex[:10]}"
-                    loc_id_map[loc.id] = new_loc_id
-                    is_start = 1 if (loc.is_starting_location or (not has_start and idx == 0)) else 0
-                    is_hub = 1 if getattr(loc, "is_hub", False) else 0
-                    starting_msg = getattr(loc, "starting_message", "") or ""
-                    conn.execute(
-                        """
-                        INSERT INTO location_nodes (
-                            id, world_id, created_at_turn_id, name, summary,
-                            description, environmental_tags_json, is_starting_location, is_hub, starting_message
-                        )
-                        VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            new_loc_id,
-                            target_world_id,
-                            loc.name,
-                            loc.summary,
-                            loc.description,
-                            json.dumps(loc.environmental_tags),
-                            is_start,
-                            is_hub,
-                            starting_msg,
-                        ),
+            existing_taken_cont_ids = {
+                r["id"] for r in conn.execute("SELECT id FROM location_containers").fetchall()
+            }
+            cont_id_map: dict[str, str] = {}
+            for cont in sorted_containers:
+                can_reuse_cont = (
+                    reuse_ids
+                    and bool(cont.id)
+                    and not cont.id.startswith("new_")
+                    and cont.id not in existing_taken_cont_ids
+                )
+                new_cont_id = cont.id if can_reuse_cont else f"cont_{uuid.uuid4().hex[:10]}"
+                existing_taken_cont_ids.add(new_cont_id)
+                cont_id_map[cont.id] = new_cont_id
+                mapped_parent_id = (
+                    cont_id_map.get(cont.parent_container_id)
+                    if cont.parent_container_id
+                    else None
+                )
+                conn.execute(
+                    """
+                    INSERT INTO location_containers (
+                        id, world_id, parent_container_id, depth, name,
+                        description, environmental_tags_json, created_at
                     )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        new_cont_id,
+                        target_world_id,
+                        mapped_parent_id,
+                        cont.depth,
+                        cont.name,
+                        cont.description,
+                        json.dumps(cont.environmental_tags),
+                        now,
+                    ),
+                )
 
-                occupied_from = {}
-                for edge in base_edges:
-                    from_id = loc_id_map.get(edge.from_location_id)
-                    to_id = loc_id_map.get(edge.to_location_id)
-                    if not from_id or not to_id:
-                        continue
-                    new_edge_id = f"edge_{uuid.uuid4().hex[:10]}"
-                    occ = occupied_from.setdefault(from_id, set())
-                    cdir = pick_available_compass_direction(
-                        normalize_compass_direction(edge.compass_direction, edge.direction_label),
-                        occ,
+            existing_taken_loc_ids = {
+                r["id"] for r in conn.execute("SELECT id FROM location_nodes").fetchall()
+            }
+            loc_id_map: dict[str, str] = {}
+            for idx, loc in enumerate(base_locations):
+                can_reuse_loc = (
+                    reuse_ids
+                    and bool(loc.id)
+                    and not loc.id.startswith("new_")
+                    and loc.id not in existing_taken_loc_ids
+                )
+                new_loc_id = loc.id if can_reuse_loc else f"loc_{uuid.uuid4().hex[:10]}"
+                existing_taken_loc_ids.add(new_loc_id)
+                loc_id_map[loc.id] = new_loc_id
+                is_start = 1 if (loc.is_starting_location or (not has_start and idx == 0)) else 0
+                is_hub = 1 if getattr(loc, "is_hub", False) else 0
+                is_portal = 1 if getattr(loc, "is_entry_exit", False) else 0
+                starting_msg = getattr(loc, "starting_message", "") or ""
+                mapped_loc_cont = (
+                    cont_id_map.get(loc.container_id) if loc.container_id else None
+                )
+                conn.execute(
+                    """
+                    INSERT INTO location_nodes (
+                        id, world_id, created_at_turn_id, container_id, name, summary,
+                        description, environmental_tags_json, is_starting_location, is_hub,
+                        is_entry_exit, starting_message
                     )
-                    occ.add(cdir)
-                    conn.execute(
-                        """
-                        INSERT INTO location_edges (
-                            id, world_id, from_location_id, to_location_id,
-                            direction_label, compass_direction, travel_minutes, is_locked_or_hidden, created_at_turn_id
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
-                        """,
-                        (
-                            new_edge_id,
-                            target_world_id,
-                            from_id,
-                            to_id,
-                            edge.direction_label,
-                            cdir,
-                            edge.travel_minutes,
-                            1 if edge.is_locked_or_hidden else 0,
-                        ),
-                    )
+                    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        new_loc_id,
+                        target_world_id,
+                        mapped_loc_cont,
+                        loc.name,
+                        loc.summary,
+                        loc.description,
+                        json.dumps(loc.environmental_tags),
+                        is_start,
+                        is_hub,
+                        is_portal,
+                        starting_msg,
+                    ),
+                )
 
+            existing_taken_edge_ids = {
+                r["id"] for r in conn.execute("SELECT id FROM location_edges").fetchall()
+            }
+            occupied_from: dict[str, set[str]] = {}
+            for edge in base_edges:
+                from_id = loc_id_map.get(edge.from_location_id)
+                to_id = loc_id_map.get(edge.to_location_id)
+                if not from_id or not to_id:
+                    continue
+                can_reuse_edge = (
+                    reuse_ids
+                    and bool(edge.id)
+                    and not edge.id.startswith("new_")
+                    and edge.id not in existing_taken_edge_ids
+                )
+                new_edge_id = edge.id if can_reuse_edge else f"edge_{uuid.uuid4().hex[:10]}"
+                existing_taken_edge_ids.add(new_edge_id)
+                occ = occupied_from.setdefault(from_id, set())
+                cdir = pick_available_compass_direction(
+                    normalize_compass_direction(edge.compass_direction, edge.direction_label),
+                    occ,
+                )
+                occ.add(cdir)
+                conn.execute(
+                    """
+                    INSERT INTO location_edges (
+                        id, world_id, from_location_id, to_location_id,
+                        direction_label, compass_direction, travel_minutes, is_locked_or_hidden, created_at_turn_id
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    """,
+                    (
+                        new_edge_id,
+                        target_world_id,
+                        from_id,
+                        to_id,
+                        edge.direction_label,
+                        cdir,
+                        edge.travel_minutes,
+                        1 if edge.is_locked_or_hidden else 0,
+                    ),
+                )
+
+            if not reuse_ids:
                 # Repoint active (non-deleted) template characters to the new world version
                 conn.execute(
                     "UPDATE characters SET world_id = ? WHERE world_id = ? AND pending_deletion = 0",
@@ -2976,6 +3105,87 @@ class CantinaRepository:
                                 conn=conn,
                             )
 
+            # Insert base Level 1 container-level lore nodes & non-secret container_lore vectors
+            for cont in sorted_containers:
+                if cont.depth != 1:
+                    continue
+                mapped_cont_id = cont_id_map.get(cont.id)
+                if not mapped_cont_id:
+                    continue
+                for cont_lore in cont.lore_nodes:
+                    can_reuse_cont_lore_id = (
+                        reuse_ids
+                        and bool(cont_lore.id)
+                        and not cont_lore.id.startswith("new_")
+                        and cont_lore.id not in existing_taken_lore_ids
+                    )
+                    cont_lore_id = (
+                        cont_lore.id
+                        if can_reuse_cont_lore_id
+                        else f"lore_{uuid.uuid4().hex[:10]}"
+                    )
+                    existing_taken_lore_ids.add(cont_lore_id)
+                    cont_tags_json = json.dumps(cont_lore.entity_tags)
+                    conn.execute(
+                        """
+                        INSERT INTO lore_nodes (
+                            id, world_id, location_id, container_id, campaign_id, title, category, content, entity_tags_json
+                        )
+                        VALUES (?, ?, NULL, ?, NULL, ?, ?, ?, ?)
+                        """,
+                        (
+                            cont_lore_id,
+                            target_world_id,
+                            mapped_cont_id,
+                            cont_lore.title,
+                            cont_lore.category,
+                            cont_lore.content,
+                            cont_tags_json,
+                        ),
+                    )
+                    if cont_lore.category != "secret":
+                        vec_title, vec_keywords = _location_lore_vector_fields(
+                            cont.name, cont_lore.title, cont_lore.entity_tags
+                        )
+                        vec_kw_json = json.dumps(vec_keywords)
+                        blob_key = (vec_title, cont_lore.content, vec_kw_json)
+                        if blob_key in existing_lore_blobs:
+                            conn.execute(
+                                """
+                                INSERT INTO vector_entries (
+                                    id, source_type, world_id, location_id, container_id, character_id, campaign_id,
+                                    anchor_turn_id, title, content, keywords_json, embedding_blob
+                                )
+                                VALUES (?, 'container_lore', ?, NULL, ?, NULL, NULL, NULL, ?, ?, ?, ?)
+                                """,
+                                (
+                                    cont_lore_id,
+                                    target_world_id,
+                                    mapped_cont_id,
+                                    vec_title,
+                                    cont_lore.content,
+                                    vec_kw_json,
+                                    existing_lore_blobs[blob_key],
+                                ),
+                            )
+                        else:
+                            pre_vec = (
+                                precomputed_embeddings.get(blob_key)
+                                if precomputed_embeddings
+                                else None
+                            )
+                            self.vector_store.upsert_entry(
+                                entry_id=cont_lore_id,
+                                source_type="container_lore",
+                                world_id=target_world_id,
+                                container_id=mapped_cont_id,
+                                title=vec_title,
+                                content=cont_lore.content,
+                                keywords=vec_keywords,
+                                embedding=pre_vec,
+                                conn=conn,
+                            )
+
             conn.commit()
         finally:
             conn.close()
@@ -2988,7 +3198,7 @@ class CantinaRepository:
         payload: WorldUpdatePayload,
         owner_id: str | None = None,
     ) -> WorldRecord:
-        """Asynchronously pre-compute embeddings strictly for uncached world & non-secret location lore."""
+        """Asynchronously pre-compute embeddings strictly for uncached world, location, and container lore."""
         # Validate world existence & ownership first before incurring embedding I/O
         orig = self.get_world(world_id, base_only=True, owner_id=owner_id)
         conn = self._connect()
@@ -2998,7 +3208,7 @@ class CantinaRepository:
                 SELECT title, content, keywords_json, embedding_blob
                 FROM vector_entries
                 WHERE world_id = ?
-                  AND source_type IN ('lore', 'location_lore')
+                  AND source_type IN ('lore', 'location_lore', 'container_lore')
                   AND (campaign_id IS NULL OR campaign_id = '')
                 """,
                 (world_id,),
@@ -3038,6 +3248,23 @@ class CantinaRepository:
                     )
                 )
 
+        for cont in payload.containers:
+            if cont.depth != 1:
+                continue
+            for cont_lore in cont.lore_nodes:
+                if cont_lore.category == "secret":
+                    continue
+                vec_title, vec_keywords = _location_lore_vector_fields(
+                    cont.name, cont_lore.title, cont_lore.entity_tags
+                )
+                vec_kw_json = json.dumps(vec_keywords)
+                items_to_embed.append(
+                    (
+                        (vec_title, cont_lore.content, vec_kw_json),
+                        combine_entry_text(vec_title, cont_lore.content, vec_keywords),
+                    )
+                )
+
         precomputed = await _compute_missing_embeddings(items_to_embed, existing_blobs)
         return self.update_world(
             world_id,
@@ -3045,6 +3272,171 @@ class CantinaRepository:
             owner_id=owner_id,
             precomputed_embeddings=precomputed,
         )
+
+    def delete_location_container(
+        self,
+        world_id: str,
+        container_id: str,
+        *,
+        reassign_to_container_id: str | None = None,
+        unparent_children: bool = False,
+        lore_disposal: Literal["delete", "reassign", "promote_to_world"] = "delete",
+        owner_id: str | None = None,
+    ) -> WorldRecord:
+        """Delete a container, enforcing child reassignment/unparenting and Level 1 lore disposal rules."""
+        orig = self.get_world(world_id, base_only=True, owner_id=owner_id)
+        cont_by_id = {c.id: c for c in orig.containers}
+        target = cont_by_id.get(container_id)
+        if not target:
+            raise KeyError(f"Container '{container_id}' not found in world '{world_id}'")
+
+        child_containers = [c for c in orig.containers if c.parent_container_id == container_id]
+        child_locations = [loc for loc in orig.locations if loc.container_id == container_id]
+
+        dest_container: LocationContainer | None = None
+        if reassign_to_container_id is not None:
+            if reassign_to_container_id == container_id:
+                raise ValueError("Cannot reassign children to the container being deleted.")
+            dest_container = cont_by_id.get(reassign_to_container_id)
+            if not dest_container:
+                raise ValueError(
+                    f"Target container '{reassign_to_container_id}' does not exist in world '{world_id}'."
+                )
+
+        if (child_containers or child_locations) and not dest_container and not unparent_children:
+            raise ValueError(
+                f"Container '{target.name}' contains child nodes; specify reassign_to_container_id or confirm unparent_children."
+            )
+
+        if dest_container:
+            for cc in child_containers:
+                if cc.depth >= dest_container.depth:
+                    raise ValueError(
+                        f"Child container '{cc.name}' (depth {cc.depth}) cannot be reassigned into '{dest_container.name}' (depth {dest_container.depth})."
+                    )
+
+        new_parent_for_children = dest_container.id if dest_container else None
+        remaining_containers: list[LocationContainer] = []
+        for c in orig.containers:
+            if c.id == container_id:
+                continue
+            updated_c = c.model_copy(deep=True)
+            if updated_c.parent_container_id == container_id:
+                updated_c.parent_container_id = new_parent_for_children
+            remaining_containers.append(updated_c)
+
+        updated_locations: list[LocationNode] = []
+        for loc in orig.locations:
+            updated_loc = loc.model_copy(deep=True)
+            if updated_loc.container_id == container_id:
+                updated_loc.container_id = new_parent_for_children
+                if new_parent_for_children is None:
+                    updated_loc.is_entry_exit = False
+            updated_locations.append(updated_loc)
+
+        updated_world_lore = list(orig.lore_nodes)
+        if target.depth == 1 and target.lore_nodes:
+            if lore_disposal == "reassign":
+                if not dest_container or dest_container.depth != 1:
+                    raise ValueError(
+                        "Level 1 container lore can only be reassigned to a target container of depth 1."
+                    )
+                for rc in remaining_containers:
+                    if rc.id == dest_container.id:
+                        rc.lore_nodes = [
+                            *rc.lore_nodes,
+                            *[
+                                ln.model_copy(
+                                    update={"id": "", "container_id": dest_container.id, "location_id": None}
+                                )
+                                for ln in target.lore_nodes
+                            ],
+                        ]
+                        break
+            elif lore_disposal == "promote_to_world":
+                for ln in target.lore_nodes:
+                    if ln.category == "secret":
+                        continue
+                    updated_world_lore.append(
+                        ln.model_copy(update={"id": "", "location_id": None, "container_id": None})
+                    )
+            elif lore_disposal != "delete":
+                raise ValueError(f"Unsupported lore_disposal mode '{lore_disposal}'.")
+
+        payload = WorldUpdatePayload(
+            name=orig.name,
+            global_rules=orig.global_rules,
+            containers=remaining_containers,
+            locations=updated_locations,
+            edges=orig.edges,
+            lore_nodes=updated_world_lore,
+        )
+        return self.update_world(world_id, payload, owner_id=owner_id)
+
+    def convert_location_to_container(
+        self,
+        world_id: str,
+        location_id: str,
+        *,
+        container_name: str | None = None,
+        portal_name: str | None = None,
+        migrate_lore: bool = True,
+        owner_id: str | None = None,
+    ) -> WorldRecord:
+        """Wrap an existing Level 0 location inside a new Level 1 container (World Sheet Editor operation)."""
+        orig = self.get_world(world_id, base_only=True, owner_id=owner_id)
+        cont_by_id = {c.id: c for c in orig.containers}
+        target_loc = next((loc for loc in orig.locations if loc.id == location_id), None)
+        if not target_loc:
+            raise KeyError(f"Location '{location_id}' not found in world '{world_id}'")
+
+        parent_cont = cont_by_id.get(target_loc.container_id) if target_loc.container_id else None
+        if parent_cont and parent_cont.depth <= 1:
+            raise ValueError(
+                f"Cannot wrap '{target_loc.name}' into a Level 1 container because its parent '{parent_cont.name}' is already depth {parent_cont.depth}."
+            )
+
+        new_cont_id = f"cont_{uuid.uuid4().hex[:10]}"
+        migrated_lore = (
+            [
+                ln.model_copy(update={"id": "", "location_id": None, "container_id": new_cont_id})
+                for ln in target_loc.lore_nodes
+            ]
+            if migrate_lore
+            else []
+        )
+        new_container = LocationContainer(
+            id=new_cont_id,
+            world_id=world_id,
+            parent_container_id=target_loc.container_id,
+            depth=1,
+            name=(container_name or target_loc.name).strip(),
+            description=target_loc.description or target_loc.summary,
+            environmental_tags=list(target_loc.environmental_tags),
+            lore_nodes=migrated_lore,
+        )
+
+        updated_locations: list[LocationNode] = []
+        for loc in orig.locations:
+            copied = loc.model_copy(deep=True)
+            if copied.id == location_id:
+                copied.container_id = new_cont_id
+                copied.is_entry_exit = True
+                if portal_name and portal_name.strip():
+                    copied.name = portal_name.strip()
+                if migrate_lore:
+                    copied.lore_nodes = []
+            updated_locations.append(copied)
+
+        payload = WorldUpdatePayload(
+            name=orig.name,
+            global_rules=orig.global_rules,
+            containers=[*orig.containers, new_container],
+            locations=updated_locations,
+            edges=orig.edges,
+            lore_nodes=orig.lore_nodes,
+        )
+        return self.update_world(world_id, payload, owner_id=owner_id)
 
     def mark_world_pending_deletion(
         self, world_id: str, owner_id: str | None = None
@@ -3101,9 +3493,9 @@ class CantinaRepository:
 
             for r in rows:
                 w_id = r["id"]
-                # Delete world & location lore vectors; preserve character backstory shards by detaching world_id
+                # Delete world, location & container lore vectors; preserve character backstory shards by detaching world_id
                 conn.execute(
-                    "DELETE FROM vector_entries WHERE world_id = ? AND source_type IN ('lore', 'location_lore')",
+                    "DELETE FROM vector_entries WHERE world_id = ? AND source_type IN ('lore', 'location_lore', 'container_lore')",
                     (w_id,),
                 )
                 conn.execute(
@@ -3236,11 +3628,29 @@ class CantinaRepository:
             from_location_id,
             valid_turn_ids=effective_turns,
         )
+        from_loc = self.get_location(from_location_id)
         distinct_dest_ids = {nb.destination.id for nb in current_neighbors}
         target_dir = normalize_compass_direction(
             spec.compass_direction,
             f"{spec.entry_direction_label} {spec.name}",
         )
+
+        # Resolve container inheritance (climb one level only if exiting via an active portal)
+        from_is_portal = bool(from_loc.is_entry_exit) or any(
+            nb.destination.container_id != from_loc.container_id
+            for nb in current_neighbors
+        )
+        new_container_id: str | None = from_loc.container_id
+        if from_loc.container_id and from_is_portal and getattr(spec, "is_exterior", False):
+            conn_cont = self._connect()
+            try:
+                c_row = conn_cont.execute(
+                    "SELECT parent_container_id FROM location_containers WHERE id = ?",
+                    (from_loc.container_id,),
+                ).fetchone()
+                new_container_id = c_row["parent_container_id"] if c_row else None
+            finally:
+                conn_cont.close()
 
         # If fewer than 8 adjacent nodes exist, connect directly in target_dir (or nearest free compass slot)
         if len(distinct_dest_ids) < 8:
@@ -3261,15 +3671,16 @@ class CantinaRepository:
                 conn.execute(
                     """
                     INSERT INTO location_nodes (
-                        id, world_id, created_at_turn_id, name, summary,
-                        description, environmental_tags_json, is_starting_location, is_hub
+                        id, world_id, created_at_turn_id, container_id, name, summary,
+                        description, environmental_tags_json, is_starting_location, is_hub, is_entry_exit
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
                     """,
                     (
                         new_loc_id,
                         world_id,
                         created_at_turn_id,
+                        new_container_id,
                         spec.name,
                         spec.summary,
                         spec.description,
@@ -3344,7 +3755,6 @@ class CantinaRepository:
             )
 
         # Create a new Passage Hub in target_dir and reconnect existing nodes in that direction to it
-        from_loc = self.get_location(from_location_id)
         base_passage_name = COMPASS_PASSAGE_NAMES[target_dir]
         world_snapshot = self.get_world(world_id, valid_turn_ids=effective_turns)
         existing_names_lower = {loc.name.lower() for loc in world_snapshot.locations}
@@ -3358,6 +3768,10 @@ class CantinaRepository:
         new_loc_id = f"loc_{uuid.uuid4().hex[:10]}"
         hub_back_dir = OPPOSITE_COMPASS[target_dir]
         hub_occupied_dirs: set[str] = {hub_back_dir}
+        hub_crosses_boundary = from_loc.container_id is not None and (
+            any(nb.destination.container_id != from_loc.container_id for nb in neighbors_in_dir)
+            or new_container_id != from_loc.container_id
+        )
 
         conn = self._connect()
         try:
@@ -3365,15 +3779,16 @@ class CantinaRepository:
             conn.execute(
                 """
                 INSERT INTO location_nodes (
-                    id, world_id, created_at_turn_id, name, summary,
-                    description, environmental_tags_json, is_starting_location, is_hub
+                    id, world_id, created_at_turn_id, container_id, name, summary,
+                    description, environmental_tags_json, is_starting_location, is_hub, is_entry_exit
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?)
                 """,
                 (
                     hub_id,
                     world_id,
                     created_at_turn_id,
+                    from_loc.container_id,
                     hub_name,
                     f"Connecting passageway branching {target_dir} from {from_loc.name}.",
                     (
@@ -3381,6 +3796,7 @@ class CantinaRepository:
                         "linking multiple adjoining rooms and thresholds."
                     ),
                     json.dumps(["hub", "passageway", f"{target_dir.lower()} passage"]),
+                    1 if hub_crosses_boundary else 0,
                 ),
             )
 
@@ -3499,15 +3915,16 @@ class CantinaRepository:
             conn.execute(
                 """
                 INSERT INTO location_nodes (
-                    id, world_id, created_at_turn_id, name, summary,
-                    description, environmental_tags_json, is_starting_location, is_hub
+                    id, world_id, created_at_turn_id, container_id, name, summary,
+                    description, environmental_tags_json, is_starting_location, is_hub, is_entry_exit
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
                 """,
                 (
                     new_loc_id,
                     world_id,
                     created_at_turn_id,
+                    new_container_id,
                     spec.name,
                     spec.summary,
                     spec.description,
@@ -7566,16 +7983,15 @@ class CantinaRepository:
 
         return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
 
-    def update_campaign_location_lore(
+    def _resolve_campaign_lore_target(
         self,
         campaign_id: str,
-        location_id: str,
-        lore_nodes: list[LocationLoreNodeDraft],
+        scope_kind: Literal["location", "container"],
+        target_id: str,
         *,
         owner_id: str | None = None,
-        precomputed_embeddings: dict[tuple[str, str, str], np.ndarray] | None = None,
-    ) -> CampaignStateBundle:
-        """Persist a Copy-on-Write location lore override scoped strictly to a single campaign."""
+    ) -> tuple[CampaignRecord, str, str | None]:
+        """Validate ownership, branch visibility/depth, and return (campaign, entity_name, anchor_turn_id)."""
         campaign = self.get_campaign(campaign_id, owner_id=owner_id)
         if not campaign.active_leaf_turn_id:
             raise ValueError(f"Campaign '{campaign_id}' has no active turn")
@@ -7583,28 +7999,72 @@ class CantinaRepository:
         branch_turns = self.get_branch_turn_chain(campaign.active_leaf_turn_id)
         valid_turn_ids = {t.id for t in branch_turns}
 
-        loc = self.get_location(location_id, campaign_id=campaign_id)
-        if loc.world_id != campaign.world_id:
+        if scope_kind == "location":
+            loc = self.get_location(target_id, campaign_id=campaign_id)
+            if loc.world_id != campaign.world_id:
+                raise KeyError(
+                    f"Location '{target_id}' does not belong to campaign '{campaign_id}'"
+                )
+            if loc.created_at_turn_id is not None and loc.created_at_turn_id not in valid_turn_ids:
+                raise KeyError(
+                    f"Location '{target_id}' is not visible on the active timeline branch"
+                )
+            return campaign, loc.name, loc.created_at_turn_id
+
+        conn = self._connect()
+        try:
+            c_row = conn.execute(
+                "SELECT id, world_id, name, depth FROM location_containers WHERE id = ?",
+                (target_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if not c_row:
+            raise KeyError(f"Container '{target_id}' not found")
+        if c_row["world_id"] != campaign.world_id:
             raise KeyError(
-                f"Location '{location_id}' does not belong to campaign '{campaign_id}'"
+                f"Container '{target_id}' does not belong to campaign '{campaign_id}'"
             )
-        if loc.created_at_turn_id is not None and loc.created_at_turn_id not in valid_turn_ids:
-            raise KeyError(
-                f"Location '{location_id}' is not visible on the active timeline branch"
+        if int(c_row["depth"]) != 1:
+            raise ValueError(
+                f"Only Level 1 containers support scoped lore entries (container '{c_row['name']}' is depth {c_row['depth']})."
             )
+        return campaign, c_row["name"], None
+
+    def _update_campaign_scoped_lore(
+        self,
+        campaign_id: str,
+        scope_kind: Literal["location", "container"],
+        target_id: str,
+        lore_nodes: list[LocationLoreNodeDraft],
+        *,
+        owner_id: str | None = None,
+        precomputed_embeddings: dict[tuple[str, str, str], np.ndarray] | None = None,
+    ) -> CampaignStateBundle:
+        """Persist a Copy-on-Write location or Level 1 container lore override scoped to one campaign."""
+        campaign, scope_name, anchor_turn_id = self._resolve_campaign_lore_target(
+            campaign_id, scope_kind, target_id, owner_id=owner_id
+        )
+        scope_col = "location_id" if scope_kind == "location" else "container_id"
+        override_table = (
+            "campaign_location_lore_overrides"
+            if scope_kind == "location"
+            else "campaign_container_lore_overrides"
+        )
+        source_type = "location_lore" if scope_kind == "location" else "container_lore"
 
         now = utc_now_iso()
         conn = self._connect()
         try:
             vec_rows = conn.execute(
-                """
+                f"""
                 SELECT title, content, keywords_json, embedding_blob
                 FROM vector_entries
                 WHERE world_id = ?
-                  AND location_id = ?
-                  AND source_type = 'location_lore'
+                  AND {scope_col} = ?
+                  AND source_type = ?
                 """,
-                (campaign.world_id, location_id),
+                (campaign.world_id, target_id, source_type),
             ).fetchall()
             existing_blobs: dict[tuple[str, str, str], bytes] = {
                 (r["title"], r["content"], r["keywords_json"]): bytes(r["embedding_blob"])
@@ -7614,84 +8074,89 @@ class CantinaRepository:
             prev_camp_lore_ids = {
                 r["id"]
                 for r in conn.execute(
-                    "SELECT id FROM lore_nodes WHERE campaign_id = ? AND location_id = ?",
-                    (campaign_id, location_id),
+                    f"SELECT id FROM lore_nodes WHERE campaign_id = ? AND {scope_col} = ?",
+                    (campaign_id, target_id),
                 ).fetchall()
             }
 
             conn.execute(
-                """
-                INSERT INTO campaign_location_lore_overrides (campaign_id, location_id, updated_at)
+                f"""
+                INSERT INTO {override_table} (campaign_id, {scope_col}, updated_at)
                 VALUES (?, ?, ?)
-                ON CONFLICT(campaign_id, location_id) DO UPDATE SET updated_at = excluded.updated_at
+                ON CONFLICT(campaign_id, {scope_col}) DO UPDATE SET updated_at = excluded.updated_at
                 """,
-                (campaign_id, location_id, now),
+                (campaign_id, target_id, now),
             )
             conn.execute(
-                "DELETE FROM lore_nodes WHERE campaign_id = ? AND location_id = ?",
-                (campaign_id, location_id),
+                f"DELETE FROM lore_nodes WHERE campaign_id = ? AND {scope_col} = ?",
+                (campaign_id, target_id),
             )
             conn.execute(
-                """
+                f"""
                 DELETE FROM vector_entries
-                WHERE campaign_id = ? AND location_id = ? AND source_type = 'location_lore'
+                WHERE campaign_id = ? AND {scope_col} = ? AND source_type = ?
                 """,
-                (campaign_id, location_id),
+                (campaign_id, target_id, source_type),
             )
 
             taken_ids = {
                 r["id"] for r in conn.execute("SELECT id FROM lore_nodes").fetchall()
             }
-            for loc_lore in lore_nodes:
+            for item_lore in lore_nodes:
                 can_reuse_id = (
-                    bool(loc_lore.id)
-                    and loc_lore.id in prev_camp_lore_ids
-                    and loc_lore.id not in taken_ids
+                    bool(item_lore.id)
+                    and item_lore.id in prev_camp_lore_ids
+                    and item_lore.id not in taken_ids
                 )
-                lore_id = loc_lore.id if can_reuse_id else f"lore_{uuid.uuid4().hex[:10]}"
+                lore_id = item_lore.id if can_reuse_id else f"lore_{uuid.uuid4().hex[:10]}"
                 taken_ids.add(lore_id)
-                tags_json = json.dumps(loc_lore.entity_tags)
+                tags_json = json.dumps(item_lore.entity_tags)
+                loc_val = target_id if scope_kind == "location" else None
+                cont_val = target_id if scope_kind == "container" else None
                 conn.execute(
                     """
                     INSERT INTO lore_nodes (
-                        id, world_id, location_id, campaign_id, title, category, content, entity_tags_json
+                        id, world_id, location_id, container_id, campaign_id, title, category, content, entity_tags_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         lore_id,
                         campaign.world_id,
-                        location_id,
+                        loc_val,
+                        cont_val,
                         campaign_id,
-                        loc_lore.title,
-                        loc_lore.category,
-                        loc_lore.content,
+                        item_lore.title,
+                        item_lore.category,
+                        item_lore.content,
                         tags_json,
                     ),
                 )
-                if loc_lore.category != "secret":
+                if item_lore.category != "secret":
                     vec_title, vec_keywords = _location_lore_vector_fields(
-                        loc.name, loc_lore.title, loc_lore.entity_tags
+                        scope_name, item_lore.title, item_lore.entity_tags
                     )
                     vec_kw_json = json.dumps(vec_keywords)
-                    blob_key = (vec_title, loc_lore.content, vec_kw_json)
+                    blob_key = (vec_title, item_lore.content, vec_kw_json)
                     if blob_key in existing_blobs:
                         conn.execute(
                             """
                             INSERT INTO vector_entries (
-                                id, source_type, world_id, location_id, character_id, campaign_id,
+                                id, source_type, world_id, location_id, container_id, character_id, campaign_id,
                                 anchor_turn_id, title, content, keywords_json, embedding_blob
                             )
-                            VALUES (?, 'location_lore', ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                            VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
                             """,
                             (
                                 lore_id,
+                                source_type,
                                 campaign.world_id,
-                                location_id,
+                                loc_val,
+                                cont_val,
                                 campaign_id,
-                                loc.created_at_turn_id,
+                                anchor_turn_id,
                                 vec_title,
-                                loc_lore.content,
+                                item_lore.content,
                                 vec_kw_json,
                                 existing_blobs[blob_key],
                             ),
@@ -7704,13 +8169,14 @@ class CantinaRepository:
                         )
                         self.vector_store.upsert_entry(
                             entry_id=lore_id,
-                            source_type="location_lore",
+                            source_type=source_type,
                             world_id=campaign.world_id,
-                            location_id=location_id,
+                            location_id=loc_val,
+                            container_id=cont_val,
                             campaign_id=campaign_id,
-                            anchor_turn_id=loc.created_at_turn_id,
+                            anchor_turn_id=anchor_turn_id,
                             title=vec_title,
-                            content=loc_lore.content,
+                            content=item_lore.content,
                             keywords=vec_keywords,
                             embedding=pre_vec,
                             conn=conn,
@@ -7722,42 +8188,33 @@ class CantinaRepository:
 
         return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
 
-    async def aupdate_campaign_location_lore(
+    async def _aupdate_campaign_scoped_lore(
         self,
         campaign_id: str,
-        location_id: str,
+        scope_kind: Literal["location", "container"],
+        target_id: str,
         lore_nodes: list[LocationLoreNodeDraft],
         *,
         owner_id: str | None = None,
     ) -> CampaignStateBundle:
         """Validate ownership/branch visibility, pre-compute missing embeddings asynchronously, and save override."""
-        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
-        if not campaign.active_leaf_turn_id:
-            raise ValueError(f"Campaign '{campaign_id}' has no active turn")
-
-        branch_turns = self.get_branch_turn_chain(campaign.active_leaf_turn_id)
-        valid_turn_ids = {t.id for t in branch_turns}
-        loc = self.get_location(location_id, campaign_id=campaign_id)
-        if loc.world_id != campaign.world_id:
-            raise KeyError(
-                f"Location '{location_id}' does not belong to campaign '{campaign_id}'"
-            )
-        if loc.created_at_turn_id is not None and loc.created_at_turn_id not in valid_turn_ids:
-            raise KeyError(
-                f"Location '{location_id}' is not visible on the active timeline branch"
-            )
+        campaign, scope_name, _ = self._resolve_campaign_lore_target(
+            campaign_id, scope_kind, target_id, owner_id=owner_id
+        )
+        scope_col = "location_id" if scope_kind == "location" else "container_id"
+        source_type = "location_lore" if scope_kind == "location" else "container_lore"
 
         conn = self._connect()
         try:
             vec_rows = conn.execute(
-                """
+                f"""
                 SELECT title, content, keywords_json, embedding_blob
                 FROM vector_entries
                 WHERE world_id = ?
-                  AND location_id = ?
-                  AND source_type = 'location_lore'
+                  AND {scope_col} = ?
+                  AND source_type = ?
                 """,
-                (campaign.world_id, location_id),
+                (campaign.world_id, target_id, source_type),
             ).fetchall()
             existing_blobs: dict[tuple[str, str, str], bytes] = {
                 (r["title"], r["content"], r["keywords_json"]): bytes(r["embedding_blob"])
@@ -7767,27 +8224,100 @@ class CantinaRepository:
             conn.close()
 
         items_to_embed: list[tuple[tuple[str, str, str], str]] = []
-        for loc_lore in lore_nodes:
-            if loc_lore.category == "secret":
+        for item_lore in lore_nodes:
+            if item_lore.category == "secret":
                 continue
             vec_title, vec_keywords = _location_lore_vector_fields(
-                loc.name, loc_lore.title, loc_lore.entity_tags
+                scope_name, item_lore.title, item_lore.entity_tags
             )
             vec_kw_json = json.dumps(vec_keywords)
             items_to_embed.append(
                 (
-                    (vec_title, loc_lore.content, vec_kw_json),
-                    combine_entry_text(vec_title, loc_lore.content, vec_keywords),
+                    (vec_title, item_lore.content, vec_kw_json),
+                    combine_entry_text(vec_title, item_lore.content, vec_keywords),
                 )
             )
 
         precomputed = await _compute_missing_embeddings(items_to_embed, existing_blobs)
-        return self.update_campaign_location_lore(
+        return self._update_campaign_scoped_lore(
             campaign_id,
-            location_id,
+            scope_kind,
+            target_id,
             lore_nodes,
             owner_id=owner_id,
             precomputed_embeddings=precomputed,
+        )
+
+    def update_campaign_location_lore(
+        self,
+        campaign_id: str,
+        location_id: str,
+        lore_nodes: list[LocationLoreNodeDraft],
+        *,
+        owner_id: str | None = None,
+        precomputed_embeddings: dict[tuple[str, str, str], np.ndarray] | None = None,
+    ) -> CampaignStateBundle:
+        """Persist a Copy-on-Write location lore override scoped strictly to a single campaign."""
+        return self._update_campaign_scoped_lore(
+            campaign_id,
+            "location",
+            location_id,
+            lore_nodes,
+            owner_id=owner_id,
+            precomputed_embeddings=precomputed_embeddings,
+        )
+
+    async def aupdate_campaign_location_lore(
+        self,
+        campaign_id: str,
+        location_id: str,
+        lore_nodes: list[LocationLoreNodeDraft],
+        *,
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
+        """Validate ownership/branch visibility, pre-compute missing embeddings asynchronously, and save override."""
+        return await self._aupdate_campaign_scoped_lore(
+            campaign_id,
+            "location",
+            location_id,
+            lore_nodes,
+            owner_id=owner_id,
+        )
+
+    def update_campaign_container_lore(
+        self,
+        campaign_id: str,
+        container_id: str,
+        lore_nodes: list[LocationLoreNodeDraft],
+        *,
+        owner_id: str | None = None,
+        precomputed_embeddings: dict[tuple[str, str, str], np.ndarray] | None = None,
+    ) -> CampaignStateBundle:
+        """Persist a Copy-on-Write Level 1 container lore override scoped strictly to a single campaign."""
+        return self._update_campaign_scoped_lore(
+            campaign_id,
+            "container",
+            container_id,
+            lore_nodes,
+            owner_id=owner_id,
+            precomputed_embeddings=precomputed_embeddings,
+        )
+
+    async def aupdate_campaign_container_lore(
+        self,
+        campaign_id: str,
+        container_id: str,
+        lore_nodes: list[LocationLoreNodeDraft],
+        *,
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
+        """Validate ownership/Level 1 container, pre-compute missing embeddings asynchronously, and save override."""
+        return await self._aupdate_campaign_scoped_lore(
+            campaign_id,
+            "container",
+            container_id,
+            lore_nodes,
+            owner_id=owner_id,
         )
 
     def checkout_turn_branch(
@@ -7869,6 +8399,27 @@ class CantinaRepository:
             except KeyError:
                 pass
 
+        # Evaluate effective branch-level portal flags dynamically across active branch edges
+        loc_container_by_id = {loc.id: loc.container_id for loc in world_filtered.locations}
+        cross_boundary_loc_ids: set[str] = set()
+        for edge in world_filtered.edges:
+            if (
+                edge.from_location_id in loc_container_by_id
+                and edge.to_location_id in loc_container_by_id
+                and loc_container_by_id[edge.from_location_id] != loc_container_by_id[edge.to_location_id]
+            ):
+                cross_boundary_loc_ids.add(edge.from_location_id)
+                cross_boundary_loc_ids.add(edge.to_location_id)
+
+        for loc in world_filtered.locations:
+            if loc.container_id is not None and loc.id in cross_boundary_loc_ids:
+                loc.is_entry_exit = True
+        if active_loc.container_id is not None and active_loc.id in cross_boundary_loc_ids:
+            active_loc.is_entry_exit = True
+        for nb in neighbors:
+            if nb.destination.container_id is not None and nb.destination.id in cross_boundary_loc_ids:
+                nb.destination.is_entry_exit = True
+
         return CampaignStateBundle(
             campaign=campaign,
             active_branch_turns=branch_turns,
@@ -7880,6 +8431,7 @@ class CantinaRepository:
             present_character_ids=present_ids,
             active_location=active_loc,
             neighbor_locations=neighbors,
+            containers=world_filtered.containers,
             visible_locations=world_filtered.locations,
             visible_edges=world_filtered.edges,
             episodic_chunks=episodic_chunks,
@@ -7896,11 +8448,25 @@ class CantinaRepository:
             id=r["id"],
             world_id=r["world_id"],
             location_id=r["location_id"] if "location_id" in keys else None,
+            container_id=r["container_id"] if "container_id" in keys else None,
             campaign_id=r["campaign_id"] if "campaign_id" in keys else None,
             title=r["title"],
             category=r["category"],
             content=r["content"],
             entity_tags=json.loads(r["entity_tags_json"] or "[]"),
+        )
+
+    @staticmethod
+    def _row_to_container(r: sqlite3.Row) -> LocationContainer:
+        keys = r.keys()
+        return LocationContainer(
+            id=r["id"],
+            world_id=r["world_id"],
+            parent_container_id=r["parent_container_id"] if "parent_container_id" in keys else None,
+            depth=r["depth"],
+            name=r["name"],
+            description=r["description"] if "description" in keys and r["description"] else "",
+            environmental_tags=json.loads(r["environmental_tags_json"] or "[]"),
         )
 
     @staticmethod
@@ -7910,12 +8476,14 @@ class CantinaRepository:
             id=r["id"],
             world_id=r["world_id"],
             created_at_turn_id=r["created_at_turn_id"],
+            container_id=r["container_id"] if "container_id" in keys else None,
             name=r["name"],
             summary=r["summary"],
             description=r["description"],
             environmental_tags=json.loads(r["environmental_tags_json"] or "[]"),
             is_starting_location=bool(r["is_starting_location"]),
             is_hub=bool(r["is_hub"]) if "is_hub" in keys else False,
+            is_entry_exit=bool(r["is_entry_exit"]) if "is_entry_exit" in keys else False,
             starting_message=r["starting_message"] if "starting_message" in keys and r["starting_message"] else "",
         )
 

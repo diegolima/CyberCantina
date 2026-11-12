@@ -2,16 +2,22 @@ import React, { useEffect, useMemo, useState } from "react";
 import { BookOpen, MapPin, Search, Sparkles, X } from "lucide-react";
 import {
   CharacterRecord,
+  LocationContainer,
   LocationNode,
   RecalledMemoryItem,
   WorldRecord,
 } from "../../types";
 
-type IndexFilter = "all" | "shards" | "world_lore" | "location_lore";
+type IndexFilter =
+  | "all"
+  | "shards"
+  | "world_lore"
+  | "location_lore"
+  | "container_lore";
 
-interface IndexEntry {
+export interface LoreIndexEntry {
   key: string;
-  kind: "shard" | "world_lore" | "location_lore";
+  kind: "shard" | "world_lore" | "location_lore" | "container_lore";
   group: string;
   tag: string;
   title: string;
@@ -21,11 +27,15 @@ interface IndexEntry {
   ambientActive?: boolean;
 }
 
+type IndexEntry = LoreIndexEntry;
+
 interface LoreIndexModalProps {
   world: WorldRecord;
   characters: CharacterRecord[];
   /** Campaign-resolved visible locations (falls back to world.locations). */
   locations?: LocationNode[];
+  /** Campaign-resolved containers including CoW container lore overrides (falls back to world.containers). */
+  containers?: LocationContainer[];
   activeLocationId?: string;
   /** Items injected into the prompt on the latest turn, highlighted in the list. */
   recalledItems: RecalledMemoryItem[];
@@ -34,11 +44,148 @@ interface LoreIndexModalProps {
 
 const norm = (s: string) => s.trim().toLowerCase();
 
-/** Searchable modal listing the full static RAG index (character shards + world & location lore). */
+export function buildLoreIndexEntries(opts: {
+  world: WorldRecord;
+  characters: CharacterRecord[];
+  locations?: LocationNode[];
+  containers?: LocationContainer[];
+  activeLocationId?: string;
+  recalledItems: RecalledMemoryItem[];
+}): LoreIndexEntry[] {
+  const {
+    world,
+    characters,
+    locations,
+    containers,
+    activeLocationId,
+    recalledItems,
+  } = opts;
+  const recalledLoreIds = new Set(
+    recalledItems.filter((r) => r.source_type === "lore").map((r) => r.id)
+  );
+  const recalledLoreTitles = new Set(
+    recalledItems.filter((r) => r.source_type === "lore").map((r) => norm(r.title))
+  );
+  const recalledLocLoreIds = new Set(
+    recalledItems
+      .filter((r) => r.source_type === "location_lore")
+      .map((r) => r.id)
+  );
+  const recalledLocLoreTitles = new Set(
+    recalledItems
+      .filter((r) => r.source_type === "location_lore")
+      .map((r) => norm(r.title))
+  );
+  const recalledContLoreIds = new Set(
+    recalledItems
+      .filter((r) => r.source_type === "container_lore")
+      .map((r) => r.id)
+  );
+  const recalledContLoreTitles = new Set(
+    recalledItems
+      .filter((r) => r.source_type === "container_lore")
+      .map((r) => norm(r.title))
+  );
+  const recalledShardTitles = new Set(
+    recalledItems
+      .filter((r) => r.source_type === "character_shard")
+      .map((r) => norm(r.title))
+  );
+
+  const list: LoreIndexEntry[] = [];
+  for (const ch of characters) {
+    ch.memory_shards.forEach((shard, i) => {
+      const tierLabel =
+        shard.origin === "clerk_ephemeral"
+          ? "Ephemeral"
+          : shard.origin === "clerk_promoted"
+            ? "Promoted"
+            : shard.origin === "compacted"
+              ? "Compacted"
+              : "Shard";
+      const tag = shard.significance
+        ? `${tierLabel} · ${shard.significance}`
+        : tierLabel;
+      list.push({
+        key: `shard-${ch.id}-${shard.id || i}`,
+        kind: "shard",
+        group: `${ch.name} — Memory Shards`,
+        tag,
+        title: shard.title,
+        content: shard.content,
+        recalled: recalledShardTitles.has(norm(shard.title)),
+      });
+    });
+  }
+  for (const lore of world.lore_nodes) {
+    list.push({
+      key: `lore-${lore.id}`,
+      kind: "world_lore",
+      group: `${world.name} — World Lore`,
+      tag: lore.category,
+      title: lore.title,
+      content: lore.content,
+      tags: lore.entity_tags,
+      recalled:
+        recalledLoreIds.has(lore.id) || recalledLoreTitles.has(norm(lore.title)),
+    });
+  }
+  const resolvedLocations = locations ?? world.locations ?? [];
+  for (const loc of resolvedLocations) {
+    const isCurrent = loc.id === activeLocationId;
+    for (const lore of loc.lore_nodes ?? []) {
+      if (lore.category === "secret") continue;
+      const compositeTitle = `${loc.name} — ${lore.title}`;
+      list.push({
+        key: `loc-lore-${loc.id}-${lore.id}`,
+        kind: "location_lore",
+        group: `${loc.name}${isCurrent ? " (Current Room)" : ""} — Location Lore`,
+        tag: lore.category,
+        title: lore.title,
+        content: lore.content,
+        tags: lore.entity_tags,
+        recalled:
+          recalledLocLoreIds.has(lore.id) ||
+          recalledLocLoreTitles.has(norm(lore.title)) ||
+          recalledLocLoreTitles.has(norm(compositeTitle)),
+        ambientActive: isCurrent,
+      });
+    }
+  }
+  const resolvedContainers = containers ?? world.containers ?? [];
+  const activeLoc = resolvedLocations.find((l) => l.id === activeLocationId);
+  const activeContainerId = activeLoc?.container_id ?? null;
+  for (const cont of resolvedContainers) {
+    if (cont.depth !== 1) continue;
+    const isActiveCont = cont.id === activeContainerId;
+    for (const lore of cont.lore_nodes ?? []) {
+      if (lore.category === "secret") continue;
+      const compositeTitle = `${cont.name} — ${lore.title}`;
+      list.push({
+        key: `cont-lore-${cont.id}-${lore.id}`,
+        kind: "container_lore",
+        group: `${cont.name}${isActiveCont ? " (Active Building/Container)" : ""} — Container Lore`,
+        tag: lore.category,
+        title: lore.title,
+        content: lore.content,
+        tags: lore.entity_tags,
+        recalled:
+          recalledContLoreIds.has(lore.id) ||
+          recalledContLoreTitles.has(norm(lore.title)) ||
+          recalledContLoreTitles.has(norm(compositeTitle)),
+        ambientActive: isActiveCont,
+      });
+    }
+  }
+  return list;
+}
+
+/** Searchable modal listing the full static RAG index (character shards + world, container & location lore). */
 export const LoreIndexModal: React.FC<LoreIndexModalProps> = ({
   world,
   characters,
   locations,
+  containers,
   activeLocationId,
   recalledItems,
   onClose,
@@ -54,92 +201,18 @@ export const LoreIndexModal: React.FC<LoreIndexModalProps> = ({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const entries = useMemo<IndexEntry[]>(() => {
-    const recalledLoreIds = new Set(
-      recalledItems.filter((r) => r.source_type === "lore").map((r) => r.id)
-    );
-    const recalledLoreTitles = new Set(
-      recalledItems.filter((r) => r.source_type === "lore").map((r) => norm(r.title))
-    );
-    const recalledLocLoreIds = new Set(
-      recalledItems
-        .filter((r) => r.source_type === "location_lore")
-        .map((r) => r.id)
-    );
-    const recalledLocLoreTitles = new Set(
-      recalledItems
-        .filter((r) => r.source_type === "location_lore")
-        .map((r) => norm(r.title))
-    );
-    const recalledShardTitles = new Set(
-      recalledItems
-        .filter((r) => r.source_type === "character_shard")
-        .map((r) => norm(r.title))
-    );
-
-    const list: IndexEntry[] = [];
-    for (const ch of characters) {
-      ch.memory_shards.forEach((shard, i) => {
-        const tierLabel =
-          shard.origin === "clerk_ephemeral"
-            ? "Ephemeral"
-            : shard.origin === "clerk_promoted"
-              ? "Promoted"
-              : shard.origin === "compacted"
-                ? "Compacted"
-                : "Shard";
-        const tag = shard.significance
-          ? `${tierLabel} · ${shard.significance}`
-          : tierLabel;
-        list.push({
-          key: `shard-${ch.id}-${shard.id || i}`,
-          kind: "shard",
-          group: `${ch.name} — Memory Shards`,
-          tag,
-          title: shard.title,
-          content: shard.content,
-          recalled: recalledShardTitles.has(norm(shard.title)),
-        });
-      });
-    }
-    for (const lore of world.lore_nodes) {
-      list.push({
-        key: `lore-${lore.id}`,
-        kind: "world_lore",
-        group: `${world.name} — World Lore`,
-        tag: lore.category,
-        title: lore.title,
-        content: lore.content,
-        tags: lore.entity_tags,
-        recalled:
-          recalledLoreIds.has(lore.id) || recalledLoreTitles.has(norm(lore.title)),
-      });
-    }
-    const resolvedLocations = locations ?? world.locations ?? [];
-    for (const loc of resolvedLocations) {
-      const isCurrent = loc.id === activeLocationId;
-      for (const lore of loc.lore_nodes ?? []) {
-        // Secret room lore is never indexed in vector_entries / cross-room RAG
-        if (lore.category === "secret") continue;
-        const compositeTitle = `${loc.name} — ${lore.title}`;
-        list.push({
-          key: `loc-lore-${loc.id}-${lore.id}`,
-          kind: "location_lore",
-          group: `${loc.name}${isCurrent ? " (Current Room)" : ""} — Location Lore`,
-          tag: lore.category,
-          title: lore.title,
-          content: lore.content,
-          tags: lore.entity_tags,
-          recalled:
-            recalledLocLoreIds.has(lore.id) ||
-            recalledLocLoreTitles.has(norm(lore.title)) ||
-            recalledLocLoreTitles.has(norm(compositeTitle)),
-          ambientActive: isCurrent,
-        });
-      }
-    }
-    return list;
-  }, [characters, world, locations, activeLocationId, recalledItems]);
+  const entries = useMemo<IndexEntry[]>(
+    () =>
+      buildLoreIndexEntries({
+        world,
+        characters,
+        locations,
+        containers,
+        activeLocationId,
+        recalledItems,
+      }),
+    [characters, world, locations, containers, activeLocationId, recalledItems]
+  );
 
   const filtered = useMemo(() => {
     const q = norm(query);
@@ -147,6 +220,7 @@ export const LoreIndexModal: React.FC<LoreIndexModalProps> = ({
       if (filter === "shards" && e.kind !== "shard") return false;
       if (filter === "world_lore" && e.kind !== "world_lore") return false;
       if (filter === "location_lore" && e.kind !== "location_lore") return false;
+      if (filter === "container_lore" && e.kind !== "container_lore") return false;
       if (!q) return true;
       return (
         e.title.toLowerCase().includes(q) ||
@@ -170,6 +244,7 @@ export const LoreIndexModal: React.FC<LoreIndexModalProps> = ({
   const shardCount = entries.filter((e) => e.kind === "shard").length;
   const worldLoreCount = entries.filter((e) => e.kind === "world_lore").length;
   const locationLoreCount = entries.filter((e) => e.kind === "location_lore").length;
+  const containerLoreCount = entries.filter((e) => e.kind === "container_lore").length;
 
   return (
     <div className="modal-backdrop" onClick={onClose} style={{ zIndex: 70 }}>
@@ -214,6 +289,7 @@ export const LoreIndexModal: React.FC<LoreIndexModalProps> = ({
                 ["all", `All (${entries.length})`],
                 ["shards", `Shards (${shardCount})`],
                 ["world_lore", `World (${worldLoreCount})`],
+                ["container_lore", `Containers (${containerLoreCount})`],
                 ["location_lore", `Locations (${locationLoreCount})`],
               ] as Array<[IndexFilter, string]>
             ).map(([value, label]) => (
@@ -248,7 +324,9 @@ export const LoreIndexModal: React.FC<LoreIndexModalProps> = ({
                       ? "memory-item-shard"
                       : item.kind === "location_lore"
                         ? "memory-item-location_lore"
-                        : "memory-item-lore"
+                        : item.kind === "container_lore"
+                          ? "memory-item-container_lore"
+                          : "memory-item-lore"
                   }`}
                 >
                   <div className="memory-item-head">

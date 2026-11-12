@@ -218,7 +218,7 @@ DEFAULT_CLERK_POST_TURN_SYSTEM = (
     "- transition_type ('stay' | 'move_existing' | 'improvise_new'): tracks whether the active scene "
     "(the player's vantage point) stayed in the current location, moved to a known exit, or entered an unmapped area.\n"
     "- target_location_id (if transition_type == 'move_existing', must match one of the Known Exits IDs; else null)\n"
-    "- improvised_location (if transition_type == 'improvise_new', object with name, summary, description, environmental_tags, entry_direction_label, return_direction_label, compass_direction ['N'|'NE'|'E'|'SE'|'S'|'SW'|'W'|'NW'], travel_minutes; else null)\n"
+    "- improvised_location (if transition_type == 'improvise_new', object with name, summary, description, environmental_tags, entry_direction_label, return_direction_label, compass_direction ['N'|'NE'|'E'|'SE'|'S'|'SW'|'W'|'NW'], travel_minutes, is_exterior [boolean: true ONLY if stepping outside the current building/compound into the outdoors or surrounding district/street, false if exploring another interior room]; else null)\n"
     "- notable_event_summary (1-sentence objective summary if a significant macro plot or world-state event occurred, else null)\n"
     "- scene_flags_updated (list of strings, default []): Add flags ONLY for persistent, active scene-wide "
     "environmental or tactical conditions (e.g. 'Power Failure', 'Hostile Standoff', 'Heavy Rain', 'Alarms Blaring', 'Cover Blown', 'Stealth Mode'). "

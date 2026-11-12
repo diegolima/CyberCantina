@@ -19,8 +19,10 @@ from app.engine.mentions import CharacterWhisper, DecomposedUserMessage, decompo
 from app.engine.phase2_context import (
     DiscoveredPersonaView,
     TurnContextBundle,
+    get_immediate_level1_container,
     pack_recalled_items_to_budget,
     resolve_character_previous_state,
+    select_active_container_lore_for_turn,
     select_active_location_lore_for_turn,
 )
 from app.engine.llm_client import llm_client
@@ -763,6 +765,30 @@ async def run_character_cognition_agent(
         )
         local_lore_section = f"- Local Facts & Rumors:\n{loc_lore_lines}\n"
 
+    imm_container = get_immediate_level1_container(active_location, world)
+    container_ambiance_section = ""
+    if imm_container is not None:
+        c_desc = (imm_container.description or "").strip()
+        c_tags = ", ".join(imm_container.environmental_tags) if imm_container.environmental_tags else "None"
+        c_lore_selected = select_active_container_lore_for_turn(
+            imm_container,
+            user_message=user_message,
+            pre_turn=pre_turn,
+            narrator_directive=narrator_directive,
+            max_ambient_entries=2,
+        )
+        c_lore_text = ""
+        if c_lore_selected:
+            c_lore_lines = "\n".join(
+                f"    * [{'SECRET — DISCOVERED' if ln.category == 'secret' else ln.category.upper()}] {ln.title}: {ln.content}"
+                for ln in c_lore_selected
+            )
+            c_lore_text = f"\n  * Building/Compound Lore:\n{c_lore_lines}"
+        container_ambiance_section = (
+            f"- Surrounding Building/Compound ({imm_container.name}): {c_desc} "
+            f"[Atmosphere: {c_tags}]{c_lore_text}\n"
+        )
+
     known_player_facts_section = ""
     if known_persona is not None:
         lines: list[str] = [f"Player Character ({known_persona.name}):"]
@@ -813,6 +839,7 @@ async def run_character_cognition_agent(
         f"- [2] Carried Inventory: {', '.join(format_item_names(previous_state.inventory)) or 'None'}\n"
         f"- [3] Scene Props & Fixtures ({active_location.name}): {', '.join(active_location.environmental_tags) or 'None'}\n\n"
         f"Environment Details ({active_location.name}):\n"
+        f"{container_ambiance_section}"
         f"{local_lore_section}\n"
         f"Co-Present Characters in Room:\n"
         f"{co_present_text}\n"

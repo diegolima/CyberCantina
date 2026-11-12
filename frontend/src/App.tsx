@@ -1134,6 +1134,19 @@ export const App: React.FC = () => {
     setBundle(updated);
   };
 
+  const handleSaveCampaignContainerLore = async (
+    containerId: string,
+    loreNodes: LocationLoreNodeDraft[]
+  ) => {
+    if (!bundle || isStreaming || isPhase4Running) return;
+    const updated = await api.updateCampaignContainerLore(
+      bundle.campaign.id,
+      containerId,
+      loreNodes
+    );
+    setBundle(updated);
+  };
+
   const handleCreateLinkedLocation = async (payload: {
     from_location_id: string;
     name: string;
@@ -1975,6 +1988,7 @@ export const App: React.FC = () => {
           onToggleItemEquip={handleToggleItemEquip}
           onUpdateCampaignMemories={handleUpdateCampaignMemories}
           onSaveCampaignLocationLore={handleSaveCampaignLocationLore}
+          onSaveCampaignContainerLore={handleSaveCampaignContainerLore}
           onCheckoutTurn={handleCheckoutTurn}
           isMutatingLocked={isStreaming || isPhase4Running}
           worlds={worlds}

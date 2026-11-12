@@ -744,13 +744,60 @@ export const api = {
     worldId: string,
     payload: Pick<
       WorldRecord,
-      "name" | "global_rules" | "locations" | "edges" | "lore_nodes"
+      "name" | "global_rules" | "containers" | "locations" | "edges" | "lore_nodes"
     >
   ) =>
     fetchJson<WorldRecord>(`${API_BASE}/worlds/${worldId}`, {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
+  deleteWorldContainer: (
+    worldId: string,
+    containerId: string,
+    opts?: {
+      reassign_to_container_id?: string | null;
+      unparent_children?: boolean;
+      lore_disposal?: "delete" | "reassign" | "promote_to_world";
+    }
+  ) => {
+    const params = new URLSearchParams();
+    if (opts?.reassign_to_container_id) {
+      params.set("reassign_to_container_id", opts.reassign_to_container_id);
+    }
+    if (opts?.unparent_children) {
+      params.set("unparent_children", "true");
+    }
+    if (opts?.lore_disposal) {
+      params.set("lore_disposal", opts.lore_disposal);
+    }
+    const qs = params.toString();
+    return fetchJson<WorldRecord>(
+      `${API_BASE}/worlds/${worldId}/containers/${containerId}${qs ? `?${qs}` : ""}`,
+      {
+        method: "DELETE",
+      }
+    );
+  },
+  convertLocationToContainer: (
+    worldId: string,
+    locationId: string,
+    payload: {
+      container_name: string;
+      container_depth?: 1 | 2 | 3 | 4;
+      parent_container_id?: string | null;
+      initial_interior_name?: string;
+      initial_interior_summary?: string;
+      initial_interior_description?: string;
+      migrate_lore_to_container?: boolean;
+    }
+  ) =>
+    fetchJson<WorldRecord>(
+      `${API_BASE}/worlds/${worldId}/locations/${locationId}/convert-to-container`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    ),
   deleteWorld: (worldId: string) =>
     fetchJson<{
       world_id: string;
@@ -1045,6 +1092,18 @@ export const api = {
   ) =>
     fetchJson<CampaignStateBundle>(
       `${API_BASE}/campaigns/${campaignId}/locations/${locationId}/lore`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ lore_nodes: loreNodes }),
+      }
+    ),
+  updateCampaignContainerLore: (
+    campaignId: string,
+    containerId: string,
+    loreNodes: LocationLoreNodeDraft[]
+  ) =>
+    fetchJson<CampaignStateBundle>(
+      `${API_BASE}/campaigns/${campaignId}/containers/${containerId}/lore`,
       {
         method: "PUT",
         body: JSON.stringify({ lore_nodes: loreNodes }),

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable, Final, Literal
 import re
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.engine.mentions import CharacterWhisper
 from app.schemas.affective import (
@@ -34,6 +34,7 @@ from app.schemas.character import (
 from app.schemas.persona import PersonaRecord
 from app.schemas.world import (
     CompassDirection,
+    LocationContainer,
     LocationEdge,
     LocationNode,
     NeighborLocationView,
@@ -306,7 +307,7 @@ class PreTurnAnalysis(PreTurnLLMOutput):
 
 
 RecallSourceType = Literal[
-    "lore", "location_lore", "character_shard", "episodic_chunk", "item_lore"
+    "lore", "location_lore", "container_lore", "character_shard", "episodic_chunk", "item_lore"
 ]
 
 
@@ -339,6 +340,12 @@ class WorldStateSnapshot(BaseModel):
 class ImprovisedLocationSpec(BaseModel):
     """New location node dynamically created when characters explore an unmapped room/area."""
 
+    model_config = ConfigDict(
+        json_schema_extra=lambda schema: schema.update(
+            required=list(schema.get("properties", {}).keys())
+        )
+    )
+
     name: str
     summary: str
     description: str
@@ -347,6 +354,10 @@ class ImprovisedLocationSpec(BaseModel):
     return_direction_label: str = "Back the way you came"
     compass_direction: CompassDirection = "N"
     travel_minutes: int = Field(default=1, ge=1, le=240)
+    is_exterior: bool = Field(
+        default=False,
+        description="True if the newly explored location is outside the current building/compound; False if exploring deeper inside.",
+    )
 
     @field_validator("compass_direction", mode="before")
     @classmethod
@@ -416,6 +427,12 @@ class ExtractedCharacterMemory(BaseModel):
 
 class WorldPostTurnDelta(BaseModel):
     """Global world-state output produced by the Post-Turn World Clerk (clock, space, flags, macro events)."""
+
+    model_config = ConfigDict(
+        json_schema_extra=lambda schema: schema.update(
+            required=list(schema.get("properties", {}).keys())
+        )
+    )
 
     elapsed_minutes: int = Field(
         default=2,
@@ -951,6 +968,7 @@ class CampaignStateBundle(BaseModel):
     character_states: dict[str, CharacterStateSnapshot] = Field(default_factory=dict)
     character_records: dict[str, CharacterRecord] = Field(default_factory=dict)
     present_character_ids: list[str] = Field(default_factory=list)
+    containers: list[LocationContainer] = Field(default_factory=list)
     active_location: LocationNode
     neighbor_locations: list[NeighborLocationView]
     visible_locations: list[LocationNode]

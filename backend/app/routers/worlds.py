@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from typing import Literal
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from app.auth import get_current_user
 from app.dependencies import get_effective_user_model_settings, get_repo, run_entity_pruner
@@ -96,6 +98,66 @@ async def update_world(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+class ConvertLocationToContainerRequest(BaseModel):
+    container_name: str | None = None
+    portal_name: str | None = None
+    migrate_lore: bool = True
+
+
+@router.post(
+    "/api/worlds/{world_id}/locations/{location_id}/convert-to-container",
+    response_model=WorldRecord,
+)
+def convert_location_to_container(
+    world_id: str,
+    location_id: str,
+    req: ConvertLocationToContainerRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> WorldRecord:
+    """Wrap an existing Level 0 location inside a new Level 1 container."""
+    try:
+        return get_repo().convert_location_to_container(
+            world_id,
+            location_id,
+            container_name=req.container_name,
+            portal_name=req.portal_name,
+            migrate_lore=req.migrate_lore,
+            owner_id=current_user.id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete(
+    "/api/worlds/{world_id}/containers/{container_id}",
+    response_model=WorldRecord,
+)
+def delete_world_container(
+    world_id: str,
+    container_id: str,
+    reassign_to_container_id: str | None = Query(default=None),
+    unparent_children: bool = Query(default=False),
+    lore_disposal: Literal["delete", "reassign", "promote_to_world"] = Query(default="delete"),
+    current_user: UserProfile = Depends(get_current_user),
+) -> WorldRecord:
+    """Delete a container from a world with explicit child reassignment/unparenting and Level 1 lore disposal."""
+    try:
+        return get_repo().delete_location_container(
+            world_id,
+            container_id,
+            reassign_to_container_id=reassign_to_container_id,
+            unparent_children=unparent_children,
+            lore_disposal=lore_disposal,
+            owner_id=current_user.id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.delete("/api/worlds/{world_id}")
