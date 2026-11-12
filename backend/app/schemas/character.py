@@ -53,16 +53,21 @@ _ITEM_PREFIX_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _ITEM_SUFFIX_RE = re.compile(
-    r"\s*\((?:worn|carried|equipped|held|stashed|clothing|item|object)\)$",
+    r"\((?:worn|carried|equipped|held|stashed|clothing|item|object)\)$",
     flags=re.IGNORECASE,
 )
 
 
+def strip_item_location_affixes(raw: str) -> str:
+    """Collapse whitespace and strip trailing/leading equipment location tags such as [worn] or (carried)."""
+    s = re.sub(r"\s+", " ", (raw or "").strip())
+    s = _ITEM_PREFIX_RE.sub("", s).strip()
+    return _ITEM_SUFFIX_RE.sub("", s).strip()
+
+
 def normalize_item_key(raw: str) -> str:
     """Normalize an item name for deterministic legacy ID hashing and matching."""
-    s = re.sub(r"\s+", " ", (raw or "").strip().lower())
-    s = _ITEM_PREFIX_RE.sub("", s)
-    s = _ITEM_SUFFIX_RE.sub("", s).strip()
+    s = strip_item_location_affixes((raw or "").lower())
     return s or re.sub(r"\s+", " ", (raw or "").strip().lower())
 
 
@@ -461,7 +466,24 @@ def normalize_bullet_plan(plan: str | Sequence[str] | None) -> str:
     return "\n".join(f"- {step}" for step in steps)
 
 
-_HTML_COMMENT_RE = re.compile(r"<!--[\s\S]*?-->")
+def _strip_html_comments(text: str) -> str:
+    """Remove closed <!-- ... --> HTML comments in linear time without regex backtracking."""
+    out: list[str] = []
+    pos = 0
+    while True:
+        start = text.find("<!--", pos)
+        if start == -1:
+            out.append(text[pos:])
+            break
+        end = text.find("-->", start + 4)
+        if end == -1:
+            out.append(text[pos:])
+            break
+        out.append(text[pos:start])
+        pos = end + 3
+    return "".join(out)
+
+
 _REASONING_BLOCK_RE = re.compile(
     r"<(?P<tag>think|thought|reasoning|scratchpad)\b[^>]*>[\s\S]*?</(?P=tag)\s*>",
     re.IGNORECASE,
@@ -475,7 +497,7 @@ _PARAGRAPH_TAG_RE = re.compile(r"</?p\b[^>]*>", re.IGNORECASE)
 _BR_TAG_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 _LIST_ITEM_OPEN_RE = re.compile(r"<li\b[^>]*>", re.IGNORECASE)
 _LIST_ITEM_CLOSE_RE = re.compile(r"</li\s*>", re.IGNORECASE)
-_ANY_MARKUP_TAG_RE = re.compile(r"</?[a-zA-Z][a-zA-Z0-9_:-]*(?:\s+[^<>]*?)?/?>")
+_ANY_MARKUP_TAG_RE = re.compile(r"</?[a-zA-Z][a-zA-Z0-9_:-]*(?:\s[^<>]*)?/?>")
 
 
 def _italic_match_to_markdown(match: re.Match[str]) -> str:
@@ -515,7 +537,7 @@ def sanitize_character_markup(
     """Strip LLM-generated HTML/XML tags & entities while preserving prose *italics* when requested."""
     if not text:
         return ""
-    cleaned = _HTML_COMMENT_RE.sub("", text)
+    cleaned = _strip_html_comments(text)
     cleaned = _REASONING_BLOCK_RE.sub("", cleaned)
 
     cleaned = _PARAGRAPH_BOUNDARY_RE.sub("\n\n", cleaned)

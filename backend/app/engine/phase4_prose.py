@@ -11,7 +11,7 @@ from typing import Any
 
 from app.config import settings
 from app.engine.llm_client import llm_client
-from app.engine.phase3_cognition import parse_cognition_xml
+from app.engine.phase3_cognition import parse_cognition_xml, strip_xml_tag_blocks
 from app.engine.mentions import DecomposedUserMessage
 from app.schemas.auth import ModelProfile
 from app.schemas.character import CharacterRecord, CharacterStateSnapshot, CognitionBlock
@@ -395,18 +395,13 @@ async def stream_phase4_prose(
                 skipped=True,
             )
         yield {"event": "cognition_complete", "data": primary_cognition.model_dump()}
-        cleaned = re.sub(
-            r"<cognition>.*?</cognition>", "", buffer, flags=re.DOTALL | re.I
-        ).strip()
+        cleaned = strip_xml_tag_blocks(buffer, ("cognition",)).strip()
         if cleaned:
             prose_accumulator.append(cleaned)
             yield {"event": "prose_delta", "data": {"delta": cleaned}}
     elif guard_buffer:
-        cleaned = re.sub(
-            r"<(?:cognition|think)>.*?</(?:cognition|think)>\s*",
-            "",
-            guard_buffer,
-            flags=re.DOTALL | re.I,
+        cleaned = strip_xml_tag_blocks(
+            guard_buffer, ("cognition", "think"), strip_trailing_ws=True
         ).strip()
         if cleaned:
             prose_accumulator.append(cleaned)

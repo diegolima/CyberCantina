@@ -64,11 +64,76 @@ from app.schemas.world import LocationNode, NeighborLocationView, WorldRecord
 
 logger = logging.getLogger(__name__)
 
-_RECALL_RE = re.compile(r"<recall>(.*?)</recall>", re.DOTALL | re.IGNORECASE)
-_FEELING_RE = re.compile(r"<feeling(?P<attrs>[^>]*)>(?P<text>.*?)</feeling>", re.DOTALL | re.IGNORECASE)
-_WANT_RE = re.compile(r"<want>(.*?)</want>", re.DOTALL | re.IGNORECASE)
-_SELECTED_CHOICE_RE = re.compile(r"<selected_choice>(.*?)</selected_choice>", re.DOTALL | re.IGNORECASE)
-_PLAN_RE = re.compile(r"<plan>(.*?)</plan>", re.DOTALL | re.IGNORECASE)
+def _extract_xml_tag(
+    text: str,
+    tag: str,
+    *,
+    allow_attrs: bool = False,
+) -> tuple[str, str] | None:
+    """Extract (attrs, inner_text) for the first closed <tag...>...</tag> in O(n) time."""
+    lower = text.lower()
+    open_prefix = f"<{tag.lower()}"
+    close_tag = f"</{tag.lower()}>"
+    pos = 0
+    while True:
+        start = lower.find(open_prefix, pos)
+        if start == -1:
+            return None
+        after_name = start + len(open_prefix)
+        if after_name >= len(lower):
+            return None
+        if allow_attrs:
+            if lower[after_name] != ">" and not lower[after_name].isspace():
+                pos = after_name
+                continue
+            open_end = lower.find(">", after_name)
+        else:
+            if lower[after_name] != ">":
+                pos = after_name
+                continue
+            open_end = after_name
+        if open_end == -1:
+            return None
+        close_start = lower.find(close_tag, open_end + 1)
+        if close_start == -1:
+            return None
+        attrs = text[after_name:open_end] if allow_attrs else ""
+        inner = text[open_end + 1 : close_start]
+        return attrs, inner
+
+
+def strip_xml_tag_blocks(
+    text: str,
+    tags: tuple[str, ...],
+    *,
+    strip_trailing_ws: bool = False,
+) -> str:
+    """Strip closed <tag>...</tag> blocks case-insensitively in linear time."""
+    result = text
+    for tag in tags:
+        open_tag = f"<{tag.lower()}>"
+        close_tag = f"</{tag.lower()}>"
+        lower = result.lower()
+        out: list[str] = []
+        pos = 0
+        while True:
+            start = lower.find(open_tag, pos)
+            if start == -1:
+                out.append(result[pos:])
+                break
+            end = lower.find(close_tag, start + len(open_tag))
+            if end == -1:
+                out.append(result[pos:])
+                break
+            out.append(result[pos:start])
+            pos = end + len(close_tag)
+            if strip_trailing_ws:
+                while pos < len(result) and result[pos].isspace():
+                    pos += 1
+        result = "".join(out)
+    return result
+
+
 _VALENCE_ATTR_RE = re.compile(r'valence=["\']([+-]?\d+(?:\.\d+)?)["\']', re.IGNORECASE)
 _AROUSAL_ATTR_RE = re.compile(r'arousal=["\']([+-]?\d+(?:\.\d+)?)["\']', re.IGNORECASE)
 _TONE_ATTR_RE = re.compile(r'tone=["\']([^"\']+)["\']', re.IGNORECASE)
@@ -88,18 +153,18 @@ def parse_cognition_xml(
     fallback_state: CharacterStateSnapshot,
 ) -> CognitionBlock:
     """Parse inner tags of <cognition>...</cognition> supporting both CARE enums and legacy floats."""
-    recall_match = _RECALL_RE.search(cognition_xml)
-    feeling_match = _FEELING_RE.search(cognition_xml)
-    want_match = _WANT_RE.search(cognition_xml)
-    plan_match = _PLAN_RE.search(cognition_xml)
+    recall_match = _extract_xml_tag(cognition_xml, "recall")
+    feeling_match = _extract_xml_tag(cognition_xml, "feeling", allow_attrs=True)
+    want_match = _extract_xml_tag(cognition_xml, "want")
+    plan_match = _extract_xml_tag(cognition_xml, "plan")
 
     recall = (
-        recall_match.group(1).strip()
+        recall_match[1].strip()
         if recall_match
         else "- Holding onto the current thread of conversation."
     )
     feeling = (
-        feeling_match.group("text").strip()
+        feeling_match[1].strip()
         if feeling_match
         else fallback_state.mood_label
     )
@@ -110,7 +175,7 @@ def parse_cognition_xml(
     impulse: CategoricalFeelingImpulse = fallback_imp
 
     if feeling_match:
-        attrs = feeling_match.group("attrs") or ""
+        attrs = feeling_match[0] or ""
         t_m = _TONE_ATTR_RE.search(attrs)
         i_m = _INTENSITY_ATTR_RE.search(attrs)
         ag_m = _AGENCY_ATTR_RE.search(attrs)
@@ -166,11 +231,11 @@ def parse_cognition_xml(
 
     recall = _sanitize_cognition_text(recall, field_type="recall", location_id=fallback_state.current_location_id)
     recall = _format_cognition_bullets(recall, max_bullets=3, max_words_per_bullet=12)
-    raw_want = want_match.group(1).strip() if want_match else fallback_state.active_want
+    raw_want = want_match[1].strip() if want_match else fallback_state.active_want
     want = _sanitize_cognition_text(raw_want, field_type="want") or fallback_state.active_want
-    choice_match = _SELECTED_CHOICE_RE.search(cognition_xml)
-    selected_choice = choice_match.group(1).strip() if choice_match else None
-    raw_plan = plan_match.group(1).strip() if plan_match else fallback_state.active_plan
+    choice_match = _extract_xml_tag(cognition_xml, "selected_choice")
+    selected_choice = choice_match[1].strip() if choice_match else None
+    raw_plan = plan_match[1].strip() if plan_match else fallback_state.active_plan
     plan = _sanitize_cognition_text(raw_plan, field_type="plan") or fallback_state.active_plan
     plan = _format_cognition_bullets(plan, max_bullets=3, max_words_per_bullet=25)
 
@@ -205,7 +270,9 @@ def _format_cognition_bullets(
     if not text:
         return ""
     t = re.sub(r"^[,\s\[]+", "", text).strip()
-    t = re.sub(r"[\]\s]+$", "", t).strip()
+    while t and (t[-1] == "]" or t[-1].isspace()):
+        t = t[:-1]
+    t = t.strip()
     t = re.sub(
         r"\[(EPISODIC_CHUNK|CHARACTER_SHARD|LOCATION_LORE|LORE)\]\s*",
         "",
@@ -214,7 +281,7 @@ def _format_cognition_bullets(
     ).strip()
 
     if "\n" not in t and re.search(r"\b[1-9][.)]\s+", t):
-        parts = re.split(r"\s*(?:^|\b)[1-9][.)]\s+", t)
+        parts = re.split(r"\b[1-9][.)]\s+", t)
         items = [f"- {p.strip()}" for p in parts if p.strip()]
         if items:
             t = "\n".join(items)
@@ -275,7 +342,7 @@ def _sanitize_cognition_text(
 
     if field_type == "want":
         t = re.sub(r"^(?:<want>|want>|\[want\]|\"want\"[:=]|\bwant[:=])\s*", "", t, flags=re.I)
-        t = re.sub(r"^1\s+singular\s+sentence\s+(?:defining\s+[^.]*\.\s*)?", "", t, flags=re.I)
+        t = re.sub(r"^1\s+singular\s+sentence\s+(?:defining\s[^.]*\.\s*)?", "", t, flags=re.I)
         t = re.sub(r"</want>$", "", t, flags=re.I).strip()
     elif field_type == "plan":
         cleaned_tokens = re.sub(r"^[-*•\s]*plan[=:\s]*$", "", t, flags=re.I).strip()

@@ -17,7 +17,7 @@ from app.schemas.character import CharacterRecord
 _SMART_DOUBLE_QUOTES = ("“", "”", "„", "‟", "«", "»")
 _SMART_SINGLE_QUOTES = ("‘", "’", "‚", "‛")
 
-_MENTION_LINE_RE = re.compile(r"^@(?P<name>[^:\n]+?)\s*:\s*(?P<content>.*)$")
+_MENTION_LINE_RE = re.compile(r"^@(?P<name>[^:\n]+):(?P<content>.*)$")
 
 
 class MentionTargetScope(str, Enum):
@@ -147,7 +147,11 @@ def parse_whisper_content(content: str) -> tuple[list[str], list[str]]:
         else:
             # Outside quotes
             # Strip leading/trailing punctuation artifacts like orphan colons or commas
-            cleaned = re.sub(r"^[,;:\s]+|[,;:\s]+$", "", part).strip()
+            cleaned = part.strip()
+            while cleaned and cleaned[0] in ",;:":
+                cleaned = cleaned[1:].lstrip()
+            while cleaned and cleaned[-1] in ",;:":
+                cleaned = cleaned[:-1].rstrip()
             if cleaned:
                 sensory.append(cleaned)
 
@@ -197,7 +201,7 @@ def decompose_user_message(
             candidate_name = _normalize_name_key(match.group("name"))
             target_char = char_lookup.get(candidate_name)
             if target_char:
-                content = match.group("content")
+                content = match.group("content").lstrip()
                 speech, sensory = parse_whisper_content(content)
                 scope = (
                     MentionTargetScope.LOCAL

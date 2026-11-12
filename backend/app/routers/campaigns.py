@@ -69,6 +69,7 @@ from app.schemas.turn import (
     TurnSubmitRequest,
     WorldStateSnapshot,
 )
+from app.security.log_sanitize import sanitize_log_value
 from app.schemas.world import CampaignLocationLoreUpdatePayload
 
 logger = logging.getLogger("cybercantina.routers.campaigns")
@@ -742,18 +743,19 @@ async def _execute_turn_stream_events_unlocked(
         ):
             req.narrative_mode = "advance"
             if not req.duration_minutes:
-                m = re.search(r"(\d+)\s*minutes?", lower_msg)
-                if m:
-                    req.duration_minutes = int(m.group(1))
+                for m in re.finditer(r"\d+", lower_msg):
+                    if lower_msg[m.end() :].lstrip().startswith("minute"):
+                        req.duration_minutes = int(m.group(0))
+                        break
         elif lower_msg.startswith("[introduce a complication") or lower_msg.startswith("[introduce an unexpected complication"):
             req.narrative_mode = "complication"
-            dir_match = re.search(r"^\[introduce a complication:\s*(.*?)\]$", effective_user_message, re.IGNORECASE)
+            dir_match = re.search(r"^\[introduce a complication:(.*)\]$", effective_user_message, re.IGNORECASE)
             if dir_match and not req.narrator_directive:
                 req.narrator_directive = dir_match.group(1).strip()
         elif lower_msg.startswith("[perception check") or lower_msg.startswith("[examine the scene"):
             # Backwards-compatibility for historical swipes/edits: normalize legacy perception cues into custom directive
             req.narrative_mode = "custom"
-            dir_match = re.search(r"^\[perception check:\s*(.*?)\]$", effective_user_message, re.IGNORECASE)
+            dir_match = re.search(r"^\[perception check:(.*)\]$", effective_user_message, re.IGNORECASE)
             if dir_match:
                 req.narrator_directive = dir_match.group(1).strip()
             else:
@@ -1240,9 +1242,25 @@ async def stream_campaign_turn(
                 ev_name = packet["event"]
                 payload = json.dumps(packet["data"])
                 yield f"event: {ev_name}\ndata: {payload}\n\n"
-        except Exception as exc:
-            logger.error("Turn stream failed for campaign '%s': %s", campaign_id, exc)
-            err_payload = json.dumps({"error": str(exc)})
+        except KeyError as exc:
+            logger.warning(
+                "Turn stream target missing for campaign '%s': %s",
+                sanitize_log_value(campaign_id),
+                sanitize_log_value(exc),
+            )
+            err_payload = json.dumps({"error": "Campaign or required entity not found."})
+            yield f"event: error\ndata: {err_payload}\n\n"
+        except ValueError as exc:
+            logger.warning(
+                "Turn stream validation failed for campaign '%s': %s",
+                sanitize_log_value(campaign_id),
+                sanitize_log_value(exc),
+            )
+            err_payload = json.dumps({"error": "Invalid turn request."})
+            yield f"event: error\ndata: {err_payload}\n\n"
+        except Exception:
+            logger.exception("Turn stream failed for campaign '%s'", sanitize_log_value(campaign_id))
+            err_payload = json.dumps({"error": "An internal error occurred while streaming the turn."})
             yield f"event: error\ndata: {err_payload}\n\n"
 
     return StreamingResponse(

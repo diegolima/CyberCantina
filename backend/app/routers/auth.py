@@ -45,6 +45,7 @@ from app.schemas.auth import (
     RegisterRequest,
     UserProfile,
 )
+from app.security.log_sanitize import sanitize_log_value
 
 logger = logging.getLogger("cybercantina.routers.auth")
 router = APIRouter(tags=["auth"])
@@ -443,7 +444,7 @@ def reset_my_data(
             detail="Current password confirmation failed.",
         )
     repo.reset_user_data(current_user.id)
-    logger.info("Reset all data for user '%s'", current_user.username)
+    logger.info("Reset all data for user '%s'", sanitize_log_value(current_user.username))
     return {
         "status": "ok",
         "message": "All user data (characters, worlds, and campaigns) has been reset.",
@@ -472,7 +473,7 @@ def delete_my_account(
         )
     repo.delete_user(current_user.id)
     response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
-    logger.info("Deleted account for user '%s'", current_user.username)
+    logger.info("Deleted account for user '%s'", sanitize_log_value(current_user.username))
     return {"status": "deleted"}
 
 

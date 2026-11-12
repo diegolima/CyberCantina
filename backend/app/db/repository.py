@@ -62,9 +62,11 @@ from app.schemas.character import (
     coerce_item_list,
     dump_items_json,
     normalize_item_key,
+    strip_item_location_affixes,
 )
 from app.engine.affective_engine import seed_initial_care_state
 from app.schemas.affective import AffectiveCareState
+from app.security.log_sanitize import sanitize_log_value
 from app.security.media_path import (
     safe_resolve_character_media_dir,
     validate_safe_character_id,
@@ -359,9 +361,9 @@ class CantinaRepository:
         except Exception as exc:
             logger.warning(
                 "Skipped copying character media from '%s' to '%s': %s",
-                src_character_id,
-                dst_character_id,
-                exc,
+                sanitize_log_value(src_character_id),
+                sanitize_log_value(dst_character_id),
+                sanitize_log_value(exc),
             )
 
     def _delete_character_media(self, character_id: str) -> None:
@@ -371,7 +373,11 @@ class CantinaRepository:
             if c_media.exists():
                 shutil.rmtree(c_media, ignore_errors=True)
         except Exception as exc:
-            logger.warning("Skipped deleting character media for '%s': %s", character_id, exc)
+            logger.warning(
+                "Skipped deleting character media for '%s': %s",
+                sanitize_log_value(character_id),
+                sanitize_log_value(exc),
+            )
 
     @property
     def providers(self) -> "ProviderStore":
@@ -6735,25 +6741,9 @@ class CantinaRepository:
         if not campaign.active_leaf_turn_id:
             raise ValueError(f"Campaign '{campaign_id}' has no active turn")
 
-        def _clean(raw: str) -> str:
-            s = re.sub(r"\s+", " ", (raw or "").strip())
-            s = re.sub(
-                r"^\[(?:worn|carried|equipped|held|stashed|clothing|item|object)\]\s*",
-                "",
-                s,
-                flags=re.IGNORECASE,
-            )
-            s = re.sub(
-                r"\s*\((?:worn|carried|equipped|held|stashed|clothing|item|object)\)$",
-                "",
-                s,
-                flags=re.IGNORECASE,
-            )
-            return s.strip()
-
         clean_item_id = (item_id or "").strip() or None
         raw_item_low = (item or "").strip().lower()
-        clean_target = _clean(item)
+        clean_target = strip_item_location_affixes(item)
         target_key = normalize_item_key(clean_target) if clean_target else ""
 
         if not clean_item_id and not clean_target:
@@ -6872,7 +6862,7 @@ class CantinaRepository:
                 idx = _find_idx(inventory)
                 if idx is not None:
                     moved = inventory.pop(idx)
-                    cleaned_label = _clean(moved.name) or moved.name
+                    cleaned_label = strip_item_location_affixes(moved.name) or moved.name
                     moved_clean = moved.model_copy(update={"name": cleaned_label[:160]})
                     moved_key = normalize_item_key(moved_clean.name)
                     existing_eq_idx = next(
@@ -6901,7 +6891,7 @@ class CantinaRepository:
                 idx = _find_idx(equipped)
                 if idx is not None:
                     moved = equipped.pop(idx)
-                    cleaned_label = _clean(moved.name) or moved.name
+                    cleaned_label = strip_item_location_affixes(moved.name) or moved.name
                     moved_clean = moved.model_copy(update={"name": cleaned_label[:160]})
                     moved_key = normalize_item_key(moved_clean.name)
                     existing_inv_idx = next(
@@ -7005,7 +6995,7 @@ class CantinaRepository:
                 base_item = found_bucket[found_idx]
                 updated_label = base_item.name
                 if new_name is not UNSET and new_name is not None:
-                    cleaned_new = _clean(str(new_name))[:160]
+                    cleaned_new = strip_item_location_affixes(str(new_name))[:160]
                     if not cleaned_new:
                         raise ValueError("Item name cannot be empty.")
                     updated_label = cleaned_new
