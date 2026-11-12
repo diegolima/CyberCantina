@@ -753,7 +753,8 @@ PROMPTS_METADATA = [
             {"name": "core_drive", "description": "Core drive"},
             {"name": "core_fear", "description": "Core fear"},
         ],
-        "required_tags": ["<cognition>", "</cognition>"],
+        # Phase 3 cognition enforces CognitionBlock via constrained JSON schema, not XML tag parsing.
+        "required_tags": [],
     },
     {
         "key": PROMPT_KEY_CLERK_SUMMARY,

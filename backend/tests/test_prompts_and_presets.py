@@ -54,6 +54,18 @@ def test_validate_prompt_template() -> None:
     assert len(good_warnings) == 0
 
 
+def test_builtin_presets_have_no_missing_required_tags() -> None:
+    """Verify every built-in preset prompt satisfies PROMPTS_METADATA required_tags with zero warnings."""
+    from app.prompts.defaults import BUILTIN_PRESETS, PROMPTS_METADATA
+
+    for preset in BUILTIN_PRESETS:
+        for meta in PROMPTS_METADATA:
+            key = meta["key"]
+            tpl = preset["prompts"].get(key, "")
+            warnings = validate_prompt_template(key, tpl)
+            assert warnings == [], f"Preset {preset['id']} prompt {key} has warnings: {warnings}"
+
+
 @pytest.fixture()
 def test_repo(tmp_path: Path) -> CantinaRepository:
     """Provide an isolated, freshly initialized repository with built-in presets."""

@@ -407,7 +407,8 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
           const templateVal =
             editingPrompts[meta.key] ?? currentPreset?.prompts[meta.key] ?? data?.defaults[meta.key] ?? "";
           const savedVal = currentPreset?.prompts[meta.key] ?? data?.defaults[meta.key] ?? "";
-          const hasMissingTag = meta.required_tags.some((t) => !templateVal.includes(t));
+          const missingTags = meta.required_tags.filter((t) => !templateVal.includes(t));
+          const hasMissingTag = missingTags.length > 0;
           const isDirty = !isBuiltin && (templateVal !== savedVal);
           const isSavingThis = !!savingKeys[meta.key];
           const justSavedThis = !!savedNoticeKeys[meta.key];
@@ -540,7 +541,7 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
                       }}
                     >
                       Warning: Missing recommended token(s):{" "}
-                      <code>{meta.required_tags.join(", ")}</code>. The output parser expects these XML or schema markers.
+                      <code>{missingTags.join(", ")}</code>. The output parser expects these XML or schema markers.
                     </div>
                   )}
 
