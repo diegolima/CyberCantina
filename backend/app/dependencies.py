@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import io
 import logging
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,6 +25,7 @@ from app.config import (
 from app.db.repository import CantinaRepository
 from app.providers.resolver import ProviderUnavailableError, attach_endpoint, resolve_endpoint
 from app.schemas.auth import AuthSessionResponse, EffectiveWarning, UserProfile
+from app.security.media_path import PathTraversalError, safe_resolve_media_file_path
 
 logger = logging.getLogger("cybercantina.dependencies")
 
@@ -279,18 +279,12 @@ def issue_session_response(
 
 def safe_resolve_media_path(character_id: str, category: str, filename: str) -> Path:
     """Safely validate and resolve a media file path to prevent directory traversal."""
-    if category not in ("portraits", "gallery"):
-        raise HTTPException(status_code=400, detail="Invalid media category.")
-    if not re.match(r"^[a-zA-Z0-9_-]+$", character_id):
-        raise HTTPException(status_code=400, detail="Invalid character ID.")
-    if not re.match(r"^[a-zA-Z0-9_.-]+$", filename) or filename.startswith("."):
-        raise HTTPException(status_code=400, detail="Invalid filename.")
-
-    base = Path(settings.media_dir).resolve()
-    target = (base / "characters" / character_id / category / filename).resolve()
-    if not target.is_relative_to(base):
-        raise HTTPException(status_code=403, detail="Path traversal forbidden.")
-    return target
+    try:
+        return safe_resolve_media_file_path(settings.media_dir, character_id, category, filename)
+    except PathTraversalError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def process_and_save_image(

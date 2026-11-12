@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import sqlite3
 import uuid
@@ -64,6 +65,12 @@ from app.schemas.character import (
 )
 from app.engine.affective_engine import seed_initial_care_state
 from app.schemas.affective import AffectiveCareState
+from app.security.media_path import (
+    safe_resolve_character_media_dir,
+    validate_safe_character_id,
+)
+
+logger = logging.getLogger("cybercantina.db.repository")
 
 UNSET: Any = object()
 
@@ -341,6 +348,30 @@ class CantinaRepository:
         self.db_path = db_path
         self.media_dir = media_dir or str(Path(db_path).resolve().parent / "data" / "media")
         self.vector_store = VectorStore(db_path)
+
+    def _copy_character_media(self, src_character_id: str, dst_character_id: str) -> None:
+        """Safely copy static character media directory when forking a character."""
+        try:
+            old_media = safe_resolve_character_media_dir(self.media_dir, src_character_id)
+            new_media = safe_resolve_character_media_dir(self.media_dir, dst_character_id)
+            if old_media.exists() and not new_media.exists():
+                shutil.copytree(old_media, new_media)
+        except Exception as exc:
+            logger.warning(
+                "Skipped copying character media from '%s' to '%s': %s",
+                src_character_id,
+                dst_character_id,
+                exc,
+            )
+
+    def _delete_character_media(self, character_id: str) -> None:
+        """Safely remove a character's static media directory from disk."""
+        try:
+            c_media = safe_resolve_character_media_dir(self.media_dir, character_id)
+            if c_media.exists():
+                shutil.rmtree(c_media, ignore_errors=True)
+        except Exception as exc:
+            logger.warning("Skipped deleting character media for '%s': %s", character_id, exc)
 
     @property
     def providers(self) -> "ProviderStore":
@@ -1566,13 +1597,7 @@ class CantinaRepository:
                 "SELECT id FROM characters WHERE owner_id = ?", (user_id,)
             ).fetchall()
             for cr in char_rows:
-                c_id = cr["id"]
-                try:
-                    c_media = Path(self.media_dir) / "characters" / c_id
-                    if c_media.exists():
-                        shutil.rmtree(c_media, ignore_errors=True)
-                except Exception:
-                    pass
+                self._delete_character_media(cr["id"])
 
             conn.execute(
                 """
@@ -3448,7 +3473,11 @@ class CantinaRepository:
         owner_id: str | None = None,
     ) -> CharacterRecord:
         """Persist a CharacterWizardDraft and embed its backstory shards into the VectorStore."""
-        c_id = character_id or f"char_{uuid.uuid4().hex[:10]}"
+        c_id = (
+            validate_safe_character_id(character_id)
+            if character_id is not None
+            else f"char_{uuid.uuid4().hex[:10]}"
+        )
         now = utc_now_iso()
         clean_tags = [slugify_tag(t) for t in draft.tags if t and t.strip()]
         creator_str = draft.creator.strip()
@@ -3460,6 +3489,16 @@ class CantinaRepository:
         gallery_json = json.dumps([img.model_dump() for img in clean_gallery])
         conn = self._connect()
         try:
+            if character_id is not None:
+                if conn.execute("SELECT 1 FROM characters WHERE id = ?", (c_id,)).fetchone():
+                    raise ValueError(f"Character ID '{c_id}' already exists.")
+                if owner_id is not None:
+                    staged_row = conn.execute(
+                        "SELECT user_id FROM staged_character_ownership WHERE character_id = ?",
+                        (c_id,),
+                    ).fetchone()
+                    if staged_row and staged_row["user_id"] != owner_id:
+                        raise ValueError("Access denied for staged character ID.")
             for it in [*draft.equipped, *draft.inventory]:
                 if it.lore_id:
                     _validate_world_artifact_lore_id(conn, world_id, it.lore_id)
@@ -3608,6 +3647,8 @@ class CantinaRepository:
         owner_id: str | None = None,
     ) -> CharacterRecord:
         """Asynchronously pre-compute shard embeddings using embed_text and persist CharacterWizardDraft."""
+        if character_id is not None:
+            validate_safe_character_id(character_id)
         embeddings: list[np.ndarray] = []
         if draft.memory_shards:
             embeddings = list(
@@ -3677,6 +3718,7 @@ class CantinaRepository:
 
     def stage_character_media_ownership(self, user_id: str, character_id: str) -> None:
         """Register temporary media ownership for an uncommitted character draft (expires after a TTL)."""
+        clean_id = validate_safe_character_id(character_id)
         conn = self._connect()
         try:
             self._prune_expired_staged_ownership(conn)
@@ -3685,7 +3727,7 @@ class CantinaRepository:
                 INSERT OR REPLACE INTO staged_character_ownership (character_id, user_id, created_at)
                 VALUES (?, ?, ?)
                 """,
-                (character_id, user_id, utc_now_iso()),
+                (clean_id, user_id, utc_now_iso()),
             )
             conn.commit()
         finally:
@@ -4264,13 +4306,7 @@ class CantinaRepository:
                 )
 
                 # Copy media assets on disk if present
-                try:
-                    old_media = Path(self.media_dir) / "characters" / character_id
-                    new_media = Path(self.media_dir) / "characters" / target_char_id
-                    if old_media.exists() and not new_media.exists():
-                        shutil.copytree(old_media, new_media)
-                except Exception:
-                    pass
+                self._copy_character_media(character_id, target_char_id)
 
                 # Copy previous version snapshots into target_char_id so historical versions are accessible
                 old_vers = conn.execute(
@@ -4625,13 +4661,7 @@ class CantinaRepository:
                         now,
                     ),
                 )
-                try:
-                    old_media = Path(self.media_dir) / "characters" / character_id
-                    new_media = Path(self.media_dir) / "characters" / target_char_id
-                    if old_media.exists() and not new_media.exists():
-                        shutil.copytree(old_media, new_media)
-                except Exception:
-                    pass
+                self._copy_character_media(character_id, target_char_id)
 
                 # Copy all historical versions (including v3) to the new entity
                 old_vers = conn.execute(
@@ -4786,12 +4816,7 @@ class CantinaRepository:
                 )
                 conn.execute("DELETE FROM characters WHERE id = ?", (c_id,))
                 pruned_ids.append(c_id)
-                try:
-                    c_media = Path(self.media_dir) / "characters" / c_id
-                    if c_media.exists():
-                        shutil.rmtree(c_media, ignore_errors=True)
-                except Exception:
-                    pass
+                self._delete_character_media(c_id)
 
             if pruned_ids:
                 conn.commit()

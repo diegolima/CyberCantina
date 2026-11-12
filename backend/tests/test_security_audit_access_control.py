@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import io
+import json
+import os
 from pathlib import Path
 import pytest
 from PIL import Image
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app import main as main_module
 from app.config import settings
 from app.db.repository import CantinaRepository
+from app.dependencies import safe_resolve_media_path
 from app.schemas.character import (
     BaselinePsyche,
+    CharacterUpdatePayload,
     CharacterWizardDraft,
     MemoryShard,
     VoiceAnchor,
@@ -501,4 +506,207 @@ def test_admin_cannot_access_user_data_except_on_deletion(
 
     # Character media on disk is also removed
     assert not char_media_dir.exists()
+
+
+def test_character_id_path_injection_blocked_at_commit_and_filesystem_sinks(
+    sec_client: tuple[TestClient, CantinaRepository], tmp_path: Path
+) -> None:
+    """Reject traversal character IDs at API/repo entry points and protect copy/delete sinks."""
+    client, repo = sec_client
+
+    res_u1 = client.post(
+        "/api/auth/setup",
+        json={"username": "path_attacker", "password": "AttackPassword123!"},
+    )
+    assert res_u1.status_code == 200
+    u1_id = res_u1.json()["user"]["id"]
+    u1_headers = {"Authorization": f"Bearer {res_u1.json()['token']}"}
+
+    res_u2 = client.post(
+        "/api/auth/register",
+        json={"username": "path_victim", "password": "VictimPassword123!"},
+    )
+    assert res_u2.status_code == 200
+    u2_id = res_u2.json()["user"]["id"]
+    u2_headers = {"Authorization": f"Bearer {res_u2.json()['token']}"}
+
+    draft = CharacterWizardDraft(
+        name="Boundary Tester",
+        tagline="Security probe",
+        core_persona="Methodical",
+        baseline_psyche=BaselinePsyche(
+            core_drive="Truth",
+            core_fear="Regression",
+            default_want="Verification",
+            default_plan="Probe boundaries",
+        ),
+    )
+
+    outside_dir = tmp_path / "sensitive_outside"
+    outside_dir.mkdir(parents=True, exist_ok=True)
+    outside_marker = outside_dir / "keep.txt"
+    outside_marker.write_text("must survive", encoding="utf-8")
+
+    # 1. API rejects invalid/traversal character_id values on commit
+    for bad_id in ("..", ".", "../outside", "../../etc", str(outside_dir), "bad\\path", "char_1\n", ""):
+        res = client.post(
+            "/api/wizards/character/commit",
+            headers=u1_headers,
+            json={"draft": draft.model_dump(), "character_id": bad_id},
+        )
+        assert res.status_code == 400, f"Expected 400 for bad_id={bad_id!r}, got {res.status_code}"
+
+        with pytest.raises(ValueError):
+            repo.create_character_from_draft(draft, character_id=bad_id, owner_id=u1_id)
+        with pytest.raises(ValueError):
+            repo.stage_character_media_ownership(u1_id, bad_id)
+
+    # 2. Prevent claiming another user's staged character ID or colliding with existing IDs
+    repo.stage_character_media_ownership(u2_id, "char_u2_staged")
+    hijack_res = client.post(
+        "/api/wizards/character/commit",
+        headers=u1_headers,
+        json={"draft": draft.model_dump(), "character_id": "char_u2_staged"},
+    )
+    assert hijack_res.status_code == 400
+
+    valid_commit = client.post(
+        "/api/wizards/character/commit",
+        headers=u2_headers,
+        json={"draft": draft.model_dump(), "character_id": "char_u2_staged"},
+    )
+    assert valid_commit.status_code == 200
+
+    dup_res = client.post(
+        "/api/wizards/character/commit",
+        headers=u1_headers,
+        json={"draft": draft.model_dump(), "character_id": "char_u2_staged"},
+    )
+    assert dup_res.status_code == 400
+
+    # Victim's media folder must remain intact even if legacy corrupted DB rows exist
+    victim_media = Path(settings.media_dir) / "characters" / "char_u2_staged" / "portraits"
+    victim_media.mkdir(parents=True, exist_ok=True)
+    victim_file = victim_media / "default_safe.webp"
+    victim_file.write_bytes(b"VALID_WEBP_BYTES")
+
+    # 3. Defense-in-depth: simulate pre-existing corrupted SQLite character rows
+    conn = repo._connect()
+    try:
+        for idx, legacy_id in enumerate(("..", str(outside_dir)), start=1):
+            conn.execute(
+                """
+                INSERT INTO characters (
+                    id, owner_id, world_id, name, tagline, core_persona, baseline_psyche_json,
+                    pending_deletion, version, created_at
+                )
+                VALUES (?, ?, NULL, ?, 'Legacy', 'Test', ?, 0, 1, '2026-10-31T00:00:00Z')
+                """,
+                (legacy_id, u1_id, f"Legacy Bad {idx}", draft.baseline_psyche.model_dump_json()),
+            )
+            version_snapshot = {
+                **draft.model_dump(),
+                "id": legacy_id,
+                "version": 1,
+                "pending_deletion": False,
+                "created_at": "2026-10-31T00:00:00Z",
+            }
+            conn.execute(
+                """
+                INSERT INTO character_versions (id, character_id, version, data_json, created_at)
+                VALUES (?, ?, 1, ?, '2026-10-31T00:00:00Z')
+                """,
+                (
+                    f"cver_bad_{idx}",
+                    legacy_id,
+                    json.dumps(version_snapshot),
+                ),
+            )
+        conn.execute(
+            "INSERT INTO worlds (id, owner_id, name, global_rules_json, pending_deletion, created_at) "
+            "VALUES ('world_legacy_sec', ?, 'Sec World', '{}', 0, '2026-10-31T00:00:00Z')",
+            (u1_id,),
+        )
+        conn.execute(
+            "INSERT INTO location_nodes (id, world_id, name, summary, description, environmental_tags_json, is_starting_location) "
+            "VALUES ('loc_legacy_sec', 'world_legacy_sec', 'Start', 'Start', 'Room', '[]', 1)"
+        )
+        conn.execute(
+            "INSERT INTO campaigns (id, owner_id, name, world_id, character_id, active_leaf_turn_id, created_at) "
+            "VALUES ('camp_legacy_sec', ?, 'Legacy Camp', 'world_legacy_sec', '..', NULL, '2026-10-31T00:00:00Z')",
+            (u1_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # CoW fork on update_character and restore_character_version must NOT copy parent media_dir
+    upd = repo.update_character(
+        "..",
+        CharacterUpdatePayload(
+            name="Updated Legacy",
+            tagline="Legacy",
+            core_persona="Test",
+            baseline_psyche=draft.baseline_psyche,
+        ),
+        owner_id=u1_id,
+    )
+    forked_upd_dir = Path(settings.media_dir) / "characters" / upd.id
+    assert not forked_upd_dir.exists()
+
+    # Re-attach a campaign to the '..' row if needed and test restore_character_version CoW path
+    conn = repo._connect()
+    try:
+        conn.execute("UPDATE campaigns SET character_id = '..' WHERE id = 'camp_legacy_sec'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    restored = repo.restore_character_version("..", 1, owner_id=u1_id)
+    forked_rest_dir = Path(settings.media_dir) / "characters" / restored.id
+    assert not forked_rest_dir.exists()
+
+    # Detach campaign and run pruner + reset_user_data; neither media_dir nor outside_dir may be deleted
+    conn = repo._connect()
+    try:
+        conn.execute("DELETE FROM campaigns WHERE id = 'camp_legacy_sec'")
+        conn.execute("UPDATE characters SET pending_deletion = 1 WHERE id = ?", (str(outside_dir),))
+        conn.commit()
+    finally:
+        conn.close()
+
+    repo.prune_pending_deletion_characters()
+    assert victim_file.exists()
+    assert outside_marker.exists()
+
+    repo.reset_user_data(u1_id)
+    assert victim_file.exists()
+    assert outside_marker.exists()
+
+
+def test_safe_resolve_media_path_blocks_newlines_and_symlinks(
+    sec_client: tuple[TestClient, CantinaRepository], tmp_path: Path
+) -> None:
+    """Verify safe_resolve_media_path rejects trailing newlines and symlink escapes."""
+    _client, _repo = sec_client
+
+    with pytest.raises(HTTPException) as exc_char:
+        safe_resolve_media_path("char_abc\n", "portraits", "default_123.webp")
+    assert exc_char.value.status_code == 400
+
+    with pytest.raises(HTTPException) as exc_file:
+        safe_resolve_media_path("char_abc", "portraits", "default_123.webp\n")
+    assert exc_file.value.status_code == 400
+
+    outside_target = tmp_path / "outside_secret.webp"
+    outside_target.write_bytes(b"SECRET")
+    char_portraits = Path(settings.media_dir) / "characters" / "char_sym" / "portraits"
+    char_portraits.mkdir(parents=True, exist_ok=True)
+    symlink_path = char_portraits / "leak.webp"
+    os.symlink(outside_target, symlink_path)
+
+    with pytest.raises(HTTPException) as exc_sym:
+        safe_resolve_media_path("char_sym", "portraits", "leak.webp")
+    assert exc_sym.value.status_code == 403
+
 
