@@ -31,6 +31,63 @@ def _extract_section(text: str, heading: str) -> str:
     return ""
 
 
+def _extract_lore_entry_keys(
+    entry: dict[str, Any],
+    *,
+    fallback_name: str = "",
+) -> list[str]:
+    """Extract deduplicated trigger keywords from a character_book entry."""
+    keys: list[str] = []
+    seen: set[str] = set()
+    for field in ("keys", "key", "secondary_keys"):
+        raw = entry.get(field)
+        if isinstance(raw, str):
+            candidates = [part.strip() for part in raw.split(",")]
+        elif isinstance(raw, list):
+            candidates = [str(item).strip() for item in raw]
+        else:
+            candidates = []
+        for cand in candidates:
+            if cand and cand.lower() not in seen:
+                seen.add(cand.lower())
+                keys.append(cand)
+    if not keys and fallback_name:
+        return [fallback_name.lower()]
+    return keys
+
+
+def _format_character_book_for_prompt(
+    entries: list[dict[str, Any]],
+    *,
+    max_entries: int = 12,
+    max_entry_chars: int = 500,
+    max_total_chars: int = 4500,
+) -> str:
+    """Format enabled character_book lorebook entries into a bounded prompt section."""
+    lines: list[str] = []
+    total_chars = 0
+    for idx, entry in enumerate(entries):
+        if not isinstance(entry, dict) or entry.get("enabled") is False:
+            continue
+        content = str(entry.get("content") or "").strip()
+        if not content:
+            continue
+        title = str(entry.get("comment") or entry.get("name") or f"Entry {idx + 1}").strip()
+        keys = _extract_lore_entry_keys(entry)
+        snippet = content[:max_entry_chars].strip()
+        if len(content) > max_entry_chars:
+            snippet += "..."
+        key_suffix = f" (keys: {', '.join(keys[:6])})" if keys else ""
+        line = f"- [{title[:60]}]{key_suffix}: {snippet}"
+        if total_chars + len(line) > max_total_chars:
+            break
+        lines.append(line)
+        total_chars += len(line) + 1
+        if len(lines) >= max_entries:
+            break
+    return "\n".join(lines)
+
+
 def _fallback_sillytavern_distillation(
     card: SillyTavernRawCard,
     world: WorldRecord | None = None,
@@ -150,19 +207,23 @@ def _fallback_sillytavern_distillation(
     memory_shards: list[MemoryShard] = []
     # If character_book entries exist, convert them!
     if card.character_book_entries:
-        for idx, entry in enumerate(card.character_book_entries[:5]):
-            title = entry.get("comment") or entry.get("name") or f"Lore Shard {idx + 1}"
+        for idx, entry in enumerate(card.character_book_entries):
+            if not isinstance(entry, dict) or entry.get("enabled") is False:
+                continue
+            title = str(entry.get("comment") or entry.get("name") or f"Lore Shard {idx + 1}").strip()
             content = str(entry.get("content", "")).strip()
-            keys = [str(k).strip() for k in entry.get("keys", []) if str(k).strip()]
+            keys = _extract_lore_entry_keys(entry, fallback_name=name)
             if content:
                 memory_shards.append(
                     MemoryShard(
                         title=title[:60],
                         content=content[:300],
-                        keywords=keys or [name.lower()],
+                        keywords=keys,
                         emotional_weight=0.75,
                     )
                 )
+                if len(memory_shards) >= 5:
+                    break
 
     if not memory_shards:
         # Split description into paragraph shards
@@ -226,6 +287,12 @@ async def distill_sillytavern_card(
     system_prompt = render_template(
         prompt_template or get_default_prompt("wizard_character_sillytavern_system")
     )
+    lorebook_block = _format_character_book_for_prompt(card.character_book_entries)
+    lorebook_section = (
+        f"Character Book / Lorebook Entries:\n{lorebook_block}\n\n"
+        if lorebook_block
+        else ""
+    )
     user_prompt = (
         f"Character Name: {card.name}\n"
         f"Raw Description:\n{card.description}\n\n"
@@ -233,6 +300,7 @@ async def distill_sillytavern_card(
         f"Scenario Context:\n{card.scenario}\n\n"
         f"First Message / Greeting:\n{card.first_mes}\n\n"
         f"Dialogue Examples:\n{card.mes_example}\n\n"
+        f"{lorebook_section}"
         f"Tags: {', '.join(card.tags)}\n"
         f"{world_context}"
     )
@@ -246,6 +314,7 @@ async def distill_sillytavern_card(
             CharacterWizardLLMOutput,
             profile=actor_prof,
             max_tokens=4096,
+            required_properties=list(CharacterWizardLLMOutput.model_fields.keys()),
         )
         draft = (
             llm_out.to_draft()
@@ -325,11 +394,22 @@ def synthesize_world_seed_from_sillytavern(card: SillyTavernRawCard) -> WorldWiz
         if len(loc_candidate) < 25 and loc_candidate.lower() not in (name.lower(), "the room", "a bar"):
             world_name = f"{loc_candidate} & Environs"
 
-    core_premise = card.scenario.strip() or (
+    lore_fallback = ""
+    if not card.scenario.strip() and card.character_book_entries:
+        lore_snippets = [
+            str(entry.get("content") or "").strip()
+            for entry in card.character_book_entries
+            if isinstance(entry, dict) and entry.get("enabled") is not False and str(entry.get("content") or "").strip()
+        ]
+        if lore_snippets:
+            lore_fallback = " ".join(lore_snippets[:2])
+
+    core_premise = card.scenario.strip() or lore_fallback or (
         f"A gritty, high-stakes narrative setting where {name} navigates dangerous rivalries and shifting alliances."
     )
     if len(core_premise) > 300:
-        core_premise = core_premise[:300].rsplit(".", 1)[0] + "."
+        clipped = core_premise[:300]
+        core_premise = (clipped.rsplit(".", 1)[0] + ".") if "." in clipped else clipped.rstrip() + "..."
 
     hub_concept = card.first_mes.strip()[:200] or f"A bustling establishment where {name} meets contacts."
 

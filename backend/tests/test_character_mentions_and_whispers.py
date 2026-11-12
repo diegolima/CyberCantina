@@ -214,9 +214,15 @@ def test_sanitize_history_for_episodic_summary(sample_roster):
 
 
 @pytest.mark.asyncio
-async def test_phase1_speaker_prioritization_and_perception_check(sample_roster):
+async def test_phase1_speaker_prioritization_and_perception_check(
+    sample_roster, monkeypatch: pytest.MonkeyPatch
+):
+    from app.config import settings
     from app.engine.phase1_pre import run_phase1_pre_analysis, select_speaker_order
     from app.schemas.world import LocationNode
+
+    monkeypatch.setattr(settings, "allow_offline_fallback", True)
+    monkeypatch.setattr(settings.clerk_profile, "base_url", "http://127.0.0.1:9/v1")
 
     active_loc = LocationNode(
         id="loc_vault",

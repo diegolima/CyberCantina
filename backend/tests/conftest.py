@@ -20,14 +20,31 @@ def isolate_settings_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
 
 @pytest.fixture(autouse=True)
 def isolate_provider_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Startup migration mutates the global settings; restore provider-related state after each test."""
+    """Restore global settings and provider probes to factory defaults on every test."""
+    from app.config import AppSettings
+    from app.engine.llm_client import llm_client
     from app.providers.probe import probe_service
 
-    for profile in (settings.actor_profile, settings.clerk_profile, settings.embedding_profile):
-        monkeypatch.setattr(profile, "provider_id", None)
-    monkeypatch.setattr(settings, "allow_user_providers", False)
-    monkeypatch.setattr(settings, "clerk_mirrors_actor", False)
-    monkeypatch.setattr(settings, "settings_revision", 0)
+    defaults = AppSettings()
+    for field_name in AppSettings.model_fields:
+        if field_name in (
+            "db_path",
+            "media_dir",
+            "actor_profile",
+            "clerk_profile",
+            "embedding_profile",
+            "memory_config",
+        ):
+            continue
+        monkeypatch.setattr(settings, field_name, getattr(defaults, field_name))
+
+    for nested_name in ("actor_profile", "clerk_profile", "embedding_profile", "memory_config"):
+        target = getattr(settings, nested_name)
+        fresh = getattr(defaults, nested_name)
+        for sub_field in type(fresh).model_fields:
+            monkeypatch.setattr(target, sub_field, getattr(fresh, sub_field))
+
+    llm_client._client = None
     probe_service._client = None
     probe_service._inflight.clear()
     probe_service._cache.clear()

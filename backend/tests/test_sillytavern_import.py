@@ -15,9 +15,10 @@ from PIL import Image, PngImagePlugin
 from app import main as main_module
 from app.config import settings
 from app.db.repository import CantinaRepository
-from app.schemas.character import CharacterWizardDraft
+from app.schemas.character import BaselinePsyche, CharacterWizardDraft, CharacterWizardLLMOutput
 from app.wizards.sillytavern_distiller import (
     _fallback_sillytavern_distillation,
+    distill_sillytavern_card,
     synthesize_world_seed_from_sillytavern,
 )
 from app.wizards.sillytavern_parser import (
@@ -384,5 +385,114 @@ def test_care_temperament_and_worldview_inference_across_wizards():
     )
     assert rival_draft.baseline_psyche.temperament.archetype == "proud_rival"
     assert rival_draft.baseline_psyche.initial_worldview.agency >= 0.8
+
+
+def test_parse_character_book_macros_disabled_and_dict_entries():
+    """Verify character_book handles null fields, dict entries, disabled filtering, and macros."""
+    raw = json.dumps(
+        {
+            "spec": "chara_card_v2",
+            "data": {
+                "name": "Vex",
+                "description": "Courier in the Lower Spires.",
+                "alternate_greetings": None,
+                "extensions": None,
+                "character_book": {
+                    "entries": {
+                        "0": {
+                            "comment": "{{char}}'s Safehouse",
+                            "keys": ["safehouse", "bolt-hole"],
+                            "secondary_keys": ["keys"],
+                            "content": "{{char}} hides spare creds from {{user}} beneath the grate.",
+                            "enabled": True,
+                        },
+                        "1": {
+                            "comment": "Disabled Draft",
+                            "keys": ["unused"],
+                            "content": "Should be excluded when enabled=False.",
+                            "enabled": False,
+                        },
+                    }
+                },
+            },
+        }
+    )
+    card = parse_sillytavern_json(raw)
+    assert len(card.character_book_entries) == 1
+    entry = card.character_book_entries[0]
+    assert entry["comment"] == "Vex's Safehouse"
+    assert entry["content"] == "Vex hides spare creds from you beneath the grate."
+    assert card.alternate_greetings == []
+
+    fallback_draft = _fallback_sillytavern_distillation(card)
+    assert any(
+        ms.title == "Vex's Safehouse" and "safehouse" in ms.keywords
+        for ms in fallback_draft.memory_shards
+    )
+
+
+@pytest.mark.asyncio
+async def test_distill_sillytavern_card_includes_character_book_and_required_properties():
+    """Verify LLM distillation receives character_book entries and passes required_properties."""
+    raw = json.dumps(
+        {
+            "spec": "chara_card_v2",
+            "data": {
+                "name": "Nyx",
+                "description": "Signal runner in Neon Dock.",
+                "personality": "Guarded and sharp.",
+                "scenario": "",
+                "first_mes": "*Nyx taps her console.* \"You're late.\"",
+                "character_book": {
+                    "entries": [
+                        {
+                            "comment": "Dock 14 Pact",
+                            "keys": ["dock 14", "smugglers"],
+                            "content": "{{char}} owes the harbor union for smuggling {{user}} past customs.",
+                            "enabled": True,
+                        }
+                    ]
+                },
+            },
+        }
+    )
+    card = parse_sillytavern_json(raw)
+    world_seed = synthesize_world_seed_from_sillytavern(card)
+    assert "harbor union" in world_seed.core_premise
+
+    mocked_out = CharacterWizardLLMOutput(
+        name="Nyx",
+        tagline="Guarded signal runner on Neon Dock.",
+        core_persona="Sharp and guarded courier who weighs every debt before speaking.",
+        baseline_psyche=BaselinePsyche(
+            mood_label="Wary & Guarded",
+            valence=-0.2,
+            arousal=0.4,
+            core_drive="Clear her harbor debt.",
+            core_fear="Being handed over to port security.",
+            default_want="Verify why you came back to Dock 14.",
+            default_plan="- Check dock cameras\n- Keep dialogue brief",
+        ),
+    )
+
+    with patch(
+        "app.wizards.sillytavern_distiller.llm_client.complete_structured",
+        new_callable=AsyncMock,
+        return_value=mocked_out,
+    ) as mock_complete:
+        draft = await distill_sillytavern_card(card)
+
+    assert draft.name == "Nyx"
+    assert mock_complete.await_count == 1
+    call_args = mock_complete.call_args
+    messages = call_args.args[0]
+    user_msg = messages[1]["content"]
+    assert "Character Book / Lorebook Entries:" in user_msg
+    assert "Dock 14 Pact" in user_msg
+    assert "Nyx owes the harbor union for smuggling you past customs." in user_msg
+    assert call_args.kwargs["required_properties"] == list(
+        CharacterWizardLLMOutput.model_fields.keys()
+    )
+
 
 

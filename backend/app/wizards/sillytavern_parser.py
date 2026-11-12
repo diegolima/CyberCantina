@@ -174,7 +174,9 @@ def parse_sillytavern_json(raw_json_str: str) -> SillyTavernRawCard:
     tags = _clean_tags(card_dict.get("tags", []))
 
     # Alternate greetings
-    alt_greetings_raw = card_dict.get("alternate_greetings", [])
+    alt_greetings_raw = card_dict.get("alternate_greetings")
+    if not isinstance(alt_greetings_raw, list):
+        alt_greetings_raw = []
     alt_greetings = [
         _replace_macros(str(g), name)
         for g in alt_greetings_raw
@@ -189,14 +191,32 @@ def parse_sillytavern_json(raw_json_str: str) -> SillyTavernRawCard:
         creator_notes = f"{creator_notes}\n{formatted_alts}".strip()
 
     # Lorebook / Character book entries
-    character_book = card_dict.get("character_book") or card_dict.get("extensions", {}).get(
-        "character_book", {}
+    extensions = card_dict.get("extensions")
+    character_book = card_dict.get("character_book") or (
+        extensions.get("character_book", {}) if isinstance(extensions, dict) else {}
     )
+    raw_entries: list[Any] = []
+    if isinstance(character_book, dict):
+        book_entries = character_book.get("entries")
+        if isinstance(book_entries, list):
+            raw_entries = book_entries
+        elif isinstance(book_entries, dict):
+            raw_entries = list(book_entries.values())
+
     entries: list[dict[str, Any]] = []
-    if isinstance(character_book, dict) and isinstance(character_book.get("entries"), list):
-        for entry in character_book["entries"]:
-            if isinstance(entry, dict) and entry.get("content"):
-                entries.append(entry)
+    for entry in raw_entries:
+        if not isinstance(entry, dict) or entry.get("enabled") is False:
+            continue
+        raw_content = str(entry.get("content") or "").strip()
+        if not raw_content:
+            continue
+        normalized_entry = dict(entry)
+        normalized_entry["content"] = _replace_macros(raw_content, name)
+        if entry.get("comment"):
+            normalized_entry["comment"] = _replace_macros(str(entry["comment"]), name)
+        if entry.get("name"):
+            normalized_entry["name"] = _replace_macros(str(entry["name"]), name)
+        entries.append(normalized_entry)
 
     return SillyTavernRawCard(
         name=name,

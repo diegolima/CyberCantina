@@ -271,6 +271,7 @@ def test_delete_and_disable_blocked_by_system_roles_but_user_overrides_reset(env
 def test_idor_user_cannot_reference_another_users_provider(env) -> None:
     client, repo, admin_h, make_user = env
     settings.allow_user_providers = True
+    settings.allow_user_model_overrides = True
     alice_h, _ = make_user("alice")
     bob_h, bob_id = make_user("bob")
     system = _create(client, admin_h, name="Sys").json()
@@ -724,6 +725,7 @@ def test_role_context_defaults_and_legacy_backfill(env) -> None:
     assert legacy.clerk_profile.context_size == 8192
 
     # Legacy user override row lacking context_size still receives role defaults on API read
+    settings.allow_user_model_overrides = True
     alice_h, alice_id = make_user("alice")
     prov = _create(client, admin_h, name="Sys").json()
     with sqlite3.connect(settings.db_path) as conn:

@@ -421,10 +421,13 @@ async def test_character_and_world_wizards(temp_repo: CantinaRepository) -> None
     assert len(created_char.memory_shards) >= 3
 
 
-async def test_world_wizard_genre_preservation() -> None:
+async def test_world_wizard_genre_preservation(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify that World Wizard preserves the user's intended genre and does not default or revert to Cyberpunk Noir."""
     from app.schemas.world import WorldGlobalRules, WorldWizardDraft
     from app.wizards.world_wizard import _align_draft_rules_with_seed
+
+    monkeypatch.setattr(settings, "allow_offline_fallback", True)
+    monkeypatch.setattr(settings.actor_profile, "base_url", "http://127.0.0.1:9/v1")
 
     # 1. Schema check: genre must be required and must not default to Cyberpunk Noir
     schema = WorldGlobalRules.model_json_schema()
@@ -468,10 +471,13 @@ async def test_world_wizard_genre_preservation() -> None:
     assert aligned.global_rules.genre == "Hard Sci-Fi Corporate Thriller / Claustrophobic Noir"
 
 
-async def test_world_wizard_reimagine_map() -> None:
+async def test_world_wizard_reimagine_map(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify that reimagining a world map regenerates topology according to the user prompt."""
     from app.schemas.world import WorldGlobalRules, WorldMapReimagineRequest
     from app.wizards.world_wizard import reimagine_world_map
+
+    monkeypatch.setattr(settings, "allow_offline_fallback", True)
+    monkeypatch.setattr(settings.actor_profile, "base_url", "http://127.0.0.1:9/v1")
 
     req = WorldMapReimagineRequest(
         world_name="Submerged Spindle",
