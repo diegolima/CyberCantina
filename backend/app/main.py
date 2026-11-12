@@ -8,14 +8,19 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import config
 from app.auth import get_current_user, get_optional_user
 from app.config import settings
+from app.providers.local_relay import local_relay_hub, relay_tab_context, relay_user_context
 from app.providers.probe import probe_service, probe_system_providers
-from app.providers.seeder import reconcile_settings_references, seed_providers
+from app.providers.seeder import (
+    ensure_first_boot_webgpu_default,
+    reconcile_settings_references,
+    seed_providers,
+)
 from app.db.seed import ensure_default_seed
 from app.dependencies import (
     get_effective_user_model_settings,
@@ -30,6 +35,7 @@ from app.routers.campaigns import _execute_turn_stream_events, router as campaig
 from app.routers.characters import router as characters_router
 from app.routers.enrich import router as enrich_router
 from app.routers.import_export import router as import_export_router
+from app.routers.local_relay import router as local_relay_router
 from app.routers.mechanics import router as mechanics_router
 from app.routers.notes import router as notes_router
 from app.routers.personas import router as personas_router
@@ -37,6 +43,7 @@ from app.routers.prompts import router as prompts_router
 from app.routers.providers import router as providers_router
 from app.routers.settings import router as settings_router
 from app.routers.worlds import router as worlds_router
+from app.security.log_sanitize import sanitize_log_value
 
 # Configure root logger
 logging.basicConfig(
@@ -60,8 +67,8 @@ async def _periodic_entity_pruner(interval_seconds: float = 60.0) -> None:
             logger.warning("Periodic entity pruner error: %s", exc)
 
 
-def _migrate_providers(repo) -> None:  # type: ignore[no-untyped-def]
-    """Startup order: backup -> seed (one-way, transactional) -> reconcile -> stamp embeddings."""
+async def _migrate_providers(repo) -> None:  # type: ignore[no-untyped-def]
+    """Startup order: backup -> seed (one-way, transactional) -> reconcile -> first-boot WebGPU check."""
     store = repo.providers
     try:
         report = seed_providers(store, settings, settings_path=config.SETTINGS_FILE_PATH)
@@ -75,6 +82,12 @@ def _migrate_providers(repo) -> None:  # type: ignore[no-untyped-def]
                 logger.warning("User overrides reset to the default provider: %s", report.discarded_overrides)
             repo.vector_store.stamp_unstamped_entries()
         reconcile_settings_references(settings, store)
+        await ensure_first_boot_webgpu_default(
+            store,
+            settings,
+            seed_report=report,
+            settings_path=config.SETTINGS_FILE_PATH,
+        )
     except Exception:  # noqa: BLE001 - never block startup; legacy endpoints keep working
         logger.exception("Provider migration failed; continuing with legacy endpoint settings")
 
@@ -99,7 +112,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     if users:
         admin = next((u for u in users if u.role == "admin"), users[0])
         repo.claim_unowned_entities(admin.id)
-    _migrate_providers(repo)
+    await _migrate_providers(repo)
     await auto_configure_ollama_models()
     pruner_task = asyncio.create_task(_periodic_entity_pruner())
     probe_task = asyncio.create_task(_periodic_provider_probe())
@@ -114,6 +127,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             await probe_task
         await llm_client.close()
         await probe_service.close()
+        await local_relay_hub.close_all()
 
 
 app = FastAPI(
@@ -144,10 +158,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def attach_relay_tab_context(request: Request, call_next):
+    raw_tab = request.headers.get("x-cantina-tab-id")
+    tab_id = sanitize_log_value(raw_tab).strip()[:64] if raw_tab else None
+    tab_token = relay_tab_context.set(tab_id or None)
+    user_token = relay_user_context.set(None)
+    try:
+        response = await call_next(request)
+        if "Permissions-Policy" not in response.headers:
+            response.headers["Permissions-Policy"] = "loopback-network=(self)"
+        return response
+    finally:
+        relay_user_context.reset(user_token)
+        relay_tab_context.reset(tab_token)
+
+
 # Register modular domain routers
 app.include_router(auth_router)
 app.include_router(settings_router)
 app.include_router(providers_router)
+app.include_router(local_relay_router)
 app.include_router(prompts_router)
 app.include_router(notes_router)
 app.include_router(worlds_router)

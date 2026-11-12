@@ -2016,7 +2016,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
                       setUserClerkProviderId(sel.providerId);
                       setUserClerkModel(sel.model);
                       const newProv = sel.providerId ? providerStore.byId(sel.providerId) : null;
-                      if (newProv && newProv.type !== "ollama") {
+                      if (newProv && newProv.type !== "ollama" && newProv.type !== "browser_ollama") {
                         setUserClerkRunOnCpu(false);
                       }
                     }}

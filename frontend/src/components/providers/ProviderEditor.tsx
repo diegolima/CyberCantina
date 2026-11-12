@@ -1,6 +1,9 @@
-import React, { useState } from "react";
-import { AlertTriangle, Check, Loader2, Plug, Trash2 } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { AlertTriangle, Check, Copy, Loader2, Plug, Trash2 } from "lucide-react";
 import { ApiError, api } from "../../api";
+import { probeBrowserOllama } from "../../local/ollamaDriver";
+import { checkWebGpuAdapter, getWebGpuModelInfos } from "../../local/webgpuCatalog";
+import { useOptionalLocalRelay } from "../../providers/LocalRelayContext";
 import {
   LLMProvider,
   ProviderColor,
@@ -33,8 +36,10 @@ function describeReference(ref: ProviderReference): string {
 /** Create / edit form for one provider. Saves and deletes commit immediately. */
 export const ProviderEditor: React.FC<EditorProps> = (props) => {
   const store = useProviders();
+  const relay = useOptionalLocalRelay();
   const existing = props.mode === "edit" ? props.provider : null;
   const deleteOnly = props.mode === "edit" && props.deleteOnly;
+  const scope: ProviderScope = existing ? existing.scope : (props as { scope: ProviderScope }).scope;
 
   const [providerType, setProviderType] = useState<ProviderType>(existing?.type ?? "ollama");
   const [name, setName] = useState(existing?.name ?? "");
@@ -48,30 +53,115 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
   const [conflict, setConflict] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<ProviderProbeResponse | null>(null);
+  const [needsCorsSetup, setNeedsCorsSetup] = useState(false);
+  const [webgpuCheck, setWebgpuCheck] = useState<{ supported: boolean; reason?: string } | null>(null);
+  const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [blockers, setBlockers] = useState<ProviderReference[]>([]);
+
+  const isWebGpu = providerType === "webgpu";
+  const isBrowserOllama = providerType === "browser_ollama";
+  const isBrowserLocal = isWebGpu || isBrowserOllama;
+  const showBrowserTypes = true;
+
+  useEffect(() => {
+    if (!isWebGpu) return;
+    let cancelled = false;
+    void checkWebGpuAdapter().then((res) => {
+      if (!cancelled) setWebgpuCheck(res);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isWebGpu]);
 
   const urlMissing = providerType === "ollama" && url.trim() === "";
   const tokenMissing = providerType === "openrouter" && props.mode === "create" && !token.trim();
   const hostChanged =
     !!existing &&
+    !isBrowserLocal &&
     existing.base_url !== null &&
     hostOf(url) !== null &&
     hostOf(url) !== hostOf(existing.base_url);
   const tokenRequired = hostChanged && !!existing?.has_bearer_token && !token && !clearToken;
   const canSave = !urlMissing && !tokenMissing && !saving && !tokenRequired && (props.mode === "create" || name.trim() !== "");
 
+  const defaultUrlFor = (ptype: ProviderType): string => {
+    if (ptype === "openrouter") return "https://openrouter.ai/api/v1";
+    if (ptype === "aihorde") return "https://oai.stablehorde.net/v1";
+    if (ptype === "browser_ollama") return "http://localhost:11434";
+    if (ptype === "webgpu") return "webgpu://browser";
+    return "";
+  };
+
   const handleTest = async () => {
     setTesting(true);
     setTestResult(null);
+    setNeedsCorsSetup(false);
+    setError(null);
     try {
-      const defaultUrl =
-        providerType === "openrouter"
-          ? "https://openrouter.ai/api/v1"
-          : providerType === "aihorde"
-          ? "https://oai.stablehorde.net/v1"
-          : "";
-      const effectiveUrl = url.trim() || defaultUrl;
+      const effectiveUrl = url.trim() || defaultUrlFor(providerType);
+      if (isBrowserOllama) {
+        relay?.ensureConnected();
+        const localRes = await probeBrowserOllama(effectiveUrl);
+        setNeedsCorsSetup(Boolean(localRes.needsCorsOrLnaSetup));
+        if (existing) {
+          const synced = await api.reportClientProbe(existing.id, {
+            reachable: localRes.reachable,
+            protocol: localRes.protocol,
+            models: localRes.models,
+            error_code: localRes.error_code,
+            error: localRes.error,
+          });
+          setTestResult(synced);
+        } else {
+          setTestResult({
+            provider_id: null,
+            reachable: localRes.reachable,
+            protocol: localRes.protocol,
+            models: localRes.models,
+            chat_models: localRes.models.filter((m) => !m.is_embedding).map((m) => m.name),
+            embedding_models: localRes.models.filter((m) => m.is_embedding).map((m) => m.name),
+            error_code: localRes.error_code,
+            error: localRes.error,
+            config_version: 0,
+            probed_at: new Date().toISOString(),
+            from_cache: false,
+          });
+        }
+        return;
+      }
+      if (isWebGpu) {
+        relay?.ensureConnected();
+        const check = await checkWebGpuAdapter();
+        setWebgpuCheck(check);
+        const models = check.supported ? getWebGpuModelInfos() : [];
+        if (existing) {
+          const synced = await api.reportClientProbe(existing.id, {
+            reachable: check.supported,
+            protocol: check.supported ? "openai_compat" : null,
+            models,
+            error_code: check.supported ? null : "webgpu_unsupported",
+            error: check.supported ? null : check.reason || "WebGPU is unavailable.",
+          });
+          setTestResult(synced);
+        } else {
+          setTestResult({
+            provider_id: null,
+            reachable: check.supported,
+            protocol: check.supported ? "openai_compat" : null,
+            models,
+            chat_models: models.map((m) => m.name),
+            embedding_models: [],
+            error_code: check.supported ? null : "webgpu_unsupported",
+            error: check.supported ? null : check.reason || "WebGPU is unavailable.",
+            config_version: 0,
+            probed_at: new Date().toISOString(),
+            from_cache: false,
+          });
+        }
+        return;
+      }
       const result = await api.probeProviderDraft({
         provider_id: existing?.id ?? null,
         type: providerType,
@@ -91,21 +181,18 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
     setError(null);
     setConflict(false);
     try {
-      const defaultUrl =
-        providerType === "openrouter"
-          ? "https://openrouter.ai/api/v1"
-          : providerType === "aihorde"
-          ? "https://oai.stablehorde.net/v1"
-          : "";
-      const effectiveUrl = url.trim() || defaultUrl;
+      const effectiveUrl = url.trim() || defaultUrlFor(providerType);
       if (props.mode === "create") {
         await store.create({
           name: name.trim() || null,
           type: providerType,
-          scope: props.scope,
+          scope,
           color,
           is_enabled: enabled,
-          settings: { base_url: effectiveUrl, bearer_token: token || null },
+          settings: {
+            base_url: effectiveUrl,
+            bearer_token: isBrowserLocal ? null : token || null,
+          },
         });
       } else {
         const p = props.provider;
@@ -114,9 +201,12 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
           name: name.trim() !== p.name ? name.trim() : undefined,
           color: color !== p.color ? color : undefined,
           is_enabled: enabled !== p.is_enabled ? enabled : undefined,
-          base_url: url.trim() !== (p.base_url ?? "") ? (effectiveUrl || undefined) : undefined,
-          bearer_token: token || undefined,
-          clear_bearer_token: clearToken || undefined,
+          base_url:
+            !isWebGpu && url.trim() !== (p.base_url ?? "")
+              ? effectiveUrl || undefined
+              : undefined,
+          bearer_token: isBrowserLocal ? undefined : token || undefined,
+          clear_bearer_token: isBrowserLocal ? undefined : clearToken || undefined,
         });
       }
       props.onDone();
@@ -160,29 +250,75 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
 
       <div className="form-group">
         <label className="form-label">Provider Type</label>
-        <div style={{ display: "flex", gap: "8px" }}>
+        <div className="provider-type-grid">
           <button
             type="button"
             disabled={deleteOnly || props.mode === "edit"}
             className={`btn ${providerType === "ollama" ? "btn--primary" : "btn--subtle"}`}
-            style={{ flex: 1, padding: "7px 12px", fontSize: "0.82rem" }}
+            style={{ padding: "7px 10px", fontSize: "0.8rem" }}
             onClick={() => {
               setProviderType("ollama");
-              if (!name || name === "OpenRouter" || name === "AI Horde") setName("");
-              if (url === "https://openrouter.ai/api/v1" || url === "https://oai.stablehorde.net/v1") setUrl("");
+              setTestResult(null);
+              setNeedsCorsSetup(false);
+              if (["OpenRouter", "AI Horde", "Local Ollama (Browser)", "Browser WebGPU"].includes(name)) setName("");
+              if (url === "https://openrouter.ai/api/v1" || url === "https://oai.stablehorde.net/v1" || url === "webgpu://browser") setUrl("");
             }}
           >
-            Ollama (Local / Self-hosted)
+            Ollama (Host Server)
           </button>
+          {showBrowserTypes && (
+            <>
+              <button
+                type="button"
+                disabled={deleteOnly || props.mode === "edit"}
+                className={`btn ${providerType === "browser_ollama" ? "btn--primary" : "btn--subtle"}`}
+                style={{ padding: "7px 10px", fontSize: "0.8rem" }}
+                onClick={() => {
+                  setProviderType("browser_ollama");
+                  setTestResult(null);
+                  setNeedsCorsSetup(false);
+                  if (!name || ["Ollama", "OpenRouter", "AI Horde", "Browser WebGPU"].includes(name)) {
+                    setName("Local Ollama (Browser)");
+                  }
+                  if (!url || url.startsWith("https://openrouter.ai") || url.startsWith("https://oai.stablehorde") || url === "webgpu://browser") {
+                    setUrl("http://localhost:11434");
+                  }
+                }}
+              >
+                {scope === "system" ? "Local Ollama (User's Browser)" : "Local Ollama (Browser)"}
+              </button>
+              <button
+                type="button"
+                disabled={deleteOnly || props.mode === "edit"}
+                className={`btn ${providerType === "webgpu" ? "btn--primary" : "btn--subtle"}`}
+                style={{ padding: "7px 10px", fontSize: "0.8rem" }}
+                onClick={() => {
+                  setProviderType("webgpu");
+                  setTestResult(null);
+                  setNeedsCorsSetup(false);
+                  if (!name || ["Ollama", "OpenRouter", "AI Horde", "Local Ollama (Browser)"].includes(name)) {
+                    setName("Browser WebGPU");
+                  }
+                  setUrl("webgpu://browser");
+                }}
+              >
+                In-Browser WebGPU
+              </button>
+            </>
+          )}
           <button
             type="button"
             disabled={deleteOnly || props.mode === "edit"}
             className={`btn ${providerType === "openrouter" ? "btn--primary" : "btn--subtle"}`}
-            style={{ flex: 1, padding: "7px 12px", fontSize: "0.82rem" }}
+            style={{ padding: "7px 10px", fontSize: "0.8rem" }}
             onClick={() => {
               setProviderType("openrouter");
-              if (!name || name === "Ollama" || name === "AI Horde") setName("OpenRouter");
-              if (!url || url === "https://oai.stablehorde.net/v1") setUrl("https://openrouter.ai/api/v1");
+              setTestResult(null);
+              setNeedsCorsSetup(false);
+              if (!name || ["Ollama", "AI Horde", "Local Ollama (Browser)", "Browser WebGPU"].includes(name)) setName("OpenRouter");
+              if (!url || url === "https://oai.stablehorde.net/v1" || url === "webgpu://browser" || url === "http://localhost:11434") {
+                setUrl("https://openrouter.ai/api/v1");
+              }
             }}
           >
             OpenRouter (Cloud API)
@@ -191,11 +327,15 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
             type="button"
             disabled={deleteOnly || props.mode === "edit"}
             className={`btn ${providerType === "aihorde" ? "btn--primary" : "btn--subtle"}`}
-            style={{ flex: 1, padding: "7px 12px", fontSize: "0.82rem" }}
+            style={{ padding: "7px 10px", fontSize: "0.8rem" }}
             onClick={() => {
               setProviderType("aihorde");
-              if (!name || name === "Ollama" || name === "OpenRouter") setName("AI Horde");
-              if (!url || url === "https://openrouter.ai/api/v1") setUrl("https://oai.stablehorde.net/v1");
+              setTestResult(null);
+              setNeedsCorsSetup(false);
+              if (!name || ["Ollama", "OpenRouter", "Local Ollama (Browser)", "Browser WebGPU"].includes(name)) setName("AI Horde");
+              if (!url || url === "https://openrouter.ai/api/v1" || url === "webgpu://browser" || url === "http://localhost:11434") {
+                setUrl("https://oai.stablehorde.net/v1");
+              }
             }}
           >
             AI Horde (Crowdsourced)
@@ -203,7 +343,7 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
         </div>
       </div>
 
-      <div className="grid-2">
+      <div className={isWebGpu ? "" : "grid-2"}>
         <div className="form-group">
           <label className="form-label">Name</label>
           <input
@@ -216,6 +356,10 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
                   ? "Defaults to “OpenRouter”"
                   : providerType === "aihorde"
                   ? "Defaults to “AI Horde”"
+                  : providerType === "browser_ollama"
+                  ? "Defaults to “Local Ollama (Browser)”"
+                  : providerType === "webgpu"
+                  ? "Defaults to “Browser WebGPU”"
                   : "Defaults to “Ollama”"
                 : undefined
             }
@@ -223,85 +367,119 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
             onChange={(e) => setName(e.target.value)}
           />
         </div>
-        <div className="form-group">
-          <label className="form-label">
-            Server URL{" "}
-            {providerType === "openrouter" ? (
-              <span className="form-hint">(default: openrouter.ai/api/v1)</span>
-            ) : providerType === "aihorde" ? (
-              <span className="form-hint">(default: oai.stablehorde.net/v1)</span>
-            ) : null}
-          </label>
-          <input
-            className="form-input"
-            value={url}
-            disabled={deleteOnly || providerType === "aihorde"}
-            placeholder={
-              providerType === "openrouter"
-                ? "https://openrouter.ai/api/v1"
-                : providerType === "aihorde"
-                ? "https://oai.stablehorde.net/v1"
-                : "http://localhost:11434"
-            }
-            onChange={(e) => setUrl(e.target.value)}
-            aria-invalid={urlMissing}
-          />
-        </div>
-      </div>
-
-      <div className="form-group">
-        <label className="form-label">
-          {providerType === "openrouter"
-            ? "OpenRouter API Key"
-            : providerType === "aihorde"
-            ? "AI Horde API Key"
-            : "Bearer token"}{" "}
-          <span className="form-hint">
-            {providerType === "openrouter"
-              ? "(required, sk-or-v1-...)"
-              : providerType === "aihorde"
-              ? "(optional, defaults to anonymous 0000000000)"
-              : "(optional, for hosted/cloud endpoints)"}
-          </span>
-        </label>
-        <input
-          type="password"
-          autoComplete="new-password"
-          className="form-input"
-          value={token}
-          disabled={deleteOnly || clearToken}
-          placeholder={
-            existing?.has_bearer_token
-              ? "•••••••• saved. Type to replace"
-              : providerType === "openrouter"
-              ? "sk-or-v1-..."
-              : providerType === "aihorde"
-              ? "Leave blank to use anonymous key (0000000000)"
-              : "Leave empty if not needed"
-          }
-          onChange={(e) => setToken(e.target.value)}
-        />
-        {existing?.has_bearer_token && (
-          <label className="provider-inline-check">
+        {!isWebGpu && (
+          <div className="form-group">
+            <label className="form-label">
+              {isBrowserOllama ? "Local Ollama URL" : "Server URL"}{" "}
+              {providerType === "openrouter" ? (
+                <span className="form-hint">(default: openrouter.ai/api/v1)</span>
+              ) : providerType === "aihorde" ? (
+                <span className="form-hint">(default: oai.stablehorde.net/v1)</span>
+              ) : isBrowserOllama ? (
+                <span className="form-hint">(loopback only: localhost or 127.0.0.1)</span>
+              ) : null}
+            </label>
             <input
-              type="checkbox"
-              checked={clearToken}
-              disabled={deleteOnly}
-              onChange={(e) => {
-                setClearToken(e.target.checked);
-                if (e.target.checked) setToken("");
-              }}
+              className="form-input"
+              value={url}
+              disabled={deleteOnly || providerType === "aihorde"}
+              placeholder={
+                providerType === "openrouter"
+                  ? "https://openrouter.ai/api/v1"
+                  : providerType === "aihorde"
+                  ? "https://oai.stablehorde.net/v1"
+                  : "http://localhost:11434"
+              }
+              onChange={(e) => setUrl(e.target.value)}
+              aria-invalid={urlMissing}
             />
-            Remove the saved token
-          </label>
-        )}
-        {tokenRequired && (
-          <div className="provider-warning" role="alert">
-            <AlertTriangle size={13} /> The server host changed. For safety, enter the token again or remove it, so
-            the saved token is never sent to a different server.
           </div>
         )}
       </div>
+
+      {isWebGpu && (
+        <div className="provider-note" style={{ marginBottom: 12 }}>
+          <div>
+            <strong>Zero-install WebGPU inference:</strong> runs quantized 1.7B–8B models directly inside
+            your browser via WebLLM. First load downloads 1.8–5.7 GB into browser cache, and context
+            windows are automatically clamped to 4k–8k tokens per model to fit GPU memory.
+          </div>
+          {webgpuCheck && (
+            <div style={{ marginTop: 6, color: webgpuCheck.supported ? "var(--accent-emerald)" : "var(--accent-amber)" }}>
+              {webgpuCheck.supported
+                ? "✓ WebGPU adapter detected in this browser."
+                : `⚠ ${webgpuCheck.reason}`}
+            </div>
+          )}
+        </div>
+      )}
+
+      {isBrowserOllama && (
+        <div className="provider-note" style={{ marginBottom: 12 }}>
+          <div>
+            <strong>Local GPU via Browser Relay:</strong> your browser connects directly to Ollama on
+            this computer and relays tokens while this tab stays open. Requires{" "}
+            <code>OLLAMA_ORIGINS="{typeof window !== "undefined" ? window.location.origin : "*"}"</code>{" "}
+            and clicking <strong>Allow</strong> on the browser&apos;s Local Network Access prompt.
+          </div>
+        </div>
+      )}
+
+      {!isBrowserLocal && (
+        <div className="form-group">
+          <label className="form-label">
+            {providerType === "openrouter"
+              ? "OpenRouter API Key"
+              : providerType === "aihorde"
+              ? "AI Horde API Key"
+              : "Bearer token"}{" "}
+            <span className="form-hint">
+              {providerType === "openrouter"
+                ? "(required, sk-or-v1-...)"
+                : providerType === "aihorde"
+                ? "(optional, defaults to anonymous 0000000000)"
+                : "(optional, for hosted/cloud endpoints)"}
+            </span>
+          </label>
+          <input
+            type="password"
+            autoComplete="new-password"
+            className="form-input"
+            value={token}
+            disabled={deleteOnly || clearToken}
+            placeholder={
+              existing?.has_bearer_token
+                ? "•••••••• saved. Type to replace"
+                : providerType === "openrouter"
+                ? "sk-or-v1-..."
+                : providerType === "aihorde"
+                ? "Leave blank to use anonymous key (0000000000)"
+                : "Leave empty if not needed"
+            }
+            onChange={(e) => setToken(e.target.value)}
+          />
+          {existing?.has_bearer_token && (
+            <label className="provider-inline-check">
+              <input
+                type="checkbox"
+                checked={clearToken}
+                disabled={deleteOnly}
+                onChange={(e) => {
+                  setClearToken(e.target.checked);
+                  if (e.target.checked) setToken("");
+                }}
+              />
+              Remove the saved token
+            </label>
+          )}
+          {tokenRequired && (
+            <div className="provider-warning" role="alert">
+              <AlertTriangle size={13} /> The server host changed. For safety, enter the token again or remove it, so
+              the saved token is never sent to a different server.
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="form-group">
         <label className="form-label">Colour</label>
@@ -349,6 +527,58 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
               {testResult.error ? ` (${testResult.error})` : ""}
             </>
           )}
+        </div>
+      )}
+
+      {needsCorsSetup && isBrowserOllama && (
+        <div className="provider-note" style={{ marginTop: 8, fontSize: "0.75rem" }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>
+            Ollama CORS / Browser Access Setup
+          </div>
+          <div style={{ marginBottom: 6 }}>
+            If Ollama is running, allow this origin and restart Ollama (also allow the browser&apos;s
+            Local Network Access prompt and disable localhost blocking in ad-blockers):
+          </div>
+          {[
+            {
+              label: "macOS",
+              cmd: `launchctl setenv OLLAMA_ORIGINS "${typeof window !== "undefined" ? window.location.origin : "*"}"`,
+            },
+            {
+              label: "Linux (systemd)",
+              cmd: `OLLAMA_ORIGINS="${typeof window !== "undefined" ? window.location.origin : "*"}" ollama serve`,
+            },
+            {
+              label: "Windows (PowerShell)",
+              cmd: `$env:OLLAMA_ORIGINS="${typeof window !== "undefined" ? window.location.origin : "*"}"; ollama serve`,
+            },
+          ].map((item) => (
+            <div
+              key={item.label}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                marginTop: 4,
+              }}
+            >
+              <span style={{ minWidth: 115, color: "var(--text-muted)" }}>{item.label}:</span>
+              <code style={{ flex: 1, overflowX: "auto", padding: "2px 6px" }}>{item.cmd}</code>
+              <button
+                type="button"
+                className="btn btn-sm"
+                style={{ padding: "2px 6px" }}
+                onClick={() => {
+                  void navigator.clipboard?.writeText(item.cmd);
+                  setCopiedCmd(item.label);
+                  window.setTimeout(() => setCopiedCmd(null), 1500);
+                }}
+                title={`Copy ${item.label} command`}
+              >
+                {copiedCmd === item.label ? <Check size={12} /> : <Copy size={12} />}
+              </button>
+            </div>
+          ))}
         </div>
       )}
 

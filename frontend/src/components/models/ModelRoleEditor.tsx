@@ -59,7 +59,10 @@ export const ModelRoleEditor: React.FC<ModelRoleEditorProps> = ({
 }) => {
   const store = useProviders();
   const selectedProvider = store.byId(selection.providerId);
-  const isOllama = !selectedProvider || selectedProvider.type === "ollama";
+  const isOllama =
+    !selectedProvider ||
+    selectedProvider.type === "ollama" ||
+    selectedProvider.type === "browser_ollama";
 
   const [tempValid, setTempValid] = useState(true);
   const [tokensValid, setTokensValid] = useState(true);

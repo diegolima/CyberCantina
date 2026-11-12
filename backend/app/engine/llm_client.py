@@ -15,9 +15,11 @@ import httpx
 from pydantic import BaseModel, Field
 
 from app.config import ModelProfile, persist_settings, settings
+from app.providers.local_relay import local_relay_hub, relay_user_context
 from app.providers.models import parse_aihorde_models, parse_ollama_tags
 from app.providers.probe import bearer_headers
 from app.providers.resolver import ProviderUnavailableError, resolve_system_profile
+from app.providers.webgpu_catalog import get_webgpu_max_context
 from app.security.url_policy import UrlBlockedError, assert_url_allowed, normalize_base_url
 
 logger = logging.getLogger("cybercantina.llm")
@@ -128,6 +130,8 @@ class CallTarget:
     native_headers: dict[str, str]
     openai_headers: dict[str, str]
     provider_type: str = "ollama"
+    owner_id: str | None = None
+    caller_user_id: str | None = None
 
 
 def get_chat_completions_url(target: CallTarget) -> str:
@@ -146,6 +150,16 @@ async def build_call_target(profile: ModelProfile, role: str = "model") -> CallT
     endpoint = profile.resolved or (resolve_system_profile(profile, role) if profile.provider_id else None)
     if endpoint is not None:
         ptype = endpoint.type
+        if ptype in ("browser_ollama", "webgpu"):
+            root = endpoint.root_url if ptype == "webgpu" else get_ollama_root_url(endpoint.root_url)
+            return CallTarget(
+                root,
+                {},
+                {},
+                provider_type=ptype,
+                owner_id=endpoint.owner_id,
+                caller_user_id=endpoint.caller_user_id,
+            )
         if endpoint.network_restricted:
             try:
                 await assert_url_allowed(normalize_base_url(endpoint.root_url, provider_type=ptype), allow_private=False)
@@ -243,6 +257,8 @@ async def _status_for_profile(profile: ModelProfile, role: str) -> OllamaStatusR
         logger.warning("Skipping model auto-configuration for %s: %s", role, exc)
         return None
     if endpoint is not None:
+        if endpoint.type != "ollama":
+            return None
         return await query_ollama_status(endpoint.root_url, bearer_token=endpoint.bearer_token)
     return await query_ollama_status(profile.base_url)
 
@@ -398,6 +414,34 @@ class LLMClient:
         max_tok = max_tokens if max_tokens is not None else active_profile.max_tokens
 
         target = await build_call_target(active_profile)
+
+        if target.provider_type in ("browser_ollama", "webgpu"):
+            ctx = getattr(active_profile, "context_size", None)
+            if target.provider_type == "webgpu" and ctx is not None:
+                ctx = min(int(ctx), get_webgpu_max_context(active_profile.model))
+            res = await local_relay_hub.complete(
+                user_id=target.owner_id or target.caller_user_id or relay_user_context.get(),
+                driver=target.provider_type,  # type: ignore[arg-type]
+                base_url=target.root_url,
+                model=active_profile.model,
+                messages=messages,
+                temperature=temp,
+                max_tokens=max_tok,
+                context_size=int(ctx) if ctx is not None else None,
+                keep_alive=format_ollama_keep_alive(getattr(active_profile, "keep_alive_minutes", 30)),
+                json_mode=json_mode,
+                json_schema=json_schema,
+                disable_reasoning=disable_reasoning,
+                timeout=active_profile.timeout_seconds,
+            )
+            content = (res.content or "").strip()
+            if content:
+                return content
+            thinking_text = (res.thinking or "").strip()
+            if thinking_text and "{" in thinking_text:
+                return thinking_text
+            return content
+
         client = await self.get_http_client(timeout=active_profile.timeout_seconds)
 
         # 1. Try native Ollama /api/chat first (only for Ollama providers)
@@ -602,6 +646,27 @@ class LLMClient:
         """Stream token deltas from Ollama (/api/chat or /v1/chat/completions) or OpenRouter."""
         active_profile = profile or settings.actor_profile
         target = await build_call_target(active_profile)
+
+        if target.provider_type in ("browser_ollama", "webgpu"):
+            ctx = getattr(active_profile, "context_size", None)
+            if target.provider_type == "webgpu" and ctx is not None:
+                ctx = min(int(ctx), get_webgpu_max_context(active_profile.model))
+            async for delta in local_relay_hub.stream(
+                user_id=target.owner_id or target.caller_user_id or relay_user_context.get(),
+                driver=target.provider_type,  # type: ignore[arg-type]
+                base_url=target.root_url,
+                model=active_profile.model,
+                messages=messages,
+                temperature=active_profile.temperature,
+                max_tokens=active_profile.max_tokens,
+                context_size=int(ctx) if ctx is not None else None,
+                keep_alive=format_ollama_keep_alive(getattr(active_profile, "keep_alive_minutes", 30)),
+                disable_reasoning=disable_reasoning,
+                timeout=active_profile.timeout_seconds,
+            ):
+                yield delta
+            return
+
         client = await self.get_http_client(timeout=active_profile.timeout_seconds)
 
         # 1. Prefer native Ollama streaming on /api/chat (only for Ollama providers)

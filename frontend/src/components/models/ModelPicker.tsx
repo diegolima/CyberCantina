@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
+import { getWebGpuModelSpec } from "../../local/webgpuCatalog";
 import { LLMProvider } from "../../types";
 import { ProviderColorPill, ScopeBadge, StatusDot } from "../providers/ProviderBadges";
 import { useProviders } from "../providers/ProvidersContext";
@@ -65,7 +66,9 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
 
   const isAihorde = selected?.type === "aihorde";
   const isOpenrouter = selected?.type === "openrouter";
+  const isWebGpu = selected?.type === "webgpu";
   const isCombobox = isOpenrouter || isAihorde;
+  const webgpuSpec = isWebGpu ? getWebGpuModelSpec(value.model) : undefined;
 
   const openrouterSuggestions = useMemo(() => {
     if (!isOpenrouter) return [];
@@ -279,6 +282,11 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
       {!value.providerId && !disabled && store.providers.length > 0 && (
         <div className="provider-warning" role="alert">
           <AlertTriangle size={13} /> Choose a provider to continue.
+        </div>
+      )}
+      {webgpuSpec && (
+        <div className="form-hint" style={{ marginTop: 4 }}>
+          {webgpuSpec.note} · Max context: {webgpuSpec.maxContextTokens} tokens
         </div>
       )}
     </div>

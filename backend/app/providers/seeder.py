@@ -4,14 +4,25 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import sqlite3
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
+
+import httpx
 
 from app.config import AppSettings, ModelProfile, persist_settings
 from app.db.provider_store import ProviderStore
-from app.security.url_policy import UrlBlockedError, normalize_base_url
+from app.providers.webgpu_catalog import (
+    DEFAULT_WEBGPU_CONTEXT_SIZE,
+    DEFAULT_WEBGPU_MODEL,
+    get_webgpu_model_infos,
+)
+from app.schemas.auth import UserModelSettingsPayload
+from app.security.url_policy import WEBGPU_SENTINEL_URL, UrlBlockedError, normalize_base_url
 
 logger = logging.getLogger("cybercantina.providers.seeder")
 
@@ -79,6 +90,9 @@ def seed_providers(
         return SeedReport(skipped=True)
 
     report = SeedReport()
+    if os.environ.get("CYBERCANTINA_NO_DEFAULT_PROVIDER", "").strip().lower() in ("1", "true", "yes"):
+        store.set_meta(SEED_META_KEY, "1")
+        return report
     if settings_path is not None:
         report.backups = backup_before_migration(store.db_path, settings_path)
 
@@ -203,3 +217,131 @@ def reconcile_settings_references(app_settings: AppSettings, store: ProviderStor
         except OSError as exc:
             logger.error("Could not persist reconciled settings: %s", exc)
     return findings
+
+
+def auto_provision_webgpu_for_user(
+    repo,  # type: ignore[no-untyped-def]
+    user_id: str,
+    app_settings: AppSettings,
+) -> str | None:
+    """When BYOP is active and no enabled global providers exist, give new users a WebGPU provider."""
+    if not app_settings.allow_user_providers:
+        return None
+    store: ProviderStore = repo.providers
+    if store.get_meta(SEED_META_KEY) is None:
+        return None
+    if any(p.is_enabled for p in store.list_system()):
+        return None
+    if store.list_for_owner(user_id) or repo.get_user_model_settings(user_id) is not None:
+        return None
+
+    record = store.create(
+        name="Browser WebGPU",
+        type="webgpu",
+        scope="user",
+        owner_id=user_id,
+        color="purple",
+        is_enabled=True,
+        base_url=WEBGPU_SENTINEL_URL,
+        bearer_token=None,
+        network_restricted=True,
+    )
+    store.record_probe(
+        record.id,
+        models=get_webgpu_model_infos(),
+        error_code=None,
+        probed_at=datetime.now(timezone.utc).isoformat(),
+    )
+    repo.save_user_model_settings(
+        user_id,
+        UserModelSettingsPayload(
+            actor_profile=ModelProfile(
+                provider_id=record.id,
+                model=DEFAULT_WEBGPU_MODEL,
+                context_size=DEFAULT_WEBGPU_CONTEXT_SIZE,
+            ),
+            clerk_mirrors_actor=True,
+        ),
+    )
+    return record.id
+
+
+async def _is_default_ollama_reachable(url: str = "http://localhost:11434") -> bool:
+    try:
+        async with httpx.AsyncClient(timeout=1.5, follow_redirects=False) as client:
+            resp = await client.get(f"{url.rstrip('/')}/api/tags")
+            return resp.status_code == 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def ensure_first_boot_webgpu_default(
+    store: ProviderStore,
+    app_settings: AppSettings,
+    *,
+    seed_report: SeedReport,
+    settings_path: Path | None = None,
+    probe_ollama: Callable[[], Awaitable[bool]] | None = None,
+) -> bool:
+    """On a brand-new install with no reachable server Ollama, pre-configure system Browser WebGPU.
+
+    Leaves existing installs (``seed_report.skipped``) and explicitly configured endpoints
+    (``ACTOR_BASE_URL`` / ``CLERK_BASE_URL``) untouched.
+    """
+    meta_key = "first_boot_provider_checked_v1"
+    if store.get_meta(meta_key) is not None:
+        return False
+    if seed_report.skipped or not seed_report.created:
+        store.set_meta(meta_key, "1")
+        return False
+    if os.environ.get("ACTOR_BASE_URL") or os.environ.get("CLERK_BASE_URL"):
+        store.set_meta(meta_key, "1")
+        return False
+
+    ollama_ok = await (probe_ollama() if probe_ollama is not None else _is_default_ollama_reachable())
+    if ollama_ok:
+        store.set_meta(meta_key, "1")
+        return False
+
+    wg = store.create(
+        name="Browser WebGPU",
+        type="webgpu",
+        scope="system",
+        owner_id=None,
+        color="purple",
+        is_enabled=True,
+        base_url=WEBGPU_SENTINEL_URL,
+        bearer_token=None,
+        network_restricted=False,
+    )
+    store.record_probe(
+        wg.id,
+        models=get_webgpu_model_infos(),
+        error_code=None,
+        probed_at=datetime.now(timezone.utc).isoformat(),
+    )
+    for old_id in seed_report.created:
+        store.delete(old_id)
+
+    app_settings.actor_profile = app_settings.actor_profile.model_copy(
+        update={
+            "provider_id": wg.id,
+            "model": DEFAULT_WEBGPU_MODEL,
+            "context_size": DEFAULT_WEBGPU_CONTEXT_SIZE,
+        }
+    )
+    app_settings.clerk_profile = app_settings.clerk_profile.model_copy(
+        update={
+            "provider_id": wg.id,
+            "model": DEFAULT_WEBGPU_MODEL,
+            "context_size": DEFAULT_WEBGPU_CONTEXT_SIZE,
+        }
+    )
+    app_settings.clerk_mirrors_actor = True
+    app_settings.allow_user_providers = True
+    app_settings.allow_user_model_overrides = True
+    if settings_path is not None:
+        persist_settings(app_settings)
+    store.set_meta(meta_key, "1")
+    logger.info("Pre-configured Browser WebGPU as default system provider (no server Ollama detected on first boot).")
+    return True

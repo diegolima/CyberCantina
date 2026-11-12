@@ -40,16 +40,23 @@ class NormalizedUrl:
 
 OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 AIHORDE_DEFAULT_BASE_URL = "https://oai.stablehorde.net/v1"
+BROWSER_OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
+WEBGPU_SENTINEL_URL = "webgpu://browser"
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 def normalize_base_url(raw: str, *, provider_type: str = "ollama") -> NormalizedUrl:
     """Validate syntax and reduce to a root URL (no trailing slash, ``/v1`` or ``/api``)."""
+    if provider_type == "webgpu":
+        return NormalizedUrl(root=WEBGPU_SENTINEL_URL, host="browser", port=0, scheme="webgpu")
     text = (raw or "").strip()
     if not text:
         if provider_type == "openrouter":
             text = OPENROUTER_DEFAULT_BASE_URL
         elif provider_type == "aihorde":
             text = AIHORDE_DEFAULT_BASE_URL
+        elif provider_type == "browser_ollama":
+            text = BROWSER_OLLAMA_DEFAULT_BASE_URL
         else:
             raise UrlBlockedError("invalid_url", "Server URL is required.")
     parts = urlsplit(text)
@@ -78,7 +85,13 @@ def normalize_base_url(raw: str, *, provider_type: str = "ollama") -> Normalized
                 path = path[: -len(suffix)].rstrip("/")
     host_part = parts.netloc
     root = f"{parts.scheme}://{host_part}{path}"
-    return NormalizedUrl(root=root, host=parts.hostname.lower(), port=port, scheme=parts.scheme)
+    normalized = NormalizedUrl(root=root, host=parts.hostname.lower(), port=port, scheme=parts.scheme)
+    if provider_type == "browser_ollama" and normalized.host not in _LOOPBACK_HOSTS:
+        raise UrlBlockedError(
+            "blocked_by_policy",
+            "Browser-local Ollama must use a loopback address (localhost or 127.0.0.1).",
+        )
+    return normalized
 
 
 def _classify(ip_text: str, *, allow_private: bool) -> str | None:

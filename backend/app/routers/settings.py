@@ -276,7 +276,7 @@ def update_profile_models(
     payload: UserModelSettingsPayload,
     current_user: UserProfile = Depends(get_current_user),
 ) -> ProfileModelSettingsResponse:
-    if not settings.allow_user_model_overrides and current_user.role != "admin":
+    if not settings.allow_user_model_overrides and not settings.allow_user_providers and current_user.role != "admin":
         if payload.actor_profile is not None or payload.clerk_profile is not None:
             raise HTTPException(
                 status_code=403,

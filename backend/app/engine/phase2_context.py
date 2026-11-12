@@ -85,6 +85,11 @@ def resolve_actor_context_ceiling(actor_profile: ModelProfile) -> tuple[int | No
     if endpoint is not None:
         if endpoint.type in ("openrouter", "aihorde"):
             return None, 0
+        if endpoint.type == "webgpu":
+            from app.providers.webgpu_catalog import get_webgpu_max_context
+
+            clamped = min(int(ctx), get_webgpu_max_context(getattr(actor_profile, "model", None)))
+            return clamped, int(getattr(actor_profile, "max_tokens", 0) or 0)
         if endpoint.type == "ollama":
             from app.providers.probe import probe_service
 

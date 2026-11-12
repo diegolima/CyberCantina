@@ -19,3 +19,6 @@ class ResolvedEndpoint:
     timeout_seconds: float = 120.0
     # True for providers created by non-admin users: network location is re-validated before use.
     network_restricted: bool = False
+    owner_id: str | None = None
+    # Requesting user for system-scoped browser providers (where owner_id is None).
+    caller_user_id: str | None = None

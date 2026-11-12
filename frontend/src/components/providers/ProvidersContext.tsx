@@ -8,7 +8,11 @@ import React, {
   useState,
 } from "react";
 import { api } from "../../api";
+import { probeBrowserOllama } from "../../local/ollamaDriver";
+import { checkWebGpuAdapter, getWebGpuModelInfos } from "../../local/webgpuCatalog";
+import { useOptionalLocalRelay } from "../../providers/LocalRelayContext";
 import {
+  ClientProbeReport,
   LLMProvider,
   ProviderCreatePayload,
   ProviderProbeResponse,
@@ -54,6 +58,7 @@ export const ProvidersProvider: React.FC<{
    */
   probeSystem?: boolean;
 }> = ({ children, probeSystem = true }) => {
+  const relay = useOptionalLocalRelay();
   const [providers, setProviders] = useState<LLMProvider[]>([]);
   const [status, setStatus] = useState<Record<string, ProviderStatus>>({});
   const [loading, setLoading] = useState(true);
@@ -76,7 +81,8 @@ export const ProvidersProvider: React.FC<{
     async (id: string, opts?: { force?: boolean }) => {
       const target = providersRef.current.find((p) => p.id === id);
       if (!target) return;
-      if (!probeSystem && target.scope === "system") return;
+      const isBrowserLocal = target.type === "browser_ollama" || target.type === "webgpu";
+      if (!probeSystem && target.scope === "system" && !isBrowserLocal) return;
       abortProbe(id);
       const controller = new AbortController();
       inflight.current.set(id, controller);
@@ -84,7 +90,60 @@ export const ProvidersProvider: React.FC<{
       const version = target.version;
       setStatus((s) => ({ ...s, [id]: { state: "probing", forVersion: version, result: s[id]?.result } }));
       try {
-        const result = await api.probeProvider(id, { force: opts?.force, signal: controller.signal });
+        let result: ProviderProbeResponse;
+        const canPersistClientProbe = target.scope === "user" || probeSystem;
+        if (target.type === "browser_ollama") {
+          const localRes = await probeBrowserOllama(target.base_url ?? undefined, controller.signal);
+          const report: ClientProbeReport = {
+            reachable: localRes.reachable,
+            protocol: localRes.protocol,
+            models: localRes.models,
+            error_code: localRes.error_code,
+            error: localRes.error,
+          };
+          result = canPersistClientProbe
+            ? await api.reportClientProbe(id, report, controller.signal)
+            : {
+                provider_id: id,
+                reachable: localRes.reachable,
+                protocol: localRes.protocol,
+                models: localRes.models,
+                chat_models: localRes.models.filter((m) => !m.is_embedding).map((m) => m.name),
+                embedding_models: localRes.models.filter((m) => m.is_embedding).map((m) => m.name),
+                error_code: localRes.error_code,
+                error: localRes.error,
+                config_version: version,
+                probed_at: new Date().toISOString(),
+                from_cache: false,
+              };
+        } else if (target.type === "webgpu") {
+          const check = await checkWebGpuAdapter();
+          const models = check.supported ? getWebGpuModelInfos() : [];
+          const report: ClientProbeReport = {
+            reachable: check.supported,
+            protocol: check.supported ? "openai_compat" : null,
+            models,
+            error_code: check.supported ? null : "webgpu_unsupported",
+            error: check.supported ? null : check.reason || "WebGPU is unavailable.",
+          };
+          result = canPersistClientProbe
+            ? await api.reportClientProbe(id, report, controller.signal)
+            : {
+                provider_id: id,
+                reachable: check.supported,
+                protocol: check.supported ? "openai_compat" : null,
+                models,
+                chat_models: models.map((m) => m.name),
+                embedding_models: [],
+                error_code: check.supported ? null : "webgpu_unsupported",
+                error: check.supported ? null : check.reason || "WebGPU is unavailable.",
+                config_version: version,
+                probed_at: new Date().toISOString(),
+                from_cache: false,
+              };
+        } else {
+          result = await api.probeProvider(id, { force: opts?.force, signal: controller.signal });
+        }
         const current = providersRef.current.find((p) => p.id === id);
         // Drop stale answers: the provider was edited/removed while the request was in flight.
         if (!mounted.current || controller.signal.aborted || !current || current.version !== version) return;
@@ -112,7 +171,15 @@ export const ProvidersProvider: React.FC<{
   const probeAll = useCallback(
     async (opts?: { force?: boolean }) => {
       const queue = providersRef.current
-        .filter((p) => p.is_enabled && p.usable && (probeSystem || p.scope !== "system"))
+        .filter(
+          (p) =>
+            p.is_enabled &&
+            p.usable &&
+            (probeSystem ||
+              p.scope !== "system" ||
+              p.type === "browser_ollama" ||
+              p.type === "webgpu")
+        )
         .map((p) => p.id);
       const workers = Array.from({ length: Math.min(PROBE_CONCURRENCY, queue.length) }, async () => {
         for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
@@ -163,9 +230,10 @@ export const ProvidersProvider: React.FC<{
       const created = await api.createProvider(payload);
       commitProviders([...providersRef.current, created]);
       void probe(created.id, { force: true });
+      void relay?.refreshProviders();
       return created;
     },
-    [commitProviders, probe]
+    [commitProviders, probe, relay]
   );
 
   const update = useCallback(
@@ -175,9 +243,10 @@ export const ProvidersProvider: React.FC<{
       commitProviders(providersRef.current.map((p) => (p.id === id ? updated : p)));
       setStatus((s) => ({ ...s, [id]: { state: "unknown", forVersion: updated.version } }));
       void probe(id, { force: true });
+      void relay?.refreshProviders();
       return updated;
     },
-    [abortProbe, commitProviders, probe]
+    [abortProbe, commitProviders, probe, relay]
   );
 
   const remove = useCallback(
@@ -189,8 +258,9 @@ export const ProvidersProvider: React.FC<{
         const { [id]: _removed, ...rest } = s;
         return rest;
       });
+      void relay?.refreshProviders();
     },
-    [abortProbe, commitProviders]
+    [abortProbe, commitProviders, relay]
   );
 
   const byId = useCallback(

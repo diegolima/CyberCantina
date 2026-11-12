@@ -220,7 +220,7 @@ class AppSettings(BaseModel):
         description="When True, users can customize their own Actor and Clerk models in their Profile.",
     )
     allow_user_providers: bool = Field(
-        default=False,
+        default_factory=lambda: os.environ.get("CYBERCANTINA_ALLOW_USER_PROVIDERS", "").strip().lower() in ("1", "true", "yes"),
         description=(
             "When True (BYOP), users can register their own private providers. Forces "
             "allow_user_model_overrides to True."

@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ProviderType = Literal["ollama", "openrouter", "aihorde"]
+ProviderType = Literal["ollama", "openrouter", "aihorde", "browser_ollama", "webgpu"]
 ProviderScope = Literal["system", "user"]
 ProviderColor = Literal["neutral", "cyan", "purple", "indigo", "bronze"]
 ProbeErrorCode = Literal[
@@ -23,6 +23,8 @@ ProbeErrorCode = Literal[
     "blocked_by_policy",
     "invalid_url",
     "rate_limited",
+    "relay_offline",
+    "webgpu_unsupported",
     "unknown",
 ]
 UnusableReason = Literal["disabled", "byop_disabled"]
@@ -126,6 +128,16 @@ class ProviderProbeResponse(BaseModel):
     config_version: int = 0
     probed_at: str
     from_cache: bool = False
+
+
+class ClientProbeReport(BaseModel):
+    """Browser-executed probe outcome pushed back by the provider owner."""
+
+    reachable: bool
+    protocol: Literal["ollama_native", "openai_compat"] | None = None
+    models: list[ProviderModelInfo] = Field(default_factory=list)
+    error_code: ProbeErrorCode | None = None
+    error: str | None = None
 
 
 class ProviderReference(BaseModel):

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { AlertTriangle } from "lucide-react";
+import { clampWebGpuContext } from "../../local/webgpuCatalog";
 import { useProviders } from "../providers/ProvidersContext";
 import { IntegerField } from "./IntegerField";
 import { ModelCard } from "./ModelCard";
@@ -168,18 +169,28 @@ export const ModelDeck: React.FC<ModelDeckProps> = ({
 
   // Provider details
   const actorProvider = store.byId(actorSelection.providerId);
-  const isActorOllama = !actorProvider || actorProvider.type === "ollama";
+  const isActorOllama =
+    !actorProvider ||
+    actorProvider.type === "ollama" ||
+    actorProvider.type === "browser_ollama";
+  const isActorWebGpu = actorProvider?.type === "webgpu";
   const actorProbeProtocol = actorSelection.providerId
     ? store.status[actorSelection.providerId]?.result?.protocol
     : undefined;
-  const isActorNativeOllama = isActorOllama && actorProbeProtocol !== "openai_compat";
+  const isActorNativeOllama =
+    (isActorOllama && actorProbeProtocol !== "openai_compat") || isActorWebGpu;
 
   const clerkProvider = store.byId(clerkSelection.providerId);
-  const isClerkOllama = !clerkProvider || clerkProvider.type === "ollama";
+  const isClerkOllama =
+    !clerkProvider ||
+    clerkProvider.type === "ollama" ||
+    clerkProvider.type === "browser_ollama";
+  const isClerkWebGpu = clerkProvider?.type === "webgpu";
   const clerkProbeProtocol = clerkSelection.providerId
     ? store.status[clerkSelection.providerId]?.result?.protocol
     : undefined;
-  const isClerkNativeOllama = isClerkOllama && clerkProbeProtocol !== "openai_compat";
+  const isClerkNativeOllama =
+    (isClerkOllama && clerkProbeProtocol !== "openai_compat") || isClerkWebGpu;
 
   // Check if Clerk uses same model as Actor
   const normTag = (m: string) => {
@@ -228,13 +239,21 @@ export const ModelDeck: React.FC<ModelDeckProps> = ({
   const vectorSummary = `Turns N=${workingMemoryTurns} · Chunks K=${episodicChunkSize} · Flags=${maxSceneFlags}`;
 
   const actorHints: string[] = [];
+  if (isActorWebGpu && actorSelection.model) {
+    const clamp = clampWebGpuContext(actorContextSize, actorSelection.model);
+    if (clamp.clamped) {
+      actorHints.push(
+        `${actorSelection.model} caps browser WebGPU context at ${formatContextTokens(clamp.effectiveContext)} (${clamp.effectiveContext} tokens); ${formatContextTokens(actorContextSize)} will be clamped automatically.`
+      );
+    }
+  }
   if (isActorNativeOllama) {
     if (actorContextSize - actorTokens < 2048) {
       actorHints.push(
         `Leaves under 2,048 tokens for prompt input (${actorTokens} max tokens in ${formatContextTokens(actorContextSize)} ctx); Zone 1–4 context may truncate.`
       );
     }
-    if (actorContextSize <= 12288 && workingMemoryTurns > 20) {
+    if (!isActorWebGpu && actorContextSize <= 12288 && workingMemoryTurns > 20) {
       actorHints.push(
         `Working Memory N=${workingMemoryTurns} often exceeds ${formatContextTokens(actorContextSize)} Actor context; consider 16k–32k+.`
       );
@@ -242,6 +261,14 @@ export const ModelDeck: React.FC<ModelDeckProps> = ({
   }
 
   const clerkHints: string[] = [];
+  if (isClerkWebGpu && !clerkContextMatchesActor && clerkSelection.model) {
+    const clamp = clampWebGpuContext(effectiveClerkContext, clerkSelection.model);
+    if (clamp.clamped) {
+      clerkHints.push(
+        `${clerkSelection.model} caps browser WebGPU context at ${formatContextTokens(clamp.effectiveContext)} tokens; ${formatContextTokens(effectiveClerkContext)} will be clamped automatically.`
+      );
+    }
+  }
   if (isClerkNativeOllama) {
     if (effectiveClerkContext - clerkTokens < 2048) {
       clerkHints.push(

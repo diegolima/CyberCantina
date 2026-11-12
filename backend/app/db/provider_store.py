@@ -176,6 +176,10 @@ class ProviderStore:
                 base_label = "OpenRouter"
             elif type == "aihorde":
                 base_label = "AI Horde"
+            elif type == "browser_ollama":
+                base_label = "Local Ollama (Browser)"
+            elif type == "webgpu":
+                base_label = "Browser WebGPU"
             else:
                 base_label = type.capitalize()
             display = self.unique_default_name(base_label, scope=scope, owner_id=owner_id)

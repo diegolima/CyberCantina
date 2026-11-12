@@ -131,6 +131,12 @@ export const ModelCard: React.FC<ModelCardProps> = ({
     return () => document.removeEventListener("mousedown", handleOutsideClick);
   }, [isExpanded]);
 
+  const formatProviderBadge = (ptype: LLMProvider["type"]) => {
+    if (ptype === "browser_ollama") return "LOCAL OLLAMA";
+    if (ptype === "webgpu") return "WEBGPU";
+    return ptype.toUpperCase();
+  };
+
   // Provider selectable options
   const selectable = (p: LLMProvider) =>
     (!systemOnly || p.scope === "system") && ((p.is_enabled && p.usable) || p.id === selection.providerId);
@@ -143,7 +149,7 @@ export const ModelCard: React.FC<ModelCardProps> = ({
         .map((p) => ({
           id: p.id,
           label: p.name,
-          secondaryLabel: p.type.toUpperCase(),
+          secondaryLabel: formatProviderBadge(p.type),
           badge: <ProviderColorPill color={p.color}>{p.name}</ProviderColorPill>,
           icon: <StatusDot provider={p} status={store.status[p.id]} />,
           isCurrent: p.id === selection.providerId,
@@ -156,7 +162,7 @@ export const ModelCard: React.FC<ModelCardProps> = ({
         .map((p) => ({
           id: p.id,
           label: p.name,
-          secondaryLabel: p.type.toUpperCase(),
+          secondaryLabel: formatProviderBadge(p.type),
           badge: <ProviderColorPill color={p.color}>{p.name}</ProviderColorPill>,
           icon: <StatusDot provider={p} status={store.status[p.id]} />,
           isCurrent: p.id === selection.providerId,

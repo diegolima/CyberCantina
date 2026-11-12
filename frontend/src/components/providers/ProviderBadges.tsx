@@ -35,6 +35,10 @@ export function describeProbeError(code: ProbeErrorCode | null | undefined): str
       return "The server URL is invalid.";
     case "rate_limited":
       return "Too many checks; try again in a minute.";
+    case "relay_offline":
+      return "Browser inference relay is offline. Keep this tab open and connected.";
+    case "webgpu_unsupported":
+      return "WebGPU is not available in this browser.";
     default:
       return "The server could not be reached.";
   }

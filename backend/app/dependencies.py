@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import logging
 from dataclasses import dataclass, field
@@ -87,9 +88,10 @@ def _finalize_profile(
         warnings.append(EffectiveWarning(role=role, code="missing_provider"))  # type: ignore[arg-type]
         return _finalize_profile(default, role, user_id=None, from_user=False, default=default, warnings=warnings)
     try:
-        return attach_endpoint(
-            profile, resolve_endpoint(profile, user_id=user_id if from_user else None, role=role)
-        )
+        endpoint = resolve_endpoint(profile, user_id=user_id if from_user else None, role=role)
+        if endpoint is not None and user_id is not None and endpoint.caller_user_id is None:
+            endpoint = dataclasses.replace(endpoint, caller_user_id=user_id)
+        return attach_endpoint(profile, endpoint)
     except ProviderUnavailableError as exc:
         if not from_user:
             logger.warning("System %s provider unavailable: %s", role, exc)
@@ -167,7 +169,7 @@ def resolve_effective_models(user_id: str | None) -> EffectiveModels:
 
     user_settings = (
         get_repo().get_user_model_settings(user_id)
-        if (settings.allow_user_model_overrides and user_id)
+        if ((settings.allow_user_model_overrides or settings.allow_user_providers) and user_id)
         else None
     )
     actor_src, clerk_src = default_actor, default_clerk

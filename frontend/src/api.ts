@@ -13,6 +13,7 @@ import {
   CharacterWizardDraft,
   CharacterWizardSeed,
   ChoicePreviewResponse,
+  ClientProbeReport,
   CognitionBlock,
   CreateNotePayload,
   CreateCampaignPayload,
@@ -22,6 +23,7 @@ import {
   ImportCommitResponse,
   ImportInspectResponse,
   ItemEquipActionPayload,
+  LocalRelayStatusResponse,
   LocationLoreNodeDraft,
   MemoryShard,
   OllamaStatusResponse,
@@ -66,6 +68,27 @@ import {
 
 const API_BASE = "/api";
 const TOKEN_STORAGE_KEY = "cantina_session_token";
+const RELAY_TAB_STORAGE_KEY = "cantina_relay_tab_id";
+
+let fallbackTabId: string | null = null;
+
+export function getRelayTabId(): string {
+  try {
+    const existing = sessionStorage.getItem(RELAY_TAB_STORAGE_KEY);
+    if (existing) return existing;
+    const generated =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `tab_${Math.random().toString(36).slice(2, 12)}`;
+    sessionStorage.setItem(RELAY_TAB_STORAGE_KEY, generated);
+    return generated;
+  } catch {
+    if (!fallbackTabId) {
+      fallbackTabId = `tab_${Math.random().toString(36).slice(2, 12)}`;
+    }
+    return fallbackTabId;
+  }
+}
 
 let unauthorizedHandler: (() => void) | null = null;
 
@@ -105,6 +128,7 @@ function buildAuthHeaders(
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
+  headers["X-Cantina-Tab-Id"] = getRelayTabId();
   if (extra) {
     if (extra instanceof Headers) {
       extra.forEach((v, k) => {
@@ -600,6 +624,14 @@ export const api = {
       `${API_BASE}/providers/${id}/probe${opts?.force ? "?force=true" : ""}`,
       { method: "POST", signal: opts?.signal }
     ),
+  reportClientProbe: (id: string, report: ClientProbeReport, signal?: AbortSignal) =>
+    fetchJson<ProviderProbeResponse>(`${API_BASE}/providers/${id}/client-probe`, {
+      method: "POST",
+      body: JSON.stringify(report),
+      signal,
+    }),
+  getLocalRelayStatus: () =>
+    fetchJson<LocalRelayStatusResponse>(`${API_BASE}/local-relay/status`),
   probeProviderDraft: (draft: ProviderDraft) =>
     fetchJson<ProviderProbeResponse>(`${API_BASE}/providers/probe-draft`, {
       method: "POST",

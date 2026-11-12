@@ -314,7 +314,7 @@ async def probe_system_providers(store: ProviderStore, service: ProbeService | N
     active = service or probe_service
     probed = 0
     for record in store.list_system():
-        if record.is_enabled:
+        if record.is_enabled and record.type not in ("browser_ollama", "webgpu"):
             await active.probe(record, store, force=True)
             probed += 1
     return probed

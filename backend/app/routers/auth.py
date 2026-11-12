@@ -21,8 +21,10 @@ from app.auth import (
     verify_passkey_registration,
     verify_password,
 )
+from app.config import settings
 from app.db.seed import ensure_default_seed
 from app.dependencies import get_repo, issue_session_response
+from app.providers.seeder import auto_provision_webgpu_for_user
 from app.schemas.auth import (
     AdminChangeUsernameRequest,
     AdminCreateUserRequest,
@@ -173,6 +175,7 @@ def register_user(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    auto_provision_webgpu_for_user(repo, user.id, settings)
     logger.info("Registered new user '%s'", user.username)
     return issue_session_response(repo, user, request, response)
 
@@ -508,7 +511,7 @@ def admin_create_user(
         )
     pwd_hash = hash_password(req.password)
     try:
-        return repo.create_user(
+        created = repo.create_user(
             username=req.username,
             display_name=req.display_name or req.username,
             password_hash=pwd_hash,
@@ -516,6 +519,9 @@ def admin_create_user(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if created.role == "user":
+        auto_provision_webgpu_for_user(repo, created.id, settings)
+    return created
 
 
 @router.put("/api/admin/users/{user_id}/username", response_model=UserProfile)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
@@ -16,12 +17,15 @@ from app.db.provider_store import (
     ProviderVersionConflictError,
 )
 from app.dependencies import get_repo
+from app.providers.local_relay import local_relay_hub
 from app.providers.openrouter_catalog import openrouter_catalog_service
 from app.providers.probe import ProbeRateLimited, probe_service
 from app.providers.references import clear_user_overrides, find_references
 from app.providers.resolver import visibility_problem
+from app.providers.webgpu_catalog import get_webgpu_model_infos
 from app.schemas.auth import UserProfile
 from app.schemas.provider import (
+    ClientProbeReport,
     ProviderCreatePayload,
     ProviderDeleteConflict,
     ProviderDraft,
@@ -88,6 +92,13 @@ def _visible_or_404(store: ProviderStore, provider_id: str, user: UserProfile) -
     return record
 
 
+_BROWSER_PROVIDER_TYPES = frozenset({"browser_ollama", "webgpu"})
+
+
+def _is_browser_provider(provider_type: str) -> bool:
+    return provider_type in _BROWSER_PROVIDER_TYPES
+
+
 def _validate_url(raw: str | None, *, provider_type: str = "ollama", allow_private: bool):
     try:
         url = normalize_base_url(raw or "", provider_type=provider_type)
@@ -96,7 +107,9 @@ def _validate_url(raw: str | None, *, provider_type: str = "ollama", allow_priva
     return url
 
 
-async def _check_url_policy(url, *, allow_private: bool) -> None:
+async def _check_url_policy(url, *, provider_type: str = "ollama", allow_private: bool) -> None:
+    if _is_browser_provider(provider_type):
+        return
     try:
         await assert_url_allowed(url, allow_private=allow_private)
     except UrlBlockedError as exc:
@@ -129,11 +142,17 @@ async def create_provider(
         raw_url = (payload.settings.base_url or "").strip() or "https://openrouter.ai/api/v1"
     elif payload.type == "aihorde":
         raw_url = (payload.settings.base_url or "").strip() or "https://oai.stablehorde.net/v1"
+    elif payload.type == "webgpu":
+        raw_url = "webgpu://browser"
+        raw_token = ""
+    elif payload.type == "browser_ollama":
+        raw_url = (payload.settings.base_url or "").strip() or "http://localhost:11434"
+        raw_token = ""
     else:
         raw_url = (payload.settings.base_url or "").strip()
 
     url = _validate_url(raw_url, provider_type=payload.type, allow_private=allow_private)
-    await _check_url_policy(url, allow_private=allow_private)
+    await _check_url_policy(url, provider_type=payload.type, allow_private=allow_private)
     store = _store()
     try:
         record = store.create(
@@ -147,6 +166,14 @@ async def create_provider(
             bearer_token=raw_token or None,
             network_restricted=not allow_private,
         )
+        if payload.type == "webgpu":
+            store.record_probe(
+                record.id,
+                models=get_webgpu_model_infos(),
+                error_code=None,
+                probed_at=datetime.now(timezone.utc).isoformat(),
+            )
+            record = store.get(record.id) or record
     except ProviderNameConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -166,10 +193,10 @@ async def update_provider(
         raise HTTPException(status_code=403, detail="Personal providers are disabled by the administrator.")
 
     new_url: str | None = None
-    if payload.base_url is not None:
+    if payload.base_url is not None and record.type != "webgpu":
         allow_private = _is_admin(user) and not record.network_restricted
         url = _validate_url(payload.base_url, provider_type=record.type, allow_private=allow_private)
-        await _check_url_policy(url, allow_private=allow_private)
+        await _check_url_policy(url, provider_type=record.type, allow_private=allow_private)
         new_url = url.root
         old_host = normalize_base_url(record.base_url, provider_type=record.type).host if record.base_url else ""
         if (
@@ -273,8 +300,56 @@ async def probe_provider(
                 config_version=record.version,
                 probed_at="",
             )
+    if _is_browser_provider(record.type):
+        probed_at = datetime.now(timezone.utc).isoformat()
+        resp = await local_relay_hub.probe(
+            user_id=user.id,
+            provider_id=record.id,
+            driver=record.type,  # type: ignore[arg-type]
+            base_url=record.base_url,
+            config_version=record.version,
+            probed_at=probed_at,
+        )
+        if resp.reachable:
+            store.record_probe(record.id, models=resp.models, error_code=None, probed_at=probed_at)
+        elif resp.error_code and resp.error_code != "relay_offline":
+            store.record_probe(record.id, models=None, error_code=resp.error_code, probed_at=probed_at)
+        return _public_probe(resp, privileged=_can_manage(record, user))
     resp = await probe_service.probe(record, store, force=force)
     return _public_probe(resp, privileged=_can_manage(record, user))
+
+
+@router.post("/{provider_id}/client-probe", response_model=ProviderProbeResponse)
+def report_client_probe(
+    provider_id: str,
+    report: ClientProbeReport,
+    user: UserProfile = Depends(get_current_user),
+) -> ProviderProbeResponse:
+    """Persist a client-executed probe for a browser-local provider owned by the caller."""
+    store = _store()
+    record = _visible_or_404(store, provider_id, user)
+    if not _can_manage(record, user):
+        raise HTTPException(status_code=403, detail="You are not allowed to update this provider.")
+    if not _is_browser_provider(record.type):
+        raise HTTPException(status_code=422, detail="Client probes are only valid for browser-local providers.")
+    probed_at = datetime.now(timezone.utc).isoformat()
+    models = get_webgpu_model_infos() if (record.type == "webgpu" and report.reachable and not report.models) else report.models
+    if report.reachable:
+        store.record_probe(record.id, models=models, error_code=None, probed_at=probed_at)
+    else:
+        store.record_probe(record.id, models=None, error_code=report.error_code or "unknown", probed_at=probed_at)
+    return ProviderProbeResponse(
+        provider_id=record.id,
+        reachable=report.reachable,
+        protocol=report.protocol,
+        models=models,
+        chat_models=[m.name for m in models if not m.is_embedding],
+        embedding_models=[m.name for m in models if m.is_embedding],
+        error_code=None if report.reachable else (report.error_code or "unknown"),
+        error=None if report.reachable else report.error,
+        config_version=record.version,
+        probed_at=probed_at,
+    )
 
 
 @router.post("/probe-draft", response_model=ProviderProbeResponse)
@@ -293,7 +368,15 @@ async def probe_draft(draft: ProviderDraft, user: UserProfile = Depends(get_curr
     default_draft_url = (
         "https://openrouter.ai/api/v1"
         if draft.type == "openrouter"
-        else ("https://oai.stablehorde.net/v1" if draft.type == "aihorde" else "")
+        else (
+            "https://oai.stablehorde.net/v1"
+            if draft.type == "aihorde"
+            else (
+                "http://localhost:11434"
+                if draft.type == "browser_ollama"
+                else ("webgpu://browser" if draft.type == "webgpu" else "")
+            )
+        )
     )
     draft_url = draft.base_url or default_draft_url
     try:
@@ -301,6 +384,15 @@ async def probe_draft(draft: ProviderDraft, user: UserProfile = Depends(get_curr
     except UrlBlockedError as exc:
         return ProviderProbeResponse(
             provider_id=draft.provider_id, reachable=False, error_code="invalid_url", error=str(exc), probed_at=""
+        )
+    if _is_browser_provider(draft.type):
+        return await local_relay_hub.probe(
+            user_id=user.id,
+            provider_id=draft.provider_id,
+            driver=draft.type,  # type: ignore[arg-type]
+            base_url=url.root,
+            config_version=0,
+            probed_at=datetime.now(timezone.utc).isoformat(),
         )
     if draft.provider_id:
         record = _visible_or_404(store, draft.provider_id, user)

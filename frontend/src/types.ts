@@ -1204,7 +1204,12 @@ export interface SettingsUpdateResponse extends AppSettings {
   stale_embedding_entries: number;
 }
 
-export type ProviderType = "ollama" | "openrouter" | "aihorde";
+export type ProviderType =
+  | "ollama"
+  | "openrouter"
+  | "aihorde"
+  | "browser_ollama"
+  | "webgpu";
 export type ProviderScope = "system" | "user";
 export type ProviderColor = "neutral" | "cyan" | "purple" | "indigo" | "bronze";
 export type ProbeErrorCode =
@@ -1219,6 +1224,8 @@ export type ProbeErrorCode =
   | "blocked_by_policy"
   | "invalid_url"
   | "rate_limited"
+  | "relay_offline"
+  | "webgpu_unsupported"
   | "unknown";
 
 export interface ProviderModelInfo {
@@ -1293,6 +1300,24 @@ export interface ProviderProbeResponse {
   config_version: number;
   probed_at: string;
   from_cache: boolean;
+}
+
+export interface ClientProbeReport {
+  reachable: boolean;
+  protocol?: "ollama_native" | "openai_compat" | null;
+  models: ProviderModelInfo[];
+  error_code?: ProbeErrorCode | null;
+  error?: string | null;
+}
+
+export interface LocalRelayStatusResponse {
+  connected: boolean;
+  tabs: {
+    tab_id: string;
+    webgpu_supported: boolean;
+    loaded_webgpu_model?: string | null;
+    webgpu_error?: string | null;
+  }[];
 }
 
 export interface ProviderReference {

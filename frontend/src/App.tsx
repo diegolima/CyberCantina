@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Cpu,
   Flame,
   FolderKanban,
   Globe,
@@ -40,6 +41,10 @@ import { NewCampaignModal } from "./components/NewCampaignModal";
 import { NotesFlyout, NotesModal } from "./components/NotesDrawer";
 import { PersonaEditorModal } from "./components/PersonaEditorModal";
 import {
+  LocalRelayProvider,
+  useOptionalLocalRelay,
+} from "./providers/LocalRelayContext";
+import {
   CharacterWizardModal,
   WorldWizardModal,
 } from "./components/WizardModals";
@@ -64,6 +69,7 @@ import {
   Phase4AgentProgressItem,
   Phase4TurnProgress,
   PreTurnAnalysis,
+  ProfileModelSettingsResponse,
   RecalledMemoryItem,
   UserNote,
   UserProfile,
@@ -211,6 +217,42 @@ function SidebarCategory<T>({
   );
 }
 
+const RelaySidebarBadge: React.FC = () => {
+  const relay = useOptionalLocalRelay();
+  if (!relay || !relay.hasBrowserProviders) return null;
+  const connected = relay.wsState === "connected";
+  return (
+    <div
+      className={`relay-status-pill ${connected ? "connected" : "offline"}`}
+      title={
+        relay.webgpuLoadedModel
+          ? `Browser relay ${relay.wsState} · WebGPU loaded: ${relay.webgpuLoadedModel}`
+          : `Browser inference relay: ${relay.wsState}`
+      }
+    >
+      <Cpu size={13} />
+      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {relay.webgpuLoadedModel
+          ? `GPU: ${relay.webgpuLoadedModel.split("-q4")[0]}`
+          : connected
+          ? "Browser Relay Ready"
+          : `Relay ${relay.wsState}…`}
+      </span>
+      {relay.webgpuLoadedModel && (
+        <button
+          type="button"
+          className="btn btn-ghost"
+          style={{ padding: "1px 5px", fontSize: "0.66rem" }}
+          onClick={() => void relay.unloadWebGpu()}
+          title="Unload WebGPU model from browser VRAM"
+        >
+          Unload
+        </button>
+      )}
+    </div>
+  );
+};
+
 export const App: React.FC = () => {
   const [authChecking, setAuthChecking] = useState(true);
   const [setupRequired, setSetupRequired] = useState(false);
@@ -221,9 +263,14 @@ export const App: React.FC = () => {
   const [profileInitialTab, setProfileInitialTab] = useState<
     "identity" | "account" | "preferences" | "models" | "prompts" | "behavior"
   >("identity");
-  const [adminInitialTab, setAdminInitialTab] = useState<"users" | "models">(
-    "users"
-  );
+  const [profileInitialSubTab, setProfileInitialSubTab] = useState<
+    "behavior" | "prompts" | "models" | "providers" | undefined
+  >(undefined);
+  const [adminInitialTab, setAdminInitialTab] = useState<
+    "users" | "providers" | "models" | "prompts"
+  >("users");
+  const [profileModels, setProfileModels] =
+    useState<ProfileModelSettingsResponse | null>(null);
 
   const [campaigns, setCampaigns] = useState<CampaignRecord[]>([]);
   const [worlds, setWorlds] = useState<WorldRecord[]>([]);
@@ -412,18 +459,20 @@ export const App: React.FC = () => {
   };
 
   const loadWorkspaceData = async () => {
-    const [camps, wList, cList, cfg, userNotes, personaList] = await Promise.all([
+    const [camps, wList, cList, cfg, userNotes, personaList, profModels] = await Promise.all([
       api.listCampaigns(),
       api.listWorlds(),
       api.listCharacters(),
       api.getSettings(),
       api.listNotes().catch(() => [] as UserNote[]),
       api.listPersonas().catch(() => [] as PersonaRecord[]),
+      api.getProfileModels().catch(() => null),
     ]);
     setCampaigns(camps);
     setWorlds(wList);
     setCharacters(cList);
     setAppSettings(cfg);
+    setProfileModels(profModels);
     setNotes(userNotes);
     setPersonas(personaList);
     const storedPersonaId = localStorage.getItem(DEFAULT_PERSONA_STORAGE_KEY);
@@ -1267,6 +1316,7 @@ export const App: React.FC = () => {
   }
 
   return (
+    <LocalRelayProvider currentUser={currentUser}>
     <div className={`studio-shell ${!bundle ? "no-campaign" : ""}`}>
       {/* Left Sidebar: 4 Collapsible, Searchable, Paged Categories (Active in play mode) */}
       {bundle && (
@@ -1651,6 +1701,7 @@ export const App: React.FC = () => {
 
         {/* Bottom User Profile & Admin Area */}
         <div className="sidebar-bottom-area">
+          <RelaySidebarBadge />
           {/* Notes Button sitting directly above user profile */}
           <div
             className={`sidebar-notes-btn ${showNotesFlyout ? "active" : ""}`}
@@ -1840,12 +1891,41 @@ export const App: React.FC = () => {
           }}
           onOpenProfile={() => {
             setProfileInitialTab("identity");
+            setProfileInitialSubTab(undefined);
             setShowProfileModal(true);
           }}
           onOpenAdmin={() => {
             setAdminInitialTab("users");
             setShowAdminModal(true);
           }}
+          onOpenProviders={() => {
+            if (currentUser?.role === "admin") {
+              setAdminInitialTab("providers");
+              setShowAdminModal(true);
+            } else {
+              setProfileInitialTab("preferences");
+              setProfileInitialSubTab("providers");
+              setShowProfileModal(true);
+            }
+          }}
+          effectiveActorModel={
+            profileModels?.effective_actor_profile
+              ? {
+                  providerId: profileModels.effective_actor_profile.provider_id,
+                  model: profileModels.effective_actor_profile.model,
+                  contextSize: profileModels.effective_actor_profile.context_size,
+                }
+              : appSettings?.actor_profile
+              ? {
+                  providerId: appSettings.actor_profile.provider_id,
+                  model: appSettings.actor_profile.model,
+                  contextSize: appSettings.actor_profile.context_size,
+                }
+              : null
+          }
+          allowUserProviders={Boolean(
+            profileModels?.allow_user_providers ?? appSettings?.allow_user_providers
+          )}
           onOpenNotes={() => {
             setNotesModalInitialId(undefined);
             setShowNotesModal(true);
@@ -2203,7 +2283,12 @@ export const App: React.FC = () => {
           user={currentUser}
           singleUserMode={singleUserMode}
           initialTab={profileInitialTab}
-          onClose={() => setShowProfileModal(false)}
+          initialSubTab={profileInitialSubTab}
+          onClose={() => {
+            setShowProfileModal(false);
+            setProfileInitialSubTab(undefined);
+            void api.getProfileModels().then(setProfileModels).catch(() => {});
+          }}
           onUserUpdated={async (updated) => {
             setCurrentUser(updated);
             await refreshAuthStatus();
@@ -2220,7 +2305,10 @@ export const App: React.FC = () => {
           currentUser={currentUser}
           singleUserMode={singleUserMode}
           initialTab={adminInitialTab}
-          onClose={() => setShowAdminModal(false)}
+          onClose={() => {
+            setShowAdminModal(false);
+            void api.getProfileModels().then(setProfileModels).catch(() => {});
+          }}
           onCurrentUserUpdated={async (updated) => {
             setCurrentUser(updated);
             await refreshAuthStatus();
@@ -2230,7 +2318,10 @@ export const App: React.FC = () => {
               await handleAccountDeleted();
             }
           }}
-          onSettingsUpdated={(updated) => setAppSettings(updated)}
+          onSettingsUpdated={(updated) => {
+            setAppSettings(updated);
+            void api.getProfileModels().then(setProfileModels).catch(() => {});
+          }}
         />
       )}
 
@@ -2326,5 +2417,6 @@ export const App: React.FC = () => {
         />
       )}
     </div>
+    </LocalRelayProvider>
   );
 };

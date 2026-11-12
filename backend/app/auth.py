@@ -28,6 +28,7 @@ from webauthn.helpers.structs import (
 
 from app.config import settings
 from app.db.repository import CantinaRepository
+from app.providers.local_relay import relay_user_context
 from app.schemas.auth import UserProfile
 
 SESSION_COOKIE_NAME = "cantina_session"
@@ -326,7 +327,10 @@ def get_optional_user(
     raw_token: str | None = Depends(extract_raw_token),
 ) -> UserProfile | None:
     repo = CantinaRepository(settings.db_path)
-    return resolve_optional_user(repo, raw_token)
+    user = resolve_optional_user(repo, raw_token)
+    if user is not None:
+        relay_user_context.set(user.id)
+    return user
 
 
 def get_current_user(
@@ -339,6 +343,7 @@ def get_current_user(
             status_code=401,
             detail="Authentication required or session expired after 24 hours of inactivity.",
         )
+    relay_user_context.set(user.id)
     return user
 
 

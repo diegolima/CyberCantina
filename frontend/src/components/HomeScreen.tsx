@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   Computer,
+  Cpu,
   Download,
   FileArchive,
   Flame,
@@ -14,7 +16,9 @@ import {
   UserCheck,
   UserCog,
   Users,
+  X,
 } from "lucide-react";
+import { useOptionalLocalRelay } from "../providers/LocalRelayContext";
 import {
   CampaignRecord,
   CharacterRecord,
@@ -50,7 +54,14 @@ export interface HomeScreenProps {
   onSetActivePersona: (persona: PersonaRecord) => void;
   onOpenProfile: () => void;
   onOpenAdmin: () => void;
+  onOpenProviders?: () => void;
   onOpenNotes: () => void;
+  effectiveActorModel?: {
+    providerId?: string | null;
+    model?: string;
+    contextSize?: number | null;
+  } | null;
+  allowUserProviders?: boolean;
   onLogout: () => void;
   onDeleteCampaign?: (campaign: CampaignRecord) => void;
   onDeleteCharacter?: (character: CharacterRecord) => void;
@@ -198,7 +209,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onSetActivePersona,
   onOpenProfile,
   onOpenAdmin,
+  onOpenProviders,
   onOpenNotes,
+  effectiveActorModel,
+  allowUserProviders = false,
   onLogout,
   onDeleteCampaign,
   onDeleteCharacter,
@@ -207,11 +221,55 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onRefreshData,
   onOpenCharacterWizardWithDraft,
 }) => {
+  const relay = useOptionalLocalRelay();
   const [activePickerCategory, setActivePickerCategory] = useState<EntityCategory | null>(null);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [droppedFile, setDroppedFile] = useState<File | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [preloadingWebGpu, setPreloadingWebGpu] = useState(false);
+  const [preloadError, setPreloadError] = useState<string | null>(null);
+
+  const dismissKey = currentUser
+    ? `cantina_webgpu_notice_dismissed_v1:${currentUser.id}`
+    : "cantina_webgpu_notice_dismissed_v1";
+  const [noticeDismissed, setNoticeDismissed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(dismissKey) === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      setNoticeDismissed(localStorage.getItem(dismissKey) === "1");
+    } catch {
+      setNoticeDismissed(false);
+    }
+  }, [dismissKey]);
+
+  const activeActorProvider = useMemo(
+    () =>
+      effectiveActorModel?.providerId
+        ? relay?.allProviders.find((p) => p.id === effectiveActorModel.providerId)
+        : undefined,
+    [effectiveActorModel?.providerId, relay?.allProviders]
+  );
+
+  const showWebGpuNotice =
+    !noticeDismissed && activeActorProvider?.type === "webgpu";
+  const canConfigureProviders =
+    currentUser?.role === "admin" || allowUserProviders;
+
+  const dismissWebGpuNotice = () => {
+    setNoticeDismissed(true);
+    try {
+      localStorage.setItem(dismissKey, "1");
+    } catch {
+      // ignore storage errors
+    }
+  };
 
   // Extract primary images (at most 1 per entity) for each category
   const personaImages = useMemo(() => getCategoryPrimaryImages("personas", personas), [personas]);
@@ -348,6 +406,106 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               Welcome to your central control deck. Explore worlds, manage characters, configure personas, or dive straight into active campaigns.
             </div>
           </div>
+
+          {showWebGpuNotice && (
+            <div
+              className={`home-webgpu-notice ${
+                relay?.webgpuSupported === false ? "is-unsupported" : ""
+              }`}
+              role="status"
+            >
+              <div className="home-webgpu-notice-icon">
+                {relay?.webgpuSupported === false ? (
+                  <AlertTriangle size={18} color="var(--accent-amber)" />
+                ) : (
+                  <Cpu size={18} color="var(--accent-violet)" />
+                )}
+              </div>
+              <div className="home-webgpu-notice-body">
+                <div className="home-webgpu-notice-title">
+                  {relay?.webgpuSupported === false
+                    ? "Browser WebGPU is unavailable on this browser or GPU"
+                    : "In-Browser WebGPU is pre-configured out of the box"}
+                </div>
+                <div className="home-webgpu-notice-text">
+                  {relay?.webgpuSupported === false ? (
+                    <>
+                      {relay.webgpuError || "This browser cannot run WebGPU models."}{" "}
+                      Add a <strong>Local Ollama (Browser)</strong> or{" "}
+                      <strong>OpenRouter</strong> provider to start generating turns.
+                    </>
+                  ) : (
+                    <>
+                      Ready to play with{" "}
+                      <code>{effectiveActorModel?.model || "Qwen2.5-3B-Instruct"}</code>{" "}
+                      running locally on your browser GPU (first turn downloads ~2.5 GB
+                      into browser cache, 4k context cap). For optimal speed, larger
+                      models, and 12k+ context, we recommend adding a{" "}
+                      <strong>Local Ollama</strong> or <strong>OpenRouter</strong>{" "}
+                      provider.
+                    </>
+                  )}
+                </div>
+                {preloadError && (
+                  <div className="home-webgpu-notice-error">{preloadError}</div>
+                )}
+                <div className="home-webgpu-notice-actions">
+                  {canConfigureProviders && onOpenProviders && (
+                    <button
+                      type="button"
+                      className="btn btn-amber btn-sm"
+                      onClick={onOpenProviders}
+                    >
+                      {currentUser?.role === "admin"
+                        ? "Configure Providers (Admin)"
+                        : "Add Optimal Provider"}
+                    </button>
+                  )}
+                  {relay?.webgpuSupported !== false &&
+                    !relay?.webgpuLoadedModel &&
+                    effectiveActorModel?.model && (
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        disabled={preloadingWebGpu || !!relay?.webgpuProgress}
+                        onClick={async () => {
+                          setPreloadingWebGpu(true);
+                          setPreloadError(null);
+                          try {
+                            await relay?.preloadWebGpu(
+                              effectiveActorModel.model!,
+                              effectiveActorModel.contextSize
+                            );
+                          } catch (err: any) {
+                            setPreloadError(
+                              err?.message || "Failed to preload WebGPU model."
+                            );
+                          } finally {
+                            setPreloadingWebGpu(false);
+                          }
+                        }}
+                      >
+                        {preloadingWebGpu || relay?.webgpuProgress
+                          ? `Loading (${Math.round(
+                              (relay?.webgpuProgress?.progress ?? 0) * 100
+                            )}%)…`
+                          : "Preload Browser Model"}
+                      </button>
+                    )}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{ padding: 4, alignSelf: "flex-start" }}
+                onClick={dismissWebGpuNotice}
+                aria-label="Dismiss WebGPU notice"
+                title="Dismiss"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
 
           {/* Centralized Cards Deck Area */}
           <div className="home-deck-area">

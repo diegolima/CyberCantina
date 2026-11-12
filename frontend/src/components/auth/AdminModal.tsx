@@ -1108,7 +1108,8 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
                     }}
                     onClerkSelection={(sel) => {
                       const newProv = sel.providerId ? providerStore.byId(sel.providerId) : null;
-                      const isOllama = !newProv || newProv.type === "ollama";
+                      const isOllama =
+                        !newProv || newProv.type === "ollama" || newProv.type === "browser_ollama";
                       setAppSettingsForm({
                         ...appSettingsForm,
                         clerk_profile: {

@@ -75,6 +75,7 @@ def resolve_endpoint(
         bearer_token=token,
         timeout_seconds=getattr(profile, "timeout_seconds", 15.0),
         network_restricted=record.network_restricted,
+        owner_id=record.owner_id,
     )
 
 

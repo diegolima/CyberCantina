@@ -46,7 +46,7 @@ export const ProvidersManager: React.FC<ProvidersManagerProps> = ({ variant, all
       <div className="providers-toolbar">
         <div className="providers-intro">
           {isAdminArea
-            ? "A provider is a server that runs models (for now: Ollama). Pick providers for the Actor and Clerk in the Models tab. Provider changes apply immediately."
+            ? "A provider supplies LLM inference (Ollama on the host server, Local Ollama in each user's browser, In-Browser WebGPU, OpenRouter, or AI Horde). Pick system defaults in the Models tab."
             : "System providers are managed by the administrator and listed here with their last known status."}
         </div>
         {(isAdminArea || personal.length > 0) && (
@@ -110,8 +110,8 @@ export const ProvidersManager: React.FC<ProvidersManagerProps> = ({ variant, all
           )}
           {allowUserProviders && personal.length === 0 && !adding && (
             <div className="providers-empty">
-              You have no personal providers. Personal providers are private to you and cannot target local or
-              private-network addresses.
+              You have no personal providers. Add OpenRouter, AI Horde, your own Local Ollama (via
+              browser), or In-Browser WebGPU (zero install).
             </div>
           )}
           {personal.map((p) => renderCard(p, true))}

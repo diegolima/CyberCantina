@@ -47,6 +47,7 @@ from app.engine.phase5_clerk import run_phase5_post_turn_clerk
 from app.engine.phase4_clerk import run_phase4_post_turn_clerk
 from app.engine.clerk_placement import generate_clerk_starting_placement
 from app.prompts.defaults import PROMPT_KEY_CLERK_WORLD_START_PLACEMENT
+from app.providers.local_relay import RelayRemoteError, RelayUnavailableError
 from app.schemas.auth import UserProfile
 from app.schemas.persona import PersonaRecord, PersonaTurnStateSnapshot
 from app.schemas.character import (
@@ -1234,6 +1235,14 @@ async def _execute_turn_stream_events_unlocked(
             await asyncio.shield(worker_task)
 
 
+_RELAY_ERROR_MESSAGES = {
+    "webgpu_unsupported": "WebGPU is not supported or enabled in this browser. Switch to Local Ollama or a cloud provider in Profile > Models.",
+    "cors_or_network_error": "Could not connect to local Ollama from your browser. Verify Ollama is running with OLLAMA_ORIGINS configured and Local Network Access allowed.",
+    "model_not_found": "The selected local model is not installed in Ollama. Pull the model or select an installed one in Profile > Models.",
+    "inference_failed": "Local browser model execution failed. Check browser GPU memory or Ollama logs.",
+}
+
+
 @router.post("/api/campaigns/{campaign_id}/turns/stream")
 async def stream_campaign_turn(
     campaign_id: str,
@@ -1250,6 +1259,26 @@ async def stream_campaign_turn(
                 ev_name = packet["event"]
                 payload = json.dumps(packet["data"])
                 yield f"event: {ev_name}\ndata: {payload}\n\n"
+        except RelayUnavailableError:
+            logger.warning("Turn stream relay offline for campaign '%s'", sanitize_log_value(campaign_id))
+            err_payload = json.dumps(
+                {
+                    "error": (
+                        "Browser inference relay is not connected. Keep this browser tab open "
+                        "and check your Local Ollama or WebGPU provider in Profile."
+                    )
+                }
+            )
+            yield f"event: error\ndata: {err_payload}\n\n"
+        except RelayRemoteError as exc:
+            logger.warning(
+                "Turn stream browser driver error (%s) for campaign '%s'",
+                sanitize_log_value(exc.code),
+                sanitize_log_value(campaign_id),
+            )
+            msg = _RELAY_ERROR_MESSAGES.get(exc.code, _RELAY_ERROR_MESSAGES["inference_failed"])
+            err_payload = json.dumps({"error": msg})
+            yield f"event: error\ndata: {err_payload}\n\n"
         except KeyError as exc:
             logger.warning(
                 "Turn stream target missing for campaign '%s': %s",
