@@ -304,7 +304,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                   {w.target_scope === "local" ? (
                     <span className="mention-badge-present">
                       <span className="presence-dot emerald" />
-                      In Room
+                      In Location
                     </span>
                   ) : (
                     <span className="mention-badge-remote">

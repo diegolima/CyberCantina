@@ -355,7 +355,7 @@ export function useTopologyPointerDrag({
         ) {
           const srcName =
             linkDrag.sourceKind === "location"
-              ? locationMap.get(linkDrag.sourceId)?.name ?? "Room"
+              ? locationMap.get(linkDrag.sourceId)?.name ?? "Location"
               : containerMap.get(linkDrag.sourceId)?.name ?? "Container";
           setEmptyCanvasModal({
             sourceKind: linkDrag.sourceKind,

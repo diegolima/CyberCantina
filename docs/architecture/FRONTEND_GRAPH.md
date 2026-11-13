@@ -111,7 +111,7 @@ flowchart TD
 | `components/character` | 10 | `api`, `components (root)`, `components/shared`, `types` |
 | `components/chat` | 5 | `components (root)`, `components/inspector`, `hooks`, `types`, `utils` |
 | `components/inspector` | 11 | `components (root)`, `components/map`, `types`, `utils` |
-| `components/map` | 12 | `components (root)`, `hooks`, `types` |
+| `components/map` | 13 | `components (root)`, `hooks`, `types` |
 | `components/models` | 12 | `components/providers`, `local`, `types` |
 | `components/prompts` | 3 | *(leaf)* |
 | `components/providers` | 5 | `api`, `local`, `providers`, `types` |

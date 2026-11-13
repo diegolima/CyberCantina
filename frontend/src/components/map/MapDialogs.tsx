@@ -20,6 +20,7 @@ import {
   LocationEdge,
   LocationNode,
 } from "../../types";
+import { CONTAINER_DEPTH_LABELS } from "./topologyProjection";
 
 export interface PassageHubCollisionState {
   sourceNodeId: string;
@@ -331,7 +332,7 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
             title={
               !state.canCreateContainer
                 ? "Cannot add a container inside a Level 1 container"
-                : "Create container with an auto-linked entry room"
+                : "Create container with an auto-linked entry location"
             }
             style={{
               justifyContent: "center",
@@ -375,7 +376,8 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
               >
                 {state.availableDepths.map((d) => (
                   <option key={d} value={d}>
-                    L{d}
+                    L{d} — {CONTAINER_DEPTH_LABELS[d]}
+                    {d === 1 ? " (Lore)" : ""}
                   </option>
                 ))}
               </select>
@@ -540,6 +542,299 @@ export const GroupIntoContainerModal: React.FC<GroupIntoContainerModalProps> = (
             onClick={() => onConfirm(name.trim())}
           >
             Confirm Container
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export interface StandaloneContainerCreateState {
+  x: number;
+  y: number;
+  parentContainerId: string | null;
+  availableDepths: Array<1 | 2 | 3 | 4>;
+}
+
+export interface StandaloneContainerCreateModalProps {
+  state: StandaloneContainerCreateState | null;
+  onCancel: () => void;
+  onCreate: (opts: {
+    name: string;
+    depth: 1 | 2 | 3 | 4;
+    createEntryLocation: boolean;
+  }) => void;
+}
+
+export const StandaloneContainerCreateModal: React.FC<StandaloneContainerCreateModalProps> = ({
+  state,
+  onCancel,
+  onCreate,
+}) => {
+  const [depth, setDepth] = useState<1 | 2 | 3 | 4>(1);
+  const [name, setName] = useState("");
+  const [createEntryLocation, setCreateEntryLocation] = useState(true);
+  const [touchedEntryToggle, setTouchedEntryToggle] = useState(false);
+
+  useEffect(() => {
+    if (state) {
+      const initialDepth = state.availableDepths[0] ?? 1;
+      setDepth(initialDepth);
+      setName("");
+      setCreateEntryLocation(initialDepth === 1);
+      setTouchedEntryToggle(false);
+    }
+  }, [state]);
+
+  if (!state) return null;
+
+  const macroDepths = state.availableDepths.filter((d) => d > 1);
+  const placeholder = `New ${CONTAINER_DEPTH_LABELS[depth].split(" / ")[0]}`;
+
+  const handleSelectDepth = (nextDepth: 1 | 2 | 3 | 4) => {
+    setDepth(nextDepth);
+    if (!touchedEntryToggle) {
+      setCreateEntryLocation(nextDepth === 1);
+    }
+  };
+
+  const handleSubmit = () => {
+    onCreate({
+      name: name.trim() || placeholder,
+      depth,
+      createEntryLocation,
+    });
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Create Container"
+      style={{
+        position: "absolute",
+        inset: 0,
+        background: "rgba(9, 13, 22, 0.82)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 35,
+        padding: 16,
+      }}
+      onClick={(e) => {
+        e.stopPropagation();
+        onCancel();
+      }}
+    >
+      <div
+        style={{
+          width: "min(460px, 95%)",
+          background: "var(--bg-card)",
+          border: "1px solid rgba(245, 158, 11, 0.5)",
+          borderRadius: 8,
+          padding: 16,
+          display: "flex",
+          flexDirection: "column",
+          gap: 11,
+        }}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            onCancel();
+          }
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            fontSize: "0.88rem",
+            fontWeight: 700,
+            color: "var(--accent-amber)",
+          }}
+        >
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <Layers size={16} /> Choose Container Type
+          </span>
+          <button
+            type="button"
+            className="btn"
+            style={{ padding: "2px 6px" }}
+            onClick={onCancel}
+            aria-label="Close"
+          >
+            <X size={13} />
+          </button>
+        </div>
+
+        {/* Tier 1: Lore Container (Level 1) */}
+        {state.availableDepths.includes(1) && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            <span
+              style={{
+                fontSize: "0.68rem",
+                fontWeight: 700,
+                textTransform: "uppercase",
+                letterSpacing: "0.05em",
+                color: "var(--text-muted)",
+              }}
+            >
+              Lore Container
+            </span>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => handleSelectDepth(1)}
+              style={{
+                justifyContent: "space-between",
+                textAlign: "left",
+                padding: "8px 10px",
+                borderColor: depth === 1 ? "#f59e0b" : "var(--border-subtle)",
+                background:
+                  depth === 1 ? "rgba(245, 158, 11, 0.16)" : "var(--bg-panel)",
+                color: depth === 1 ? "#fde68a" : "var(--text-primary)",
+              }}
+            >
+              <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                <strong style={{ fontSize: "0.76rem" }}>
+                  L1 · {CONTAINER_DEPTH_LABELS[1]}
+                </strong>
+                <span style={{ fontSize: "0.69rem", color: "var(--text-secondary)" }}>
+                  Holds Level 0 locations and supports Container Lore &amp; Secrets.
+                </span>
+              </span>
+              <span
+                style={{
+                  fontSize: "0.68rem",
+                  fontWeight: 700,
+                  color: "#fbbf24",
+                  marginLeft: 8,
+                  flexShrink: 0,
+                }}
+              >
+                Lore
+              </span>
+            </button>
+          </div>
+        )}
+
+        {/* Tier 2: Higher-Level Macro Containers (Levels 2-4) */}
+        {macroDepths.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            <span
+              style={{
+                fontSize: "0.68rem",
+                fontWeight: 700,
+                textTransform: "uppercase",
+                letterSpacing: "0.05em",
+                color: "var(--text-muted)",
+              }}
+            >
+              Higher-Level Macro Containers (Organize Sub-Containers)
+            </span>
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              {macroDepths.map((d) => {
+                const selected = depth === d;
+                return (
+                  <button
+                    key={d}
+                    type="button"
+                    className="btn"
+                    onClick={() => handleSelectDepth(d)}
+                    style={{
+                      justifyContent: "space-between",
+                      textAlign: "left",
+                      padding: "7px 10px",
+                      borderColor: selected ? "#22d3ee" : "var(--border-subtle)",
+                      background: selected
+                        ? "rgba(6, 182, 212, 0.14)"
+                        : "var(--bg-panel)",
+                      color: selected ? "#a5f3fc" : "var(--text-primary)",
+                    }}
+                  >
+                    <span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                      <strong style={{ fontSize: "0.75rem" }}>
+                        L{d} · {CONTAINER_DEPTH_LABELS[d]}
+                      </strong>
+                      <span style={{ fontSize: "0.68rem", color: "var(--text-secondary)" }}>
+                        Groups lower-level containers (L1{d > 2 ? `–L${d - 1}` : ""}) and exterior locations. No container-level lore.
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="field-group" style={{ gap: 4 }}>
+          <label style={{ fontSize: "0.72rem" }}>Container Name</label>
+          <input
+            className="field-input"
+            placeholder={placeholder}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                handleSubmit();
+              }
+            }}
+            autoFocus
+          />
+        </div>
+
+        <label
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 7,
+            fontSize: "0.72rem",
+            color: "var(--text-secondary)",
+            cursor: "pointer",
+            background: "var(--bg-panel)",
+            padding: "7px 9px",
+            borderRadius: 6,
+            border: "1px solid var(--border-subtle)",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={createEntryLocation}
+            onChange={(e) => {
+              setTouchedEntryToggle(true);
+              setCreateEntryLocation(e.target.checked);
+            }}
+            style={{ marginTop: 2 }}
+          />
+          <span>
+            <strong>Create initial entry location inside container</strong>
+            <span style={{ display: "block", fontSize: "0.67rem", color: "var(--text-muted)" }}>
+              {createEntryLocation
+                ? "Adds an Entry/Exit Portal location inside so you can immediately link passages to this container."
+                : "Starts empty so you can drag existing buildings or locations into it (add a location inside before linking)."}
+            </span>
+          </span>
+        </label>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
+          <button
+            type="button"
+            className="btn"
+            style={{ padding: "5px 11px", fontSize: "0.75rem" }}
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-amber"
+            style={{ padding: "5px 12px", fontSize: "0.75rem" }}
+            onClick={handleSubmit}
+          >
+            Create L{depth} Container
           </button>
         </div>
       </div>

@@ -244,7 +244,7 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <Sparkles size={13} color="var(--accent-amber)" />
                       <span>
-                        Improvised new adjacent room:{" "}
+                        Improvised new adjacent location:{" "}
                         <strong style={{ color: "var(--accent-amber)" }}>
                           {improvised?.name || "New Chamber"}
                         </strong>
@@ -903,7 +903,7 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
                 </span>
               ) : locTransition === "follow_player" ? (
                 <span style={{ color: "var(--accent-cyan)" }}>
-                  Accompanied the player to the active room.
+                  Accompanied the player to the active location.
                 </span>
               ) : (
                 <span style={{ color: "var(--accent-amber)" }}>

@@ -427,7 +427,7 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
             }}
           >
             <span>
-              Rooms: <strong>{containerStats.descendantLocationCount}</strong>
+              Locations: <strong>{containerStats.descendantLocationCount}</strong>
             </span>
             <span>·</span>
             <span>
@@ -667,7 +667,7 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
           }}
         >
           <Lock size={12} />
-          Visited room — narrative fields are locked for history consistency. Icon &amp; position remain editable.
+          Visited location — narrative fields are locked for history consistency. Icon &amp; position remain editable.
         </div>
       )}
 
@@ -806,7 +806,7 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
           className="field-input"
           disabled={isLocNarrativeLocked}
           value={selectedLocation.summary || ""}
-          placeholder="Brief hook visible from adjacent rooms..."
+          placeholder="Brief hook visible from adjacent locations..."
           onChange={(e) =>
             onPatchLocation(selectedLocation.id, { summary: e.target.value })
           }
@@ -926,7 +926,7 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
         targetName={selectedLocation.name}
         worldId={selectedLocation.world_id}
         scopeLabel="Location Lore & Secrets"
-        emptyText="No local lore attached to this room."
+        emptyText="No local lore attached to this location."
         loreList={selectedLocation.lore_nodes ?? []}
         canEditDraftLore={mode === "editor"}
         savedInDb={isLocationSavedInDb}

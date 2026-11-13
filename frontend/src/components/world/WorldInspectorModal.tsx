@@ -710,7 +710,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                     fontStyle: "italic",
                   }}
                 >
-                  No world lore nodes indexed. Add macro lore for factions, history, culture, and rumors (attach room-specific lore &amp; secrets on the Map tab).
+                  No world lore nodes indexed. Add macro lore for factions, history, culture, and rumors (attach location-specific lore &amp; secrets on the Map tab).
                 </div>
               ) : (
                 loreNodes.map((lore, idx) => {
@@ -1004,7 +1004,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                   lineHeight: 1.5,
                 }}
               >
-                Describe your desired layout, rooms, or spatial atmosphere for{" "}
+                Describe your desired layout, locations, or spatial atmosphere for{" "}
                 <strong>{name}</strong> ({globalRules.genre}). The AI will
                 regenerate the interconnected locations and passages to match your
                 vision while preserving existing world rules and lore.
@@ -1074,7 +1074,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 >
                   <strong>Warning:</strong> Replacing the map will discard{" "}
                   <strong>{locationsWithLoreCount}</strong> location-attached lore
-                  entry/entries on your current rooms.
+                  entry/entries on your current locations.
                 </div>
               )}
             </div>

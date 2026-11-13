@@ -77,9 +77,9 @@ export const CharacterMentionPicker: React.FC<CharacterMentionPickerProps> = ({
                 <div className="mention-picker-name-row">
                   <span className="mention-picker-name">@{char.name}</span>
                   {isPresent ? (
-                    <span className="mention-badge-present" title="Present in current room">
+                    <span className="mention-badge-present" title="Present in current location">
                       <span className="presence-dot emerald" />
-                      In Room
+                      In Location
                     </span>
                   ) : (
                     <span className="mention-badge-remote" title="Elsewhere in campaign (Comms/Off-site)">

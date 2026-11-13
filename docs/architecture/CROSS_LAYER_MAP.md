@@ -643,6 +643,7 @@ erDiagram
 | `frontend/src/components/map/PortalPromotionModal.tsx` |
 | `frontend/src/components/map/SpatialTopologyCanvas.tsx` |
 | `frontend/src/components/map/TopologyHeaderToolbar.tsx` |
+| `frontend/src/components/map/mapGeometry.ts` |
 | `frontend/src/components/map/mapIcons.ts` |
 | `frontend/src/components/map/mapValidation.ts` |
 | `frontend/src/components/map/topologyProjection.ts` |

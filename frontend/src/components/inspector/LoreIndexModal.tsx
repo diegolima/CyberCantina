@@ -139,7 +139,7 @@ export function buildLoreIndexEntries(opts: {
       list.push({
         key: `loc-lore-${loc.id}-${lore.id}`,
         kind: "location_lore",
-        group: `${loc.name}${isCurrent ? " (Current Room)" : ""} — Location Lore`,
+        group: `${loc.name}${isCurrent ? " (Current Location)" : ""} — Location Lore`,
         tag: lore.category,
         title: lore.title,
         content: lore.content,
@@ -347,7 +347,7 @@ export const LoreIndexModal: React.FC<LoreIndexModalProps> = ({
                             gap: 3,
                           }}
                         >
-                          <MapPin size={10} /> Active room
+                          <MapPin size={10} /> Active location
                         </span>
                       )}
                       {item.recalled && (

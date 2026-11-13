@@ -36,7 +36,7 @@ const PALETTE_ITEMS: Array<{
   {
     kind: "location",
     label: "+ Location",
-    title: "Drag onto canvas (or click) to add an unlinked Level 0 room",
+    title: "Drag onto canvas (or click) to add an unlinked Level 0 location",
     accent: "#22d3ee",
     bg: "rgba(6, 182, 212, 0.1)",
     border: "rgba(6, 182, 212, 0.38)",
@@ -54,7 +54,7 @@ const PALETTE_ITEMS: Array<{
   {
     kind: "container",
     label: "+ Container",
-    title: "Drag onto canvas (or click) to add a new Container (with entry room)",
+    title: "Drag onto canvas (or click) to add a Lore (L1) or Macro (L2–L4) Container",
     accent: "#fbbf24",
     bg: "rgba(245, 158, 11, 0.1)",
     border: "rgba(245, 158, 11, 0.38)",

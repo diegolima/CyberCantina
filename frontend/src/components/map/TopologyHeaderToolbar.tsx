@@ -12,6 +12,7 @@ import {
   ZoomOut,
 } from "lucide-react";
 import type { ProjectedDepthTopology } from "./topologyProjection";
+import { MAX_MAP_ZOOM, MIN_MAP_ZOOM, clampZoom } from "./mapGeometry";
 
 export interface TopologyHeaderToolbarProps {
   title?: string;
@@ -86,35 +87,92 @@ export const TopologyHeaderToolbar: React.FC<TopologyHeaderToolbarProps> = ({
         </span>
 
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          <button
-            type="button"
-            className="btn"
-            style={{ padding: "4px 8px", fontSize: "0.74rem" }}
-            onClick={() => setZoom((z) => Math.min(3, +(z + 0.25).toFixed(2)))}
-            title="Zoom In"
+          <div
+            role="group"
+            aria-label="Map zoom controls"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              border: "1px solid var(--border-subtle)",
+              borderRadius: 6,
+              background: "var(--bg-card)",
+              overflow: "hidden",
+            }}
           >
-            <ZoomIn size={14} />
-          </button>
-          <button
-            type="button"
-            className="btn"
-            style={{ padding: "4px 8px", fontSize: "0.74rem" }}
-            onClick={() =>
-              setZoom((z) => Math.max(0.35, +(z - 0.25).toFixed(2)))
-            }
-            title="Zoom Out"
-          >
-            <ZoomOut size={14} />
-          </button>
+            <button
+              type="button"
+              className="btn"
+              disabled={zoom <= MIN_MAP_ZOOM}
+              style={{
+                padding: "4px 7px",
+                fontSize: "0.74rem",
+                border: "none",
+                borderRadius: 0,
+              }}
+              onClick={() => setZoom((z) => clampZoom(z - 0.25))}
+              title={
+                zoom <= MIN_MAP_ZOOM
+                  ? `Minimum zoom (${Math.round(MIN_MAP_ZOOM * 100)}%)`
+                  : "Zoom Out"
+              }
+              aria-label="Zoom Out"
+            >
+              <ZoomOut size={14} />
+            </button>
+            <button
+              type="button"
+              className="btn"
+              style={{
+                padding: "4px 8px",
+                fontSize: "0.73rem",
+                fontWeight: 600,
+                minWidth: 48,
+                justifyContent: "center",
+                border: "none",
+                borderLeft: "1px solid var(--border-subtle)",
+                borderRight: "1px solid var(--border-subtle)",
+                borderRadius: 0,
+                color:
+                  Math.round(zoom * 100) === 100
+                    ? "var(--text-secondary)"
+                    : "var(--accent-cyan)",
+              }}
+              onClick={() => setZoom(1)}
+              title="Reset zoom to 100%"
+              aria-label={`Current zoom ${Math.round(zoom * 100)}%, click to reset`}
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <button
+              type="button"
+              className="btn"
+              disabled={zoom >= MAX_MAP_ZOOM}
+              style={{
+                padding: "4px 7px",
+                fontSize: "0.74rem",
+                border: "none",
+                borderRadius: 0,
+              }}
+              onClick={() => setZoom((z) => clampZoom(z + 0.25))}
+              title={
+                zoom >= MAX_MAP_ZOOM
+                  ? `Maximum zoom (${Math.round(MAX_MAP_ZOOM * 100)}%)`
+                  : "Zoom In"
+              }
+              aria-label="Zoom In"
+            >
+              <ZoomIn size={14} />
+            </button>
+          </div>
           <button
             type="button"
             className="btn"
             style={{ padding: "4px 9px", fontSize: "0.74rem" }}
             onClick={handleCenter}
-            title="Center on Selected / Active Node"
+            title="Center on Selected / Active Location"
           >
             <Crosshair size={14} />
-            Center ({Math.round(zoom * 100)}%)
+            Center
           </button>
 
           {onReimagineMap && (

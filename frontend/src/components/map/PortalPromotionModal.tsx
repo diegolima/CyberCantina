@@ -80,24 +80,24 @@ export const PortalPromotionModal: React.FC<PortalPromotionModalProps> = ({
                   Cross-Boundary Connection &amp; Portal Setup
                 </div>
 
-                {promotionPrompt.targetContainerForRoomPick && (
+                {promotionPrompt.targetContainerForLocationPick && (
                   <div className="field-group" style={{ gap: 4 }}>
                     <label style={{ fontSize: "0.74rem", fontWeight: 600 }}>
-                      Select Target Room Inside{" "}
-                      {promotionPrompt.targetContainerForRoomPick.name}:
+                      Select Target Location Inside{" "}
+                      {promotionPrompt.targetContainerForLocationPick.name}:
                     </label>
                     <select
                       className="field-select"
-                      value={promotionPrompt.chosenTargetRoomId}
+                      value={promotionPrompt.chosenTargetLocationId}
                       onChange={(e) => {
                         const picked =
-                          promotionPrompt.targetRoomCandidates.find(
+                          promotionPrompt.targetLocationCandidates.find(
                             (r) => r.id === e.target.value
                           ) ?? promotionPrompt.toLocation;
                         setPromotionPrompt({
                           ...promotionPrompt,
                           toLocation: picked,
-                          chosenTargetRoomId: picked.id,
+                          chosenTargetLocationId: picked.id,
                           candidates: computePromotionCandidates(
                             promotionPrompt.fromLocation,
                             picked,
@@ -107,7 +107,7 @@ export const PortalPromotionModal: React.FC<PortalPromotionModalProps> = ({
                         });
                       }}
                     >
-                      {promotionPrompt.targetRoomCandidates.map((r) => (
+                      {promotionPrompt.targetLocationCandidates.map((r) => (
                         <option key={r.id} value={r.id}>
                           {r.name}
                           {projectedTopology.dynamicPortalIds.has(r.id)
@@ -133,7 +133,7 @@ export const PortalPromotionModal: React.FC<PortalPromotionModalProps> = ({
                       Connecting{" "}
                       <strong>{promotionPrompt.fromLocation.name}</strong> →{" "}
                       <strong>{promotionPrompt.toLocation.name}</strong> crosses a
-                      Level 1 container boundary. Mark interior room(s) as
+                      Level 1 container boundary. Mark interior location(s) as
                       Entry/Exit Portals:
                     </div>
                     {promotionPrompt.candidates.map((cand) => (

@@ -613,9 +613,9 @@ export interface PromotionCandidate {
 export interface PromotionPromptState {
   fromLocation: LocationNode;
   toLocation: LocationNode;
-  targetContainerForRoomPick: LocationContainer | null;
-  targetRoomCandidates: LocationNode[];
-  chosenTargetRoomId: string;
+  targetContainerForLocationPick: LocationContainer | null;
+  targetLocationCandidates: LocationNode[];
+  chosenTargetLocationId: string;
   direction: CompassDirection;
   travelMinutes: number;
   bidirectional: boolean;

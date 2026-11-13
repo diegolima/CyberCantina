@@ -17,7 +17,18 @@ import {
   EmptyCanvasCreateModal,
   GroupIntoContainerModal,
   PassageHubCollisionModal,
+  StandaloneContainerCreateModal,
 } from "../map/MapDialogs";
+import {
+  CONTAINER_CARD_HALF_W,
+  HUB_RADIUS,
+  LOCATION_TILE_HALF,
+  clampZoom,
+  computeDistanceBadgeWidth,
+  computeEdgeClippedSegment,
+  computeRayShapeExitDistance,
+  resolveCanvasCursor,
+} from "../map/mapGeometry";
 import { getDefaultMapIconKey, resolveMapIconComponent } from "../map/mapIcons";
 import {
   computeUnreachableLocationIds,
@@ -426,7 +437,7 @@ describe("Interactive Map Editor & Mini-Map", () => {
         onDrillIntoContainer={() => {}}
       />
     );
-    expect(visitedHtml).toContain("Visited room");
+    expect(visitedHtml).toContain("Visited location");
     expect(visitedHtml).toContain("Choose map icon");
     expect(visitedHtml).toContain("Enrich Description");
     expect(visitedHtml).toContain("Suggest Tags");
@@ -630,5 +641,137 @@ describe("Interactive Map Editor & Mini-Map", () => {
     expect(inspectorHtml).toContain("[Watson Distr");
     expect(inspectorHtml).toContain("<polygon");
     expect(inspectorHtml).toContain("Portal");
+  });
+
+  it("clips link segments to node perimeters, sizes badges, clamps zoom, and resolves canvas cursors", () => {
+    // Location cardinal & diagonal rounded-corner ray exit
+    expect(computeRayShapeExitDistance(100, 0, { kind: "location" })).toBeCloseTo(
+      LOCATION_TILE_HALF,
+      4
+    );
+    const diagLoc = computeRayShapeExitDistance(100, 100, { kind: "location" });
+    expect(diagLoc).toBeGreaterThan(LOCATION_TILE_HALF);
+    expect(diagLoc).toBeLessThan(LOCATION_TILE_HALF * Math.SQRT2);
+
+    // Hub octagon apothem vs vertex
+    expect(computeRayShapeExitDistance(100, 0, { kind: "hub" })).toBeCloseTo(
+      HUB_RADIUS * Math.cos(Math.PI / 8),
+      4
+    );
+
+    // Container card horizontal exit
+    expect(computeRayShapeExitDistance(100, 0, { kind: "container" })).toBeCloseTo(
+      CONTAINER_CARD_HALF_W,
+      4
+    );
+
+    // Asymmetric container -> location clipped segment places midpoint in visible gap
+    const clipped = computeEdgeClippedSegment(
+      { x: 0, y: 0 },
+      { kind: "container" },
+      { x: 200, y: 0 },
+      { kind: "location" }
+    );
+    expect(clipped.collapsed).toBe(false);
+    expect(clipped.x1).toBeCloseTo(74, 4);
+    expect(clipped.x2).toBeCloseTo(182, 4);
+    expect(clipped.midX).toBeCloseTo(128, 4);
+
+    // Coincident and overlapping centers collapse safely without NaN
+    const coincident = computeEdgeClippedSegment(
+      { x: 50, y: 50 },
+      { kind: "location" },
+      { x: 50, y: 50 },
+      { kind: "location" }
+    );
+    expect(coincident.collapsed).toBe(true);
+    expect(Number.isFinite(coincident.midX)).toBe(true);
+
+    const overlapping = computeEdgeClippedSegment(
+      { x: 0, y: 0 },
+      { kind: "container" },
+      { x: 20, y: 0 },
+      { kind: "location" }
+    );
+    expect(overlapping.collapsed).toBe(true);
+    expect(overlapping.midX).toBe(10);
+
+    // Dynamic badge width & zoom clamping & cursor precedence
+    expect(computeDistanceBadgeWidth("2m")).toBe(44);
+    expect(computeDistanceBadgeWidth("240m · 12 🔒")).toBeGreaterThan(44);
+    expect(clampZoom(0.1)).toBe(0.35);
+    expect(clampZoom(5)).toBe(3);
+    expect(clampZoom(Number.NaN)).toBe(1);
+    expect(
+      resolveCanvasCursor({ isNodeDragging: false, isLinking: false, isPanning: false })
+    ).toBe("grab");
+    expect(
+      resolveCanvasCursor({ isNodeDragging: false, isLinking: false, isPanning: true })
+    ).toBe("grabbing");
+    expect(
+      resolveCanvasCursor({ isNodeDragging: false, isLinking: true, isPanning: false })
+    ).toBe("crosshair");
+    expect(
+      resolveCanvasCursor({ isNodeDragging: true, isLinking: false, isPanning: false })
+    ).toBe("grabbing");
+  });
+
+  it("renders layered opaque edge badges, location terminology, decoupled zoom HUD, and container level modal", () => {
+    const { containers, locations, edges } = makeRichWorldFixture();
+    const html = renderToStaticMarkup(
+      <SpatialTopologyView
+        title="UX Polish Topology"
+        containers={containers}
+        locations={locations}
+        edges={edges}
+        activeLocationId="loc_foyer"
+        mode="editor"
+        onSaveMap={() => {}}
+        onChangeGraph={() => {}}
+      />
+    );
+
+    // Paint order: edge-lines -> edge-badges -> nodes
+    const linesIdx = html.indexOf('data-layer="edge-lines"');
+    const badgesIdx = html.indexOf('data-layer="edge-badges"');
+    const nodesIdx = html.indexOf('data-layer="nodes"');
+    expect(linesIdx).toBeGreaterThan(-1);
+    expect(badgesIdx).toBeGreaterThan(linesIdx);
+    expect(nodesIdx).toBeGreaterThan(badgesIdx);
+
+    // Opaque distance badge and "locations" terminology
+    expect(html).toContain('fill-opacity="1"');
+    expect(html).not.toContain('fill-opacity="0.9"');
+    expect(html).toContain("locations ·");
+    expect(html).not.toContain("rooms ·");
+
+    // Hover buffer around location
+    expect(html).toContain('r="34"');
+
+    // Decoupled zoom indicator & Center button
+    expect(html).toContain("Current zoom 100%, click to reset");
+    expect(html).toContain('data-testid="canvas-zoom-indicator"');
+    expect(html).not.toContain("Center (100%)");
+
+    // Standalone container depth prompt shows Lore (L1) and Higher-Level Macro options
+    const standaloneDlgHtml = renderToStaticMarkup(
+      <StandaloneContainerCreateModal
+        state={{
+          x: 100,
+          y: 100,
+          parentContainerId: null,
+          availableDepths: [1, 2, 3, 4],
+        }}
+        onCancel={() => {}}
+        onCreate={() => {}}
+      />
+    );
+    expect(standaloneDlgHtml).toContain("Lore Container");
+    expect(standaloneDlgHtml).toContain("Building / Landmark");
+    expect(standaloneDlgHtml).toContain("Higher-Level Macro Containers");
+    expect(standaloneDlgHtml).toContain("District / Zone");
+    expect(standaloneDlgHtml).toContain("City / Settlement");
+    expect(standaloneDlgHtml).toContain("Region / Planet / Realm");
+    expect(standaloneDlgHtml).toContain("Create initial entry location inside container");
   });
 });

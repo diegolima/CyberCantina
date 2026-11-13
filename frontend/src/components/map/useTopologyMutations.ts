@@ -9,6 +9,7 @@ import type {
   EmptyCanvasLinkState,
   GroupIntoContainerState,
   PassageHubCollisionState,
+  StandaloneContainerCreateState,
 } from "./MapDialogs";
 import { getDefaultMapIconKey } from "./mapIcons";
 import type { PaletteItemKind } from "./MapPaletteBar";
@@ -63,6 +64,10 @@ export interface UseTopologyMutationsParams {
   setGroupModal: React.Dispatch<
     React.SetStateAction<GroupIntoContainerState | null>
   >;
+  standaloneContainerModal: StandaloneContainerCreateState | null;
+  setStandaloneContainerModal: React.Dispatch<
+    React.SetStateAction<StandaloneContainerCreateState | null>
+  >;
   setMultiEdgeModalEdges: React.Dispatch<
     React.SetStateAction<LocationEdge[] | null>
   >;
@@ -99,6 +104,8 @@ export function useTopologyMutations({
   setEmptyCanvasModal,
   groupModal,
   setGroupModal,
+  standaloneContainerModal,
+  setStandaloneContainerModal,
   setMultiEdgeModalEdges,
   setPromotionPrompt,
 }: UseTopologyMutationsParams) {
@@ -158,6 +165,75 @@ export function useTopologyMutations({
 
   const canAddContainerHere = availableContainerDepthsHere.length > 0;
 
+  const commitStandaloneContainer = useCallback(
+    (opts: {
+      name: string;
+      depth: 1 | 2 | 3 | 4;
+      x: number;
+      y: number;
+      parentContainerId: string | null;
+      createEntryLocation: boolean;
+    }) => {
+      const contId = makeUniqueId("new_cont");
+      const newCont: LocationContainer = {
+        id: contId,
+        world_id: worldId,
+        parent_container_id: opts.parentContainerId,
+        depth: opts.depth,
+        name: opts.name,
+        description: "A newly added region or structure awaiting refinement.",
+        environmental_tags: [],
+        lore_nodes: [],
+        ui_x: Math.round(opts.x),
+        ui_y: Math.round(opts.y),
+        icon: getDefaultMapIconKey("container", opts.depth),
+      };
+
+      const nextLocs = [...workingLocations];
+      if (opts.createEntryLocation) {
+        const portalId = makeUniqueId("new_loc");
+        nextLocs.push({
+          id: portalId,
+          world_id: worldId,
+          container_id: contId,
+          is_entry_exit: true,
+          name: `${newCont.name} Entrance`,
+          summary: "Entryway into this area.",
+          description:
+            "The main threshold connecting this area to neighboring paths.",
+          environmental_tags: ["entrance"],
+          is_starting_location: false,
+          is_hub: false,
+          is_visited: false,
+          icon: getDefaultMapIconKey("location"),
+        });
+      }
+
+      commitNextGraph({
+        containers: [...workingContainers, newCont],
+        locations: nextLocs,
+        edges: workingEdges,
+      });
+      setSelectedContainerId(contId);
+      setSelectedLocId(null);
+      setStatusNotice(
+        opts.createEntryLocation
+          ? `Added unlinked L${opts.depth} container "${newCont.name}" — connect a passage to save.`
+          : `Added L${opts.depth} macro container "${newCont.name}" — drag locations or sub-containers into it.`
+      );
+    },
+    [
+      worldId,
+      workingLocations,
+      workingContainers,
+      workingEdges,
+      commitNextGraph,
+      setSelectedContainerId,
+      setSelectedLocId,
+      setStatusNotice,
+    ]
+  );
+
   const createStandaloneAt = useCallback(
     (kind: PaletteItemKind, x: number, y: number) => {
       if (isMutatingLocked) return;
@@ -167,47 +243,25 @@ export function useTopologyMutations({
       }
 
       if (kind === "container") {
-        const contId = makeUniqueId("new_cont");
-        const portalId = makeUniqueId("new_loc");
+        if (availableContainerDepthsHere.length > 1) {
+          setStandaloneContainerModal({
+            x: Math.round(x),
+            y: Math.round(y),
+            parentContainerId: currentContainerId,
+            availableDepths: availableContainerDepthsHere,
+          });
+          return;
+        }
         const depth = availableContainerDepthsHere[0] ?? 1;
         const contCount = workingContainers.length + 1;
-        const newCont: LocationContainer = {
-          id: contId,
-          world_id: worldId,
-          parent_container_id: currentContainerId,
-          depth,
+        commitStandaloneContainer({
           name: `New Container ${contCount}`,
-          description: "A newly added region or structure awaiting refinement.",
-          environmental_tags: [],
-          lore_nodes: [],
-          ui_x: Math.round(x),
-          ui_y: Math.round(y),
-          icon: getDefaultMapIconKey("container", depth),
-        };
-        const newPortal: LocationNode = {
-          id: portalId,
-          world_id: worldId,
-          container_id: contId,
-          is_entry_exit: true,
-          name: `${newCont.name} Entrance`,
-          summary: "Entryway into this area.",
-          description: "The main threshold connecting this area to neighboring paths.",
-          environmental_tags: ["entrance"],
-          is_starting_location: false,
-          is_hub: false,
-          is_visited: false,
-          icon: getDefaultMapIconKey("location"),
-        };
-        commitNextGraph({
-          containers: [...workingContainers, newCont],
-          locations: [...workingLocations, newPortal],
-          edges: workingEdges,
+          depth,
+          x,
+          y,
+          parentContainerId: currentContainerId,
+          createEntryLocation: true,
         });
-        setSelectedContainerId(contId);
-        setSelectedLocId(null);
-        setStatusNotice(
-          `Added unlinked container "${newCont.name}" — connect a passage to save.`
-        );
         return;
       }
 
@@ -222,7 +276,7 @@ export function useTopologyMutations({
         name: isHub ? `Junction ${idx}` : `New Location ${idx}`,
         summary: isHub ? "Connecting passage junction." : "Newly placed area.",
         description: isHub
-          ? "A connecting thoroughfare branching toward adjoining rooms."
+          ? "A connecting thoroughfare branching toward adjoining locations."
           : "A newly charted area ready for sensory details.",
         environmental_tags: isHub ? ["corridor"] : [],
         is_starting_location: false,
@@ -252,8 +306,30 @@ export function useTopologyMutations({
       workingEdges,
       worldId,
       currentContainerId,
+      commitStandaloneContainer,
       commitNextGraph,
+      setStandaloneContainerModal,
     ]
+  );
+
+  const handleConfirmStandaloneContainerCreate = useCallback(
+    (opts: {
+      name: string;
+      depth: 1 | 2 | 3 | 4;
+      createEntryLocation: boolean;
+    }) => {
+      if (!standaloneContainerModal) return;
+      commitStandaloneContainer({
+        name: opts.name,
+        depth: opts.depth,
+        x: standaloneContainerModal.x,
+        y: standaloneContainerModal.y,
+        parentContainerId: standaloneContainerModal.parentContainerId,
+        createEntryLocation: opts.createEntryLocation,
+      });
+      setStandaloneContainerModal(null);
+    },
+    [standaloneContainerModal, commitStandaloneContainer, setStandaloneContainerModal]
   );
 
   // Execute direct bidirectional edge creation (applying optional L1 portal promotions)
@@ -313,7 +389,7 @@ export function useTopologyMutations({
     [workingLocations, workingContainers, workingEdges, worldId, commitNextGraph]
   );
 
-  // Resolve connecting a source L0 room and target visible entity (L0 or Container supernode)
+  // Resolve connecting a source L0 location and target visible entity (L0 or Container supernode)
   const initiateConnection = useCallback(
     (opts: {
       sourceKind: "location" | "container";
@@ -353,7 +429,7 @@ export function useTopologyMutations({
       const tgtInfo = resolveLocFromNode(opts.targetKind, opts.targetId);
       if (!srcInfo.loc || !tgtInfo.loc) {
         setStatusNotice(
-          "Cannot connect to an empty container — add a room inside it first."
+          "Cannot connect to an empty container — add a location or sub-container inside it first."
         );
         return;
       }
@@ -400,7 +476,7 @@ export function useTopologyMutations({
             : "source";
         const occEdge = srcExistingEdge || tgtExistingEdge!;
         const occOther =
-          locationMap.get(occEdge.to_location_id)?.name ?? "another room";
+          locationMap.get(occEdge.to_location_id)?.name ?? "another location";
         const hubAnchor = collidingSide === "target" ? srcInfo.loc : tgtInfo.loc;
         setHubCollisionModal({
           sourceNodeId: srcInfo.loc.id,
@@ -423,7 +499,7 @@ export function useTopologyMutations({
         return;
       }
 
-      // If cross-container or multi-room target container needs room pick / portal promotion
+      // If cross-container or multi-location target container needs location pick / portal promotion
       const candidates = computePromotionCandidates(
         srcInfo.loc,
         tgtInfo.loc,
@@ -437,12 +513,12 @@ export function useTopologyMutations({
         setPromotionPrompt({
           fromLocation: srcInfo.loc,
           toLocation: tgtInfo.loc,
-          targetContainerForRoomPick:
+          targetContainerForLocationPick:
             tgtInfo.container && tgtInfo.candidates.length > 1
               ? tgtInfo.container
               : null,
-          targetRoomCandidates: tgtInfo.candidates,
-          chosenTargetRoomId: tgtInfo.loc.id,
+          targetLocationCandidates: tgtInfo.candidates,
+          chosenTargetLocationId: tgtInfo.loc.id,
           direction: opts.sourceSlot,
           travelMinutes: 2,
           bidirectional: true,
@@ -498,7 +574,7 @@ export function useTopologyMutations({
         name: hubName,
         summary: "Connecting corridor junction.",
         description:
-          "A multi-way transit junction linking adjoining rooms and wings.",
+          "A multi-way transit junction linking adjoining locations and wings.",
         environmental_tags: ["corridor", "junction"],
         is_starting_location: false,
         is_hub: true,
@@ -759,8 +835,8 @@ export function useTopologyMutations({
         name: opts.name,
         summary: isHub ? "Passage junction." : opts.name,
         description: isHub
-          ? "A connecting corridor junction linking adjoining rooms."
-          : "A newly connected room awaiting description.",
+          ? "A connecting corridor junction linking adjoining locations."
+          : "A newly connected location awaiting description.",
         environmental_tags: isHub ? ["corridor"] : [],
         is_starting_location: false,
         is_hub: isHub,
@@ -905,7 +981,7 @@ export function useTopologyMutations({
       if (loc.is_starting_location) {
         return {
           allowed: false,
-          reason: "Reassign Starting Location before deleting this room.",
+          reason: "Reassign Starting Location before deleting this location.",
         };
       }
       if (mode === "campaign" && loc.is_visited) {
@@ -957,7 +1033,7 @@ export function useTopologyMutations({
       if (parentCont && parentCont.depth <= 1) {
         return {
           allowed: false,
-          reason: "Rooms inside a Level 1 container are already at the deepest container tier.",
+          reason: "Locations inside a Level 1 container are already at the deepest container tier.",
         };
       }
       return { allowed: true };
@@ -1086,7 +1162,7 @@ export function useTopologyMutations({
       if (!loc) return;
       const check = canConvertLocation(locId);
       if (!check.allowed) {
-        setStatusNotice(check.reason || "Cannot convert room.");
+        setStatusNotice(check.reason || "Cannot convert location.");
         return;
       }
       const keepVisitedImmutable = mode === "campaign" && Boolean(loc.is_visited);
@@ -1262,6 +1338,7 @@ export function useTopologyMutations({
     availableContainerDepthsHere,
     canAddContainerHere,
     createStandaloneAt,
+    handleConfirmStandaloneContainerCreate,
     executeDirectEdgeCreation,
     initiateConnection,
     handleConfirmHubCollision,

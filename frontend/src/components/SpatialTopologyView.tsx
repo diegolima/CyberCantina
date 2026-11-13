@@ -21,7 +21,10 @@ import {
   MultiEdgePopover,
   PassageHubCollisionModal,
   PassageHubCollisionState,
+  StandaloneContainerCreateModal,
+  StandaloneContainerCreateState,
 } from "./map/MapDialogs";
+import { computeEdgeClippedSegment, type NodeShapeDescriptor } from "./map/mapGeometry";
 import {
   MapPaletteBar,
   PALETTE_DRAG_MIME,
@@ -242,6 +245,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   const panDragRef = useRef<{
     active: boolean;
     moved: boolean;
+    button: number;
     startClientX: number;
     startClientY: number;
     origPanX: number;
@@ -249,6 +253,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   }>({
     active: false,
     moved: false,
+    button: 0,
     startClientX: 0,
     startClientY: 0,
     origPanX: 0,
@@ -270,6 +275,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     useState<EmptyCanvasLinkState | null>(null);
   const [groupModal, setGroupModal] =
     useState<GroupIntoContainerState | null>(null);
+  const [standaloneContainerModal, setStandaloneContainerModal] =
+    useState<StandaloneContainerCreateState | null>(null);
   const [promotionPrompt, setPromotionPrompt] =
     useState<PromotionPromptState | null>(null);
   const [multiEdgeModalEdges, setMultiEdgeModalEdges] = useState<
@@ -453,12 +460,10 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       selectedContainer?.id || selectedLocation?.id || activeLoc?.id;
     if (!targetId) {
       setPan({ x: 0, y: 0 });
-      setZoom(1);
       return;
     }
     const pt = fullMapCoords[targetId] ?? { x: 0, y: 0 };
     setPan({ x: -pt.x, y: -pt.y });
-    setZoom(1);
   }, [selectedContainer, selectedLocation, activeLoc, fullMapCoords]);
 
   const handleFocusInvalid = useCallback(() => {
@@ -480,6 +485,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     availableContainerDepthsHere,
     canAddContainerHere,
     createStandaloneAt,
+    handleConfirmStandaloneContainerCreate,
     executeDirectEdgeCreation,
     initiateConnection,
     handleConfirmHubCollision,
@@ -525,6 +531,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     setEmptyCanvasModal,
     groupModal,
     setGroupModal,
+    standaloneContainerModal,
+    setStandaloneContainerModal,
     setMultiEdgeModalEdges,
     setPromotionPrompt,
   });
@@ -855,12 +863,31 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             onEditEdgeDistance={(edgeId) => {
               const edge = workingEdges.find((e) => e.id === edgeId);
               if (!edge) return;
-              const p1 = fullMapCoords[edge.from_location_id] ?? { x: 0, y: 0 };
-              const p2 = fullMapCoords[edge.to_location_id] ?? { x: 0, y: 0 };
+              const projected = projectedTopology.projectedEdges.find(
+                (pe) =>
+                  pe.rawEdge.id === edgeId ||
+                  pe.groupedEdges?.some((ge) => ge.id === edgeId)
+              );
+              const srcId = projected?.sourceNodeId ?? edge.from_location_id;
+              const tgtId = projected?.targetNodeId ?? edge.to_location_id;
+              const p1 = fullMapCoords[srcId] ?? { x: 0, y: 0 };
+              const p2 = fullMapCoords[tgtId] ?? { x: 0, y: 0 };
+              const shapeFor = (id: string): NodeShapeDescriptor => {
+                if (containerMap.has(id)) return { kind: "container" };
+                return locationMap.get(id)?.is_hub
+                  ? { kind: "hub" }
+                  : { kind: "location" };
+              };
+              const clipped = computeEdgeClippedSegment(
+                p1,
+                shapeFor(srcId),
+                p2,
+                shapeFor(tgtId)
+              );
               setInlineEdgeEdit({
                 edgeId,
-                midX: (p1.x + p2.x) / 2,
-                midY: (p1.y + p2.y) / 2,
+                midX: clipped.midX,
+                midY: clipped.midY,
                 value: String(edge.travel_minutes),
               });
             }}
@@ -884,6 +911,12 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             state={groupModal}
             onCancel={() => setGroupModal(null)}
             onConfirm={handleConfirmGroupIntoContainer}
+          />
+
+          <StandaloneContainerCreateModal
+            state={standaloneContainerModal}
+            onCancel={() => setStandaloneContainerModal(null)}
+            onCreate={handleConfirmStandaloneContainerCreate}
           />
 
           <MultiEdgePopover
