@@ -67,6 +67,8 @@ export interface AppModalsProps {
   setWizardInitialPreassignedId: React.Dispatch<React.SetStateAction<string | null>>;
   wizardInitialWorldDraft: WorldWizardDraft | null;
   setWizardInitialWorldDraft: React.Dispatch<React.SetStateAction<WorldWizardDraft | null>>;
+  wizardInitialMediaWarning?: string | null;
+  setWizardInitialMediaWarning?: React.Dispatch<React.SetStateAction<string | null>>;
   showWorldWizard: boolean;
   setShowWorldWizard: React.Dispatch<React.SetStateAction<boolean>>;
   showProfileModal: boolean;
@@ -79,7 +81,8 @@ export interface AppModalsProps {
   setProfileModels: React.Dispatch<React.SetStateAction<ProfileModelSettingsResponse | null>>;
   showAdminModal: boolean;
   setShowAdminModal: React.Dispatch<React.SetStateAction<boolean>>;
-  adminInitialTab: "users" | "providers" | "models" | "prompts";
+  adminInitialTab: "users" | "providers" | "models" | "prompts" | "server";
+  inactiveUserPurgeDays?: number | null;
   setAppSettings: React.Dispatch<React.SetStateAction<AppSettings | null>>;
   showNotesModal: boolean;
   setShowNotesModal: React.Dispatch<React.SetStateAction<boolean>>;
@@ -151,6 +154,8 @@ export const AppModals: React.FC<AppModalsProps> = ({
   setWizardInitialPreassignedId,
   wizardInitialWorldDraft,
   setWizardInitialWorldDraft,
+  wizardInitialMediaWarning = null,
+  setWizardInitialMediaWarning,
   showWorldWizard,
   setShowWorldWizard,
   showProfileModal,
@@ -162,6 +167,7 @@ export const AppModals: React.FC<AppModalsProps> = ({
   showAdminModal,
   setShowAdminModal,
   adminInitialTab,
+  inactiveUserPurgeDays = null,
   setAppSettings,
   showNotesModal,
   setShowNotesModal,
@@ -200,17 +206,20 @@ export const AppModals: React.FC<AppModalsProps> = ({
           initialDraft={wizardInitialDraft}
           initialPreassignedId={wizardInitialPreassignedId}
           initialWorldDraft={wizardInitialWorldDraft}
+          initialMediaWarning={wizardInitialMediaWarning}
           onClose={() => {
             setShowCharWizard(false);
             setWizardInitialDraft(null);
             setWizardInitialWorldDraft(null);
             setWizardInitialPreassignedId(null);
+            setWizardInitialMediaWarning?.(null);
           }}
           onCreated={async (createdChar, launchWorldId) => {
             setShowCharWizard(false);
             setWizardInitialDraft(null);
             setWizardInitialWorldDraft(null);
             setWizardInitialPreassignedId(null);
+            setWizardInitialMediaWarning?.(null);
             const [cList, wList] = await Promise.all([
               api.listCharacters(),
               api.listWorlds(),
@@ -302,6 +311,7 @@ export const AppModals: React.FC<AppModalsProps> = ({
         <ProfileModal
           user={currentUser}
           singleUserMode={singleUserMode}
+          inactiveUserPurgeDays={inactiveUserPurgeDays}
           initialTab={profileInitialTab}
           initialSubTab={profileInitialSubTab}
           onClose={() => {
@@ -325,6 +335,7 @@ export const AppModals: React.FC<AppModalsProps> = ({
           currentUser={currentUser}
           singleUserMode={singleUserMode}
           initialTab={adminInitialTab}
+          inactiveUserPurgeDays={inactiveUserPurgeDays}
           onClose={() => {
             setShowAdminModal(false);
             void api.getProfileModels().then(setProfileModels).catch(() => {});
@@ -340,6 +351,7 @@ export const AppModals: React.FC<AppModalsProps> = ({
           }}
           onSettingsUpdated={(updated) => {
             setAppSettings(updated);
+            void refreshAuthStatus();
             void api.getProfileModels().then(setProfileModels).catch(() => {});
           }}
         />

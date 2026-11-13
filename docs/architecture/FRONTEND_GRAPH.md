@@ -107,7 +107,7 @@ flowchart TD
 | `App` | 1 | `api`, `components (root)`, `hooks`, `providers`, `types`, `utils` |
 | `api` | 13 | `types` |
 | `components (root)` | 23 | `api`, `components/auth`, `components/character`, `components/chat`, `components/inspector`, `components/map`, `components/prompts`, `components/shared`, `components/wizard`, `components/world`, `hooks`, `providers`, `types`, `utils` |
-| `components/auth` | 9 | `api`, `components (root)`, `components/models`, `components/providers`, `types` |
+| `components/auth` | 10 | `api`, `components (root)`, `components/models`, `components/providers`, `types` |
 | `components/character` | 10 | `api`, `components (root)`, `components/shared`, `types` |
 | `components/chat` | 5 | `components (root)`, `components/inspector`, `hooks`, `types`, `utils` |
 | `components/inspector` | 11 | `components (root)`, `components/map`, `types`, `utils` |

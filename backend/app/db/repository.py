@@ -7,6 +7,7 @@ from app.db.repos import (
     CampaignMapOpsMixin,
     CampaignsMixin,
     CharactersMixin,
+    ChloromancerMixin,
     NotesMixin,
     PersonasMixin,
     PromptPresetsMixin,
@@ -28,6 +29,7 @@ from app.db.vector_store import embed_text
 
 class CantinaRepository(
     NotesMixin,
+    ChloromancerMixin,
     CampaignMapOpsMixin,
     TurnsBranchesMixin,
     PromptPresetsMixin,

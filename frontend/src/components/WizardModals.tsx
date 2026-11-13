@@ -44,6 +44,7 @@ export interface CharacterWizardModalProps {
   initialDraft?: CharacterWizardDraft | null;
   initialPreassignedId?: string | null;
   initialWorldDraft?: WorldWizardDraft | null;
+  initialMediaWarning?: string | null;
 }
 
 export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
@@ -54,6 +55,7 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
   initialDraft = null,
   initialPreassignedId = null,
   initialWorldDraft = null,
+  initialMediaWarning = null,
 }) => {
   const [name, setName] = useState("Soren Kael");
   const [archetype, setArchetype] = useState(
@@ -83,6 +85,7 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
   const [launchCampaignImmediately, setLaunchCampaignImmediately] = useState<boolean>(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [mediaWarning, setMediaWarning] = useState<string | null>(initialMediaWarning);
 
   const handleManualCreate = () => {
     const kwList = personalityKeywords.filter(Boolean);
@@ -193,6 +196,7 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
       setDraft(res);
       setPreassignedCharId(null);
       setImportedWorldDraft(null);
+      setMediaWarning(null);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -250,6 +254,21 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
           {error && (
             <div style={{ color: "var(--accent-rose)", fontSize: "0.82rem" }}>
               {error}
+            </div>
+          )}
+
+          {mediaWarning && (
+            <div
+              style={{
+                padding: "8px 12px",
+                borderRadius: 6,
+                background: "rgba(245, 158, 11, 0.1)",
+                border: "1px solid rgba(245, 158, 11, 0.35)",
+                color: "var(--accent-amber)",
+                fontSize: "0.78rem",
+              }}
+            >
+              <strong>Media Quota Notice:</strong> {mediaWarning}
             </div>
           )}
 

@@ -223,6 +223,7 @@ export interface SillyTavernImportResponse {
   draft: CharacterWizardDraft;
   preassigned_character_id: string;
   auto_generated_world?: WorldWizardDraft | null;
+  media_warning?: string | null;
 }
 
 export interface CharacterRecord extends Omit<CharacterWizardDraft, "equipped" | "inventory"> {

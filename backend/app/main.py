@@ -30,6 +30,8 @@ from app.dependencies import (
     safe_resolve_media_path,
 )
 from app.engine.llm_client import auto_configure_ollama_models, llm_client
+from app.housekeeping import chloromancer_scheduler
+from app.routers.admin_housekeeping import router as admin_housekeeping_router
 from app.routers.auth import router as auth_router
 from app.routers.campaigns import _execute_turn_stream_events, router as campaigns_router
 from app.routers.characters import router as characters_router
@@ -116,9 +118,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await auto_configure_ollama_models()
     pruner_task = asyncio.create_task(_periodic_entity_pruner())
     probe_task = asyncio.create_task(_periodic_provider_probe())
+    chloromancer_scheduler.start()
     try:
         yield
     finally:
+        await chloromancer_scheduler.stop()
         pruner_task.cancel()
         probe_task.cancel()
         with suppress(asyncio.CancelledError):
@@ -177,6 +181,7 @@ async def attach_relay_tab_context(request: Request, call_next):
 
 # Register modular domain routers
 app.include_router(auth_router)
+app.include_router(admin_housekeeping_router)
 app.include_router(settings_router)
 app.include_router(providers_router)
 app.include_router(local_relay_router)

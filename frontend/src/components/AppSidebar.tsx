@@ -50,7 +50,7 @@ export interface AppSidebarProps {
   >;
   setShowProfileModal: React.Dispatch<React.SetStateAction<boolean>>;
   setAdminInitialTab: React.Dispatch<
-    React.SetStateAction<"users" | "providers" | "models" | "prompts">
+    React.SetStateAction<"users" | "providers" | "models" | "prompts" | "server">
   >;
   setShowAdminModal: React.Dispatch<React.SetStateAction<boolean>>;
   handleCloseCampaign: () => void;

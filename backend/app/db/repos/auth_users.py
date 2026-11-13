@@ -87,10 +87,13 @@ class AuthUsersMixin:
 
             conn.execute(
                 """
-                INSERT INTO users (id, username, display_name, password_hash, role, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO users (
+                    id, username, display_name, password_hash, role,
+                    created_at, updated_at, last_login_at, last_active_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (u_id, clean_username, clean_display, password_hash, role, now, now),
+                (u_id, clean_username, clean_display, password_hash, role, now, now, None, now),
             )
             self._ensure_default_persona_for_user_conn(conn, u_id)
             conn.commit()
@@ -133,6 +136,8 @@ class AuthUsersMixin:
             passkeys=passkeys,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            last_login_at=row["last_login_at"] if "last_login_at" in row.keys() else None,
+            last_active_at=row["last_active_at"] if "last_active_at" in row.keys() else None,
         )
 
     def get_user_by_username(self, username: str) -> UserProfile:
@@ -364,9 +369,16 @@ class AuthUsersMixin:
         self.get_user_by_id(user_id)
         # 1. Wipe all user characters, worlds, campaigns, notes, and media
         self.reset_user_data(user_id)
-        # 2. Remove prompt presets, sessions, passkeys, user model overrides, and user account record
+        # 2. Remove staged draft media, prompt presets, sessions, passkeys, model overrides, and user record
         conn = self._connect()
         try:
+            staged_rows = conn.execute(
+                "SELECT character_id FROM staged_character_ownership WHERE user_id = ?",
+                (user_id,),
+            ).fetchall()
+            for sr in staged_rows:
+                self._delete_character_media(sr["character_id"])
+            conn.execute("DELETE FROM staged_character_ownership WHERE user_id = ?", (user_id,))
             conn.execute("DELETE FROM prompt_presets WHERE owner_id = ?", (user_id,))
             conn.execute("DELETE FROM providers WHERE scope = 'user' AND owner_id = ?", (user_id,))
             conn.execute("DELETE FROM user_model_settings WHERE user_id = ?", (user_id,))
@@ -374,6 +386,77 @@ class AuthUsersMixin:
             conn.execute("DELETE FROM user_passkeys WHERE user_id = ?", (user_id,))
             conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
             conn.commit()
+        finally:
+            conn.close()
+
+    def touch_user_login(self, user_id: str) -> None:
+        """Record an explicit authentication event on both last_login_at and last_active_at."""
+        now = utc_now_iso()
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE users SET last_login_at = ?, last_active_at = ? WHERE id = ?",
+                (now, now, user_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def list_inactive_purge_candidates(
+        self, cutoff_iso: str, *, exclude_user_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return standard ('user') accounts whose effective last activity predates ``cutoff_iso``."""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT
+                    u.id,
+                    u.username,
+                    u.display_name,
+                    u.created_at,
+                    u.last_login_at,
+                    u.last_active_at,
+                    COALESCE(u.last_active_at, u.created_at) AS effective_last_active_at,
+                    (SELECT COUNT(*) FROM characters c WHERE c.owner_id = u.id) AS character_count,
+                    (SELECT COUNT(*) FROM worlds w WHERE w.owner_id = u.id) AS world_count,
+                    (SELECT COUNT(*) FROM campaigns camp WHERE camp.owner_id = u.id) AS campaign_count
+                FROM users u
+                WHERE u.role = 'user'
+                  AND COALESCE(u.last_active_at, u.created_at) < ?
+                ORDER BY effective_last_active_at ASC
+                """,
+                (cutoff_iso,),
+            ).fetchall()
+            candidates: list[dict[str, Any]] = []
+            for r in rows:
+                uid = r["id"]
+                if exclude_user_id and uid == exclude_user_id:
+                    continue
+                char_rows = conn.execute(
+                    """
+                    SELECT id AS character_id FROM characters WHERE owner_id = ?
+                    UNION
+                    SELECT character_id FROM staged_character_ownership WHERE user_id = ?
+                    """,
+                    (uid, uid),
+                ).fetchall()
+                candidates.append(
+                    {
+                        "user_id": uid,
+                        "username": r["username"],
+                        "display_name": r["display_name"],
+                        "created_at": r["created_at"],
+                        "last_login_at": r["last_login_at"],
+                        "last_active_at": r["last_active_at"],
+                        "effective_last_active_at": r["effective_last_active_at"],
+                        "character_count": int(r["character_count"]),
+                        "world_count": int(r["world_count"]),
+                        "campaign_count": int(r["campaign_count"]),
+                        "character_ids": [cr["character_id"] for cr in char_rows],
+                    }
+                )
+            return candidates
         finally:
             conn.close()
 
@@ -785,8 +868,27 @@ class AuthUsersMixin:
                 "UPDATE user_sessions SET last_active_at = ? WHERE id = ?",
                 (now_iso, session_id_hash),
             )
-            conn.commit()
             user_id = row["user_id"]
+            user_row = conn.execute(
+                "SELECT last_active_at FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            should_touch_user = True
+            if user_row and user_row["last_active_at"]:
+                try:
+                    prev_user_dt = datetime.strptime(
+                        user_row["last_active_at"], "%Y-%m-%dT%H:%M:%SZ"
+                    ).replace(tzinfo=timezone.utc)
+                    if (now_dt - prev_user_dt).total_seconds() < 1800:
+                        should_touch_user = False
+                except ValueError:
+                    should_touch_user = True
+            if should_touch_user:
+                conn.execute(
+                    "UPDATE users SET last_active_at = ? WHERE id = ?",
+                    (now_iso, user_id),
+                )
+            conn.commit()
         finally:
             conn.close()
 

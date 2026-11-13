@@ -35,6 +35,8 @@ export const App: React.FC = () => {
   const [authChecking, setAuthChecking] = useState(true);
   const [setupRequired, setSetupRequired] = useState(false);
   const [singleUserMode, setSingleUserMode] = useState(false);
+  const [allowSelfRegistration, setAllowSelfRegistration] = useState(true);
+  const [inactiveUserPurgeDays, setInactiveUserPurgeDays] = useState<number | null>(null);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
@@ -45,7 +47,7 @@ export const App: React.FC = () => {
     "behavior" | "prompts" | "models" | "providers" | undefined
   >(undefined);
   const [adminInitialTab, setAdminInitialTab] = useState<
-    "users" | "providers" | "models" | "prompts"
+    "users" | "providers" | "models" | "prompts" | "server"
   >("users");
   const [profileModels, setProfileModels] =
     useState<ProfileModelSettingsResponse | null>(null);
@@ -78,6 +80,7 @@ export const App: React.FC = () => {
   const [wizardInitialDraft, setWizardInitialDraft] = useState<any>(null);
   const [wizardInitialWorldDraft, setWizardInitialWorldDraft] = useState<any>(null);
   const [wizardInitialPreassignedId, setWizardInitialPreassignedId] = useState<string | null>(null);
+  const [wizardInitialMediaWarning, setWizardInitialMediaWarning] = useState<string | null>(null);
 
   // User Notes (Player Scratchpad) State
   const [notes, setNotes] = useState<UserNote[]>([]);
@@ -260,6 +263,8 @@ export const App: React.FC = () => {
     const status = await api.getAuthStatus();
     setSetupRequired(status.setup_required);
     setSingleUserMode(status.single_user_mode);
+    setAllowSelfRegistration(status.allow_self_registration ?? true);
+    setInactiveUserPurgeDays(status.inactive_user_purge_days ?? null);
     setCurrentUser(status.user ?? null);
     return status;
   };
@@ -555,6 +560,7 @@ export const App: React.FC = () => {
     return (
       <AuthScreen
         singleUserMode={singleUserMode}
+        allowSelfRegistration={allowSelfRegistration}
         onAuthenticated={handleAuthenticated}
       />
     );
@@ -730,10 +736,11 @@ export const App: React.FC = () => {
             setPersonas(p);
             setCampaigns(camp);
           }}
-          onOpenCharacterWizardWithDraft={(draft, autoWorld, preassignedId) => {
+          onOpenCharacterWizardWithDraft={(draft, autoWorld, preassignedId, mediaWarning) => {
             setWizardInitialDraft(draft);
             setWizardInitialWorldDraft(autoWorld);
             setWizardInitialPreassignedId(preassignedId || null);
+            setWizardInitialMediaWarning(mediaWarning ?? null);
             setShowCharWizard(true);
           }}
         />
@@ -806,6 +813,8 @@ export const App: React.FC = () => {
         setWizardInitialPreassignedId={setWizardInitialPreassignedId}
         wizardInitialWorldDraft={wizardInitialWorldDraft}
         setWizardInitialWorldDraft={setWizardInitialWorldDraft}
+        wizardInitialMediaWarning={wizardInitialMediaWarning}
+        setWizardInitialMediaWarning={setWizardInitialMediaWarning}
         showWorldWizard={showWorldWizard}
         setShowWorldWizard={setShowWorldWizard}
         showProfileModal={showProfileModal}
@@ -817,6 +826,7 @@ export const App: React.FC = () => {
         showAdminModal={showAdminModal}
         setShowAdminModal={setShowAdminModal}
         adminInitialTab={adminInitialTab}
+        inactiveUserPurgeDays={inactiveUserPurgeDays}
         setAppSettings={setAppSettings}
         showNotesModal={showNotesModal}
         setShowNotesModal={setShowNotesModal}

@@ -268,6 +268,62 @@ class SchemaInitMixin:
                     )
                 conn.commit()
 
+            users_table_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'"
+            ).fetchone()
+            if users_table_exists:
+                existing_user_cols = {
+                    r["name"]
+                    for r in conn.execute("PRAGMA table_info(users)").fetchall()
+                }
+                if "last_login_at" not in existing_user_cols:
+                    conn.execute("ALTER TABLE users ADD COLUMN last_login_at TEXT NULL")
+                    sessions_exists = conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_sessions'"
+                    ).fetchone()
+                    if sessions_exists:
+                        conn.execute(
+                            """
+                            UPDATE users
+                            SET last_login_at = (
+                                SELECT MAX(s.created_at)
+                                FROM user_sessions s
+                                WHERE s.user_id = users.id
+                            )
+                            WHERE last_login_at IS NULL
+                            """
+                        )
+                if "last_active_at" not in existing_user_cols:
+                    conn.execute("ALTER TABLE users ADD COLUMN last_active_at TEXT NULL")
+                    sessions_exists = conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_sessions'"
+                    ).fetchone()
+                    if sessions_exists:
+                        session_cols = {
+                            r["name"]
+                            for r in conn.execute("PRAGMA table_info(user_sessions)").fetchall()
+                        }
+                        activity_col = (
+                            "last_active_at"
+                            if "last_active_at" in session_cols
+                            else ("last_seen_at" if "last_seen_at" in session_cols else "created_at")
+                        )
+                        conn.execute(
+                            f"""
+                            UPDATE users
+                            SET last_active_at = COALESCE(
+                                (SELECT MAX(s.{activity_col}) FROM user_sessions s WHERE s.user_id = users.id),
+                                created_at
+                            )
+                            WHERE last_active_at IS NULL
+                            """
+                        )
+                    else:
+                        conn.execute(
+                            "UPDATE users SET last_active_at = created_at WHERE last_active_at IS NULL"
+                        )
+                conn.commit()
+
             conn.executescript(sql)
             # Idempotent migration for existing databases created before pending_deletion
             world_cols = {

@@ -555,3 +555,39 @@ class CharactersMixin(CharacterVersionsMixin):
             conn.close()
 
         return pruned_ids
+
+    def list_user_media_character_ids(self, user_id: str) -> list[str]:
+        """Return character IDs (saved, pending_deletion, or actively staged) owned by ``user_id``."""
+        staged_cutoff = self._staged_ownership_cutoff_iso()
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT id AS character_id FROM characters WHERE owner_id = ?
+                UNION
+                SELECT character_id FROM staged_character_ownership
+                WHERE user_id = ? AND created_at >= ?
+                """,
+                (user_id, user_id, staged_cutoff),
+            ).fetchall()
+            return [str(r["character_id"]) for r in rows]
+        finally:
+            conn.close()
+
+    def list_active_media_character_ids(self) -> set[str]:
+        """Return all character IDs (saved, pending_deletion, or unexpired staged) that legitimately own media."""
+        staged_cutoff = self._staged_ownership_cutoff_iso()
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT id AS character_id FROM characters
+                UNION
+                SELECT character_id FROM staged_character_ownership
+                WHERE created_at >= ?
+                """,
+                (staged_cutoff,),
+            ).fetchall()
+            return {str(r["character_id"]) for r in rows}
+        finally:
+            conn.close()

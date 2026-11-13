@@ -68,7 +68,12 @@ export interface HomeScreenProps {
   onDeleteWorld?: (world: WorldRecord) => void;
   onDeletePersona?: (persona: PersonaRecord) => void;
   onRefreshData?: () => void;
-  onOpenCharacterWizardWithDraft?: (draft: any, autoWorld?: any, preassignedId?: string) => void;
+  onOpenCharacterWizardWithDraft?: (
+    draft: any,
+    autoWorld?: any,
+    preassignedId?: string,
+    mediaWarning?: string | null
+  ) => void;
 }
 
 interface HomeCardProps {

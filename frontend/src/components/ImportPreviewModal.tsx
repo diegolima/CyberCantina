@@ -24,7 +24,8 @@ export interface ImportPreviewModalProps {
   onOpenCharacterWizardWithDraft?: (
     draft: any,
     autoWorld?: any,
-    preassignedId?: string
+    preassignedId?: string,
+    mediaWarning?: string | null
   ) => void;
 }
 
@@ -104,7 +105,8 @@ export const ImportPreviewModal: React.FC<ImportPreviewModalProps> = ({
         onOpenCharacterWizardWithDraft(
           res.draft,
           res.auto_generated_world,
-          res.preassigned_character_id
+          res.preassigned_character_id,
+          res.media_warning ?? null
         );
       }
     } catch (err: any) {

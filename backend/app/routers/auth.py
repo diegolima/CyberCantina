@@ -23,7 +23,7 @@ from app.auth import (
 )
 from app.config import settings
 from app.db.seed import ensure_default_seed
-from app.dependencies import get_repo, issue_session_response
+from app.dependencies import attach_user_media_stats, get_repo, issue_session_response
 from app.providers.seeder import auto_provision_webgpu_for_user
 from app.schemas.auth import (
     AdminChangeUsernameRequest,
@@ -65,7 +65,9 @@ def get_auth_status(
         setup_required=setup_required,
         single_user_mode=single_user_mode,
         authenticated=current_user is not None,
-        user=current_user,
+        allow_self_registration=bool(settings.allow_self_registration),
+        inactive_user_purge_days=settings.inactive_user_purge_days,
+        user=attach_user_media_stats(repo, current_user) if current_user else None,
     )
 
 
@@ -157,6 +159,11 @@ def register_user(
         raise HTTPException(
             status_code=403,
             detail="Multi-user support is disabled while the admin account has no password.",
+        )
+    if not settings.allow_self_registration:
+        raise HTTPException(
+            status_code=403,
+            detail="Self-registration is currently disabled by the server administrator.",
         )
     if not req.password:
         raise HTTPException(
@@ -265,7 +272,7 @@ def finish_passkey_login(
 def get_my_profile(
     current_user: UserProfile = Depends(get_current_user),
 ) -> UserProfile:
-    return current_user
+    return attach_user_media_stats(get_repo(), current_user)
 
 
 @router.put("/api/profile", response_model=UserProfile)
@@ -490,7 +497,8 @@ def admin_list_users(
     q: str | None = None,
     _admin: UserProfile = Depends(require_admin),
 ) -> list[UserProfile]:
-    return get_repo().list_users(search_query=q)
+    repo = get_repo()
+    return [attach_user_media_stats(repo, u) for u in repo.list_users(search_query=q)]
 
 
 @router.post("/api/admin/users", response_model=UserProfile)

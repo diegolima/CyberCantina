@@ -4,6 +4,9 @@
 
 | Method | Path | Backend Handler | Response Schema | Frontend Client |
 | :--- | :--- | :--- | :--- | :--- |
+| `GET` | `/api/admin/chloromancer/purge-preview` | `app.routers.admin_housekeeping.admin_chloromancer_purge_preview` | `PurgePreviewResponse` | *(backend-only / test / SSE)* |
+| `POST` | `/api/admin/chloromancer/run/{job_id}` | `app.routers.admin_housekeeping.admin_chloromancer_run_job` | `ChloromancerRunRecord` | `frontend/src/api/auth.ts` |
+| `GET` | `/api/admin/chloromancer/status` | `app.routers.admin_housekeeping.admin_chloromancer_status` | `ChloromancerStatusResponse` | `frontend/src/api/auth.ts` |
 | `POST` | `/api/admin/embeddings/reindex` | `app.routers.settings.reindex_embeddings` | `dict` | `frontend/src/api/settings.ts` |
 | `GET` | `/api/admin/embeddings/status` | `app.routers.settings.embedding_status` | `dict` | `frontend/src/api/settings.ts` |
 | `GET` | `/api/admin/users` | `app.routers.auth.admin_list_users` | `list` | `frontend/src/api/auth.ts` |
@@ -206,6 +209,7 @@ erDiagram
 | `webauthn_challenges` | `users` |
 | `app_meta` | — |
 | `providers` | `users` |
+| `chloromancer_runs` | — |
 
 ## 3. Domain Package File Index
 
@@ -253,6 +257,7 @@ erDiagram
 | `backend/app/db/repos/campaigns.py` | Campaign creation, membership, and prompt preset assignment. |
 | `backend/app/db/repos/character_versions.py` | Character updates, version history snapshots/restores, and campaign memory edits. |
 | `backend/app/db/repos/characters.py` | Character creation, access checks, media staging, portraits/gallery, and soft-deletion. |
+| `backend/app/db/repos/chloromancer.py` | Chloromancer housekeeping run-history persistence. |
 | `backend/app/db/repos/notes.py` | User notes persistence and row mapping. |
 | `backend/app/db/repos/personas.py` | Player personas and dynamic campaign persona turn state. |
 | `backend/app/db/repos/prompt_presets.py` | Prompt preset CRUD and effective prompt resolution. |
@@ -409,6 +414,14 @@ erDiagram
 | :--- | :--- |
 | `backend/app/engine/world_clock.py` | In-world clock helpers: parsing, describing, advancing, and extracting narrative time hints. |
 
+#### `app.housekeeping`
+
+| File | Summary |
+| :--- | :--- |
+| `backend/app/housekeeping/__init__.py` | Chloromancer background housekeeping scheduler and maintenance jobs. |
+| `backend/app/housekeeping/purge_inactive.py` | Deterministic inactive-user purge job and dry-run preview for Chloromancer. |
+| `backend/app/housekeeping/scheduler.py` | In-process async Chloromancer housekeeping scheduler. |
+
 #### `app.main`
 
 | File | Summary |
@@ -444,6 +457,7 @@ erDiagram
 | File | Summary |
 | :--- | :--- |
 | `backend/app/routers/__init__.py` | FastAPI APIRouter modules for CyberCantina. |
+| `backend/app/routers/admin_housekeeping.py` | Admin housekeeping router for Chloromancer scheduler status, dry-run preview, and manual triggers. |
 | `backend/app/routers/auth.py` | Authentication, passkeys, user profiles, and admin user management router. |
 | `backend/app/routers/campaigns.py` | Campaign Management, Turn Streaming & Spatial State API Router. |
 | `backend/app/routers/characters.py` | Characters, versioning, SillyTavern importer, and character media router. |
@@ -477,6 +491,7 @@ erDiagram
 | `backend/app/schemas/auth.py` | Pydantic schemas for Multi-User Authentication, WebAuthn Passkeys, Profile, and Admin. |
 | `backend/app/schemas/character.py` | Character, psyche, memory shard, and cognition schemas. |
 | `backend/app/schemas/enrich.py` | Pydantic schemas for the AI Magic Wand text enrichment endpoint. |
+| `backend/app/schemas/housekeeping.py` | Pydantic v2 schemas for Chloromancer housekeeping scheduler and purge previews. |
 | `backend/app/schemas/import_export.py` | Schemas for native CyberCantina archive (.zcc) export and import. |
 | `backend/app/schemas/mechanics.py` | Schemas for mechanics checks, previews, and dice calculations. |
 | `backend/app/schemas/note.py` | Schemas for User Notes. |
@@ -583,6 +598,7 @@ erDiagram
 | :--- |
 | `frontend/src/components/auth/AdminModal.tsx` |
 | `frontend/src/components/auth/AdminModelsTab.tsx` |
+| `frontend/src/components/auth/AdminServerConfigTab.tsx` |
 | `frontend/src/components/auth/AdminUsersTab.tsx` |
 | `frontend/src/components/auth/AuthScreen.tsx` |
 | `frontend/src/components/auth/FeedbackModal.tsx` |

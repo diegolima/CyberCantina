@@ -5,6 +5,7 @@ import {
   Cpu,
   FileText,
   Server,
+  Sliders,
   UserCog,
   Users,
   X,
@@ -17,11 +18,13 @@ import { ProvidersManager } from "../providers/ProvidersManager";
 import { ProvidersProvider } from "../providers/ProvidersContext";
 import { AdminUsersTab } from "./AdminUsersTab";
 import { AdminModelsTab } from "./AdminModelsTab";
+import { AdminServerConfigTab } from "./AdminServerConfigTab";
 
 export interface AdminModalProps {
   currentUser: UserProfile;
   singleUserMode: boolean;
-  initialTab?: "users" | "providers" | "models" | "prompts";
+  initialTab?: "users" | "providers" | "models" | "prompts" | "server";
+  inactiveUserPurgeDays?: number | null;
   onClose: () => void;
   onCurrentUserUpdated: (updated: UserProfile) => void;
   onAccountDeleted?: (deletedUserId: string) => Promise<void>;
@@ -32,13 +35,14 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
   currentUser,
   singleUserMode,
   initialTab,
+  inactiveUserPurgeDays = null,
   onClose,
   onCurrentUserUpdated,
   onAccountDeleted,
   onSettingsUpdated,
 }) => {
   const [activeTab, setActiveTab] = useState<
-    "users" | "providers" | "models" | "prompts"
+    "users" | "providers" | "models" | "prompts" | "server"
   >(initialTab ?? "users");
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [filterQuery, setFilterQuery] = useState("");
@@ -71,7 +75,12 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
   };
 
   useEffect(() => {
-    if ((activeTab === "models" || activeTab === "providers") && !appSettingsForm) {
+    if (
+      (activeTab === "models" ||
+        activeTab === "providers" ||
+        activeTab === "server") &&
+      !appSettingsForm
+    ) {
       loadSettings();
     }
   }, [activeTab]);
@@ -154,8 +163,18 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
       <div
         className="modal-panel"
         style={{
-          maxWidth: activeTab === "models" || activeTab === "prompts" ? 880 : 740,
-          width: activeTab === "models" || activeTab === "prompts" ? "min(880px, 95vw)" : undefined,
+          maxWidth:
+            activeTab === "models" ||
+            activeTab === "prompts" ||
+            activeTab === "server"
+              ? 880
+              : 740,
+          width:
+            activeTab === "models" ||
+            activeTab === "prompts" ||
+            activeTab === "server"
+              ? "min(880px, 95vw)"
+              : undefined,
           transition: "max-width 0.2s ease",
         }}
       >
@@ -211,6 +230,16 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
             <FileText size={14} />
             Prompts & Presets
           </button>
+          <button
+            type="button"
+            className={`modal-tab-btn ${
+              activeTab === "server" ? "active" : ""
+            }`}
+            onClick={() => setActiveTab("server")}
+          >
+            <Sliders size={14} />
+            Server Configuration
+          </button>
         </div>
 
         <div className="modal-body" style={{ gap: 14 }}>
@@ -255,6 +284,10 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
             <AdminUsersTab
               currentUser={currentUser}
               singleUserMode={singleUserMode}
+              inactiveUserPurgeDays={
+                appSettingsForm?.inactive_user_purge_days ??
+                inactiveUserPurgeDays
+              }
               users={users}
               setUsers={setUsers}
               loadUsers={loadUsers}
@@ -303,6 +336,19 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
               onActivePresetChanged={async (presetId) => {
                 await api.setActivePromptPreset(presetId);
               }}
+            />
+          )}
+
+          {/* Admin Server Configuration Tab */}
+          {activeTab === "server" && (
+            <AdminServerConfigTab
+              appSettingsForm={appSettingsForm}
+              setAppSettingsForm={setAppSettingsForm}
+              savingSettings={savingSettings}
+              handleSaveSettings={handleSaveSettings}
+              setStatusMsg={setStatusMsg}
+              setErrorMsg={setErrorMsg}
+              onUsersChanged={loadUsers}
             />
           )}
         </div>

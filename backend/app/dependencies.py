@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import io
 import logging
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,7 +27,11 @@ from app.config import (
 from app.db.repository import CantinaRepository
 from app.providers.resolver import ProviderUnavailableError, attach_endpoint, resolve_endpoint
 from app.schemas.auth import AuthSessionResponse, EffectiveWarning, UserProfile
-from app.security.media_path import PathTraversalError, safe_resolve_media_file_path
+from app.security.media_path import (
+    PathTraversalError,
+    safe_resolve_character_media_dir,
+    safe_resolve_media_file_path,
+)
 
 logger = logging.getLogger("cybercantina.dependencies")
 
@@ -302,6 +307,8 @@ def issue_session_response(
         user_agent=ua,
         ip_address=ip,
     )
+    repo.touch_user_login(user.id)
+    refreshed_user = attach_user_media_stats(repo, repo.get_user_by_id(user.id))
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=raw_token,
@@ -312,7 +319,7 @@ def issue_session_response(
     )
     return AuthSessionResponse(
         token=raw_token,
-        user=user,
+        user=refreshed_user,
         single_user_mode=repo.is_single_user_passwordless_mode(),
     )
 
@@ -327,10 +334,67 @@ def safe_resolve_media_path(character_id: str, category: str, filename: str) -> 
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def process_and_save_image(
-    file_bytes: bytes, target_path: Path, square_crop: bool = False, max_size: int = 512
-) -> None:
-    """Validate, format-normalize to WebP, optionally square-crop, and write to disk."""
+_USER_MEDIA_LOCKS: dict[str, threading.Lock] = {}
+_USER_MEDIA_LOCKS_GUARD = threading.Lock()
+
+
+def get_user_media_lock(user_id: str) -> threading.Lock:
+    """Return a per-user mutex serializing media quota checks and disk writes."""
+    with _USER_MEDIA_LOCKS_GUARD:
+        lock = _USER_MEDIA_LOCKS.get(user_id)
+        if lock is None:
+            lock = threading.Lock()
+            _USER_MEDIA_LOCKS[user_id] = lock
+        return lock
+
+
+def get_character_media_bytes(media_dir: str, character_id: str) -> int:
+    """Sum persisted file bytes inside a character's confined media directory."""
+    try:
+        c_dir = safe_resolve_character_media_dir(media_dir, character_id)
+    except (PathTraversalError, ValueError):
+        return 0
+    if not c_dir.is_dir():
+        return 0
+    total = 0
+    for item in c_dir.rglob("*"):
+        if item.is_file():
+            try:
+                total += item.stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def get_user_media_usage_bytes(repo: CantinaRepository, user_id: str) -> int:
+    """Compute total persisted media bytes across all characters owned or staged by ``user_id``."""
+    total = 0
+    for cid in repo.list_user_media_character_ids(user_id):
+        total += get_character_media_bytes(repo.media_dir, cid)
+    return total
+
+
+def get_user_quota_bytes(user: UserProfile) -> int | None:
+    """Return the active media byte limit for ``user``, or None when unlimited / exempt (admin)."""
+    if user.role == "admin":
+        return None
+    quota_mb = settings.user_media_quota_mb
+    if quota_mb is None or quota_mb <= 0:
+        return None
+    return int(round(float(quota_mb) * 1024 * 1024))
+
+
+def attach_user_media_stats(repo: CantinaRepository, user: UserProfile) -> UserProfile:
+    """Return a copy of ``user`` enriched with current media usage and quota bytes."""
+    used = get_user_media_usage_bytes(repo, user.id)
+    quota = get_user_quota_bytes(user)
+    return user.model_copy(update={"media_bytes_used": used, "media_quota_bytes": quota})
+
+
+def render_webp_bytes(
+    file_bytes: bytes, square_crop: bool = False, max_size: int = 512
+) -> bytes:
+    """Validate, format-normalize to WebP, optionally square-crop, and return encoded bytes."""
     if len(file_bytes) > 20 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Image exceeds 20MB limit.")
     try:
@@ -353,9 +417,66 @@ def process_and_save_image(
                 if w > max_size or h > max_size:
                     img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
 
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            img.save(target_path, format="WEBP", quality=85)
+            buf = io.BytesIO()
+            img.save(buf, format="WEBP", quality=85)
+            return buf.getvalue()
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid image format: {exc}") from exc
+
+
+def format_mb(num_bytes: int) -> str:
+    return f"{num_bytes / (1024 * 1024):.2f} MB"
+
+
+def remove_character_media_dir(media_dir: str, character_id: str) -> None:
+    """Safely remove all persisted media files for a character directory."""
+    import shutil
+
+    try:
+        c_dir = safe_resolve_character_media_dir(media_dir, character_id)
+    except (PathTraversalError, ValueError):
+        return
+    if c_dir.is_dir():
+        shutil.rmtree(c_dir, ignore_errors=True)
+
+
+def enforce_quota_and_write_webp(
+    repo: CantinaRepository,
+    user: UserProfile,
+    webp_bytes: bytes,
+    target_path: Path,
+    *,
+    replacing_path: Path | None = None,
+) -> None:
+    """Enforce per-user media storage quota atomically and write WebP bytes to ``target_path``."""
+    with get_user_media_lock(user.id):
+        quota = get_user_quota_bytes(user)
+        if quota is not None:
+            used = get_user_media_usage_bytes(repo, user.id)
+            replaced = (
+                replacing_path.stat().st_size
+                if (replacing_path is not None and replacing_path.is_file())
+                else 0
+            )
+            net_added = len(webp_bytes) - replaced
+            if net_added > 0 and (used + net_added) > quota:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        f"Media storage quota exceeded ({format_mb(used)} / {format_mb(quota)} used). "
+                        "Delete existing portraits or gallery images to free space."
+                    ),
+                )
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_bytes(webp_bytes)
+
+
+def process_and_save_image(
+    file_bytes: bytes, target_path: Path, square_crop: bool = False, max_size: int = 512
+) -> None:
+    """Validate, format-normalize to WebP, optionally square-crop, and write to disk."""
+    webp_bytes = render_webp_bytes(file_bytes, square_crop=square_crop, max_size=max_size)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_bytes(webp_bytes)

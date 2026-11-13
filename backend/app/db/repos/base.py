@@ -390,3 +390,21 @@ class RepositoryBase:
         conn.execute("PRAGMA synchronous = NORMAL;")
         conn.execute("PRAGMA busy_timeout = 5000;")
         return conn
+
+    def vacuum_and_checkpoint_wal(self) -> tuple[int, int]:
+        """Truncate the WAL and run VACUUM to reclaim freed SQLite pages on disk.
+
+        Returns ``(bytes_before, bytes_after)`` of the primary database file.
+        """
+        db_file = Path(self.db_path)
+        bytes_before = db_file.stat().st_size if db_file.exists() else 0
+        conn = sqlite3.connect(self.db_path, timeout=30.0, isolation_level=None)
+        try:
+            conn.execute("PRAGMA busy_timeout = 10000;")
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+            conn.execute("VACUUM;")
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        finally:
+            conn.close()
+        bytes_after = db_file.stat().st_size if db_file.exists() else 0
+        return bytes_before, bytes_after

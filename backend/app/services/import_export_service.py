@@ -16,7 +16,17 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.db.repository import CantinaRepository, _location_lore_vector_fields, utc_now_iso
-from app.dependencies import process_and_save_image, safe_resolve_media_path
+from app.dependencies import (
+    enforce_quota_and_write_webp,
+    format_mb,
+    get_user_media_lock,
+    get_user_media_usage_bytes,
+    get_user_quota_bytes,
+    process_and_save_image,
+    remove_character_media_dir,
+    render_webp_bytes,
+    safe_resolve_media_path,
+)
 from app.schemas.character import (
     CharacterWizardDraft,
     GalleryImage,
@@ -488,6 +498,50 @@ async def commit_staged_import(
     worlds_data: list[dict[str, Any]] = staged.parsed_payload.get("worlds", [])
     personas_data: list[dict[str, Any]] = staged.parsed_payload.get("personas", [])
 
+    try:
+        actor_user = repo.get_user_by_id(user_id)
+    except KeyError:
+        actor_user = None
+    quota_bytes = get_user_quota_bytes(actor_user) if actor_user is not None else None
+    pre_rendered_media: dict[tuple[int, str, str], bytes] = {}
+    zip_names = set(zf.namelist())
+
+    if quota_bytes is not None and actor_user is not None:
+        total_media_bytes = 0
+        for c_idx, c in enumerate(characters_data):
+            old_c_id = str(c.get("id") or "")
+            c_name = str(c.get("name") or "Unnamed Character").strip()
+            strategy = (
+                req.conflict_strategies.get(old_c_id)
+                or req.conflict_strategies.get(c_name)
+                or req.default_conflict_strategy
+            )
+            if strategy == "skip":
+                continue
+            for emotion, rel_path in c.get("portraits", {}).items():
+                if rel_path in zip_names:
+                    webp_bytes = render_webp_bytes(zf.read(rel_path), square_crop=True, max_size=512)
+                    pre_rendered_media[(c_idx, "portrait", str(emotion))] = webp_bytes
+                    total_media_bytes += len(webp_bytes)
+            for g_idx, g_item in enumerate(c.get("gallery", [])):
+                rel_path = g_item.get("url", "")
+                if rel_path in zip_names:
+                    webp_bytes = render_webp_bytes(zf.read(rel_path), square_crop=False, max_size=1920)
+                    pre_rendered_media[(c_idx, "gallery", str(g_idx))] = webp_bytes
+                    total_media_bytes += len(webp_bytes)
+
+        if total_media_bytes > 0:
+            with get_user_media_lock(actor_user.id):
+                used_bytes = get_user_media_usage_bytes(repo, actor_user.id)
+                if used_bytes + total_media_bytes > quota_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"Import media ({format_mb(total_media_bytes)}) exceeds your remaining "
+                            f"media quota ({format_mb(used_bytes)} / {format_mb(quota_bytes)} used)."
+                        ),
+                    )
+
     imported_characters: list[str] = []
     imported_worlds: list[str] = []
     imported_personas: list[str] = []
@@ -807,7 +861,7 @@ async def commit_staged_import(
             errors.append(f"Persona '{p_name}': {exc}")
 
     # 3. Ingest Characters
-    for c in characters_data:
+    for c_idx, c in enumerate(characters_data):
         old_c_id = str(c.get("id") or "")
         c_name = str(c.get("name") or "Unnamed Character").strip()
         strategy = (
@@ -820,8 +874,8 @@ async def commit_staged_import(
             skipped_entities.append(f"Character: {c_name}")
             continue
 
+        new_c_id = f"char_{uuid.uuid4().hex[:10]}"
         try:
-            new_c_id = f"char_{uuid.uuid4().hex[:10]}"
             id_remap[old_c_id] = new_c_id
             final_name = c_name
             if strategy == "copy":
@@ -836,24 +890,36 @@ async def commit_staged_import(
             # Unpack media and rewrite URLs
             new_portraits: dict[str, str] = {}
             for emotion, rel_path in c.get("portraits", {}).items():
-                if rel_path in zf.namelist():
-                    img_bytes = zf.read(rel_path)
+                if rel_path in zip_names:
                     filename = f"{emotion}_{uuid.uuid4().hex[:8]}.webp"
                     target_path = safe_resolve_media_path(new_c_id, "portraits", filename)
-                    process_and_save_image(img_bytes, target_path, square_crop=True, max_size=512)
+                    pre = pre_rendered_media.get((c_idx, "portrait", str(emotion)))
+                    if actor_user is not None:
+                        webp_bytes = pre if pre is not None else render_webp_bytes(
+                            zf.read(rel_path), square_crop=True, max_size=512
+                        )
+                        enforce_quota_and_write_webp(repo, actor_user, webp_bytes, target_path)
+                    else:
+                        process_and_save_image(zf.read(rel_path), target_path, square_crop=True, max_size=512)
                     new_portraits[emotion] = f"/api/media/characters/{new_c_id}/portraits/{filename}"
                 else:
                     new_portraits[emotion] = rel_path
 
             new_gallery: list[GalleryImage] = []
-            for g_item in c.get("gallery", []):
+            for g_idx, g_item in enumerate(c.get("gallery", [])):
                 rel_path = g_item.get("url", "")
-                if rel_path in zf.namelist():
-                    img_bytes = zf.read(rel_path)
+                if rel_path in zip_names:
                     g_id = f"img_{uuid.uuid4().hex[:10]}"
                     filename = f"{g_id}.webp"
                     target_path = safe_resolve_media_path(new_c_id, "gallery", filename)
-                    process_and_save_image(img_bytes, target_path, square_crop=False, max_size=1920)
+                    pre = pre_rendered_media.get((c_idx, "gallery", str(g_idx)))
+                    if actor_user is not None:
+                        webp_bytes = pre if pre is not None else render_webp_bytes(
+                            zf.read(rel_path), square_crop=False, max_size=1920
+                        )
+                        enforce_quota_and_write_webp(repo, actor_user, webp_bytes, target_path)
+                    else:
+                        process_and_save_image(zf.read(rel_path), target_path, square_crop=False, max_size=1920)
                     new_gallery.append(
                         GalleryImage(
                             id=g_id,
@@ -907,7 +973,11 @@ async def commit_staged_import(
             )
             imported_characters.append(final_name)
 
+        except HTTPException:
+            remove_character_media_dir(repo.media_dir, new_c_id)
+            raise
         except Exception as exc:
+            remove_character_media_dir(repo.media_dir, new_c_id)
             logger.exception("Failed importing character '%s': %s", c_name, exc)
             errors.append(f"Character '{c_name}': {exc}")
 

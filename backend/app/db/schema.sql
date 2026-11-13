@@ -10,10 +10,13 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NULL,
     role TEXT NOT NULL DEFAULT 'user', -- 'user' | 'admin'
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    last_login_at TEXT NULL,
+    last_active_at TEXT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_last_active ON users(role, last_active_at);
 
 CREATE TABLE IF NOT EXISTS user_passkeys (
     id TEXT PRIMARY KEY, -- credential_id (Base64URL)
@@ -462,3 +465,17 @@ CREATE TABLE IF NOT EXISTS providers (
 CREATE UNIQUE INDEX IF NOT EXISTS ux_providers_system_name ON providers(name_key) WHERE scope = 'system';
 CREATE UNIQUE INDEX IF NOT EXISTS ux_providers_user_name ON providers(owner_id, name_key) WHERE scope = 'user';
 CREATE INDEX IF NOT EXISTS idx_providers_owner ON providers(owner_id);
+
+-- Chloromancer background housekeeping run history
+CREATE TABLE IF NOT EXISTS chloromancer_runs (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    trigger TEXT NOT NULL, -- 'scheduled' | 'manual'
+    started_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL,
+    status TEXT NOT NULL, -- 'ok' | 'skipped' | 'error'
+    items_affected INTEGER NOT NULL DEFAULT 0,
+    details_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_chloromancer_runs_job_started
+    ON chloromancer_runs(job_id, started_at DESC);

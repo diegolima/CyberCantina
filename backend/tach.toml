@@ -287,6 +287,15 @@ depends_on = [
 ]
 
 [[modules]]
+path = "app.housekeeping"
+depends_on = [
+    "app.config",
+    "app.db",
+    "app.schemas",
+    "app.security",
+]
+
+[[modules]]
 path = "app.routers"
 depends_on = [
     "app.auth",
@@ -305,6 +314,7 @@ depends_on = [
     "app.engine.phase4_clerk",
     "app.engine.phase4_prose",
     "app.engine.phase5_clerk",
+    "app.housekeeping",
     "app.prompts",
     "app.providers",
     "app.schemas",
@@ -321,6 +331,7 @@ depends_on = [
     "app.db",
     "app.dependencies",
     "app.engine.llm_client",
+    "app.housekeeping",
     "app.providers",
     "app.routers",
     "app.security",

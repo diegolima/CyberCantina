@@ -2,6 +2,9 @@ import type {
   AdminResetPasswordResponse,
   AuthSessionResponse,
   AuthStatusResponse,
+  ChloromancerRunRecord,
+  ChloromancerStatusResponse,
+  PurgePreviewResponse,
   UserProfile,
   UserRole,
 } from "../types";
@@ -293,4 +296,25 @@ export const authApi = {
     );
     return res;
   },
+
+  getChloromancerStatus: (limit: number = 20) =>
+    fetchJson<ChloromancerStatusResponse>(
+      `${API_BASE}/admin/chloromancer/status?limit=${encodeURIComponent(String(limit))}`
+    ),
+
+  getPurgePreview: (days?: number | null) => {
+    const query =
+      typeof days === "number" && days > 0
+        ? `?days=${encodeURIComponent(String(days))}`
+        : "";
+    return fetchJson<PurgePreviewResponse>(
+      `${API_BASE}/admin/chloromancer/purge-preview${query}`
+    );
+  },
+
+  runChloromancerJob: (jobId: string) =>
+    fetchJson<ChloromancerRunRecord>(
+      `${API_BASE}/admin/chloromancer/run/${encodeURIComponent(jobId)}`,
+      { method: "POST" }
+    ),
 };

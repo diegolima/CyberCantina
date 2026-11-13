@@ -29,6 +29,10 @@ class UserProfile(BaseModel):
     passkeys: list[PasskeyInfo] = Field(default_factory=list)
     created_at: str
     updated_at: str
+    last_login_at: str | None = None
+    last_active_at: str | None = None
+    media_bytes_used: int | None = None
+    media_quota_bytes: int | None = None
 
 
 class AuthStatusResponse(BaseModel):
@@ -36,6 +40,8 @@ class AuthStatusResponse(BaseModel):
     single_user_mode: bool
     authenticated: bool
     user: UserProfile | None = None
+    allow_self_registration: bool = True
+    inactive_user_purge_days: int | None = None
 
 
 class InitialSetupRequest(BaseModel):

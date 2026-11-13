@@ -30,10 +30,11 @@ Source of truth: [backend/tach.toml](../../backend/tach.toml) validated by `tach
 | `app.engine.phase4_prose` | `app.config`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.phase3_cognition`, `app.schemas` |
 | `app.engine.phase5_clerk` | `app.config`, `app.db`, `app.engine.affective_engine`, `app.engine.character_agent`, `app.engine.clerk`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.phase2_context`, `app.engine.world_clock`, `app.prompts`, `app.schemas` |
 | `app.engine.world_clock` | `app.schemas` |
-| `app.main` | `app.auth`, `app.config`, `app.db`, `app.dependencies`, `app.engine.llm_client`, `app.providers`, `app.routers`, `app.security` |
+| `app.housekeeping` | `app.config`, `app.db`, `app.schemas`, `app.security` |
+| `app.main` | `app.auth`, `app.config`, `app.db`, `app.dependencies`, `app.engine.llm_client`, `app.housekeeping`, `app.providers`, `app.routers`, `app.security` |
 | `app.prompts` | *(leaf / none)* |
 | `app.providers` | `app.config`, `app.db`, `app.schemas`, `app.security` |
-| `app.routers` | `app.auth`, `app.config`, `app.db`, `app.dependencies`, `app.engine.affective_engine`, `app.engine.choices`, `app.engine.clerk_placement`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.phase1_pre`, `app.engine.phase2_context`, `app.engine.phase3_actor`, `app.engine.phase3_cognition`, `app.engine.phase4_clerk`, `app.engine.phase4_prose`, `app.engine.phase5_clerk`, `app.prompts`, `app.providers`, `app.schemas`, `app.security`, `app.services`, `app.wizards` |
+| `app.routers` | `app.auth`, `app.config`, `app.db`, `app.dependencies`, `app.engine.affective_engine`, `app.engine.choices`, `app.engine.clerk_placement`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.phase1_pre`, `app.engine.phase2_context`, `app.engine.phase3_actor`, `app.engine.phase3_cognition`, `app.engine.phase4_clerk`, `app.engine.phase4_prose`, `app.engine.phase5_clerk`, `app.housekeeping`, `app.prompts`, `app.providers`, `app.schemas`, `app.security`, `app.services`, `app.wizards` |
 | `app.schemas` | `app.config` |
 | `app.security` | *(leaf / none)* |
 | `app.services` | `app.config`, `app.db`, `app.dependencies`, `app.schemas`, `app.wizards` |
@@ -158,11 +159,16 @@ graph TD
     app.engine.phase5_clerk --> app.prompts
     app.engine.phase5_clerk --> app.schemas
     app.engine.world_clock --> app.schemas
+    app.housekeeping --> app.config
+    app.housekeeping --> app.db
+    app.housekeeping --> app.schemas
+    app.housekeeping --> app.security
     app.main --> app.auth
     app.main --> app.config
     app.main --> app.db
     app.main --> app.dependencies
     app.main --> app.engine.llm_client
+    app.main --> app.housekeeping
     app.main --> app.providers
     app.main --> app.routers
     app.main --> app.security
@@ -187,6 +193,7 @@ graph TD
     app.routers --> app.engine.phase4_clerk
     app.routers --> app.engine.phase4_prose
     app.routers --> app.engine.phase5_clerk
+    app.routers --> app.housekeeping
     app.routers --> app.prompts
     app.routers --> app.providers
     app.routers --> app.schemas

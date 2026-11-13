@@ -247,6 +247,35 @@ class AppSettings(BaseModel):
             "agents concurrently via asyncio.gather (fast on cloud APIs or multi-slot vLLM)."
         ),
     )
+    allow_self_registration: bool = Field(
+        default_factory=lambda: os.environ.get("CYBERCANTINA_ALLOW_SELF_REGISTRATION", "true").strip().lower()
+        not in ("0", "false", "no"),
+        description="When True, unauthenticated visitors may self-register new standard user accounts.",
+    )
+    inactive_user_purge_days: int | None = Field(
+        default=None,
+        ge=1,
+        le=3650,
+        description=(
+            "Days of inactivity after which standard user accounts and all their data are purged "
+            "by Chloromancer (None = disabled; admin accounts are never purged)."
+        ),
+    )
+    user_media_quota_mb: float | None = Field(
+        default=None,
+        ge=0.5,
+        le=10240.0,
+        description=(
+            "Maximum persisted WebP media storage per standard user account in MB "
+            "(None = unlimited; admin accounts are exempt)."
+        ),
+    )
+    chloromancer_interval_minutes: int = Field(
+        default=60,
+        ge=5,
+        le=10080,
+        description="Background interval in minutes between scheduled Chloromancer housekeeping ticks.",
+    )
 
     @model_validator(mode="after")
     def enforce_byop_coupling(self) -> "AppSettings":

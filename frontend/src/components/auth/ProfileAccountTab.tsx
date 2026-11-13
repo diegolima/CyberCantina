@@ -1,7 +1,9 @@
 import React, { useState } from "react";
 import {
   AlertTriangle,
+  Clock,
   Fingerprint,
+  HardDrive,
   KeyRound,
   RefreshCw,
   Trash2,
@@ -9,9 +11,24 @@ import {
 import { api } from "../../api";
 import { AuthStatusResponse, PasskeyInfo, UserProfile } from "../../types";
 
+function formatAccountBytes(bytes?: number): string {
+  if (!bytes || bytes <= 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function formatAccountTimestamp(iso?: string | null): string {
+  if (!iso) return "—";
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return iso;
+  return dt.toLocaleString();
+}
+
 export interface ProfileAccountTabProps {
   user: UserProfile;
   singleUserMode: boolean;
+  inactiveUserPurgeDays?: number | null;
   setStatusMsg: (msg: string | null) => void;
   setErrorMsg: (msg: string | null) => void;
   setFeedback: (
@@ -31,6 +48,7 @@ export interface ProfileAccountTabProps {
 export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
   user,
   singleUserMode,
+  inactiveUserPurgeDays = null,
   setStatusMsg,
   setErrorMsg,
   setFeedback,
@@ -281,8 +299,129 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
     }
   };
 
+  const usedBytes = user.media_bytes_used ?? 0;
+  const quotaBytes = user.media_quota_bytes ?? null;
+  const quotaPct =
+    quotaBytes && quotaBytes > 0
+      ? Math.min(100, Math.round((usedBytes / quotaBytes) * 100))
+      : null;
+
   return (
             <>
+              {/* Media Storage Quota & Activity Retention Card */}
+              <div
+                style={{
+                  background: "var(--bg-card)",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: 8,
+                  padding: 14,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 10,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <span
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontWeight: 600,
+                      fontSize: "0.86rem",
+                    }}
+                  >
+                    <HardDrive size={15} color="var(--accent-cyan)" />
+                    Media Storage &amp; Activity
+                  </span>
+                  <span
+                    style={{
+                      fontSize: "0.74rem",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    {formatAccountBytes(usedBytes)}
+                    {user.role === "admin"
+                      ? " (Administrator: Exempt from quota)"
+                      : quotaBytes
+                      ? ` / ${formatAccountBytes(quotaBytes)} (${quotaPct}%)`
+                      : " (No quota limit)"}
+                  </span>
+                </div>
+
+                {quotaPct !== null && (
+                  <div
+                    style={{
+                      width: "100%",
+                      height: 6,
+                      borderRadius: 999,
+                      background: "var(--bg-deep)",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${quotaPct}%`,
+                        height: "100%",
+                        background:
+                          quotaPct >= 90
+                            ? "var(--accent-rose, #f43f5e)"
+                            : "var(--accent-cyan)",
+                        transition: "width 0.2s ease",
+                      }}
+                    />
+                  </div>
+                )}
+
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    flexWrap: "wrap",
+                    fontSize: "0.72rem",
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    <Clock size={12} />
+                    Last Active:{" "}
+                    {formatAccountTimestamp(user.last_active_at ?? user.created_at)}
+                  </span>
+                  <span>
+                    Last Login: {formatAccountTimestamp(user.last_login_at)}
+                  </span>
+                </div>
+
+                {user.role === "user" &&
+                  inactiveUserPurgeDays != null &&
+                  inactiveUserPurgeDays > 0 && (
+                    <div
+                      style={{
+                        padding: "8px 10px",
+                        borderRadius: 6,
+                        background: "rgba(245, 158, 11, 0.08)",
+                        border: "1px solid rgba(245, 158, 11, 0.3)",
+                        fontSize: "0.74rem",
+                        color: "var(--accent-amber)",
+                      }}
+                    >
+                      <strong>Account Retention Policy:</strong> Accounts
+                      inactive for {inactiveUserPurgeDays} days (along with their
+                      characters, worlds, and campaigns) are automatically
+                      purged. Sign in periodically or export your characters and
+                      worlds as <code>.zcc</code> backups from the Home screen.
+                    </div>
+                  )}
+              </div>
+
               <form
                 onSubmit={(e) => handleChangePassword(e, false)}
             style={{

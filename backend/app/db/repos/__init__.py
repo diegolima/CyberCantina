@@ -22,6 +22,7 @@ from app.db.repos.campaigns import CampaignsMixin
 from app.db.repos.prompt_presets import PromptPresetsMixin
 from app.db.repos.turns import TurnsBranchesMixin
 from app.db.repos.campaign_spatial import CampaignMapOpsMixin
+from app.db.repos.chloromancer import ChloromancerMixin
 from app.db.repos.notes import NotesMixin
 from app.db.repos.base import (
     STAGED_CHARACTER_OWNERSHIP_TTL_SECONDS,

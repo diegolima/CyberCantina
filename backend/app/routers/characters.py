@@ -22,9 +22,14 @@ from pydantic import BaseModel
 from app.auth import get_current_user
 from app.db.repository import utc_now_iso
 from app.dependencies import (
+    enforce_quota_and_write_webp,
+    format_mb,
     get_effective_user_model_settings,
     get_repo,
-    process_and_save_image,
+    get_user_media_lock,
+    get_user_media_usage_bytes,
+    get_user_quota_bytes,
+    render_webp_bytes,
     run_entity_pruner,
     safe_resolve_media_path,
 )
@@ -72,6 +77,7 @@ class SillyTavernImportResponse(BaseModel):
     draft: CharacterWizardDraft
     preassigned_character_id: str
     auto_generated_world: WorldWizardDraft | None = None
+    media_warning: str | None = None
 
 
 @router.get("/api/characters", response_model=list[CharacterRecord])
@@ -212,44 +218,64 @@ async def wizard_import_sillytavern_card(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Card distillation failed: {exc}") from exc
 
+    media_warning: str | None = None
     # If raw PNG artwork is available, process and stage default portrait and gallery image
     if pkg.image_bytes:
         try:
-            portrait_suffix = uuid.uuid4().hex[:8]
-            portrait_filename = f"default_{portrait_suffix}.webp"
-            portrait_path = safe_resolve_media_path(
-                preassigned_id, "portraits", portrait_filename
-            )
-            await asyncio.to_thread(
-                process_and_save_image,
+            portrait_webp = await asyncio.to_thread(
+                render_webp_bytes,
                 pkg.image_bytes,
-                portrait_path,
                 square_crop=True,
                 max_size=512,
             )
-            draft.portraits["default"] = (
-                f"/api/media/characters/{preassigned_id}/portraits/{portrait_filename}"
-            )
-
-            gallery_id = f"img_{uuid.uuid4().hex[:10]}"
-            gallery_filename = f"{gallery_id}.webp"
-            gallery_path = safe_resolve_media_path(
-                preassigned_id, "gallery", gallery_filename
-            )
-            await asyncio.to_thread(
-                process_and_save_image,
+            gallery_webp = await asyncio.to_thread(
+                render_webp_bytes,
                 pkg.image_bytes,
-                gallery_path,
                 square_crop=False,
                 max_size=1920,
             )
-            gallery_item = GalleryImage(
-                id=gallery_id,
-                url=f"/api/media/characters/{preassigned_id}/gallery/{gallery_filename}",
-                caption="Original Card Artwork",
-                created_at=utc_now_iso(),
-            )
-            draft.gallery = [gallery_item]
+
+            def _stage_card_media() -> str | None:
+                portrait_suffix = uuid.uuid4().hex[:8]
+                portrait_filename = f"default_{portrait_suffix}.webp"
+                portrait_path = safe_resolve_media_path(
+                    preassigned_id, "portraits", portrait_filename
+                )
+                gallery_id = f"img_{uuid.uuid4().hex[:10]}"
+                gallery_filename = f"{gallery_id}.webp"
+                gallery_path = safe_resolve_media_path(
+                    preassigned_id, "gallery", gallery_filename
+                )
+                needed_bytes = len(portrait_webp) + len(gallery_webp)
+                with get_user_media_lock(current_user.id):
+                    quota = get_user_quota_bytes(current_user)
+                    if quota is not None:
+                        used = get_user_media_usage_bytes(repo, current_user.id)
+                        if used + needed_bytes > quota:
+                            return (
+                                f"Card artwork was omitted because staging its media ({format_mb(needed_bytes)}) "
+                                f"exceeds your storage quota ({format_mb(used)} / {format_mb(quota)} used). "
+                                "Character text fields were imported successfully."
+                            )
+                    portrait_path.parent.mkdir(parents=True, exist_ok=True)
+                    portrait_path.write_bytes(portrait_webp)
+                    gallery_path.parent.mkdir(parents=True, exist_ok=True)
+                    gallery_path.write_bytes(gallery_webp)
+
+                draft.portraits["default"] = (
+                    f"/api/media/characters/{preassigned_id}/portraits/{portrait_filename}"
+                )
+                draft.gallery = [
+                    GalleryImage(
+                        id=gallery_id,
+                        url=f"/api/media/characters/{preassigned_id}/gallery/{gallery_filename}",
+                        caption="Original Card Artwork",
+                        created_at=utc_now_iso(),
+                    )
+                ]
+                return None
+
+            media_warning = await asyncio.to_thread(_stage_card_media)
         except Exception as exc:
             logger.warning("Failed staging card media artwork: %s", exc)
 
@@ -269,6 +295,7 @@ async def wizard_import_sillytavern_card(
         draft=draft,
         preassigned_character_id=preassigned_id,
         auto_generated_world=auto_world_draft,
+        media_warning=media_warning,
     )
 
 
@@ -466,18 +493,33 @@ async def upload_character_portrait(
     filename = f"{clean_emotion}_{file_suffix}.webp"
     target_path = safe_resolve_media_path(character_id, "portraits", filename)
 
-    # Delete existing portrait file for this emotion if present
+    webp_bytes = await asyncio.to_thread(
+        render_webp_bytes, file_bytes, square_crop=True, max_size=512
+    )
+
+    old_path: Path | None = None
     old_url = char.portraits.get(clean_emotion)
     if old_url:
         old_name = Path(old_url).name
         try:
             old_path = safe_resolve_media_path(character_id, "portraits", old_name)
-            if old_path.is_file():
-                old_path.unlink(missing_ok=True)
+        except Exception:
+            old_path = None
+
+    await asyncio.to_thread(
+        enforce_quota_and_write_webp,
+        repo,
+        current_user,
+        webp_bytes,
+        target_path,
+        replacing_path=old_path,
+    )
+
+    if old_path is not None and old_path != target_path and old_path.is_file():
+        try:
+            old_path.unlink(missing_ok=True)
         except Exception:
             pass
-
-    await asyncio.to_thread(process_and_save_image, file_bytes, target_path, square_crop=True, max_size=512)
 
     new_portraits = dict(char.portraits)
     new_portraits[clean_emotion] = f"/api/media/characters/{character_id}/portraits/{filename}"
@@ -542,7 +584,16 @@ async def upload_character_gallery_image(
     filename = f"{img_id}.webp"
     target_path = safe_resolve_media_path(character_id, "gallery", filename)
 
-    await asyncio.to_thread(process_and_save_image, file_bytes, target_path, square_crop=False, max_size=1920)
+    webp_bytes = await asyncio.to_thread(
+        render_webp_bytes, file_bytes, square_crop=False, max_size=1920
+    )
+    await asyncio.to_thread(
+        enforce_quota_and_write_webp,
+        repo,
+        current_user,
+        webp_bytes,
+        target_path,
+    )
 
     item = GalleryImage(
         id=img_id,

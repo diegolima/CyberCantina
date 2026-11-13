@@ -17,6 +17,7 @@ import { ProfilePreferencesTab } from "./ProfilePreferencesTab";
 export interface ProfileModalProps {
   user: UserProfile;
   singleUserMode: boolean;
+  inactiveUserPurgeDays?: number | null;
   initialTab?: "identity" | "account" | "preferences" | "models" | "prompts" | "behavior";
   initialSubTab?: "behavior" | "prompts" | "models" | "providers";
   onClose: () => void;
@@ -28,6 +29,7 @@ export interface ProfileModalProps {
 const ProfileModalInner: React.FC<ProfileModalProps> = ({
   user,
   singleUserMode,
+  inactiveUserPurgeDays = null,
   initialTab,
   initialSubTab,
   onClose,
@@ -262,6 +264,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
             <ProfileAccountTab
               user={user}
               singleUserMode={singleUserMode}
+              inactiveUserPurgeDays={inactiveUserPurgeDays}
               setStatusMsg={setStatusMsg}
               setErrorMsg={setErrorMsg}
               setFeedback={setFeedback}

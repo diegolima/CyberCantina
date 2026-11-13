@@ -22,13 +22,71 @@ export interface UserProfile {
   passkeys: PasskeyInfo[];
   created_at: string;
   updated_at: string;
+  last_login_at?: string | null;
+  last_active_at?: string | null;
+  media_bytes_used?: number;
+  media_quota_bytes?: number | null;
 }
 
 export interface AuthStatusResponse {
   setup_required: boolean;
   single_user_mode: boolean;
   authenticated: boolean;
+  allow_self_registration?: boolean;
+  inactive_user_purge_days?: number | null;
   user?: UserProfile | null;
+}
+
+export interface ChloromancerJobInfo {
+  job_id: string;
+  description: string;
+  interval_minutes: number;
+  enabled: boolean;
+  running: boolean;
+}
+
+export interface ChloromancerRunRecord {
+  id: string;
+  job_id: string;
+  trigger: string;
+  started_at: string;
+  finished_at: string;
+  status: string;
+  items_affected: number;
+  details: Record<string, any>;
+}
+
+export interface ChloromancerStatusResponse {
+  scheduler_active: boolean;
+  interval_minutes: number;
+  inactive_user_purge_days: number | null;
+  jobs: ChloromancerJobInfo[];
+  recent_runs: ChloromancerRunRecord[];
+}
+
+export interface PurgeCandidatePreview {
+  user_id: string;
+  username: string;
+  display_name: string;
+  created_at: string;
+  last_login_at: string | null;
+  last_active_at: string;
+  days_inactive: number;
+  character_count: number;
+  world_count: number;
+  campaign_count: number;
+  media_bytes: number;
+}
+
+export interface PurgePreviewResponse {
+  days_threshold: number | null;
+  cutoff_at: string | null;
+  candidates: PurgeCandidatePreview[];
+  total_users: number;
+  total_characters: number;
+  total_worlds: number;
+  total_campaigns: number;
+  total_media_bytes: number;
 }
 
 export interface AuthSessionResponse {

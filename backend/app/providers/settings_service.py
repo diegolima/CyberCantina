@@ -69,6 +69,10 @@ def apply_settings(
             settings.clerk_mirrors_actor = updated.clerk_mirrors_actor
             settings.delegate_cognition_to_clerk = updated.delegate_cognition_to_clerk
             settings.agent_dispatch_mode = updated.agent_dispatch_mode
+            settings.allow_self_registration = updated.allow_self_registration
+            settings.inactive_user_purge_days = updated.inactive_user_purge_days
+            settings.user_media_quota_mb = updated.user_media_quota_mb
+            settings.chloromancer_interval_minutes = updated.chloromancer_interval_minutes
             settings.settings_revision = settings.settings_revision + 1
             persist(settings)
         except Exception:

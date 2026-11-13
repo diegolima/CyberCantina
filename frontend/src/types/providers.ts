@@ -47,6 +47,10 @@ export interface AppSettings {
   settings_revision?: number;
   delegate_cognition_to_clerk: boolean;
   agent_dispatch_mode?: AgentDispatchMode;
+  allow_self_registration?: boolean;
+  inactive_user_purge_days?: number | null;
+  user_media_quota_mb?: number | null;
+  chloromancer_interval_minutes?: number;
 }
 
 export interface SettingsUpdateResponse extends AppSettings {

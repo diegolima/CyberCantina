@@ -15,6 +15,7 @@ import { UserProfile } from "../../types";
 export interface AdminUsersTabProps {
   currentUser: UserProfile;
   singleUserMode: boolean;
+  inactiveUserPurgeDays?: number | null;
   users: UserProfile[];
   setUsers: React.Dispatch<React.SetStateAction<UserProfile[]>>;
   loadUsers: (preferredUserId?: string | null) => Promise<void>;
@@ -40,9 +41,43 @@ export interface AdminUsersTabProps {
   onClose: () => void;
 }
 
+function formatMediaBytes(bytes?: number): string {
+  if (!bytes || bytes <= 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function formatActivityTime(iso?: string | null): string {
+  if (!iso) return "Never";
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return iso;
+  return dt.toLocaleString();
+}
+
+function getPurgeBadge(
+  u: UserProfile,
+  purgeDays?: number | null
+): { label: string; color: string } | null {
+  if (!purgeDays || purgeDays <= 0 || u.role !== "user") return null;
+  const basis = u.last_active_at || u.created_at;
+  const ts = new Date(basis).getTime();
+  if (Number.isNaN(ts)) return null;
+  const daysElapsed = Math.floor((Date.now() - ts) / 86400000);
+  const daysLeft = purgeDays - daysElapsed;
+  if (daysLeft <= 0) {
+    return { label: "Due for purge", color: "#fda4af" };
+  }
+  if (daysLeft <= 3) {
+    return { label: `${daysLeft}d until purge`, color: "var(--accent-amber)" };
+  }
+  return { label: `${daysLeft}d left`, color: "var(--text-muted)" };
+}
+
 export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
   currentUser,
   singleUserMode,
+  inactiveUserPurgeDays = null,
   users,
   setUsers,
   loadUsers,
@@ -365,9 +400,29 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
                             style={{
                               fontSize: "0.71rem",
                               color: "var(--text-secondary)",
+                              display: "flex",
+                              justifyContent: "space-between",
+                              gap: 6,
                             }}
                           >
-                            {u.display_name}
+                            <span>{u.display_name}</span>
+                            {(() => {
+                              const badge = getPurgeBadge(
+                                u,
+                                inactiveUserPurgeDays
+                              );
+                              return badge ? (
+                                <span
+                                  style={{
+                                    color: badge.color,
+                                    fontWeight: 600,
+                                    fontSize: "0.66rem",
+                                  }}
+                                >
+                                  {badge.label}
+                                </span>
+                              ) : null;
+                            })()}
                           </div>
                         </div>
                       </div>
@@ -517,6 +572,56 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
                         >
                           Display Name: {selectedUser.display_name} • Passkeys:{" "}
                           {selectedUser.passkeys.length}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: "0.72rem",
+                            color: "var(--text-muted)",
+                            marginTop: 6,
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 2,
+                          }}
+                        >
+                          <span>
+                            Last Active:{" "}
+                            {formatActivityTime(
+                              selectedUser.last_active_at ??
+                                selectedUser.created_at
+                            )}{" "}
+                            • Last Login:{" "}
+                            {formatActivityTime(selectedUser.last_login_at)}
+                          </span>
+                          <span>
+                            Media Storage:{" "}
+                            {formatMediaBytes(selectedUser.media_bytes_used)}
+                            {selectedUser.role === "admin"
+                              ? " (Admin exempt from quota)"
+                              : selectedUser.media_quota_bytes
+                              ? ` / ${formatMediaBytes(
+                                  selectedUser.media_quota_bytes
+                                )}`
+                              : " (No quota enforced)"}
+                            {(() => {
+                              const badge = getPurgeBadge(
+                                selectedUser,
+                                inactiveUserPurgeDays
+                              );
+                              return badge ? (
+                                <>
+                                  {" • "}
+                                  <span
+                                    style={{
+                                      color: badge.color,
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    {badge.label}
+                                  </span>
+                                </>
+                              ) : null;
+                            })()}
+                          </span>
                         </div>
                       </div>
                       <span

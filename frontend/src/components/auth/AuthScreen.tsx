@@ -1,15 +1,17 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { AlertTriangle, Fingerprint, KeyRound, Lock } from "lucide-react";
 import { api } from "../../api";
 import { AuthSessionResponse } from "../../types";
 
 export interface AuthScreenProps {
   singleUserMode: boolean;
+  allowSelfRegistration?: boolean;
   onAuthenticated: (res: AuthSessionResponse) => void;
 }
 
 export const AuthScreen: React.FC<AuthScreenProps> = ({
   singleUserMode,
+  allowSelfRegistration = true,
   onAuthenticated,
 }) => {
   const [mode, setMode] = useState<"login" | "register">("login");
@@ -19,6 +21,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const [confirmPassword, setConfirmPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!allowSelfRegistration && mode === "register") {
+      setMode("login");
+    }
+  }, [allowSelfRegistration, mode]);
 
   const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -89,7 +97,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         </div>
 
         <div className="modal-body" style={{ gap: 14 }}>
-          {!singleUserMode && (
+          {!singleUserMode && allowSelfRegistration && (
             <div className="Inspector-tabs" style={{ marginBottom: 4 }}>
               <button
                 type="button"
@@ -111,6 +119,22 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               >
                 Create Account
               </button>
+            </div>
+          )}
+
+          {!singleUserMode && !allowSelfRegistration && (
+            <div
+              style={{
+                padding: "8px 10px",
+                borderRadius: 6,
+                background: "rgba(56, 189, 248, 0.08)",
+                border: "1px solid rgba(56, 189, 248, 0.25)",
+                fontSize: "0.76rem",
+                color: "var(--text-secondary)",
+              }}
+            >
+              Self-registration is currently disabled. Sign in with an account
+              created by the server administrator.
             </div>
           )}
 
