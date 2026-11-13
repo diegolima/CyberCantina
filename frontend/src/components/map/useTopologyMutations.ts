@@ -23,6 +23,7 @@ import {
   OPPOSITE_COMPASS,
   compassFromVector,
   computePromotionCandidates,
+  filterEdgesAfterDeletion,
   makeUniqueId,
   pickCompassSlot,
   type GraphSnapshot,
@@ -1298,37 +1299,39 @@ export function useTopologyMutations({
     [workingEdges, workingContainers, workingLocations, commitNextGraph]
   );
 
-  const handleDeleteEdge = useCallback(
-    (edgeId: string) => {
-      const target = workingEdges.find((e) => e.id === edgeId);
-      if (!target) return;
-      const nextEdges = workingEdges.filter(
-        (e) =>
-          e.id !== edgeId &&
-          !(
-            e.from_location_id === target.to_location_id &&
-            e.to_location_id === target.from_location_id
-          )
-      );
+  const deleteEdgeIds = useCallback(
+    (edgeIds: string[]) => {
+      const nextEdges = filterEdgesAfterDeletion(workingEdges, edgeIds);
+      if (nextEdges === workingEdges) return;
       commitNextGraph({
         containers: workingContainers,
         locations: workingLocations,
         edges: nextEdges,
       });
+      const removedIds = new Set(
+        workingEdges
+          .filter((e) => !nextEdges.includes(e))
+          .map((e) => e.id)
+      );
       setMultiEdgeModalEdges((prev) =>
-        prev
-          ? prev.filter(
-              (e) =>
-                e.id !== edgeId &&
-                !(
-                  e.from_location_id === target.to_location_id &&
-                  e.to_location_id === target.from_location_id
-                )
-            )
-          : null
+        prev ? prev.filter((e) => !removedIds.has(e.id)) : null
       );
     },
-    [workingEdges, workingContainers, workingLocations, commitNextGraph]
+    [workingEdges, workingContainers, workingLocations, commitNextGraph, setMultiEdgeModalEdges]
+  );
+
+  const handleDeleteEdge = useCallback(
+    (edgeId: string) => {
+      deleteEdgeIds([edgeId]);
+    },
+    [deleteEdgeIds]
+  );
+
+  const handleDeleteEdgeGroup = useCallback(
+    (edgeIds: string[]) => {
+      deleteEdgeIds(edgeIds);
+    },
+    [deleteEdgeIds]
   );
 
   return {
@@ -1356,5 +1359,6 @@ export function useTopologyMutations({
     handleUpdateEdgeDistance,
     handleToggleEdgeLocked,
     handleDeleteEdge,
+    handleDeleteEdgeGroup,
   };
 }

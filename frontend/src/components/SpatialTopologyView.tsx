@@ -24,7 +24,11 @@ import {
   StandaloneContainerCreateModal,
   StandaloneContainerCreateState,
 } from "./map/MapDialogs";
-import { computeEdgeClippedSegment, type NodeShapeDescriptor } from "./map/mapGeometry";
+import {
+  computeEdgeClippedSegment,
+  isEditableKeyboardTarget,
+  type NodeShapeDescriptor,
+} from "./map/mapGeometry";
 import {
   MapPaletteBar,
   PALETTE_DRAG_MIME,
@@ -503,6 +507,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     handleUpdateEdgeDistance,
     handleToggleEdgeLocked,
     handleDeleteEdge,
+    handleDeleteEdgeGroup,
   } = useTopologyMutations({
     worldId,
     mode,
@@ -588,6 +593,78 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       setInternalSaving(false);
     }
   };
+
+  // Global Delete-key removal for selected location, hub, or container (Undo-backed)
+  const hasBlockingOverlayOpen = Boolean(
+    inlineEdgeEdit ||
+      contextMenu ||
+      hubCollisionModal ||
+      emptyCanvasModal ||
+      groupModal ||
+      standaloneContainerModal ||
+      promotionPrompt ||
+      multiEdgeModalEdges
+  );
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.key !== "Delete" ||
+        e.repeat ||
+        e.ctrlKey ||
+        e.metaKey ||
+        e.altKey ||
+        e.shiftKey
+      ) {
+        return;
+      }
+      if (isMutatingLocked || effectiveSaving || hasBlockingOverlayOpen) {
+        return;
+      }
+      if (
+        isEditableKeyboardTarget(e.target) ||
+        isEditableKeyboardTarget(
+          typeof document !== "undefined" ? document.activeElement : null
+        )
+      ) {
+        return;
+      }
+
+      if (selectedContainerId) {
+        e.preventDefault();
+        const check = canDeleteContainer(selectedContainerId);
+        if (!check.allowed) {
+          if (check.reason) setStatusNotice(check.reason);
+          return;
+        }
+        handleDeleteContainer(selectedContainerId);
+        return;
+      }
+
+      if (selectedLocId) {
+        e.preventDefault();
+        const check = canDeleteLocation(selectedLocId);
+        if (!check.allowed) {
+          if (check.reason) setStatusNotice(check.reason);
+          return;
+        }
+        handleDeleteLocation(selectedLocId);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    isMutatingLocked,
+    effectiveSaving,
+    hasBlockingOverlayOpen,
+    selectedContainerId,
+    selectedLocId,
+    canDeleteContainer,
+    canDeleteLocation,
+    handleDeleteContainer,
+    handleDeleteLocation,
+  ]);
 
   const handleCloseClick = () => {
     if (!onClose) return;
@@ -790,6 +867,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         >
           <SpatialTopologyCanvas
             svgRef={svgRef}
+            canvasWrapRef={canvasWrapRef}
             viewportGroupRef={viewportGroupRef}
             panDragRef={panDragRef}
             mode={mode}
@@ -822,6 +900,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             setMultiEdgeModalEdges={setMultiEdgeModalEdges}
             openContextMenuAt={openContextMenuAt}
             handleUpdateEdgeDistance={handleUpdateEdgeDistance}
+            handleDeleteEdge={handleDeleteEdge}
+            handleDeleteEdgeGroup={handleDeleteEdgeGroup}
             drillIntoContainer={drillIntoContainer}
           />
 

@@ -274,6 +274,7 @@ export type MagicContextRef =
     }
   | {
       scope: "world_location";
+      entity_kind?: "location" | "container";
       world_id?: string | null;
       location_id?: string | null;
       world_name?: string | null;
@@ -284,6 +285,7 @@ export type MagicContextRef =
       location_summary?: string | null;
       location_description?: string | null;
       existing_tags?: string[] | null;
+      child_names?: string[] | null;
     }
   | {
       scope: "character_field";

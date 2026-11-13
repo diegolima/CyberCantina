@@ -720,6 +720,106 @@ export function clientToWorldPoint(
   };
 }
 
+/**
+ * Project SVG canvas world coordinates into pixel coordinates relative to a
+ * positioning wrapper element (`canvasWrapRef`) for HTML overlay controls.
+ */
+export function worldPointToWrapperPoint(
+  worldX: number,
+  worldY: number,
+  svgEl: SVGSVGElement | null,
+  wrapEl: HTMLElement | null,
+  groupEl: SVGGElement | null,
+  pan: { x: number; y: number },
+  zoom: number
+): { x: number; y: number } | null {
+  if (!svgEl || !wrapEl) return null;
+  const wrapRect = wrapEl.getBoundingClientRect();
+  if (wrapRect.width <= 0 || wrapRect.height <= 0) return null;
+  const originLeft = wrapRect.left + (wrapEl.clientLeft || 0);
+  const originTop = wrapRect.top + (wrapEl.clientTop || 0);
+
+  if (
+    groupEl &&
+    typeof svgEl.createSVGPoint === "function" &&
+    typeof groupEl.getScreenCTM === "function"
+  ) {
+    const ctm = groupEl.getScreenCTM();
+    if (ctm) {
+      const pt = svgEl.createSVGPoint();
+      pt.x = worldX;
+      pt.y = worldY;
+      const screenPt = pt.matrixTransform(ctm);
+      return {
+        x: screenPt.x - originLeft,
+        y: screenPt.y - originTop,
+      };
+    }
+  }
+
+  const svgRect = svgEl.getBoundingClientRect();
+  if (svgRect.width <= 0 || svgRect.height <= 0) return null;
+  const scale = Math.min(svgRect.width / 680, svgRect.height / 520) || 1;
+  const vbX = (worldX + pan.x) * zoom;
+  const vbY = (worldY + pan.y) * zoom;
+  return {
+    x: svgRect.left + svgRect.width / 2 + vbX * scale - originLeft,
+    y: svgRect.top + svgRect.height / 2 + vbY * scale - originTop,
+  };
+}
+
 export function makeUniqueId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+/**
+ * Clamp and step an inline edge travel-minutes draft string by `delta`,
+ * falling back to `fallbackMinutes` when the draft is blank/non-numeric.
+ */
+export function stepEdgeMinutesDraft(
+  rawDraft: string,
+  delta: number,
+  fallbackMinutes = 1
+): string {
+  const parsed = parseInt(rawDraft.trim(), 10);
+  const base = Number.isFinite(parsed)
+    ? parsed
+    : Math.max(1, Math.min(240, Math.round(fallbackMinutes) || 1));
+  return String(Math.max(1, Math.min(240, base + delta)));
+}
+
+/**
+ * Resolve an inline edge travel-minutes draft on commit. Returns null when
+ * blank/invalid so callers can preserve the edge's existing duration.
+ */
+export function parseCommittedEdgeMinutes(rawDraft: string): number | null {
+  const trimmed = rawDraft.trim();
+  if (!trimmed) return null;
+  const parsed = parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(1, Math.min(240, parsed));
+}
+
+/**
+ * Remove the given edge IDs plus their symmetric bidirectional reverse edges
+ * from an edge list in a single pure pass.
+ */
+export function filterEdgesAfterDeletion(
+  edges: LocationEdge[],
+  edgeIds: string[]
+): LocationEdge[] {
+  if (edgeIds.length === 0) return edges;
+  const targetIds = new Set(edgeIds);
+  const targets = edges.filter((e) => targetIds.has(e.id));
+  if (targets.length === 0) return edges;
+
+  return edges.filter(
+    (edge) =>
+      !targetIds.has(edge.id) &&
+      !targets.some(
+        (t) =>
+          edge.from_location_id === t.to_location_id &&
+          edge.to_location_id === t.from_location_id
+      )
+  );
 }

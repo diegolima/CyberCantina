@@ -32,6 +32,9 @@ import {
   COMPASS_ANGLES,
   COMPASS_ORDER,
   clientToWorldPoint,
+  parseCommittedEdgeMinutes,
+  stepEdgeMinutesDraft,
+  worldPointToWrapperPoint,
   type LinkDragState,
   type NodeDragState,
   type ProjectedDepthTopology,
@@ -39,6 +42,7 @@ import {
 
 export interface SpatialTopologyCanvasProps {
   svgRef: React.RefObject<SVGSVGElement>;
+  canvasWrapRef?: React.RefObject<HTMLDivElement>;
   viewportGroupRef: React.RefObject<SVGGElement>;
   panDragRef: React.MutableRefObject<{
     active: boolean;
@@ -81,11 +85,14 @@ export interface SpatialTopologyCanvasProps {
   setMultiEdgeModalEdges: React.Dispatch<React.SetStateAction<LocationEdge[] | null>>;
   openContextMenuAt: (e: React.MouseEvent, target: MapContextMenuState["target"]) => void;
   handleUpdateEdgeDistance: (edgeId: string, minutes: number) => void;
+  handleDeleteEdge: (edgeId: string) => void;
+  handleDeleteEdgeGroup: (edgeIds: string[]) => void;
   drillIntoContainer: (contId: string | null) => void;
 }
 
 export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
   svgRef,
+  canvasWrapRef,
   viewportGroupRef,
   panDragRef,
   mode,
@@ -118,11 +125,49 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
   setMultiEdgeModalEdges,
   openContextMenuAt,
   handleUpdateEdgeDistance,
+  handleDeleteEdge,
+  handleDeleteEdgeGroup,
   drillIntoContainer,
 }) => {
   const [isPanning, setIsPanning] = useState(false);
+  const [hoveredEdgePairKey, setHoveredEdgePairKey] = useState<string | null>(null);
+  const edgeHoverTimeoutRef = useRef<number | null>(null);
+  const inlineInputRef = useRef<HTMLInputElement | null>(null);
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
+
+  const cancelEdgeHoverClear = () => {
+    if (edgeHoverTimeoutRef.current !== null) {
+      window.clearTimeout(edgeHoverTimeoutRef.current);
+      edgeHoverTimeoutRef.current = null;
+    }
+  };
+
+  const enterEdgeHover = (pairKey: string) => {
+    cancelEdgeHoverClear();
+    setHoveredEdgePairKey(pairKey);
+  };
+
+  const leaveEdgeHover = (pairKey: string) => {
+    cancelEdgeHoverClear();
+    edgeHoverTimeoutRef.current = window.setTimeout(() => {
+      setHoveredEdgePairKey((curr) => (curr === pairKey ? null : curr));
+    }, 90);
+  };
+
+  useEffect(() => {
+    return () => {
+      cancelEdgeHoverClear();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!inlineEdgeEdit?.edgeId) return;
+    const input = inlineInputRef.current;
+    if (!input) return;
+    input.focus();
+    input.select();
+  }, [inlineEdgeEdit?.edgeId]);
 
   useEffect(() => {
     if (!isPanning) return;
@@ -216,10 +261,12 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
               o.targetNodeId === edge.sourceNodeId
           );
 
+        const groupedCount = edge.groupedEdges?.length ?? 0;
         const labelText = `${edge.travel_minutes}m${
-          edge.isAggregated ? ` · ${edge.groupedEdges?.length ?? ""}` : ""
+          edge.isAggregated && groupedCount > 1 ? ` · ${groupedCount}` : ""
         }${edge.containsLockedEdge ? " 🔒" : ""}`;
         const badgeWidth = computeDistanceBadgeWidth(labelText);
+        const pairKey = [edge.sourceNodeId, edge.targetNodeId].sort().join("<->");
 
         return {
           edge,
@@ -228,6 +275,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
           showLabel,
           labelText,
           badgeWidth,
+          pairKey,
         };
       })
       .filter((item): item is NonNullable<typeof item> => item !== null);
@@ -251,8 +299,65 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
       ...inlineEdgeEdit,
       midX: match ? match.clipped.midX : inlineEdgeEdit.midX,
       midY: match ? match.clipped.midY : inlineEdgeEdit.midY,
+      fallbackMinutes: match ? match.edge.travel_minutes : 1,
     };
   }, [inlineEdgeEdit, renderedEdges]);
+
+  const isEditorQuickDeleteEnabled =
+    mode === "editor" &&
+    !isMutatingLocked &&
+    !inlineEdgeEdit &&
+    !nodeDrag &&
+    !linkDrag &&
+    !isPanning;
+
+  const commitInlineEdgeEdit = () => {
+    if (!activeInlineEdge) return;
+    const committed = parseCommittedEdgeMinutes(activeInlineEdge.value);
+    if (committed !== null) {
+      handleUpdateEdgeDistance(activeInlineEdge.edgeId, committed);
+    }
+    setInlineEdgeEdit(null);
+  };
+
+  const stepInlineEdgeEdit = (delta: number) => {
+    if (!activeInlineEdge) return;
+    setInlineEdgeEdit((prev) =>
+      prev
+        ? {
+            ...prev,
+            value: stepEdgeMinutesDraft(
+              prev.value,
+              delta,
+              activeInlineEdge.fallbackMinutes
+            ),
+          }
+        : null
+    );
+  };
+
+  const wrapEl = canvasWrapRef?.current ?? svgRef.current?.parentElement ?? null;
+  const inlineOverlayPoint = activeInlineEdge
+    ? worldPointToWrapperPoint(
+        activeInlineEdge.midX,
+        activeInlineEdge.midY,
+        svgRef.current,
+        wrapEl,
+        viewportGroupRef.current,
+        pan,
+        zoom
+      )
+    : null;
+  const wrapRectForClamp = wrapEl?.getBoundingClientRect();
+  const clampedOverlayPos =
+    inlineOverlayPoint && wrapRectForClamp && wrapRectForClamp.width > 120
+      ? {
+          left: Math.max(58, Math.min(wrapRectForClamp.width - 58, inlineOverlayPoint.x)),
+          top: Math.max(20, Math.min(wrapRectForClamp.height - 20, inlineOverlayPoint.y)),
+        }
+      : inlineOverlayPoint
+      ? { left: inlineOverlayPoint.x, top: inlineOverlayPoint.y }
+      : null;
 
   const canvasCursor = resolveCanvasCursor({
     isNodeDragging: Boolean(nodeDrag?.hasMoved),
@@ -311,58 +416,78 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
             >
               {/* Layer 1: Edge Lines & Active Link Rubber-Band */}
               <g data-layer="edge-lines">
-                {renderedEdges.map(({ edge, clipped, isDirect }) => (
-                  <line
-                    key={edge.id}
-                    x1={clipped.x1}
-                    y1={clipped.y1}
-                    x2={clipped.x2}
-                    y2={clipped.y2}
-                    stroke={
-                      isDirect
-                        ? "#06b6d4"
-                        : edge.isAggregated
-                        ? "#475569"
-                        : "#334155"
-                    }
-                    strokeWidth={
-                      edge.isAggregated
-                        ? isDirect
-                          ? 2.8
-                          : 2.0
-                        : isDirect
-                        ? 2.4
-                        : 1.5
-                    }
-                    strokeDasharray={
-                      edge.containsLockedEdge
-                        ? "5 4"
-                        : edge.isAggregated
-                        ? "2 2"
-                        : undefined
-                    }
-                    style={{ cursor: isPanning ? "grabbing" : "pointer" }}
-                    onContextMenu={(ev) =>
-                      openContextMenuAt(ev, {
-                        kind: "edge",
+                {renderedEdges.map(({ edge, clipped, isDirect, pairKey }) => {
+                  const openEdgeEdit = (ev: React.MouseEvent) => {
+                    ev.stopPropagation();
+                    if (edge.isAggregated && edge.groupedEdges) {
+                      setMultiEdgeModalEdges(edge.groupedEdges);
+                    } else {
+                      setInlineEdgeEdit({
                         edgeId: edge.rawEdge.id,
-                      })
+                        midX: clipped.midX,
+                        midY: clipped.midY,
+                        value: String(edge.travel_minutes),
+                      });
                     }
-                    onDoubleClick={(ev) => {
-                      ev.stopPropagation();
-                      if (edge.isAggregated && edge.groupedEdges) {
-                        setMultiEdgeModalEdges(edge.groupedEdges);
-                      } else {
-                        setInlineEdgeEdit({
+                  };
+                  return (
+                    <g
+                      key={edge.id}
+                      onMouseEnter={() => {
+                        if (isEditorQuickDeleteEnabled) enterEdgeHover(pairKey);
+                      }}
+                      onMouseLeave={() => leaveEdgeHover(pairKey)}
+                      onContextMenu={(ev) =>
+                        openContextMenuAt(ev, {
+                          kind: "edge",
                           edgeId: edge.rawEdge.id,
-                          midX: clipped.midX,
-                          midY: clipped.midY,
-                          value: String(edge.travel_minutes),
-                        });
+                        })
                       }
-                    }}
-                  />
-                ))}
+                      onDoubleClick={openEdgeEdit}
+                    >
+                      {/* Invisible wide hit-target so thin lines hover & click cleanly */}
+                      <line
+                        x1={clipped.x1}
+                        y1={clipped.y1}
+                        x2={clipped.x2}
+                        y2={clipped.y2}
+                        stroke="transparent"
+                        strokeWidth={14}
+                        style={{ cursor: isPanning ? "grabbing" : "pointer" }}
+                      />
+                      <line
+                        x1={clipped.x1}
+                        y1={clipped.y1}
+                        x2={clipped.x2}
+                        y2={clipped.y2}
+                        stroke={
+                          isDirect
+                            ? "#06b6d4"
+                            : edge.isAggregated
+                            ? "#475569"
+                            : "#334155"
+                        }
+                        strokeWidth={
+                          edge.isAggregated
+                            ? isDirect
+                              ? 2.8
+                              : 2.0
+                            : isDirect
+                            ? 2.4
+                            : 1.5
+                        }
+                        strokeDasharray={
+                          edge.containsLockedEdge
+                            ? "5 4"
+                            : edge.isAggregated
+                            ? "2 2"
+                            : undefined
+                        }
+                        pointerEvents="none"
+                      />
+                    </g>
+                  );
+                })}
 
                 {/* Rubber-band Link Creation Line */}
                 {linkDrag && (
@@ -382,13 +507,17 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
               {/* Layer 2: Opaque Distance Badges (painted above all edge lines) */}
               <g data-layer="edge-badges">
                 {renderedEdges.map(
-                  ({ edge, clipped, isDirect, showLabel, labelText, badgeWidth }) => {
+                  ({ edge, clipped, isDirect, showLabel, labelText, badgeWidth, pairKey }) => {
                     if (!showLabel) return null;
                     if (inlineEdgeEdit?.edgeId === edge.rawEdge.id) return null;
                     return (
                       <g
                         key={`badge-${edge.id}`}
                         style={{ cursor: isPanning ? "grabbing" : "pointer" }}
+                        onMouseEnter={() => {
+                          if (isEditorQuickDeleteEnabled) enterEdgeHover(pairKey);
+                        }}
+                        onMouseLeave={() => leaveEdgeHover(pairKey)}
                         onContextMenu={(ev) =>
                           openContextMenuAt(ev, {
                             kind: "edge",
@@ -993,60 +1122,233 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
               })}
               </g>
 
-              {/* Layer 4: Active Inline Edge Distance Editor */}
-              {activeInlineEdge && (
-                <g data-layer="inline-edge-editor">
-                  <foreignObject
-                    x={activeInlineEdge.midX - 28}
-                    y={activeInlineEdge.midY - 12}
-                    width={56}
-                    height={24}
-                  >
-                    <input
-                      type="number"
-                      min={1}
-                      max={240}
-                      autoFocus
-                      value={activeInlineEdge.value}
-                      onChange={(ev) =>
-                        setInlineEdgeEdit((prev) =>
-                          prev ? { ...prev, value: ev.target.value } : null
-                        )
-                      }
-                      onBlur={() => {
-                        handleUpdateEdgeDistance(
-                          activeInlineEdge.edgeId,
-                          parseInt(activeInlineEdge.value, 10) || 1
-                        );
-                        setInlineEdgeEdit(null);
-                      }}
-                      onKeyDown={(ev) => {
-                        if (ev.key === "Enter") {
-                          handleUpdateEdgeDistance(
-                            activeInlineEdge.edgeId,
-                            parseInt(activeInlineEdge.value, 10) || 1
-                          );
-                          setInlineEdgeEdit(null);
-                        } else if (ev.key === "Escape") {
-                          setInlineEdgeEdit(null);
-                        }
-                      }}
-                      style={{
-                        width: "100%",
-                        height: "22px",
-                        fontSize: "10px",
-                        textAlign: "center",
-                        background: "#0b0e14",
-                        color: "#e2e8f0",
-                        border: "1px solid #22d3ee",
-                        borderRadius: 4,
-                      }}
-                    />
-                  </foreignObject>
+              {/* Layer 4: World-Editor Hover Quick-Delete Link Control */}
+              {isEditorQuickDeleteEnabled && hoveredEdgePairKey && (
+                <g data-layer="edge-quick-delete">
+                  {renderedEdges.map(({ edge, clipped, showLabel, badgeWidth, pairKey }) => {
+                    if (!showLabel || hoveredEdgePairKey !== pairKey) return null;
+                    // Anchor compact circled X on the top-right corner of the distance badge
+                    const qx = clipped.midX + badgeWidth / 2 - 1;
+                    const qy = clipped.midY - 9;
+                    const deleteTitle =
+                      edge.isAggregated &&
+                      edge.groupedEdges &&
+                      edge.groupedEdges.length > 1
+                        ? `Delete all ${edge.groupedEdges.length} linked passages`
+                        : "Delete link";
+                    return (
+                      <g
+                        key={`quick-del-${pairKey}`}
+                        data-edge-quick-delete={edge.id}
+                        style={{ cursor: "pointer" }}
+                        onMouseEnter={() => enterEdgeHover(pairKey)}
+                        onMouseLeave={() => leaveEdgeHover(pairKey)}
+                        onMouseDown={(ev) => {
+                          ev.preventDefault();
+                          ev.stopPropagation();
+                        }}
+                        onDoubleClick={(ev) => ev.stopPropagation()}
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          cancelEdgeHoverClear();
+                          setHoveredEdgePairKey(null);
+                          if (edge.isAggregated && edge.groupedEdges?.length) {
+                            handleDeleteEdgeGroup(
+                              edge.groupedEdges.map((ge) => ge.id)
+                            );
+                          } else {
+                            handleDeleteEdge(edge.rawEdge.id);
+                          }
+                        }}
+                      >
+                        <title>{deleteTitle}</title>
+                        {/* Invisible hover bridge over top-right corner of badge */}
+                        <rect
+                          x={clipped.midX + badgeWidth / 2 - 14}
+                          y={qy - 9}
+                          width={24}
+                          height={20}
+                          fill="transparent"
+                        />
+                        <circle cx={qx} cy={qy} r={9} fill="transparent" />
+                        <circle
+                          cx={qx}
+                          cy={qy}
+                          r={5.5}
+                          fill="#0b0e14"
+                          stroke="#f43f5e"
+                          strokeWidth={1.3}
+                        />
+                        <line
+                          x1={qx - 2.1}
+                          y1={qy - 2.1}
+                          x2={qx + 2.1}
+                          y2={qy + 2.1}
+                          stroke="#fb7185"
+                          strokeWidth={1.4}
+                          strokeLinecap="round"
+                        />
+                        <line
+                          x1={qx + 2.1}
+                          y1={qy - 2.1}
+                          x2={qx - 2.1}
+                          y2={qy + 2.1}
+                          stroke="#fb7185"
+                          strokeWidth={1.4}
+                          strokeLinecap="round"
+                        />
+                      </g>
+                    );
+                  })}
                 </g>
               )}
             </g>
           </svg>
+
+          {/* HTML Overlay Inline Link Travel-Time Editor */}
+          {activeInlineEdge && (
+            <div
+              data-layer="inline-edge-editor"
+              role="group"
+              aria-label="Edit link travel time"
+              onMouseDown={(ev) => ev.stopPropagation()}
+              onClick={(ev) => ev.stopPropagation()}
+              onDoubleClick={(ev) => ev.stopPropagation()}
+              onBlur={(ev) => {
+                if (ev.currentTarget.contains(ev.relatedTarget as Node | null)) {
+                  return;
+                }
+                commitInlineEdgeEdit();
+              }}
+              style={{
+                position: "absolute",
+                left: clampedOverlayPos ? `${clampedOverlayPos.left}px` : "50%",
+                top: clampedOverlayPos ? `${clampedOverlayPos.top}px` : "50%",
+                transform: "translate(-50%, -50%)",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 2,
+                padding: "2px 4px",
+                background: "#0b0e14",
+                border: "1px solid #22d3ee",
+                borderRadius: 6,
+                boxShadow: "0 4px 14px rgba(0, 0, 0, 0.65)",
+                zIndex: 25,
+              }}
+            >
+              <button
+                type="button"
+                aria-label="Decrease travel minutes"
+                title="Decrease (-1m)"
+                onMouseDown={(ev) => {
+                  ev.preventDefault();
+                  ev.stopPropagation();
+                }}
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  stepInlineEdgeEdit(-1);
+                }}
+                style={{
+                  background: "rgba(30, 41, 59, 0.85)",
+                  border: "1px solid #334155",
+                  borderRadius: 4,
+                  color: "#cbd5e1",
+                  width: 18,
+                  height: 20,
+                  fontSize: "12px",
+                  lineHeight: "16px",
+                  cursor: "pointer",
+                  padding: 0,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                −
+              </button>
+              <input
+                ref={inlineInputRef}
+                type="text"
+                inputMode="numeric"
+                aria-label="Travel minutes"
+                value={activeInlineEdge.value}
+                onChange={(ev) => {
+                  const digitsOnly = ev.target.value.replace(/[^\d]/g, "");
+                  setInlineEdgeEdit((prev) =>
+                    prev ? { ...prev, value: digitsOnly } : null
+                  );
+                }}
+                onKeyDown={(ev) => {
+                  if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    commitInlineEdgeEdit();
+                  } else if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    setInlineEdgeEdit(null);
+                  } else if (ev.key === "ArrowUp") {
+                    ev.preventDefault();
+                    stepInlineEdgeEdit(1);
+                  } else if (ev.key === "ArrowDown") {
+                    ev.preventDefault();
+                    stepInlineEdgeEdit(-1);
+                  }
+                }}
+                style={{
+                  width: 40,
+                  height: 20,
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  textAlign: "center",
+                  background: "#111827",
+                  color: "#f1f5f9",
+                  border: "1px solid #1e293b",
+                  borderRadius: 4,
+                  outline: "none",
+                  padding: "0 2px",
+                }}
+              />
+              <span
+                style={{
+                  fontSize: "10px",
+                  color: "#94a3b8",
+                  paddingRight: 2,
+                  userSelect: "none",
+                }}
+              >
+                m
+              </span>
+              <button
+                type="button"
+                aria-label="Increase travel minutes"
+                title="Increase (+1m)"
+                onMouseDown={(ev) => {
+                  ev.preventDefault();
+                  ev.stopPropagation();
+                }}
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  stepInlineEdgeEdit(1);
+                }}
+                style={{
+                  background: "rgba(30, 41, 59, 0.85)",
+                  border: "1px solid #334155",
+                  borderRadius: 4,
+                  color: "#cbd5e1",
+                  width: 18,
+                  height: 20,
+                  fontSize: "12px",
+                  lineHeight: "16px",
+                  cursor: "pointer",
+                  padding: 0,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                +
+              </button>
+            </div>
+          )}
 
           {/* Drop target validation banner */}
           {nodeDrag?.hasMoved && nodeDrag.hoverTarget && (

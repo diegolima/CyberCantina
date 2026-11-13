@@ -734,3 +734,61 @@ def test_enrich_uses_actor_model_draft_context_structured_tags_and_sanitization(
     )
     assert res_err.status_code == 500
     assert "SECRET_INTERNAL_STACK_TRACE_XYZ" not in res_err.text
+
+    # 4. Level 1 container framing via entity_kind="container" and child_names
+    captured_messages: list[list[dict[str, str]]] = []
+
+    async def fake_container_complete_text(messages, *, profile=None, **_kwargs):
+        captured_messages.append(messages)
+        return "Neon spills across the wet awning above a fortified club entrance."
+
+    monkeypatch.setattr(llm_client, "complete_text", fake_container_complete_text)
+    res_cont_desc = client.post(
+        "/api/enrich",
+        headers=headers,
+        json={
+            "field_role": "location_description",
+            "current_text": "",
+            "context_ref": {
+                "scope": "world_location",
+                "entity_kind": "container",
+                "world_name": "Night Sector",
+                "genre": "Cyberpunk",
+                "tone": "Noir",
+                "location_name": "Afterlife Club",
+                "child_names": ["Main Floor", "VIP Mezzanine"],
+            },
+        },
+    )
+    assert res_cont_desc.status_code == 200, res_cont_desc.text
+    assert len(captured_messages) == 1
+    sys_msg = captured_messages[0][0]["content"]
+    usr_msg = captured_messages[0][1]["content"]
+    assert "landmark/building container 'Afterlife Club'" in sys_msg
+    assert "Target Landmark / Building Container: Afterlife Club" in usr_msg
+    assert "Interior locations within this landmark: Main Floor, VIP Mezzanine" in usr_msg
+
+    captured_tag_messages: list[list[dict[str, str]]] = []
+
+    async def fake_container_tags(messages, schema_cls, *, profile=None, required_properties=None, **_kwargs):
+        captured_tag_messages.append(messages)
+        return LocationTagsEnrichOutput(tags=["Neon Awning", "Bass Vibration"])
+
+    monkeypatch.setattr(llm_client, "complete_structured", fake_container_tags)
+    res_cont_tags = client.post(
+        "/api/enrich",
+        headers=headers,
+        json={
+            "field_role": "location_tags",
+            "current_text": "",
+            "context_ref": {
+                "scope": "world_location",
+                "entity_kind": "container",
+                "world_name": "Night Sector",
+                "location_name": "Afterlife Club",
+            },
+        },
+    )
+    assert res_cont_tags.status_code == 200, res_cont_tags.text
+    assert res_cont_tags.json()["enriched_text"] == "Neon Awning, Bass Vibration"
+    assert "landmark/building container 'Afterlife Club'" in captured_tag_messages[0][0]["content"]

@@ -11,8 +11,13 @@ import {
 } from "../../types";
 import { LiveInspector } from "../LiveInspector";
 import { MagicWandButton } from "../MagicWandButton";
-import { SpatialTopologyView, computeFullMapCoords } from "../SpatialTopologyView";
+import {
+  SpatialTopologyView,
+  computeFullMapCoords,
+  projectTopologyForDepth,
+} from "../SpatialTopologyView";
 import { MapDetailsDrawer } from "../map/MapDetailsDrawer";
+import { SpatialTopologyCanvas } from "../map/SpatialTopologyCanvas";
 import {
   EmptyCanvasCreateModal,
   GroupIntoContainerModal,
@@ -27,8 +32,14 @@ import {
   computeDistanceBadgeWidth,
   computeEdgeClippedSegment,
   computeRayShapeExitDistance,
+  isEditableKeyboardTarget,
   resolveCanvasCursor,
 } from "../map/mapGeometry";
+import {
+  filterEdgesAfterDeletion,
+  parseCommittedEdgeMinutes,
+  stepEdgeMinutesDraft,
+} from "../map/topologyProjection";
 import { getDefaultMapIconKey, resolveMapIconComponent } from "../map/mapIcons";
 import {
   computeUnreachableLocationIds,
@@ -773,5 +784,195 @@ describe("Interactive Map Editor & Mini-Map", () => {
     expect(standaloneDlgHtml).toContain("City / Settlement");
     expect(standaloneDlgHtml).toContain("Region / Planet / Realm");
     expect(standaloneDlgHtml).toContain("Create initial entry location inside container");
+  });
+
+  it("supports inline editor HTML overlay, L1 container Magic Wand boundaries, Delete target guards, and atomic edge-group deletion (v0.10.2)", () => {
+    const { containers, locations, edges } = makeRichWorldFixture();
+
+    // 1. Pure inline edge travel-minute stepping & commit parsing
+    expect(stepEdgeMinutesDraft("5", 1)).toBe("6");
+    expect(stepEdgeMinutesDraft("1", -1)).toBe("1");
+    expect(stepEdgeMinutesDraft("240", 1)).toBe("240");
+    expect(stepEdgeMinutesDraft("", 1, 7)).toBe("8");
+    expect(parseCommittedEdgeMinutes("")).toBeNull();
+    expect(parseCommittedEdgeMinutes("0")).toBe(1);
+    expect(parseCommittedEdgeMinutes("310")).toBe(240);
+    expect(parseCommittedEdgeMinutes("18")).toBe(18);
+
+    // 2. Inline edge editor renders as HTML overlay (not SVG foreignObject) with +/- steppers
+    const projected = projectTopologyForDepth(
+      null,
+      containers,
+      locations,
+      edges,
+      "loc_foyer"
+    );
+    const coords: Record<string, { x: number; y: number }> = {
+      ...computeFullMapCoords(locations, edges, "loc_foyer"),
+      cont_district: { x: 120, y: -40 },
+      cont_club: { x: 0, y: 0 },
+    };
+    const canvasEditHtml = renderToStaticMarkup(
+      <SpatialTopologyCanvas
+        svgRef={{ current: null }}
+        canvasWrapRef={{ current: null }}
+        viewportGroupRef={{ current: null }}
+        panDragRef={{
+          current: {
+            active: false,
+            moved: false,
+            button: 0,
+            startClientX: 0,
+            startClientY: 0,
+            origPanX: 0,
+            origPanY: 0,
+          },
+        }}
+        mode="editor"
+        zoom={1}
+        setZoom={() => {}}
+        pan={{ x: 0, y: 0 }}
+        setPan={() => {}}
+        nodeDrag={null}
+        setNodeDrag={() => {}}
+        linkDrag={null}
+        setLinkDrag={() => {}}
+        hoveredNodeKey={null}
+        setHoveredNodeKey={() => {}}
+        projectedTopology={projected}
+        fullMapCoords={coords}
+        selectedContainer={null}
+        selectedLocation={null}
+        activeLoc={locations[0]}
+        activeNeighborIds={new Set()}
+        unreachableSet={new Set()}
+        occupiedSlotsByLocId={new Map()}
+        isMutatingLocked={false}
+        inlineEdgeEdit={{ edgeId: "e_club_street", midX: 10, midY: 20, value: "2" }}
+        setInlineEdgeEdit={() => {}}
+        statusNotice={null}
+        setStatusNotice={() => {}}
+        setSelectedLocId={() => {}}
+        setSelectedContainerId={() => {}}
+        setContextMenu={() => {}}
+        setMultiEdgeModalEdges={() => {}}
+        openContextMenuAt={() => {}}
+        handleUpdateEdgeDistance={() => {}}
+        handleDeleteEdge={() => {}}
+        handleDeleteEdgeGroup={() => {}}
+        drillIntoContainer={() => {}}
+      />
+    );
+    expect(canvasEditHtml).not.toContain("<foreignObject");
+    expect(canvasEditHtml).toContain('data-layer="inline-edge-editor"');
+    expect(canvasEditHtml).toContain('aria-label="Decrease travel minutes"');
+    expect(canvasEditHtml).toContain('aria-label="Increase travel minutes"');
+    expect(canvasEditHtml).toContain('aria-label="Travel minutes"');
+    expect(canvasEditHtml).toContain('stroke-width="14"');
+    expect(canvasEditHtml).not.toContain("· 1");
+
+    // 3. Atomic edge & aggregated bundle deletion removes reverse pairs in one pass
+    const afterSingleDelete = filterEdgesAfterDeletion(edges, ["e1"]);
+    expect(afterSingleDelete.some((e) => e.id === "e1")).toBe(false);
+    expect(afterSingleDelete.some((e) => e.id === "e2")).toBe(false);
+    expect(afterSingleDelete.length).toBe(edges.length - 2);
+
+    const extraEdge: LocationEdge = {
+      id: "e_extra",
+      world_id: "world_1",
+      from_location_id: "loc_foyer",
+      to_location_id: "loc_street",
+      direction_label: "Fire escape",
+      compass_direction: "S",
+      travel_minutes: 3,
+      is_locked_or_hidden: false,
+    };
+    const extraRev: LocationEdge = {
+      id: "e_extra_rev",
+      world_id: "world_1",
+      from_location_id: "loc_street",
+      to_location_id: "loc_foyer",
+      direction_label: "Up stairs",
+      compass_direction: "N",
+      travel_minutes: 3,
+      is_locked_or_hidden: false,
+    };
+    const afterBundleDelete = filterEdgesAfterDeletion(
+      [...edges, extraEdge, extraRev],
+      ["e1", "e_extra"]
+    );
+    expect(
+      afterBundleDelete.some((e) =>
+        ["e1", "e2", "e_extra", "e_extra_rev"].includes(e.id)
+      )
+    ).toBe(false);
+    expect(afterBundleDelete.length).toBe(edges.length - 2);
+
+    // 4. Delete keyboard target guard blocks inputs/textareas/contenteditable, allows canvas targets
+    expect(isEditableKeyboardTarget({ tagName: "INPUT" })).toBe(true);
+    expect(isEditableKeyboardTarget({ tagName: "textarea" })).toBe(true);
+    expect(isEditableKeyboardTarget({ tagName: "SELECT" })).toBe(true);
+    expect(isEditableKeyboardTarget({ tagName: "DIV", isContentEditable: true })).toBe(true);
+    expect(
+      isEditableKeyboardTarget({
+        tagName: "SPAN",
+        closest: (sel: string) => (sel.includes(".tag-chips-container") ? {} : null),
+      })
+    ).toBe(true);
+    expect(isEditableKeyboardTarget({ tagName: "svg" })).toBe(false);
+    expect(isEditableKeyboardTarget(null)).toBe(false);
+
+    // 5. Magic Wand renders on Level 1 container (depth=1), but NOT on Level 2+ container
+    const depthLabels = {
+      1: "Building / Landmark",
+      2: "District / Zone",
+      3: "City / Settlement",
+      4: "Region / Planet / Realm",
+    };
+    const l1ContHtml = renderToStaticMarkup(
+      <MapDetailsDrawer
+        mode="editor"
+        isMutatingLocked={false}
+        selectedContainer={containers[1]}
+        selectedLocation={null}
+        containers={containers}
+        allLocations={locations}
+        activeLocId="loc_foyer"
+        dynamicPortalIds={new Set(["loc_foyer"])}
+        externalPortals={[]}
+        containerStats={null}
+        depthLabels={depthLabels}
+        onClose={() => {}}
+        onPatchLocation={() => {}}
+        onPatchContainer={() => {}}
+        onResetCoordinates={() => {}}
+        onDrillIntoContainer={() => {}}
+      />
+    );
+    expect(l1ContHtml).toContain("Enrich Description");
+    expect(l1ContHtml).toContain("Suggest Tags");
+
+    const l2ContHtml = renderToStaticMarkup(
+      <MapDetailsDrawer
+        mode="editor"
+        isMutatingLocked={false}
+        selectedContainer={containers[0]}
+        selectedLocation={null}
+        containers={containers}
+        allLocations={locations}
+        activeLocId="loc_foyer"
+        dynamicPortalIds={new Set(["loc_foyer"])}
+        externalPortals={[]}
+        containerStats={null}
+        depthLabels={depthLabels}
+        onClose={() => {}}
+        onPatchLocation={() => {}}
+        onPatchContainer={() => {}}
+        onResetCoordinates={() => {}}
+        onDrillIntoContainer={() => {}}
+      />
+    );
+    expect(l2ContHtml).not.toContain("Enrich Description");
+    expect(l2ContHtml).not.toContain("Suggest Tags");
   });
 });

@@ -220,6 +220,10 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
 }) => {
   const selectedLocIdRef = useRef<string | null>(selectedLocation?.id ?? null);
   selectedLocIdRef.current = selectedLocation?.id ?? null;
+  const selectedContIdRef = useRef<string | null>(selectedContainer?.id ?? null);
+  selectedContIdRef.current = selectedContainer?.id ?? null;
+  const selectedContDepthRef = useRef<number | null>(selectedContainer?.depth ?? null);
+  selectedContDepthRef.current = selectedContainer?.depth ?? null;
 
   const isLocNarrativeLocked =
     isMutatingLocked ||
@@ -237,10 +241,49 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
           )
       ));
 
+  const isLevel1ContainerSelected = Boolean(selectedContainer && selectedContainer.depth === 1);
+  const selectedContainerChildNames = useMemo(() => {
+    if (!selectedContainer || selectedContainer.depth !== 1) return [];
+    return allLocations
+      .filter((loc) => loc.container_id === selectedContainer.id)
+      .map((loc) => loc.name)
+      .filter((n) => n.trim().length > 0);
+  }, [selectedContainer, allLocations]);
+
+  const activeMagicEntityKey = selectedContainer
+    ? `cont:${selectedContainer.id}`
+    : selectedLocation
+    ? `loc:${selectedLocation.id}`
+    : "none";
+
+  const isMagicWandDisabled = selectedContainer
+    ? selectedContainer.depth !== 1 || isContNarrativeLocked
+    : selectedLocation
+    ? isLocNarrativeLocked
+    : true;
+
   const locationContextRef = useMemo<MagicContextRef>(() => {
+    if (selectedContainer && selectedContainer.depth === 1) {
+      return {
+        scope: "world_location",
+        entity_kind: "container",
+        world_id: selectedContainer.world_id || worldContext?.worldId || null,
+        location_id: null,
+        world_name: worldContext?.worldName || null,
+        genre: worldContext?.genre || null,
+        tone: worldContext?.tone || null,
+        setting_overview: worldContext?.settingOverview || null,
+        location_name: selectedContainer.name || null,
+        location_summary: null,
+        location_description: selectedContainer.description || null,
+        existing_tags: selectedContainer.environmental_tags ?? [],
+        child_names: selectedContainerChildNames,
+      };
+    }
     const loc = selectedLocation;
     return {
       scope: "world_location",
+      entity_kind: "location",
       world_id: loc?.world_id || worldContext?.worldId || null,
       location_id: loc?.id || null,
       world_name: worldContext?.worldName || null,
@@ -252,43 +295,54 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
       location_description: loc?.description || null,
       existing_tags: loc?.environmental_tags ?? [],
     };
-  }, [selectedLocation, worldContext]);
+  }, [selectedContainer, selectedContainerChildNames, selectedLocation, worldContext]);
 
   const descriptionWand = useMagicWand({
     fieldRole: "location_description",
-    value: selectedLocation?.description ?? "",
+    value: selectedContainer
+      ? selectedContainer.description ?? ""
+      : selectedLocation?.description ?? "",
     onChange: (nextText) => {
-      if (selectedLocIdRef.current) {
+      if (selectedContIdRef.current && selectedContDepthRef.current === 1) {
+        onPatchContainer(selectedContIdRef.current, { description: nextText });
+      } else if (selectedLocIdRef.current) {
         onPatchLocation(selectedLocIdRef.current, { description: nextText });
       }
     },
     contextRef: locationContextRef,
-    contextKey: `loc-desc:${selectedLocation?.id ?? "none"}`,
-    disabled: !selectedLocation || isLocNarrativeLocked,
+    contextKey: `desc:${activeMagicEntityKey}`,
+    disabled: isMagicWandDisabled,
     singleLine: false,
     maxWords: 120,
   });
 
+  const activeEntityTags = selectedContainer
+    ? selectedContainer.environmental_tags ?? []
+    : selectedLocation?.environmental_tags ?? [];
+
   const tagsAsString = useMemo(
-    () => (selectedLocation?.environmental_tags ?? []).join(", "),
-    [selectedLocation?.environmental_tags]
+    () => activeEntityTags.join(", "),
+    [activeEntityTags]
   );
 
   const tagsWand = useMagicWand({
     fieldRole: "location_tags",
     value: tagsAsString,
     onChange: (nextRaw) => {
-      if (!selectedLocIdRef.current) return;
       const parts = nextRaw
         .split(/[,;\n]+/)
         .map((s) => s.trim())
         .filter(Boolean);
       const nextTags = normalizeTagList([], parts, 12, 48);
-      onPatchLocation(selectedLocIdRef.current, { environmental_tags: nextTags });
+      if (selectedContIdRef.current && selectedContDepthRef.current === 1) {
+        onPatchContainer(selectedContIdRef.current, { environmental_tags: nextTags });
+      } else if (selectedLocIdRef.current) {
+        onPatchLocation(selectedLocIdRef.current, { environmental_tags: nextTags });
+      }
     },
     contextRef: locationContextRef,
-    contextKey: `loc-tags:${selectedLocation?.id ?? "none"}`,
-    disabled: !selectedLocation || isLocNarrativeLocked,
+    contextKey: `tags:${activeMagicEntityKey}`,
+    disabled: isMagicWandDisabled,
     singleLine: true,
     maxWords: 32,
   });
@@ -473,7 +527,28 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
         </div>
 
         <div className="field-group" style={{ gap: 4 }}>
-          <label style={{ fontSize: "0.72rem" }}>Atmospheric Description</label>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 6,
+            }}
+          >
+            <label style={{ fontSize: "0.72rem", margin: 0 }}>
+              Atmospheric Description
+            </label>
+            {isLevel1ContainerSelected && (
+              <MagicWandButton
+                wand={descriptionWand}
+                isInputEmpty={!selectedContainer.description.trim()}
+                isSlashCommand={false}
+                variant="compact"
+                compactLabel="Enrich Description"
+                iconAccent="amber"
+              />
+            )}
+          </div>
           <textarea
             className="field-textarea"
             rows={3}
@@ -486,7 +561,28 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
         </div>
 
         <div className="field-group" style={{ gap: 4 }}>
-          <label style={{ fontSize: "0.72rem" }}>Environmental Tags</label>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 6,
+            }}
+          >
+            <label style={{ fontSize: "0.72rem", margin: 0 }}>
+              Environmental Tags
+            </label>
+            {isLevel1ContainerSelected && (
+              <MagicWandButton
+                wand={tagsWand}
+                isInputEmpty={(selectedContainer.environmental_tags ?? []).length === 0}
+                isSlashCommand={false}
+                variant="compact"
+                compactLabel="Suggest Tags"
+                iconAccent="violet"
+              />
+            )}
+          </div>
           <TagChipsInput
             value={selectedContainer.environmental_tags || []}
             disabled={isContNarrativeLocked}

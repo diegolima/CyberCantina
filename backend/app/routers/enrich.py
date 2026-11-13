@@ -207,11 +207,21 @@ async def enrich_text(
             else (db_loc.environmental_tags if db_loc else [])
         )
 
+        is_container = ref.entity_kind == "container"
+        target_label = (
+            "Target Landmark / Building Container" if is_container else "Target Location"
+        )
         context_summary_lines = [
             f"World: {world_name} ({genre} — {tone})",
             f"Setting overview: {setting_overview or 'None provided'}",
-            f"Target Location: {loc_name}",
+            f"{target_label}: {loc_name}",
         ]
+        if is_container and ref.child_names:
+            child_list = [c.strip() for c in ref.child_names if c.strip()][:10]
+            if child_list:
+                context_summary_lines.append(
+                    f"Interior locations within this landmark: {', '.join(child_list)}"
+                )
         if loc_summary:
             context_summary_lines.append(f"Location summary: {loc_summary}")
         if loc_description and req.field_role != "location_description":
@@ -228,10 +238,16 @@ async def enrich_text(
                 f"grounded in the world's genre ({genre}) and tone ({tone})."
             )
         elif req.field_role == "location_tags":
+            entity_noun = "landmark/building container" if is_container else "location"
             role_instruction = (
                 f"Extract and generate 3 to 6 concise, evocative sensory and environmental keyword tags "
                 f"(2-4 words max per tag, such as 'Flickering Neon', 'Damp Cobblestones', 'Ozone Hum') "
-                f"for location '{loc_name}', grounded in {genre} / {tone}."
+                f"for {entity_noun} '{loc_name}', grounded in {genre} / {tone}."
+            )
+        elif is_container:
+            role_instruction = (
+                f"Write an atmospheric, sensory exterior and overall ambience description ({req.max_words} words max) "
+                f"for landmark/building container '{loc_name}', grounded in the world's genre ({genre}) and tone ({tone})."
             )
         else:
             role_instruction = (

@@ -27,6 +27,7 @@ class CampaignTurnEnrichContextRef(BaseModel):
 
 class WorldLocationEnrichContextRef(BaseModel):
     scope: Literal["world_location"] = "world_location"
+    entity_kind: Literal["location", "container"] = "location"
     world_id: str | None = None
     location_id: str | None = None
     world_name: str | None = None
@@ -37,6 +38,7 @@ class WorldLocationEnrichContextRef(BaseModel):
     location_summary: str | None = None
     location_description: str | None = None
     existing_tags: list[str] | None = None
+    child_names: list[str] | None = None
 
 
 class CharacterFieldEnrichContextRef(BaseModel):
