@@ -19,7 +19,7 @@ from app.db.repository import CantinaRepository
 from app.dependencies import resolve_effective_models
 from app.engine.llm_client import build_call_target, llm_client
 from app.providers.probe import ProbeService, probe_service
-from app.providers.seeder import SEED_META_KEY, reconcile_settings_references, seed_providers
+from app.providers.seeder import reconcile_settings_references, seed_providers
 from app.security.secret_box import load_secret_box
 from app.security.url_policy import (
     UrlBlockedError,

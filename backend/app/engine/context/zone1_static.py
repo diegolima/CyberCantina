@@ -185,7 +185,7 @@ def build_zone1_static_system_prompt(
         appearance_parts.append(f"- Overview: {character.physical_appearance.strip()}")
 
     appearance_line = (
-        f"Physical Appearance (Immutable Anatomy & Features):\n" + "\n".join(appearance_parts) + "\n"
+        "Physical Appearance (Immutable Anatomy & Features):\n" + "\n".join(appearance_parts) + "\n"
         if appearance_parts
         else ""
     )

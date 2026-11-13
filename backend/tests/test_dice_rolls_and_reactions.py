@@ -3,10 +3,7 @@
 import pytest
 
 from app.schemas.turn import (
-    CanonicalOutcomeTier,
-    CheckRole,
     CharacterCheckSpec,
-    DiceMode,
     DiceRollResult,
     MechanicsTrigger,
     PreTurnAnalysis,
@@ -20,14 +17,11 @@ from app.schemas.character import (
     CharacterStateSnapshot,
     CharacterWizardDraft,
     CognitionBlock,
-    VoiceAnchor,
 )
 from app.engine.phase1_pre import (
     classify_outcome_tier,
     build_tier_directives,
-    resolve_dice_check,
     resolve_character_dice_checks,
-    run_phase1_pre_analysis,
 )
 from app.engine.character_agent import (
     ContestedItemCase,

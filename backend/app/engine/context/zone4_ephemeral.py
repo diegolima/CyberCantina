@@ -238,12 +238,12 @@ def build_zone4_ephemeral_tail_frame(
                 f"    </character_roll>"
             )
         rng_section = (
-            f"\n  <mechanics_outcome>\n"
+            "\n  <mechanics_outcome>\n"
             + "\n".join(roll_lines)
             + "\n    <mechanics_guidance>\n"
             "      Enforce each character's outcome tier strictly in dialogue and action. If co-present characters rolled opposing outcomes, higher tiers take precedence over contested objectives (Critical Success > Clean Success > Simple Failure > Failure with Consequences > Critical Failure).\n"
             "    </mechanics_guidance>\n"
-            f"  </mechanics_outcome>"
+            "  </mechanics_outcome>"
         )
     elif pre_turn.resolved_roll is not None:
         r = pre_turn.resolved_roll
@@ -575,10 +575,10 @@ def build_zone4_ephemeral_tail_frame(
                 pts.append(f"Sensory/Perception: {w.sensory_parts}")
             whisper_lines.append(f"    - @{w.character_name} ({w.target_scope.value.upper()}): {'; '.join(pts)}")
         directed_cues_section = (
-            f"\n  <directed_character_cues>\n"
+            "\n  <directed_character_cues>\n"
             + "\n".join(whisper_lines)
             + "\n    CRITICAL DIRECTIVE: Characters are only aware of their own private perceptions and words spoken aloud in the room. Characters must NOT metagame each other's private sensory observations.\n"
-            f"  </directed_character_cues>"
+            "  </directed_character_cues>"
         )
 
     return (

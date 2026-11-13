@@ -14,14 +14,12 @@ from app.db.seed import ensure_default_seed
 from app.engine.affective_engine import materialize_snapshot_with_care, seed_initial_care_state
 from app.routers.campaigns import campaign_turn_gate
 from app.schemas.affective import (
-    AffectiveCareState,
     RelationalEdge,
     WorldviewProfile,
     temperament_config_for_archetype,
 )
 from app.schemas.character import (
     BaselinePsyche,
-    CharacterStateSnapshot,
     CharacterWizardDraft,
     CognitionBlock,
 )

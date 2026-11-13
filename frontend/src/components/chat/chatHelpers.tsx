@@ -5,15 +5,15 @@ import type {
   CharacterChoiceSet,
   CharacterRecord,
   CharacterWhisper,
-  CognitionBlock,
   DiceMode,
+  LiveStreamState,
   NarrativeMode,
   Phase3TurnProgress,
   Phase4TurnProgress,
-  PreTurnAnalysis,
-  RecalledMemoryItem,
 } from "../../types";
 import { decomposeClientUserMessage } from "../../utils/mentions";
+
+export type { LiveStreamState };
 
 export function getTierBadgeClass(tier?: string): string {
   switch (tier) {
@@ -32,17 +32,6 @@ export function getTierBadgeClass(tier?: string): string {
     default:
       return "";
   }
-}
-
-export interface LiveStreamState {
-  userMessage: string;
-  preTurn: PreTurnAnalysis | null;
-  recalledItems: RecalledMemoryItem[];
-  cognitionRaw: string;
-  cognitionParsed: CognitionBlock | null;
-  proseText: string;
-  phaseStatus: string;
-  isNarrator?: boolean;
 }
 
 export interface ChatStageProps {

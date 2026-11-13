@@ -14,12 +14,10 @@ from app.prompts import (
     FACTORY_DEFAULT_PROMPTS,
     PROMPT_KEY_ACTOR_ZONE1,
     PROMPT_KEY_CLERK_POST_TURN,
-    get_default_prompt,
     render_template,
     validate_prompt_template,
 )
 from app.schemas.auth import UserModelSettingsPayload
-from app.schemas.prompt import PromptPresetRecord
 
 
 def test_render_template_variable_substitution() -> None:

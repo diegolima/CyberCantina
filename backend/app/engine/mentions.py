@@ -6,48 +6,19 @@ for @Character Name: directed dialogue and sensory cues across the 5-phase pipel
 
 from __future__ import annotations
 
-from enum import Enum
 import re
 from typing import Protocol, runtime_checkable
+
 from pydantic import BaseModel, Field
 
 from app.schemas.character import CharacterRecord
+from app.schemas.turn import CharacterWhisper, MentionTargetScope
 
 # Unicode quote normalization map
 _SMART_DOUBLE_QUOTES = ("“", "”", "„", "‟", "«", "»")
 _SMART_SINGLE_QUOTES = ("‘", "’", "‚", "‛")
 
 _MENTION_LINE_RE = re.compile(r"^@(?P<name>[^:\n]+):(?P<content>.*)$")
-
-
-class MentionTargetScope(str, Enum):
-    """Scope of a mentioned character relative to the current location."""
-
-    LOCAL = "local"  # Co-present in the active location
-    REMOTE = "remote"  # Elsewhere in the campaign (off-site / comms)
-
-
-class CharacterWhisper(BaseModel):
-    """Structured representation of directed context for a single character."""
-
-    character_id: str
-    character_name: str
-    target_scope: MentionTargetScope = Field(
-        default=MentionTargetScope.LOCAL,
-        description="Whether the character is in the room (local) or off-site (remote).",
-    )
-    raw_lines: list[str] = Field(
-        default_factory=list,
-        description="Original source lines from the user message directed to this character.",
-    )
-    speech_parts: list[str] = Field(
-        default_factory=list,
-        description="Extracted dialogue enclosed in double quotes (spoken aloud to this character).",
-    )
-    sensory_parts: list[str] = Field(
-        default_factory=list,
-        description="Extracted sensory observations / GM notes outside double quotes (perceived internally).",
-    )
 
 
 class DecomposedUserMessage(BaseModel):

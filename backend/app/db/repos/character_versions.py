@@ -4,31 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 import uuid
-from datetime import datetime, timedelta, timezone
 import numpy as np
 from app.db.vector_store import combine_entry_text, embed_text
 from app.schemas.character import (
-    BaselinePsyche,
     CharacterRecord,
     CharacterUpdatePayload,
     CharacterVersionSummary,
-    CharacterWizardDraft,
-    GalleryImage,
     ItemInstance,
     MemoryShard,
-    VoiceAnchor,
     dump_items_json,
 )
 from app.schemas.turn import CampaignStateBundle
-from app.security.media_path import validate_safe_character_id
 from app.db.repos.base import (
     _validate_world_artifact_lore_id,
     _sanitize_character_media,
     slugify_tag,
     utc_now_iso,
-    STAGED_CHARACTER_OWNERSHIP_TTL_SECONDS,
 )
 
 

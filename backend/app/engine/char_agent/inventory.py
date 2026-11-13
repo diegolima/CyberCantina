@@ -24,6 +24,7 @@ from app.schemas.character import (
 from app.schemas.turn import (
     ArbitrationRulingRecord,
     CharacterAgentDelta,
+    DiceRollResult,
     InventoryArbitrationResult,
     PreTurnAnalysis,
     TurnNodeRecord,
@@ -79,12 +80,14 @@ def enforce_permanent_item_locks(
                 holder_delta.items_removed = kept_rem
 
                 # Also strip "-item" prefixed removal shorthands on items_equipped / items_obtained
-                def _filter_neg_shorthand(entries: list[str]) -> tuple[list[str], bool]:
+                def _filter_neg_shorthand(
+                    entries: list[str], queries: set[str] = perm_queries
+                ) -> tuple[list[str], bool]:
                     out: list[str] = []
                     hit = False
                     for ent in entries:
                         ec = ent.strip()
-                        if ec.startswith("-") and len(ec) > 1 and matches_inventory_query(ec[1:].strip(), perm_queries):
+                        if ec.startswith("-") and len(ec) > 1 and matches_inventory_query(ec[1:].strip(), queries):
                             hit = True
                         else:
                             out.append(ent)
@@ -610,7 +613,7 @@ async def arbitrate_inventory_disputes_detailed(
     roll_info = "\n".join(roll_info_lines) if roll_info_lines else "None"
 
     user_prompt = (
-        f"Contested Items:\n" + "\n".join(dispute_lines) + "\n\n"
+        "Contested Items:\n" + "\n".join(dispute_lines) + "\n\n"
         f"Mechanics / Dice Outcome: {roll_info}\n"
         f"User Message:\n{completed_turn.user_message}\n\n"
         f"Narrative Prose:\n{completed_turn.raw_prose}"

@@ -170,12 +170,12 @@ def heuristic_character_cognition(
         plan_bullets = (
             [
                 f"- Address the player directly regarding: {target_cue[:60]}...",
-                f"- Hold ground and monitor room reactions.",
+                "- Hold ground and monitor room reactions.",
             ]
             if role == "primary_speaker"
             else [
-                f"- React subtly from the periphery to the player's dialogue.",
-                f"- Maintain eye contact and observe next developments.",
+                "- React subtly from the periphery to the player's dialogue.",
+                "- Maintain eye contact and observe next developments.",
             ]
         )
 

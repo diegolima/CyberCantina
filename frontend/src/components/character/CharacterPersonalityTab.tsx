@@ -9,7 +9,7 @@ import {
   getTemperamentPresetMeta,
 } from "../../types";
 import { TagChipsInput } from "../TagChipsInput";
-import { ClickToEditField } from "../EntityEditorModals";
+import { ClickToEditField } from "../shared/ClickToEditField";
 
 export interface CharacterPersonalityData {
   personality_traits?: string[];

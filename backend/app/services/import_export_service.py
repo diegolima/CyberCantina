@@ -14,13 +14,10 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
-import numpy as np
 
-from app.config import settings
 from app.db.repository import CantinaRepository, _location_lore_vector_fields, utc_now_iso
 from app.dependencies import process_and_save_image, safe_resolve_media_path
 from app.schemas.character import (
-    CharacterRecord,
     CharacterWizardDraft,
     GalleryImage,
 )
@@ -28,7 +25,6 @@ from app.schemas.import_export import (
     EntitySummary,
     ImportCommitRequest,
     ImportCommitResponse,
-    ImportConflictStrategy,
     ImportEntityConflict,
     ImportInspectResponse,
     ZccManifest,
@@ -36,9 +32,6 @@ from app.schemas.import_export import (
 )
 from app.schemas.persona import PersonaCreatePayload, PersonaRecord
 from app.schemas.world import (
-    LocationEdge,
-    LocationNode,
-    LoreNode,
     WorldRecord,
 )
 from app.wizards.sillytavern_parser import extract_card_from_bytes
@@ -117,7 +110,6 @@ def build_zcc_export(
     description: str = "",
 ) -> bytes:
     """Bundle selected characters, worlds, personas, and media into a .zcc ZIP archive."""
-    characters: list[CharacterRecord] = []
     worlds: list[WorldRecord] = []
     personas: list[PersonaRecord] = []
 

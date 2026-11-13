@@ -7,7 +7,6 @@ import sqlite3
 import uuid
 import numpy as np
 from app.db.vector_store import combine_entry_text, embed_text
-from app.engine.mentions import CharacterWhisper
 from app.schemas.character import (
     CharacterRecord,
     CharacterStateSnapshot,
@@ -18,6 +17,7 @@ from app.schemas.character import (
 from app.schemas.persona import PersonaTurnStateSnapshot
 from app.schemas.turn import (
     CampaignStateBundle,
+    CharacterWhisper,
     EpisodicChunkRecord,
     PostTurnStateDelta,
     PreTurnAnalysis,

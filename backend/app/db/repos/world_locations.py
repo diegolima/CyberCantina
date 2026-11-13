@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Literal
 import uuid
 from app.schemas.turn import ImprovisedLocationSpec
 from app.schemas.world import (

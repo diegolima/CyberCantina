@@ -2,7 +2,7 @@ import React from "react";
 import { MessageSquare, Plus, Trash2 } from "lucide-react";
 import { VoiceAnchor } from "../../types";
 import { TagChipsInput } from "../TagChipsInput";
-import { ClickToEditField } from "../EntityEditorModals";
+import { ClickToEditField } from "../shared/ClickToEditField";
 
 export interface CharacterVoiceData {
   communication_style?: string[];

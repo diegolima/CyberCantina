@@ -526,7 +526,7 @@ def _fallback_character_expansion(
         ),
         memory_shards=[
             MemoryShard(
-                title=f"Formative Incident: Escape from the Old Order",
+                title="Formative Incident: Escape from the Old Order",
                 content=(
                     f"During their earlier years in {world.name if world else 'their home settlement'}, {seed.name} "
                     f"was caught defying local authorities while operating as a {seed.archetype}. "

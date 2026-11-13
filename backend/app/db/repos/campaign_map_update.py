@@ -3,41 +3,19 @@
 from __future__ import annotations
 
 import json
-import re
-import sqlite3
 import uuid
 from typing import Any
-import numpy as np
-from app.db.vector_store import combine_entry_text
-from app.schemas.character import (
-    ItemFlag,
-    ItemInstance,
-    VALID_ITEM_FLAGS,
-    coerce_item_list,
-    dump_items_json,
-    normalize_item_key,
-    strip_item_location_affixes,
-)
 from app.schemas.turn import (
     CampaignMapUpdatePayload,
-    CampaignRecord,
     CampaignStateBundle,
-    ImprovisedLocationSpec,
 )
 from app.schemas.world import (
-    OPPOSITE_COMPASS,
     LocationContainer,
     LocationEdge,
-    LocationLoreNodeDraft,
     LocationNode,
-    LoreNode,
     normalize_compass_direction,
 )
 from app.db.repos.base import (
-    UNSET,
-    _validate_world_artifact_lore_id,
-    _compute_missing_embeddings,
-    _location_lore_vector_fields,
     utc_now_iso,
 )
 

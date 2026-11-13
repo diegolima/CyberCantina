@@ -3,24 +3,10 @@
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
 import uuid
 from typing import Any
-import numpy as np
-from app.db.vector_store import combine_entry_text
-from app.schemas.character import (
-    ItemFlag,
-    ItemInstance,
-    VALID_ITEM_FLAGS,
-    coerce_item_list,
-    dump_items_json,
-    normalize_item_key,
-    strip_item_location_affixes,
-)
 from app.schemas.turn import (
-    CampaignMapUpdatePayload,
-    CampaignRecord,
     CampaignStateBundle,
     ImprovisedLocationSpec,
 )
@@ -28,17 +14,9 @@ from app.schemas.world import (
     OPPOSITE_COMPASS,
     LocationContainer,
     LocationEdge,
-    LocationLoreNodeDraft,
     LocationNode,
     LoreNode,
     normalize_compass_direction,
-)
-from app.db.repos.base import (
-    UNSET,
-    _validate_world_artifact_lore_id,
-    _compute_missing_embeddings,
-    _location_lore_vector_fields,
-    utc_now_iso,
 )
 from app.db.repos.campaign_map_update import CampaignMapUpdateMixin
 from app.db.repos.campaign_lore_items import CampaignLoreItemsMixin
@@ -66,11 +44,6 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
 
         leaf_turn = self.get_turn_node(campaign.active_leaf_turn_id)
         old_loc_id = leaf_turn.world_snapshot.active_location_id
-        old_loc_name = ""
-        try:
-            old_loc_name = self.get_location(old_loc_id).name
-        except KeyError:
-            pass
 
         new_flags: list[str] = [f"At {target_loc.name}"]
         merged_visited = list(

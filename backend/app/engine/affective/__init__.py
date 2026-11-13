@@ -1,4 +1,11 @@
-"""CARE-v1 affective mathematics, lexical rendering, and post-turn appraisal package."""
+"""CARE-v1 affective mathematics, lexical rendering, and post-turn appraisal package.
+
+Submodules:
+- `models`: Physical-inspired constants & affective state models
+- `calculus`: Valence/arousal/dominance integration, composure strain, and relational deltas
+- `rendering`: Zone 1/4 qualitative mood, stance, and memory salience prose formatters
+- `appraisal`: Post-turn emotional appraisal and temperament drift updates
+"""
 
 from __future__ import annotations
 

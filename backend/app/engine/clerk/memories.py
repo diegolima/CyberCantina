@@ -220,7 +220,6 @@ def _extract_heuristic_character_memories(
             target_chars = [present_characters[0]]
 
     # Build a concise 1-2 sentence synthesis
-    u_clean = _synthesize_concise_sentences(user_message, max_sentences=1)
     p_clean = _synthesize_concise_sentences(raw_prose, max_sentences=1)
     kws = list(
         dict.fromkeys(

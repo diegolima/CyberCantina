@@ -1,4 +1,13 @@
-"""Phase 2 context scoping, Zone 1-4 prompt building, and turn bundle assembly."""
+"""Phase 2 context scoping, Zone 1-4 prompt building, and turn bundle assembly.
+
+Submodules:
+- `lore_scope`: Character working-window filtering & triggered location/container/item lore
+- `zone1_static`: KV-cache-stable system persona, world rules, and temperament instructions
+- `zone2_episodic`: LOD episodic cascade (`summary` -> `synopsis` -> `dropped`) & vector recall
+- `zone3_history`: Epistemic-isolated branch history formatting (`@Character:` whisper scoping)
+- `zone4_ephemeral`: Per-turn physical state, spatial graph neighbors, and choice/roll injection
+- `assembler`: Top-level `assemble_four_zone_messages` orchestrator
+"""
 
 from __future__ import annotations
 

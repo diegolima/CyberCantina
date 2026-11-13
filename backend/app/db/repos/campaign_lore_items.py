@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-import sqlite3
 import uuid
-from typing import Any
+from typing import Any, Literal
 import numpy as np
 from app.db.vector_store import combine_entry_text
 from app.schemas.character import (
@@ -19,19 +18,11 @@ from app.schemas.character import (
     strip_item_location_affixes,
 )
 from app.schemas.turn import (
-    CampaignMapUpdatePayload,
     CampaignRecord,
     CampaignStateBundle,
-    ImprovisedLocationSpec,
 )
 from app.schemas.world import (
-    OPPOSITE_COMPASS,
-    LocationContainer,
-    LocationEdge,
     LocationLoreNodeDraft,
-    LocationNode,
-    LoreNode,
-    normalize_compass_direction,
 )
 from app.db.repos.base import (
     UNSET,

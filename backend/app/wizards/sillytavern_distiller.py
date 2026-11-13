@@ -24,7 +24,7 @@ from app.wizards.sillytavern_parser import SillyTavernRawCard
 
 def _extract_section(text: str, heading: str) -> str:
     """Extract content under a specific heading until the next heading or double newline."""
-    pattern = rf"(?:^|\n)(?:#+\s*|\*\*\s*|)" + re.escape(heading) + rf"(?:\s*\*+|\s*:|)(?:\n+)([\s\S]*?)(?=(?:\n(?:#+\s*|\*\*\s*|[A-Z][a-zA-Z\s]{{2,20}}:)|\Z))"
+    pattern = r"(?:^|\n)(?:#+\s*|\*\*\s*|)" + re.escape(heading) + r"(?:\s*\*+|\s*:|)(?:\n+)([\s\S]*?)(?=(?:\n(?:#+\s*|\*\*\s*|[A-Z][a-zA-Z\s]{2,20}:)|\Z))"
     match = re.search(pattern, text, re.IGNORECASE)
     if match:
         return match.group(1).strip()
@@ -191,9 +191,9 @@ def _fallback_sillytavern_distillation(
         mood_label=mood_label,
         valence=val,
         arousal=ar,
-        core_drive=f"Accomplish their mission and protect what matters to them.",
-        core_fear=f"Being cornered, manipulated, or losing control in critical moments.",
-        default_want=f"Assess the immediate surroundings and the user's motives.",
+        core_drive="Accomplish their mission and protect what matters to them.",
+        core_fear="Being cornered, manipulated, or losing control in critical moments.",
+        default_want="Assess the immediate surroundings and the user's motives.",
         default_plan=(
             "- Assess the immediate surroundings and note all available exits.\n"
             "- Gauge the user's motives through cautious, guarded interaction.\n"

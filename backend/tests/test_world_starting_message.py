@@ -18,10 +18,8 @@ from app.engine.clerk_placement import (
 from app.routers.campaigns import CampaignCreateRequest, create_campaign
 from app.schemas.auth import UserProfile
 from app.schemas.world import (
-    LocationNode,
     LocationNodeDraft,
     WorldGlobalRules,
-    WorldRecord,
     WorldUpdatePayload,
     WorldWizardDraft,
 )

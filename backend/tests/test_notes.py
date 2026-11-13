@@ -9,7 +9,6 @@ from fastapi.testclient import TestClient
 from app import main as main_module
 from app.config import settings
 from app.db.repository import CantinaRepository
-from app.schemas.auth import UserProfile
 
 
 @pytest.fixture()

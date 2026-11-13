@@ -7,7 +7,6 @@ container lore overrides, world forking/in-place updates, and .zcc ZIP round-tri
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -34,7 +33,6 @@ from app.schemas.turn import (
     DiceRollResult,
     ImprovisedLocationSpec,
     PreTurnAnalysis,
-    WorldPostTurnDelta,
 )
 from app.schemas.world import (
     LocationContainer,

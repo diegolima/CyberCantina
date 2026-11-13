@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Image as ImageIcon, Loader2, Maximize2, Trash2, Upload, User, X } from "lucide-react";
 import { api } from "../../api";
 import type { BasicEmotion, CharacterRecord, GalleryImage } from "../../types";
-import { BASIC_EMOTIONS, cropToSquareBlob } from "./CharacterInspectorModal";
+import { BASIC_EMOTIONS, cropToSquareBlob } from "./characterMediaUtils";
 
 export interface CharacterMediaTabProps {
   isActive: boolean;

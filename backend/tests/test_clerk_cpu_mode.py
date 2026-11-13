@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import httpx
 
-from app.config import AppSettings, ModelProfile, settings
+from app.config import ModelProfile, settings
 from app.dependencies import (
     is_separate_clerk_model,
     normalize_model_tag,

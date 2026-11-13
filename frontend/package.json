@@ -8,7 +8,9 @@
     "dev": "vite --port 5173",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "arch:check": "depcruise src --config .dependency-cruiser.cjs",
+    "arch:graph": "depcruise src --config .dependency-cruiser.cjs --output-type mermaid"
   },
   "dependencies": {
     "@mlc-ai/web-llm": "^0.2.88",
@@ -20,6 +22,7 @@
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.2.1",
+    "dependency-cruiser": "^18.7.2",
     "typescript": "^5.4.5",
     "vite": "^6.4.6",
     "vitest": "^4.1.12"

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Final, Literal
+from enum import Enum
 import re
+from typing import Any, Awaitable, Callable, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.engine.mentions import CharacterWhisper
 from app.schemas.affective import (
     MAX_TURN_ELAPSED_MINUTES_SANITY,
     AgencyLevel,
@@ -42,6 +42,37 @@ from app.schemas.world import (
     validate_container_hierarchy_integrity,
     validate_world_reachability,
 )
+
+
+class MentionTargetScope(str, Enum):
+    """Scope of a mentioned character relative to the current location."""
+
+    LOCAL = "local"  # Co-present in the active location
+    REMOTE = "remote"  # Elsewhere in the campaign (off-site / comms)
+
+
+class CharacterWhisper(BaseModel):
+    """Structured representation of directed context for a single character."""
+
+    character_id: str
+    character_name: str
+    target_scope: MentionTargetScope = Field(
+        default=MentionTargetScope.LOCAL,
+        description="Whether the character is in the room (local) or off-site (remote).",
+    )
+    raw_lines: list[str] = Field(
+        default_factory=list,
+        description="Original source lines from the user message directed to this character.",
+    )
+    speech_parts: list[str] = Field(
+        default_factory=list,
+        description="Extracted dialogue enclosed in double quotes (spoken aloud to this character).",
+    )
+    sensory_parts: list[str] = Field(
+        default_factory=list,
+        description="Extracted sensory observations / GM notes outside double quotes (perceived internally).",
+    )
+
 
 CheckRole = Literal[
     "active_attempt",

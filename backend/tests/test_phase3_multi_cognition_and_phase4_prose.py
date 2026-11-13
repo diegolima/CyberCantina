@@ -2,21 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 import pytest
 
 from app.db.repository import CantinaRepository
 from app.engine.phase2_context import (
     build_zone1_ensemble_system_prompt,
-    build_zone1_static_system_prompt,
     build_zone4_ephemeral_tail_frame,
-    resolve_phase2_turn_context,
 )
 from app.engine.phase3_cognition import (
-    PriorCognitionCue,
-    heuristic_character_cognition,
     run_phase3_multi_cognition,
 )
 from app.engine.phase4_prose import stream_phase4_prose
@@ -31,12 +25,10 @@ from app.schemas.turn import (
     MechanicsTrigger,
     Phase3ProgressEvent,
     PreTurnAnalysis,
-    RecalledMemoryItem,
     TurnNodeRecord,
-    TurnSubmitRequest,
     WorldStateSnapshot,
 )
-from app.schemas.world import LocationNode, NeighborLocationView, WorldGlobalRules, WorldRecord
+from app.schemas.world import LocationNode, WorldGlobalRules, WorldRecord
 
 
 @pytest.fixture()

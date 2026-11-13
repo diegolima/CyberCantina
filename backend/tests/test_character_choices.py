@@ -2,10 +2,7 @@
 
 import pytest
 from app.engine.choices import (
-    build_directed_cognition_schema,
     build_gate_check_spec,
-    build_gate_directives,
-    build_undirected_cognition_schema,
     check_choice_compliance,
     coerce_choice_compliance,
     cognition_dispatch_order,
@@ -14,10 +11,9 @@ from app.engine.choices import (
     preview_choice_set,
     resolve_choice_set,
 )
-from app.schemas.character import BaselinePsyche, CharacterRecord, CharacterStateSnapshot, CognitionBlock
+from app.schemas.character import BaselinePsyche, CharacterRecord, CognitionBlock
 from app.schemas.mechanics import ChoicePreviewRequest
 from app.schemas.turn import (
-    CanonicalOutcomeTier,
     CharacterChoiceOption,
     CharacterChoiceSet,
     ChoiceResolution,

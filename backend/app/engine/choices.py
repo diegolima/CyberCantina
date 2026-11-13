@@ -20,7 +20,6 @@ from app.schemas.turn import (
     CharacterChoiceSet,
     ChoiceGate,
     ChoiceResolution,
-    ChoiceStatus,
 )
 
 GATE_SPECIFICITY: Final[Mapping[ChoiceGate, int]] = {

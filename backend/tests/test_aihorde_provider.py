@@ -2,19 +2,14 @@
 
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
 from app.config import ModelProfile
-from app.db.provider_store import ProviderStore
 from app.engine.llm_client import (
     CallTarget,
-    _AIHORDE_ANON_SEMAPHORE,
-    _get_aihorde_fallback_model,
-    build_call_target,
     get_chat_completions_url,
     llm_client,
 )

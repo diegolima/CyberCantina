@@ -433,3 +433,14 @@ export interface CampaignStateBundle {
   containers?: LocationContainer[];
   episodic_chunks: EpisodicChunkRecord[];
 }
+
+export interface LiveStreamState {
+  userMessage: string;
+  preTurn: PreTurnAnalysis | null;
+  recalledItems: RecalledMemoryItem[];
+  cognitionRaw: string;
+  cognitionParsed: CognitionBlock | null;
+  proseText: string;
+  phaseStatus: string;
+  isNarrator?: boolean;
+}

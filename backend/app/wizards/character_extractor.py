@@ -75,7 +75,7 @@ async def extract_features_from_bio(
     # PASS 1: Comprehensive Physical Trait Extraction
     # =========================================================================
     existing_str = (
-        f"Already extracted features to IGNORE (do not extract these again):\n"
+        "Already extracted features to IGNORE (do not extract these again):\n"
         + "\n".join(f"- {f}" for f in existing)
         + "\n\n"
         if existing
@@ -331,7 +331,7 @@ async def extract_quirks_from_demeanor(
     # PASS 1: Comprehensive Quirks & Flaws Extraction
     # =========================================================================
     existing_str = (
-        f"Already extracted quirks/flaws to IGNORE (do not extract these again):\n"
+        "Already extracted quirks/flaws to IGNORE (do not extract these again):\n"
         + "\n".join(f"- {q}" for q in existing)
         + "\n\n"
         if existing

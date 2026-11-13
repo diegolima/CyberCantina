@@ -1,4 +1,11 @@
-"""Phase 3 Character Cognition & Hidden Thought Generation package."""
+"""Phase 3 Character Cognition & Hidden Thought Generation package.
+
+Submodules:
+- `xml_parser`: Deterministic `<cognition>` XML tag/attribute extractor & prose leakage sanitizer
+- `heuristics`: Offline/fallback cognition generator when no LLM endpoint is configured
+- `prompt_builder`: System/user instructions enforcing per-character epistemic viewpoint & choices
+- `runner`: Parallel/sequential multi-character Phase 3 cognition execution
+"""
 
 from __future__ import annotations
 

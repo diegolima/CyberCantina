@@ -1,4 +1,10 @@
-"""Character Post-Turn State & Inventory Arbitration package."""
+"""Character Post-Turn State & Inventory Arbitration package.
+
+Submodules:
+- `matching`: Word-bounded item matching, alias resolution, and mood/stance normalization
+- `inventory`: Permanent item lock enforcement and multi-character custody dispute detection
+- `runner`: Per-character post-turn extraction and two-tier conflict arbitration
+"""
 
 from __future__ import annotations
 

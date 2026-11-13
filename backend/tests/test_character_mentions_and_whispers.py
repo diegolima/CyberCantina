@@ -12,7 +12,6 @@ from app.engine.mentions import (
 from app.schemas.character import (
     BaselinePsyche,
     CharacterRecord,
-    VoiceAnchor,
 )
 
 

@@ -34,6 +34,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from typing import Literal
 from dataclasses import (
     dataclass,
     field,

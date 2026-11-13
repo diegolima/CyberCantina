@@ -1,4 +1,10 @@
-"""AI Character Creation Wizard (3-Pass Pipeline & Multi-Genre Fallbacks)."""
+"""AI Character Creation Wizard (3-Pass Pipeline & Multi-Genre Fallbacks).
+
+Submodules:
+- `genre_profiles`: Multi-genre fallback defaults & height/mannerism/item normalization
+- `inference`: Heuristic trait, moral code, quirk, and dialogue anchor extractors
+- `draft_pipeline`: 3-pass structured LLM character generation (`generate_character_draft`)
+"""
 
 from __future__ import annotations
 

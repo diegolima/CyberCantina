@@ -896,7 +896,7 @@ async def run_phase5_post_turn_clerk(
                 for ch, _idxs, aged_s in compaction_jobs
             ]
 
-        for (ch, aged_indices, _aged_shards), compacted_spec in zip(compaction_jobs, compacted_specs):
+        for (ch, aged_indices, _aged_shards), compacted_spec in zip(compaction_jobs, compacted_specs, strict=True):
             char_shards = raw_shards_by_char.get(ch.id, [])
             for idx in aged_indices:
                 char_shards[idx] = char_shards[idx].model_copy(

@@ -35,6 +35,8 @@ embeddings = [
 dev = [
     "pytest>=8.1.0",
     "pytest-asyncio>=0.23.6",
+    "ruff>=0.17.0",
+    "tach>=0.35.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -44,3 +46,26 @@ include = ["app*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "B023", "B904", "B905"]
+ignore = ["E741"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["F401", "F403"]
+"app/db/repository.py" = ["F401", "F403"]
+"app/db/vector_store.py" = ["F401", "F403"]
+"app/engine/affective_engine.py" = ["F401", "F403"]
+"app/engine/character_agent.py" = ["F401", "F403"]
+"app/engine/phase2_context.py" = ["F401", "F403"]
+"app/engine/phase3_cognition.py" = ["F401", "F403"]
+"app/engine/phase5_clerk.py" = ["F401", "F403"]
+"app/engine/mentions.py" = ["F401"]
+"app/main.py" = ["F401"]
+"app/routers/campaigns.py" = ["F401", "F403"]
+"app/wizards/character_wizard.py" = ["F401", "F403"]
+"tests/*" = ["F841", "B017"]

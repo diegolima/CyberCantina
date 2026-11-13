@@ -1,4 +1,13 @@
-"""Phase 5 async post-turn clerk & character state package."""
+"""Phase 5 async post-turn clerk & character state package.
+
+Submodules:
+- `gossip`: Witness verification & persona turn-state gossip propagation
+- `inventory`: Inventory normalization, add/remove merging, and heuristic delta extraction
+- `memories`: Character memory shard deduplication, extraction, and semantic compaction
+- `episodic`: Turn-chunk witness calculation, salience scoring, and episodic summarization
+- `heuristics`: Deterministic offline fallback deltas for world/character post-turn state
+- `pipeline`: `run_phase5_post_turn_clerk` coordinator & passive-bystander fast path
+"""
 
 from __future__ import annotations
 

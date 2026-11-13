@@ -12,9 +12,7 @@ Covers:
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
-from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,11 +24,8 @@ from app.db.seed import ensure_default_seed
 from app.engine.phase1_pre import (
     detect_persona_disclosures,
     detect_persona_disclosures_token_matching,
-    run_phase1_pre_analysis,
 )
 from app.engine.phase2_context import (
-    DiscoveredPersonaView,
-    assemble_four_zone_messages,
     build_all_character_known_personas,
     build_zone1_ensemble_system_prompt,
     build_zone1_narrator_system_prompt,
@@ -39,11 +34,9 @@ from app.engine.phase2_context import (
 )
 from app.engine.phase3_cognition import (
     heuristic_character_cognition,
-    run_character_cognition_agent,
 )
 from app.engine.phase5_clerk import (
     apply_turn_persona_state_and_gossip,
-    run_phase5_post_turn_clerk,
     verify_prose_gossip_exchanges,
 )
 from app.main import app
@@ -62,13 +55,9 @@ from app.schemas.persona import (
     PersonaRecord,
     PersonaTurnStateSnapshot,
     PersonaUpdatePayload,
-    get_default_persona,
 )
 from app.schemas.turn import (
-    PersonaGossipEvent,
     PreTurnAnalysis,
-    TurnNodeRecord,
-    TurnSubmitRequest,
 )
 
 
@@ -984,8 +973,8 @@ def test_per_user_default_persona_isolation(temp_repo: CantinaRepository) -> Non
     u_a = temp_repo.create_user(username="user_alice", display_name="Alice", role="user", user_id="user_alice")
     u_b = temp_repo.create_user(username="user_bob", display_name="Bob", role="user", user_id="user_bob")
 
-    p_a = temp_repo.get_persona(f"persona_default_user_alice", owner_id=u_a.id)
-    p_b = temp_repo.get_persona(f"persona_default_user_bob", owner_id=u_b.id)
+    p_a = temp_repo.get_persona("persona_default_user_alice", owner_id=u_a.id)
+    p_b = temp_repo.get_persona("persona_default_user_bob", owner_id=u_b.id)
 
     assert p_a is not None
     assert p_a.id == "persona_default_user_alice"

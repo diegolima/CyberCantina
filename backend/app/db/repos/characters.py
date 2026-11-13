@@ -12,16 +12,12 @@ from app.db.vector_store import combine_entry_text, embed_text
 from app.schemas.character import (
     BaselinePsyche,
     CharacterRecord,
-    CharacterUpdatePayload,
-    CharacterVersionSummary,
     CharacterWizardDraft,
     GalleryImage,
-    ItemInstance,
     MemoryShard,
     VoiceAnchor,
     dump_items_json,
 )
-from app.schemas.turn import CampaignStateBundle
 from app.security.media_path import validate_safe_character_id
 from app.db.repos.base import (
     _validate_world_artifact_lore_id,

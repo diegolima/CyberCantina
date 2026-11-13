@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { api, streamCampaignTurn } from "../api";
-import type { LiveStreamState } from "../components/chat/chatHelpers";
 import type {
   CampaignStateBundle,
   CharacterChoiceSet,
   DiceMode,
   ItemEquipActionPayload,
+  LiveStreamState,
   LocationContainer,
   LocationEdge,
   LocationLoreNodeDraft,

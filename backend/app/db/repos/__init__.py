@@ -1,4 +1,13 @@
-"""Domain repository mixins composed into CantinaRepository."""
+"""Domain repository mixins composed into CantinaRepository.
+
+Submodules:
+- `base` / `schema_init`: SQLite connection helpers, WAL pragmas, schema DDL init
+- `auth_users` / `prompt_presets` / `notes`: Users, WebAuthn/sessions, presets, notes
+- `worlds` / `world_locations` / `world_lore_map`: World catalog, spatial containers/nodes/edges
+- `characters` / `character_versions` / `personas`: Characters, version snapshots, personas
+- `campaigns` / `turns`: Campaign lifecycle, turn tree DAG, episodic chunks, state bundles
+- `campaign_spatial` / `campaign_map_update` / `campaign_lore_items`: Runtime map & inventory overrides
+"""
 
 from __future__ import annotations
 

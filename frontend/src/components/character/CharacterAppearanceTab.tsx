@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Loader2, Plus, Sparkles, Trash2, Undo2 } from "lucide-react";
 import { api } from "../../api";
 import { TagChipsInput } from "../TagChipsInput";
-import { ClickToEditField } from "../EntityEditorModals";
+import { ClickToEditField } from "../shared/ClickToEditField";
 
 export interface CharacterAppearanceData {
   build_and_height?: string;

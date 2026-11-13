@@ -3,7 +3,6 @@ from fastapi.testclient import TestClient
 
 from app.db.repository import CantinaRepository
 from app.main import app, _execute_turn_stream_events
-from app.schemas.auth import UserProfile
 from app.schemas.turn import TurnSubmitRequest
 from app.auth import get_current_user
 

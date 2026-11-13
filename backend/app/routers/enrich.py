@@ -80,8 +80,8 @@ async def enrich_text(
     if req.context_ref.scope == "campaign_turn":
         try:
             campaign = repo.get_campaign(req.context_ref.campaign_id, owner_id=current_user.id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Campaign not found")
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Campaign not found") from exc
 
         parent_id = req.context_ref.parent_turn_id or campaign.active_leaf_turn_id
         if not parent_id:
@@ -154,8 +154,8 @@ async def enrich_text(
         if ref.world_id and not ref.world_id.startswith("new_"):
             try:
                 db_world = repo.get_world(ref.world_id, owner_id=current_user.id)
-            except KeyError:
-                raise HTTPException(status_code=404, detail="World not found")
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail="World not found") from exc
 
         db_loc = None
         if ref.location_id and not ref.location_id.startswith("new_"):
@@ -242,8 +242,8 @@ async def enrich_text(
     elif req.context_ref.scope == "character_field":
         try:
             char = repo.get_character(req.context_ref.character_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail="Character not found")
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Character not found") from exc
 
         context_summary_lines = [
             f"Character: {char.name} ({char.tagline})",
@@ -300,21 +300,21 @@ async def enrich_text(
                 "Tag enrichment failed: %s",
                 sanitize_log_value(str(exc)),
             )
-            raise HTTPException(status_code=500, detail="AI enrichment failed.")
+            raise HTTPException(status_code=500, detail="AI enrichment failed.") from exc
 
     if is_empty:
         user_prompt = (
-            f"Draft a compelling starting draft from scratch based on the following scene context.\n\n"
-            f"=== CONTEXT ===\n" + "\n".join(context_summary_lines) + "\n\n"
-            f"Output ONLY the final text without commentary, markdown headers, or quotation wrappers."
+            "Draft a compelling starting draft from scratch based on the following scene context.\n\n"
+            "=== CONTEXT ===\n" + "\n".join(context_summary_lines) + "\n\n"
+            "Output ONLY the final text without commentary, markdown headers, or quotation wrappers."
         )
     else:
         user_prompt = (
-            f"Enhance the following text according to the context and instructions.\n\n"
-            f"=== CONTEXT ===\n" + "\n".join(context_summary_lines) + "\n\n"
+            "Enhance the following text according to the context and instructions.\n\n"
+            "=== CONTEXT ===\n" + "\n".join(context_summary_lines) + "\n\n"
             f"=== USER DRAFT ===\n{raw_text}\n\n"
             f"{instruction_guidance}\n"
-            f"Output ONLY the enhanced text without preamble, explanations, or meta-commentary."
+            "Output ONLY the enhanced text without preamble, explanations, or meta-commentary."
         )
 
     messages = [
@@ -342,4 +342,4 @@ async def enrich_text(
             "Enrichment failed: %s",
             sanitize_log_value(str(exc)),
         )
-        raise HTTPException(status_code=500, detail="AI enrichment failed.")
+        raise HTTPException(status_code=500, detail="AI enrichment failed.") from exc

@@ -10,7 +10,6 @@ from app.config import ModelProfile
 from app.engine.llm_client import LLMClient
 from app.prompts.defaults import (
     DEFAULT_CLERK_WORLD_START_PLACEMENT_SYSTEM,
-    PROMPT_KEY_CLERK_WORLD_START_PLACEMENT,
 )
 from app.schemas.character import CharacterRecord
 from app.schemas.world import LocationNode, WorldRecord

@@ -1,0 +1,327 @@
+source_roots = ["."]
+exclude = [
+    ".venv",
+    "tests",
+    "__pycache__",
+]
+# Intentional runtime coupling remains between config<->providers (ModelProfile.resolved),
+# db<->providers (vector_math endpoint resolution), db<->engine.affective_engine,
+# and facade<->subpackage monkeypatch hooks; strict layered dependencies still block
+# any lower layer from importing services, routers, wizards, or main.
+forbid_circular_dependencies = false
+
+[[modules]]
+path = "app.security"
+depends_on = []
+
+[[modules]]
+path = "app.prompts"
+depends_on = []
+
+[[modules]]
+path = "app.config"
+depends_on = [
+    "app.providers",
+]
+
+[[modules]]
+path = "app.schemas"
+depends_on = [
+    "app.config",
+]
+
+[[modules]]
+path = "app.providers"
+depends_on = [
+    "app.config",
+    "app.db",
+    "app.schemas",
+    "app.security",
+]
+
+[[modules]]
+path = "app.db"
+depends_on = [
+    "app.config",
+    "app.engine.affective_engine",
+    "app.prompts",
+    "app.providers",
+    "app.schemas",
+    "app.security",
+]
+
+[[modules]]
+path = "app.auth"
+depends_on = [
+    "app.config",
+    "app.db",
+    "app.providers",
+    "app.schemas",
+]
+
+[[modules]]
+path = "app.dependencies"
+depends_on = [
+    "app.auth",
+    "app.config",
+    "app.db",
+    "app.providers",
+    "app.schemas",
+    "app.security",
+]
+
+[[modules]]
+path = "app.engine"
+depends_on = []
+
+[[modules]]
+path = "app.engine.affective"
+depends_on = [
+    "app.schemas",
+]
+
+[[modules]]
+path = "app.engine.affective_engine"
+depends_on = [
+    "app.engine.affective",
+    "app.schemas",
+]
+
+[[modules]]
+path = "app.engine.mentions"
+depends_on = [
+    "app.schemas",
+]
+
+[[modules]]
+path = "app.engine.world_clock"
+depends_on = [
+    "app.schemas",
+]
+
+[[modules]]
+path = "app.engine.llm_client"
+depends_on = [
+    "app.config",
+    "app.providers",
+    "app.security",
+]
+
+[[modules]]
+path = "app.engine.choices"
+depends_on = [
+    "app.engine.phase1_pre",
+    "app.schemas",
+]
+
+[[modules]]
+path = "app.engine.phase1_pre"
+depends_on = [
+    "app.config",
+    "app.engine.choices",
+    "app.engine.llm_client",
+    "app.engine.mentions",
+    "app.prompts",
+    "app.schemas",
+]
+
+[[modules]]
+path = "app.engine.context"
+depends_on = [
+    "app.config",
+    "app.db",
+    "app.engine.affective_engine",
+    "app.engine.choices",
+    "app.engine.mentions",
+    "app.engine.world_clock",
+    "app.prompts",
+    "app.providers",
+    "app.schemas",
+]
+
+[[modules]]
+path = "app.engine.phase2_context"
+depends_on = [
+    "app.config",
+    "app.db",
+    "app.engine.affective_engine",
+    "app.engine.context",
+    "app.engine.mentions",
+    "app.engine.world_clock",
+    "app.prompts",
+    "app.schemas",
+]
+
+[[modules]]
+path = "app.engine.cognition"
+depends_on = [
+    "app.config",
+    "app.engine.affective_engine",
+    "app.engine.choices",
+    "app.engine.llm_client",
+    "app.engine.mentions",
+    "app.engine.phase2_context",
+    "app.prompts",
+    "app.schemas",
+]
+
+[[modules]]
+path = "app.engine.phase3_cognition"
+depends_on = [
+    "app.config",
+    "app.engine.affective_engine",
+    "app.engine.cognition",
+    "app.engine.llm_client",
+    "app.engine.mentions",
+    "app.engine.phase2_context",
+    "app.prompts",
+    "app.schemas",
+]
+
+[[modules]]
+path = "app.engine.phase4_prose"
+depends_on = [
+    "app.config",
+    "app.engine.llm_client",
+    "app.engine.mentions",
+    "app.engine.phase3_cognition",
+    "app.schemas",
+]
+
+[[modules]]
+path = "app.engine.phase3_actor"
+depends_on = [
+    "app.engine.llm_client",
+    "app.engine.phase3_cognition",
+    "app.engine.phase4_prose",
+    "app.schemas",
+]
+
+[[modules]]
+path = "app.engine.char_agent"
+depends_on = [
+    "app.config",
+    "app.engine.affective_engine",
+    "app.engine.llm_client",
+    "app.engine.mentions",
+    "app.prompts",
+    "app.schemas",
+]
+
+[[modules]]
+path = "app.engine.character_agent"
+depends_on = [
+    "app.config",
+    "app.engine.affective_engine",
+    "app.engine.char_agent",
+    "app.engine.llm_client",
+    "app.engine.mentions",
+    "app.prompts",
+    "app.schemas",
+]
+
+[[modules]]
+path = "app.engine.clerk"
+depends_on = [
+    "app.config",
+    "app.db",
+    "app.engine.affective_engine",
+    "app.engine.character_agent",
+    "app.engine.llm_client",
+    "app.engine.mentions",
+    "app.engine.phase2_context",
+    "app.engine.world_clock",
+    "app.prompts",
+    "app.schemas",
+]
+
+[[modules]]
+path = "app.engine.phase5_clerk"
+depends_on = [
+    "app.config",
+    "app.db",
+    "app.engine.affective_engine",
+    "app.engine.character_agent",
+    "app.engine.clerk",
+    "app.engine.llm_client",
+    "app.engine.mentions",
+    "app.engine.phase2_context",
+    "app.engine.world_clock",
+    "app.prompts",
+    "app.schemas",
+]
+
+[[modules]]
+path = "app.engine.phase4_clerk"
+depends_on = [
+    "app.engine.phase5_clerk",
+]
+
+[[modules]]
+path = "app.engine.clerk_placement"
+depends_on = [
+    "app.config",
+    "app.engine.llm_client",
+    "app.prompts",
+    "app.schemas",
+]
+
+[[modules]]
+path = "app.wizards"
+depends_on = [
+    "app.config",
+    "app.db",
+    "app.engine.llm_client",
+    "app.prompts",
+    "app.schemas",
+]
+
+[[modules]]
+path = "app.services"
+depends_on = [
+    "app.config",
+    "app.db",
+    "app.dependencies",
+    "app.schemas",
+    "app.wizards",
+]
+
+[[modules]]
+path = "app.routers"
+depends_on = [
+    "app.auth",
+    "app.config",
+    "app.db",
+    "app.dependencies",
+    "app.engine.affective_engine",
+    "app.engine.choices",
+    "app.engine.clerk_placement",
+    "app.engine.llm_client",
+    "app.engine.mentions",
+    "app.engine.phase1_pre",
+    "app.engine.phase2_context",
+    "app.engine.phase3_actor",
+    "app.engine.phase3_cognition",
+    "app.engine.phase4_clerk",
+    "app.engine.phase4_prose",
+    "app.engine.phase5_clerk",
+    "app.prompts",
+    "app.providers",
+    "app.schemas",
+    "app.security",
+    "app.services",
+    "app.wizards",
+]
+
+[[modules]]
+path = "app.main"
+depends_on = [
+    "app.auth",
+    "app.config",
+    "app.db",
+    "app.dependencies",
+    "app.engine.llm_client",
+    "app.providers",
+    "app.routers",
+    "app.security",
+]

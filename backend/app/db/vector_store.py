@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 import json
 import sqlite3
+from typing import Any
 
 import numpy as np
 
@@ -373,7 +374,6 @@ class VectorStore:
         rrf_rank_map = {cid: idx for idx, (cid, _val) in enumerate(fused_pairs)}
         max_rrf = 2.0 / 61.0
 
-        by_id = {c["id"]: c for c in pre_scored}
         ordered_candidates = sorted(
             pre_scored,
             key=lambda c: (

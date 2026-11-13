@@ -1,6 +1,6 @@
 import React from "react";
 import { WorldRecord } from "../../types";
-import { ClickToEditField } from "../EntityEditorModals";
+import { ClickToEditField } from "../shared/ClickToEditField";
 import { TagChipsInput } from "../TagChipsInput";
 
 export interface CharacterBaseData {

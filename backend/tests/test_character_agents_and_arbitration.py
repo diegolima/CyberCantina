@@ -40,6 +40,7 @@ from app.schemas.turn import (
     ExtractedCharacterMemory,
     ImprovisedLocationSpec,
     InventoryArbitrationResult,
+    Phase4ProgressEvent,
     PreTurnAnalysis,
     WorldPostTurnDelta,
 )

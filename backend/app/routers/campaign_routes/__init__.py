@@ -1,4 +1,11 @@
-"""Campaign REST & SSE endpoints package."""
+"""Campaign REST & SSE endpoints package.
+
+Submodules:
+- `schemas_and_gate`: Request schemas, `CampaignTurnGate` concurrency lock, and facade attribute helpers
+- `crud_and_state`: Campaign CRUD, turn/branch checkout, and bundle retrieval routes
+- `spatial_routes`: In-campaign linked locations, edges, and lore/container overrides
+- `turn_streaming`: SSE 5-phase turn streaming (`/turn/stream`) and synchronous `/turn` endpoint
+"""
 
 from __future__ import annotations
 

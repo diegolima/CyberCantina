@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import random
 import re
 
@@ -17,7 +18,6 @@ from app.schemas.character import (
 from app.schemas.persona import (
     DisclosureDetectionMode,
     PersonaItemInstance,
-    PersonaLoreEntry,
     PersonaRecord,
 )
 from app.schemas.turn import (
@@ -25,7 +25,6 @@ from app.schemas.turn import (
     CharacterCheckSpec,
     CharacterChoiceSet,
     CheckRole,
-    ChoiceResolution,
     DiceMode,
     DiceRollResult,
     MechanicsTrigger,
