@@ -16,6 +16,7 @@
 - **Tag & Keyword Inputs**: Always use `TagChipsInput` (`frontend/src/components/TagChipsInput.tsx`) for tag/keyword arrays. Never bind `<input value={tags.join(", ")}>` with `.split(",").filter(Boolean)` in `onChange`, which deletes spaces and trailing commas on every keystroke.
 - **Semantic Accents**: Reserve `--accent-rose` / red strictly for errors, validation failures, and destructive actions. Assistive AI extract/populate actions must use `--accent-amber` or `--accent-violet` with `Sparkles`.
 - **Dynamic Node Modals & Creation Flows**: Keep primary `+ Add` headers sticky inside long node editors and scroll/focus newly appended entries into view. Separate catalog saving (`Save Character`) from optional session launch toggles (`Immediately start a campaign`).
+- **Map Topology Editor Contracts (`v0.10.1+`)**: Keep `SpatialTopologyView` / `SpatialTopologyCanvas` deletions (`Delete` key, `"X"` quick-delete) single-snapshot Undo-backed without extra confirmation modals while surfacing `canDeleteLocation` / `canDeleteContainer` block reasons via `statusNotice`. Render hover quick-delete `"X"` controls **only** in `mode === "editor"` (`!isMutatingLocked`) on the top-right corner of distance badges (no full-line red recoloring), hide `· N` bundle suffixes when `groupedCount <= 1`, and scope map `MagicWandButton` controls (`MapDetailsDrawer.tsx`) strictly to Level 0 Locations and Level 1 (`depth === 1`) Containers (omitted on Levels 2–4).
 
 ## Feature Specifications & Lifecycle Artifacts
 - **Feature Packages (`docs/features/<target_version>-<feature-slug>/`)**: Active feature requirements (`FRD.md`), architectural designs (`ARCHITECTURE.md`), pre-implementation reviews (`REVIEW.md`), and execution plans (`PLAN.md`) are colocated in versioned directories.
@@ -24,6 +25,7 @@
 ## Verification & Debugging
 - **Character Media Path & Log Boundaries**: All character ID validation and media filesystem operations (`shutil.copytree`, `shutil.rmtree`, `FileResponse`, `unlink`, image saves) must route through `backend/app/security/media_path.py` (`validate_safe_character_id`, `safe_resolve_character_media_dir`, `safe_resolve_media_file_path`) rather than raw `Path(self.media_dir)` joins, and client-influenced log values must pass through `sanitize_log_value` (`backend/app/security/log_sanitize.py`).
 - **Live Output Diagnostics**: When debugging user-reported generation issues, inspect saved rows directly in `backend/cybercantina.db` via `sqlite3` to verify whether defects stem from LLM output, fallback imputation, or frontend rendering.
+- **Frontend Vitest (Node-Only Environment)**: `frontend/package.json` runs Vitest without `jsdom` or `@testing-library/react`; keep non-DOM UI logic in pure helpers (`mapGeometry.ts`, `topologyProjection.ts`, etc.) and pair unit tests with `ReactDOMServer.renderToStaticMarkup` component assertions.
 - **Required Checks Before Completion**:
   - Backend: `cd backend && .venv/bin/ruff check app tests && .venv/bin/tach check` and `backend/.venv/bin/pytest backend/tests`
   - Frontend: `npm --prefix frontend run arch:check && npm --prefix frontend run build && npm --prefix frontend test`
