@@ -1,0 +1,1005 @@
+import React, { useState } from "react";
+import {
+  AlertTriangle,
+  Fingerprint,
+  KeyRound,
+  RefreshCw,
+  Trash2,
+} from "lucide-react";
+import { api } from "../../api";
+import { AuthStatusResponse, PasskeyInfo, UserProfile } from "../../types";
+
+export interface ProfileAccountTabProps {
+  user: UserProfile;
+  singleUserMode: boolean;
+  setStatusMsg: (msg: string | null) => void;
+  setErrorMsg: (msg: string | null) => void;
+  setFeedback: (
+    fb: {
+      type: "success" | "error";
+      title: string;
+      message: string;
+      onConfirm: () => void;
+    } | null
+  ) => void;
+  onUserUpdated: (updated: UserProfile, singleUserMode?: boolean) => void;
+  onAccountReset: () => Promise<void>;
+  onAccountDeleted: () => Promise<void>;
+  onClose: () => void;
+}
+
+export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
+  user,
+  singleUserMode,
+  setStatusMsg,
+  setErrorMsg,
+  setFeedback,
+  onUserUpdated,
+  onAccountReset,
+  onAccountDeleted,
+  onClose,
+}) => {
+  // Password change state
+  const [currentPasswordForPwd, setCurrentPasswordForPwd] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [showBlankPwdConfirm, setShowBlankPwdConfirm] = useState(false);
+  const [savingPwd, setSavingPwd] = useState(false);
+
+  // Passkey add / renew / delete state
+  const [passkeyLabel, setPasskeyLabel] = useState("");
+  const [currentPasswordForPasskey, setCurrentPasswordForPasskey] =
+    useState("");
+  const [renewTarget, setRenewTarget] = useState<PasskeyInfo | null>(null);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
+
+  // Danger Zone: Reset Account Data & Delete Account
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [resetConfirmPwd, setResetConfirmPwd] = useState("");
+  const [resetBusy, setResetBusy] = useState(false);
+
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteConfirmPwd, setDeleteConfirmPwd] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
+  const handleChangePassword = async (
+    e: React.FormEvent,
+    confirmBlank: boolean = false
+  ) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    setStatusMsg(null);
+
+    if (user.has_password && !currentPasswordForPwd) {
+      setErrorMsg("Please confirm your current password before making changes.");
+      return;
+    }
+
+    if (newPassword && newPassword !== confirmNewPassword) {
+      setErrorMsg("New passwords do not match.");
+      return;
+    }
+
+    if (!newPassword) {
+      if (user.role !== "admin") {
+        setErrorMsg("Standard user accounts cannot have a blank password.");
+        return;
+      }
+      if (!confirmBlank) {
+        setShowBlankPwdConfirm(true);
+        return;
+      }
+    }
+
+    setSavingPwd(true);
+    try {
+      const res: AuthStatusResponse = await api.changePassword({
+        current_password: currentPasswordForPwd,
+        new_password: newPassword,
+        confirm_blank_password: confirmBlank,
+      });
+      setCurrentPasswordForPwd("");
+      setNewPassword("");
+      setConfirmNewPassword("");
+      setShowBlankPwdConfirm(false);
+      if (res.user) {
+        onUserUpdated(res.user, res.single_user_mode);
+      }
+      setStatusMsg(
+        newPassword
+          ? "Password updated. Multi-user support is active."
+          : "Password cleared. Switched to single-user local mode."
+      );
+    } catch (err: any) {
+      setErrorMsg(err?.message || "Failed to change password.");
+    } finally {
+      setSavingPwd(false);
+    }
+  };
+
+  const handleAddOrRenewPasskey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    setStatusMsg(null);
+
+    if (!user.has_password) {
+      setErrorMsg("Set a password on your account before adding passkeys.");
+      return;
+    }
+
+    if (!currentPasswordForPasskey) {
+      setErrorMsg(
+        "Please confirm your current password before adding or renewing a passkey."
+      );
+      return;
+    }
+
+    const label =
+      passkeyLabel.trim() ||
+      (renewTarget ? renewTarget.friendly_name : `Passkey #${user.passkeys.length + 1}`);
+
+    setPasskeyBusy(true);
+    try {
+      const updated = await api.registerPasskey({
+        current_password: currentPasswordForPasskey,
+        friendly_name: label,
+        replace_credential_id: renewTarget ? renewTarget.id : null,
+      });
+      onUserUpdated(updated);
+      setStatusMsg(
+        renewTarget
+          ? `Passkey "${label}" renewed.`
+          : `Passkey "${label}" registered.`
+      );
+      setPasskeyLabel("");
+      setCurrentPasswordForPasskey("");
+      setRenewTarget(null);
+    } catch (err: any) {
+      setErrorMsg(err?.message || "Passkey registration failed.");
+    } finally {
+      setPasskeyBusy(false);
+    }
+  };
+
+  const handleConfirmDeletePasskey = async (credentialId: string) => {
+    setErrorMsg(null);
+    setStatusMsg(null);
+    if (!currentPasswordForPasskey) {
+      setErrorMsg(
+        "Enter your current password in the Passkey confirmation field to remove a passkey."
+      );
+      return;
+    }
+    setPasskeyBusy(true);
+    try {
+      const updated = await api.deletePasskey(
+        credentialId,
+        currentPasswordForPasskey
+      );
+      onUserUpdated(updated);
+      setDeleteTargetId(null);
+      setCurrentPasswordForPasskey("");
+      setStatusMsg("Passkey removed.");
+    } catch (err: any) {
+      setErrorMsg(err?.message || "Failed to remove passkey.");
+    } finally {
+      setPasskeyBusy(false);
+    }
+  };
+
+  const handleConfirmResetData = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    setStatusMsg(null);
+    if (user.has_password && !resetConfirmPwd) {
+      setFeedback({
+        type: "error",
+        title: "Password Required",
+        message:
+          "Please enter your current password to confirm account data reset.",
+        onConfirm: () => setFeedback(null),
+      });
+      return;
+    }
+    setResetBusy(true);
+    try {
+      await api.resetProfileData({ current_password: resetConfirmPwd });
+      setFeedback({
+        type: "success",
+        title: "Account Data Reset",
+        message:
+          "All your characters, worlds, and campaigns have been successfully deleted.",
+        onConfirm: async () => {
+          setFeedback(null);
+          setResetConfirmPwd("");
+          setShowResetConfirm(false);
+          await onAccountReset();
+        },
+      });
+    } catch (err: any) {
+      setFeedback({
+        type: "error",
+        title: "Account Reset Error",
+        message:
+          err?.message ||
+          "Failed to reset account data. Please check your password and try again.",
+        onConfirm: () => {
+          setFeedback(null);
+          setResetConfirmPwd("");
+        },
+      });
+    } finally {
+      setResetBusy(false);
+    }
+  };
+
+  const handleConfirmDeleteAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    setStatusMsg(null);
+    if (user.has_password && !deleteConfirmPwd) {
+      setFeedback({
+        type: "error",
+        title: "Password Required",
+        message:
+          "Please enter your current password to confirm account deletion.",
+        onConfirm: () => setFeedback(null),
+      });
+      return;
+    }
+    setDeleteBusy(true);
+    try {
+      await api.deleteProfileAccount({ current_password: deleteConfirmPwd });
+      setFeedback({
+        type: "success",
+        title: "Account Deleted",
+        message:
+          "Your account and all associated characters, worlds, and campaigns have been permanently deleted.",
+        onConfirm: async () => {
+          setFeedback(null);
+          setDeleteConfirmPwd("");
+          setShowDeleteConfirm(false);
+          onClose();
+          await onAccountDeleted();
+        },
+      });
+    } catch (err: any) {
+      setFeedback({
+        type: "error",
+        title: "Account Deletion Error",
+        message:
+          err?.message ||
+          "Failed to delete account. Please check your password and try again.",
+        onConfirm: () => {
+          setFeedback(null);
+          setDeleteConfirmPwd("");
+        },
+      });
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
+  return (
+            <>
+              <form
+                onSubmit={(e) => handleChangePassword(e, false)}
+            style={{
+              background: "var(--bg-card)",
+              border: "1px solid var(--border-subtle)",
+              borderRadius: 8,
+              padding: 14,
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <span
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontWeight: 600,
+                  fontSize: "0.86rem",
+                }}
+              >
+                <KeyRound size={15} color="var(--accent-amber)" />
+                {user.has_password ? "Change Password" : "Set Account Password"}
+              </span>
+              {singleUserMode && (
+                <span
+                  style={{
+                    fontSize: "0.72rem",
+                    color: "var(--accent-amber)",
+                  }}
+                >
+                  Single-User Mode Active (Passwordless)
+                </span>
+              )}
+            </div>
+
+            {user.has_password && (
+              <div className="form-group">
+                <label className="form-label">
+                  Confirm Current Password (Required)
+                </label>
+                <input
+                  type="password"
+                  className="form-input"
+                  value={currentPasswordForPwd}
+                  onChange={(e) => setCurrentPasswordForPwd(e.target.value)}
+                  placeholder="Enter your current password to confirm..."
+                />
+              </div>
+            )}
+
+            <div className="grid-2">
+              <div className="form-group">
+                <label className="form-label">New Password</label>
+                <input
+                  type="password"
+                  className="form-input"
+                  value={newPassword}
+                  onChange={(e) => {
+                    setNewPassword(e.target.value);
+                    if (e.target.value) setShowBlankPwdConfirm(false);
+                  }}
+                  placeholder={
+                    user.role === "admin"
+                      ? "New password (or blank if sole user)"
+                      : "Enter new password..."
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Confirm New Password</label>
+                <input
+                  type="password"
+                  className="form-input"
+                  value={confirmNewPassword}
+                  onChange={(e) => setConfirmNewPassword(e.target.value)}
+                  placeholder="Repeat new password..."
+                />
+              </div>
+            </div>
+
+            {showBlankPwdConfirm && !newPassword && (
+              <div className="auth-warning-box">
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    fontWeight: 700,
+                    color: "var(--accent-amber)",
+                    marginBottom: 4,
+                  }}
+                >
+                  <AlertTriangle size={15} />
+                  <span>Confirm Blank Admin Password?</span>
+                </div>
+                <p
+                  style={{
+                    fontSize: "0.76rem",
+                    color: "var(--text-secondary)",
+                    marginBottom: 8,
+                  }}
+                >
+                  Leaving the admin password blank will disable multi-user
+                  support and enable automatic login. This is only allowed when
+                  no other users exist in the system.
+                </p>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "flex-end",
+                    gap: 8,
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => setShowBlankPwdConfirm(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-amber"
+                    onClick={(e) => handleChangePassword(e, true)}
+                    disabled={savingPwd}
+                  >
+                    Confirm Blank Password
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!showBlankPwdConfirm && (
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  type="submit"
+                  className="btn btn-amber"
+                  disabled={savingPwd}
+                >
+                  {savingPwd
+                    ? "Updating..."
+                    : user.has_password
+                    ? "Update Password"
+                    : "Set Password & Enable Multi-User"}
+                </button>
+              </div>
+            )}
+          </form>
+
+          {/* 3. Passkeys Management (Multiple Passkeys Supported) */}
+          <div
+            style={{
+              background: "var(--bg-card)",
+              border: "1px solid var(--border-subtle)",
+              borderRadius: 8,
+              padding: 14,
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <span
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontWeight: 600,
+                  fontSize: "0.86rem",
+                }}
+              >
+                <Fingerprint size={16} color="var(--accent-cyan)" />
+                Passkeys ({user.passkeys.length})
+              </span>
+              <span
+                style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}
+              >
+                WebAuthn / FIDO2 Hardware &amp; Platform Keys
+              </span>
+            </div>
+
+            {!user.has_password ? (
+              <div
+                style={{
+                  fontSize: "0.78rem",
+                  color: "var(--text-secondary)",
+                  padding: "6px 0",
+                }}
+              >
+                Set an account password above first to register or renew
+                passkeys.
+              </div>
+            ) : (
+              <>
+                {user.passkeys.length > 0 ? (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                    }}
+                  >
+                    {user.passkeys.map((pk) => {
+                      const isRenewing = renewTarget?.id === pk.id;
+                      const isDeleting = deleteTargetId === pk.id;
+                      return (
+                        <div
+                          key={pk.id}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            padding: "8px 10px",
+                            borderRadius: 6,
+                            background: "var(--bg-deep)",
+                            border: `1px solid ${
+                              isRenewing
+                                ? "var(--accent-cyan)"
+                                : "var(--border-subtle)"
+                            }`,
+                          }}
+                        >
+                          <div>
+                            <div
+                              style={{
+                                fontWeight: 600,
+                                fontSize: "0.82rem",
+                                color: "var(--text-primary)",
+                              }}
+                            >
+                              {pk.friendly_name}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: "0.7rem",
+                                color: "var(--text-muted)",
+                              }}
+                            >
+                              Added {pk.created_at.slice(0, 10)} • Last used{" "}
+                              {pk.last_used_at.slice(0, 10)}
+                            </div>
+                          </div>
+
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button
+                              type="button"
+                              className="btn"
+                              style={{
+                                padding: "4px 8px",
+                                fontSize: "0.72rem",
+                                borderColor: isRenewing
+                                  ? "var(--accent-cyan)"
+                                  : undefined,
+                              }}
+                              onClick={() => {
+                                setDeleteTargetId(null);
+                                if (isRenewing) {
+                                  setRenewTarget(null);
+                                  setPasskeyLabel("");
+                                } else {
+                                  setRenewTarget(pk);
+                                  setPasskeyLabel(pk.friendly_name);
+                                }
+                              }}
+                              disabled={passkeyBusy}
+                              title="Renew this passkey with a fresh WebAuthn credential"
+                            >
+                              <RefreshCw size={12} />
+                              <span>{isRenewing ? "Cancel Renew" : "Renew"}</span>
+                            </button>
+
+                            {isDeleting ? (
+                              <button
+                                type="button"
+                                className="btn"
+                                style={{
+                                  padding: "4px 8px",
+                                  fontSize: "0.72rem",
+                                  borderColor: "var(--accent-rose)",
+                                  color: "var(--accent-rose)",
+                                }}
+                                onClick={() => handleConfirmDeletePasskey(pk.id)}
+                                disabled={passkeyBusy}
+                              >
+                                Confirm Remove
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="btn"
+                                style={{
+                                  padding: "4px 8px",
+                                  fontSize: "0.72rem",
+                                }}
+                                onClick={() => {
+                                  setRenewTarget(null);
+                                  setDeleteTargetId(pk.id);
+                                }}
+                                disabled={passkeyBusy}
+                                title="Remove passkey"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      fontSize: "0.78rem",
+                      color: "var(--text-muted)",
+                      padding: "4px 0",
+                    }}
+                  >
+                    No passkeys registered yet. Add one below for passwordless
+                    one-tap sign-in.
+                  </div>
+                )}
+
+                <form
+                  onSubmit={handleAddOrRenewPasskey}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 10,
+                    marginTop: 4,
+                    paddingTop: 10,
+                    borderTop: "1px solid var(--border-subtle)",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "0.78rem",
+                      fontWeight: 600,
+                      color: renewTarget
+                        ? "var(--accent-cyan)"
+                        : "var(--text-secondary)",
+                    }}
+                  >
+                    {renewTarget
+                      ? `Renewing Passkey: "${renewTarget.friendly_name}"`
+                      : "Add New Passkey"}
+                  </div>
+
+                  <div className="grid-2">
+                    <div className="form-group">
+                      <label className="form-label">Passkey Name / Label</label>
+                      <input
+                        type="text"
+                        className="form-input"
+                        value={passkeyLabel}
+                        onChange={(e) => setPasskeyLabel(e.target.value)}
+                        placeholder="e.g. MacBook Touch ID, YubiKey"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">
+                        Confirm Password (Required)
+                      </label>
+                      <input
+                        type="password"
+                        className="form-input"
+                        value={currentPasswordForPasskey}
+                        onChange={(e) =>
+                          setCurrentPasswordForPasskey(e.target.value)
+                        }
+                        placeholder="Current password..."
+                      />
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "flex-end",
+                      gap: 8,
+                    }}
+                  >
+                    {renewTarget && (
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => {
+                          setRenewTarget(null);
+                          setPasskeyLabel("");
+                        }}
+                      >
+                        Cancel Renewal
+                      </button>
+                    )}
+                    <button
+                      type="submit"
+                      className="btn btn-cyan"
+                      disabled={passkeyBusy}
+                    >
+                      <Fingerprint size={14} />
+                      <span>
+                        {passkeyBusy
+                          ? "Waiting for Authenticator..."
+                          : renewTarget
+                          ? "Confirm & Renew Passkey"
+                          : "Add Passkey"}
+                      </span>
+                    </button>
+                  </div>
+                </form>
+              </>
+            )}
+          </div>
+
+          {/* 4. Danger Zone: Reset Data & Delete Account */}
+          <div
+            style={{
+              background: "var(--bg-card)",
+              border: "1px solid rgba(244, 63, 94, 0.35)",
+              borderRadius: 8,
+              padding: 14,
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <span
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontWeight: 600,
+                  fontSize: "0.86rem",
+                  color: "#fda4af",
+                }}
+              >
+                <AlertTriangle size={16} />
+                Danger Zone: Account Reset &amp; Deletion
+              </span>
+            </div>
+
+            {/* Sub-item A: Reset Account Data */}
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+                padding: "10px 12px",
+                background: "var(--bg-deep)",
+                borderRadius: 6,
+                border: "1px solid var(--border-subtle)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: "0.82rem" }}>
+                    Reset Account Data
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "0.72rem",
+                      color: "var(--text-secondary)",
+                      marginTop: 2,
+                    }}
+                  >
+                    Permanently delete all your characters, worlds, and campaigns.
+                    Your login credentials and passkeys will remain active.
+                  </div>
+                </div>
+                {!showResetConfirm && (
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    style={{
+                      padding: "5px 10px",
+                      fontSize: "0.74rem",
+                      whiteSpace: "nowrap",
+                    }}
+                    onClick={() => {
+                      setShowResetConfirm(true);
+                      setShowDeleteConfirm(false);
+                      setResetConfirmPwd("");
+                    }}
+                  >
+                    Reset Data
+                  </button>
+                )}
+              </div>
+
+              {showResetConfirm && (
+                <form
+                  onSubmit={handleConfirmResetData}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                    marginTop: 6,
+                    paddingTop: 8,
+                    borderTop: "1px solid rgba(244, 63, 94, 0.2)",
+                  }}
+                >
+                  <div style={{ fontSize: "0.75rem", color: "#fda4af" }}>
+                    Are you sure? This will immediately purge all your
+                    campaigns, worlds, and characters.
+                  </div>
+                  {user.has_password && (
+                    <div className="form-group">
+                      <label
+                        className="form-label"
+                        style={{ fontSize: "0.72rem" }}
+                      >
+                        Confirm Password
+                      </label>
+                      <input
+                        type="password"
+                        className="form-input"
+                        value={resetConfirmPwd}
+                        onChange={(e) => setResetConfirmPwd(e.target.value)}
+                        placeholder="Current password to confirm reset..."
+                        required
+                      />
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "flex-end",
+                      gap: 8,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => setShowResetConfirm(false)}
+                      disabled={resetBusy}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="btn btn-danger"
+                      disabled={resetBusy}
+                    >
+                      {resetBusy
+                        ? "Resetting..."
+                        : "Confirm Reset Account Data"}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+
+            {/* Sub-item B: Delete Account (Regular Users) */}
+            {user.role === "user" ? (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                  padding: "10px 12px",
+                  background: "var(--bg-deep)",
+                  borderRadius: 6,
+                  border: "1px solid var(--border-subtle)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 12,
+                  }}
+                >
+                  <div>
+                    <div
+                      style={{
+                        fontWeight: 600,
+                        fontSize: "0.82rem",
+                        color: "#fda4af",
+                      }}
+                    >
+                      Delete Account
+                    </div>
+                    <div
+                      style={{
+                        fontSize: "0.72rem",
+                        color: "var(--text-secondary)",
+                        marginTop: 2,
+                      }}
+                    >
+                      Permanently delete your user account, login credentials,
+                      passkeys, and all created characters, worlds, and
+                      campaigns.
+                    </div>
+                  </div>
+                  {!showDeleteConfirm && (
+                    <button
+                      type="button"
+                      className="btn btn-danger"
+                      style={{
+                        padding: "5px 10px",
+                        fontSize: "0.74rem",
+                        whiteSpace: "nowrap",
+                      }}
+                      onClick={() => {
+                        setShowDeleteConfirm(true);
+                        setShowResetConfirm(false);
+                        setDeleteConfirmPwd("");
+                      }}
+                    >
+                      Delete Account
+                    </button>
+                  )}
+                </div>
+
+                {showDeleteConfirm && (
+                  <form
+                    onSubmit={handleConfirmDeleteAccount}
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                      marginTop: 6,
+                      paddingTop: 8,
+                      borderTop: "1px solid rgba(244, 63, 94, 0.2)",
+                    }}
+                  >
+                    <div style={{ fontSize: "0.75rem", color: "#fda4af" }}>
+                      This action is irreversible. Your account and all
+                      associated data will be permanently destroyed.
+                    </div>
+                    {user.has_password && (
+                      <div className="form-group">
+                        <label
+                          className="form-label"
+                          style={{ fontSize: "0.72rem" }}
+                        >
+                          Confirm Password
+                        </label>
+                        <input
+                          type="password"
+                          className="form-input"
+                          value={deleteConfirmPwd}
+                          onChange={(e) => setDeleteConfirmPwd(e.target.value)}
+                          placeholder="Current password to confirm account deletion..."
+                          required
+                        />
+                      </div>
+                    )}
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "flex-end",
+                        gap: 8,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => setShowDeleteConfirm(false)}
+                        disabled={deleteBusy}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        className="btn btn-danger"
+                        disabled={deleteBusy}
+                      >
+                        {deleteBusy
+                          ? "Deleting..."
+                          : "Confirm Delete My Account"}
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            ) : (
+              <div
+                style={{
+                  fontSize: "0.72rem",
+                  color: "var(--text-muted)",
+                  padding: "4px 2px",
+                }}
+              >
+                Administrator accounts can be managed and deleted from the Admin
+                Area (as long as at least 1 admin user remains).
+              </div>
+            )}
+          </div>
+            </>
+  );
+};

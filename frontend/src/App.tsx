@@ -1,259 +1,35 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  Cpu,
-  Flame,
-  FolderKanban,
-  Globe,
-  LogOut,
-  Plus,
-  Search,
-  StickyNote,
-  User,
-  UserCheck,
-  UserCog,
-  Users,
-  X,
-} from "lucide-react";
-import {
   api,
   setOnUnauthorizedHandler,
   setStoredSessionToken,
-  streamCampaignTurn,
 } from "./api";
 import {
-  AdminModal,
   AuthScreen,
   InitialSetupScreen,
-  ProfileModal,
 } from "./components/AuthModals";
 import { ChatStage } from "./components/ChatStage";
-import {
-  CharacterInspectorModal,
-  WorldInspectorModal,
-} from "./components/EntityEditorModals";
+import { type DeleteTarget } from "./components/DeleteConfirmationModal";
 import { LiveInspector } from "./components/LiveInspector";
 import { HomeScreen } from "./components/HomeScreen";
-import { NewCampaignModal } from "./components/NewCampaignModal";
-import { NotesFlyout, NotesModal } from "./components/NotesDrawer";
-import { PersonaEditorModal } from "./components/PersonaEditorModal";
-import {
-  LocalRelayProvider,
-  useOptionalLocalRelay,
-} from "./providers/LocalRelayContext";
-import {
-  CharacterWizardModal,
-  WorldWizardModal,
-} from "./components/WizardModals";
+import { AppSidebar } from "./components/AppSidebar";
+import { AppModals } from "./components/AppModals";
+import { NotesFlyout } from "./components/NotesDrawer";
+import { LocalRelayProvider } from "./providers/LocalRelayContext";
+import { useCampaignTurnActions } from "./hooks/useCampaignTurnActions";
 import { slugifyTag } from "./utils/noteSearch";
 import {
   AppSettings,
   AuthSessionResponse,
   CampaignRecord,
   CampaignStateBundle,
-  CharacterChoiceSet,
   CharacterRecord,
-  CognitionBlock,
-  DiceMode,
-  ItemEquipActionPayload,
-  LocationContainer,
-  LocationEdge,
-  LocationLoreNodeDraft,
-  LocationNode,
-  MemoryShard,
-  NarrativeMode,
   PersonaRecord,
-  Phase3AgentProgressItem,
-  Phase3TurnProgress,
-  Phase4AgentProgressItem,
-  Phase4TurnProgress,
-  PreTurnAnalysis,
   ProfileModelSettingsResponse,
-  RecalledMemoryItem,
   UserNote,
   UserProfile,
   WorldRecord,
 } from "./types";
-
-const PAGE_SIZE = 5;
-
-interface SidebarCategoryProps<T> {
-  title: string;
-  icon: React.ReactNode;
-  items: T[];
-  searchPlaceholder: string;
-  filterFn: (item: T, query: string) => boolean;
-  renderItem: (item: T) => React.ReactNode;
-  onNewClick?: () => void;
-  newButtonTitle?: string;
-  defaultExpanded?: boolean;
-}
-
-function SidebarCategory<T>({
-  title,
-  icon,
-  items,
-  searchPlaceholder,
-  filterFn,
-  renderItem,
-  onNewClick,
-  newButtonTitle,
-  defaultExpanded = false,
-}: SidebarCategoryProps<T>) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [page, setPage] = useState(0);
-
-  const normalizedQuery = searchQuery.trim().toLowerCase();
-  const filteredItems = normalizedQuery
-    ? items.filter((item) => filterFn(item, normalizedQuery))
-    : items;
-
-  const totalPages = Math.max(1, Math.ceil(filteredItems.length / PAGE_SIZE));
-  const safePage = Math.min(page, totalPages - 1);
-  const pagedItems = filteredItems.slice(
-    safePage * PAGE_SIZE,
-    (safePage + 1) * PAGE_SIZE
-  );
-
-  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setSearchQuery(e.target.value);
-    setPage(0);
-  };
-
-  return (
-    <div className="sidebar-section">
-      <div
-        className="sidebar-category-header"
-        onClick={() => setExpanded((prev) => !prev)}
-      >
-        <div className="sidebar-category-title">
-          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          {icon}
-          <span>
-            {title} ({items.length})
-          </span>
-        </div>
-
-        {onNewClick && (
-          <button
-            type="button"
-            className="btn"
-            style={{ padding: "2px 7px", fontSize: "0.68rem" }}
-            onClick={(e) => {
-              e.stopPropagation();
-              onNewClick();
-            }}
-            title={newButtonTitle}
-          >
-            <Plus size={11} /> New
-          </button>
-        )}
-      </div>
-
-      {expanded && (
-        <div className="sidebar-category-body">
-          <div className="sidebar-search-wrap">
-            <Search size={13} className="sidebar-search-icon" />
-            <input
-              type="text"
-              className="sidebar-search-input"
-              placeholder={searchPlaceholder}
-              value={searchQuery}
-              onChange={handleSearchChange}
-            />
-          </div>
-
-          <div className="campaign-list">
-            {pagedItems.length > 0 ? (
-              pagedItems.map((item) => renderItem(item))
-            ) : (
-              <div
-                style={{
-                  fontSize: "0.75rem",
-                  color: "var(--text-muted)",
-                  padding: "6px 4px",
-                  textAlign: "center",
-                }}
-              >
-                No matching entries
-              </div>
-            )}
-          </div>
-
-          {filteredItems.length > PAGE_SIZE && (
-            <div className="sidebar-pager">
-              <span>
-                {safePage * PAGE_SIZE + 1}–
-                {Math.min((safePage + 1) * PAGE_SIZE, filteredItems.length)} of{" "}
-                {filteredItems.length}
-              </span>
-              <div style={{ display: "flex", gap: 4 }}>
-                <button
-                  type="button"
-                  className="btn"
-                  style={{ padding: "2px 6px", fontSize: "0.68rem" }}
-                  disabled={safePage === 0}
-                  onClick={() => setPage((p) => Math.max(0, p - 1))}
-                >
-                  <ChevronLeft size={12} />
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  style={{ padding: "2px 6px", fontSize: "0.68rem" }}
-                  disabled={safePage >= totalPages - 1}
-                  onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-                >
-                  <ChevronRight size={12} />
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-const RelaySidebarBadge: React.FC = () => {
-  const relay = useOptionalLocalRelay();
-  if (!relay || !relay.hasBrowserProviders) return null;
-  const connected = relay.wsState === "connected";
-  return (
-    <div
-      className={`relay-status-pill ${connected ? "connected" : "offline"}`}
-      title={
-        relay.webgpuLoadedModel
-          ? `Browser relay ${relay.wsState} · WebGPU loaded: ${relay.webgpuLoadedModel}`
-          : `Browser inference relay: ${relay.wsState}`
-      }
-    >
-      <Cpu size={13} />
-      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {relay.webgpuLoadedModel
-          ? `GPU: ${relay.webgpuLoadedModel.split("-q4")[0]}`
-          : connected
-          ? "Browser Relay Ready"
-          : `Relay ${relay.wsState}…`}
-      </span>
-      {relay.webgpuLoadedModel && (
-        <button
-          type="button"
-          className="btn btn-ghost"
-          style={{ padding: "1px 5px", fontSize: "0.66rem" }}
-          onClick={() => void relay.unloadWebGpu()}
-          title="Unload WebGPU model from browser VRAM"
-        >
-          Unload
-        </button>
-      )}
-    </div>
-  );
-};
 
 export const App: React.FC = () => {
   const [authChecking, setAuthChecking] = useState(true);
@@ -382,47 +158,32 @@ export const App: React.FC = () => {
     }
   };
 
-  const [deleteTarget, setDeleteTarget] = useState<
-    | { kind: "campaign"; campaign: CampaignRecord }
-    | {
-        kind: "character";
-        character: CharacterRecord;
-        campaignsUsing: CampaignRecord[];
-      }
-    | {
-        kind: "world";
-        world: WorldRecord;
-        campaignsUsing: CampaignRecord[];
-      }
-    | {
-        kind: "persona";
-        persona: PersonaRecord;
-        campaignsUsing: CampaignRecord[];
-      }
-    | null
-  >(null);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [phase3Progress, setPhase3Progress] = useState<Phase3TurnProgress | null>(null);
-  const [isPhase4Running, setIsPhase4Running] = useState(false);
-  const [phase4ProgressByTurn, setPhase4ProgressByTurn] = useState<
-    Record<string, Phase4TurnProgress>
-  >({});
-  const [streamError, setStreamError] = useState<string | null>(null);
-  const [pendingLocationOverrideId, setPendingLocationOverrideId] = useState<
-    string | null
-  >(null);
-  const [liveStream, setLiveStream] = useState<{
-    userMessage: string;
-    preTurn: PreTurnAnalysis | null;
-    recalledItems: RecalledMemoryItem[];
-    cognitionRaw: string;
-    cognitionParsed: CognitionBlock | null;
-    proseText: string;
-    phaseStatus: string;
-    isNarrator?: boolean;
-  } | null>(null);
+  const {
+    isStreaming,
+    phase3Progress,
+    isPhase4Running,
+    phase4ProgressByTurn,
+    streamError,
+    pendingLocationOverrideId,
+    setPendingLocationOverrideId,
+    liveStream,
+    handleSendTurn,
+    handleOverrideLocation,
+    handleToggleItemEquip,
+    handleUpdateCampaignMemories,
+    handleSaveCampaignLocationLore,
+    handleSaveCampaignContainerLore,
+    handleSaveCampaignMap,
+    handleCheckoutTurn,
+    handleDeleteLastTurn,
+  } = useCampaignTurnActions({
+    bundle,
+    setBundle,
+    setCampaignWorld,
+  });
 
   const ACTIVE_CAMPAIGN_STORAGE_KEY = "cybercantina_active_campaign_id";
   const DEFAULT_PERSONA_STORAGE_KEY = "cybercantina_default_persona_id";
@@ -691,491 +452,6 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleSendTurn = async (opts: {
-    userMessage: string;
-    parentTurnId?: string | null;
-    diceMode?: DiceMode;
-    manualDiceOverride?: number | null;
-    narrativeMode?: NarrativeMode;
-    narratorDirective?: string | null;
-    durationMinutes?: number | null;
-    characterChoices?: Record<string, CharacterChoiceSet>;
-  }) => {
-    if (!bundle) return;
-    setIsStreaming(true);
-    setStreamError(null);
-    setPhase3Progress(null);
-    const isNarrator = Boolean(
-      opts.narrativeMode && opts.narrativeMode !== "standard"
-    );
-    setLiveStream({
-      userMessage: opts.userMessage,
-      preTurn: null,
-      recalledItems: [],
-      cognitionRaw: "",
-      cognitionParsed: null,
-      proseText: "",
-      isNarrator,
-      phaseStatus:
-        isNarrator
-          ? "Invoking Neutral Scene Narrator..."
-          : "Phase 1: Pre-Turn Analysis & GraphRAG...",
-    });
-
-    try {
-      await streamCampaignTurn(
-        bundle.campaign.id,
-        {
-          user_message: opts.userMessage,
-          parent_turn_id: opts.parentTurnId ?? bundle.campaign.active_leaf_turn_id,
-          dice_mode: opts.diceMode ?? "auto",
-          manual_dice_override: opts.manualDiceOverride ?? null,
-          override_location_id: pendingLocationOverrideId,
-          narrative_mode: opts.narrativeMode,
-          narrator_directive: opts.narratorDirective,
-          duration_minutes: opts.durationMinutes,
-          character_choices: opts.characterChoices,
-        },
-        {
-          onChoicesAdjusted: (data) => {
-            console.warn(
-              "Director choices adjusted - dropped characters:",
-              data.dropped_character_ids
-            );
-          },
-          onPhase1Complete: (data) => {
-            setLiveStream((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    preTurn: data.pre_turn,
-                    recalledItems: data.recalled_items,
-                    isNarrator:
-                      prev.isNarrator ||
-                      data.pre_turn?.active_speaker_id === "__narrator__",
-                    phaseStatus: "Phase 2: Scoped RAG & Context Resolved...",
-                  }
-                : null
-            );
-          },
-          onPhase3Start: (data) => {
-            const rosterAgents: Record<string, Phase3AgentProgressItem> = {};
-            const orderedIds: string[] = [];
-            for (const entry of data.roster || []) {
-              orderedIds.push(entry.character_id);
-              rosterAgents[entry.character_id] = {
-                characterId: entry.character_id,
-                characterName: entry.character_name,
-                role: entry.role,
-                status: "queued",
-              };
-            }
-            setPhase3Progress({
-              dispatchMode: data.dispatch_mode || "sequential",
-              isComplete: false,
-              orderedCharacterIds: orderedIds,
-              agents: rosterAgents,
-            });
-            setLiveStream((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    phaseStatus: `Phase 3: Multi-Cognition Swarm (${data.dispatch_mode || "sequential"})...`,
-                  }
-                : null
-            );
-          },
-          onPhase3AgentStart: (data) => {
-            if (!data.character_id) return;
-            setPhase3Progress((prev) => {
-              if (!prev) return prev;
-              const agent = prev.agents[data.character_id!];
-              return {
-                ...prev,
-                agents: {
-                  ...prev.agents,
-                  [data.character_id!]: {
-                    ...(agent || {
-                      characterId: data.character_id!,
-                      characterName: data.character_name || data.character_id!,
-                      role: data.role || "co_present",
-                    }),
-                    status: "thinking",
-                  },
-                },
-              };
-            });
-          },
-          onPhase3AgentComplete: (data) => {
-            if (!data.character_id) return;
-            setPhase3Progress((prev) => {
-              if (!prev) return prev;
-              const agent = prev.agents[data.character_id!];
-              return {
-                ...prev,
-                agents: {
-                  ...prev.agents,
-                  [data.character_id!]: {
-                    ...(agent || {
-                      characterId: data.character_id!,
-                      characterName: data.character_name || data.character_id!,
-                      role: data.role || "co_present",
-                    }),
-                    status: "completed",
-                    cognition: data.cognition,
-                    usedFallback: data.used_fallback,
-                  },
-                },
-              };
-            });
-          },
-          onPhase3AgentError: (data) => {
-            if (!data.character_id) return;
-            setPhase3Progress((prev) => {
-              if (!prev) return prev;
-              const agent = prev.agents[data.character_id!];
-              return {
-                ...prev,
-                agents: {
-                  ...prev.agents,
-                  [data.character_id!]: {
-                    ...(agent || {
-                      characterId: data.character_id!,
-                      characterName: data.character_name || data.character_id!,
-                      role: data.role || "co_present",
-                    }),
-                    status: "failed",
-                    error: data.error,
-                  },
-                },
-              };
-            });
-          },
-          onPhase3Complete: (_data) => {
-            setPhase3Progress((prev) => (prev ? { ...prev, isComplete: true } : null));
-            setLiveStream((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    phaseStatus: "Phase 4: Streaming Narrative Prose...",
-                  }
-                : null
-            );
-          },
-          onCognitionDelta: (rawBuffer) => {
-            setLiveStream((prev) =>
-              prev ? { ...prev, cognitionRaw: rawBuffer } : null
-            );
-          },
-          onCognitionComplete: (cognition) => {
-            setLiveStream((prev) =>
-              prev ? { ...prev, cognitionParsed: cognition } : null
-            );
-          },
-          onProseDelta: (delta) => {
-            setLiveStream((prev) =>
-              prev ? { ...prev, proseText: prev.proseText + delta } : null
-            );
-          },
-          onTurnSaved: (savedTurn) => {
-            setPendingLocationOverrideId(null);
-            setBundle((prev) => {
-              if (!prev) return prev;
-              const parentIdx = prev.active_branch_turns.findIndex(
-                (t) => t.id === savedTurn.parent_turn_id
-              );
-              const baseBranch =
-                parentIdx !== -1
-                  ? prev.active_branch_turns.slice(0, parentIdx + 1)
-                  : prev.active_branch_turns;
-              const nextAll = prev.all_turn_nodes.some(
-                (t) => t.id === savedTurn.id
-              )
-                ? prev.all_turn_nodes.map((t) =>
-                    t.id === savedTurn.id ? savedTurn : t
-                  )
-                : [...prev.all_turn_nodes, savedTurn];
-              return {
-                ...prev,
-                campaign: {
-                  ...prev.campaign,
-                  active_leaf_turn_id: savedTurn.id,
-                },
-                active_branch_turns: [...baseBranch, savedTurn],
-                all_turn_nodes: nextAll,
-                current_world_snapshot: savedTurn.world_snapshot,
-                current_character_state: savedTurn.character_state,
-              };
-            });
-            setLiveStream(null);
-            setPhase3Progress(null);
-            setIsStreaming(false);
-            setIsPhase4Running(true);
-          },
-          onPhase4Start: (data) => {
-            setIsPhase4Running(true);
-            setPhase4ProgressByTurn((prev) => {
-              const rosterAgents: Record<string, Phase4AgentProgressItem> = {};
-              const orderedKeys: string[] = [];
-              for (const entry of data.roster || []) {
-                orderedKeys.push(entry.agent_key);
-                rosterAgents[entry.agent_key] = {
-                  agentKey: entry.agent_key,
-                  kind: entry.kind,
-                  label: entry.label,
-                  status: "queued",
-                  reconciled: false,
-                };
-              }
-              return {
-                ...prev,
-                [data.turn_id]: {
-                  turnId: data.turn_id,
-                  dispatchMode: data.dispatch_mode || "parallel",
-                  isComplete: false,
-                  orderedAgentKeys: orderedKeys,
-                  agents: rosterAgents,
-                },
-              };
-            });
-          },
-          onPhase4AgentStart: (data) => {
-            if (!data.agent_key) return;
-            setPhase4ProgressByTurn((prev) => {
-              const current = prev[data.turn_id];
-              if (!current) return prev;
-              const agent = current.agents[data.agent_key!];
-              return {
-                ...prev,
-                [data.turn_id]: {
-                  ...current,
-                  agents: {
-                    ...current.agents,
-                    [data.agent_key!]: {
-                      ...(agent || {
-                        agentKey: data.agent_key!,
-                        kind: data.kind || "character",
-                        label: data.label || data.agent_key!,
-                        reconciled: false,
-                      }),
-                      status: "running",
-                    },
-                  },
-                },
-              };
-            });
-          },
-          onPhase4AgentComplete: (data) => {
-            if (!data.agent_key) return;
-            setPhase4ProgressByTurn((prev) => {
-              const current = prev[data.turn_id];
-              if (!current) return prev;
-              const agent = current.agents[data.agent_key!];
-              return {
-                ...prev,
-                [data.turn_id]: {
-                  ...current,
-                  agents: {
-                    ...current.agents,
-                    [data.agent_key!]: {
-                      ...(agent || {
-                        agentKey: data.agent_key!,
-                        kind: data.kind || "character",
-                        label: data.label || data.agent_key!,
-                        reconciled: false,
-                      }),
-                      status: "completed",
-                      reconciled: false,
-                      provisionalWorldDelta: data.world_delta ?? agent?.provisionalWorldDelta,
-                      provisionalCharacterDelta: data.character_delta ?? agent?.provisionalCharacterDelta,
-                    },
-                  },
-                },
-              };
-            });
-          },
-          onPhase4AgentError: (data) => {
-            if (!data.agent_key) return;
-            setPhase4ProgressByTurn((prev) => {
-              const current = prev[data.turn_id];
-              if (!current) return prev;
-              const agent = current.agents[data.agent_key!];
-              return {
-                ...prev,
-                [data.turn_id]: {
-                  ...current,
-                  agents: {
-                    ...current.agents,
-                    [data.agent_key!]: {
-                      ...(agent || {
-                        agentKey: data.agent_key!,
-                        kind: data.kind || "character",
-                        label: data.label || data.agent_key!,
-                        reconciled: false,
-                      }),
-                      status: "failed",
-                      error: data.error,
-                    },
-                  },
-                },
-              };
-            });
-          },
-          onPhase4ArbitrationStart: (data) => {
-            setPhase4ProgressByTurn((prev) => {
-              const current = prev[data.turn_id];
-              if (!current) return prev;
-              const contested = new Set(data.contested_agent_keys || []);
-              const updatedAgents = { ...current.agents };
-              for (const [key, item] of Object.entries(updatedAgents)) {
-                if (contested.has(key)) {
-                  updatedAgents[key] = { ...item, status: "arbitrating" };
-                }
-              }
-              return {
-                ...prev,
-                [data.turn_id]: {
-                  ...current,
-                  agents: updatedAgents,
-                },
-              };
-            });
-          },
-          onPhase4Complete: async (data) => {
-            setIsPhase4Running(false);
-            setPhase4ProgressByTurn((prev) => {
-              const current = prev[data.turn.id];
-              if (!current) return prev;
-              const markedAgents: Record<string, Phase4AgentProgressItem> = {};
-              for (const [key, item] of Object.entries(current.agents)) {
-                markedAgents[key] = {
-                  ...item,
-                  status: item.status === "failed" ? "failed" : "completed",
-                  reconciled: true,
-                };
-              }
-              return {
-                ...prev,
-                [data.turn.id]: {
-                  ...current,
-                  isComplete: true,
-                  agents: markedAgents,
-                },
-              };
-            });
-            setPendingLocationOverrideId(null);
-            setBundle(data.state_bundle);
-            const updatedWorld = await api.getWorld(
-              data.state_bundle.campaign.world_id
-            );
-            setCampaignWorld(updatedWorld);
-          },
-          onError: (err) => {
-            setStreamError(err);
-          },
-        }
-      );
-    } catch (err) {
-      setStreamError(String(err));
-    } finally {
-      setIsStreaming(false);
-      setIsPhase4Running(false);
-      setPhase3Progress(null);
-      setLiveStream(null);
-    }
-  };
-
-  const handleOverrideLocation = async (locationId: string) => {
-    if (!bundle || isStreaming || isPhase4Running) return;
-    const updated = await api.overrideLocation(bundle.campaign.id, locationId);
-    setBundle(updated);
-    setPendingLocationOverrideId(locationId);
-  };
-
-  const handleToggleItemEquip = async (payload: ItemEquipActionPayload) => {
-    if (!bundle || isStreaming || isPhase4Running) return;
-    try {
-      const updated = await api.toggleItemEquip(bundle.campaign.id, payload);
-      setBundle(updated);
-    } catch (err) {
-      console.error("Failed to manage item equipment/inventory:", err);
-      if (payload.action === "update" || payload.action === "add") {
-        throw err;
-      }
-    }
-  };
-
-  const handleUpdateCampaignMemories = async (
-    characterId: string,
-    memoryShards: MemoryShard[]
-  ) => {
-    if (!bundle || isStreaming || isPhase4Running) return;
-    try {
-      const updated = await api.updateCampaignCharacterMemories(
-        bundle.campaign.id,
-        characterId,
-        memoryShards
-      );
-      setBundle(updated);
-    } catch (err) {
-      console.error("Failed to update campaign character memories:", err);
-      throw err;
-    }
-  };
-
-  const handleSaveCampaignLocationLore = async (
-    locationId: string,
-    loreNodes: LocationLoreNodeDraft[]
-  ) => {
-    if (!bundle || isStreaming || isPhase4Running) return;
-    const updated = await api.updateCampaignLocationLore(
-      bundle.campaign.id,
-      locationId,
-      loreNodes
-    );
-    setBundle(updated);
-  };
-
-  const handleSaveCampaignContainerLore = async (
-    containerId: string,
-    loreNodes: LocationLoreNodeDraft[]
-  ) => {
-    if (!bundle || isStreaming || isPhase4Running) return;
-    const updated = await api.updateCampaignContainerLore(
-      bundle.campaign.id,
-      containerId,
-      loreNodes
-    );
-    setBundle(updated);
-  };
-
-  const handleSaveCampaignMap = async (payload: {
-    containers: LocationContainer[];
-    locations: LocationNode[];
-    edges: LocationEdge[];
-  }) => {
-    if (!bundle || isStreaming || isPhase4Running) return;
-    const updated = await api.updateCampaignMap(bundle.campaign.id, payload);
-    setBundle(updated);
-  };
-
-  const handleCheckoutTurn = async (turnId: string) => {
-    if (!bundle || isStreaming || isPhase4Running) return;
-    setPendingLocationOverrideId(null);
-    const updated = await api.checkoutBranch(bundle.campaign.id, turnId);
-    setBundle(updated);
-  };
-
-  const handleDeleteLastTurn = async () => {
-    if (!bundle || isStreaming || isPhase4Running) return;
-    setStreamError(null);
-    setPendingLocationOverrideId(null);
-    const updated = await api.deleteLastTurn(bundle.campaign.id);
-    setBundle(updated);
-    const updatedWorld = await api.getWorld(updated.campaign.world_id);
-    setCampaignWorld(updatedWorld);
-  };
-
   // Highlight entities strictly according to the active campaign.
   // Edge case: if the campaign was created with an older version of a character/world,
   // find and highlight the latest version currently in the library.
@@ -1288,504 +564,42 @@ export const App: React.FC = () => {
     <LocalRelayProvider currentUser={currentUser}>
     <div className={`studio-shell ${!bundle ? "no-campaign" : ""}`}>
       {/* Left Sidebar: 4 Collapsible, Searchable, Paged Categories (Active in play mode) */}
-      {bundle && (
-        <aside className="sidebar">
-          <div
-            className="brand-header"
-            style={{ cursor: "pointer" }}
-            onClick={handleCloseCampaign}
-            title="Return to Home page"
-          >
-            <div className="brand-title">
-              <Flame size={20} color="var(--accent-amber)" />
-              <span>CYBERCANTINA</span>
-            </div>
-          </div>
-
-        {/* 1. Personas (+new) */}
-        <SidebarCategory
-          title="Personas"
-          icon={<UserCheck size={14} color="var(--accent-emerald)" />}
-          items={personas}
-          searchPlaceholder="Search personas, appearance, lore..."
-          onNewClick={() => {
-            setEditingPersona(null);
-            setShowPersonaModal(true);
-          }}
-          newButtonTitle="Create a new User Persona"
-          filterFn={(p, q) => {
-            const query = q.trim().toLowerCase();
-            return Boolean(
-              p.name.toLowerCase().includes(query) ||
-              (p.species && p.species.toLowerCase().includes(query)) ||
-              (p.persona_bio && p.persona_bio.toLowerCase().includes(query)) ||
-              (p.tags && p.tags.some((t) => t.toLowerCase().includes(query))) ||
-              (p.build_and_height && p.build_and_height.toLowerCase().includes(query)) ||
-              (p.physical_appearance && p.physical_appearance.toLowerCase().includes(query)) ||
-              (p.inventory && p.inventory.some((i) => i.name.toLowerCase().includes(query))) ||
-              (p.lore_entries && p.lore_entries.some((l) => l.title.toLowerCase().includes(query)))
-            );
-          }}
-          renderItem={(p) => {
-            const isActive = campaignActivePersonaId === p.id;
-            return (
-              <div
-                key={p.id}
-                className={`campaign-item ${isActive ? "active" : ""}`}
-                onClick={() => {
-                  setEditingPersona(p);
-                  setShowPersonaModal(true);
-                }}
-              >
-                {!p.id.startsWith("persona_default_") && p.id !== "persona_default_user" ? (
-                  <button
-                    type="button"
-                    className="item-remove-btn"
-                    onClick={(e) => handleRequestDeletePersona(e, p)}
-                    disabled={isStreaming}
-                    title={`Delete persona ${p.name}`}
-                  >
-                    <X size={13} />
-                  </button>
-                ) : (
-                  <div style={{ width: 14 }} />
-                )}
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
-                    <span style={{ fontWeight: 600, fontSize: "0.81rem" }}>
-                      {p.name}
-                      {(p.id.startsWith("persona_default_") || p.id === "persona_default_user") && (
-                        <span
-                          style={{
-                            fontSize: "0.62rem",
-                            color: "var(--accent-emerald)",
-                            background: "rgba(16, 185, 129, 0.12)",
-                            padding: "1px 4px",
-                            borderRadius: 3,
-                            marginLeft: 5,
-                            fontWeight: 500,
-                          }}
-                        >
-                          Default
-                        </span>
-                      )}
-                    </span>
-                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                      {isActive && (
-                        <span
-                          style={{
-                            fontSize: "0.62rem",
-                            color: "var(--accent-amber)",
-                            background: "rgba(245, 158, 11, 0.12)",
-                            border: "1px solid rgba(245, 158, 11, 0.35)",
-                            padding: "1px 4px",
-                            borderRadius: 3,
-                            fontWeight: 600,
-                            flexShrink: 0,
-                          }}
-                        >
-                          Active
-                        </span>
-                      )}
-                      {p.age && (
-                        <span
-                          style={{
-                            fontSize: "0.65rem",
-                            color: "var(--accent-emerald)",
-                            background: "rgba(16, 185, 129, 0.12)",
-                            padding: "1px 4px",
-                            borderRadius: 3,
-                            flexShrink: 0,
-                          }}
-                        >
-                          Age {p.age}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div
-                    style={{
-                      fontSize: "0.71rem",
-                      color: "var(--text-secondary)",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
-                    {p.physical_appearance || "No physical description"}
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: 6,
-                      marginTop: 3,
-                      fontSize: "0.63rem",
-                      color: "var(--text-muted)",
-                    }}
-                  >
-                    <span>{p.equipped?.length ?? 0} equipped</span>
-                    <span>•</span>
-                    <span>{p.inventory?.length ?? 0} items</span>
-                    <span>•</span>
-                    <span>{p.lore_entries?.length ?? 0} lore</span>
-                  </div>
-                </div>
-              </div>
-            );
-          }}
-        />
-
-        {/* 2. Characters (+new) */}
-        <SidebarCategory
-          title="Characters"
-          icon={<Users size={14} color="var(--accent-amber)" />}
-          items={characters}
-          searchPlaceholder="Search characters, tags, creators..."
-          onNewClick={() => setShowCharWizard(true)}
-          newButtonTitle="Create a new Character with AI Wizard"
-          filterFn={(char, q) => {
-            const query = q.trim().toLowerCase().replace(/^#/, "");
-            return Boolean(
-              char.name.toLowerCase().includes(query) ||
-              char.tagline.toLowerCase().includes(query) ||
-              (char.tags && char.tags.some((t) => t.toLowerCase().includes(query))) ||
-              (char.creator && char.creator.toLowerCase().includes(query))
-            );
-          }}
-          renderItem={(char) => {
-            const isActive = campaignActiveCharacterIds.has(char.id);
-            return (
-              <div
-                key={char.id}
-                className={`campaign-item ${isActive ? "active" : ""}`}
-                onClick={() => handleSelectCharacter(char)}
-              >
-                <button
-                  type="button"
-                  className="item-remove-btn"
-                  onClick={(e) => handleRequestDeleteCharacter(e, char)}
-                  disabled={isStreaming}
-                  title={`Remove ${char.name}`}
-                >
-                  <X size={13} />
-                </button>
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
-                    <span style={{ fontWeight: 600, fontSize: "0.81rem" }}>
-                      {char.name}
-                    </span>
-                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                      {isActive && (
-                        <span
-                          style={{
-                            fontSize: "0.62rem",
-                            color: "var(--accent-amber)",
-                            background: "rgba(245, 158, 11, 0.12)",
-                            border: "1px solid rgba(245, 158, 11, 0.35)",
-                            padding: "1px 4px",
-                            borderRadius: 3,
-                            fontWeight: 600,
-                            flexShrink: 0,
-                          }}
-                        >
-                          Active
-                        </span>
-                      )}
-                      <span
-                        style={{
-                          fontSize: "0.65rem",
-                          color: "var(--accent-amber)",
-                          background: "rgba(245, 158, 11, 0.12)",
-                          padding: "1px 4px",
-                          borderRadius: 3,
-                          flexShrink: 0,
-                        }}
-                      >
-                        v{char.version ?? 1}
-                      </span>
-                    </div>
-                  </div>
-                  <div
-                    style={{
-                      fontSize: "0.71rem",
-                      color: "var(--text-secondary)",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
-                    {char.tagline}
-                  </div>
-                  {char.tags && char.tags.length > 0 && (
-                    <div
-                      style={{
-                        display: "flex",
-                        gap: 4,
-                        marginTop: 3,
-                        overflow: "hidden",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {char.tags.slice(0, 3).map((t) => (
-                        <span
-                          key={t}
-                          style={{
-                            fontSize: "0.62rem",
-                            color: "var(--accent-cyan)",
-                            background: "rgba(6, 182, 212, 0.1)",
-                            padding: "0 4px",
-                            borderRadius: 2,
-                          }}
-                        >
-                          #{t}
-                        </span>
-                      ))}
-                      {char.tags.length > 3 && (
-                        <span style={{ fontSize: "0.62rem", color: "var(--text-muted)" }}>
-                          +{char.tags.length - 3}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          }}
-        />
-
-        {/* 3. Worlds (+new) */}
-        <SidebarCategory
-          title="Worlds"
-          icon={<Globe size={14} color="var(--accent-cyan)" />}
-          items={worlds}
-          searchPlaceholder="Search worlds..."
-          onNewClick={() => setShowWorldWizard(true)}
-          newButtonTitle="Create a new World & Spatial Graph with AI Wizard"
-          filterFn={(w, q) =>
-            w.name.toLowerCase().includes(q) ||
-            w.global_rules.genre.toLowerCase().includes(q)
-          }
-          renderItem={(w) => {
-            const isActive = campaignActiveWorldId === w.id;
-            return (
-              <div
-                key={w.id}
-                className={`campaign-item ${isActive ? "active" : ""}`}
-                onClick={() => handleSelectWorld(w)}
-              >
-                <button
-                  type="button"
-                  className="item-remove-btn"
-                  onClick={(e) => handleRequestDeleteWorld(e, w)}
-                  disabled={isStreaming}
-                  title={`Remove ${w.name}`}
-                >
-                  <X size={13} />
-                </button>
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
-                    <div style={{ fontWeight: 600, fontSize: "0.81rem" }}>
-                      {w.name}
-                    </div>
-                    {isActive && (
-                      <span
-                        style={{
-                          fontSize: "0.62rem",
-                          color: "var(--accent-amber)",
-                          background: "rgba(245, 158, 11, 0.12)",
-                          border: "1px solid rgba(245, 158, 11, 0.35)",
-                          padding: "1px 4px",
-                          borderRadius: 3,
-                          fontWeight: 600,
-                          flexShrink: 0,
-                        }}
-                      >
-                        Active
-                      </span>
-                    )}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: "0.71rem",
-                      color: "var(--text-secondary)",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
-                    {w.global_rules.genre} • {w.locations.length} locations
-                  </div>
-                </div>
-              </div>
-            );
-          }}
-        />
-
-        {/* 4. Campaigns (+new) */}
-        <SidebarCategory
-          title="Campaigns"
-          icon={<FolderKanban size={14} color="var(--accent-emerald)" />}
-          items={campaigns}
-          searchPlaceholder="Search campaigns..."
-          onNewClick={
-            worlds.length > 0 && characters.length > 0
-              ? () => setShowNewCampaignModal(true)
-              : undefined
-          }
-          newButtonTitle="Start a new campaign with selected Character, World & Persona"
-          filterFn={(camp, q) => camp.name.toLowerCase().includes(q)}
-          renderItem={(camp) => (
-            <div
-              key={camp.id}
-              className={`campaign-item ${
-                bundle?.campaign.id === camp.id ? "active" : ""
-              }`}
-              onClick={() => loadCampaignBundle(camp.id)}
-            >
-              <button
-                type="button"
-                className="item-remove-btn"
-                onClick={(e) => handleRequestDeleteCampaign(e, camp)}
-                disabled={isStreaming}
-                title={`Delete campaign ${camp.name}`}
-              >
-                <X size={13} />
-              </button>
-              <div
-                style={{
-                  fontWeight: 600,
-                  fontSize: "0.81rem",
-                  minWidth: 0,
-                  flex: 1,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                {camp.name}
-              </div>
-            </div>
-          )}
-        />
-
-        {/* Bottom User Profile & Admin Area */}
-        <div className="sidebar-bottom-area">
-          <RelaySidebarBadge />
-          {/* Notes Button sitting directly above user profile */}
-          <div
-            className={`sidebar-notes-btn ${showNotesFlyout ? "active" : ""}`}
-            onClick={() => setShowNotesFlyout((prev) => !prev)}
-            title="Open Player Notes scratchpad"
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
-              <StickyNote size={15} color="var(--accent-amber)" />
-              <span style={{ fontWeight: 600, fontSize: "0.81rem", color: "var(--text-primary)" }}>
-                Player Notes
-              </span>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              {notes.length > 0 && (
-                <span className="notes-pill-count">
-                  {notes.filter((n) => n.is_starred).length > 0
-                    ? `★ ${notes.filter((n) => n.is_starred).length}`
-                    : notes.length}
-                </span>
-              )}
-              <button
-                type="button"
-                className="btn btn-ghost"
-                style={{ padding: "2px 5px", fontSize: "0.7rem" }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setNotesModalInitialId(undefined);
-                  setShowNotesModal(true);
-                  setShowNotesFlyout(false);
-                }}
-                title="New Note / Manage All"
-              >
-                <Plus size={12} />
-              </button>
-            </div>
-          </div>
-
-          <div
-            className="sidebar-user-card"
-            onClick={() => {
-              setProfileInitialTab("identity");
-              setShowProfileModal(true);
-            }}
-            title="Open User Profile, Password & Passkeys"
-          >
-            <User size={15} color="var(--accent-cyan)" />
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div
-                style={{
-                  fontWeight: 600,
-                  fontSize: "0.8rem",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                }}
-              >
-                <span
-                  style={{
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                >
-                  {currentUser.display_name || currentUser.username}
-                </span>
-                <span className={`role-pill role-${currentUser.role}`}>
-                  {currentUser.role}
-                </span>
-              </div>
-              <div
-                style={{
-                  fontSize: "0.69rem",
-                  color: "var(--text-muted)",
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                @{currentUser.username}
-                {singleUserMode ? " • Single-user mode" : ""}
-              </div>
-            </div>
-            {!singleUserMode && (
-              <button
-                type="button"
-                className="btn"
-                style={{ padding: "4px 7px", fontSize: "0.7rem" }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleLogout();
-                }}
-                title="Sign out"
-              >
-                <LogOut size={13} />
-              </button>
-            )}
-          </div>
-
-          {currentUser.role === "admin" && (
-            <button
-              type="button"
-              className="btn sidebar-admin-btn"
-              onClick={() => {
-                setAdminInitialTab("users");
-                setShowAdminModal(true);
-              }}
-              title="Open Admin Area"
-            >
-              <UserCog size={14} color="var(--accent-amber)" />
-              <span>Admin Area</span>
-            </button>
-          )}
-        </div>
-      </aside>
-      )}
+      <AppSidebar
+        bundle={bundle}
+        personas={personas}
+        characters={characters}
+        worlds={worlds}
+        campaigns={campaigns}
+        campaignActiveWorldId={campaignActiveWorldId}
+        campaignActivePersonaId={campaignActivePersonaId}
+        campaignActiveCharacterIds={campaignActiveCharacterIds}
+        notes={notes}
+        showNotesFlyout={showNotesFlyout}
+        setShowNotesFlyout={setShowNotesFlyout}
+        currentUser={currentUser}
+        singleUserMode={singleUserMode}
+        isStreaming={isStreaming}
+        setEditingPersona={setEditingPersona}
+        setShowPersonaModal={setShowPersonaModal}
+        setShowCharWizard={setShowCharWizard}
+        setShowWorldWizard={setShowWorldWizard}
+        setShowNewCampaignModal={setShowNewCampaignModal}
+        setNotesModalInitialId={setNotesModalInitialId}
+        setShowNotesModal={setShowNotesModal}
+        setProfileInitialTab={setProfileInitialTab}
+        setShowProfileModal={setShowProfileModal}
+        setAdminInitialTab={setAdminInitialTab}
+        setShowAdminModal={setShowAdminModal}
+        handleCloseCampaign={handleCloseCampaign}
+        handleRequestDeletePersona={handleRequestDeletePersona}
+        handleSelectCharacter={handleSelectCharacter}
+        handleRequestDeleteCharacter={handleRequestDeleteCharacter}
+        handleSelectWorld={handleSelectWorld}
+        handleRequestDeleteWorld={handleRequestDeleteWorld}
+        loadCampaignBundle={loadCampaignBundle}
+        handleRequestDeleteCampaign={handleRequestDeleteCampaign}
+        handleLogout={handleLogout}
+      />
 
       {/* Quick Player Notes Flyout Drawer */}
       {showNotesFlyout && (
@@ -1949,440 +763,79 @@ export const App: React.FC = () => {
       )}
 
       {/* Modals */}
-      {deleteTarget && (
-        <div className="modal-backdrop">
-          <div className="modal-panel" style={{ width: "min(480px, 92vw)" }}>
-            <div className="modal-header">
-              <span
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  color: "#fda4af",
-                }}
-              >
-                <AlertTriangle size={18} />
-                {deleteTarget.kind === "campaign"
-                  ? "Delete Campaign & Timeline"
-                  : deleteTarget.kind === "world"
-                  ? "Remove World"
-                  : deleteTarget.kind === "persona"
-                  ? "Delete User Persona"
-                  : "Remove Character"}
-              </span>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => setDeleteTarget(null)}
-                disabled={isDeleting}
-              >
-                <X size={15} />
-              </button>
-            </div>
-
-            <div className="modal-body" style={{ fontSize: "0.86rem", lineHeight: 1.55 }}>
-              {deleteTarget.kind === "campaign" ? (
-                <p>
-                  Are you sure you want to delete campaign{" "}
-                  <strong style={{ color: "var(--accent-amber)" }}>
-                    "{deleteTarget.campaign.name}"
-                  </strong>
-                  ? This will permanently remove the campaign and its entire
-                  timeline branch tree, episodic memories, and improvised
-                  locations.
-                </p>
-              ) : deleteTarget.kind === "world" ? (
-                <>
-                  <p>
-                    Are you sure you want to remove world{" "}
-                    <strong style={{ color: "var(--accent-cyan)" }}>
-                      "{deleteTarget.world.name}"
-                    </strong>
-                    ?
-                  </p>
-                  {deleteTarget.campaignsUsing.length > 0 ? (
-                    <div
-                      className="cog-step"
-                      style={{
-                        borderColor: "rgba(34, 211, 238, 0.4)",
-                        fontSize: "0.8rem",
-                      }}
-                    >
-                      <strong style={{ color: "var(--accent-cyan)" }}>
-                        Used in {deleteTarget.campaignsUsing.length} active
-                        campaign(s):
-                      </strong>{" "}
-                      {deleteTarget.campaignsUsing.map((c) => c.name).join(", ")}
-                      <div style={{ marginTop: 4, color: "var(--text-secondary)" }}>
-                        This world will be marked <em>pending deletion</em> and
-                        hidden from your world list immediately, while its
-                        spatial graph and lore remain available to those running
-                        campaigns until they are removed.
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>
-                      This world is not referenced by any running campaigns and
-                      will be permanently pruned.
-                    </div>
-                  )}
-                </>
-              ) : deleteTarget.kind === "persona" ? (
-                <>
-                  <p>
-                    Are you sure you want to delete persona{" "}
-                    <strong style={{ color: "var(--accent-emerald)" }}>
-                      "{deleteTarget.persona.name}"
-                    </strong>
-                    ?
-                  </p>
-                  {deleteTarget.campaignsUsing.length > 0 ? (
-                    <div
-                      className="cog-step"
-                      style={{
-                        borderColor: "rgba(16, 185, 129, 0.4)",
-                        fontSize: "0.8rem",
-                      }}
-                    >
-                      <strong style={{ color: "var(--accent-emerald)" }}>
-                        Referenced by {deleteTarget.campaignsUsing.length} active
-                        campaign(s):
-                      </strong>{" "}
-                      {deleteTarget.campaignsUsing.map((c) => c.name).join(", ")}
-                      <div style={{ marginTop: 4, color: "var(--text-secondary)" }}>
-                        Active campaigns will continue unaffected because each campaign
-                        maintains its own frozen persona snapshot.
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>
-                      This persona template will be permanently removed.
-                    </div>
-                  )}
-                </>
-              ) : (
-                <>
-                  <p>
-                    Are you sure you want to remove character{" "}
-                    <strong style={{ color: "var(--accent-amber)" }}>
-                      "{deleteTarget.character.name}"
-                    </strong>
-                    ?
-                  </p>
-                  {deleteTarget.campaignsUsing.length > 0 ? (
-                    <div
-                      className="cog-step"
-                      style={{
-                        borderColor: "rgba(245, 158, 11, 0.4)",
-                        fontSize: "0.8rem",
-                      }}
-                    >
-                      <strong style={{ color: "var(--accent-amber)" }}>
-                        Used in {deleteTarget.campaignsUsing.length} active
-                        campaign(s):
-                      </strong>{" "}
-                      {deleteTarget.campaignsUsing.map((c) => c.name).join(", ")}
-                      <div style={{ marginTop: 4, color: "var(--text-secondary)" }}>
-                        This character will be marked <em>pending deletion</em>{" "}
-                        and hidden from your character list immediately, while
-                        remaining available to those running campaigns until
-                        they are removed.
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>
-                      This character is not referenced by any running campaigns
-                      and will be permanently pruned.
-                    </div>
-                  )}
-                </>
-              )}
-
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "flex-end",
-                  gap: 10,
-                  marginTop: 8,
-                }}
-              >
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => setDeleteTarget(null)}
-                  disabled={isDeleting}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-danger"
-                  onClick={handleConfirmDelete}
-                  disabled={isDeleting}
-                >
-                  {isDeleting
-                    ? "Removing..."
-                    : deleteTarget.kind === "campaign"
-                    ? "Delete Campaign"
-                    : deleteTarget.kind === "world"
-                    ? "Remove World"
-                    : deleteTarget.kind === "persona"
-                    ? "Delete Persona"
-                    : "Remove Character"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showCharWizard && (
-        <CharacterWizardModal
-          worlds={worlds}
-          defaultWorldId={
-            worlds.find((w) => w.id === activeWorld?.id)?.id ??
-            worlds[0]?.id ??
-            ""
-          }
-          initialDraft={wizardInitialDraft}
-          initialPreassignedId={wizardInitialPreassignedId}
-          initialWorldDraft={wizardInitialWorldDraft}
-          onClose={() => {
-            setShowCharWizard(false);
-            setWizardInitialDraft(null);
-            setWizardInitialWorldDraft(null);
-            setWizardInitialPreassignedId(null);
-          }}
-          onCreated={async (createdChar, launchWorldId) => {
-            setShowCharWizard(false);
-            setWizardInitialDraft(null);
-            setWizardInitialWorldDraft(null);
-            setWizardInitialPreassignedId(null);
-            const [cList, wList] = await Promise.all([
-              api.listCharacters(),
-              api.listWorlds(),
-            ]);
-            setCharacters(cList);
-            setWorlds(wList);
-            setActiveCharacter(createdChar);
-            if (launchWorldId) {
-              const targetWorld =
-                wList.find((w) => w.id === launchWorldId) ?? wList[0];
-              if (targetWorld) {
-                const newBundle = await api.createCampaign({
-                  name: `${createdChar.name} in ${targetWorld.name}`,
-                  world_id: targetWorld.id,
-                  character_id: createdChar.id,
-                  persona_id: activePersona?.id,
-                });
-                const allCamps = await api.listCampaigns();
-                setCampaigns(allCamps);
-                setBundle(newBundle);
-                try {
-                  localStorage.setItem(ACTIVE_CAMPAIGN_STORAGE_KEY, newBundle.campaign.id);
-                } catch {}
-                setCampaignWorld(targetWorld);
-                setCampaignCharacter(createdChar);
-                setActiveWorld(targetWorld);
-              }
-            }
-          }}
-        />
-      )}
-
-      {showWorldWizard && (
-        <WorldWizardModal
-          onClose={() => setShowWorldWizard(false)}
-          onCreated={async (createdWorld) => {
-            setShowWorldWizard(false);
-            const wList = await api.listWorlds();
-            setWorlds(wList);
-            setActiveWorld(createdWorld);
-          }}
-        />
-      )}
-
-      {inspectingCharacter && (
-        <CharacterInspectorModal
-          character={inspectingCharacter}
-          worlds={worlds}
-          onClose={() => setInspectingCharacter(null)}
-          onSaved={async (updatedChar, closeModal = true) => {
-            if (closeModal) {
-              setInspectingCharacter(null);
-            } else {
-              setInspectingCharacter(updatedChar);
-            }
-            const cList = await api.listCharacters();
-            setCharacters(cList);
-            setActiveCharacter(updatedChar);
-            // If updated in-place (not used by any campaign), keep campaignCharacter synced if matching
-            if (campaignCharacter?.id === updatedChar.id) {
-              setCampaignCharacter(updatedChar);
-            }
-          }}
-        />
-      )}
-
-      {inspectingWorld && (
-        <WorldInspectorModal
-          world={inspectingWorld}
-          onClose={() => setInspectingWorld(null)}
-          onSaved={async (updatedWorld) => {
-            setInspectingWorld(null);
-            const [wList, cList] = await Promise.all([
-              api.listWorlds(),
-              api.listCharacters(),
-            ]);
-            setWorlds(wList);
-            setCharacters(cList);
-            setActiveWorld(updatedWorld);
-            // If updated in-place (not used by any campaign), keep campaignWorld synced if matching
-            if (campaignWorld?.id === updatedWorld.id) {
-              setCampaignWorld(updatedWorld);
-            }
-          }}
-        />
-      )}
-
-      {showProfileModal && currentUser && (
-        <ProfileModal
-          user={currentUser}
-          singleUserMode={singleUserMode}
-          initialTab={profileInitialTab}
-          initialSubTab={profileInitialSubTab}
-          onClose={() => {
-            setShowProfileModal(false);
-            setProfileInitialSubTab(undefined);
-            void api.getProfileModels().then(setProfileModels).catch(() => {});
-          }}
-          onUserUpdated={async (updated) => {
-            setCurrentUser(updated);
-            await refreshAuthStatus();
-          }}
-          onAccountReset={async () => {
-            await loadWorkspaceData();
-          }}
-          onAccountDeleted={handleAccountDeleted}
-        />
-      )}
-
-      {showAdminModal && currentUser && currentUser.role === "admin" && (
-        <AdminModal
-          currentUser={currentUser}
-          singleUserMode={singleUserMode}
-          initialTab={adminInitialTab}
-          onClose={() => {
-            setShowAdminModal(false);
-            void api.getProfileModels().then(setProfileModels).catch(() => {});
-          }}
-          onCurrentUserUpdated={async (updated) => {
-            setCurrentUser(updated);
-            await refreshAuthStatus();
-          }}
-          onAccountDeleted={async (deletedUserId) => {
-            if (deletedUserId === currentUser.id) {
-              await handleAccountDeleted();
-            }
-          }}
-          onSettingsUpdated={(updated) => {
-            setAppSettings(updated);
-            void api.getProfileModels().then(setProfileModels).catch(() => {});
-          }}
-        />
-      )}
-
-      {/* Full Notes Manager Modal */}
-      {showNotesModal && (
-        <NotesModal
-          isOpen={showNotesModal}
-          notes={notes}
-          initialSelectedId={notesModalInitialId}
-          contextTags={noteContextTags}
-          activeCampaignName={bundle?.campaign?.name}
-          activeWorldName={(campaignWorld || activeWorld)?.name}
-          activeCharacterName={(campaignCharacter || activeCharacter)?.name}
-          onClose={() => {
-            setShowNotesModal(false);
-            setNotesModalInitialId(undefined);
-          }}
-          onSaveNote={handleSaveNote}
-          onDeleteNote={handleDeleteNote}
-          onToggleStar={handleToggleNoteStar}
-        />
-      )}
-
-      {showPersonaModal && (
-        <PersonaEditorModal
-          persona={editingPersona}
-          isDefault={Boolean(editingPersona && activePersona?.id === editingPersona.id)}
-          onClose={() => {
-            setShowPersonaModal(false);
-            setEditingPersona(null);
-          }}
-          onSetDefault={(p) => handleSetDefaultPersona(p)}
-          onSaved={async (savedPersona) => {
-            const list = await api.listPersonas();
-            setPersonas(list);
-            if (!activePersona || activePersona.id === savedPersona.id) {
-              handleSetDefaultPersona(savedPersona);
-            }
-            setShowPersonaModal(false);
-            setEditingPersona(null);
-          }}
-          onDeleted={async () => {
-            const list = await api.listPersonas();
-            setPersonas(list);
-            const nextDef = list[0] ?? null;
-            if (nextDef) {
-              handleSetDefaultPersona(nextDef);
-            } else {
-              setActivePersona(null);
-              try {
-                localStorage.removeItem(DEFAULT_PERSONA_STORAGE_KEY);
-              } catch {}
-            }
-            setShowPersonaModal(false);
-            setEditingPersona(null);
-          }}
-        />
-      )}
-
-      {showNewCampaignModal && (
-        <NewCampaignModal
-          worlds={worlds}
-          characters={characters}
-          personas={personas}
-          initialWorldId={activeWorld?.id}
-          initialCharacterId={activeCharacter?.id}
-          initialPersonaId={activePersona?.id}
-          onClose={() => setShowNewCampaignModal(false)}
-          onOpenPersonaModal={() => {
-            setEditingPersona(null);
-            setShowPersonaModal(true);
-          }}
-          onCreate={async (payload) => {
-            const created = await api.createCampaign(payload);
-            const allCamps = await api.listCampaigns();
-            setCampaigns(allCamps);
-            setBundle(created);
-            try {
-              localStorage.setItem(ACTIVE_CAMPAIGN_STORAGE_KEY, created.campaign.id);
-            } catch {}
-            const w = worlds.find((item) => item.id === payload.world_id) ?? worlds[0];
-            const primaryId = payload.focus_character_id || payload.character_id || payload.character_ids?.[0];
-            const c = characters.find((item) => item.id === primaryId) ?? characters[0];
-            setCampaignWorld(w);
-            setCampaignCharacter(c);
-            setActiveWorld(w);
-            setActiveCharacter(c);
-            if (payload.persona_id) {
-              const p = personas.find((item) => item.id === payload.persona_id) ?? null;
-              setActivePersona(p);
-            }
-          }}
-        />
-      )}
+      <AppModals
+        ACTIVE_CAMPAIGN_STORAGE_KEY={ACTIVE_CAMPAIGN_STORAGE_KEY}
+        DEFAULT_PERSONA_STORAGE_KEY={DEFAULT_PERSONA_STORAGE_KEY}
+        currentUser={currentUser}
+        setCurrentUser={setCurrentUser}
+        singleUserMode={singleUserMode}
+        worlds={worlds}
+        setWorlds={setWorlds}
+        characters={characters}
+        setCharacters={setCharacters}
+        personas={personas}
+        setPersonas={setPersonas}
+        setCampaigns={setCampaigns}
+        notes={notes}
+        bundle={bundle}
+        setBundle={setBundle}
+        activeWorld={activeWorld}
+        setActiveWorld={setActiveWorld}
+        activeCharacter={activeCharacter}
+        setActiveCharacter={setActiveCharacter}
+        activePersona={activePersona}
+        setActivePersona={setActivePersona}
+        campaignWorld={campaignWorld}
+        setCampaignWorld={setCampaignWorld}
+        campaignCharacter={campaignCharacter}
+        setCampaignCharacter={setCampaignCharacter}
+        inspectingCharacter={inspectingCharacter}
+        setInspectingCharacter={setInspectingCharacter}
+        inspectingWorld={inspectingWorld}
+        setInspectingWorld={setInspectingWorld}
+        noteContextTags={noteContextTags}
+        deleteTarget={deleteTarget}
+        setDeleteTarget={setDeleteTarget}
+        isDeleting={isDeleting}
+        handleConfirmDelete={handleConfirmDelete}
+        showCharWizard={showCharWizard}
+        setShowCharWizard={setShowCharWizard}
+        wizardInitialDraft={wizardInitialDraft}
+        setWizardInitialDraft={setWizardInitialDraft}
+        wizardInitialPreassignedId={wizardInitialPreassignedId}
+        setWizardInitialPreassignedId={setWizardInitialPreassignedId}
+        wizardInitialWorldDraft={wizardInitialWorldDraft}
+        setWizardInitialWorldDraft={setWizardInitialWorldDraft}
+        showWorldWizard={showWorldWizard}
+        setShowWorldWizard={setShowWorldWizard}
+        showProfileModal={showProfileModal}
+        setShowProfileModal={setShowProfileModal}
+        profileInitialTab={profileInitialTab}
+        profileInitialSubTab={profileInitialSubTab}
+        setProfileInitialSubTab={setProfileInitialSubTab}
+        setProfileModels={setProfileModels}
+        showAdminModal={showAdminModal}
+        setShowAdminModal={setShowAdminModal}
+        adminInitialTab={adminInitialTab}
+        setAppSettings={setAppSettings}
+        showNotesModal={showNotesModal}
+        setShowNotesModal={setShowNotesModal}
+        notesModalInitialId={notesModalInitialId}
+        setNotesModalInitialId={setNotesModalInitialId}
+        showPersonaModal={showPersonaModal}
+        setShowPersonaModal={setShowPersonaModal}
+        editingPersona={editingPersona}
+        setEditingPersona={setEditingPersona}
+        showNewCampaignModal={showNewCampaignModal}
+        setShowNewCampaignModal={setShowNewCampaignModal}
+        handleSaveNote={handleSaveNote}
+        handleDeleteNote={handleDeleteNote}
+        handleToggleNoteStar={handleToggleNoteStar}
+        handleSetDefaultPersona={handleSetDefaultPersona}
+        handleAccountDeleted={handleAccountDeleted}
+        refreshAuthStatus={refreshAuthStatus}
+        loadWorkspaceData={loadWorkspaceData}
+      />
     </div>
     </LocalRelayProvider>
   );
