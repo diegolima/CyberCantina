@@ -13,7 +13,7 @@ from app.schemas.turn import (
     PreTurnAnalysis,
     WorldStateSnapshot,
 )
-from app.db.repos.base import _dump_care_state_json, utc_now_iso
+from app.db.repos.base import _delete_campaign_rows, _dump_care_state_json, utc_now_iso
 
 
 class CampaignsMixin:
@@ -432,46 +432,7 @@ class CampaignsMixin:
             if not row:
                 raise KeyError(f"Campaign '{campaign_id}' not found")
 
-            # 1. Remove episodic & campaign-scoped vector entries (including improvised location lore vectors)
-            conn.execute(
-                "DELETE FROM vector_entries WHERE campaign_id = ?",
-                (campaign_id,),
-            )
-            conn.execute(
-                """
-                DELETE FROM vector_entries
-                WHERE location_id IN (
-                    SELECT id FROM location_nodes
-                    WHERE created_at_turn_id IN (
-                        SELECT id FROM turn_nodes WHERE campaign_id = ?
-                    )
-                )
-                """,
-                (campaign_id,),
-            )
-
-            # 2. Remove improvised spatial edges and locations created during this campaign's turns
-            conn.execute(
-                """
-                DELETE FROM location_edges
-                WHERE created_at_turn_id IN (
-                    SELECT id FROM turn_nodes WHERE campaign_id = ?
-                )
-                """,
-                (campaign_id,),
-            )
-            conn.execute(
-                """
-                DELETE FROM location_nodes
-                WHERE created_at_turn_id IN (
-                    SELECT id FROM turn_nodes WHERE campaign_id = ?
-                )
-                """,
-                (campaign_id,),
-            )
-
-            # 3. Delete campaign (cascades turn_nodes, world_state_snapshots, character_states, episodic_chunks, campaign_characters)
-            conn.execute("DELETE FROM campaigns WHERE id = ?", (campaign_id,))
+            _delete_campaign_rows(conn, campaign_id)
             conn.commit()
         finally:
             conn.close()

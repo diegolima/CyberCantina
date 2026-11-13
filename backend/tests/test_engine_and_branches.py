@@ -2004,3 +2004,219 @@ def test_resolve_actor_context_ceiling_skips_non_native_ollama_providers() -> No
         probe_service.invalidate("prov_vllm")
 
 
+def _seed_improvised_location_active_in_campaign(
+    repo: CantinaRepository, campaign_id: str, suffix: str
+) -> tuple[str, str, str, str]:
+    """Create a child turn with an improvised container+location that becomes active in snapshots."""
+    bundle_0 = repo.get_campaign_state_bundle(campaign_id)
+    turn_0 = bundle_0.active_branch_turns[0]
+    hub_id = bundle_0.active_location.id
+    world_id = bundle_0.campaign.world_id
+
+    turn_1 = repo.save_turn_node(
+        turn_id=f"turn_improv_{suffix}_1",
+        campaign_id=campaign_id,
+        parent_turn_id=turn_0.id,
+        depth_index=turn_0.depth_index + 1,
+        user_message="Head into the hidden back room.",
+        actor_id=turn_0.actor_id,
+        raw_prose="You duck behind the counter into a cramped side room.",
+        cognition=turn_0.cognition,
+        pre_turn=turn_0.pre_turn,
+        world_snapshot=turn_0.world_snapshot,
+        character_state=turn_0.character_state,
+        recalled_items=[],
+    )
+    repo.checkout_turn_branch(campaign_id, turn_1.id)
+
+    bundle_1 = repo.create_linked_location(
+        campaign_id,
+        from_location_id=hub_id,
+        name=f"Improvised Bungalow {suffix}",
+        description="A newly discovered improvised room.",
+        environmental_tags=["improvised"],
+        compass_direction="N",
+        travel_minutes=2,
+    )
+    improv_loc = next(
+        loc for loc in bundle_1.visible_locations if loc.name == f"Improvised Bungalow {suffix}"
+    )
+
+    container_id = f"cont_improv_{suffix}"
+    conn = repo._connect()
+    try:
+        conn.execute(
+            """
+            INSERT INTO location_containers (
+                id, world_id, created_at_turn_id, parent_container_id, depth, name, description, created_at
+            ) VALUES (?, ?, ?, NULL, 1, ?, 'Improvised container', '2026-01-01T00:00:00Z')
+            """,
+            (container_id, world_id, turn_1.id, f"Improvised Wing {suffix}"),
+        )
+        conn.execute(
+            """
+            INSERT INTO vector_entries (
+                id, source_type, world_id, container_id, title, content, keywords_json, embedding_blob
+            ) VALUES (?, 'container_lore', ?, ?, 'Wing Lore', 'Hidden wing', '["wing"]', zeroblob(4))
+            """,
+            (f"vec_cont_{suffix}", world_id, container_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Save a subsequent turn whose world_state_snapshots.active_location_id AND
+    # character_states.current_location_id reference the improvised location.
+    moved_ws = turn_1.world_snapshot.model_copy(
+        update={
+            "turn_id": f"turn_improv_{suffix}_2",
+            "active_location_id": improv_loc.id,
+            "visited_location_ids": [hub_id, improv_loc.id],
+        }
+    )
+    moved_cs = turn_1.character_state.model_copy(
+        update={
+            "turn_id": f"turn_improv_{suffix}_2",
+            "current_location_id": improv_loc.id,
+        }
+    )
+    turn_2 = repo.save_turn_node(
+        turn_id=f"turn_improv_{suffix}_2",
+        campaign_id=campaign_id,
+        parent_turn_id=turn_1.id,
+        depth_index=turn_1.depth_index + 1,
+        user_message="Look around inside.",
+        actor_id=turn_1.actor_id,
+        raw_prose="The improvised room smells of ozone.",
+        cognition=turn_1.cognition,
+        pre_turn=turn_1.pre_turn,
+        world_snapshot=moved_ws,
+        character_state=moved_cs,
+        recalled_items=[],
+    )
+    repo.checkout_turn_branch(campaign_id, turn_2.id)
+    return world_id, improv_loc.id, container_id, turn_2.id
+
+
+def test_delete_campaign_with_active_improvised_location_and_superseded_rows(
+    temp_repo: CantinaRepository,
+) -> None:
+    """Deleting a campaign whose snapshots reference improvised locations must not hit FK failures."""
+    camp_id = "camp_neon_rust_default"
+    world_id, improv_loc_id, container_id, turn_2_id = _seed_improvised_location_active_in_campaign(
+        temp_repo, camp_id, "del"
+    )
+
+    # Simulate a base-world location/edge superseded by this campaign
+    base_world = temp_repo.get_world(world_id, base_only=True)
+    superseded_loc_id = base_world.locations[0].id
+    superseded_edge_id = base_world.edges[0].id
+    conn = temp_repo._connect()
+    try:
+        conn.execute(
+            "UPDATE location_nodes SET superseded_at_turn_id = ? WHERE id = ?",
+            (turn_2_id, superseded_loc_id),
+        )
+        conn.execute(
+            "UPDATE location_edges SET superseded_at_turn_id = ? WHERE id = ?",
+            (turn_2_id, superseded_edge_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Must succeed without sqlite3.IntegrityError: FOREIGN KEY constraint failed
+    temp_repo.delete_campaign(camp_id)
+
+    assert temp_repo.list_campaigns() == []
+    conn = temp_repo._connect()
+    try:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM location_nodes WHERE id = ?", (improv_loc_id,)).fetchone()[0]
+            == 0
+        )
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM location_containers WHERE id = ?", (container_id,)
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM vector_entries WHERE container_id = ? OR location_id = ?",
+                (container_id, improv_loc_id),
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            conn.execute(
+                "SELECT superseded_at_turn_id FROM location_nodes WHERE id = ?",
+                (superseded_loc_id,),
+            ).fetchone()["superseded_at_turn_id"]
+            is None
+        )
+        assert (
+            conn.execute(
+                "SELECT superseded_at_turn_id FROM location_edges WHERE id = ?",
+                (superseded_edge_id,),
+            ).fetchone()["superseded_at_turn_id"]
+            is None
+        )
+    finally:
+        conn.close()
+
+
+async def test_reset_user_data_with_active_improvised_location(
+    temp_repo: CantinaRepository,
+) -> None:
+    """reset_user_data must cleanly delete campaigns whose turns reference improvised locations."""
+    user = temp_repo.create_user(username="improv_reset_user", display_name="Reset User")
+    w_draft = await generate_world_draft(
+        WorldWizardSeed(
+            name="Reset Test Archipelago",
+            genre_and_tone="Coastal Mystery",
+            core_premise="A quiet cove with hidden bungalows.",
+            initial_hub_concept="Driftwood Pier",
+            location_count=3,
+        )
+    )
+    world = temp_repo.create_world_from_draft(w_draft, owner_id=user.id)
+    c_draft = await generate_character_draft(
+        CharacterWizardSeed(
+            name="Mara Lin",
+            archetype="Harbor keeper",
+            personality_keywords=["observant", "calm"],
+        ),
+        world=world,
+    )
+    char = temp_repo.create_character_from_draft(c_draft, world_id=world.id, owner_id=user.id)
+    camp = temp_repo.create_campaign(
+        name="User Improv Campaign",
+        world_id=world.id,
+        character_id=char.id,
+        owner_id=user.id,
+    )
+    _, improv_loc_id, container_id, _ = _seed_improvised_location_active_in_campaign(
+        temp_repo, camp.id, "reset"
+    )
+
+    temp_repo.reset_user_data(user.id)
+
+    conn = temp_repo._connect()
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM campaigns WHERE id = ?", (camp.id,)).fetchone()[0] == 0
+        assert (
+            conn.execute("SELECT COUNT(*) FROM location_nodes WHERE id = ?", (improv_loc_id,)).fetchone()[0]
+            == 0
+        )
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM location_containers WHERE id = ?", (container_id,)
+            ).fetchone()[0]
+            == 0
+        )
+    finally:
+        conn.close()
+
+
+

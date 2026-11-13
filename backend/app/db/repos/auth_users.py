@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from app.config import ModelProfile
 from app.schemas.auth import PasskeyInfo, UserModelSettingsPayload, UserProfile, UserRole
-from app.db.repos.base import utc_now_iso, WEBAUTHN_CHALLENGE_TTL_SECONDS
+from app.db.repos.base import _delete_campaign_rows, utc_now_iso, WEBAUTHN_CHALLENGE_TTL_SECONDS
 
 
 class AuthUsersMixin:
@@ -300,29 +300,7 @@ class AuthUsersMixin:
                 "SELECT id FROM campaigns WHERE owner_id = ?", (user_id,)
             ).fetchall()
             for r in camp_rows:
-                c_id = r["id"]
-                conn.execute(
-                    "DELETE FROM vector_entries WHERE campaign_id = ?", (c_id,)
-                )
-                conn.execute(
-                    """
-                    DELETE FROM location_edges
-                    WHERE created_at_turn_id IN (
-                        SELECT id FROM turn_nodes WHERE campaign_id = ?
-                    )
-                    """,
-                    (c_id,),
-                )
-                conn.execute(
-                    """
-                    DELETE FROM location_nodes
-                    WHERE created_at_turn_id IN (
-                        SELECT id FROM turn_nodes WHERE campaign_id = ?
-                    )
-                    """,
-                    (c_id,),
-                )
-                conn.execute("DELETE FROM campaigns WHERE id = ?", (c_id,))
+                _delete_campaign_rows(conn, r["id"])
 
             # 2. Delete user characters, associated shard vectors, and disk media
             char_rows = conn.execute(

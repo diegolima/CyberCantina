@@ -254,6 +254,88 @@ def _location_lore_vector_fields(
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+
+def _chunked(items: list[str], size: int = 500) -> list[list[str]]:
+    """Split a list of IDs into SQLite parameter-safe batches."""
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+def _delete_campaign_rows(conn: sqlite3.Connection, campaign_id: str) -> None:
+    """Delete a campaign, its turn tree, episodic/location vectors, and campaign-improvised spatial graph."""
+    turn_ids = [
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM turn_nodes WHERE campaign_id = ?", (campaign_id,)
+        ).fetchall()
+    ]
+
+    # 1. Remove campaign-scoped vector entries and vectors bound to improvised locations/containers/turns
+    conn.execute("DELETE FROM vector_entries WHERE campaign_id = ?", (campaign_id,))
+    if turn_ids:
+        for batch in _chunked(turn_ids):
+            placeholders = ",".join("?" for _ in batch)
+            conn.execute(
+                f"DELETE FROM vector_entries WHERE anchor_turn_id IN ({placeholders})",
+                batch,
+            )
+            conn.execute(
+                f"""
+                DELETE FROM vector_entries
+                WHERE location_id IN (
+                    SELECT id FROM location_nodes WHERE created_at_turn_id IN ({placeholders})
+                )
+                """,
+                batch,
+            )
+            conn.execute(
+                f"""
+                DELETE FROM vector_entries
+                WHERE container_id IN (
+                    SELECT id FROM location_containers WHERE created_at_turn_id IN ({placeholders})
+                )
+                """,
+                batch,
+            )
+
+    # 2. Delete the campaign first so ON DELETE CASCADE removes turn_nodes, world_state_snapshots,
+    #    and character_states before we remove improvised location_nodes referenced by those snapshots.
+    conn.execute("DELETE FROM campaigns WHERE id = ?", (campaign_id,))
+
+    # 3. Restore any base-world rows superseded during this campaign, then delete improvised spatial rows
+    if turn_ids:
+        for batch in _chunked(turn_ids):
+            placeholders = ",".join("?" for _ in batch)
+            conn.execute(
+                f"UPDATE location_edges SET superseded_at_turn_id = NULL WHERE superseded_at_turn_id IN ({placeholders})",
+                batch,
+            )
+            conn.execute(
+                f"UPDATE location_nodes SET superseded_at_turn_id = NULL WHERE superseded_at_turn_id IN ({placeholders})",
+                batch,
+            )
+            conn.execute(
+                f"UPDATE vector_entries SET superseded_at_turn_id = NULL WHERE superseded_at_turn_id IN ({placeholders})",
+                batch,
+            )
+        for batch in _chunked(turn_ids):
+            placeholders = ",".join("?" for _ in batch)
+            conn.execute(
+                f"DELETE FROM location_edges WHERE created_at_turn_id IN ({placeholders})",
+                batch,
+            )
+        for batch in _chunked(turn_ids):
+            placeholders = ",".join("?" for _ in batch)
+            conn.execute(
+                f"DELETE FROM location_nodes WHERE created_at_turn_id IN ({placeholders})",
+                batch,
+            )
+        for batch in _chunked(turn_ids):
+            placeholders = ",".join("?" for _ in batch)
+            conn.execute(
+                f"DELETE FROM location_containers WHERE created_at_turn_id IN ({placeholders})",
+                batch,
+            )
+
 STAGED_CHARACTER_OWNERSHIP_TTL_SECONDS = 3600  # 1 hour for uncommitted character drafts
 
 WEBAUTHN_CHALLENGE_TTL_SECONDS = 300  # 5 minutes
