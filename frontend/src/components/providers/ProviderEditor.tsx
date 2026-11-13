@@ -19,6 +19,19 @@ type EditorProps =
   | { mode: "edit"; provider: LLMProvider; deleteOnly?: boolean; onDone: () => void }
   | { mode: "create"; scope: ProviderScope; onDone: () => void };
 
+const PRESET_CLOUD_HOSTS = new Set(["openrouter.ai", "oai.stablehorde.net"]);
+
+function isPresetCloudOrSentinelUrl(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed === "webgpu://browser") return true;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "https:" && PRESET_CLOUD_HOSTS.has(parsed.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 function hostOf(raw: string): string | null {
   try {
     return new URL(raw.trim()).host.toLowerCase();
@@ -280,7 +293,7 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
                   if (!name || ["Ollama", "OpenRouter", "AI Horde", "Browser WebGPU"].includes(name)) {
                     setName("Local Ollama (Browser)");
                   }
-                  if (!url || url.startsWith("https://openrouter.ai") || url.startsWith("https://oai.stablehorde") || url === "webgpu://browser") {
+                  if (isPresetCloudOrSentinelUrl(url)) {
                     setUrl("http://localhost:11434");
                   }
                 }}

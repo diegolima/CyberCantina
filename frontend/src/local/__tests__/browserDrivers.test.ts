@@ -26,9 +26,57 @@ describe("ollamaDriver", () => {
     vi.unstubAllGlobals();
   });
 
-  it("normalizes /v1 and /api suffixes", () => {
+  it("normalizes /v1 and /api suffixes on loopback hosts", () => {
+    expect(normalizeOllamaRoot(undefined)).toBe("http://localhost:11434");
+    expect(normalizeOllamaRoot("")).toBe("http://localhost:11434");
     expect(normalizeOllamaRoot("http://localhost:11434/v1/")).toBe("http://localhost:11434");
     expect(normalizeOllamaRoot("http://127.0.0.1:11434/api")).toBe("http://127.0.0.1:11434");
+    expect(normalizeOllamaRoot("https://[::1]:11434/v1")).toBe("https://[::1]:11434");
+  });
+
+  it("rejects non-loopback, malformed, credentialed, or custom-path URLs", async () => {
+    const badUrls = [
+      "not-a-url",
+      "ftp://localhost:11434",
+      "javascript:alert(1)",
+      "http://user:pass@localhost:11434",
+      "http://localhost:11434?x=1",
+      "http://localhost:11434#frag",
+      "http://localhost.evil.com:11434",
+      "http://192.168.1.10:11434",
+      "http://169.254.169.254/latest/meta-data",
+      "http://localhost:11434/admin",
+      "http://localhost:11434/v1/api",
+    ];
+
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (const bad of badUrls) {
+      expect(() => normalizeOllamaRoot(bad)).toThrow();
+
+      const probe = await probeBrowserOllama(bad);
+      expect(probe.reachable).toBe(false);
+      expect(probe.error_code).toBe("bad_payload");
+
+      await expect(
+        runBrowserOllamaChat(
+          {
+            type: "llm.request",
+            request_id: "r-bad",
+            driver: "browser_ollama",
+            mode: "complete",
+            base_url: bad,
+            model: "llama3.1:8b",
+            messages: [{ role: "user", content: "hi" }],
+            options: { temperature: 0.7, max_tokens: 64 },
+          },
+          () => {}
+        )
+      ).rejects.toThrow();
+    }
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("probes /api/tags and flags TypeError as CORS/LNA setup needed", async () => {

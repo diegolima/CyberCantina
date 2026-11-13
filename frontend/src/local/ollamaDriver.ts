@@ -15,11 +15,70 @@ function isEmbeddingName(name: string): boolean {
   return EMBED_KEYWORDS.some((kw) => lower.includes(kw));
 }
 
+const LOOPBACK_HOSTS: Record<string, string> = {
+  localhost: "localhost",
+  "127.0.0.1": "127.0.0.1",
+  "[::1]": "[::1]",
+  "::1": "[::1]",
+};
+
+/**
+ * Validate and normalize a browser-local Ollama base URL to a loopback origin.
+ * Rejects non-HTTP(S) schemes, credentials, queries, fragments, non-loopback hosts, and custom paths.
+ */
 export function normalizeOllamaRoot(rawUrl: string | undefined): string {
-  let cleaned = (rawUrl || "http://localhost:11434").trim().replace(/\/+$/, "");
-  if (cleaned.endsWith("/v1")) cleaned = cleaned.slice(0, -3).replace(/\/+$/, "");
-  if (cleaned.endsWith("/api")) cleaned = cleaned.slice(0, -4).replace(/\/+$/, "");
-  return cleaned || "http://localhost:11434";
+  const trimmed = (rawUrl ?? "").trim();
+  if (!trimmed) {
+    return "http://localhost:11434";
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error("Local Ollama URL is not a valid URL.");
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Local Ollama URL must use http:// or https://.");
+  }
+  const protocol = parsed.protocol === "https:" ? "https:" : "http:";
+
+  if (parsed.username || parsed.password) {
+    throw new Error("Credentials in the Local Ollama URL are not allowed.");
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error("Local Ollama URL must not contain a query string or fragment.");
+  }
+
+  const hostKey = parsed.hostname.toLowerCase();
+  const safeHost = Object.prototype.hasOwnProperty.call(LOOPBACK_HOSTS, hostKey)
+    ? LOOPBACK_HOSTS[hostKey]
+    : null;
+  if (!safeHost) {
+    throw new Error("Browser-local Ollama must use a loopback address (localhost, 127.0.0.1, or [::1]).");
+  }
+
+  let portSuffix = "";
+  if (parsed.port) {
+    const portNum = Number.parseInt(parsed.port, 10);
+    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535 || String(portNum) !== parsed.port) {
+      throw new Error("Local Ollama URL has an invalid port.");
+    }
+    portSuffix = `:${portNum}`;
+  }
+
+  let path = parsed.pathname.replace(/\/+$/, "");
+  if (path.endsWith("/v1")) {
+    path = path.slice(0, -3).replace(/\/+$/, "");
+  } else if (path.endsWith("/api")) {
+    path = path.slice(0, -4).replace(/\/+$/, "");
+  }
+  if (path !== "") {
+    throw new Error("Local Ollama URL must not contain a custom path.");
+  }
+
+  return `${protocol}//${safeHost}${portSuffix}`;
 }
 
 function loopbackFetchInit(init: RequestInit): RequestInit {
@@ -72,7 +131,18 @@ export async function probeBrowserOllama(
   baseUrl?: string,
   signal?: AbortSignal
 ): Promise<BrowserOllamaProbeOutcome> {
-  const root = normalizeOllamaRoot(baseUrl);
+  let root: string;
+  try {
+    root = normalizeOllamaRoot(baseUrl);
+  } catch (err: any) {
+    return {
+      reachable: false,
+      protocol: null,
+      models: [],
+      error_code: "bad_payload",
+      error: err?.message || "Invalid Local Ollama URL.",
+    };
+  }
   const timeoutCtrl = new AbortController();
   const timer = setTimeout(() => timeoutCtrl.abort(), 5000);
   const combinedSignal =
