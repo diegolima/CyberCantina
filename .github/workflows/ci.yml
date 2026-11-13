@@ -26,11 +26,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
-      - name: Lint and check module boundaries (ruff + tach)
+      - name: Lint, check boundaries, and verify architecture docs
         working-directory: backend
         run: |
-          ruff check app tests
+          ruff check app tests ../scripts/generate_arch_docs.py
           tach check
+          python ../scripts/generate_arch_docs.py --check
       - name: Run pytest
         working-directory: backend
         run: pytest tests

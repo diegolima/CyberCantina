@@ -52,13 +52,6 @@ def _extract_module_doc(path: Path) -> str:
     return first_line[:110]
 
 
-def _count_lines(path: Path) -> int:
-    try:
-        return sum(1 for _ in path.open("r", encoding="utf-8"))
-    except OSError:
-        return 0
-
-
 def _bucket_backend_path(rel_path: Path) -> str:
     parts = list(rel_path.parts)
     if parts[-1] == "__init__.py":
@@ -148,22 +141,20 @@ def _collect_fastapi_routes() -> list[tuple[str, str, str, str]]:
     return sorted(rows, key=lambda item: (item[1], item[0]))
 
 
-def _parse_schema_sql() -> tuple[list[tuple[str, int, list[str]]], list[tuple[str, str]]]:
+def _parse_schema_sql() -> tuple[list[tuple[str, list[str]]], list[tuple[str, str]]]:
     """Parse CREATE TABLE definitions and foreign-key edges from schema.sql."""
     schema_path = BACKEND_DIR / "app" / "db" / "schema.sql"
     sql = schema_path.read_text(encoding="utf-8")
-    tables: list[tuple[str, int, list[str]]] = []
+    tables: list[tuple[str, list[str]]] = []
     fk_edges: set[tuple[str, str]] = set()
 
     current_table: str | None = None
-    start_line = 0
     current_fks: list[str] = []
 
-    for lineno, line in enumerate(sql.splitlines(), start=1):
+    for line in sql.splitlines():
         m_tbl = _CREATE_TABLE_RE.search(line)
         if m_tbl:
             current_table = m_tbl.group(1)
-            start_line = lineno
             current_fks = []
             continue
         if current_table is not None:
@@ -172,7 +163,7 @@ def _parse_schema_sql() -> tuple[list[tuple[str, int, list[str]]], list[tuple[st
                 current_fks.append(parent)
                 fk_edges.add((current_table, parent))
             if line.strip().startswith(");"):
-                tables.append((current_table, start_line, sorted(set(current_fks))))
+                tables.append((current_table, sorted(set(current_fks))))
                 current_table = None
                 current_fks = []
 
@@ -193,14 +184,17 @@ def _run_tach_mermaid() -> str:
         text=True,
         check=True,
     )
-    lines: list[str] = []
-    in_graph = False
+    header: str | None = None
+    body_lines: list[str] = []
     for line in proc.stdout.splitlines():
-        if line.strip().startswith("graph "):
-            in_graph = True
-        if in_graph:
-            lines.append(line.rstrip())
-    return "\n".join(lines).strip()
+        stripped = line.rstrip()
+        if stripped.strip().startswith("graph "):
+            header = stripped.strip()
+        elif header is not None and stripped:
+            body_lines.append(stripped)
+    if header is None:
+        return ""
+    return "\n".join([header, *sorted(body_lines)])
 
 
 def _render_readme() -> str:
@@ -363,14 +357,13 @@ def _render_frontend_graph() -> str:
         "",
         "## Bucket Inventory",
         "",
-        "| Bucket | Files | Total LOC | Outgoing Dependencies |",
-        "| :--- | ---: | ---: | :--- |",
+        "| Bucket | Files | Outgoing Dependencies |",
+        "| :--- | ---: | :--- |",
     ]
     for bucket in sorted(files_by_bucket.keys()):
         paths = files_by_bucket[bucket]
-        total_loc = sum(_count_lines(p) for p in paths)
         deps = ", ".join(f"`{d}`" for d in sorted(edges.get(bucket, set()))) or "*(leaf)*"
-        lines.append(f"| `{bucket}` | {len(paths)} | {total_loc} | {deps} |")
+        lines.append(f"| `{bucket}` | {len(paths)} | {deps} |")
 
     lines.append("")
     return "\n".join(lines)
@@ -414,13 +407,13 @@ def _render_cross_layer_map() -> str:
         [
             "```",
             "",
-            "| Table | DDL Line | Foreign-Key Parents |",
-            "| :--- | ---: | :--- |",
+            "| Table | Foreign-Key Parents |",
+            "| :--- | :--- |",
         ]
     )
-    for tbl, lineno, parents in tables:
+    for tbl, parents in tables:
         p_str = ", ".join(f"`{p}`" for p in parents) if parents else "—"
-        lines.append(f"| `{tbl}` | {lineno} | {p_str} |")
+        lines.append(f"| `{tbl}` | {p_str} |")
 
     lines.extend(
         [
@@ -441,24 +434,23 @@ def _render_cross_layer_map() -> str:
     for group in sorted(backend_groups.keys()):
         lines.append(f"#### `{group}`")
         lines.append("")
-        lines.append("| File | LOC | Summary |")
-        lines.append("| :--- | ---: | :--- |")
+        lines.append("| File | Summary |")
+        lines.append("| :--- | :--- |")
         for py_path in sorted(backend_groups[group]):
             rel = py_path.relative_to(REPO_ROOT).as_posix()
-            loc = _count_lines(py_path)
             doc = _extract_module_doc(py_path) or "—"
-            lines.append(f"| `{rel}` | {loc} | {doc.replace('|', '/')} |")
+            lines.append(f"| `{rel}` | {doc.replace('|', '/')} |")
         lines.append("")
 
     lines.extend(["### Frontend (`frontend/src/`)", ""])
     for bucket in sorted(fe_files_by_bucket.keys()):
         lines.append(f"#### `{bucket}`")
         lines.append("")
-        lines.append("| File | LOC |")
-        lines.append("| :--- | ---: |")
+        lines.append("| File |")
+        lines.append("| :--- |")
         for ts_path in sorted(fe_files_by_bucket[bucket]):
             rel = ts_path.relative_to(REPO_ROOT).as_posix()
-            lines.append(f"| `{rel}` | {_count_lines(ts_path)} |")
+            lines.append(f"| `{rel}` |")
         lines.append("")
 
     return "\n".join(lines)
@@ -490,7 +482,12 @@ def main(argv: list[str] | None = None) -> int:
             if current != expected:
                 stale.append(target.relative_to(REPO_ROOT).as_posix())
         if stale:
-            print("Stale architecture docs detected:", ", ".join(stale), file=sys.stderr)
+            print(
+                "Stale architecture docs detected:",
+                ", ".join(stale),
+                "\nRegenerate with: backend/.venv/bin/python scripts/generate_arch_docs.py",
+                file=sys.stderr,
+            )
             return 1
         print(f"Architecture docs up to date ({len(outputs)} files verified).")
         return 0

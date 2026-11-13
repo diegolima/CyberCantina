@@ -27,4 +27,4 @@
 - **Required Checks Before Completion**:
   - Backend: `cd backend && .venv/bin/ruff check app tests && .venv/bin/tach check` and `backend/.venv/bin/pytest backend/tests`
   - Frontend: `npm --prefix frontend run arch:check && npm --prefix frontend run build && npm --prefix frontend test`
-  - Architecture docs (when modules/routes/tables change): `backend/.venv/bin/python scripts/generate_arch_docs.py`
+  - Architecture docs (enforced in CI via `--check`; regenerate when modules, docstrings, routes, tables, or imports change): `backend/.venv/bin/python scripts/generate_arch_docs.py && backend/.venv/bin/python scripts/generate_arch_docs.py --check`
