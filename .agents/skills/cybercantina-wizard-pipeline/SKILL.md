@@ -10,11 +10,11 @@ description: >-
 
 ## Architecture Map
 - **Routers**: `backend/app/routers/characters.py`, `backend/app/routers/worlds.py`
-- **3-Pass Character Generator**: `backend/app/wizards/character_wizard.py`
+- **3-Pass Character Generator**: `backend/app/wizards/char_gen/` (`genre_profiles.py`, `inference.py`, `draft_pipeline.py`; re-exported via `backend/app/wizards/character_wizard.py`)
 - **Extractors & Importers**: `backend/app/wizards/character_extractor.py`, `backend/app/wizards/sillytavern_distiller.py`
 - **Schemas & Sanitizers**: `backend/app/schemas/character.py`, `backend/app/schemas/affective.py`, `backend/app/schemas/world.py`
 - **Prompt Defaults**: `backend/app/prompts/defaults.py`
-- **Wizard Modal UI & Client Fallbacks**: `frontend/src/components/WizardModals.tsx`
+- **Wizard Modal UI & Client Fallbacks**: `frontend/src/components/WizardModals.tsx`, `frontend/src/components/wizard/WorldWizardModal.tsx`, `frontend/src/components/wizard/genreFallbacks.ts`
 
 ## Character Generation 3-Pass Contract
 1. **Pass 1 (`CharacterWizardPass1LLMOutput`) — Identity, Anatomy & Gear**:
@@ -33,9 +33,9 @@ description: >-
   - Prose mode (`preserve_italics=True`, used on `initial_message` and `voice_anchors[].snippet`): strips `<think>`/`<thought>`/`<reasoning>`/`<scratchpad>` & `<!-- -->`, converts `<p>`/`<br>`/`<li>` structure, converts `<i>`/`<em>` into paragraph-safe Markdown `*...*` for `renderFormattedProse`, strips remaining HTML/XML tags, and unescapes HTML entities.
   - Plain-text/chip mode (`preserve_italics=False`, optional `single_line=True`): strips all HTML/XML tags without adding `*` markers and unescapes entities.
 - **Single-Item Gear & Genre Fallbacks**:
-  - `_split_compound_items` splits `"X and Y"` compounds into discrete `ItemInstance` entries; `resolve_genre_fallback_profile` covers all 13 genre profiles (keep backend `character_wizard.py` and frontend `WizardModals.tsx` genre profiles synchronized).
+  - `_split_compound_items` splits `"X and Y"` compounds into discrete `ItemInstance` entries; `resolve_genre_fallback_profile` covers all 13 genre profiles (keep backend `backend/app/wizards/char_gen/genre_profiles.py` and frontend `frontend/src/components/wizard/genreFallbacks.ts` synchronized).
 - **Height Sanitization**:
-  - `_sanitize_height_only` strips appended frame/build descriptors from `build_and_height`; `phase2_context.py` renders `- Height:` when build is absent and `- Build & Height:` for legacy rows.
+  - `_sanitize_height_only` strips appended frame/build descriptors from `build_and_height`; `backend/app/engine/context/zone1_static.py` renders `- Height:` when build is absent and `- Build & Height:` for legacy rows.
 
 ## Debugging & Verification Workflow
 1. **Inspect Live Saved Characters** (when auditing a reported generation defect):
