@@ -267,6 +267,7 @@ def slugify_tag(text: str) -> str:
     return re.sub(r"\s+", "-", cleaned)
 from app.engine.mentions import CharacterWhisper
 from app.schemas.turn import (
+    CampaignMapUpdatePayload,
     CampaignRecord,
     CampaignStateBundle,
     EpisodicChunkRecord,
@@ -574,11 +575,15 @@ class CantinaRepository:
                     CREATE TABLE IF NOT EXISTS location_containers (
                         id TEXT PRIMARY KEY,
                         world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+                        created_at_turn_id TEXT NULL,
                         parent_container_id TEXT NULL REFERENCES location_containers(id) ON DELETE CASCADE,
                         depth INTEGER NOT NULL CHECK(depth BETWEEN 1 AND 4),
                         name TEXT NOT NULL,
                         description TEXT NOT NULL DEFAULT '',
                         environmental_tags_json TEXT NOT NULL DEFAULT '[]',
+                        ui_x REAL NULL,
+                        ui_y REAL NULL,
+                        icon TEXT NULL,
                         created_at TEXT NOT NULL DEFAULT ''
                     )
                     """
@@ -1064,6 +1069,75 @@ class CantinaRepository:
                 conn.execute(
                     "ALTER TABLE world_state_snapshots ADD COLUMN campaign_elapsed_minutes INTEGER NOT NULL DEFAULT 0"
                 )
+            if "visited_location_ids_json" not in ws_cols:
+                conn.execute(
+                    "ALTER TABLE world_state_snapshots ADD COLUMN visited_location_ids_json TEXT NOT NULL DEFAULT '[]'"
+                )
+                # One-shot backwards-compatibility backfill: mark all currently visible
+                # locations in existing campaign snapshots as visited.
+                existing_ws = conn.execute(
+                    """
+                    SELECT ws.turn_id, ws.active_location_id, t.campaign_id, c.world_id
+                    FROM world_state_snapshots ws
+                    JOIN turn_nodes t ON t.id = ws.turn_id
+                    JOIN campaigns c ON c.id = t.campaign_id
+                    """
+                ).fetchall()
+                if existing_ws:
+                    all_turn_parents = {
+                        r["id"]: r["parent_turn_id"]
+                        for r in conn.execute("SELECT id, parent_turn_id FROM turn_nodes").fetchall()
+                    }
+                    world_locs_cache: dict[str, list[sqlite3.Row]] = {}
+                    for ws_row in existing_ws:
+                        w_id = ws_row["world_id"]
+                        if w_id not in world_locs_cache:
+                            world_locs_cache[w_id] = conn.execute(
+                                "SELECT id, created_at_turn_id FROM location_nodes WHERE world_id = ?",
+                                (w_id,),
+                            ).fetchall()
+                        branch_ids: set[str] = set()
+                        curr_tid: str | None = ws_row["turn_id"]
+                        while curr_tid and curr_tid not in branch_ids:
+                            branch_ids.add(curr_tid)
+                            curr_tid = all_turn_parents.get(curr_tid)
+                        visited_ids: list[str] = []
+                        seen_vis: set[str] = set()
+                        for loc_r in world_locs_cache[w_id]:
+                            c_tid = loc_r["created_at_turn_id"]
+                            if c_tid is None or c_tid in branch_ids:
+                                lid = loc_r["id"]
+                                if lid not in seen_vis:
+                                    seen_vis.add(lid)
+                                    visited_ids.append(lid)
+                        active_lid = ws_row["active_location_id"]
+                        if active_lid and active_lid not in seen_vis:
+                            visited_ids.append(active_lid)
+                        conn.execute(
+                            "UPDATE world_state_snapshots SET visited_location_ids_json = ? WHERE turn_id = ?",
+                            (json.dumps(visited_ids), ws_row["turn_id"]),
+                        )
+
+            cont_cols = {
+                r["name"]
+                for r in conn.execute("PRAGMA table_info(location_containers)").fetchall()
+            }
+            if "created_at_turn_id" not in cont_cols:
+                conn.execute(
+                    "ALTER TABLE location_containers ADD COLUMN created_at_turn_id TEXT NULL"
+                )
+            if "ui_x" not in cont_cols:
+                conn.execute(
+                    "ALTER TABLE location_containers ADD COLUMN ui_x REAL NULL"
+                )
+            if "ui_y" not in cont_cols:
+                conn.execute(
+                    "ALTER TABLE location_containers ADD COLUMN ui_y REAL NULL"
+                )
+            if "icon" not in cont_cols:
+                conn.execute(
+                    "ALTER TABLE location_containers ADD COLUMN icon TEXT NULL"
+                )
 
             cs_cols = {
                 r["name"]
@@ -1101,6 +1175,22 @@ class CantinaRepository:
             if "starting_message" not in loc_cols:
                 conn.execute(
                     "ALTER TABLE location_nodes ADD COLUMN starting_message TEXT NOT NULL DEFAULT ''"
+                )
+            if "superseded_at_turn_id" not in loc_cols:
+                conn.execute(
+                    "ALTER TABLE location_nodes ADD COLUMN superseded_at_turn_id TEXT NULL"
+                )
+            if "ui_x" not in loc_cols:
+                conn.execute(
+                    "ALTER TABLE location_nodes ADD COLUMN ui_x REAL NULL"
+                )
+            if "ui_y" not in loc_cols:
+                conn.execute(
+                    "ALTER TABLE location_nodes ADD COLUMN ui_y REAL NULL"
+                )
+            if "icon" not in loc_cols:
+                conn.execute(
+                    "ALTER TABLE location_nodes ADD COLUMN icon TEXT NULL"
                 )
 
             edge_cols = {
@@ -2625,7 +2715,39 @@ class CantinaRepository:
                 (world_id,),
             ).fetchall()
 
-            containers = [self._row_to_container(r) for r in container_rows]
+            containers: list[LocationContainer] = []
+            for r in container_rows:
+                c_turn = r["created_at_turn_id"] if "created_at_turn_id" in r.keys() else None
+                if base_only and c_turn is not None:
+                    continue
+                if valid_turn_ids is not None and c_turn is not None and c_turn not in valid_turn_ids:
+                    continue
+                containers.append(self._row_to_container(r))
+
+            locations: list[LocationNode] = []
+            for r in loc_rows:
+                c_turn = r["created_at_turn_id"]
+                sup_turn = r["superseded_at_turn_id"] if "superseded_at_turn_id" in r.keys() else None
+                if base_only and c_turn is not None:
+                    continue
+                if valid_turn_ids is not None:
+                    if c_turn is not None and c_turn not in valid_turn_ids:
+                        continue
+                    if sup_turn is not None and sup_turn in valid_turn_ids:
+                        continue
+                elif not base_only and sup_turn is not None:
+                    continue
+                locations.append(self._row_to_location(r))
+
+            if not base_only and campaign_id:
+                containers, locations = self._apply_campaign_spatial_overrides(
+                    conn,
+                    campaign_id=campaign_id,
+                    valid_turn_ids=valid_turn_ids,
+                    containers=containers,
+                    locations=locations,
+                )
+
             cont_lore_map = self._resolve_container_lore_map(
                 conn,
                 [c.id for c in containers if c.depth == 1],
@@ -2634,15 +2756,6 @@ class CantinaRepository:
             for c in containers:
                 if c.depth == 1:
                     c.lore_nodes = cont_lore_map.get(c.id, [])
-
-            locations: list[LocationNode] = []
-            for r in loc_rows:
-                c_turn = r["created_at_turn_id"]
-                if base_only and c_turn is not None:
-                    continue
-                if valid_turn_ids is not None and c_turn is not None and c_turn not in valid_turn_ids:
-                    continue
-                locations.append(self._row_to_location(r))
 
             loc_lore_map = self._resolve_location_lore_map(
                 conn,
@@ -2818,19 +2931,23 @@ class CantinaRepository:
                 conn.execute(
                     """
                     INSERT INTO location_containers (
-                        id, world_id, parent_container_id, depth, name,
-                        description, environmental_tags_json, created_at
+                        id, world_id, created_at_turn_id, parent_container_id, depth, name,
+                        description, environmental_tags_json, ui_x, ui_y, icon, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         new_cont_id,
                         target_world_id,
+                        cont.created_at_turn_id if can_reuse_cont else None,
                         mapped_parent_id,
                         cont.depth,
                         cont.name,
                         cont.description,
                         json.dumps(cont.environmental_tags),
+                        cont.ui_x,
+                        cont.ui_y,
+                        cont.icon,
                         now,
                     ),
                 )
@@ -2859,11 +2976,11 @@ class CantinaRepository:
                 conn.execute(
                     """
                     INSERT INTO location_nodes (
-                        id, world_id, created_at_turn_id, container_id, name, summary,
+                        id, world_id, created_at_turn_id, superseded_at_turn_id, container_id, name, summary,
                         description, environmental_tags_json, is_starting_location, is_hub,
-                        is_entry_exit, starting_message
+                        is_entry_exit, starting_message, ui_x, ui_y, icon
                     )
-                    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         new_loc_id,
@@ -2877,6 +2994,9 @@ class CantinaRepository:
                         is_hub,
                         is_portal,
                         starting_msg,
+                        loc.ui_x,
+                        loc.ui_y,
+                        loc.icon,
                     ),
                 )
 
@@ -3567,6 +3687,7 @@ class CantinaRepository:
                 edge_turn = r["edge_turn_id"]
                 edge_sup = r["edge_superseded_turn_id"]
                 loc_turn = r["created_at_turn_id"]
+                loc_sup = r["superseded_at_turn_id"] if "superseded_at_turn_id" in r.keys() else None
                 if valid_turn_ids is not None:
                     if edge_turn is not None and edge_turn not in valid_turn_ids:
                         continue
@@ -3574,7 +3695,9 @@ class CantinaRepository:
                         continue
                     if loc_turn is not None and loc_turn not in valid_turn_ids:
                         continue
-                elif edge_sup is not None:
+                    if loc_sup is not None and loc_sup in valid_turn_ids:
+                        continue
+                elif edge_sup is not None or loc_sup is not None:
                     continue
                 dest = self._row_to_location(r)
                 cdir = normalize_compass_direction(r["compass_direction"], r["direction_label"])
@@ -3588,6 +3711,24 @@ class CantinaRepository:
                         destination=dest,
                     )
                 )
+
+            if campaign_id and neighbors:
+                _, overridden_dests = self._apply_campaign_spatial_overrides(
+                    conn,
+                    campaign_id=campaign_id,
+                    valid_turn_ids=valid_turn_ids,
+                    containers=[],
+                    locations=[n.destination for n in neighbors],
+                )
+                dest_by_id = {d.id: d for d in overridden_dests}
+                kept_neighbors: list[NeighborLocationView] = []
+                for n in neighbors:
+                    ov_dest = dest_by_id.get(n.destination.id)
+                    if ov_dest is None:
+                        continue
+                    n.destination = ov_dest
+                    kept_neighbors.append(n)
+                neighbors = kept_neighbors
 
             if neighbors:
                 loc_lore_map = self._resolve_location_lore_map(
@@ -5762,7 +5903,7 @@ class CantinaRepository:
         """Create a new campaign and initialize Turn 0 (opening scene snapshot)."""
         camp_id = campaign_id or f"camp_{uuid.uuid4().hex[:10]}"
         now = utc_now_iso()
-        world = self.get_world(world_id, owner_id=owner_id)
+        world = self.get_world(world_id, base_only=True, owner_id=owner_id)
         character = self.get_character(character_id, owner_id=owner_id)
 
         persona: PersonaRecord | None = None
@@ -5848,12 +5989,18 @@ class CantinaRepository:
             )
 
         root_turn_id = f"turn_{uuid.uuid4().hex[:10]}"
+        root_visited_ids = list(
+            dict.fromkeys(
+                [primary_loc_id, *[loc_map.get(ec.id, start_loc.id) for ec in extra_characters]]
+            )
+        )
         root_snapshot = WorldStateSnapshot(
             turn_id=root_turn_id,
             world_timestamp=world.global_rules.starting_timestamp,
             active_location_id=primary_loc_id,
             scene_flags=["Scene Opening"],
             campaign_elapsed_minutes=0,
+            visited_location_ids=root_visited_ids,
         )
         root_care = seed_initial_care_state(
             character.baseline_psyche,
@@ -6509,12 +6656,37 @@ class CantinaRepository:
                     now,
                 ),
             )
+            visited_ids = list(
+                dict.fromkeys(
+                    [
+                        *(world_snapshot.visited_location_ids or []),
+                        *(
+                            [world_snapshot.active_location_id]
+                            if world_snapshot.active_location_id
+                            else []
+                        ),
+                    ]
+                )
+            )
+            if not world_snapshot.visited_location_ids and parent_turn_id is not None:
+                parent_ws = conn.execute(
+                    "SELECT visited_location_ids_json FROM world_state_snapshots WHERE turn_id = ?",
+                    (parent_turn_id,),
+                ).fetchone()
+                if parent_ws and parent_ws["visited_location_ids_json"]:
+                    try:
+                        parent_visited = json.loads(parent_ws["visited_location_ids_json"] or "[]")
+                    except Exception:
+                        parent_visited = []
+                    visited_ids = list(dict.fromkeys([*parent_visited, *visited_ids]))
+
             conn.execute(
                 """
                 INSERT INTO world_state_snapshots (
-                    turn_id, world_timestamp, active_location_id, scene_flags_json, campaign_elapsed_minutes
+                    turn_id, world_timestamp, active_location_id, scene_flags_json,
+                    campaign_elapsed_minutes, visited_location_ids_json
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     turn_id,
@@ -6522,6 +6694,7 @@ class CantinaRepository:
                     world_snapshot.active_location_id,
                     json.dumps(world_snapshot.scene_flags),
                     int(world_snapshot.campaign_elapsed_minutes),
+                    json.dumps(visited_ids),
                 ),
             )
 
@@ -6661,10 +6834,34 @@ class CantinaRepository:
                 "UPDATE turn_nodes SET post_turn_json = ? WHERE id = ?",
                 (post_turn.model_dump_json(), turn_id),
             )
+            existing_ws = conn.execute(
+                "SELECT visited_location_ids_json FROM world_state_snapshots WHERE turn_id = ?",
+                (turn_id,),
+            ).fetchone()
+            existing_visited: list[str] = []
+            if existing_ws and existing_ws["visited_location_ids_json"]:
+                try:
+                    existing_visited = json.loads(existing_ws["visited_location_ids_json"] or "[]")
+                except Exception:
+                    existing_visited = []
+            merged_visited = list(
+                dict.fromkeys(
+                    [
+                        *existing_visited,
+                        *(updated_world_snapshot.visited_location_ids or []),
+                        *(
+                            [updated_world_snapshot.active_location_id]
+                            if updated_world_snapshot.active_location_id
+                            else []
+                        ),
+                    ]
+                )
+            )
             conn.execute(
                 """
                 UPDATE world_state_snapshots
-                SET world_timestamp = ?, active_location_id = ?, scene_flags_json = ?, campaign_elapsed_minutes = ?
+                SET world_timestamp = ?, active_location_id = ?, scene_flags_json = ?,
+                    campaign_elapsed_minutes = ?, visited_location_ids_json = ?
                 WHERE turn_id = ?
                 """,
                 (
@@ -6672,6 +6869,7 @@ class CantinaRepository:
                     updated_world_snapshot.active_location_id,
                     json.dumps(updated_world_snapshot.scene_flags),
                     int(updated_world_snapshot.campaign_elapsed_minutes),
+                    json.dumps(merged_visited),
                     turn_id,
                 ),
             )
@@ -7013,6 +7211,7 @@ class CantinaRepository:
                     ws.active_location_id,
                     ws.scene_flags_json,
                     ws.campaign_elapsed_minutes,
+                    ws.visited_location_ids_json,
                     cs.character_id AS cs_character_id,
                     cs.current_location_id,
                     cs.mood_label,
@@ -7064,6 +7263,7 @@ class CantinaRepository:
                     ws.active_location_id,
                     ws.scene_flags_json,
                     ws.campaign_elapsed_minutes,
+                    ws.visited_location_ids_json,
                     cs.character_id AS cs_character_id,
                     cs.current_location_id,
                     cs.mood_label,
@@ -7105,6 +7305,7 @@ class CantinaRepository:
                     ws.active_location_id,
                     ws.scene_flags_json,
                     ws.campaign_elapsed_minutes,
+                    ws.visited_location_ids_json,
                     cs.character_id AS cs_character_id,
                     cs.current_location_id,
                     cs.mood_label,
@@ -7200,9 +7401,13 @@ class CantinaRepository:
                 deleted_ids,
             )
 
-            # 4. Delete improvised spatial edges & locations created during the deleted turns, and restore superseded edges
+            # 4. Delete improvised spatial edges, locations, & containers created during the deleted turns, and restore superseded rows
             conn.execute(
                 f"UPDATE location_edges SET superseded_at_turn_id = NULL WHERE world_id = ? AND superseded_at_turn_id IN ({placeholders})",
+                [campaign.world_id, *deleted_ids],
+            )
+            conn.execute(
+                f"UPDATE location_nodes SET superseded_at_turn_id = NULL WHERE world_id = ? AND superseded_at_turn_id IN ({placeholders})",
                 [campaign.world_id, *deleted_ids],
             )
             conn.execute(
@@ -7211,6 +7416,10 @@ class CantinaRepository:
             )
             conn.execute(
                 f"DELETE FROM location_nodes WHERE world_id = ? AND created_at_turn_id IN ({placeholders})",
+                [campaign.world_id, *deleted_ids],
+            )
+            conn.execute(
+                f"DELETE FROM location_containers WHERE world_id = ? AND created_at_turn_id IN ({placeholders})",
                 [campaign.world_id, *deleted_ids],
             )
 
@@ -7262,16 +7471,21 @@ class CantinaRepository:
             pass
 
         new_flags: list[str] = [f"At {target_loc.name}"]
+        merged_visited = list(
+            dict.fromkeys(
+                [*(leaf_turn.world_snapshot.visited_location_ids or []), target_loc.id]
+            )
+        )
 
         conn = self._connect()
         try:
             conn.execute(
                 """
                 UPDATE world_state_snapshots
-                SET active_location_id = ?, scene_flags_json = ?
+                SET active_location_id = ?, scene_flags_json = ?, visited_location_ids_json = ?
                 WHERE turn_id = ?
                 """,
-                (target_loc.id, json.dumps(new_flags), leaf_turn.id),
+                (target_loc.id, json.dumps(new_flags), json.dumps(merged_visited), leaf_turn.id),
             )
             # Move characters who were present at old_loc_id (plus primary actor) to target_loc.id
             conn.execute(
@@ -7983,6 +8197,556 @@ class CantinaRepository:
 
         return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
 
+    def update_campaign_map(
+        self,
+        campaign_id: str,
+        payload: CampaignMapUpdatePayload,
+        *,
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
+        """Atomically persist turn-anchored spatial, cosmetic, container, and unvisited edits for a campaign."""
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
+        if not campaign.active_leaf_turn_id:
+            raise ValueError(f"Campaign '{campaign_id}' has no active turn")
+
+        leaf_turn_id = campaign.active_leaf_turn_id
+        branch_turns = self.get_branch_turn_chain(leaf_turn_id)
+        valid_turn_ids = {t.id for t in branch_turns}
+        leaf_turn = branch_turns[-1]
+
+        current_world = self.get_world(
+            campaign.world_id,
+            valid_turn_ids=valid_turn_ids,
+            campaign_id=campaign_id,
+        )
+        raw_world = self.get_world(campaign.world_id, valid_turn_ids=valid_turn_ids)
+        raw_conts = {c.id: c for c in raw_world.containers}
+        raw_locs = {l.id: l for l in raw_world.locations}
+
+        visited_ids = set(leaf_turn.world_snapshot.visited_location_ids or []) | {
+            leaf_turn.world_snapshot.active_location_id
+        }
+        occupied_loc_ids = {
+            st.current_location_id for st in leaf_turn.character_states.values()
+        }
+        active_loc_id = leaf_turn.world_snapshot.active_location_id
+
+        orig_conts = {c.id: c for c in current_world.containers}
+        orig_locs = {l.id: l for l in current_world.locations}
+        orig_edges = {e.id: e for e in current_world.edges}
+
+        def _ancestor_chain(
+            start_cont_id: str | None, c_map: dict[str, LocationContainer]
+        ) -> list[str]:
+            chain: list[str] = []
+            curr = start_cont_id
+            seen: set[str] = set()
+            while curr and curr in c_map and curr not in seen:
+                seen.add(curr)
+                chain.append(curr)
+                curr = c_map[curr].parent_container_id
+            return chain
+
+        def _is_subsequence(old_seq: list[str], new_seq: list[str]) -> bool:
+            idx = 0
+            for item in new_seq:
+                if idx < len(old_seq) and item == old_seq[idx]:
+                    idx += 1
+            return idx == len(old_seq)
+
+        # Track visited container closure on original map
+        conts_with_visited: set[str] = set()
+        for v_lid in visited_ids:
+            v_loc = orig_locs.get(v_lid)
+            if v_loc and v_loc.container_id:
+                conts_with_visited.update(_ancestor_chain(v_loc.container_id, orig_conts))
+
+        # Validate & assign IDs for submitted containers
+        cont_id_remap: dict[str, str] = {}
+        payload_orig_cont_ids: set[str] = set()
+        for c in payload.containers:
+            if c.id in orig_conts and not c.id.startswith("new_"):
+                if c.id in payload_orig_cont_ids:
+                    raise ValueError(f"Duplicate container ID '{c.id}'.")
+                payload_orig_cont_ids.add(c.id)
+                cont_id_remap[c.id] = c.id
+            else:
+                if c.id in cont_id_remap:
+                    raise ValueError(f"Duplicate draft container ID '{c.id}'.")
+                cont_id_remap[c.id] = f"cont_{uuid.uuid4().hex[:10]}"
+
+        for orig_cid, orig_c in orig_conts.items():
+            if orig_cid not in payload_orig_cont_ids:
+                if orig_cid in conts_with_visited:
+                    raise ValueError(
+                        f"Cannot remove container '{orig_c.name}' because it contains visited locations."
+                    )
+                if orig_c.created_at_turn_id != leaf_turn_id:
+                    raise ValueError(
+                        f"Saved container '{orig_c.name}' cannot be removed directly. Rewind to a turn before it existed to discard it."
+                    )
+
+        new_cont_map: dict[str, LocationContainer] = {}
+        for c in payload.containers:
+            mapped_id = cont_id_remap[c.id]
+            mapped_parent = (
+                cont_id_remap.get(c.parent_container_id)
+                if c.parent_container_id
+                else None
+            )
+            if c.id in orig_conts and c.depth != orig_conts[c.id].depth:
+                raise ValueError(
+                    f"Cannot change depth level of existing container '{c.name}'."
+                )
+            new_cont_map[mapped_id] = c.model_copy(
+                update={
+                    "id": mapped_id,
+                    "world_id": campaign.world_id,
+                    "parent_container_id": mapped_parent,
+                }
+            )
+
+        # Validate & assign IDs for submitted locations
+        loc_id_remap: dict[str, str] = {}
+        payload_orig_loc_ids: set[str] = set()
+        for loc in payload.locations:
+            if loc.id in orig_locs and not loc.id.startswith("new_"):
+                if loc.id in payload_orig_loc_ids:
+                    raise ValueError(f"Duplicate location ID '{loc.id}'.")
+                payload_orig_loc_ids.add(loc.id)
+                loc_id_remap[loc.id] = loc.id
+            else:
+                if loc.id in loc_id_remap:
+                    raise ValueError(f"Duplicate draft location ID '{loc.id}'.")
+                if loc.is_starting_location:
+                    raise ValueError(
+                        "Cannot designate a new starting location mid-campaign."
+                    )
+                loc_id_remap[loc.id] = f"loc_{uuid.uuid4().hex[:10]}"
+
+        deleted_loc_ids: list[str] = []
+        for orig_lid, orig_loc in orig_locs.items():
+            if orig_lid not in payload_orig_loc_ids:
+                if orig_lid in visited_ids:
+                    raise ValueError(
+                        f"Cannot remove visited location '{orig_loc.name}'."
+                    )
+                if orig_loc.is_starting_location:
+                    raise ValueError("Cannot remove the Starting Location.")
+                if orig_lid == active_loc_id:
+                    raise ValueError("Cannot remove the active turn location.")
+                if orig_lid in occupied_loc_ids:
+                    raise ValueError(
+                        f"Cannot remove location '{orig_loc.name}' while characters are present there."
+                    )
+                deleted_loc_ids.append(orig_lid)
+
+        new_locs: list[LocationNode] = []
+        for loc in payload.locations:
+            mapped_id = loc_id_remap[loc.id]
+            mapped_cont = (
+                cont_id_remap.get(loc.container_id) if loc.container_id else None
+            )
+            if loc.id in orig_locs:
+                orig_loc = orig_locs[loc.id]
+                if bool(loc.is_starting_location) != bool(orig_loc.is_starting_location):
+                    raise ValueError(
+                        f"Cannot change starting-location designation of '{orig_loc.name}' mid-campaign."
+                    )
+                if loc.id in visited_ids:
+                    # 1. Visited ancestor-containment monotonicity
+                    old_ancestors = _ancestor_chain(orig_loc.container_id, orig_conts)
+                    new_ancestors = _ancestor_chain(mapped_cont, new_cont_map)
+                    if not _is_subsequence(old_ancestors, new_ancestors):
+                        raise ValueError(
+                            f"Cannot remove visited location '{orig_loc.name}' from its existing container hierarchy."
+                        )
+                    # 2. Narrative field locks
+                    narrative_changed = (
+                        loc.name.strip() != orig_loc.name.strip()
+                        or loc.summary != orig_loc.summary
+                        or loc.description != orig_loc.description
+                        or list(loc.environmental_tags) != list(orig_loc.environmental_tags)
+                        or loc.starting_message != orig_loc.starting_message
+                        or bool(loc.is_hub) != bool(orig_loc.is_hub)
+                    )
+                    if narrative_changed:
+                        raise ValueError(
+                            f"Cannot modify name, summary, description, tags, or hub role of visited location '{orig_loc.name}'."
+                        )
+            new_locs.append(
+                loc.model_copy(
+                    update={
+                        "id": mapped_id,
+                        "world_id": campaign.world_id,
+                        "container_id": mapped_cont,
+                    }
+                )
+            )
+
+        now = utc_now_iso()
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE;")
+            existing_leaf_override_keys = {
+                (r["entity_type"], r["entity_id"])
+                for r in conn.execute(
+                    "SELECT entity_type, entity_id FROM campaign_spatial_overrides WHERE turn_id = ? AND campaign_id = ?",
+                    (leaf_turn_id, campaign_id),
+                ).fetchall()
+            }
+
+            # 1. Remove deletable active-leaf containers cleanly
+            for orig_cid, orig_c in orig_conts.items():
+                if orig_cid not in payload_orig_cont_ids:
+                    conn.execute(
+                        "DELETE FROM campaign_spatial_overrides WHERE campaign_id = ? AND entity_type = 'container' AND entity_id = ?",
+                        (campaign_id, orig_cid),
+                    )
+                    conn.execute(
+                        "DELETE FROM location_containers WHERE id = ? AND created_at_turn_id = ?",
+                        (orig_cid, leaf_turn_id),
+                    )
+
+            # 2. Insert new containers ordered top-down (depth DESC) for parent FK safety
+            new_conts_to_insert = [
+                nc for cid, nc in new_cont_map.items() if cid not in orig_conts
+            ]
+            new_conts_to_insert.sort(key=lambda c: c.depth, reverse=True)
+            for nc in new_conts_to_insert:
+                conn.execute(
+                    """
+                    INSERT INTO location_containers (
+                        id, world_id, created_at_turn_id, parent_container_id, depth,
+                        name, description, environmental_tags_json, ui_x, ui_y, icon, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        nc.id,
+                        campaign.world_id,
+                        leaf_turn_id,
+                        nc.parent_container_id,
+                        nc.depth,
+                        nc.name,
+                        nc.description,
+                        json.dumps(nc.environmental_tags),
+                        nc.ui_x,
+                        nc.ui_y,
+                        nc.icon,
+                        now,
+                    ),
+                )
+
+            # 3. Update existing containers (direct on active-leaf creation, else campaign_spatial_overrides)
+            for cid in payload_orig_cont_ids:
+                nc = new_cont_map[cid]
+                orig_c = orig_conts[cid]
+                changed = (
+                    nc.parent_container_id != orig_c.parent_container_id
+                    or nc.name.strip() != orig_c.name.strip()
+                    or nc.description != orig_c.description
+                    or list(nc.environmental_tags) != list(orig_c.environmental_tags)
+                    or nc.ui_x != orig_c.ui_x
+                    or nc.ui_y != orig_c.ui_y
+                    or nc.icon != orig_c.icon
+                )
+                if orig_c.created_at_turn_id == leaf_turn_id:
+                    if changed:
+                        conn.execute(
+                            """
+                            UPDATE location_containers
+                            SET parent_container_id = ?, name = ?, description = ?,
+                                environmental_tags_json = ?, ui_x = ?, ui_y = ?, icon = ?
+                            WHERE id = ?
+                            """,
+                            (
+                                nc.parent_container_id,
+                                nc.name.strip(),
+                                nc.description,
+                                json.dumps(nc.environmental_tags),
+                                nc.ui_x,
+                                nc.ui_y,
+                                nc.icon,
+                                nc.id,
+                            ),
+                        )
+                elif changed or ("container", cid) in existing_leaf_override_keys:
+                    raw_c = raw_conts[cid]
+                    meta_dict: dict[str, Any] = {}
+                    if nc.name.strip() != raw_c.name.strip():
+                        meta_dict["name"] = nc.name.strip()
+                    if nc.description != raw_c.description:
+                        meta_dict["description"] = nc.description
+                    if list(nc.environmental_tags) != list(raw_c.environmental_tags):
+                        meta_dict["environmental_tags"] = list(nc.environmental_tags)
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO campaign_spatial_overrides (
+                            turn_id, campaign_id, entity_type, entity_id, parent_id,
+                            is_entry_exit, ui_x, ui_y, icon, metadata_override_json
+                        )
+                        VALUES (?, ?, 'container', ?, ?, NULL, ?, ?, ?, ?)
+                        """,
+                        (
+                            leaf_turn_id,
+                            campaign_id,
+                            nc.id,
+                            nc.parent_container_id,
+                            nc.ui_x,
+                            nc.ui_y,
+                            nc.icon,
+                            json.dumps(meta_dict) if meta_dict else None,
+                        ),
+                    )
+
+            # 4. Delete or supersede removed unvisited locations
+            for del_lid in deleted_loc_ids:
+                orig_loc = orig_locs[del_lid]
+                if orig_loc.created_at_turn_id == leaf_turn_id:
+                    conn.execute(
+                        "DELETE FROM campaign_spatial_overrides WHERE campaign_id = ? AND entity_type = 'location' AND entity_id = ?",
+                        (campaign_id, del_lid),
+                    )
+                    conn.execute(
+                        "DELETE FROM location_edges WHERE world_id = ? AND (from_location_id = ? OR to_location_id = ?)",
+                        (campaign.world_id, del_lid, del_lid),
+                    )
+                    conn.execute(
+                        "DELETE FROM location_nodes WHERE id = ? AND created_at_turn_id = ?",
+                        (del_lid, leaf_turn_id),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO campaign_spatial_overrides (
+                            turn_id, campaign_id, entity_type, entity_id, parent_id,
+                            is_entry_exit, ui_x, ui_y, icon, metadata_override_json
+                        )
+                        VALUES (?, ?, 'location', ?, NULL, NULL, NULL, NULL, NULL, ?)
+                        """,
+                        (
+                            leaf_turn_id,
+                            campaign_id,
+                            del_lid,
+                            json.dumps({"superseded": True}),
+                        ),
+                    )
+
+            # 5. Insert new locations & update existing locations
+            for nloc in new_locs:
+                if nloc.id not in orig_locs:
+                    conn.execute(
+                        """
+                        INSERT INTO location_nodes (
+                            id, world_id, created_at_turn_id, superseded_at_turn_id, container_id,
+                            is_entry_exit, name, summary, description, environmental_tags_json,
+                            is_starting_location, is_hub, starting_message, ui_x, ui_y, icon
+                        )
+                        VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            nloc.id,
+                            campaign.world_id,
+                            leaf_turn_id,
+                            nloc.container_id,
+                            1 if nloc.is_entry_exit else 0,
+                            nloc.name.strip(),
+                            nloc.summary,
+                            nloc.description,
+                            json.dumps(nloc.environmental_tags),
+                            1 if nloc.is_hub else 0,
+                            nloc.starting_message,
+                            nloc.ui_x,
+                            nloc.ui_y,
+                            nloc.icon,
+                        ),
+                    )
+                else:
+                    orig_loc = orig_locs[nloc.id]
+                    changed = (
+                        nloc.container_id != orig_loc.container_id
+                        or bool(nloc.is_entry_exit) != bool(orig_loc.is_entry_exit)
+                        or nloc.name.strip() != orig_loc.name.strip()
+                        or nloc.summary != orig_loc.summary
+                        or nloc.description != orig_loc.description
+                        or list(nloc.environmental_tags) != list(orig_loc.environmental_tags)
+                        or bool(nloc.is_hub) != bool(orig_loc.is_hub)
+                        or nloc.starting_message != orig_loc.starting_message
+                        or nloc.ui_x != orig_loc.ui_x
+                        or nloc.ui_y != orig_loc.ui_y
+                        or nloc.icon != orig_loc.icon
+                    )
+                    if orig_loc.created_at_turn_id == leaf_turn_id:
+                        if changed:
+                            conn.execute(
+                                """
+                                UPDATE location_nodes
+                                SET container_id = ?, is_entry_exit = ?, name = ?, summary = ?,
+                                    description = ?, environmental_tags_json = ?, is_hub = ?,
+                                    starting_message = ?, ui_x = ?, ui_y = ?, icon = ?
+                                WHERE id = ?
+                                """,
+                                (
+                                    nloc.container_id,
+                                    1 if nloc.is_entry_exit else 0,
+                                    nloc.name.strip(),
+                                    nloc.summary,
+                                    nloc.description,
+                                    json.dumps(nloc.environmental_tags),
+                                    1 if nloc.is_hub else 0,
+                                    nloc.starting_message,
+                                    nloc.ui_x,
+                                    nloc.ui_y,
+                                    nloc.icon,
+                                    nloc.id,
+                                ),
+                            )
+                    elif changed or ("location", nloc.id) in existing_leaf_override_keys:
+                        raw_loc = raw_locs[nloc.id]
+                        meta_dict = {}
+                        if nloc.name.strip() != raw_loc.name.strip():
+                            meta_dict["name"] = nloc.name.strip()
+                        if nloc.summary != raw_loc.summary:
+                            meta_dict["summary"] = nloc.summary
+                        if nloc.description != raw_loc.description:
+                            meta_dict["description"] = nloc.description
+                        if list(nloc.environmental_tags) != list(raw_loc.environmental_tags):
+                            meta_dict["environmental_tags"] = list(nloc.environmental_tags)
+                        if bool(nloc.is_hub) != bool(raw_loc.is_hub):
+                            meta_dict["is_hub"] = bool(nloc.is_hub)
+                        if nloc.starting_message != raw_loc.starting_message:
+                            meta_dict["starting_message"] = nloc.starting_message
+                        conn.execute(
+                            """
+                            INSERT OR REPLACE INTO campaign_spatial_overrides (
+                                turn_id, campaign_id, entity_type, entity_id, parent_id,
+                                is_entry_exit, ui_x, ui_y, icon, metadata_override_json
+                            )
+                            VALUES (?, ?, 'location', ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                leaf_turn_id,
+                                campaign_id,
+                                nloc.id,
+                                nloc.container_id,
+                                1 if nloc.is_entry_exit else 0,
+                                nloc.ui_x,
+                                nloc.ui_y,
+                                nloc.icon,
+                                json.dumps(meta_dict) if meta_dict else None,
+                            ),
+                        )
+
+            # 6. Diff and apply edge mutations safely across branches
+            valid_new_loc_ids = {l.id for l in new_locs}
+            payload_edges_by_orig_id: dict[str, LocationEdge] = {}
+            new_edges: list[LocationEdge] = []
+            for e in payload.edges:
+                mapped_from = loc_id_remap.get(e.from_location_id, e.from_location_id)
+                mapped_to = loc_id_remap.get(e.to_location_id, e.to_location_id)
+                if mapped_from not in valid_new_loc_ids or mapped_to not in valid_new_loc_ids:
+                    continue
+                if e.id in orig_edges and not e.id.startswith("new_"):
+                    payload_edges_by_orig_id[e.id] = e.model_copy(
+                        update={
+                            "from_location_id": mapped_from,
+                            "to_location_id": mapped_to,
+                        }
+                    )
+                else:
+                    new_edges.append(
+                        e.model_copy(
+                            update={
+                                "from_location_id": mapped_from,
+                                "to_location_id": mapped_to,
+                            }
+                        )
+                    )
+
+            for orig_eid, orig_e in orig_edges.items():
+                if orig_eid not in payload_edges_by_orig_id:
+                    if orig_e.created_at_turn_id == leaf_turn_id:
+                        conn.execute("DELETE FROM location_edges WHERE id = ?", (orig_eid,))
+                    else:
+                        conn.execute(
+                            "UPDATE location_edges SET superseded_at_turn_id = ? WHERE id = ?",
+                            (leaf_turn_id, orig_eid),
+                        )
+                else:
+                    sub_e = payload_edges_by_orig_id[orig_eid]
+                    sub_cdir = normalize_compass_direction(
+                        sub_e.compass_direction, sub_e.direction_label
+                    )
+                    orig_cdir = normalize_compass_direction(
+                        orig_e.compass_direction, orig_e.direction_label
+                    )
+                    edge_changed = (
+                        sub_e.from_location_id != orig_e.from_location_id
+                        or sub_e.to_location_id != orig_e.to_location_id
+                        or sub_e.direction_label.strip() != orig_e.direction_label.strip()
+                        or sub_cdir != orig_cdir
+                        or int(sub_e.travel_minutes) != int(orig_e.travel_minutes)
+                        or bool(sub_e.is_locked_or_hidden) != bool(orig_e.is_locked_or_hidden)
+                    )
+                    if edge_changed:
+                        if orig_e.created_at_turn_id == leaf_turn_id:
+                            conn.execute(
+                                """
+                                UPDATE location_edges
+                                SET from_location_id = ?, to_location_id = ?, direction_label = ?,
+                                    compass_direction = ?, travel_minutes = ?, is_locked_or_hidden = ?
+                                WHERE id = ?
+                                """,
+                                (
+                                    sub_e.from_location_id,
+                                    sub_e.to_location_id,
+                                    sub_e.direction_label.strip() or f"To {sub_e.to_location_id}",
+                                    sub_cdir,
+                                    max(0, int(sub_e.travel_minutes)),
+                                    1 if sub_e.is_locked_or_hidden else 0,
+                                    orig_eid,
+                                ),
+                            )
+                        else:
+                            conn.execute(
+                                "UPDATE location_edges SET superseded_at_turn_id = ? WHERE id = ?",
+                                (leaf_turn_id, orig_eid),
+                            )
+                            new_edges.append(sub_e)
+
+            for ne in new_edges:
+                cdir = normalize_compass_direction(ne.compass_direction, ne.direction_label)
+                conn.execute(
+                    """
+                    INSERT INTO location_edges (
+                        id, world_id, from_location_id, to_location_id, direction_label,
+                        compass_direction, travel_minutes, is_locked_or_hidden, created_at_turn_id
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"edge_{uuid.uuid4().hex[:10]}",
+                        campaign.world_id,
+                        ne.from_location_id,
+                        ne.to_location_id,
+                        ne.direction_label.strip() or "Passage",
+                        cdir,
+                        max(0, int(ne.travel_minutes)),
+                        1 if ne.is_locked_or_hidden else 0,
+                        leaf_turn_id,
+                    ),
+                )
+
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
+
     def _resolve_campaign_lore_target(
         self,
         campaign_id: str,
@@ -8362,16 +9126,39 @@ class CantinaRepository:
             valid_turn_ids=valid_turn_ids,
             campaign_id=campaign_id,
         )
+        visited_set = set(leaf_turn.world_snapshot.visited_location_ids or []) | {
+            leaf_turn.world_snapshot.active_location_id
+        }
+        loc_by_id = {loc.id: loc for loc in world_filtered.locations}
+        for loc in world_filtered.locations:
+            loc.is_visited = loc.id in visited_set
+
         active_loc = self.get_location(
             leaf_turn.world_snapshot.active_location_id,
             campaign_id=campaign_id,
         )
+        if active_loc.id in loc_by_id:
+            ov_active = loc_by_id[active_loc.id]
+            active_loc = ov_active.model_copy(
+                update={"lore_nodes": active_loc.lore_nodes, "is_visited": True}
+            )
+        else:
+            active_loc.is_visited = True
+
         neighbors = self.get_neighbor_locations(
             campaign.world_id,
             active_loc.id,
             valid_turn_ids=valid_turn_ids,
             campaign_id=campaign_id,
         )
+        for nb in neighbors:
+            if nb.destination.id in loc_by_id:
+                ov_dest = loc_by_id[nb.destination.id]
+                nb.destination = ov_dest.model_copy(
+                    update={"lore_nodes": nb.destination.lore_nodes}
+                )
+            else:
+                nb.destination.is_visited = nb.destination.id in visited_set
         episodic_chunks = self.get_branch_episodic_chunks(campaign_id, valid_turn_ids)
 
         present_ids = [
@@ -8437,6 +9224,100 @@ class CantinaRepository:
             episodic_chunks=episodic_chunks,
         )
 
+    @staticmethod
+    def _apply_campaign_spatial_overrides(
+        conn: sqlite3.Connection,
+        *,
+        campaign_id: str,
+        valid_turn_ids: set[str] | None,
+        containers: list[LocationContainer],
+        locations: list[LocationNode],
+    ) -> tuple[list[LocationContainer], list[LocationNode]]:
+        """Overlay branch-scoped spatial, cosmetic, and unvisited-metadata overrides chronologically."""
+        if valid_turn_ids is not None and not valid_turn_ids:
+            return containers, locations
+        table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='campaign_spatial_overrides'"
+        ).fetchone()
+        if not table_exists:
+            return containers, locations
+
+        rows = conn.execute(
+            """
+            SELECT o.*
+            FROM campaign_spatial_overrides o
+            JOIN turn_nodes t ON t.id = o.turn_id
+            WHERE o.campaign_id = ?
+            ORDER BY t.depth_index ASC, o.rowid ASC
+            """,
+            (campaign_id,),
+        ).fetchall()
+        if not rows:
+            return containers, locations
+
+        cont_by_id = {c.id: c for c in containers}
+        loc_by_id = {loc.id: loc for loc in locations}
+        superseded_loc_ids: set[str] = set()
+
+        for r in rows:
+            if valid_turn_ids is not None and r["turn_id"] not in valid_turn_ids:
+                continue
+            etype = r["entity_type"]
+            eid = r["entity_id"]
+            meta: dict[str, Any] = {}
+            if r["metadata_override_json"]:
+                try:
+                    parsed = json.loads(r["metadata_override_json"])
+                    if isinstance(parsed, dict):
+                        meta = parsed
+                except Exception:
+                    meta = {}
+
+            if etype == "container" and eid in cont_by_id:
+                cont = cont_by_id[eid]
+                cont.parent_container_id = r["parent_id"]
+                cont.ui_x = r["ui_x"]
+                cont.ui_y = r["ui_y"]
+                cont.icon = r["icon"]
+                if "name" in meta and isinstance(meta["name"], str) and meta["name"].strip():
+                    cont.name = meta["name"].strip()
+                if "description" in meta and isinstance(meta["description"], str):
+                    cont.description = meta["description"]
+                if "environmental_tags" in meta and isinstance(meta["environmental_tags"], list):
+                    cont.environmental_tags = [
+                        str(t) for t in meta["environmental_tags"] if str(t).strip()
+                    ]
+            elif etype == "location" and eid in loc_by_id:
+                if meta.get("superseded"):
+                    superseded_loc_ids.add(eid)
+                    continue
+                superseded_loc_ids.discard(eid)
+                loc = loc_by_id[eid]
+                loc.container_id = r["parent_id"]
+                if r["is_entry_exit"] is not None:
+                    loc.is_entry_exit = bool(r["is_entry_exit"])
+                loc.ui_x = r["ui_x"]
+                loc.ui_y = r["ui_y"]
+                loc.icon = r["icon"]
+                if "name" in meta and isinstance(meta["name"], str) and meta["name"].strip():
+                    loc.name = meta["name"].strip()
+                if "summary" in meta and isinstance(meta["summary"], str):
+                    loc.summary = meta["summary"]
+                if "description" in meta and isinstance(meta["description"], str):
+                    loc.description = meta["description"]
+                if "environmental_tags" in meta and isinstance(meta["environmental_tags"], list):
+                    loc.environmental_tags = [
+                        str(t) for t in meta["environmental_tags"] if str(t).strip()
+                    ]
+                if "is_hub" in meta:
+                    loc.is_hub = bool(meta["is_hub"])
+                if "starting_message" in meta and isinstance(meta["starting_message"], str):
+                    loc.starting_message = meta["starting_message"]
+
+        if superseded_loc_ids:
+            locations = [loc for loc in locations if loc.id not in superseded_loc_ids]
+        return containers, locations
+
     # ------------------------------------------------------------------
     # Row Mappers
     # ------------------------------------------------------------------
@@ -8462,11 +9343,15 @@ class CantinaRepository:
         return LocationContainer(
             id=r["id"],
             world_id=r["world_id"],
+            created_at_turn_id=r["created_at_turn_id"] if "created_at_turn_id" in keys else None,
             parent_container_id=r["parent_container_id"] if "parent_container_id" in keys else None,
             depth=r["depth"],
             name=r["name"],
             description=r["description"] if "description" in keys and r["description"] else "",
             environmental_tags=json.loads(r["environmental_tags_json"] or "[]"),
+            ui_x=r["ui_x"] if "ui_x" in keys else None,
+            ui_y=r["ui_y"] if "ui_y" in keys else None,
+            icon=r["icon"] if "icon" in keys else None,
         )
 
     @staticmethod
@@ -8476,6 +9361,7 @@ class CantinaRepository:
             id=r["id"],
             world_id=r["world_id"],
             created_at_turn_id=r["created_at_turn_id"],
+            superseded_at_turn_id=r["superseded_at_turn_id"] if "superseded_at_turn_id" in keys else None,
             container_id=r["container_id"] if "container_id" in keys else None,
             name=r["name"],
             summary=r["summary"],
@@ -8485,6 +9371,9 @@ class CantinaRepository:
             is_hub=bool(r["is_hub"]) if "is_hub" in keys else False,
             is_entry_exit=bool(r["is_entry_exit"]) if "is_entry_exit" in keys else False,
             starting_message=r["starting_message"] if "starting_message" in keys and r["starting_message"] else "",
+            ui_x=r["ui_x"] if "ui_x" in keys else None,
+            ui_y=r["ui_y"] if "ui_y" in keys else None,
+            icon=r["icon"] if "icon" in keys else None,
         )
 
     @staticmethod
@@ -8563,6 +9452,11 @@ class CantinaRepository:
                     int(r["campaign_elapsed_minutes"] or 0)
                     if "campaign_elapsed_minutes" in r.keys()
                     else 0
+                ),
+                visited_location_ids=(
+                    json.loads(r["visited_location_ids_json"] or "[]")
+                    if "visited_location_ids_json" in r.keys()
+                    else []
                 ),
             ),
             character_state=CharacterStateSnapshot(

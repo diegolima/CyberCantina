@@ -1249,6 +1249,55 @@ body {
   background: rgba(255, 255, 255, 0.1);
 }
 
+.magic-wand-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.magic-wand-icon-btn.accent-amber {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.34);
+}
+
+.magic-wand-icon-btn.accent-amber:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.24);
+  border-color: var(--accent-amber);
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.28);
+}
+
+.magic-wand-icon-btn.accent-violet {
+  background: rgba(139, 92, 246, 0.12);
+  border: 1px solid rgba(139, 92, 246, 0.36);
+}
+
+.magic-wand-icon-btn.accent-violet:hover:not(:disabled) {
+  background: rgba(139, 92, 246, 0.24);
+  border-color: var(--accent-violet);
+  box-shadow: 0 0 8px rgba(139, 92, 246, 0.28);
+}
+
+.magic-wand-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.magic-wand-icon-btn.has-error {
+  border-color: rgba(244, 63, 94, 0.55);
+}
+
+.magic-wand-active-bar.compact,
+.magic-wand-revert-bar.compact {
+  padding: 1px 5px;
+  gap: 4px;
+}
+
 /* Composer Footer */
 .composer-footer {
   padding: 6px 10px;

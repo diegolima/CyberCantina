@@ -557,10 +557,10 @@ async def commit_staged_import(
                     conn.execute(
                         """
                         INSERT INTO location_containers (
-                            id, world_id, parent_container_id, depth, name,
-                            description, environmental_tags_json, created_at
+                            id, world_id, created_at_turn_id, parent_container_id, depth, name,
+                            description, environmental_tags_json, ui_x, ui_y, icon, created_at
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             new_cont_id,
@@ -570,6 +570,9 @@ async def commit_staged_import(
                             cont.get("name", "Unnamed Container"),
                             cont.get("description", ""),
                             json.dumps(cont.get("environmental_tags", [])),
+                            cont.get("ui_x"),
+                            cont.get("ui_y"),
+                            cont.get("icon"),
                             cont.get("created_at") or now,
                         ),
                     )
@@ -629,11 +632,12 @@ async def commit_staged_import(
                     conn.execute(
                         """
                         INSERT INTO location_nodes (
-                            id, world_id, created_at_turn_id, container_id, name, summary,
-                            description, environmental_tags_json, is_starting_location, is_hub,
-                            is_entry_exit, starting_message
+                            id, world_id, created_at_turn_id, superseded_at_turn_id, container_id,
+                            name, summary, description, environmental_tags_json,
+                            is_starting_location, is_hub, is_entry_exit, starting_message,
+                            ui_x, ui_y, icon
                         )
-                        VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             new_loc_id,
@@ -647,6 +651,9 @@ async def commit_staged_import(
                             1 if loc.get("is_hub") else 0,
                             1 if loc.get("is_entry_exit") else 0,
                             loc.get("starting_message", "") or "",
+                            loc.get("ui_x"),
+                            loc.get("ui_y"),
+                            loc.get("icon"),
                         ),
                     )
 

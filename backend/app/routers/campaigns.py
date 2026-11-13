@@ -60,6 +60,7 @@ from app.schemas.character import (
 )
 from app.schemas.turn import (
     CampaignCharacterMemoriesUpdateRequest,
+    CampaignMapUpdatePayload,
     CampaignRecord,
     CampaignStateBundle,
     MechanicsTrigger,
@@ -402,6 +403,27 @@ def remove_campaign_edge(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/api/campaigns/{campaign_id}/map", response_model=CampaignStateBundle)
+def update_campaign_map(
+    campaign_id: str,
+    req: CampaignMapUpdatePayload,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Atomically save staged map changes on the active campaign branch with safety validation."""
+    try:
+        return get_repo().update_campaign_map(
+            campaign_id,
+            req,
+            owner_id=current_user.id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -24,7 +24,10 @@ import {
   ImportInspectResponse,
   ItemEquipActionPayload,
   LocalRelayStatusResponse,
+  LocationContainer,
+  LocationEdge,
   LocationLoreNodeDraft,
+  LocationNode,
   MemoryShard,
   OllamaStatusResponse,
   PersonaCreatePayload,
@@ -748,6 +751,18 @@ export const api = {
     >
   ) =>
     fetchJson<WorldRecord>(`${API_BASE}/worlds/${worldId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  updateCampaignMap: (
+    campaignId: string,
+    payload: {
+      containers: LocationContainer[];
+      locations: LocationNode[];
+      edges: LocationEdge[];
+    }
+  ) =>
+    fetchJson<CampaignStateBundle>(`${API_BASE}/campaigns/${campaignId}/map`, {
       method: "PUT",
       body: JSON.stringify(payload),
     }),

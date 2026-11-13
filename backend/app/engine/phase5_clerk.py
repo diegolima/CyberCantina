@@ -1798,12 +1798,27 @@ async def run_phase5_post_turn_clerk(
             world_delta.scene_flags_removed,
             max_flags=eff_max_flags,
         )
+    prev_visited = list(completed_turn.world_snapshot.visited_location_ids or [])
+    merged_visited = list(
+        dict.fromkeys(
+            [
+                *prev_visited,
+                *(
+                    [completed_turn.world_snapshot.active_location_id]
+                    if completed_turn.world_snapshot.active_location_id
+                    else []
+                ),
+                *([new_location_id] if new_location_id else []),
+            ]
+        )
+    )
     updated_world_snapshot = WorldStateSnapshot(
         turn_id=completed_turn.id,
         world_timestamp=new_timestamp,
         campaign_elapsed_minutes=new_campaign_elapsed,
         active_location_id=new_location_id,
         scene_flags=merged_flags,
+        visited_location_ids=merged_visited,
     )
 
     # 3. Permanent Custody Protection + Two-Tier Inventory Contention Detection & Clerk Arbitration

@@ -1,42 +1,56 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
-  BookOpen,
   Check,
-  ChevronDown,
   ChevronRight,
   Compass,
   Crosshair,
   DoorOpen,
-  EyeOff,
   FolderOpen,
   GitBranch,
   Layers,
-  Link2,
-  Lock,
-  LogIn,
-  MapPin,
-  Navigation,
-  Pencil,
-  Plus,
+  Save,
   Sparkles,
-  Star,
-  Trash2,
   X,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
 import {
   CompassDirection,
-  LOCATION_LORE_CATEGORIES,
   LocationContainer,
   LocationEdge,
-  LocationLoreCategory,
   LocationLoreNodeDraft,
   LocationNode,
-  LoreNode,
 } from "../types";
-import { TagChipsInput, normalizeTagList } from "./TagChipsInput";
+import {
+  MapDetailsDrawer,
+  WorldPromptContext,
+} from "./map/MapDetailsDrawer";
+import {
+  EmptyCanvasCreateModal,
+  EmptyCanvasLinkState,
+  GroupIntoContainerModal,
+  GroupIntoContainerState,
+  MapContextMenu,
+  MapContextMenuState,
+  MultiEdgePopover,
+  PassageHubCollisionModal,
+  PassageHubCollisionState,
+} from "./map/MapDialogs";
+import { getDefaultMapIconKey, resolveMapIconComponent } from "./map/mapIcons";
+import {
+  MapPaletteBar,
+  PALETTE_DRAG_MIME,
+  PaletteItemKind,
+} from "./map/MapPaletteBar";
+import {
+  computeUnreachableLocationIds,
+  containerHasVisitedDescendants,
+  getDescendantContainerIds,
+  isValidContainerDrop,
+  validateContainersState,
+  validateVisitedAncestorContainment,
+} from "./map/mapValidation";
 
 export const COMPASS_ORDER: CompassDirection[] = [
   "N",
@@ -125,13 +139,28 @@ export function pickCompassSlot(
   for (let offset = 1; offset < COMPASS_ORDER.length; offset++) {
     for (const sign of [1, -1]) {
       const idx =
-        (startIdx + offset * sign + COMPASS_ORDER.length) %
-        COMPASS_ORDER.length;
+        (startIdx + offset * sign + COMPASS_ORDER.length) % COMPASS_ORDER.length;
       const cand = COMPASS_ORDER[idx];
       if (!occupied.has(cand)) return cand;
     }
   }
   return base;
+}
+
+function compassFromVector(dx: number, dy: number): CompassDirection {
+  const angle = Math.atan2(dy, dx);
+  let best: CompassDirection = "N";
+  let bestDiff = Infinity;
+  for (const dir of COMPASS_ORDER) {
+    const a = COMPASS_ANGLES[dir];
+    let diff = Math.abs(angle - a);
+    if (diff > Math.PI) diff = 2 * Math.PI - diff;
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = dir;
+    }
+  }
+  return best;
 }
 
 export const CONTAINER_DEPTH_LABELS: Record<1 | 2 | 3 | 4, string> = {
@@ -162,6 +191,7 @@ export interface ProjectedTopologyEdge {
   isAggregated: boolean;
   containsLockedEdge: boolean;
   rawEdge: LocationEdge;
+  groupedEdges?: LocationEdge[];
 }
 
 export interface ProjectedExternalPortalDestination {
@@ -216,7 +246,10 @@ export function computeDynamicPortalIds(
     if (loc.is_entry_exit) portals.add(loc.id);
   }
   for (const edge of edges) {
-    if (!locContainer.has(edge.from_location_id) || !locContainer.has(edge.to_location_id)) {
+    if (
+      !locContainer.has(edge.from_location_id) ||
+      !locContainer.has(edge.to_location_id)
+    ) {
       continue;
     }
     const cFrom = locContainer.get(edge.from_location_id) ?? null;
@@ -253,9 +286,10 @@ export function projectTopologyForDepth(
   );
   const childContainerIds = new Set(childContainers.map((c) => c.id));
 
-  // Resolve any containerId to the direct child container under validCurrentId (or null if outside subtree)
   const ancestorCache = new Map<string, string | null>();
-  const resolveChildUnderCurrent = (containerId: string | null | undefined): string | null => {
+  const resolveChildUnderCurrent = (
+    containerId: string | null | undefined
+  ): string | null => {
     if (!containerId || !byId.has(containerId)) return null;
     if (ancestorCache.has(containerId)) return ancestorCache.get(containerId)!;
     const seen = new Set<string>();
@@ -288,7 +322,8 @@ export function projectTopologyForDepth(
   }
 
   for (const loc of locations) {
-    const locContId = loc.container_id && byId.has(loc.container_id) ? loc.container_id : null;
+    const locContId =
+      loc.container_id && byId.has(loc.container_id) ? loc.container_id : null;
     if (locContId === validCurrentId) {
       visibleLocations.push(loc);
       visibleByLocId.set(loc.id, { kind: "location", id: loc.id });
@@ -301,7 +336,6 @@ export function projectTopologyForDepth(
     }
   }
 
-  // Group character presence per location ID
   const charsAtLoc = new Map<string, string[]>();
   if (presentCharacterLocations) {
     for (const [charId, locId] of Object.entries(presentCharacterLocations)) {
@@ -310,41 +344,44 @@ export function projectTopologyForDepth(
     }
   }
 
-  const visibleSupernodes: ProjectedContainerSupernode[] = childContainers.map((cc) => {
-    const descendants = descendantLocsBySupernode.get(cc.id) ?? [];
-    const directCount = descendants.filter((l) => l.container_id === cc.id).length;
-    const portalDesc = descendants.filter((l) => dynamicPortalIds.has(l.id));
-    const presentIds: string[] = [];
-    for (const d of descendants) {
-      const list = charsAtLoc.get(d.id);
-      if (list) presentIds.push(...list);
+  const visibleSupernodes: ProjectedContainerSupernode[] = childContainers.map(
+    (cc) => {
+      const descendants = descendantLocsBySupernode.get(cc.id) ?? [];
+      const directCount = descendants.filter((l) => l.container_id === cc.id).length;
+      const portalDesc = descendants.filter((l) => dynamicPortalIds.has(l.id));
+      const presentIds: string[] = [];
+      for (const d of descendants) {
+        const list = charsAtLoc.get(d.id);
+        if (list) presentIds.push(...list);
+      }
+      const activeLocMapping = activeLocationId
+        ? visibleByLocId.get(activeLocationId)
+        : undefined;
+      const hasActivePlayer =
+        (activeLocMapping?.kind === "container" && activeLocMapping.id === cc.id) ||
+        descendants.some((d) => d.id === activeLocationId);
+      return {
+        container: cc,
+        directLocationCount: directCount,
+        descendantLocationCount: descendants.length,
+        externalPortalsCount: portalDesc.length,
+        hasActivePlayer,
+        presentCharacterIds: presentIds,
+        representativePortalLocationId:
+          portalDesc[0]?.id ?? descendants[0]?.id ?? null,
+      };
     }
-    const activeLocMapping = activeLocationId ? visibleByLocId.get(activeLocationId) : undefined;
-    const hasActivePlayer =
-      (activeLocMapping?.kind === "container" && activeLocMapping.id === cc.id) ||
-      descendants.some((d) => d.id === activeLocationId);
-    return {
-      container: cc,
-      directLocationCount: directCount,
-      descendantLocationCount: descendants.length,
-      externalPortalsCount: portalDesc.length,
-      hasActivePlayer,
-      presentCharacterIds: presentIds,
-      representativePortalLocationId:
-        portalDesc[0]?.id ?? descendants[0]?.id ?? null,
-    };
-  });
+  );
 
   const locMap = new Map(locations.map((l) => [l.id, l]));
-  const externalPortalsByLocationId: Record<string, ProjectedExternalPortalDestination[]> = {};
+  const externalPortalsByLocationId: Record<
+    string,
+    ProjectedExternalPortalDestination[]
+  > = {};
   const projectedEdges: ProjectedTopologyEdge[] = [];
   const aggregatedGroups = new Map<
     string,
-    {
-      sourceNodeId: string;
-      targetNodeId: string;
-      edges: LocationEdge[];
-    }
+    { sourceNodeId: string; targetNodeId: string; edges: LocationEdge[] }
   >();
 
   for (const edge of edges) {
@@ -352,7 +389,6 @@ export function projectTopologyForDepth(
     const toVis = visibleByLocId.get(edge.to_location_id);
 
     if (fromVis && !toVis) {
-      // Cross-boundary edge leaving currentContainer view
       if (fromVis.kind === "location") {
         const dest = locMap.get(edge.to_location_id);
         if (dest) {
@@ -374,7 +410,7 @@ export function projectTopologyForDepth(
     }
 
     if (!fromVis || !toVis) continue;
-    if (fromVis.id === toVis.id) continue; // Internal edge entirely inside one collapsed supernode
+    if (fromVis.id === toVis.id) continue;
 
     if (fromVis.kind === "location" && toVis.kind === "location") {
       projectedEdges.push({
@@ -420,13 +456,16 @@ export function projectTopologyForDepth(
       isAggregated: true,
       containsLockedEdge: anyLocked,
       rawEdge: first,
+      groupedEdges: group.edges,
     });
   }
 
-  // Anchor resolution for radial BFS layout:
-  // Active player node -> active supernode -> entry/exit portal in current container -> first visible node
-  const activeVis = activeLocationId ? visibleByLocId.get(activeLocationId) : undefined;
-  const portalInCurrent = visibleLocations.find((l) => dynamicPortalIds.has(l.id));
+  const activeVis = activeLocationId
+    ? visibleByLocId.get(activeLocationId)
+    : undefined;
+  const portalInCurrent = visibleLocations.find((l) =>
+    dynamicPortalIds.has(l.id)
+  );
   const anchorNodeId =
     activeVis?.id ??
     portalInCurrent?.id ??
@@ -446,6 +485,10 @@ export function projectTopologyForDepth(
   };
 }
 
+/**
+ * Resolve canvas coordinates, keeping nodes with persisted ui_x/ui_y pinned
+ * while auto-placing any null-coordinate nodes via compass BFS & repulsion.
+ */
 export function computeFullMapCoords(
   locations: LocationNode[],
   edges: LocationEdge[],
@@ -455,8 +498,27 @@ export function computeFullMapCoords(
   if (locations.length === 0) return coords;
 
   const locById = new Map(locations.map((l) => [l.id, l]));
+  const pinnedIds = new Set<string>();
+  const placed = new Set<string>();
+
+  for (const loc of locations) {
+    if (
+      typeof loc.ui_x === "number" &&
+      Number.isFinite(loc.ui_x) &&
+      typeof loc.ui_y === "number" &&
+      Number.isFinite(loc.ui_y)
+    ) {
+      coords[loc.id] = { x: loc.ui_x, y: loc.ui_y };
+      pinnedIds.add(loc.id);
+      placed.add(loc.id);
+    }
+  }
+
   const startId = locById.has(activeLocId) ? activeLocId : locations[0].id;
-  coords[startId] = { x: 0, y: 0 };
+  if (!coords[startId]) {
+    coords[startId] = { x: 0, y: 0 };
+    placed.add(startId);
+  }
 
   const adj = new Map<string, Array<{ to: string; dir: CompassDirection }>>();
   for (const e of edges) {
@@ -471,19 +533,17 @@ export function computeFullMapCoords(
     adj.get(e.from_location_id)!.push({ to: e.to_location_id, dir: d });
   }
 
-  const visited = new Set<string>([startId]);
-  const queue: string[] = [startId];
   const stepDist = 175;
-
-  while (queue.length > 0) {
-    const curr = queue.shift()!;
+  const seedQueue = Array.from(placed);
+  while (seedQueue.length > 0) {
+    const curr = seedQueue.shift()!;
     const currPt = coords[curr];
     const outgoing = adj.get(curr) ?? [];
     const usedSlots = new Set<CompassDirection>();
 
     for (const item of outgoing) {
-      if (visited.has(item.to)) continue;
-      visited.add(item.to);
+      if (placed.has(item.to)) continue;
+      placed.add(item.to);
       const slot = pickCompassSlot(item.dir, usedSlots);
       usedSlots.add(slot);
       const angle = COMPASS_ANGLES[slot];
@@ -491,22 +551,20 @@ export function computeFullMapCoords(
         x: currPt.x + Math.cos(angle) * stepDist,
         y: currPt.y + Math.sin(angle) * stepDist,
       };
-      queue.push(item.to);
+      seedQueue.push(item.to);
     }
   }
 
-  // Place any unvisited/disconnected locations in an outer ring
-  const unvisited = locations.filter((l) => !visited.has(l.id));
-  unvisited.forEach((loc, idx) => {
+  const unplaced = locations.filter((l) => !placed.has(l.id));
+  unplaced.forEach((loc, idx) => {
     const angle =
-      (idx / Math.max(1, unvisited.length)) * Math.PI * 2 - Math.PI / 2;
+      (idx / Math.max(1, unplaced.length)) * Math.PI * 2 - Math.PI / 2;
     coords[loc.id] = {
-      x: Math.cos(angle) * (stepDist * 2.2),
-      y: Math.sin(angle) * (stepDist * 2.2),
+      x: Math.cos(angle) * (stepDist * 2.1),
+      y: Math.sin(angle) * (stepDist * 2.1),
     };
   });
 
-  // Iterative collision repulsion so multi-hop nodes never overlap
   const ids = Object.keys(coords);
   const minDist = 115;
   for (let iter = 0; iter < 36; iter++) {
@@ -514,6 +572,10 @@ export function computeFullMapCoords(
       for (let j = i + 1; j < ids.length; j++) {
         const idA = ids[i];
         const idB = ids[j];
+        const aFixed = pinnedIds.has(idA) || idA === startId;
+        const bFixed = pinnedIds.has(idB) || idB === startId;
+        if (aFixed && bFixed) continue;
+
         const pA = coords[idA];
         const pB = coords[idB];
         let dx = pB.x - pA.x;
@@ -528,10 +590,10 @@ export function computeFullMapCoords(
           const push = ((minDist - dist) / dist) * 0.5;
           const ox = dx * push;
           const oy = dy * push;
-          if (idA === startId) {
+          if (aFixed) {
             pB.x += ox * 2;
             pB.y += oy * 2;
-          } else if (idB === startId) {
+          } else if (bFixed) {
             pA.x -= ox * 2;
             pA.y -= oy * 2;
           } else {
@@ -563,7 +625,6 @@ export interface PromotionCandidate {
 export interface PromotionPromptState {
   fromLocation: LocationNode;
   toLocation: LocationNode;
-  /** When user connected to a container supernode without unambiguous portal, let them choose target room. */
   targetContainerForRoomPick: LocationContainer | null;
   targetRoomCandidates: LocationNode[];
   chosenTargetRoomId: string;
@@ -573,7 +634,6 @@ export interface PromotionPromptState {
   candidates: PromotionCandidate[];
 }
 
-/** Compute Level 1 non-portal interior endpoints eligible for Portal Promotion Prompt. */
 export function computePromotionCandidates(
   fromLoc: LocationNode,
   toLoc: LocationNode,
@@ -606,56 +666,92 @@ export function computePromotionCandidates(
   return list;
 }
 
+interface GraphSnapshot {
+  containers: LocationContainer[];
+  locations: LocationNode[];
+  edges: LocationEdge[];
+}
+
+function cloneGraph(
+  containers: LocationContainer[],
+  locations: LocationNode[],
+  edges: LocationEdge[]
+): GraphSnapshot {
+  return {
+    containers: containers.map((c) => ({
+      ...c,
+      environmental_tags: [...(c.environmental_tags ?? [])],
+      lore_nodes: (c.lore_nodes ?? []).map((ln) => ({
+        ...ln,
+        entity_tags: [...(ln.entity_tags ?? [])],
+      })),
+    })),
+    locations: locations.map((l) => ({
+      ...l,
+      environmental_tags: [...(l.environmental_tags ?? [])],
+      lore_nodes: (l.lore_nodes ?? []).map((ln) => ({
+        ...ln,
+        entity_tags: [...(ln.entity_tags ?? [])],
+      })),
+    })),
+    edges: edges.map((e) => ({ ...e })),
+  };
+}
+
+function clientToWorldPoint(
+  clientX: number,
+  clientY: number,
+  svgEl: SVGSVGElement | null,
+  groupEl: SVGGElement | null,
+  pan: { x: number; y: number },
+  zoom: number
+): { x: number; y: number } {
+  if (
+    svgEl &&
+    groupEl &&
+    typeof svgEl.createSVGPoint === "function" &&
+    typeof groupEl.getScreenCTM === "function"
+  ) {
+    const ctm = groupEl.getScreenCTM();
+    if (ctm) {
+      const pt = svgEl.createSVGPoint();
+      pt.x = clientX;
+      pt.y = clientY;
+      const out = pt.matrixTransform(ctm.inverse());
+      return { x: out.x, y: out.y };
+    }
+  }
+  const rect = svgEl?.getBoundingClientRect();
+  if (!rect || rect.width === 0 || rect.height === 0) return { x: 0, y: 0 };
+  const scale = Math.min(rect.width / 680, rect.height / 520) || 1;
+  const vbX = (clientX - (rect.left + rect.width / 2)) / scale;
+  const vbY = (clientY - (rect.top + rect.height / 2)) / scale;
+  return {
+    x: vbX / zoom - pan.x,
+    y: vbY / zoom - pan.y,
+  };
+}
+
+function makeUniqueId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
 export interface SpatialTopologyViewProps {
   title?: string;
   containers?: LocationContainer[];
   locations: LocationNode[];
   edges: LocationEdge[];
-  /** In Campaign mode: current active scene location. In World Sheet: starting hub location. */
   activeLocationId: string;
-  defaultSelectedLocationId?: string;
+  defaultSelectedLocationId?: string | null;
   presentCharacterLocations?: Record<string, string>;
   mode: "campaign" | "editor";
-
-  // Optional Close callback (used when rendered in a modal overlay)
+  worldContext?: WorldPromptContext;
+  hasUnsavedChanges?: boolean;
+  isSavingMap?: boolean;
+  onSaveMap?: (graph: GraphSnapshot) => Promise<void> | void;
+  onChangeGraph?: (next: GraphSnapshot) => void;
   onClose?: () => void;
-
-  // Optional Re-imagine Map callback (AI topology generation)
   onReimagineMap?: () => void;
-
-  // Editor mode actions (staged updates in World Sheet)
-  onUpdateLocation?: (updated: LocationNode) => void;
-  onUpdateContainer?: (updated: LocationContainer) => void;
-  onConvertToContainer?: (location: LocationNode) => void;
-  onDeleteLocation?: (locationId: string) => void;
-  onSetStartingLocation?: (locationId: string) => void;
-  onAddEdge?: (payload: {
-    from_location_id: string;
-    to_location_id: string;
-    direction_label?: string;
-    compass_direction: CompassDirection;
-    travel_minutes: number;
-    bidirectional?: boolean;
-  }) => Promise<void> | void;
-  onDeleteEdge?: (edgeId: string) => Promise<void> | void;
-  onUpdateEdgeDistance?: (payload: {
-    edgeId: string;
-    travel_minutes: number;
-  }) => Promise<void> | void;
-
-  // Link Creation (supported in both modes)
-  onCreateLinkedLocation?: (payload: {
-    from_location_id: string;
-    name: string;
-    compass_direction: CompassDirection;
-    travel_minutes: number;
-    description: string;
-    environmental_tags: string[];
-    is_hub?: boolean;
-    summary?: string;
-  }) => Promise<string | void> | void;
-
-  // Campaign mode actions
   onOverrideLocation?: (locationId: string) => Promise<void> | void;
   isOverriding?: boolean;
   onSaveCampaignLocationLore?: (
@@ -671,170 +767,263 @@ export interface SpatialTopologyViewProps {
 
 export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   title,
-  containers = [],
-  locations,
-  edges,
+  containers: propContainers = [],
+  locations: propLocations,
+  edges: propEdges,
   activeLocationId,
   defaultSelectedLocationId,
   presentCharacterLocations,
   mode,
+  worldContext,
+  hasUnsavedChanges: externalDirty,
+  isSavingMap: externalSaving = false,
+  onSaveMap,
+  onChangeGraph,
   onClose,
   onReimagineMap,
-  onUpdateLocation,
-  onUpdateContainer,
-  onConvertToContainer,
-  onDeleteLocation,
-  onSetStartingLocation,
-  onAddEdge,
-  onDeleteEdge,
-  onUpdateEdgeDistance,
-  onCreateLinkedLocation,
   onOverrideLocation,
   isOverriding = false,
   onSaveCampaignLocationLore,
   onSaveCampaignContainerLore,
   isMutatingLocked = false,
 }) => {
-  const initialActiveLoc =
-    locations.find((l) => l.id === (defaultSelectedLocationId || activeLocationId)) ??
-    locations[0];
-  const [currentContainerId, setCurrentContainerId] = useState<string | null>(() => {
-    if (mode === "campaign" && containers.length > 0) {
-      return initialActiveLoc?.container_id ?? null;
-    }
-    return null;
-  });
-  const [selectedLocId, setSelectedLocId] = useState<string>(
-    defaultSelectedLocationId || activeLocationId || locations[0]?.id || ""
+  // Staged draft state for async editing in campaign (or standalone editor without onChangeGraph)
+  const isControlledExternally = mode === "editor" && Boolean(onChangeGraph);
+  const [draft, setDraft] = useState<GraphSnapshot>(() =>
+    cloneGraph(propContainers, propLocations, propEdges)
   );
-  const [selectedContainerId, setSelectedContainerId] = useState<string | null>(null);
-  const [promotionPrompt, setPromotionPrompt] = useState<PromotionPromptState | null>(null);
+  const [internalDirty, setInternalDirty] = useState(false);
+  const [internalSaving, setInternalSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [statusNotice, setStatusNotice] = useState<string | null>(null);
+  const [undoStack, setUndoStack] = useState<GraphSnapshot[]>([]);
 
-  // Pan and zoom state for the SVG canvas
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const dragRef = useRef<{
-    dragging: boolean;
-    startX: number;
-    startY: number;
-    origX: number;
-    origY: number;
-  }>({ dragging: false, startX: 0, startY: 0, origX: 0, origY: 0 });
+  const baselineContainerIds = useMemo(
+    () => new Set(propContainers.map((c) => c.id)),
+    [propContainers]
+  );
+  const baselineLocationIds = useMemo(
+    () => new Set(propLocations.map((l) => l.id)),
+    [propLocations]
+  );
 
-  // "Create Link" form state
-  const [showLinkForm, setShowLinkForm] = useState(false);
-  const [linkName, setLinkName] = useState("");
-  const [linkDirection, setLinkDirection] = useState<CompassDirection>("N");
-  const [linkMinutes, setLinkMinutes] = useState("2");
-  const [linkDescription, setLinkDescription] = useState("");
-  const [linkTags, setLinkTags] = useState("");
-  const [linkIsHub, setLinkIsHub] = useState(false);
-  const [linkError, setLinkError] = useState<string | null>(null);
-  const [isCreatingLink, setIsCreatingLink] = useState(false);
-
-  // "Connect Existing Location" form state
-  const [showConnectForm, setShowConnectForm] = useState(false);
-  const [connectTargetId, setConnectTargetId] = useState<string>("");
-  const [connectDirection, setConnectDirection] = useState<CompassDirection>("N");
-  const [connectMinutes, setConnectMinutes] = useState("2");
-  const [connectBidirectional, setConnectBidirectional] = useState(true);
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [connectError, setConnectError] = useState<string | null>(null);
-
-  // Distance editing state
-  const [editingEdgeId, setEditingEdgeId] = useState<string | null>(null);
-  const [editMinutes, setEditMinutes] = useState<string>("1");
-  const [isUpdatingDistance, setIsUpdatingDistance] = useState(false);
-
-  // Refs for scrolling and container constraints
-  const linkFormRef = useRef<HTMLDivElement>(null);
-  const connectFormRef = useRef<HTMLDivElement>(null);
-  const inspectorScrollRef = useRef<HTMLDivElement>(null);
-
-  // Auto-scroll new room form into view when opened
+  // Keep draft synced when props update and no local staged changes are pending
   useEffect(() => {
-    if (showLinkForm && linkFormRef.current) {
-      linkFormRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    if (!isControlledExternally && !internalDirty) {
+      setDraft(cloneGraph(propContainers, propLocations, propEdges));
+      setSaveError(null);
     }
-  }, [showLinkForm]);
+  }, [isControlledExternally, internalDirty, propContainers, propLocations, propEdges]);
 
-  // Auto-scroll connect room form into view when opened
-  useEffect(() => {
-    if (showConnectForm && connectFormRef.current) {
-      connectFormRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  const workingContainers = isControlledExternally
+    ? propContainers
+    : draft.containers;
+  const workingLocations = isControlledExternally
+    ? propLocations
+    : draft.locations;
+  const workingEdges = isControlledExternally ? propEdges : draft.edges;
+  const worldId =
+    worldContext?.worldId ||
+    workingLocations[0]?.world_id ||
+    workingContainers[0]?.world_id ||
+    "world_draft";
+
+  const effectiveDirty = isControlledExternally
+    ? Boolean(externalDirty)
+    : internalDirty;
+  const effectiveSaving = externalSaving || internalSaving;
+
+  const commitNextGraph = useCallback(
+    (next: GraphSnapshot, pushUndo = true) => {
+      if (pushUndo) {
+        const snapshotBefore = cloneGraph(
+          workingContainers,
+          workingLocations,
+          workingEdges
+        );
+        setUndoStack((prev) => [...prev.slice(-19), snapshotBefore]);
+      }
+      setSaveError(null);
+      if (isControlledExternally && onChangeGraph) {
+        onChangeGraph(next);
+      } else {
+        setDraft(next);
+        setInternalDirty(true);
+      }
+    },
+    [
+      isControlledExternally,
+      onChangeGraph,
+      workingContainers,
+      workingLocations,
+      workingEdges,
+    ]
+  );
+
+  const handleUndo = useCallback(() => {
+    if (undoStack.length === 0 || isMutatingLocked) return;
+    const prev = undoStack[undoStack.length - 1];
+    const nextStack = undoStack.slice(0, -1);
+    setUndoStack(nextStack);
+    if (isControlledExternally && onChangeGraph) {
+      onChangeGraph(prev);
+    } else {
+      setDraft(prev);
+      setInternalDirty(nextStack.length > 0);
     }
-  }, [showConnectForm]);
+    setStatusNotice("Reverted last map action.");
+  }, [undoStack, isMutatingLocked, isControlledExternally, onChangeGraph]);
 
-  // Removing edge state
-  const [isRemovingEdgeId, setIsRemovingEdgeId] = useState<string | null>(null);
-
-  // Scoped Lore editing state (shared by Location Lore and L1 Container Lore)
-  const [expandedEditorLoreId, setExpandedEditorLoreId] = useState<string | null>(
+  // Selection state (null = nothing selected, hides details drawer)
+  const [selectedLocId, setSelectedLocId] = useState<string | null>(() =>
+    defaultSelectedLocationId === null
+      ? null
+      : defaultSelectedLocationId ||
+        activeLocationId ||
+        propLocations[0]?.id ||
+        null
+  );
+  const [selectedContainerId, setSelectedContainerId] = useState<string | null>(
     null
   );
-  const [campLoreFormMode, setCampLoreFormMode] = useState<
-    null | { mode: "add" } | { mode: "edit"; index: number }
-  >(null);
-  const [campLoreTitle, setCampLoreTitle] = useState("");
-  const [campLoreCategory, setCampLoreCategory] =
-    useState<LocationLoreCategory>("rumor");
-  const [campLoreContent, setCampLoreContent] = useState("");
-  const [campLoreTags, setCampLoreTags] = useState<string[]>([]);
-  const [campLorePendingTagDraft, setCampLorePendingTagDraft] = useState("");
-  const [campLoreError, setCampLoreError] = useState<string | null>(null);
-  const [isSavingCampLore, setIsSavingCampLore] = useState(false);
+  const [currentContainerId, setCurrentContainerId] = useState<string | null>(
+    null
+  );
+  const [hoveredNodeKey, setHoveredNodeKey] = useState<string | null>(null);
 
-  // Keep selectedLocId & currentContainerId valid if underlying lists change
+  // Viewport transform
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const panDragRef = useRef<{
+    active: boolean;
+    moved: boolean;
+    startClientX: number;
+    startClientY: number;
+    origPanX: number;
+    origPanY: number;
+  }>({
+    active: false,
+    moved: false,
+    startClientX: 0,
+    startClientY: 0,
+    origPanX: 0,
+    origPanY: 0,
+  });
+
+  // Active drag state for nodes & containers
+  const [nodeDrag, setNodeDrag] = useState<{
+    kind: "location" | "container";
+    id: string;
+    startClientX: number;
+    startClientY: number;
+    pointerOffsetX: number;
+    pointerOffsetY: number;
+    origX: number;
+    origY: number;
+    currX: number;
+    currY: number;
+    hasMoved: boolean;
+    hoverTarget: {
+      kind: "location" | "container";
+      id: string;
+      valid: boolean;
+      reason?: string;
+    } | null;
+  } | null>(null);
+
+  // Active compass link-port drag
+  const [linkDrag, setLinkDrag] = useState<{
+    sourceKind: "location" | "container";
+    sourceId: string;
+    sourceSlot: CompassDirection;
+    startX: number;
+    startY: number;
+    currX: number;
+    currY: number;
+    hoverTarget: {
+      kind: "location" | "container";
+      id: string;
+      slot?: CompassDirection;
+    } | null;
+  } | null>(null);
+
+  // Modals & Popovers
+  const [contextMenu, setContextMenu] = useState<MapContextMenuState | null>(null);
+  const [hubCollisionModal, setHubCollisionModal] =
+    useState<PassageHubCollisionState | null>(null);
+  const [emptyCanvasModal, setEmptyCanvasModal] =
+    useState<EmptyCanvasLinkState | null>(null);
+  const [groupModal, setGroupModal] =
+    useState<GroupIntoContainerState | null>(null);
+  const [promotionPrompt, setPromotionPrompt] =
+    useState<PromotionPromptState | null>(null);
+  const [multiEdgeModalEdges, setMultiEdgeModalEdges] = useState<
+    LocationEdge[] | null
+  >(null);
+
+  // Inline edge travel-minutes editor
+  const [inlineEdgeEdit, setInlineEdgeEdit] = useState<{
+    edgeId: string;
+    midX: number;
+    midY: number;
+    value: string;
+  } | null>(null);
+
+  const canvasWrapRef = useRef<HTMLDivElement | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const viewportGroupRef = useRef<SVGGElement | null>(null);
+
+  // Keep container selection valid if deleted
   useEffect(() => {
     if (
       currentContainerId &&
-      !containers.some((c) => c.id === currentContainerId)
+      !workingContainers.some((c) => c.id === currentContainerId)
     ) {
       setCurrentContainerId(null);
     }
-  }, [containers, currentContainerId]);
+  }, [workingContainers, currentContainerId]);
 
   useEffect(() => {
     if (
       selectedContainerId &&
-      !containers.some((c) => c.id === selectedContainerId)
+      !workingContainers.some((c) => c.id === selectedContainerId)
     ) {
       setSelectedContainerId(null);
     }
-  }, [containers, selectedContainerId]);
+  }, [workingContainers, selectedContainerId]);
 
   useEffect(() => {
-    if (locations.length === 0) return;
-    const exists = locations.some((l) => l.id === selectedLocId);
-    if (!exists) {
-      setSelectedLocId(activeLocationId || locations[0].id);
+    if (
+      selectedLocId &&
+      !workingLocations.some((l) => l.id === selectedLocId)
+    ) {
+      setSelectedLocId(null);
     }
-  }, [locations, selectedLocId, activeLocationId]);
-
-  useEffect(() => {
-    setShowLinkForm(false);
-    setShowConnectForm(false);
-    setCampLoreFormMode(null);
-    setCampLoreError(null);
-    setCampLorePendingTagDraft("");
-  }, [selectedLocId, selectedContainerId]);
+  }, [workingLocations, selectedLocId]);
 
   const activeLoc = useMemo(
     () =>
-      locations.find((l) => l.id === activeLocationId) ??
-      locations.find((l) => l.is_starting_location) ??
-      locations[0],
-    [locations, activeLocationId]
+      workingLocations.find((l) => l.id === activeLocationId) ??
+      workingLocations.find((l) => l.is_starting_location) ??
+      workingLocations[0],
+    [workingLocations, activeLocationId]
   );
 
   const selectedLocation = useMemo(
-    () => locations.find((l) => l.id === selectedLocId) ?? activeLoc,
-    [locations, selectedLocId, activeLoc]
+    () =>
+      !selectedContainerId && selectedLocId
+        ? workingLocations.find((l) => l.id === selectedLocId) ?? null
+        : null,
+    [workingLocations, selectedLocId, selectedContainerId]
   );
 
   const containerMap = useMemo(
-    () => new Map(containers.map((c) => [c.id, c])),
-    [containers]
+    () => new Map(workingContainers.map((c) => [c.id, c])),
+    [workingContainers]
+  );
+  const locationMap = useMemo(
+    () => new Map(workingLocations.map((l) => [l.id, l])),
+    [workingLocations]
   );
 
   const selectedContainer = useMemo(
@@ -847,38 +1036,39 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     () =>
       projectTopologyForDepth(
         currentContainerId,
-        containers,
-        locations,
-        edges,
+        workingContainers,
+        workingLocations,
+        workingEdges,
         activeLoc?.id,
         presentCharacterLocations
       ),
     [
       currentContainerId,
-      containers,
-      locations,
-      edges,
+      workingContainers,
+      workingLocations,
+      workingEdges,
       activeLoc?.id,
       presentCharacterLocations,
     ]
   );
 
-  // Memoize graph topology coordinates using projected visible nodes + supernodes
-  const topologyKey = useMemo(() => {
-    const locIds = projectedTopology.visibleLocations
-      .map((l) => l.id)
-      .sort()
-      .join(",");
-    const supIds = projectedTopology.visibleSupernodes
-      .map((s) => s.container.id)
-      .sort()
-      .join(",");
-    const edgeKeys = projectedTopology.projectedEdges
-      .map((e) => `${e.sourceNodeId}->${e.targetNodeId}`)
-      .sort()
-      .join(",");
-    return `${currentContainerId ?? "root"}::${locIds}::${supIds}::${edgeKeys}::${projectedTopology.anchorNodeId}`;
-  }, [projectedTopology, currentContainerId]);
+  // Global validation reports (Reachability + Container invariants)
+  const reachabilityReport = useMemo(
+    () => computeUnreachableLocationIds(workingLocations, workingEdges),
+    [workingLocations, workingEdges]
+  );
+  const unreachableSet = useMemo(
+    () => new Set(reachabilityReport.unreachableIds),
+    [reachabilityReport.unreachableIds]
+  );
+  const containerValidationErrors = useMemo(
+    () => validateContainersState(workingContainers, workingLocations),
+    [workingContainers, workingLocations]
+  );
+  const hasBlockingErrors =
+    Boolean(reachabilityReport.starterError) ||
+    reachabilityReport.unreachableIds.length > 0 ||
+    containerValidationErrors.length > 0;
 
   const fullMapCoords = useMemo(() => {
     const pseudoNodes: LocationNode[] = [
@@ -891,6 +1081,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         description: sn.container.description,
         environmental_tags: sn.container.environmental_tags,
         is_starting_location: false,
+        ui_x: sn.container.ui_x ?? null,
+        ui_y: sn.container.ui_y ?? null,
       })),
     ];
     const pseudoEdges: LocationEdge[] = projectedTopology.projectedEdges.map(
@@ -901,69 +1093,47 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         to_location_id: pe.targetNodeId,
       })
     );
-    return computeFullMapCoords(
+    const computed = computeFullMapCoords(
       pseudoNodes,
       pseudoEdges,
       projectedTopology.anchorNodeId
     );
-  }, [topologyKey]);
+    if (nodeDrag && nodeDrag.hasMoved) {
+      computed[nodeDrag.id] = { x: nodeDrag.currX, y: nodeDrag.currY };
+    }
+    return computed;
+  }, [projectedTopology, nodeDrag]);
 
-  const locMap = useMemo(
-    () => new Map(locations.map((l) => [l.id, l])),
-    [locations]
-  );
-
-  // Connected exits originating from the selected location
-  const selectedLocExits = useMemo(() => {
-    if (!selectedLocation) return [];
-    return edges
-      .filter((e) => e.from_location_id === selectedLocation.id)
-      .map((e) => ({
-        edge: e,
-        dest: locMap.get(e.to_location_id),
-      }))
-      .filter(
-        (item): item is { edge: LocationEdge; dest: LocationNode } =>
-          Boolean(item.dest)
-      );
-  }, [edges, selectedLocation, locMap]);
-
-  // Occupied exits from this node
-  const occupiedDirections = useMemo(() => {
-    return new Set(
-      selectedLocExits
-        .map((ex) => ex.edge.compass_direction)
-        .filter((d): d is CompassDirection => Boolean(d))
-    );
-  }, [selectedLocExits]);
-
-  // Immediate neighbors of active location for styling
   const activeNeighborIds = useMemo(() => {
     if (!activeLoc) return new Set<string>();
     return new Set(
-      edges
+      workingEdges
         .filter((e) => e.from_location_id === activeLoc.id)
         .map((e) => e.to_location_id)
     );
-  }, [edges, activeLoc]);
+  }, [workingEdges, activeLoc]);
 
-  const selectLocationNode = (locId: string) => {
-    setSelectedContainerId(null);
-    setSelectedLocId(locId);
-  };
+  // Map outgoing occupied compass slots per L0 location ID
+  const occupiedSlotsByLocId = useMemo(() => {
+    const map = new Map<string, Set<CompassDirection>>();
+    for (const e of workingEdges) {
+      if (!e.compass_direction) continue;
+      if (!map.has(e.from_location_id)) map.set(e.from_location_id, new Set());
+      map.get(e.from_location_id)!.add(e.compass_direction);
+    }
+    return map;
+  }, [workingEdges]);
 
-  const selectContainerNode = (contId: string) => {
-    setSelectedContainerId(contId);
-  };
-
-  const drillIntoContainer = (contId: string | null) => {
+  const drillIntoContainer = useCallback((contId: string | null) => {
     setCurrentContainerId(contId);
     setSelectedContainerId(null);
+    setContextMenu(null);
+    setInlineEdgeEdit(null);
     setPan({ x: 0, y: 0 });
     setZoom(1);
-  };
+  }, []);
 
-  const handleCenter = () => {
+  const handleCenter = useCallback(() => {
     const targetId =
       selectedContainer?.id || selectedLocation?.id || activeLoc?.id;
     if (!targetId) {
@@ -974,1065 +1144,1588 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     const pt = fullMapCoords[targetId] ?? { x: 0, y: 0 };
     setPan({ x: -pt.x, y: -pt.y });
     setZoom(1);
-  };
+  }, [selectedContainer, selectedLocation, activeLoc, fullMapCoords]);
 
-  const openLinkForm = (asHub = false) => {
-    const firstFreeSlot =
-      COMPASS_ORDER.find((d) => !occupiedDirections.has(d)) ?? "N";
-    setLinkName(asHub ? `${selectedLocation?.name || "Sector"} — Passage` : "");
-    setLinkDirection(firstFreeSlot);
-    setLinkMinutes(asHub ? "1" : "2");
-    setLinkDescription(
-      asHub
-        ? "A connecting passageway and transit corridor linking adjoining sectors."
-        : ""
-    );
-    setLinkTags(asHub ? "hub, passageway" : "");
-    setLinkIsHub(asHub);
-    setLinkError(null);
-    setShowLinkForm(true);
-    setShowConnectForm(false);
-    setTimeout(() => {
-      linkFormRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }, 50);
-  };
-
-  const submitLinkForm = async () => {
-    if (!onCreateLinkedLocation || !selectedLocation || isCreatingLink) return;
-    setIsCreatingLink(true);
-    setLinkError(null);
-    try {
-      const minutes = Math.max(1, Math.min(240, parseInt(linkMinutes, 10) || 1));
-      const tags = linkTags
-        .split(",")
-        .map((t) => t.trim())
-        .filter(Boolean);
-      const newId = await onCreateLinkedLocation({
-        from_location_id: selectedLocation.id,
-        name: linkName.trim(),
-        compass_direction: linkDirection,
-        travel_minutes: minutes,
-        description: linkDescription.trim(),
-        environmental_tags: tags,
-        is_hub: linkIsHub,
-        summary: linkName.trim(),
-      });
-      setShowLinkForm(false);
-      if (newId) {
-        selectLocationNode(newId);
-      }
-    } catch (err) {
-      setLinkError(String(err));
-    } finally {
-      setIsCreatingLink(false);
+  const handleFocusInvalid = useCallback(() => {
+    const firstId = reachabilityReport.unreachableIds[0];
+    if (!firstId) return;
+    const loc = locationMap.get(firstId);
+    if (!loc) return;
+    if ((loc.container_id ?? null) !== currentContainerId) {
+      setCurrentContainerId(loc.container_id ?? null);
     }
-  };
+    setSelectedContainerId(null);
+    setSelectedLocId(loc.id);
+  }, [reachabilityReport.unreachableIds, locationMap, currentContainerId]);
 
-  const openConnectForm = () => {
-    const connectedDestIds = new Set(
-      edges
-        .filter((e) => e.from_location_id === selectedLocation?.id)
-        .map((e) => e.to_location_id)
-    );
-    const availableTargets = locations.filter(
-      (l) => l.id !== selectedLocation?.id && !connectedDestIds.has(l.id)
-    );
-    setConnectTargetId(
-      availableTargets[0]?.id ||
-        locations.find((l) => l.id !== selectedLocation?.id)?.id ||
-        ""
-    );
-    const firstFreeSlot =
-      COMPASS_ORDER.find((d) => !occupiedDirections.has(d)) ?? "N";
-    setConnectDirection(firstFreeSlot);
-    setConnectMinutes("2");
-    setConnectBidirectional(true);
-    setConnectError(null);
-    setShowConnectForm(true);
-    setShowLinkForm(false);
-    setTimeout(() => {
-      connectFormRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }, 50);
-  };
+  const patchLocation = useCallback(
+    (locId: string, patch: Partial<LocationNode>) => {
+      const nextLocs = workingLocations.map((l) =>
+        l.id === locId ? { ...l, ...patch } : l
+      );
+      commitNextGraph(
+        {
+          containers: workingContainers,
+          locations: nextLocs,
+          edges: workingEdges,
+        },
+        false
+      );
+    },
+    [workingLocations, workingContainers, workingEdges, commitNextGraph]
+  );
 
-  const buildPromotionCandidates = (
-    fromLoc: LocationNode,
-    toLoc: LocationNode
-  ): PromotionCandidate[] =>
-    computePromotionCandidates(
-      fromLoc,
-      toLoc,
-      containerMap,
-      projectedTopology.dynamicPortalIds
-    );
+  const patchContainer = useCallback(
+    (contId: string, patch: Partial<LocationContainer>) => {
+      const nextConts = workingContainers.map((c) =>
+        c.id === contId ? { ...c, ...patch } : c
+      );
+      commitNextGraph(
+        {
+          containers: nextConts,
+          locations: workingLocations,
+          edges: workingEdges,
+        },
+        false
+      );
+    },
+    [workingContainers, workingLocations, workingEdges, commitNextGraph]
+  );
 
-  const executeEdgeCreation = async (
-    fromLoc: LocationNode,
-    toLoc: LocationNode,
-    direction: CompassDirection,
-    minutes: number,
-    bidirectional: boolean,
-    promoteLocIds: Set<string>
-  ) => {
-    if (!onAddEdge) return;
-    if (mode === "editor" && onUpdateLocation) {
-      if (promoteLocIds.has(fromLoc.id)) {
-        onUpdateLocation({ ...fromLoc, is_entry_exit: true });
+  const resetCoordinates = useCallback(
+    (kind: "location" | "container", id: string) => {
+      if (kind === "location") {
+        patchLocation(id, { ui_x: null, ui_y: null });
+      } else {
+        patchContainer(id, { ui_x: null, ui_y: null });
       }
-      if (promoteLocIds.has(toLoc.id) && toLoc.id !== fromLoc.id) {
-        onUpdateLocation({ ...toLoc, is_entry_exit: true });
+    },
+    [patchLocation, patchContainer]
+  );
+
+  const availableContainerDepthsHere = useMemo<Array<1 | 2 | 3 | 4>>(() => {
+    if (!currentContainerId) return [1, 2, 3, 4];
+    const curr = containerMap.get(currentContainerId);
+    if (!curr) return [1, 2, 3, 4];
+    return ([1, 2, 3, 4] as Array<1 | 2 | 3 | 4>).filter(
+      (d) => d < curr.depth
+    );
+  }, [currentContainerId, containerMap]);
+
+  const canAddContainerHere = availableContainerDepthsHere.length > 0;
+
+  const createStandaloneAt = useCallback(
+    (kind: PaletteItemKind, x: number, y: number) => {
+      if (isMutatingLocked) return;
+      if (kind === "container" && !canAddContainerHere) {
+        setStatusNotice("Level 1 containers cannot hold nested containers.");
+        return;
       }
-    }
-    setIsConnecting(true);
-    try {
-      await onAddEdge({
-        from_location_id: fromLoc.id,
-        to_location_id: toLoc.id,
-        direction_label: `Passage to ${toLoc.name || "adjoining sector"}`,
-        compass_direction: direction,
-        travel_minutes: minutes,
-        bidirectional,
+
+      if (kind === "container") {
+        const contId = makeUniqueId("new_cont");
+        const portalId = makeUniqueId("new_loc");
+        const depth = availableContainerDepthsHere[0] ?? 1;
+        const contCount = workingContainers.length + 1;
+        const newCont: LocationContainer = {
+          id: contId,
+          world_id: worldId,
+          parent_container_id: currentContainerId,
+          depth,
+          name: `New Container ${contCount}`,
+          description: "A newly added region or structure awaiting refinement.",
+          environmental_tags: [],
+          lore_nodes: [],
+          ui_x: Math.round(x),
+          ui_y: Math.round(y),
+          icon: getDefaultMapIconKey("container", depth),
+        };
+        const newPortal: LocationNode = {
+          id: portalId,
+          world_id: worldId,
+          container_id: contId,
+          is_entry_exit: true,
+          name: `${newCont.name} Entrance`,
+          summary: "Entryway into this area.",
+          description: "The main threshold connecting this area to neighboring paths.",
+          environmental_tags: ["entrance"],
+          is_starting_location: false,
+          is_hub: false,
+          is_visited: false,
+          icon: getDefaultMapIconKey("location"),
+        };
+        commitNextGraph({
+          containers: [...workingContainers, newCont],
+          locations: [...workingLocations, newPortal],
+          edges: workingEdges,
+        });
+        setSelectedContainerId(contId);
+        setSelectedLocId(null);
+        setStatusNotice(
+          `Added unlinked container "${newCont.name}" — connect a passage to save.`
+        );
+        return;
+      }
+
+      const locId = makeUniqueId("new_loc");
+      const isHub = kind === "hub";
+      const idx = workingLocations.length + 1;
+      const newLoc: LocationNode = {
+        id: locId,
+        world_id: worldId,
+        container_id: currentContainerId,
+        is_entry_exit: false,
+        name: isHub ? `Junction ${idx}` : `New Location ${idx}`,
+        summary: isHub ? "Connecting passage junction." : "Newly placed area.",
+        description: isHub
+          ? "A connecting thoroughfare branching toward adjoining rooms."
+          : "A newly charted area ready for sensory details.",
+        environmental_tags: isHub ? ["corridor"] : [],
+        is_starting_location: false,
+        is_hub: isHub,
+        is_visited: false,
+        ui_x: Math.round(x),
+        ui_y: Math.round(y),
+        icon: getDefaultMapIconKey(isHub ? "hub" : "location"),
+      };
+      commitNextGraph({
+        containers: workingContainers,
+        locations: [...workingLocations, newLoc],
+        edges: workingEdges,
       });
-      setShowConnectForm(false);
+      setSelectedContainerId(null);
+      setSelectedLocId(locId);
+      setStatusNotice(
+        `Added unlinked "${newLoc.name}" — drag a link port to connect it before saving.`
+      );
+    },
+    [
+      isMutatingLocked,
+      canAddContainerHere,
+      availableContainerDepthsHere,
+      workingContainers,
+      workingLocations,
+      workingEdges,
+      worldId,
+      currentContainerId,
+      commitNextGraph,
+    ]
+  );
+
+  // Execute direct bidirectional edge creation (applying optional L1 portal promotions)
+  const executeDirectEdgeCreation = useCallback(
+    (
+      fromLoc: LocationNode,
+      toLoc: LocationNode,
+      direction: CompassDirection,
+      travelMinutes: number,
+      bidirectional: boolean,
+      promoteIds: Set<string>,
+      overrideLocations?: LocationNode[],
+      overrideContainers?: LocationContainer[]
+    ) => {
+      const baseLocs = overrideLocations ?? workingLocations;
+      const baseConts = overrideContainers ?? workingContainers;
+      const nextLocs =
+        promoteIds.size > 0
+          ? baseLocs.map((l) =>
+              promoteIds.has(l.id) ? { ...l, is_entry_exit: true } : l
+            )
+          : baseLocs;
+
+      const revSlot = OPPOSITE_COMPASS[direction];
+      const newEdges: LocationEdge[] = [
+        {
+          id: makeUniqueId("edge_fwd"),
+          world_id: worldId,
+          from_location_id: fromLoc.id,
+          to_location_id: toLoc.id,
+          direction_label: `Passage to ${toLoc.name}`,
+          compass_direction: direction,
+          travel_minutes: travelMinutes,
+          is_locked_or_hidden: false,
+        },
+      ];
+      if (bidirectional) {
+        newEdges.push({
+          id: makeUniqueId("edge_rev"),
+          world_id: worldId,
+          from_location_id: toLoc.id,
+          to_location_id: fromLoc.id,
+          direction_label: `Return to ${fromLoc.name}`,
+          compass_direction: revSlot,
+          travel_minutes: travelMinutes,
+          is_locked_or_hidden: false,
+        });
+      }
+
+      commitNextGraph({
+        containers: baseConts,
+        locations: nextLocs,
+        edges: [...workingEdges, ...newEdges],
+      });
       setPromotionPrompt(null);
-    } catch (err: any) {
-      setConnectError(err?.message || "Failed to connect locations");
-    } finally {
-      setIsConnecting(false);
-    }
-  };
+    },
+    [workingLocations, workingContainers, workingEdges, worldId, commitNextGraph]
+  );
 
-  const submitConnectForm = async () => {
-    if (!onAddEdge || !selectedLocation || !connectTargetId || isConnecting) return;
-    setConnectError(null);
-    const minutes = Math.max(
-      1,
-      Math.min(240, parseInt(connectMinutes, 10) || 1)
-    );
+  // Resolve connecting a source L0 room and target visible entity (L0 or Container supernode)
+  const initiateConnection = useCallback(
+    (opts: {
+      sourceKind: "location" | "container";
+      sourceId: string;
+      sourceSlot: CompassDirection;
+      targetKind: "location" | "container";
+      targetId: string;
+      explicitTargetSlot?: CompassDirection;
+    }) => {
+      const resolveLocFromNode = (
+        kind: "location" | "container",
+        id: string
+      ): { loc: LocationNode | null; container: LocationContainer | null; candidates: LocationNode[] } => {
+        if (kind === "location") {
+          return {
+            loc: locationMap.get(id) ?? null,
+            container: null,
+            candidates: [],
+          };
+        }
+        const subIds = getDescendantContainerIds(id, workingContainers);
+        const inside = workingLocations.filter(
+          (l) => l.container_id != null && subIds.has(l.container_id)
+        );
+        const portal =
+          inside.find((l) => projectedTopology.dynamicPortalIds.has(l.id)) ??
+          inside[0] ??
+          null;
+        return {
+          loc: portal,
+          container: containerMap.get(id) ?? null,
+          candidates: inside,
+        };
+      };
 
-    if (connectTargetId.startsWith("cont:")) {
-      const targetContId = connectTargetId.slice(5);
-      const targetCont = containerMap.get(targetContId);
-      if (!targetCont) return;
+      const srcInfo = resolveLocFromNode(opts.sourceKind, opts.sourceId);
+      const tgtInfo = resolveLocFromNode(opts.targetKind, opts.targetId);
+      if (!srcInfo.loc || !tgtInfo.loc) {
+        setStatusNotice(
+          "Cannot connect to an empty container — add a room inside it first."
+        );
+        return;
+      }
+      if (srcInfo.loc.id === tgtInfo.loc.id) return;
 
-      // Gather descendant locations inside targetCont
-      const descendantIds = new Set<string>([targetCont.id]);
-      let added = true;
-      while (added) {
-        added = false;
-        for (const c of containers) {
-          if (
-            c.parent_container_id &&
-            descendantIds.has(c.parent_container_id) &&
-            !descendantIds.has(c.id)
-          ) {
-            descendantIds.add(c.id);
-            added = true;
+      // Avoid duplicate identical direct edges
+      const alreadyConnected = workingEdges.some(
+        (e) =>
+          (e.from_location_id === srcInfo.loc!.id &&
+            e.to_location_id === tgtInfo.loc!.id) ||
+          (e.from_location_id === tgtInfo.loc!.id &&
+            e.to_location_id === srcInfo.loc!.id)
+      );
+      if (alreadyConnected) {
+        setStatusNotice("Those locations are already linked.");
+        return;
+      }
+
+      const srcPt = fullMapCoords[opts.sourceId] ?? { x: 0, y: 0 };
+      const tgtPt = fullMapCoords[opts.targetId] ?? { x: 100, y: 0 };
+      const targetSlot =
+        opts.explicitTargetSlot ?? OPPOSITE_COMPASS[opts.sourceSlot];
+
+      // Check compass port collision on source or explicit target port
+      const srcExistingEdge = workingEdges.find(
+        (e) =>
+          e.from_location_id === srcInfo.loc!.id &&
+          e.compass_direction === opts.sourceSlot
+      );
+      const tgtExistingEdge = opts.explicitTargetSlot
+        ? workingEdges.find(
+            (e) =>
+              e.from_location_id === tgtInfo.loc!.id &&
+              e.compass_direction === opts.explicitTargetSlot
+          )
+        : undefined;
+
+      if (srcExistingEdge || tgtExistingEdge) {
+        const collidingSide =
+          srcExistingEdge && tgtExistingEdge
+            ? "both"
+            : tgtExistingEdge
+            ? "target"
+            : "source";
+        const occEdge = srcExistingEdge || tgtExistingEdge!;
+        const occOther =
+          locationMap.get(occEdge.to_location_id)?.name ?? "another room";
+        const hubAnchor = collidingSide === "target" ? srcInfo.loc : tgtInfo.loc;
+        setHubCollisionModal({
+          sourceNodeId: srcInfo.loc.id,
+          sourceName: srcInfo.loc.name,
+          sourceSlot: opts.sourceSlot,
+          targetNodeId: tgtInfo.loc.id,
+          targetName: tgtInfo.loc.name,
+          targetSlot,
+          collidingSide,
+          occupiedByName: occOther,
+          suggestedHubName: `${
+            collidingSide === "target" ? tgtInfo.loc.name : srcInfo.loc.name
+          } — Junction`,
+          travelMinutes: 2,
+          x: Math.round((srcPt.x + tgtPt.x) / 2),
+          y: Math.round((srcPt.y + tgtPt.y) / 2),
+          // Unused variable guard: hubAnchor kept for clarity
+          ...(hubAnchor ? {} : {}),
+        });
+        return;
+      }
+
+      // If cross-container or multi-room target container needs room pick / portal promotion
+      const candidates = computePromotionCandidates(
+        srcInfo.loc,
+        tgtInfo.loc,
+        containerMap,
+        projectedTopology.dynamicPortalIds
+      );
+      if (
+        (tgtInfo.container && tgtInfo.candidates.length > 1) ||
+        candidates.length > 0
+      ) {
+        setPromotionPrompt({
+          fromLocation: srcInfo.loc,
+          toLocation: tgtInfo.loc,
+          targetContainerForRoomPick:
+            tgtInfo.container && tgtInfo.candidates.length > 1
+              ? tgtInfo.container
+              : null,
+          targetRoomCandidates: tgtInfo.candidates,
+          chosenTargetRoomId: tgtInfo.loc.id,
+          direction: opts.sourceSlot,
+          travelMinutes: 2,
+          bidirectional: true,
+          candidates,
+        });
+        return;
+      }
+
+      executeDirectEdgeCreation(
+        srcInfo.loc,
+        tgtInfo.loc,
+        opts.sourceSlot,
+        2,
+        true,
+        new Set()
+      );
+    },
+    [
+      locationMap,
+      workingContainers,
+      workingLocations,
+      workingEdges,
+      projectedTopology.dynamicPortalIds,
+      containerMap,
+      fullMapCoords,
+      executeDirectEdgeCreation,
+    ]
+  );
+
+  // Confirm Passage Hub insertion on colliding port
+  const handleConfirmHubCollision = useCallback(
+    (hubName: string, travelMinutes: number) => {
+      if (!hubCollisionModal) return;
+      const st = hubCollisionModal;
+      const srcLoc = locationMap.get(st.sourceNodeId);
+      const tgtLoc = locationMap.get(st.targetNodeId);
+      if (!srcLoc || !tgtLoc) {
+        setHubCollisionModal(null);
+        return;
+      }
+
+      const hubAnchorContainerId =
+        st.collidingSide === "target"
+          ? tgtLoc.container_id ?? null
+          : srcLoc.container_id ?? null;
+
+      const hubId = makeUniqueId("new_hub");
+      const hubNode: LocationNode = {
+        id: hubId,
+        world_id: worldId,
+        container_id: hubAnchorContainerId,
+        is_entry_exit: false,
+        name: hubName,
+        summary: "Connecting corridor junction.",
+        description:
+          "A multi-way transit junction linking adjoining rooms and wings.",
+        environmental_tags: ["corridor", "junction"],
+        is_starting_location: false,
+        is_hub: true,
+        is_visited: false,
+        ui_x: st.x,
+        ui_y: st.y,
+        icon: getDefaultMapIconKey("hub"),
+      };
+
+      // Find which existing edge(s) occupied the colliding slot
+      const anchorNode = st.collidingSide === "target" ? tgtLoc : srcLoc;
+      const anchorSlot =
+        st.collidingSide === "target" ? st.targetSlot : st.sourceSlot;
+      const peerNode = st.collidingSide === "target" ? srcLoc : tgtLoc;
+
+      const existingFwd = workingEdges.find(
+        (e) =>
+          e.from_location_id === anchorNode.id &&
+          e.compass_direction === anchorSlot
+      );
+
+      let nextEdges = [...workingEdges];
+      const hubOccupied = new Set<CompassDirection>();
+      const backToAnchorSlot = OPPOSITE_COMPASS[anchorSlot];
+      hubOccupied.add(backToAnchorSlot);
+
+      if (existingFwd) {
+        const oldDestId = existingFwd.to_location_id;
+        const oldDest = locationMap.get(oldDestId);
+        // Remove old direct edge + reverse counterpart
+        nextEdges = nextEdges.filter(
+          (e) =>
+            e.id !== existingFwd.id &&
+            !(
+              e.from_location_id === oldDestId &&
+              e.to_location_id === anchorNode.id
+            )
+        );
+        // Link Anchor <-> Hub on anchorSlot
+        nextEdges.push(
+          {
+            id: makeUniqueId("edge_hub_in"),
+            world_id: worldId,
+            from_location_id: anchorNode.id,
+            to_location_id: hubId,
+            direction_label: `To ${hubName}`,
+            compass_direction: anchorSlot,
+            travel_minutes: 1,
+            is_locked_or_hidden: false,
+          },
+          {
+            id: makeUniqueId("edge_hub_out"),
+            world_id: worldId,
+            from_location_id: hubId,
+            to_location_id: anchorNode.id,
+            direction_label: `Return to ${anchorNode.name}`,
+            compass_direction: backToAnchorSlot,
+            travel_minutes: 1,
+            is_locked_or_hidden: false,
+          }
+        );
+
+        // Reconnect Hub <-> oldDest
+        const slotToOldDest = pickCompassSlot(anchorSlot, hubOccupied);
+        hubOccupied.add(slotToOldDest);
+        const origRevSlot = OPPOSITE_COMPASS[slotToOldDest];
+        nextEdges.push(
+          {
+            id: makeUniqueId("edge_old_fwd"),
+            world_id: worldId,
+            from_location_id: hubId,
+            to_location_id: oldDestId,
+            direction_label:
+              existingFwd.direction_label || `To ${oldDest?.name ?? "Wing"}`,
+            compass_direction: slotToOldDest,
+            travel_minutes: existingFwd.travel_minutes,
+            is_locked_or_hidden: existingFwd.is_locked_or_hidden,
+          },
+          {
+            id: makeUniqueId("edge_old_rev"),
+            world_id: worldId,
+            from_location_id: oldDestId,
+            to_location_id: hubId,
+            direction_label: `Return to ${hubName}`,
+            compass_direction: origRevSlot,
+            travel_minutes: existingFwd.travel_minutes,
+            is_locked_or_hidden: existingFwd.is_locked_or_hidden,
+          }
+        );
+      } else {
+        nextEdges.push(
+          {
+            id: makeUniqueId("edge_ah"),
+            world_id: worldId,
+            from_location_id: anchorNode.id,
+            to_location_id: hubId,
+            direction_label: `To ${hubName}`,
+            compass_direction: anchorSlot,
+            travel_minutes: 1,
+            is_locked_or_hidden: false,
+          },
+          {
+            id: makeUniqueId("edge_ha"),
+            world_id: worldId,
+            from_location_id: hubId,
+            to_location_id: anchorNode.id,
+            direction_label: `Return to ${anchorNode.name}`,
+            compass_direction: backToAnchorSlot,
+            travel_minutes: 1,
+            is_locked_or_hidden: false,
+          }
+        );
+      }
+
+      // Connect Hub <-> Peer
+      const pPeer = fullMapCoords[peerNode.id] ?? { x: 0, y: 0 };
+      const rawPeerDir = compassFromVector(pPeer.x - st.x, pPeer.y - st.y);
+      const slotToPeer = pickCompassSlot(rawPeerDir, hubOccupied);
+      hubOccupied.add(slotToPeer);
+      const peerUsed = occupiedSlotsByLocId.get(peerNode.id) ?? new Set();
+      const slotFromPeer = pickCompassSlot(OPPOSITE_COMPASS[slotToPeer], peerUsed);
+      nextEdges.push(
+        {
+          id: makeUniqueId("edge_peer_fwd"),
+          world_id: worldId,
+          from_location_id: hubId,
+          to_location_id: peerNode.id,
+          direction_label: `To ${peerNode.name}`,
+          compass_direction: slotToPeer,
+          travel_minutes: travelMinutes,
+          is_locked_or_hidden: false,
+        },
+        {
+          id: makeUniqueId("edge_peer_rev"),
+          world_id: worldId,
+          from_location_id: peerNode.id,
+          to_location_id: hubId,
+          direction_label: `To ${hubName}`,
+          compass_direction: slotFromPeer,
+          travel_minutes: travelMinutes,
+          is_locked_or_hidden: false,
+        }
+      );
+
+      commitNextGraph({
+        containers: workingContainers,
+        locations: [...workingLocations, hubNode],
+        edges: nextEdges,
+      });
+      setHubCollisionModal(null);
+      setSelectedContainerId(null);
+      setSelectedLocId(hubId);
+      setStatusNotice(`Created Passage Hub "${hubName}" branching both paths.`);
+    },
+    [
+      hubCollisionModal,
+      locationMap,
+      worldId,
+      workingEdges,
+      workingContainers,
+      workingLocations,
+      fullMapCoords,
+      occupiedSlotsByLocId,
+      commitNextGraph,
+    ]
+  );
+
+  // Confirm creating a brand-new element connected from empty-canvas drop
+  const handleConfirmEmptyCanvasCreate = useCallback(
+    (opts: {
+      kind: "location" | "hub" | "container";
+      name: string;
+      travelMinutes: number;
+      containerDepth?: 1 | 2 | 3 | 4;
+    }) => {
+      if (!emptyCanvasModal) return;
+      const st = emptyCanvasModal;
+
+      let sourceLoc: LocationNode | undefined;
+      if (st.sourceKind === "location") {
+        sourceLoc = locationMap.get(st.sourceId);
+      } else {
+        const subIds = getDescendantContainerIds(st.sourceId, workingContainers);
+        const inside = workingLocations.filter(
+          (l) => l.container_id != null && subIds.has(l.container_id)
+        );
+        sourceLoc =
+          inside.find((l) => projectedTopology.dynamicPortalIds.has(l.id)) ??
+          inside[0];
+      }
+      if (!sourceLoc) {
+        setEmptyCanvasModal(null);
+        return;
+      }
+
+      if (opts.kind === "container") {
+        const contId = makeUniqueId("new_cont");
+        const portalId = makeUniqueId("new_loc");
+        const depth = opts.containerDepth ?? 1;
+        const newCont: LocationContainer = {
+          id: contId,
+          world_id: worldId,
+          parent_container_id: currentContainerId,
+          depth,
+          name: opts.name,
+          description: "A newly added structure.",
+          environmental_tags: [],
+          lore_nodes: [],
+          ui_x: Math.round(st.dropX),
+          ui_y: Math.round(st.dropY),
+          icon: getDefaultMapIconKey("container", depth),
+        };
+        const portalLoc: LocationNode = {
+          id: portalId,
+          world_id: worldId,
+          container_id: contId,
+          is_entry_exit: true,
+          name: `${opts.name} Entrance`,
+          summary: `Entrance into ${opts.name}.`,
+          description: `The gateway leading into ${opts.name}.`,
+          environmental_tags: ["entrance"],
+          is_starting_location: false,
+          is_hub: false,
+          is_visited: false,
+          icon: getDefaultMapIconKey("location"),
+        };
+        const updatedSource =
+          sourceLoc.container_id && !sourceLoc.is_entry_exit
+            ? { ...sourceLoc, is_entry_exit: true }
+            : sourceLoc;
+        const nextLocs = workingLocations
+          .map((l) => (l.id === sourceLoc!.id ? updatedSource : l))
+          .concat(portalLoc);
+
+        executeDirectEdgeCreation(
+          updatedSource,
+          portalLoc,
+          st.sourceSlot,
+          opts.travelMinutes,
+          true,
+          new Set(),
+          nextLocs,
+          [...workingContainers, newCont]
+        );
+        setSelectedContainerId(contId);
+        setSelectedLocId(null);
+        setEmptyCanvasModal(null);
+        return;
+      }
+
+      const isHub = opts.kind === "hub";
+      const newLocId = makeUniqueId(isHub ? "new_hub" : "new_loc");
+      const newLoc: LocationNode = {
+        id: newLocId,
+        world_id: worldId,
+        container_id: currentContainerId,
+        is_entry_exit: false,
+        name: opts.name,
+        summary: isHub ? "Passage junction." : opts.name,
+        description: isHub
+          ? "A connecting corridor junction linking adjoining rooms."
+          : "A newly connected room awaiting description.",
+        environmental_tags: isHub ? ["corridor"] : [],
+        is_starting_location: false,
+        is_hub: isHub,
+        is_visited: false,
+        ui_x: Math.round(st.dropX),
+        ui_y: Math.round(st.dropY),
+        icon: getDefaultMapIconKey(isHub ? "hub" : "location"),
+      };
+
+      executeDirectEdgeCreation(
+        sourceLoc,
+        newLoc,
+        st.sourceSlot,
+        opts.travelMinutes,
+        true,
+        new Set(),
+        [...workingLocations, newLoc],
+        workingContainers
+      );
+      setSelectedContainerId(null);
+      setSelectedLocId(newLocId);
+      setEmptyCanvasModal(null);
+    },
+    [
+      emptyCanvasModal,
+      locationMap,
+      workingContainers,
+      workingLocations,
+      projectedTopology.dynamicPortalIds,
+      worldId,
+      currentContainerId,
+      executeDirectEdgeCreation,
+    ]
+  );
+
+  // Confirm grouping L0 onto L0 into a new Level 1 container
+  const handleConfirmGroupIntoContainer = useCallback(
+    (containerName: string) => {
+      if (!groupModal) return;
+      const { draggedLoc, targetLoc, parentContainerId } = groupModal;
+      const contId = makeUniqueId("new_cont");
+      const targetPt = fullMapCoords[targetLoc.id] ?? { x: 0, y: 0 };
+      const newCont: LocationContainer = {
+        id: contId,
+        world_id: worldId,
+        parent_container_id: parentContainerId,
+        depth: 1,
+        name: containerName,
+        description: `${targetLoc.name} and ${draggedLoc.name}.`,
+        environmental_tags: [...(targetLoc.environmental_tags ?? [])],
+        lore_nodes: [],
+        ui_x: Math.round(targetPt.x),
+        ui_y: Math.round(targetPt.y),
+        icon: getDefaultMapIconKey("container", 1),
+      };
+
+      const nextLocs = workingLocations.map((l) => {
+        if (l.id === draggedLoc.id || l.id === targetLoc.id) {
+          return { ...l, container_id: contId, ui_x: null, ui_y: null };
+        }
+        return l;
+      });
+      commitNextGraph({
+        containers: [...workingContainers, newCont],
+        locations: nextLocs,
+        edges: workingEdges,
+      });
+      setGroupModal(null);
+      setSelectedLocId(null);
+      setSelectedContainerId(contId);
+      setStatusNotice(`Grouped "${draggedLoc.name}" & "${targetLoc.name}" inside "${containerName}".`);
+    },
+    [
+      groupModal,
+      fullMapCoords,
+      worldId,
+      workingLocations,
+      workingContainers,
+      workingEdges,
+      commitNextGraph,
+    ]
+  );
+
+  // Move element immediately onto existing container
+  const executeImmediateContainerMove = useCallback(
+    (
+      draggedKind: "location" | "container",
+      draggedId: string,
+      targetContainerId: string | null
+    ) => {
+      if (draggedKind === "location") {
+        const nextLocs = workingLocations.map((l) =>
+          l.id === draggedId
+            ? {
+                ...l,
+                container_id: targetContainerId,
+                is_entry_exit: targetContainerId ? l.is_entry_exit : false,
+                ui_x: null,
+                ui_y: null,
+              }
+            : l
+        );
+        commitNextGraph({
+          containers: workingContainers,
+          locations: nextLocs,
+          edges: workingEdges,
+        });
+      } else {
+        const nextConts = workingContainers.map((c) =>
+          c.id === draggedId
+            ? { ...c, parent_container_id: targetContainerId, ui_x: null, ui_y: null }
+            : c
+        );
+        commitNextGraph({
+          containers: nextConts,
+          locations: workingLocations,
+          edges: workingEdges,
+        });
+      }
+      const targetName = targetContainerId
+        ? containerMap.get(targetContainerId)?.name ?? "container"
+        : "World Root";
+      setStatusNotice(`Moved into "${targetName}" (click Undo to revert).`);
+    },
+    [
+      workingLocations,
+      workingContainers,
+      workingEdges,
+      containerMap,
+      commitNextGraph,
+    ]
+  );
+
+  // Permission helpers for Context Menu & Drag validation
+  const canDeleteLocation = useCallback(
+    (locId: string): { allowed: boolean; reason?: string } => {
+      if (workingLocations.length <= 1) {
+        return { allowed: false, reason: "Map must keep at least one location." };
+      }
+      const loc = locationMap.get(locId);
+      if (!loc) return { allowed: false };
+      if (loc.is_starting_location) {
+        return {
+          allowed: false,
+          reason: "Reassign Starting Location before deleting this room.",
+        };
+      }
+      if (mode === "campaign" && loc.is_visited) {
+        return {
+          allowed: false,
+          reason: "Visited campaign locations cannot be removed.",
+        };
+      }
+      return { allowed: true };
+    },
+    [workingLocations.length, locationMap, mode]
+  );
+
+  const canDeleteContainer = useCallback(
+    (contId: string): { allowed: boolean; reason?: string } => {
+      if (mode === "campaign") {
+        if (baselineContainerIds.has(contId)) {
+          return {
+            allowed: false,
+            reason:
+              "Saved containers cannot be removed mid-campaign; rewind to a turn before it existed.",
+          };
+        }
+        if (
+          containerHasVisitedDescendants(
+            contId,
+            workingContainers,
+            workingLocations
+          )
+        ) {
+          return {
+            allowed: false,
+            reason: "Containers holding visited locations cannot be removed.",
+          };
+        }
+      }
+      return { allowed: true };
+    },
+    [mode, baselineContainerIds, workingContainers, workingLocations]
+  );
+
+  const canConvertLocation = useCallback(
+    (locId: string): { allowed: boolean; reason?: string } => {
+      const loc = locationMap.get(locId);
+      if (!loc) return { allowed: false };
+      const parentCont = loc.container_id
+        ? containerMap.get(loc.container_id)
+        : undefined;
+      if (parentCont && parentCont.depth <= 1) {
+        return {
+          allowed: false,
+          reason: "Rooms inside a Level 1 container are already at the deepest container tier.",
+        };
+      }
+      return { allowed: true };
+    },
+    [locationMap, containerMap]
+  );
+
+  const canMoveOutToParent = useCallback(
+    (
+      kind: "location" | "container",
+      id: string
+    ): { allowed: boolean; parentLabel: string; reason?: string } => {
+      const parentContId =
+        kind === "location"
+          ? locationMap.get(id)?.container_id
+          : containerMap.get(id)?.parent_container_id;
+      const grandParentId = parentContId
+        ? containerMap.get(parentContId)?.parent_container_id ?? null
+        : null;
+      const parentLabel = grandParentId
+        ? containerMap.get(grandParentId)?.name ?? "Parent Container"
+        : "World Root";
+
+      const check = isValidContainerDrop({
+        draggedKind: kind,
+        draggedId: id,
+        targetKind: grandParentId ? "container" : "root",
+        targetId: grandParentId ?? undefined,
+        currentContainerId: grandParentId,
+        containers: workingContainers,
+        locations: workingLocations,
+        campaignMode: mode === "campaign",
+        originalContainers: propContainers,
+        originalLocations: propLocations,
+      });
+      return { allowed: check.valid, parentLabel, reason: check.reason };
+    },
+    [
+      locationMap,
+      containerMap,
+      workingContainers,
+      workingLocations,
+      mode,
+      propContainers,
+      propLocations,
+    ]
+  );
+
+  // Context menu action handlers
+  const handleDeleteLocation = useCallback(
+    (locId: string) => {
+      const check = canDeleteLocation(locId);
+      if (!check.allowed) {
+        setStatusNotice(check.reason || "Cannot delete this location.");
+        return;
+      }
+      const nextLocs = workingLocations.filter((l) => l.id !== locId);
+      const nextEdges = workingEdges.filter(
+        (e) => e.from_location_id !== locId && e.to_location_id !== locId
+      );
+      if (selectedLocId === locId) setSelectedLocId(null);
+      commitNextGraph({
+        containers: workingContainers,
+        locations: nextLocs,
+        edges: nextEdges,
+      });
+    },
+    [
+      canDeleteLocation,
+      workingLocations,
+      workingEdges,
+      workingContainers,
+      selectedLocId,
+      commitNextGraph,
+    ]
+  );
+
+  const handleDeleteContainer = useCallback(
+    (contId: string) => {
+      const check = canDeleteContainer(contId);
+      if (!check.allowed) {
+        setStatusNotice(check.reason || "Cannot remove this container.");
+        return;
+      }
+      const target = containerMap.get(contId);
+      const nextParent = target?.parent_container_id ?? null;
+      const nextConts = workingContainers
+        .filter((c) => c.id !== contId)
+        .map((c) =>
+          c.parent_container_id === contId
+            ? { ...c, parent_container_id: nextParent, ui_x: null, ui_y: null }
+            : c
+        );
+      const nextLocs = workingLocations.map((l) =>
+        l.container_id === contId
+          ? {
+              ...l,
+              container_id: nextParent,
+              is_entry_exit: nextParent ? l.is_entry_exit : false,
+              ui_x: null,
+              ui_y: null,
+            }
+          : l
+      );
+      if (selectedContainerId === contId) setSelectedContainerId(null);
+      commitNextGraph({
+        containers: nextConts,
+        locations: nextLocs,
+        edges: workingEdges,
+      });
+    },
+    [
+      canDeleteContainer,
+      containerMap,
+      workingContainers,
+      workingLocations,
+      workingEdges,
+      selectedContainerId,
+      commitNextGraph,
+    ]
+  );
+
+  const handleConvertLocationToContainer = useCallback(
+    (locId: string) => {
+      const loc = locationMap.get(locId);
+      if (!loc) return;
+      const check = canConvertLocation(locId);
+      if (!check.allowed) {
+        setStatusNotice(check.reason || "Cannot convert room.");
+        return;
+      }
+      const keepVisitedImmutable = mode === "campaign" && Boolean(loc.is_visited);
+      const contId = makeUniqueId("new_cont");
+      const newCont: LocationContainer = {
+        id: contId,
+        world_id: worldId,
+        parent_container_id: loc.container_id ?? null,
+        depth: 1,
+        name: loc.name,
+        description: loc.description || loc.summary || "",
+        environmental_tags: [...(loc.environmental_tags ?? [])],
+        lore_nodes: keepVisitedImmutable
+          ? []
+          : (loc.lore_nodes ?? []).map((ln) => ({
+              ...ln,
+              location_id: null,
+              container_id: contId,
+            })),
+        ui_x: loc.ui_x ?? null,
+        ui_y: loc.ui_y ?? null,
+        icon: getDefaultMapIconKey("container", 1),
+      };
+      const nextLocs = workingLocations.map((l) =>
+        l.id === locId
+          ? {
+              ...l,
+              container_id: contId,
+              is_entry_exit: true,
+              name: keepVisitedImmutable ? l.name : `${loc.name} Entrance`,
+              lore_nodes: keepVisitedImmutable ? l.lore_nodes : [],
+              ui_x: null,
+              ui_y: null,
+            }
+          : l
+      );
+      // Verify visited containment monotonicity in campaign mode
+      if (mode === "campaign" && loc.is_visited) {
+        const checkCont = validateVisitedAncestorContainment(
+          propLocations.find((p) => p.id === locId)?.container_id,
+          propContainers,
+          contId,
+          [...workingContainers, newCont]
+        );
+        if (!checkCont.valid) {
+          setStatusNotice(checkCont.reason || "Invalid containment change.");
+          return;
+        }
+      }
+      commitNextGraph({
+        containers: [...workingContainers, newCont],
+        locations: nextLocs,
+        edges: workingEdges,
+      });
+      setSelectedLocId(null);
+      setSelectedContainerId(contId);
+    },
+    [
+      locationMap,
+      canConvertLocation,
+      worldId,
+      workingLocations,
+      mode,
+      propLocations,
+      propContainers,
+      workingContainers,
+      workingEdges,
+      commitNextGraph,
+    ]
+  );
+
+  const handleSetStartingLocation = useCallback(
+    (locId: string) => {
+      if (mode === "campaign") return;
+      const nextLocs = workingLocations.map((l) => ({
+        ...l,
+        is_starting_location: l.id === locId,
+      }));
+      commitNextGraph({
+        containers: workingContainers,
+        locations: nextLocs,
+        edges: workingEdges,
+      });
+    },
+    [mode, workingLocations, workingContainers, workingEdges, commitNextGraph]
+  );
+
+  const handleUpdateEdgeDistance = useCallback(
+    (edgeId: string, minutes: number) => {
+      const target = workingEdges.find((e) => e.id === edgeId);
+      if (!target) return;
+      const clamped = Math.max(1, Math.min(240, Math.round(minutes) || 1));
+      const nextEdges = workingEdges.map((e) => {
+        if (
+          e.id === edgeId ||
+          (e.from_location_id === target.to_location_id &&
+            e.to_location_id === target.from_location_id)
+        ) {
+          return { ...e, travel_minutes: clamped };
+        }
+        return e;
+      });
+      commitNextGraph({
+        containers: workingContainers,
+        locations: workingLocations,
+        edges: nextEdges,
+      });
+    },
+    [workingEdges, workingContainers, workingLocations, commitNextGraph]
+  );
+
+  const handleToggleEdgeLocked = useCallback(
+    (edgeId: string) => {
+      const target = workingEdges.find((e) => e.id === edgeId);
+      if (!target) return;
+      const nextVal = !target.is_locked_or_hidden;
+      const nextEdges = workingEdges.map((e) => {
+        if (
+          e.id === edgeId ||
+          (e.from_location_id === target.to_location_id &&
+            e.to_location_id === target.from_location_id)
+        ) {
+          return { ...e, is_locked_or_hidden: nextVal };
+        }
+        return e;
+      });
+      commitNextGraph({
+        containers: workingContainers,
+        locations: workingLocations,
+        edges: nextEdges,
+      });
+    },
+    [workingEdges, workingContainers, workingLocations, commitNextGraph]
+  );
+
+  const handleDeleteEdge = useCallback(
+    (edgeId: string) => {
+      const target = workingEdges.find((e) => e.id === edgeId);
+      if (!target) return;
+      const nextEdges = workingEdges.filter(
+        (e) =>
+          e.id !== edgeId &&
+          !(
+            e.from_location_id === target.to_location_id &&
+            e.to_location_id === target.from_location_id
+          )
+      );
+      commitNextGraph({
+        containers: workingContainers,
+        locations: workingLocations,
+        edges: nextEdges,
+      });
+      setMultiEdgeModalEdges((prev) =>
+        prev
+          ? prev.filter(
+              (e) =>
+                e.id !== edgeId &&
+                !(
+                  e.from_location_id === target.to_location_id &&
+                  e.to_location_id === target.from_location_id
+                )
+            )
+          : null
+      );
+    },
+    [workingEdges, workingContainers, workingLocations, commitNextGraph]
+  );
+
+  // Hit-testing helper in world coords
+  const hitTestNodeAt = useCallback(
+    (
+      wx: number,
+      wy: number,
+      excludeKey?: { kind: "location" | "container"; id: string }
+    ): { kind: "location" | "container"; id: string } | null => {
+      for (const sn of projectedTopology.visibleSupernodes) {
+        if (
+          excludeKey?.kind === "container" &&
+          excludeKey.id === sn.container.id
+        ) {
+          continue;
+        }
+        const pt = fullMapCoords[sn.container.id];
+        if (!pt) continue;
+        if (Math.abs(wx - pt.x) <= 76 && Math.abs(wy - pt.y) <= 28) {
+          return { kind: "container", id: sn.container.id };
+        }
+      }
+      for (const loc of projectedTopology.visibleLocations) {
+        if (excludeKey?.kind === "location" && excludeKey.id === loc.id) {
+          continue;
+        }
+        const pt = fullMapCoords[loc.id];
+        if (!pt) continue;
+        const radius = loc.is_hub ? 20 : 23;
+        if (Math.hypot(wx - pt.x, wy - pt.y) <= radius) {
+          return { kind: "location", id: loc.id };
+        }
+      }
+      return null;
+    },
+    [projectedTopology, fullMapCoords]
+  );
+
+  // Hit-test compass port dots during link drag
+  const hitTestPortAt = useCallback(
+    (
+      wx: number,
+      wy: number,
+      excludeKind: "location" | "container",
+      excludeId: string
+    ): { kind: "location" | "container"; id: string; slot?: CompassDirection } | null => {
+      for (const loc of projectedTopology.visibleLocations) {
+        if (excludeKind === "location" && loc.id === excludeId) continue;
+        const pt = fullMapCoords[loc.id];
+        if (!pt) continue;
+        for (const slot of COMPASS_ORDER) {
+          const a = COMPASS_ANGLES[slot];
+          const px = pt.x + Math.cos(a) * 26;
+          const py = pt.y + Math.sin(a) * 26;
+          if (Math.hypot(wx - px, wy - py) <= 9) {
+            return { kind: "location", id: loc.id, slot };
           }
         }
       }
-      const roomsInCont = locations.filter(
-        (l) => l.container_id && descendantIds.has(l.container_id)
+      const bodyHit = hitTestNodeAt(wx, wy, { kind: excludeKind, id: excludeId });
+      return bodyHit ? { kind: bodyHit.kind, id: bodyHit.id } : null;
+    },
+    [projectedTopology.visibleLocations, fullMapCoords, hitTestNodeAt]
+  );
+
+  // Global window pointer move / up listeners for nodeDrag & linkDrag
+  useEffect(() => {
+    if (!nodeDrag && !linkDrag) return;
+
+    const handleMove = (ev: PointerEvent) => {
+      const wpt = clientToWorldPoint(
+        ev.clientX,
+        ev.clientY,
+        svgRef.current,
+        viewportGroupRef.current,
+        pan,
+        zoom
       );
-      if (roomsInCont.length === 0) {
-        setConnectError(
-          `"${targetCont.name}" has 0 interior rooms. Add an interior room first before linking to it.`
+
+      if (nodeDrag) {
+        const distPx = Math.hypot(
+          ev.clientX - nodeDrag.startClientX,
+          ev.clientY - nodeDrag.startClientY
         );
-        return;
+        const hasMoved = nodeDrag.hasMoved || distPx > 5;
+        const currX = Math.round(wpt.x - nodeDrag.pointerOffsetX);
+        const currY = Math.round(wpt.y - nodeDrag.pointerOffsetY);
+
+        let hoverTarget: typeof nodeDrag.hoverTarget = null;
+        if (hasMoved) {
+          const hit = hitTestNodeAt(currX, currY, {
+            kind: nodeDrag.kind,
+            id: nodeDrag.id,
+          });
+          if (hit) {
+            const check = isValidContainerDrop({
+              draggedKind: nodeDrag.kind,
+              draggedId: nodeDrag.id,
+              targetKind: hit.kind,
+              targetId: hit.id,
+              currentContainerId,
+              containers: workingContainers,
+              locations: workingLocations,
+              campaignMode: mode === "campaign",
+              originalContainers: propContainers,
+              originalLocations: propLocations,
+            });
+            hoverTarget = {
+              kind: hit.kind,
+              id: hit.id,
+              valid: check.valid,
+              reason: check.reason,
+            };
+          }
+        }
+        setNodeDrag((prev) =>
+          prev ? { ...prev, currX, currY, hasMoved, hoverTarget } : null
+        );
       }
 
-      const existingPortals = roomsInCont.filter((l) =>
-        projectedTopology.dynamicPortalIds.has(l.id)
-      );
-      if (existingPortals.length === 1) {
-        const chosenTarget = existingPortals[0];
-        const candidates = buildPromotionCandidates(selectedLocation, chosenTarget);
-        if (candidates.length > 0) {
-          setPromotionPrompt({
-            fromLocation: selectedLocation,
-            toLocation: chosenTarget,
-            targetContainerForRoomPick: null,
-            targetRoomCandidates: [],
-            chosenTargetRoomId: chosenTarget.id,
-            direction: connectDirection,
-            travelMinutes: minutes,
-            bidirectional: connectBidirectional,
-            candidates,
-          });
+      if (linkDrag) {
+        const portHit = hitTestPortAt(
+          wpt.x,
+          wpt.y,
+          linkDrag.sourceKind,
+          linkDrag.sourceId
+        );
+        setLinkDrag((prev) =>
+          prev
+            ? {
+                ...prev,
+                currX: wpt.x,
+                currY: wpt.y,
+                hoverTarget: portHit,
+              }
+            : null
+        );
+      }
+    };
+
+    const handleUp = (ev: PointerEvent) => {
+      if (nodeDrag) {
+        if (!nodeDrag.hasMoved) {
+          // Treat as Left Click -> select & inspect
+          if (nodeDrag.kind === "location") {
+            setSelectedContainerId(null);
+            setSelectedLocId(nodeDrag.id);
+          } else {
+            setSelectedContainerId(nodeDrag.id);
+          }
+          setNodeDrag(null);
           return;
         }
-        await executeEdgeCreation(
-          selectedLocation,
-          chosenTarget,
-          connectDirection,
-          minutes,
-          connectBidirectional,
-          new Set()
-        );
-        return;
-      }
 
-      // 0 or multiple portals inside target container -> prompt to select interior room + portal promotions
-      const roomPool = existingPortals.length > 1 ? existingPortals : roomsInCont;
-      const initialTarget = roomPool[0];
-      setPromotionPrompt({
-        fromLocation: selectedLocation,
-        toLocation: initialTarget,
-        targetContainerForRoomPick: targetCont,
-        targetRoomCandidates: roomPool,
-        chosenTargetRoomId: initialTarget.id,
-        direction: connectDirection,
-        travelMinutes: minutes,
-        bidirectional: connectBidirectional,
-        candidates: buildPromotionCandidates(selectedLocation, initialTarget),
-      });
-      return;
-    }
-
-    const targetLoc = locMap.get(connectTargetId);
-    if (!targetLoc) return;
-    const candidates = buildPromotionCandidates(selectedLocation, targetLoc);
-    if (candidates.length > 0) {
-      setPromotionPrompt({
-        fromLocation: selectedLocation,
-        toLocation: targetLoc,
-        targetContainerForRoomPick: null,
-        targetRoomCandidates: [],
-        chosenTargetRoomId: targetLoc.id,
-        direction: connectDirection,
-        travelMinutes: minutes,
-        bidirectional: connectBidirectional,
-        candidates,
-      });
-      return;
-    }
-
-    await executeEdgeCreation(
-      selectedLocation,
-      targetLoc,
-      connectDirection,
-      minutes,
-      connectBidirectional,
-      new Set()
-    );
-  };
-
-  // Check if removing an edge would create isolated islands (both endpoints must retain a path to the starting hub)
-  const canRemoveEdge = (edge: LocationEdge): boolean => {
-    const startId =
-      locations.find((l) => l.is_starting_location)?.id ?? locations[0]?.id;
-    if (!startId) return false;
-
-    const edgesToRemove = new Set<string>([edge.id]);
-    for (const e of edges) {
-      if (
-        e.from_location_id === edge.to_location_id &&
-        e.to_location_id === edge.from_location_id
-      ) {
-        edgesToRemove.add(e.id);
-      }
-    }
-
-    const remaining = edges.filter((e) => !edgesToRemove.has(e.id));
-    if (remaining.length === 0) return false;
-
-    const adj = new Map<string, Set<string>>();
-    for (const e of remaining) {
-      if (!adj.has(e.from_location_id)) adj.set(e.from_location_id, new Set());
-      if (!adj.has(e.to_location_id)) adj.set(e.to_location_id, new Set());
-      adj.get(e.from_location_id)!.add(e.to_location_id);
-      adj.get(e.to_location_id)!.add(e.from_location_id);
-    }
-
-    const reachable = new Set<string>([startId]);
-    const queue = [startId];
-    while (queue.length > 0) {
-      const curr = queue.shift()!;
-      for (const nextId of adj.get(curr) ?? []) {
-        if (!reachable.has(nextId)) {
-          reachable.add(nextId);
-          queue.push(nextId);
-        }
-      }
-    }
-
-    return (
-      reachable.has(edge.from_location_id) && reachable.has(edge.to_location_id)
-    );
-  };
-
-  const handleSaveDistance = async (edgeId: string) => {
-    if (!onUpdateEdgeDistance || isUpdatingDistance) return;
-    const mins = Math.max(1, Math.min(240, parseInt(editMinutes, 10) || 1));
-    try {
-      setIsUpdatingDistance(true);
-      await onUpdateEdgeDistance({ edgeId, travel_minutes: mins });
-      setEditingEdgeId(null);
-    } catch (err) {
-      console.error("Failed to update edge distance:", err);
-    } finally {
-      setIsUpdatingDistance(false);
-    }
-  };
-
-  const handleDeleteExit = async (edge: LocationEdge) => {
-    if (!onDeleteEdge || isRemovingEdgeId) return;
-    if (!canRemoveEdge(edge)) return;
-    try {
-      setIsRemovingEdgeId(edge.id);
-      await onDeleteEdge(edge.id);
-    } catch (err) {
-      console.error("Failed to remove exit:", err);
-    } finally {
-      setIsRemovingEdgeId(null);
-    }
-  };
-
-  if (!selectedLocation && locations.length === 0) {
-    return (
-      <div
-        style={{
-          padding: 30,
-          textAlign: "center",
-          color: "var(--text-muted)",
-          background: "var(--bg-deep)",
-          borderRadius: 8,
-          border: "1px solid var(--border-subtle)",
-        }}
-      >
-        <Compass
-          size={32}
-          color="var(--accent-cyan)"
-          style={{ marginBottom: 8, opacity: 0.6 }}
-        />
-        <div style={{ fontSize: "0.9rem", color: "var(--text-secondary)" }}>
-          No spatial locations defined in this world yet.
-        </div>
-      </div>
-    );
-  }
-
-  const isCurrentOrStart = selectedLocation?.id === activeLoc?.id;
-
-  const renderScopedLoreSection = (opts: {
-    targetId: string;
-    targetName: string;
-    worldId: string;
-    scopeLabel: string;
-    emptyText: string;
-    loreList: LoreNode[];
-    onEditorUpdate?: (nextLore: LoreNode[]) => void;
-    onCampaignSave?: (
-      id: string,
-      drafts: LocationLoreNodeDraft[]
-    ) => Promise<void> | void;
-  }) => {
-    const {
-      targetId,
-      targetName,
-      worldId,
-      scopeLabel,
-      emptyText,
-      loreList,
-      onEditorUpdate,
-      onCampaignSave,
-    } = opts;
-
-    const updateEditorLoreAt = (idx: number, patch: Partial<LoreNode>) => {
-      if (!onEditorUpdate) return;
-      onEditorUpdate(
-        loreList.map((item, i) => (i === idx ? { ...item, ...patch } : item))
-      );
-    };
-
-    const handleAddEditorLore = () => {
-      if (!onEditorUpdate) return;
-      const newId = `new_lore_${Date.now()}_${Math.random()
-        .toString(36)
-        .slice(2, 6)}`;
-      const created: LoreNode = {
-        id: newId,
-        world_id: worldId,
-        location_id: scopeLabel.startsWith("Location") ? targetId : null,
-        container_id: scopeLabel.startsWith("Container") ? targetId : null,
-        title: "",
-        category: "rumor",
-        content: "",
-        entity_tags: [],
-      };
-      onEditorUpdate([...loreList, created]);
-      setExpandedEditorLoreId(newId);
-    };
-
-    const handleDeleteEditorLore = (idx: number) => {
-      if (!onEditorUpdate) return;
-      const removed = loreList[idx];
-      onEditorUpdate(loreList.filter((_, i) => i !== idx));
-      if (removed && expandedEditorLoreId === removed.id) {
-        setExpandedEditorLoreId(null);
-      }
-    };
-
-    const openCampaignAddLore = () => {
-      setCampLoreFormMode({ mode: "add" });
-      setCampLoreTitle("");
-      setCampLoreCategory("rumor");
-      setCampLoreContent("");
-      setCampLoreTags([]);
-      setCampLorePendingTagDraft("");
-      setCampLoreError(null);
-    };
-
-    const openCampaignEditLore = (idx: number) => {
-      const target = loreList[idx];
-      if (!target) return;
-      setCampLoreFormMode({ mode: "edit", index: idx });
-      setCampLoreTitle(target.title);
-      setCampLoreCategory(
-        LOCATION_LORE_CATEGORIES.includes(
-          target.category as LocationLoreCategory
-        )
-          ? (target.category as LocationLoreCategory)
-          : "rumor"
-      );
-      setCampLoreContent(target.content);
-      setCampLoreTags([...target.entity_tags]);
-      setCampLorePendingTagDraft("");
-      setCampLoreError(null);
-    };
-
-    const submitCampaignLoreForm = async () => {
-      if (!onCampaignSave || !campLoreFormMode || isSavingCampLore) return;
-      const trimmedTitle = campLoreTitle.trim();
-      const trimmedContent = campLoreContent.trim();
-      const pendingParts = campLorePendingTagDraft
-        .split(/[,;\n]+/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-      const effectiveTags = normalizeTagList(campLoreTags, pendingParts);
-
-      if (!trimmedTitle) {
-        setCampLoreError("Lore title is required.");
-        return;
-      }
-      if (!trimmedContent) {
-        setCampLoreError("Lore content is required.");
-        return;
-      }
-      if (effectiveTags.length === 0) {
-        setCampLoreError("At least 1 trigger keyword is required.");
-        return;
-      }
-
-      const baseDrafts: LocationLoreNodeDraft[] = loreList.map((ln) => ({
-        id: ln.id,
-        title: ln.title,
-        category: LOCATION_LORE_CATEGORIES.includes(
-          ln.category as LocationLoreCategory
-        )
-          ? (ln.category as LocationLoreCategory)
-          : "rumor",
-        content: ln.content,
-        entity_tags: ln.entity_tags,
-      }));
-
-      if (campLoreFormMode.mode === "add") {
-        baseDrafts.push({
-          title: trimmedTitle,
-          category: campLoreCategory,
-          content: trimmedContent,
-          entity_tags: effectiveTags,
-        });
-      } else {
-        const existingId = loreList[campLoreFormMode.index]?.id ?? null;
-        baseDrafts[campLoreFormMode.index] = {
-          id: existingId,
-          title: trimmedTitle,
-          category: campLoreCategory,
-          content: trimmedContent,
-          entity_tags: effectiveTags,
-        };
-      }
-
-      setIsSavingCampLore(true);
-      setCampLoreError(null);
-      try {
-        await onCampaignSave(targetId, baseDrafts);
-        setCampLoreFormMode(null);
-        setCampLorePendingTagDraft("");
-      } catch (err: any) {
-        setCampLoreError(err?.message || "Failed to save lore.");
-      } finally {
-        setIsSavingCampLore(false);
-      }
-    };
-
-    const handleDeleteCampaignLore = async (idx: number) => {
-      if (!onCampaignSave || isSavingCampLore || isMutatingLocked) return;
-      const target = loreList[idx];
-      if (!target) return;
-      if (!window.confirm(`Remove lore "${target.title}" from this campaign?`)) {
-        return;
-      }
-      const remaining: LocationLoreNodeDraft[] = loreList
-        .filter((_, i) => i !== idx)
-        .map((ln) => ({
-          id: ln.id,
-          title: ln.title,
-          category: LOCATION_LORE_CATEGORIES.includes(
-            ln.category as LocationLoreCategory
-          )
-            ? (ln.category as LocationLoreCategory)
-            : "rumor",
-          content: ln.content,
-          entity_tags: ln.entity_tags,
-        }));
-
-      setIsSavingCampLore(true);
-      setCampLoreError(null);
-      try {
-        await onCampaignSave(targetId, remaining);
-        if (
-          campLoreFormMode?.mode === "edit" &&
-          campLoreFormMode.index === idx
-        ) {
-          setCampLoreFormMode(null);
-        }
-      } catch (err: any) {
-        setCampLoreError(err?.message || "Failed to delete lore.");
-      } finally {
-        setIsSavingCampLore(false);
-      }
-    };
-
-    return (
-      <div
-        style={{
-          borderTop: "1px solid var(--border-subtle)",
-          paddingTop: 10,
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: 8,
-          }}
-        >
-          <span
-            className="cog-step-label"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 5,
-              marginBottom: 0,
-            }}
-          >
-            <BookOpen size={12} color="var(--accent-cyan)" />
-            {scopeLabel} ({loreList.length})
-          </span>
-
-          {mode === "editor" && onEditorUpdate && (
-            <button
-              type="button"
-              className="btn"
-              style={{ padding: "3px 8px", fontSize: "0.7rem" }}
-              onClick={handleAddEditorLore}
-            >
-              <Plus size={11} /> Add Lore
-            </button>
-          )}
-
-          {mode === "campaign" && onCampaignSave && !campLoreFormMode && (
-            <button
-              type="button"
-              className="btn"
-              style={{ padding: "3px 8px", fontSize: "0.7rem" }}
-              disabled={isMutatingLocked || isSavingCampLore}
-              onClick={openCampaignAddLore}
-            >
-              <Plus size={11} /> Add Lore
-            </button>
-          )}
-        </div>
-
-        {mode === "campaign" && isMutatingLocked && (
-          <div style={{ fontSize: "0.69rem", color: "var(--accent-amber)" }}>
-            Turn in progress — lore editing is temporarily locked.
-          </div>
-        )}
-
-        {campLoreError && mode === "campaign" && !campLoreFormMode && (
-          <div style={{ fontSize: "0.71rem", color: "#fda4af" }}>
-            {campLoreError}
-          </div>
-        )}
-
-        {mode === "campaign" && campLoreFormMode && (
-          <div
-            style={{
-              border: "1px solid rgba(6, 182, 212, 0.45)",
-              borderRadius: 6,
-              padding: 10,
-              background: "var(--bg-panel)",
-              display: "flex",
-              flexDirection: "column",
-              gap: 7,
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-              }}
-            >
-              <span className="cog-step-label" style={{ marginBottom: 0 }}>
-                {campLoreFormMode.mode === "add"
-                  ? `New Lore for ${targetName}`
-                  : `Edit ${scopeLabel}`}
-              </span>
-              <span style={{ fontSize: "0.64rem", color: "var(--text-muted)" }}>
-                Campaign CoW
-              </span>
-            </div>
-
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 112px",
-                gap: 6,
-              }}
-            >
-              <input
-                className="field-input"
-                placeholder="Entry title (required)"
-                value={campLoreTitle}
-                disabled={isSavingCampLore || isMutatingLocked}
-                onChange={(e) => setCampLoreTitle(e.target.value)}
-              />
-              <select
-                className="field-select"
-                value={campLoreCategory}
-                disabled={isSavingCampLore || isMutatingLocked}
-                onChange={(e) =>
-                  setCampLoreCategory(e.target.value as LocationLoreCategory)
-                }
-              >
-                {LOCATION_LORE_CATEGORIES.map((cat) => (
-                  <option key={cat} value={cat}>
-                    {cat === "secret" ? "🔒 secret" : cat}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {campLoreCategory === "secret" && (
-              <div
-                style={{
-                  fontSize: "0.68rem",
-                  color: "#fda4af",
-                  background: "rgba(244, 63, 94, 0.08)",
-                  border: "1px solid rgba(244, 63, 94, 0.25)",
-                  borderRadius: 5,
-                  padding: "5px 7px",
-                  lineHeight: 1.35,
-                }}
-              >
-                <strong>Secret Gate:</strong> Withheld from passive context &amp;
-                remote recall until unlocked by a trigger keyword or Clean/Critical
-                Success discovery roll.
-              </div>
-            )}
-
-            <textarea
-              className="field-textarea"
-              rows={3}
-              placeholder="Local history, faction presence, rumor, or hidden secret..."
-              value={campLoreContent}
-              disabled={isSavingCampLore || isMutatingLocked}
-              onChange={(e) => setCampLoreContent(e.target.value)}
-            />
-
-            <div>
-              <label
-                style={{
-                  display: "block",
-                  fontSize: "0.69rem",
-                  color: "var(--text-secondary)",
-                  marginBottom: 4,
-                }}
-              >
-                Trigger Keywords (min 1)
-              </label>
-              <TagChipsInput
-                value={campLoreTags}
-                onChange={setCampLoreTags}
-                onDraftChange={setCampLorePendingTagDraft}
-                disabled={isSavingCampLore || isMutatingLocked}
-                accentVariant={campLoreCategory === "secret" ? "amber" : "cyan"}
-                placeholder="Type keyword & press Enter..."
-              />
-            </div>
-
-            {campLoreError && (
-              <div style={{ fontSize: "0.71rem", color: "#fda4af" }}>
-                {campLoreError}
-              </div>
-            )}
-
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
-              <button
-                type="button"
-                className="btn"
-                style={{ padding: "3px 10px", fontSize: "0.73rem" }}
-                disabled={isSavingCampLore}
-                onClick={() => {
-                  setCampLoreFormMode(null);
-                  setCampLoreError(null);
-                  setCampLorePendingTagDraft("");
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn btn-cyan"
-                style={{ padding: "3px 10px", fontSize: "0.73rem" }}
-                disabled={isSavingCampLore || isMutatingLocked}
-                onClick={submitCampaignLoreForm}
-              >
-                {isSavingCampLore ? "Saving..." : "Save Lore"}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {loreList.length === 0 ? (
-          !campLoreFormMode && (
-            <div
-              style={{
-                fontSize: "0.72rem",
-                color: "var(--text-muted)",
-                fontStyle: "italic",
-              }}
-            >
-              {emptyText}
-            </div>
-          )
-        ) : mode === "editor" && onEditorUpdate ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {loreList.map((ln, idx) => {
-              const isExpanded = expandedEditorLoreId === ln.id;
-              const isInvalid =
-                !ln.title.trim() ||
-                !ln.content.trim() ||
-                !ln.entity_tags ||
-                ln.entity_tags.length === 0;
-              return (
-                <div
-                  key={ln.id || idx}
-                  style={{
-                    background: "var(--bg-panel)",
-                    border: isInvalid
-                      ? "1px solid rgba(244, 63, 94, 0.55)"
-                      : "1px solid var(--border-subtle)",
-                    borderRadius: 6,
-                    padding: "7px 9px",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 6,
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: 6,
-                      cursor: "pointer",
-                    }}
-                    onClick={() =>
-                      setExpandedEditorLoreId(isExpanded ? null : ln.id)
-                    }
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 5,
-                        minWidth: 0,
-                        flex: 1,
-                      }}
-                    >
-                      {isExpanded ? (
-                        <ChevronDown size={13} />
-                      ) : (
-                        <ChevronRight size={13} />
-                      )}
-                      <span
-                        className={`lore-cat-badge lore-cat-badge--${ln.category}`}
-                      >
-                        {ln.category === "secret" && <EyeOff size={10} />}
-                        {ln.category}
-                      </span>
-                      <span
-                        style={{
-                          fontSize: "0.76rem",
-                          fontWeight: 600,
-                          color: ln.title.trim()
-                            ? "var(--text-primary)"
-                            : "#fda4af",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {ln.title.trim() || "Untitled Lore"}
-                      </span>
-                    </div>
-
-                    <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                      {isInvalid && (
-                        <span
-                          title="Requires title, content, and at least 1 keyword"
-                          style={{ color: "#fda4af", display: "inline-flex" }}
-                        >
-                          <AlertCircle size={13} />
-                        </span>
-                      )}
-                      <button
-                        type="button"
-                        className="item-remove-btn"
-                        title="Delete lore entry"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteEditorLore(idx);
-                        }}
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-                  </div>
-
-                  {isExpanded && (
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 6,
-                        paddingTop: 4,
-                        borderTop: "1px solid var(--border-subtle)",
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "1fr 108px",
-                          gap: 6,
-                        }}
-                      >
-                        <input
-                          className="field-input"
-                          placeholder="Lore title (required)"
-                          value={ln.title}
-                          onChange={(e) =>
-                            updateEditorLoreAt(idx, { title: e.target.value })
-                          }
-                        />
-                        <select
-                          className="field-select"
-                          value={ln.category}
-                          onChange={(e) =>
-                            updateEditorLoreAt(idx, {
-                              category: e.target.value as LocationLoreCategory,
-                            })
-                          }
-                        >
-                          {LOCATION_LORE_CATEGORIES.map((cat) => (
-                            <option key={cat} value={cat}>
-                              {cat === "secret" ? "🔒 secret" : cat}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <textarea
-                        className="field-textarea"
-                        rows={3}
-                        placeholder="Lore details..."
-                        value={ln.content}
-                        onChange={(e) =>
-                          updateEditorLoreAt(idx, { content: e.target.value })
-                        }
-                      />
-
-                      <div>
-                        <label
-                          style={{
-                            display: "block",
-                            fontSize: "0.68rem",
-                            color: "var(--text-secondary)",
-                            marginBottom: 3,
-                          }}
-                        >
-                          Trigger Keywords (min 1)
-                        </label>
-                        <TagChipsInput
-                          value={ln.entity_tags || []}
-                          onChange={(tags) =>
-                            updateEditorLoreAt(idx, { entity_tags: tags })
-                          }
-                          accentVariant={
-                            ln.category === "secret" ? "amber" : "cyan"
-                          }
-                          placeholder="Type keyword & press Enter..."
-                        />
-                      </div>
-                    </div>
-                  )}
-                </div>
+        // Check if released over a breadcrumb drop zone first
+        const el =
+          typeof document !== "undefined"
+            ? document.elementFromPoint(ev.clientX, ev.clientY)
+            : null;
+        const crumbEl = el?.closest?.("[data-breadcrumb-drop]");
+        if (crumbEl) {
+          const targetCidRaw = crumbEl.getAttribute("data-breadcrumb-drop");
+          const targetCid = targetCidRaw === "__root__" ? null : targetCidRaw;
+          if (targetCid !== currentContainerId) {
+            const check = isValidContainerDrop({
+              draggedKind: nodeDrag.kind,
+              draggedId: nodeDrag.id,
+              targetKind: targetCid ? "container" : "root",
+              targetId: targetCid ?? undefined,
+              currentContainerId: targetCid,
+              containers: workingContainers,
+              locations: workingLocations,
+              campaignMode: mode === "campaign",
+              originalContainers: propContainers,
+              originalLocations: propLocations,
+            });
+            if (check.valid) {
+              executeImmediateContainerMove(
+                nodeDrag.kind,
+                nodeDrag.id,
+                targetCid
               );
-            })}
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {loreList.map((ln, idx) => (
-              <div
-                key={ln.id || idx}
-                style={{
-                  background: "var(--bg-panel)",
-                  border:
-                    ln.category === "secret"
-                      ? "1px solid rgba(244, 63, 94, 0.35)"
-                      : "1px solid var(--border-subtle)",
-                  borderRadius: 6,
-                  padding: "8px 9px",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 5,
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    gap: 6,
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 5,
-                      minWidth: 0,
-                      flex: 1,
-                    }}
-                  >
-                    <span
-                      className={`lore-cat-badge lore-cat-badge--${ln.category}`}
-                    >
-                      {ln.category === "secret" && <EyeOff size={10} />}
-                      {ln.category}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: "0.76rem",
-                        fontWeight: 600,
-                        color: "var(--text-primary)",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {ln.title}
-                    </span>
-                  </div>
+            } else {
+              setStatusNotice(check.reason || "Cannot move element out here.");
+            }
+            setNodeDrag(null);
+            return;
+          }
+        }
 
-                  {onCampaignSave && (
-                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                      <button
-                        type="button"
-                        className="btn"
-                        style={{ padding: "2px 5px" }}
-                        title="Edit lore"
-                        disabled={isMutatingLocked || isSavingCampLore}
-                        onClick={() => openCampaignEditLore(idx)}
-                      >
-                        <Pencil size={11} />
-                      </button>
-                      <button
-                        type="button"
-                        className="item-remove-btn"
-                        title="Delete lore"
-                        disabled={isMutatingLocked || isSavingCampLore}
-                        onClick={() => handleDeleteCampaignLore(idx)}
-                      >
-                        <Trash2 size={11} />
-                      </button>
-                    </div>
-                  )}
-                </div>
+        const ht = nodeDrag.hoverTarget;
+        if (ht) {
+          if (!ht.valid) {
+            // Invalid drop target -> snap back cleanly
+            setStatusNotice(
+              ht.reason || "Invalid drop target under container depth rules."
+            );
+            setNodeDrag(null);
+            return;
+          }
 
-                <div
-                  style={{
-                    fontSize: "0.73rem",
-                    color: "var(--text-secondary)",
-                    lineHeight: 1.42,
-                    whiteSpace: "pre-wrap",
-                  }}
-                >
-                  {ln.content}
-                </div>
+          if (ht.kind === "container") {
+            executeImmediateContainerMove(nodeDrag.kind, nodeDrag.id, ht.id);
+            setNodeDrag(null);
+            return;
+          }
 
-                {ln.entity_tags?.length > 0 && (
-                  <div
-                    style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: 4,
-                      marginTop: 2,
-                    }}
-                  >
-                    {ln.entity_tags.map((tag, tIdx) => (
-                      <span
-                        key={`${tag}-${tIdx}`}
-                        className={`tag-chip-pill ${
-                          ln.category === "secret" ? "tag-chip-pill--amber" : ""
-                        }`}
-                        style={{ padding: "1px 7px", fontSize: "0.66rem" }}
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
+          // Valid L0-on-L0 drop -> open Container Name confirmation modal
+          if (ht.kind === "location" && nodeDrag.kind === "location") {
+            const draggedLoc = locationMap.get(nodeDrag.id);
+            const targetLoc = locationMap.get(ht.id);
+            if (draggedLoc && targetLoc) {
+              setGroupModal({
+                draggedLoc,
+                targetLoc,
+                parentContainerId: currentContainerId,
+              });
+            }
+            setNodeDrag(null);
+            return;
+          }
+        }
+
+        // Dropped onto open canvas -> persist new coordinates
+        if (nodeDrag.kind === "location") {
+          patchLocation(nodeDrag.id, {
+            ui_x: nodeDrag.currX,
+            ui_y: nodeDrag.currY,
+          });
+        } else {
+          patchContainer(nodeDrag.id, {
+            ui_x: nodeDrag.currX,
+            ui_y: nodeDrag.currY,
+          });
+        }
+        setNodeDrag(null);
+      }
+
+      if (linkDrag) {
+        const wpt = clientToWorldPoint(
+          ev.clientX,
+          ev.clientY,
+          svgRef.current,
+          viewportGroupRef.current,
+          pan,
+          zoom
+        );
+        const dropTarget = hitTestPortAt(
+          wpt.x,
+          wpt.y,
+          linkDrag.sourceKind,
+          linkDrag.sourceId
+        );
+        if (dropTarget) {
+          initiateConnection({
+            sourceKind: linkDrag.sourceKind,
+            sourceId: linkDrag.sourceId,
+            sourceSlot: linkDrag.sourceSlot,
+            targetKind: dropTarget.kind,
+            targetId: dropTarget.id,
+            explicitTargetSlot: dropTarget.slot,
+          });
+        } else if (
+          Math.hypot(linkDrag.currX - linkDrag.startX, linkDrag.currY - linkDrag.startY) >
+          14
+        ) {
+          const srcName =
+            linkDrag.sourceKind === "location"
+              ? locationMap.get(linkDrag.sourceId)?.name ?? "Room"
+              : containerMap.get(linkDrag.sourceId)?.name ?? "Container";
+          setEmptyCanvasModal({
+            sourceKind: linkDrag.sourceKind,
+            sourceId: linkDrag.sourceId,
+            sourceName: srcName,
+            sourceSlot: linkDrag.sourceSlot,
+            dropX: Math.round(wpt.x),
+            dropY: Math.round(wpt.y),
+            canCreateContainer: canAddContainerHere,
+            availableDepths: availableContainerDepthsHere,
+          });
+        }
+        setLinkDrag(null);
+      }
+    };
+
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    return () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+    };
+  }, [
+    nodeDrag,
+    linkDrag,
+    pan,
+    zoom,
+    hitTestNodeAt,
+    hitTestPortAt,
+    currentContainerId,
+    workingContainers,
+    workingLocations,
+    mode,
+    propContainers,
+    propLocations,
+    executeImmediateContainerMove,
+    locationMap,
+    containerMap,
+    patchLocation,
+    patchContainer,
+    initiateConnection,
+    canAddContainerHere,
+    availableContainerDepthsHere,
+  ]);
+
+  const handleSaveClick = async () => {
+    if (!onSaveMap || hasBlockingErrors || effectiveSaving) return;
+    setInternalSaving(true);
+    setSaveError(null);
+    try {
+      await onSaveMap(
+        cloneGraph(workingContainers, workingLocations, workingEdges)
+      );
+      if (!isControlledExternally) {
+        setInternalDirty(false);
+        setUndoStack([]);
+      }
+      setStatusNotice("Map saved.");
+    } catch (err: unknown) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setInternalSaving(false);
+    }
   };
+
+  const handleCloseClick = () => {
+    if (!onClose) return;
+    if (
+      !isControlledExternally &&
+      effectiveDirty &&
+      typeof window !== "undefined" &&
+      !window.confirm("You have unsaved map edits. Discard changes and close?")
+    ) {
+      return;
+    }
+    onClose();
+  };
+
+  const openContextMenuAt = (
+    e: React.MouseEvent,
+    target: MapContextMenuState["target"]
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const wrapRect = canvasWrapRef.current?.getBoundingClientRect();
+    const relX = wrapRect ? e.clientX - wrapRect.left : 24;
+    const relY = wrapRect ? e.clientY - wrapRect.top : 24;
+    const clampedX = wrapRect
+      ? Math.max(8, Math.min(wrapRect.width - 230, relX))
+      : relX;
+    const clampedY = wrapRect
+      ? Math.max(8, Math.min(wrapRect.height - 200, relY))
+      : relY;
+    setContextMenu({ x: clampedX, y: clampedY, target });
+  };
+
+  const selectedExternalPortals = useMemo(() => {
+    if (!selectedLocation) return [];
+    return (projectedTopology.externalPortalsByLocationId[selectedLocation.id] ?? []).map(
+      (ext) => ({
+        edgeId: ext.edge.id,
+        destinationName: ext.destination.name,
+        destinationContainerName: ext.destinationContainerName ?? "World Root",
+        compassDirection: ext.edge.compass_direction,
+        travelMinutes: ext.edge.travel_minutes,
+        isLockedOrHidden: ext.edge.is_locked_or_hidden,
+      })
+    );
+  }, [selectedLocation, projectedTopology.externalPortalsByLocationId]);
+
+  const selectedContainerStats = useMemo(() => {
+    if (!selectedContainer) return null;
+    const stats = projectedTopology.visibleSupernodes.find(
+      (s) => s.container.id === selectedContainer.id
+    );
+    return stats
+      ? {
+          descendantLocationCount: stats.descendantLocationCount,
+          externalPortalsCount: stats.externalPortalsCount,
+          hasActivePlayer: stats.hasActivePlayer,
+        }
+      : null;
+  }, [selectedContainer, projectedTopology.visibleSupernodes]);
+
+  const hasDetailsOpen = Boolean(selectedLocation || selectedContainer);
+
+  const validationSummary =
+    reachabilityReport.starterError ||
+    containerValidationErrors[0] ||
+    (reachabilityReport.unreachableIds.length > 0
+      ? `${reachabilityReport.unreachableIds.length} unlinked location(s) cannot reach/return from Starting Location`
+      : null);
 
   return (
     <div
       style={{
         display: "flex",
         flexDirection: "column",
-        gap: 10,
-        width: "100%",
         height: "100%",
+        gap: 10,
         flex: 1,
         minHeight: 0,
       }}
+      onClick={() => {
+        if (contextMenu) setContextMenu(null);
+      }}
     >
-      {/* Header Toolbar */}
+      {/* Unified Header Toolbar */}
       <div
         style={{
           display: "flex",
@@ -2054,10 +2747,10 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         >
           <Compass size={17} color="var(--accent-cyan)" />
           {title ||
-            `Full Spatial Topology (${locations.length} Locations, ${edges.length} Passages)`}
+            `Spatial Topology (${workingLocations.length} Locations, ${workingEdges.length} Passages)`}
         </span>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <button
             type="button"
             className="btn"
@@ -2071,7 +2764,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             type="button"
             className="btn"
             style={{ padding: "4px 8px", fontSize: "0.74rem" }}
-            onClick={() => setZoom((z) => Math.max(0.35, +(z - 0.25).toFixed(2)))}
+            onClick={() =>
+              setZoom((z) => Math.max(0.35, +(z - 0.25).toFixed(2)))
+            }
             title="Zoom Out"
           >
             <ZoomOut size={14} />
@@ -2081,11 +2776,12 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             className="btn"
             style={{ padding: "4px 9px", fontSize: "0.74rem" }}
             onClick={handleCenter}
-            title="Center on Selected / Starting Location"
+            title="Center on Selected / Active Node"
           >
             <Crosshair size={14} />
             Center ({Math.round(zoom * 100)}%)
           </button>
+
           {onReimagineMap && (
             <button
               type="button"
@@ -2098,18 +2794,59 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                 gap: 5,
               }}
               onClick={onReimagineMap}
-              title="Re-imagine spatial map layout with AI based on your description"
             >
               <Sparkles size={13} />
               Re-imagine Map
             </button>
           )}
+
+          {onSaveMap && (
+            <button
+              type="button"
+              className={`btn ${effectiveDirty && !hasBlockingErrors ? "btn-amber" : "btn-cyan"}`}
+              disabled={
+                !effectiveDirty ||
+                hasBlockingErrors ||
+                effectiveSaving ||
+                isMutatingLocked
+              }
+              title={
+                hasBlockingErrors
+                  ? validationSummary || "Resolve unlinked nodes before saving."
+                  : !effectiveDirty
+                  ? "No unsaved map changes"
+                  : "Persist map layout and structure"
+              }
+              onClick={handleSaveClick}
+              style={{
+                padding: "4px 12px",
+                fontSize: "0.75rem",
+                fontWeight: 600,
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+              }}
+            >
+              {effectiveSaving ? (
+                <>Saving...</>
+              ) : effectiveDirty ? (
+                <>
+                  <Save size={13} /> Save Map
+                </>
+              ) : (
+                <>
+                  <Check size={13} /> Map Saved
+                </>
+              )}
+            </button>
+          )}
+
           {onClose && (
             <button
               type="button"
               className="btn"
               style={{ padding: "4px 8px" }}
-              onClick={onClose}
+              onClick={handleCloseClick}
               title="Close Map"
             >
               <X size={15} />
@@ -2118,8 +2855,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         </div>
       </div>
 
-      {/* Container Breadcrumb Navigation Bar */}
-      {containers.length > 0 && (
+      {/* Container Breadcrumbs (also acts as drag-drop target to move items outward) */}
+      {(workingContainers.length > 0 || currentContainerId) && (
         <div
           aria-label="Container hierarchy breadcrumbs"
           style={{
@@ -2135,112 +2872,169 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             flexShrink: 0,
           }}
         >
-          <Layers size={13} color="var(--accent-cyan)" />
           <button
             type="button"
             className="btn"
+            data-breadcrumb-drop="__root__"
+            onClick={() => drillIntoContainer(null)}
             style={{
               padding: "2px 8px",
               fontSize: "0.72rem",
-              fontWeight: currentContainerId === null ? 700 : 500,
+              borderColor:
+                currentContainerId === null
+                  ? "var(--accent-cyan)"
+                  : "var(--border-subtle)",
               color:
                 currentContainerId === null
                   ? "var(--accent-cyan)"
                   : "var(--text-secondary)",
-              borderColor:
-                currentContainerId === null
-                  ? "rgba(6, 182, 212, 0.45)"
-                  : undefined,
             }}
-            onClick={() => drillIntoContainer(null)}
           >
             World Root
           </button>
-          {projectedTopology.breadcrumbs.map((crumb) => {
-            const isLeaf = crumb.id === currentContainerId;
+
+          {projectedTopology.breadcrumbs.map((crumb, idx) => {
+            const isLeaf = idx === projectedTopology.breadcrumbs.length - 1;
             return (
               <React.Fragment key={crumb.id}>
-                <ChevronRight size={12} color="var(--text-muted)" />
+                <ChevronRight size={13} color="var(--text-muted)" />
                 <button
                   type="button"
                   className="btn"
+                  data-breadcrumb-drop={crumb.id}
+                  onClick={() => drillIntoContainer(crumb.id)}
                   style={{
                     padding: "2px 8px",
                     fontSize: "0.72rem",
-                    fontWeight: isLeaf ? 700 : 500,
-                    color: isLeaf ? "var(--accent-cyan)" : "var(--text-secondary)",
-                    borderColor: isLeaf ? "rgba(6, 182, 212, 0.45)" : undefined,
+                    borderColor: isLeaf
+                      ? "var(--accent-amber)"
+                      : "var(--border-subtle)",
+                    color: isLeaf
+                      ? "var(--accent-amber)"
+                      : "var(--text-secondary)",
                   }}
-                  onClick={() => drillIntoContainer(crumb.id)}
                 >
-                  <FolderOpen size={11} />
-                  {crumb.name}
-                  <span style={{ opacity: 0.65, fontSize: "0.65rem" }}>
-                    (L{crumb.depth})
-                  </span>
+                  <FolderOpen size={11} style={{ marginRight: 4 }} />
+                  {crumb.name} (L{crumb.depth})
                 </button>
               </React.Fragment>
             );
           })}
-          {currentContainerId !== null && (
-            <button
-              type="button"
-              className="btn"
-              style={{
-                marginLeft: "auto",
-                padding: "2px 8px",
-                fontSize: "0.7rem",
-              }}
-              onClick={() =>
-                drillIntoContainer(
-                  projectedTopology.currentContainer?.parent_container_id ?? null
-                )
-              }
-            >
-              ↑ Up One Level
-            </button>
-          )}
         </div>
       )}
 
-      {/* Main 2-Column Area: SVG Visual Map + Selected Location Inspector */}
+      {/* Draggable Node Palette Bar + Undo + Validation Status */}
+      <MapPaletteBar
+        canAddContainerHere={canAddContainerHere}
+        isMutatingLocked={isMutatingLocked}
+        undoCount={undoStack.length}
+        onUndo={handleUndo}
+        onQuickAdd={(kind) => createStandaloneAt(kind, -pan.x + 55, -pan.y + 35)}
+        unreachableCount={reachabilityReport.unreachableIds.length}
+        validationMessage={
+          reachabilityReport.starterError || containerValidationErrors[0] || null
+        }
+        onFocusInvalid={handleFocusInvalid}
+      />
+
+      {saveError && (
+        <div
+          role="alert"
+          style={{
+            color: "#fda4af",
+            background: "rgba(244, 63, 94, 0.12)",
+            border: "1px solid rgba(244, 63, 94, 0.4)",
+            borderRadius: 6,
+            padding: "6px 10px",
+            fontSize: "0.75rem",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+            flexShrink: 0,
+          }}
+        >
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <AlertCircle size={14} /> {saveError}
+          </span>
+          <button
+            type="button"
+            className="btn"
+            style={{ padding: "1px 6px", fontSize: "0.68rem" }}
+            onClick={() => setSaveError(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Main Split Body: Canvas + Contextual Right Details Drawer */}
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "minmax(0, 1fr) minmax(320px, 375px)",
-          gridTemplateRows: "minmax(0, 1fr)",
+          gridTemplateColumns: hasDetailsOpen
+            ? "minmax(460px, 1.85fr) minmax(300px, 1fr)"
+            : "1fr",
           gap: 14,
           flex: 1,
-          minHeight: 400,
-          height: "calc(90vh - 120px)",
-          maxHeight: "100%",
+          minHeight: 0,
           overflow: "hidden",
         }}
       >
-        {/* Left: Interactive Pan/Zoom SVG Canvas */}
+        {/* Left Interactive SVG Canvas Container */}
         <div
+          ref={canvasWrapRef}
           style={{
             position: "relative",
             background: "var(--bg-deep)",
             borderRadius: 8,
             border: "1px solid var(--border-subtle)",
             overflow: "hidden",
-            userSelect: "none",
-            height: "100%",
+            display: "flex",
+            flexDirection: "column",
             minHeight: 0,
+          }}
+          onDragOver={(e) => {
+            if (e.dataTransfer.types.includes(PALETTE_DRAG_MIME)) {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
+            }
+          }}
+          onDrop={(e) => {
+            const rawKind = e.dataTransfer.getData(
+              PALETTE_DRAG_MIME
+            ) as PaletteItemKind;
+            if (!rawKind) return;
+            e.preventDefault();
+            const wpt = clientToWorldPoint(
+              e.clientX,
+              e.clientY,
+              svgRef.current,
+              viewportGroupRef.current,
+              pan,
+              zoom
+            );
+            createStandaloneAt(rawKind, wpt.x, wpt.y);
           }}
         >
           <svg
+            ref={svgRef}
             width="100%"
             height="100%"
+            viewBox="-340 -260 680 520"
             style={{
               width: "100%",
               height: "100%",
               minHeight: 0,
-              cursor: dragRef.current.dragging ? "grabbing" : "grab",
+              cursor: nodeDrag?.hasMoved
+                ? "grabbing"
+                : linkDrag
+                ? "crosshair"
+                : panDragRef.current.active
+                ? "grabbing"
+                : "grab",
               display: "block",
             }}
-            viewBox="-340 -260 680 520"
             onWheel={(e) => {
               e.preventDefault();
               const delta = e.deltaY < 0 ? 0.15 : -0.15;
@@ -2249,36 +3043,56 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
               );
             }}
             onMouseDown={(e) => {
-              dragRef.current = {
-                dragging: true,
-                startX: e.clientX,
-                startY: e.clientY,
-                origX: pan.x,
-                origY: pan.y,
+              if (e.button !== 0 || nodeDrag || linkDrag) return;
+              panDragRef.current = {
+                active: true,
+                moved: false,
+                startClientX: e.clientX,
+                startClientY: e.clientY,
+                origPanX: pan.x,
+                origPanY: pan.y,
               };
             }}
             onMouseMove={(e) => {
-              if (!dragRef.current.dragging) return;
-              const dx = (e.clientX - dragRef.current.startX) / zoom;
-              const dy = (e.clientY - dragRef.current.startY) / zoom;
+              if (!panDragRef.current.active) return;
+              const rawDx = e.clientX - panDragRef.current.startClientX;
+              const rawDy = e.clientY - panDragRef.current.startClientY;
+              if (Math.hypot(rawDx, rawDy) > 4) {
+                panDragRef.current.moved = true;
+              }
               setPan({
-                x: dragRef.current.origX + dx,
-                y: dragRef.current.origY + dy,
+                x: panDragRef.current.origPanX + rawDx / zoom,
+                y: panDragRef.current.origPanY + rawDy / zoom,
               });
             }}
-            onMouseUp={() => {
-              dragRef.current.dragging = false;
+            onMouseUp={(e) => {
+              if (panDragRef.current.active && !panDragRef.current.moved && e.button === 0) {
+                // Click on empty canvas deselects current element & hides details pane
+                setSelectedLocId(null);
+                setSelectedContainerId(null);
+                setContextMenu(null);
+                setInlineEdgeEdit(null);
+              }
+              panDragRef.current.active = false;
             }}
             onMouseLeave={() => {
-              dragRef.current.dragging = false;
+              panDragRef.current.active = false;
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setContextMenu(null);
             }}
           >
-            <g transform={`scale(${zoom}) translate(${pan.x}, ${pan.y})`}>
-              {/* Projected Edge Passages */}
+            <g
+              ref={viewportGroupRef}
+              transform={`scale(${zoom}) translate(${pan.x}, ${pan.y})`}
+            >
+              {/* Edges & Interactive Travel Minutes Badges */}
               {projectedTopology.projectedEdges.map((edge) => {
                 const p1 = fullMapCoords[edge.sourceNodeId];
                 const p2 = fullMapCoords[edge.targetNodeId];
                 if (!p1 || !p2) return null;
+
                 const focusedId = selectedContainer?.id || selectedLocation?.id;
                 const isDirect =
                   edge.sourceNodeId === activeLoc?.id ||
@@ -2287,6 +3101,14 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                   edge.targetNodeId === focusedId;
                 const midX = (p1.x + p2.x) / 2;
                 const midY = (p1.y + p2.y) / 2;
+                const showLabel =
+                  edge.sourceNodeId <= edge.targetNodeId ||
+                  !projectedTopology.projectedEdges.some(
+                    (o) =>
+                      o.sourceNodeId === edge.targetNodeId &&
+                      o.targetNodeId === edge.sourceNodeId
+                  );
+
                 return (
                   <g key={edge.id}>
                     <line
@@ -2308,7 +3130,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                             : 2.0
                           : isDirect
                           ? 2.4
-                          : 1.4
+                          : 1.5
                       }
                       strokeDasharray={
                         edge.containsLockedEdge
@@ -2317,196 +3139,821 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                           ? "2 2"
                           : undefined
                       }
+                      style={{ cursor: "pointer" }}
+                      onContextMenu={(ev) =>
+                        openContextMenuAt(ev, {
+                          kind: "edge",
+                          edgeId: edge.rawEdge.id,
+                        })
+                      }
+                      onDoubleClick={(ev) => {
+                        ev.stopPropagation();
+                        if (edge.isAggregated && edge.groupedEdges) {
+                          setMultiEdgeModalEdges(edge.groupedEdges);
+                        } else {
+                          setInlineEdgeEdit({
+                            edgeId: edge.rawEdge.id,
+                            midX,
+                            midY,
+                            value: String(edge.travel_minutes),
+                          });
+                        }
+                      }}
                     />
-                    {edge.compass_direction &&
-                      edge.sourceNodeId < edge.targetNodeId && (
-                        <text
-                          x={midX}
-                          y={midY - 5}
-                          textAnchor="middle"
-                          fill={isDirect ? "#67e8f9" : "#64748b"}
-                          fontSize="8.5"
-                          fontWeight="600"
-                        >
-                          {edge.compass_direction} ({edge.travel_minutes}m)
-                          {edge.isAggregated ? " ⇄" : ""}
-                        </text>
-                      )}
+
+                    {showLabel && (
+                      <g
+                        style={{ cursor: "pointer" }}
+                        onContextMenu={(ev) =>
+                          openContextMenuAt(ev, {
+                            kind: "edge",
+                            edgeId: edge.rawEdge.id,
+                          })
+                        }
+                        onDoubleClick={(ev) => {
+                          ev.stopPropagation();
+                          if (edge.isAggregated && edge.groupedEdges) {
+                            setMultiEdgeModalEdges(edge.groupedEdges);
+                          } else {
+                            setInlineEdgeEdit({
+                              edgeId: edge.rawEdge.id,
+                              midX,
+                              midY,
+                              value: String(edge.travel_minutes),
+                            });
+                          }
+                        }}
+                      >
+                        {inlineEdgeEdit?.edgeId === edge.rawEdge.id ? (
+                          <foreignObject
+                            x={midX - 28}
+                            y={midY - 12}
+                            width={56}
+                            height={24}
+                          >
+                            <input
+                              type="number"
+                              min={1}
+                              max={240}
+                              autoFocus
+                              value={inlineEdgeEdit.value}
+                              onChange={(ev) =>
+                                setInlineEdgeEdit((prev) =>
+                                  prev ? { ...prev, value: ev.target.value } : null
+                                )
+                              }
+                              onBlur={() => {
+                                handleUpdateEdgeDistance(
+                                  edge.rawEdge.id,
+                                  parseInt(inlineEdgeEdit.value, 10) || 1
+                                );
+                                setInlineEdgeEdit(null);
+                              }}
+                              onKeyDown={(ev) => {
+                                if (ev.key === "Enter") {
+                                  handleUpdateEdgeDistance(
+                                    edge.rawEdge.id,
+                                    parseInt(inlineEdgeEdit.value, 10) || 1
+                                  );
+                                  setInlineEdgeEdit(null);
+                                } else if (ev.key === "Escape") {
+                                  setInlineEdgeEdit(null);
+                                }
+                              }}
+                              style={{
+                                width: "100%",
+                                height: "22px",
+                                fontSize: "10px",
+                                textAlign: "center",
+                                background: "#0b0e14",
+                                color: "#e2e8f0",
+                                border: "1px solid #22d3ee",
+                                borderRadius: 4,
+                              }}
+                            />
+                          </foreignObject>
+                        ) : (
+                          <>
+                            <rect
+                              x={midX - 22}
+                              y={midY - 9}
+                              width={44}
+                              height={16}
+                              rx={4}
+                              fill="#0b0e14"
+                              fillOpacity={0.9}
+                              stroke={isDirect ? "#0891b2" : "#334155"}
+                              strokeWidth={1}
+                            />
+                            <text
+                              x={midX}
+                              y={midY + 2}
+                              textAnchor="middle"
+                              fill={isDirect ? "#67e8f9" : "#94a3b8"}
+                              fontSize="8.2"
+                              fontWeight="600"
+                            >
+                              {edge.travel_minutes}m
+                              {edge.isAggregated
+                                ? ` · ${edge.groupedEdges?.length ?? ""}`
+                                : ""}
+                              {edge.containsLockedEdge ? " 🔒" : ""}
+                            </text>
+                          </>
+                        )}
+                      </g>
+                    )}
                   </g>
                 );
               })}
 
-              {/* Projected Child Container Supernodes */}
+              {/* Rubber-band Link Creation Line */}
+              {linkDrag && (
+                <line
+                  x1={linkDrag.startX}
+                  y1={linkDrag.startY}
+                  x2={linkDrag.currX}
+                  y2={linkDrag.currY}
+                  stroke="#22d3ee"
+                  strokeWidth={2}
+                  strokeDasharray="4 3"
+                  pointerEvents="none"
+                />
+              )}
+
+              {/* Child Container Supernodes (Levels 1-4) */}
               {projectedTopology.visibleSupernodes.map((sn) => {
                 const pt = fullMapCoords[sn.container.id];
                 if (!pt) return null;
                 const isSelected = selectedContainer?.id === sn.container.id;
-                const cardW = 136;
-                const cardH = 44;
+                const isDropHover =
+                  nodeDrag?.hoverTarget?.kind === "container" &&
+                  nodeDrag.hoverTarget.id === sn.container.id;
+                const dropStroke = isDropHover
+                  ? nodeDrag!.hoverTarget!.valid
+                    ? "#10b981"
+                    : "#f43f5e"
+                  : sn.hasActivePlayer
+                  ? "#f59e0b"
+                  : isSelected
+                  ? "#22d3ee"
+                  : "#475569";
+
+                const cardW = 148;
+                const cardH = 50;
+                const ContIcon = resolveMapIconComponent(
+                  sn.container.icon,
+                  "container",
+                  sn.container.depth
+                );
+                const showPorts =
+                  hoveredNodeKey === `cont:${sn.container.id}` ||
+                  isSelected ||
+                  Boolean(linkDrag);
+
                 return (
                   <g
                     key={sn.container.id}
+                    data-node-kind="container"
+                    data-node-id={sn.container.id}
                     style={{ cursor: "pointer" }}
-                    onClick={(e) => {
+                    onMouseEnter={() => setHoveredNodeKey(`cont:${sn.container.id}`)}
+                    onMouseLeave={() =>
+                      setHoveredNodeKey((curr) =>
+                        curr === `cont:${sn.container.id}` ? null : curr
+                      )
+                    }
+                    onPointerDown={(e) => {
+                      if (e.button !== 0) return;
                       e.stopPropagation();
-                      selectContainerNode(sn.container.id);
+                      if (isMutatingLocked) {
+                        setSelectedContainerId(sn.container.id);
+                        return;
+                      }
+                      const wpt = clientToWorldPoint(
+                        e.clientX,
+                        e.clientY,
+                        svgRef.current,
+                        viewportGroupRef.current,
+                        pan,
+                        zoom
+                      );
+                      setNodeDrag({
+                        kind: "container",
+                        id: sn.container.id,
+                        startClientX: e.clientX,
+                        startClientY: e.clientY,
+                        pointerOffsetX: wpt.x - pt.x,
+                        pointerOffsetY: wpt.y - pt.y,
+                        origX: pt.x,
+                        origY: pt.y,
+                        currX: pt.x,
+                        currY: pt.y,
+                        hasMoved: false,
+                        hoverTarget: null,
+                      });
                     }}
                     onDoubleClick={(e) => {
                       e.stopPropagation();
                       drillIntoContainer(sn.container.id);
                     }}
+                    onContextMenu={(e) =>
+                      openContextMenuAt(e, {
+                        kind: "container",
+                        id: sn.container.id,
+                      })
+                    }
                   >
+                    {/* Layered stacked card back-border */}
                     <rect
-                      x={pt.x - cardW / 2 - 4}
+                      x={pt.x - cardW / 2 + 4}
                       y={pt.y - cardH / 2 - 4}
-                      width={cardW + 8}
-                      height={cardH + 8}
-                      rx={10}
-                      fill="none"
-                      stroke={
-                        sn.hasActivePlayer
-                          ? "#f59e0b"
-                          : isSelected
-                          ? "#38bdf8"
-                          : "transparent"
-                      }
-                      strokeWidth={sn.hasActivePlayer || isSelected ? 2 : 0}
-                      strokeDasharray={
-                        sn.hasActivePlayer ? "4 3" : isSelected ? "3 3" : undefined
-                      }
+                      width={cardW}
+                      height={cardH}
+                      rx={8}
+                      fill="#0f172a"
+                      stroke={dropStroke}
+                      strokeOpacity={0.55}
+                      strokeWidth={1.2}
                     />
                     <rect
                       x={pt.x - cardW / 2}
                       y={pt.y - cardH / 2}
                       width={cardW}
                       height={cardH}
-                      rx={7}
-                      fill="#162033"
-                      stroke={
-                        sn.hasActivePlayer
-                          ? "#f59e0b"
-                          : isSelected
-                          ? "#22d3ee"
-                          : "#475569"
+                      rx={8}
+                      fill={
+                        isDropHover
+                          ? nodeDrag!.hoverTarget!.valid
+                            ? "rgba(16, 185, 129, 0.18)"
+                            : "rgba(244, 63, 94, 0.2)"
+                          : "#162033"
                       }
-                      strokeWidth={1.6}
+                      stroke={dropStroke}
+                      strokeWidth={isDropHover || isSelected ? 2.2 : 1.5}
+                    />
+                    <ContIcon
+                      x={pt.x - cardW / 2 + 9}
+                      y={pt.y - cardH / 2 + 8}
+                      width={15}
+                      height={15}
+                      stroke={sn.hasActivePlayer ? "#fbbf24" : "#38bdf8"}
+                    />
+                    <rect
+                      x={pt.x + cardW / 2 - 26}
+                      y={pt.y - cardH / 2 + 6}
+                      width={20}
+                      height={13}
+                      rx={3}
+                      fill="rgba(245, 158, 11, 0.16)"
+                      stroke="rgba(245, 158, 11, 0.4)"
+                      strokeWidth={0.8}
                     />
                     <text
-                      x={pt.x}
-                      y={pt.y - 4}
+                      x={pt.x + cardW / 2 - 16}
+                      y={pt.y - cardH / 2 + 15}
                       textAnchor="middle"
-                      fill={sn.hasActivePlayer ? "#fbbf24" : "#e2e8f0"}
-                      fontSize="10.2"
+                      fill="#fbbf24"
+                      fontSize="7.8"
                       fontWeight="700"
                     >
-                      {sn.container.name.length > 18
-                        ? `${sn.container.name.slice(0, 17)}…`
+                      L{sn.container.depth}
+                    </text>
+                    <text
+                      x={pt.x + 2}
+                      y={pt.y - 4}
+                      textAnchor="middle"
+                      fill={sn.hasActivePlayer ? "#fbbf24" : "#f1f5f9"}
+                      fontSize="10"
+                      fontWeight="700"
+                    >
+                      {sn.container.name.length > 15
+                        ? `${sn.container.name.slice(0, 14)}…`
                         : sn.container.name}
                     </text>
                     <text
                       x={pt.x}
-                      y={pt.y + 11}
+                      y={pt.y + 13}
                       textAnchor="middle"
                       fill="#94a3b8"
-                      fontSize="8.3"
+                      fontSize="8"
                     >
-                      L{sn.container.depth} · {sn.descendantLocationCount} rooms ·{" "}
+                      {sn.descendantLocationCount} rooms ·{" "}
                       {sn.externalPortalsCount} portals
                     </text>
+
+                    {/* Compass link ports on container perimeter */}
+                    {showPorts &&
+                      !isMutatingLocked &&
+                      COMPASS_ORDER.map((slot) => {
+                        const a = COMPASS_ANGLES[slot];
+                        const px = pt.x + Math.cos(a) * (cardW / 2 + 7);
+                        const py = pt.y + Math.sin(a) * (cardH / 2 + 7);
+                        return (
+                          <circle
+                            key={slot}
+                            cx={px}
+                            cy={py}
+                            r={3.8}
+                            fill="#0f172a"
+                            stroke="#22d3ee"
+                            strokeWidth={1.3}
+                            style={{ cursor: "crosshair" }}
+                            onPointerDown={(ev) => {
+                              ev.stopPropagation();
+                              setLinkDrag({
+                                sourceKind: "container",
+                                sourceId: sn.container.id,
+                                sourceSlot: slot,
+                                startX: px,
+                                startY: py,
+                                currX: px,
+                                currY: py,
+                                hoverTarget: null,
+                              });
+                            }}
+                          />
+                        );
+                      })}
                   </g>
                 );
               })}
 
-              {/* Visible Direct Location Nodes */}
+              {/* Visible Level 0 Location & Passage Hub Nodes */}
               {projectedTopology.visibleLocations.map((loc) => {
                 const pt = fullMapCoords[loc.id];
                 if (!pt) return null;
-                const isAnchor = loc.id === activeLoc?.id;
+                const isAnchorOrStart =
+                  loc.id === activeLoc?.id || loc.is_starting_location;
                 const isNeighbor = activeNeighborIds.has(loc.id);
                 const isSelected =
                   !selectedContainer && loc.id === selectedLocation?.id;
                 const isPortal = projectedTopology.dynamicPortalIds.has(loc.id);
-                const extExits =
-                  projectedTopology.externalPortalsByLocationId[loc.id] ?? [];
-                const fill = isAnchor
+                const isUnreachable = unreachableSet.has(loc.id);
+                const isDropHover =
+                  nodeDrag?.hoverTarget?.kind === "location" &&
+                  nodeDrag.hoverTarget.id === loc.id;
+
+                const IconComp = resolveMapIconComponent(
+                  loc.icon,
+                  loc.is_hub ? "hub" : "location"
+                );
+
+                const borderColor = isDropHover
+                  ? nodeDrag!.hoverTarget!.valid
+                    ? "#10b981"
+                    : "#f43f5e"
+                  : isAnchorOrStart
                   ? "#f59e0b"
                   : loc.is_hub
                   ? "#a855f7"
+                  : isUnreachable
+                  ? "#f59e0b"
+                  : isSelected
+                  ? "#22d3ee"
                   : isNeighbor
-                  ? "#06b6d4"
+                  ? "#0891b2"
                   : "#475569";
+
+                const fillColor = isAnchorOrStart
+                  ? "rgba(245, 158, 11, 0.22)"
+                  : loc.is_hub
+                  ? "rgba(168, 85, 247, 0.22)"
+                  : isNeighbor
+                  ? "rgba(6, 182, 212, 0.16)"
+                  : "#111827";
+
+                const iconStroke = isAnchorOrStart
+                  ? "#fbbf24"
+                  : loc.is_hub
+                  ? "#e9d5ff"
+                  : isSelected || isNeighbor
+                  ? "#67e8f9"
+                  : "#cbd5e1";
+
+                const occupiedSet =
+                  occupiedSlotsByLocId.get(loc.id) ?? new Set<CompassDirection>();
+                const showPorts =
+                  hoveredNodeKey === `loc:${loc.id}` ||
+                  isSelected ||
+                  Boolean(linkDrag);
+
+                const extExits =
+                  projectedTopology.externalPortalsByLocationId[loc.id] ?? [];
+
+                // Regular octagon points for Passage Hub
+                const hubRadius = 17;
+                const hubPoints = Array.from({ length: 8 }, (_, k) => {
+                  const angle = (k * Math.PI) / 4 + Math.PI / 8;
+                  return `${(pt.x + Math.cos(angle) * hubRadius).toFixed(1)},${(
+                    pt.y +
+                    Math.sin(angle) * hubRadius
+                  ).toFixed(1)}`;
+                }).join(" ");
 
                 return (
                   <g
                     key={loc.id}
-                    style={{ cursor: "pointer" }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      selectLocationNode(loc.id);
+                    data-node-kind="location"
+                    data-node-id={loc.id}
+                    style={{
+                      cursor: "pointer",
+                      opacity:
+                        mode === "campaign" && !loc.is_visited && !isSelected
+                          ? 0.85
+                          : 1,
                     }}
+                    onMouseEnter={() => setHoveredNodeKey(`loc:${loc.id}`)}
+                    onMouseLeave={() =>
+                      setHoveredNodeKey((curr) =>
+                        curr === `loc:${loc.id}` ? null : curr
+                      )
+                    }
+                    onPointerDown={(e) => {
+                      if (e.button !== 0) return;
+                      e.stopPropagation();
+                      if (isMutatingLocked) {
+                        setSelectedContainerId(null);
+                        setSelectedLocId(loc.id);
+                        return;
+                      }
+                      const wpt = clientToWorldPoint(
+                        e.clientX,
+                        e.clientY,
+                        svgRef.current,
+                        viewportGroupRef.current,
+                        pan,
+                        zoom
+                      );
+                      setNodeDrag({
+                        kind: "location",
+                        id: loc.id,
+                        startClientX: e.clientX,
+                        startClientY: e.clientY,
+                        pointerOffsetX: wpt.x - pt.x,
+                        pointerOffsetY: wpt.y - pt.y,
+                        origX: pt.x,
+                        origY: pt.y,
+                        currX: pt.x,
+                        currY: pt.y,
+                        hasMoved: false,
+                        hoverTarget: null,
+                      });
+                    }}
+                    onContextMenu={(e) =>
+                      openContextMenuAt(e, { kind: "location", id: loc.id })
+                    }
                   >
-                    {isSelected && (
+                    {/* Selection or Unreachable Warning Ring */}
+                    {(isSelected || isUnreachable) && (
                       <circle
                         cx={pt.x}
                         cy={pt.y}
-                        r={isAnchor ? 16 : 13}
+                        r={loc.is_hub ? 22 : 24}
                         fill="none"
-                        stroke={isAnchor ? "#fbbf24" : "#38bdf8"}
-                        strokeWidth={2}
+                        stroke={isUnreachable ? "#f59e0b" : "#38bdf8"}
+                        strokeWidth={1.8}
                         strokeDasharray="3 3"
                       />
                     )}
-                    {isPortal && (
+
+                    {/* Node Body: Octagon Passage Hub OR Rounded Tile Location */}
+                    {loc.is_hub ? (
                       <polygon
-                        points={`${pt.x},${pt.y - 13} ${pt.x + 13},${pt.y} ${pt.x},${pt.y + 13} ${pt.x - 13},${pt.y}`}
-                        fill="none"
-                        stroke="#22d3ee"
-                        strokeWidth={1.3}
+                        points={hubPoints}
+                        fill={fillColor}
+                        stroke={borderColor}
+                        strokeWidth={2}
+                      />
+                    ) : (
+                      <rect
+                        x={pt.x - 18}
+                        y={pt.y - 18}
+                        width={36}
+                        height={36}
+                        rx={10}
+                        fill={fillColor}
+                        stroke={borderColor}
+                        strokeWidth={isAnchorOrStart || isSelected ? 2.2 : 1.7}
                       />
                     )}
-                    <circle
-                      cx={pt.x}
-                      cy={pt.y}
-                      r={isAnchor ? 11 : loc.is_hub ? 9.5 : 8}
-                      fill={fill}
-                      stroke="#0b0e14"
-                      strokeWidth={2.2}
+
+                    <IconComp
+                      x={pt.x - (loc.is_hub ? 7.5 : 8.5)}
+                      y={pt.y - (loc.is_hub ? 7.5 : 8.5)}
+                      width={loc.is_hub ? 15 : 17}
+                      height={loc.is_hub ? 15 : 17}
+                      stroke={iconStroke}
                     />
+
+                    {/* Cyan Portal Diamond Badge */}
+                    {isPortal && (
+                      <g>
+                        <polygon
+                          points={`${pt.x + 17},${pt.y - 23} ${pt.x + 23},${pt.y - 17} ${pt.x + 17},${pt.y - 11} ${pt.x + 11},${pt.y - 17}`}
+                          fill="#083344"
+                          stroke="#22d3ee"
+                          strokeWidth={1.4}
+                        />
+                        <DoorOpen
+                          x={pt.x + 13.5}
+                          y={pt.y - 20.5}
+                          width={7}
+                          height={7}
+                          stroke="#67e8f9"
+                        />
+                      </g>
+                    )}
+
+                    {/* Unlinked / Unreachable warning dot */}
+                    {isUnreachable && (
+                      <g>
+                        <circle
+                          cx={pt.x - 17}
+                          cy={pt.y - 17}
+                          r={6.5}
+                          fill="#78350f"
+                          stroke="#fbbf24"
+                          strokeWidth={1.2}
+                        />
+                        <text
+                          x={pt.x - 17}
+                          y={pt.y - 14}
+                          textAnchor="middle"
+                          fill="#fef3c7"
+                          fontSize="8.5"
+                          fontWeight="800"
+                        >
+                          !
+                        </text>
+                      </g>
+                    )}
+
+                    {/* Name Label */}
                     <text
                       x={pt.x}
-                      y={pt.y + (isAnchor ? 23 : 19)}
+                      y={pt.y + 30}
                       textAnchor="middle"
                       fill={
-                        isAnchor
+                        isAnchorOrStart
                           ? "#fbbf24"
                           : isSelected
                           ? "#f8fafc"
                           : "#cbd5e1"
                       }
-                      fontSize="10.5"
-                      fontWeight={isAnchor || isSelected ? "700" : "500"}
+                      fontSize="10"
+                      fontWeight={isAnchorOrStart || isSelected ? "700" : "500"}
                     >
                       {loc.name}
                     </text>
+
                     {extExits.length > 0 && (
                       <text
                         x={pt.x}
-                        y={pt.y + (isAnchor ? 34 : 30)}
+                        y={pt.y + 41}
                         textAnchor="middle"
                         fill="#22d3ee"
-                        fontSize="8.2"
+                        fontSize="8"
                       >
-                        ↗ External: {extExits[0].destination.name}
+                        ↗ {extExits[0].destination.name}
                         {extExits.length > 1 ? ` +${extExits.length - 1}` : ""}
                       </text>
                     )}
+
+                    {/* 8 Compass Connection Link Ports */}
+                    {showPorts &&
+                      !isMutatingLocked &&
+                      COMPASS_ORDER.map((slot) => {
+                        const a = COMPASS_ANGLES[slot];
+                        const px = pt.x + Math.cos(a) * 26;
+                        const py = pt.y + Math.sin(a) * 26;
+                        const isOccupied = occupiedSet.has(slot);
+                        const isTargetHovered =
+                          linkDrag?.hoverTarget?.kind === "location" &&
+                          linkDrag.hoverTarget.id === loc.id &&
+                          linkDrag.hoverTarget.slot === slot;
+
+                        return (
+                          <circle
+                            key={slot}
+                            data-link-port={`${loc.id}:${slot}`}
+                            cx={px}
+                            cy={py}
+                            r={isTargetHovered ? 5.2 : isOccupied ? 4 : 3.4}
+                            fill={
+                              isTargetHovered
+                                ? "#22d3ee"
+                                : isOccupied
+                                ? "#06b6d4"
+                                : "#0f172a"
+                            }
+                            stroke={isOccupied ? "#a5f3fc" : "#38bdf8"}
+                            strokeWidth={1.3}
+                            style={{ cursor: "crosshair" }}
+                            onPointerDown={(ev) => {
+                              ev.stopPropagation();
+                              setLinkDrag({
+                                sourceKind: "location",
+                                sourceId: loc.id,
+                                sourceSlot: slot,
+                                startX: px,
+                                startY: py,
+                                currX: px,
+                                currY: py,
+                                hoverTarget: null,
+                              });
+                            }}
+                          />
+                        );
+                      })}
                   </g>
                 );
               })}
             </g>
           </svg>
 
-          {/* Portal Promotion Confirmation Modal */}
+          {/* Drop target validation banner */}
+          {nodeDrag?.hasMoved && nodeDrag.hoverTarget && (
+            <div
+              style={{
+                position: "absolute",
+                top: 10,
+                left: "50%",
+                transform: "translateX(-50%)",
+                background: nodeDrag.hoverTarget.valid
+                  ? "rgba(6, 78, 59, 0.92)"
+                  : "rgba(136, 19, 55, 0.94)",
+                border: `1px solid ${
+                  nodeDrag.hoverTarget.valid ? "#10b981" : "#f43f5e"
+                }`,
+                color: nodeDrag.hoverTarget.valid ? "#a7f3d0" : "#fecdd3",
+                padding: "5px 12px",
+                borderRadius: 6,
+                fontSize: "0.73rem",
+                fontWeight: 600,
+                pointerEvents: "none",
+                zIndex: 20,
+              }}
+            >
+              {nodeDrag.hoverTarget.valid
+                ? nodeDrag.hoverTarget.kind === "container"
+                  ? "Release to move inside container"
+                  : "Release to group into a new Level 1 container"
+                : nodeDrag.hoverTarget.reason || "Invalid drop target"}
+            </div>
+          )}
+
+          {/* Transient feedback pill */}
+          {statusNotice && !nodeDrag?.hasMoved && (
+            <div
+              style={{
+                position: "absolute",
+                top: 10,
+                right: 10,
+                background: "rgba(15, 23, 42, 0.92)",
+                border: "1px solid rgba(56, 189, 248, 0.4)",
+                color: "#e2e8f0",
+                padding: "5px 10px",
+                borderRadius: 6,
+                fontSize: "0.72rem",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                zIndex: 20,
+              }}
+            >
+              <span>{statusNotice}</span>
+              <button
+                type="button"
+                onClick={() => setStatusNotice(null)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          )}
+
+          {/* Floating Legend Overlay */}
+          <div
+            style={{
+              position: "absolute",
+              left: 10,
+              bottom: 10,
+              background: "rgba(11, 14, 20, 0.9)",
+              border: "1px solid var(--border-subtle)",
+              borderRadius: 6,
+              padding: "5px 10px",
+              fontSize: "0.69rem",
+              color: "var(--text-secondary)",
+              display: "flex",
+              gap: 10,
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <strong style={{ color: "#f59e0b" }}>■</strong>{" "}
+              {mode === "campaign" ? "Current / Start" : "Starting Hub"}
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <GitBranch size={11} color="#c084fc" /> Passage Hub
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <DoorOpen size={11} color="#22d3ee" /> Portal
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <Layers size={11} color="#fbbf24" /> Container
+            </span>
+            <span style={{ color: "var(--text-muted)", fontSize: "0.66rem" }}>
+              Drag nodes · Drag ports to link · Double-click distance · Right-click for actions
+            </span>
+          </div>
+
+          {/* Context Menu & Dialogs */}
+          <MapContextMenu
+            menu={contextMenu}
+            locations={workingLocations}
+            containers={workingContainers}
+            edges={workingEdges}
+            mode={mode}
+            canDeleteContainer={canDeleteContainer}
+            canDeleteLocation={canDeleteLocation}
+            canConvertLocation={canConvertLocation}
+            canMoveOutToParent={canMoveOutToParent}
+            onClose={() => setContextMenu(null)}
+            onInspect={(kind, id) => {
+              if (kind === "location") {
+                setSelectedContainerId(null);
+                setSelectedLocId(id);
+              } else {
+                setSelectedContainerId(id);
+              }
+            }}
+            onEnterContainer={drillIntoContainer}
+            onSetStartingLocation={handleSetStartingLocation}
+            onConvertToContainer={handleConvertLocationToContainer}
+            onMoveOutToParent={(kind, id) => {
+              const parentId =
+                kind === "location"
+                  ? locationMap.get(id)?.container_id
+                  : containerMap.get(id)?.parent_container_id;
+              const grandParentId = parentId
+                ? containerMap.get(parentId)?.parent_container_id ?? null
+                : null;
+              executeImmediateContainerMove(kind, id, grandParentId);
+            }}
+            onDeleteLocation={handleDeleteLocation}
+            onDeleteContainer={handleDeleteContainer}
+            onEditEdgeDistance={(edgeId) => {
+              const edge = workingEdges.find((e) => e.id === edgeId);
+              if (!edge) return;
+              const p1 = fullMapCoords[edge.from_location_id] ?? { x: 0, y: 0 };
+              const p2 = fullMapCoords[edge.to_location_id] ?? { x: 0, y: 0 };
+              setInlineEdgeEdit({
+                edgeId,
+                midX: (p1.x + p2.x) / 2,
+                midY: (p1.y + p2.y) / 2,
+                value: String(edge.travel_minutes),
+              });
+            }}
+            onToggleEdgeLocked={handleToggleEdgeLocked}
+            onDeleteEdge={handleDeleteEdge}
+          />
+
+          <PassageHubCollisionModal
+            state={hubCollisionModal}
+            onCancel={() => setHubCollisionModal(null)}
+            onConfirm={handleConfirmHubCollision}
+          />
+
+          <EmptyCanvasCreateModal
+            state={emptyCanvasModal}
+            onCancel={() => setEmptyCanvasModal(null)}
+            onCreate={handleConfirmEmptyCanvasCreate}
+          />
+
+          <GroupIntoContainerModal
+            state={groupModal}
+            onCancel={() => setGroupModal(null)}
+            onConfirm={handleConfirmGroupIntoContainer}
+          />
+
+          <MultiEdgePopover
+            edges={multiEdgeModalEdges}
+            locationMap={locationMap}
+            onClose={() => setMultiEdgeModalEdges(null)}
+            onUpdateDistance={handleUpdateEdgeDistance}
+            onToggleLocked={handleToggleEdgeLocked}
+            onDeleteEdge={handleDeleteEdge}
+          />
+
+          {/* Cross-Boundary Portal Promotion Prompt */}
           {promotionPrompt && (
             <div
               role="dialog"
@@ -2519,7 +3966,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                zIndex: 25,
+                zIndex: 35,
                 padding: 16,
               }}
               onClick={(e) => e.stopPropagation()}
@@ -2568,9 +4015,11 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                           ...promotionPrompt,
                           toLocation: picked,
                           chosenTargetRoomId: picked.id,
-                          candidates: buildPromotionCandidates(
+                          candidates: computePromotionCandidates(
                             promotionPrompt.fromLocation,
-                            picked
+                            picked,
+                            containerMap,
+                            projectedTopology.dynamicPortalIds
                           ),
                         });
                       }}
@@ -2602,7 +4051,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                       <strong>{promotionPrompt.fromLocation.name}</strong> →{" "}
                       <strong>{promotionPrompt.toLocation.name}</strong> crosses a
                       Level 1 container boundary. Mark interior room(s) as
-                      Entry/Exit Portals so AI exploration can step outside cleanly:
+                      Entry/Exit Portals:
                     </div>
                     {promotionPrompt.candidates.map((cand) => (
                       <label
@@ -2660,31 +4109,12 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                   >
                     Cancel
                   </button>
-                  {promotionPrompt.candidates.length > 0 && (
-                    <button
-                      type="button"
-                      className="btn"
-                      style={{ padding: "4px 10px", fontSize: "0.74rem" }}
-                      onClick={() =>
-                        executeEdgeCreation(
-                          promotionPrompt.fromLocation,
-                          promotionPrompt.toLocation,
-                          promotionPrompt.direction,
-                          promotionPrompt.travelMinutes,
-                          promotionPrompt.bidirectional,
-                          new Set()
-                        )
-                      }
-                    >
-                      Connect Without Promoting
-                    </button>
-                  )}
                   <button
                     type="button"
                     className="btn btn-cyan"
                     style={{ padding: "4px 12px", fontSize: "0.74rem" }}
                     onClick={() =>
-                      executeEdgeCreation(
+                      executeDirectEdgeCreation(
                         promotionPrompt.fromLocation,
                         promotionPrompt.toLocation,
                         promotionPrompt.direction,
@@ -2704,1463 +4134,47 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
               </div>
             </div>
           )}
+        </div>
 
-          {/* Floating Legend Overlay */}
-          <div
-            style={{
-              position: "absolute",
-              left: 10,
-              bottom: 10,
-              background: "rgba(11, 14, 20, 0.88)",
-              border: "1px solid var(--border-subtle)",
-              borderRadius: 6,
-              padding: "5px 10px",
-              fontSize: "0.7rem",
-              color: "var(--text-secondary)",
-              display: "flex",
-              gap: 10,
-              alignItems: "center",
-              flexWrap: "wrap",
+        {/* Right Details Drawer (hidden when empty canvas clicked) */}
+        {hasDetailsOpen && (
+          <MapDetailsDrawer
+            mode={mode}
+            selectedLocation={selectedLocation}
+            selectedContainer={selectedContainer}
+            containers={workingContainers}
+            allLocations={workingLocations}
+            dynamicPortalIds={projectedTopology.dynamicPortalIds}
+            externalPortals={selectedExternalPortals}
+            containerStats={selectedContainerStats}
+            activeLocId={activeLoc?.id}
+            worldContext={worldContext}
+            isMutatingLocked={isMutatingLocked}
+            isLocationSavedInDb={
+              selectedLocation
+                ? baselineLocationIds.has(selectedLocation.id)
+                : false
+            }
+            isContainerSavedInDb={
+              selectedContainer
+                ? baselineContainerIds.has(selectedContainer.id)
+                : false
+            }
+            depthLabels={CONTAINER_DEPTH_LABELS}
+            onClose={() => {
+              setSelectedLocId(null);
+              setSelectedContainerId(null);
             }}
-          >
-            <span>
-              <strong style={{ color: "#f59e0b" }}>●</strong>{" "}
-              {mode === "campaign" ? "Current Scene" : "Starting Hub"}
-            </span>
-            <span>
-              <strong style={{ color: "#a855f7" }}>●</strong> Passage Hub
-            </span>
-            <span>
-              <strong style={{ color: "#06b6d4" }}>●</strong> Adjacent
-            </span>
-            <span>
-              <strong style={{ color: "#475569" }}>●</strong> Other Rooms
-            </span>
-            <span style={{ color: "var(--text-muted)", fontSize: "0.68rem" }}>
-              (Drag to pan • Wheel to zoom • Click node to select)
-            </span>
-          </div>
-        </div>
-
-        {/* Right: Selected Location Inspector & Editor Controls */}
-        <div
-          ref={inspectorScrollRef}
-          style={{
-            background: "var(--bg-card)",
-            borderRadius: 8,
-            border: "1px solid var(--border-subtle)",
-            padding: 14,
-            display: "flex",
-            flexDirection: "column",
-            gap: 12,
-            overflowY: "auto",
-            minHeight: 0,
-            height: "100%",
-            maxHeight: "100%",
-          }}
-        >
-          {/* Right Inspector Content: Container Supernode OR Location Node */}
-          {selectedContainer ? (
-            <>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginBottom: 4,
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: "0.68rem",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.06em",
-                    color: "var(--accent-cyan)",
-                    fontWeight: 600,
-                  }}
-                >
-                  Level {selectedContainer.depth} ·{" "}
-                  {CONTAINER_DEPTH_LABELS[selectedContainer.depth]}
-                </div>
-                <button
-                  type="button"
-                  className="btn"
-                  style={{ padding: "2px 7px", fontSize: "0.68rem" }}
-                  onClick={() => setSelectedContainerId(null)}
-                >
-                  <X size={11} />
-                </button>
-              </div>
-
-              {mode === "editor" && onUpdateContainer ? (
-                <div className="field-group" style={{ marginBottom: 4 }}>
-                  <label style={{ fontSize: "0.72rem" }}>Container Name</label>
-                  <input
-                    className="field-input"
-                    value={selectedContainer.name}
-                    onChange={(e) =>
-                      onUpdateContainer({
-                        ...selectedContainer,
-                        name: e.target.value,
-                      })
-                    }
-                  />
-                </div>
-              ) : (
-                <div
-                  style={{
-                    fontSize: "0.98rem",
-                    fontWeight: 700,
-                    color: "var(--text-primary)",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                  }}
-                >
-                  <FolderOpen size={16} color="var(--accent-cyan)" />
-                  {selectedContainer.name}
-                </div>
-              )}
-
-              <button
-                type="button"
-                className="btn btn-cyan"
-                style={{
-                  width: "100%",
-                  justifyContent: "center",
-                  padding: "7px 12px",
-                  fontSize: "0.78rem",
-                }}
-                onClick={() => drillIntoContainer(selectedContainer.id)}
-              >
-                <LogIn size={13} />
-                Enter Container ➔
-              </button>
-
-              {(() => {
-                const supStats = projectedTopology.visibleSupernodes.find(
-                  (s) => s.container.id === selectedContainer.id
-                );
-                if (!supStats) return null;
-                return (
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: 8,
-                      flexWrap: "wrap",
-                      fontSize: "0.72rem",
-                      color: "var(--text-secondary)",
-                      background: "var(--bg-panel)",
-                      padding: "6px 9px",
-                      borderRadius: 6,
-                      border: "1px solid var(--border-subtle)",
-                    }}
-                  >
-                    <span>
-                      Rooms inside:{" "}
-                      <strong>{supStats.descendantLocationCount}</strong>
-                    </span>
-                    <span>·</span>
-                    <span>
-                      Entry/Exit Portals:{" "}
-                      <strong>{supStats.externalPortalsCount}</strong>
-                    </span>
-                    {supStats.hasActivePlayer && (
-                      <span style={{ color: "var(--accent-amber)", fontWeight: 600 }}>
-                        · Party Present
-                      </span>
-                    )}
-                  </div>
-                );
-              })()}
-
-              {mode === "editor" && onUpdateContainer ? (
-                <>
-                  <div className="field-group">
-                    <label style={{ fontSize: "0.72rem" }}>
-                      Atmospheric Description
-                    </label>
-                    <textarea
-                      className="field-textarea"
-                      rows={3}
-                      value={selectedContainer.description}
-                      onChange={(e) =>
-                        onUpdateContainer({
-                          ...selectedContainer,
-                          description: e.target.value,
-                        })
-                      }
-                    />
-                  </div>
-                  <div className="field-group">
-                    <label style={{ fontSize: "0.72rem" }}>
-                      Environmental Tags
-                    </label>
-                    <TagChipsInput
-                      value={selectedContainer.environmental_tags || []}
-                      placeholder="e.g. humid, bass, neon..."
-                      accentVariant="cyan"
-                      onChange={(tags) =>
-                        onUpdateContainer({
-                          ...selectedContainer,
-                          environmental_tags: tags,
-                        })
-                      }
-                    />
-                  </div>
-                </>
-              ) : (
-                <>
-                  {selectedContainer.description && (
-                    <div className="cog-step">
-                      <div className="cog-step-label">Atmosphere</div>
-                      <div style={{ fontSize: "0.76rem", lineHeight: 1.45 }}>
-                        {selectedContainer.description}
-                      </div>
-                    </div>
-                  )}
-                  {selectedContainer.environmental_tags?.length > 0 && (
-                    <div className="cog-step">
-                      <div className="cog-step-label">Environmental Tags</div>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                        {selectedContainer.environmental_tags.map((t, i) => (
-                          <span
-                            key={i}
-                            className="badge"
-                            style={{ fontSize: "0.68rem", padding: "2px 6px" }}
-                          >
-                            {t}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-
-              {selectedContainer.depth === 1 ? (
-                renderScopedLoreSection({
-                  targetId: selectedContainer.id,
-                  targetName: selectedContainer.name,
-                  worldId: selectedContainer.world_id,
-                  scopeLabel: "Container Lore & Secrets",
-                  emptyText:
-                    "No Level 1 container lore attached to this building/landmark.",
-                  loreList: selectedContainer.lore_nodes ?? [],
-                  onEditorUpdate: onUpdateContainer
-                    ? (nextLore) =>
-                        onUpdateContainer({
-                          ...selectedContainer,
-                          lore_nodes: nextLore,
-                        })
-                    : undefined,
-                  onCampaignSave: onSaveCampaignContainerLore,
-                })
-              ) : (
-                <div
-                  style={{
-                    fontSize: "0.71rem",
-                    color: "var(--text-muted)",
-                    borderTop: "1px solid var(--border-subtle)",
-                    paddingTop: 8,
-                    fontStyle: "italic",
-                  }}
-                >
-                  Level {selectedContainer.depth} macro containers store sensory
-                  breadcrumbs only; ambient lore attaches to Level 1 landmarks and
-                  World Lore.
-                </div>
-              )}
-            </>
-          ) : (
-            <>
-          {/* Header Row */}
-          <div>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 6,
-              }}
-            >
-              <div
-                style={{
-                  fontSize: "0.68rem",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.06em",
-                  color: "var(--text-muted)",
-                  fontWeight: 600,
-                }}
-              >
-                Selected Location
-              </div>
-
-              {/* Editor Mode: Delete Location button */}
-              {mode === "editor" &&
-                onDeleteLocation &&
-                locations.length > 1 && (
-                  <button
-                    type="button"
-                    className="item-remove-btn"
-                    title="Delete this location and connected exits"
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          `Delete "${selectedLocation.name}" and all connecting passages?`
-                        )
-                      ) {
-                        onDeleteLocation(selectedLocation.id);
-                      }
-                    }}
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                )}
-            </div>
-
-            {/* Location Title / Name Input */}
-            {mode === "editor" && onUpdateLocation ? (
-              <div className="field-group" style={{ marginBottom: 6 }}>
-                <label style={{ fontSize: "0.72rem" }}>Location Name</label>
-                <input
-                  className="field-input"
-                  style={{
-                    fontWeight: 700,
-                    fontSize: "0.9rem",
-                    color: isCurrentOrStart
-                      ? "var(--accent-amber)"
-                      : "var(--text-primary)",
-                  }}
-                  value={selectedLocation.name}
-                  onChange={(e) =>
-                    onUpdateLocation({
-                      ...selectedLocation,
-                      name: e.target.value,
-                    })
-                  }
-                />
-              </div>
-            ) : (
-              <div
-                style={{
-                  fontSize: "0.98rem",
-                  fontWeight: 700,
-                  color: isCurrentOrStart
-                    ? "var(--accent-amber)"
-                    : "var(--text-primary)",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  flexWrap: "wrap",
-                }}
-              >
-                <MapPin size={15} color="var(--accent-cyan)" />
-                {selectedLocation.name}
-                {selectedLocation.is_hub && (
-                  <span
-                    className="badge"
-                    style={{
-                      fontSize: "0.62rem",
-                      padding: "1px 6px",
-                      color: "#c084fc",
-                      borderColor: "rgba(168, 85, 247, 0.4)",
-                    }}
-                  >
-                    PASSAGE HUB
-                  </span>
-                )}
-                {projectedTopology.dynamicPortalIds.has(
-                  selectedLocation.id
-                ) && (
-                  <span
-                    className="badge"
-                    style={{
-                      fontSize: "0.62rem",
-                      padding: "1px 6px",
-                      color: "var(--accent-cyan)",
-                      borderColor: "rgba(6, 182, 212, 0.45)",
-                    }}
-                  >
-                    [Entry/Exit Portal]
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Container Membership & External Portal Info */}
-          {(containers.length > 0 ||
-            (mode === "editor" && onConvertToContainer)) && (
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 6,
-                background: "var(--bg-panel)",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: 6,
-                padding: "7px 9px",
-                fontSize: "0.73rem",
-              }}
-            >
-              {mode === "editor" && onUpdateLocation ? (
-                <div className="field-group" style={{ gap: 3 }}>
-                  <label style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>
-                    Assigned Container (Levels 1–4)
-                  </label>
-                  <select
-                    className="field-select"
-                    style={{ fontSize: "0.74rem", padding: "4px 6px" }}
-                    value={selectedLocation.container_id ?? ""}
-                    onChange={(e) => {
-                      const nextCid = e.target.value || null;
-                      onUpdateLocation({
-                        ...selectedLocation,
-                        container_id: nextCid,
-                        is_entry_exit: nextCid
-                          ? selectedLocation.is_entry_exit
-                          : false,
-                      });
-                    }}
-                  >
-                    <option value="">World Root (Uncontained)</option>
-                    {containers.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} (L{c.depth} · {CONTAINER_DEPTH_LABELS[c.depth]})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              ) : (
-                selectedLocation.container_id && (
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: 6,
-                    }}
-                  >
-                    <span style={{ color: "var(--text-secondary)" }}>
-                      Container:{" "}
-                      <strong>
-                        {containerMap.get(selectedLocation.container_id)?.name ||
-                          selectedLocation.container_id}
-                      </strong>
-                    </span>
-                    <button
-                      type="button"
-                      className="btn"
-                      style={{ padding: "1px 7px", fontSize: "0.68rem" }}
-                      onClick={() =>
-                        selectContainerNode(selectedLocation.container_id!)
-                      }
-                    >
-                      Inspect Container
-                    </button>
-                  </div>
-                )
-              )}
-
-              {(projectedTopology.externalPortalsByLocationId[selectedLocation.id]
-                ?.length ?? 0) > 0 && (
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: 4,
-                    marginTop: 2,
-                  }}
-                >
-                  {projectedTopology.externalPortalsByLocationId[
-                    selectedLocation.id
-                  ].map((ext) => (
-                    <span
-                      key={ext.edge.id}
-                      className="badge"
-                      style={{
-                        fontSize: "0.66rem",
-                        padding: "1px 6px",
-                        color: "#22d3ee",
-                        borderColor: "rgba(34, 211, 238, 0.4)",
-                      }}
-                    >
-                      External Exit → {ext.destination.name} (
-                      {ext.destinationContainerName})
-                    </span>
-                  ))}
-                </div>
-              )}
-
-              {mode === "editor" && onConvertToContainer && (
-                <button
-                  type="button"
-                  className="btn"
-                  style={{
-                    justifyContent: "center",
-                    padding: "4px 8px",
-                    fontSize: "0.72rem",
-                    color: "var(--accent-amber)",
-                  }}
-                  onClick={() => onConvertToContainer(selectedLocation)}
-                  title="Promote this Level 0 location into a Level 1 container with an initial interior portal room"
-                >
-                  <FolderOpen size={12} />
-                  Convert to Container
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* Location Role & Starting Location Status */}
-          {mode === "campaign" ? (
-            isCurrentOrStart ? (
-              <div
-                style={{
-                  background: "rgba(245, 158, 11, 0.12)",
-                  border: "1px solid rgba(245, 158, 11, 0.35)",
-                  borderRadius: 6,
-                  padding: "6px 10px",
-                  fontSize: "0.74rem",
-                  color: "var(--accent-amber)",
-                  fontWeight: 600,
-                }}
-              >
-                Active Scene Location
-              </div>
-            ) : (
-              onOverrideLocation && (
-                <button
-                  type="button"
-                  className="btn btn-amber"
-                  style={{
-                    width: "100%",
-                    justifyContent: "center",
-                    padding: "7px 12px",
-                    fontSize: "0.78rem",
-                  }}
-                  disabled={isOverriding}
-                  onClick={() => onOverrideLocation(selectedLocation.id)}
-                >
-                  <Navigation size={13} />
-                  {isOverriding
-                    ? "Overriding Location..."
-                    : "Override Current Location Here"}
-                </button>
-              )
-            )
-          ) : (
-            /* Editor Mode: Hub toggle + Starting Hub designation */
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 8,
-                background: "var(--bg-panel)",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: 6,
-                padding: "8px 10px",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-              >
-                {selectedLocation.is_starting_location ? (
-                  <span
-                    className="badge"
-                    style={{
-                      color: "var(--accent-amber)",
-                      borderColor: "rgba(245, 158, 11, 0.4)",
-                      fontSize: "0.72rem",
-                      fontWeight: 600,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 4,
-                    }}
-                  >
-                    <Star size={11} fill="var(--accent-amber)" /> Starting Hub
-                  </span>
-                ) : (
-                  onSetStartingLocation && (
-                    <button
-                      type="button"
-                      className="btn"
-                      style={{ padding: "3px 8px", fontSize: "0.72rem" }}
-                      onClick={() =>
-                        onSetStartingLocation(selectedLocation.id)
-                      }
-                      title="Set as initial starting location for campaigns"
-                    >
-                      <Star size={12} /> Set as Starting Hub
-                    </button>
-                  )
-                )}
-
-                {/* Passage Hub & Entry/Exit Portal Toggles */}
-                {onUpdateLocation && (
-                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                    <label
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 5,
-                        fontSize: "0.73rem",
-                        cursor: "pointer",
-                        color: selectedLocation.is_hub
-                          ? "#c084fc"
-                          : "var(--text-secondary)",
-                        fontWeight: selectedLocation.is_hub ? 600 : 400,
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={Boolean(selectedLocation.is_hub)}
-                        onChange={(e) =>
-                          onUpdateLocation({
-                            ...selectedLocation,
-                            is_hub: e.target.checked,
-                          })
-                        }
-                      />
-                      Passage Hub
-                    </label>
-                    {selectedLocation.container_id && (
-                      <label
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 5,
-                          fontSize: "0.73rem",
-                          cursor: "pointer",
-                          color: selectedLocation.is_entry_exit
-                            ? "var(--accent-cyan)"
-                            : "var(--text-secondary)",
-                          fontWeight: selectedLocation.is_entry_exit ? 600 : 400,
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={Boolean(selectedLocation.is_entry_exit)}
-                          onChange={(e) =>
-                            onUpdateLocation({
-                              ...selectedLocation,
-                              is_entry_exit: e.target.checked,
-                            })
-                          }
-                        />
-                        Entry/Exit Portal
-                      </label>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Summary / Exit Hook */}
-          {mode === "editor" && onUpdateLocation ? (
-            <div className="field-group">
-              <label style={{ fontSize: "0.72rem" }}>
-                1-Sentence Exit Hook / Summary
-              </label>
-              <input
-                className="field-input"
-                value={selectedLocation.summary || ""}
-                placeholder="Brief summary visible from adjacent rooms..."
-                onChange={(e) =>
-                  onUpdateLocation({
-                    ...selectedLocation,
-                    summary: e.target.value,
-                  })
-                }
-              />
-            </div>
-          ) : (
-            selectedLocation.summary && (
-              <div
-                style={{
-                  fontSize: "0.76rem",
-                  color: "var(--accent-cyan)",
-                  lineHeight: 1.4,
-                }}
-              >
-                {selectedLocation.summary}
-              </div>
-            )
-          )}
-
-          {/* Sensory Description */}
-          {mode === "editor" && onUpdateLocation ? (
-            <div className="field-group">
-              <label style={{ fontSize: "0.72rem" }}>
-                Sensory Description (Atmosphere, Sights, Smells)
-              </label>
-              <textarea
-                className="field-textarea"
-                rows={3}
-                value={selectedLocation.description}
-                placeholder="Full sensory description when inside this room..."
-                onChange={(e) =>
-                  onUpdateLocation({
-                    ...selectedLocation,
-                    description: e.target.value,
-                  })
-                }
-              />
-            </div>
-          ) : (
-            <div className="cog-step">
-              <div className="cog-step-label">Sensory Description</div>
-              <div style={{ fontSize: "0.76rem", lineHeight: 1.45 }}>
-                {selectedLocation.description}
-              </div>
-            </div>
-          )}
-
-          {/* Starting Message / Turn 0 Atmosphere */}
-          {mode === "editor" && onUpdateLocation ? (
-            <div className="field-group">
-              <label
-                style={{
-                  fontSize: "0.72rem",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                }}
-              >
-                <span>Starting Message (Turn 0 Atmosphere)</span>
-                {selectedLocation.is_starting_location && (
-                  <span
-                    className="badge"
-                    style={{
-                      fontSize: "0.64rem",
-                      background: "rgba(16, 185, 129, 0.15)",
-                      color: "var(--accent-emerald)",
-                      border: "1px solid rgba(16, 185, 129, 0.4)",
-                    }}
-                  >
-                    Primary Starting Location
-                  </span>
-                )}
-              </label>
-              <textarea
-                className="field-textarea"
-                rows={3}
-                value={selectedLocation.starting_message ?? ""}
-                placeholder="Atmospheric opening prose used if campaigns start in this room..."
-                onChange={(e) =>
-                  onUpdateLocation({
-                    ...selectedLocation,
-                    starting_message: e.target.value,
-                  })
-                }
-              />
-            </div>
-          ) : selectedLocation.starting_message ? (
-            <div className="cog-step">
-              <div className="cog-step-label">
-                Starting Message (Turn 0 Atmosphere)
-              </div>
-              <div
-                style={{
-                  fontSize: "0.76rem",
-                  lineHeight: 1.45,
-                  fontStyle: "italic",
-                  color: "var(--text-secondary)",
-                }}
-              >
-                {selectedLocation.starting_message}
-              </div>
-            </div>
-          ) : null}
-
-          {/* Environmental Tags */}
-          {mode === "editor" && onUpdateLocation ? (
-            <div className="field-group">
-              <label style={{ fontSize: "0.72rem" }}>
-                Environmental Tags
-              </label>
-              <TagChipsInput
-                value={selectedLocation.environmental_tags}
-                placeholder="e.g. dim, noisy, neon, smoke (press comma or enter)"
-                accentVariant="cyan"
-                onChange={(tags) =>
-                  onUpdateLocation({
-                    ...selectedLocation,
-                    environmental_tags: tags,
-                  })
-                }
-              />
-            </div>
-          ) : (
-            selectedLocation.environmental_tags.length > 0 && (
-              <div className="cog-step">
-                <div className="cog-step-label">Environmental Tags</div>
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: 4,
-                    marginTop: 4,
-                  }}
-                >
-                  {selectedLocation.environmental_tags.map((tag, idx) => (
-                    <span
-                      key={idx}
-                      className="badge"
-                      style={{ fontSize: "0.68rem", padding: "2px 6px" }}
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )
-          )}
-
-          {/* Location Lore & Secrets */}
-          {renderScopedLoreSection({
-            targetId: selectedLocation.id,
-            targetName: selectedLocation.name,
-            worldId: selectedLocation.world_id,
-            scopeLabel: "Location Lore & Secrets",
-            emptyText: "No local lore attached to this room.",
-            loreList: selectedLocation.lore_nodes ?? [],
-            onEditorUpdate: onUpdateLocation
-              ? (nextLore) =>
-                  onUpdateLocation({
-                    ...selectedLocation,
-                    lore_nodes: nextLore,
-                  })
-              : undefined,
-            onCampaignSave: onSaveCampaignLocationLore,
-          })}
-
-          {/* Action: Create Linked Location from Selected Location */}
-          {onCreateLinkedLocation && (
-            <div>
-              {!showLinkForm && !showConnectForm ? (
-                mode === "editor" ? (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    <button
-                      type="button"
-                      className="btn"
-                      style={{
-                        width: "100%",
-                        justifyContent: "center",
-                        padding: "7px 12px",
-                        fontSize: "0.78rem",
-                      }}
-                      onClick={() => openLinkForm(false)}
-                    >
-                      <Link2 size={13} />
-                      Create Link from {selectedLocation.name}
-                    </button>
-
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                      <button
-                        type="button"
-                        className="btn"
-                        style={{
-                          justifyContent: "center",
-                          padding: "5px 8px",
-                          fontSize: "0.72rem",
-                          color: "#c084fc",
-                        }}
-                        onClick={() => openLinkForm(true)}
-                        title="Add a connected transit corridor or junction"
-                      >
-                        <GitBranch size={12} />
-                        + Passage Hub
-                      </button>
-
-                      {locations.length >= 2 && onAddEdge && (
-                        <button
-                          type="button"
-                          className="btn"
-                          style={{
-                            justifyContent: "center",
-                            padding: "5px 8px",
-                            fontSize: "0.72rem",
-                          }}
-                          onClick={openConnectForm}
-                          title="Connect this room to an existing location"
-                        >
-                          <Plus size={12} />
-                          + Exit to Room
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    {locations.length >= 2 && onAddEdge ? (
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                        <button
-                          type="button"
-                          className="btn btn-primary"
-                          style={{
-                            justifyContent: "center",
-                            padding: "6px 8px",
-                            fontSize: "0.74rem",
-                          }}
-                          onClick={() => openLinkForm(false)}
-                          title="Explore and map a new adjacent room"
-                        >
-                          <Link2 size={12} />
-                          + New Room
-                        </button>
-
-                        <button
-                          type="button"
-                          className="btn btn-cyan"
-                          style={{
-                            justifyContent: "center",
-                            padding: "6px 8px",
-                            fontSize: "0.74rem",
-                          }}
-                          onClick={openConnectForm}
-                          title="Connect this room to an existing location"
-                        >
-                          <Plus size={12} />
-                          + Connect Room
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        className="btn btn-primary"
-                        style={{
-                          width: "100%",
-                          justifyContent: "center",
-                          padding: "7px 12px",
-                          fontSize: "0.78rem",
-                        }}
-                        onClick={() => openLinkForm(false)}
-                        title="Explore and map an adjacent room"
-                      >
-                        <Link2 size={13} />
-                        Create Link from {selectedLocation.name}
-                      </button>
-                    )}
-                  </div>
-                )
-              ) : showLinkForm ? (
-                /* Link Creation Form */
-                <div
-                  ref={linkFormRef}
-                  style={{
-                    border: "1px solid rgba(6, 182, 212, 0.45)",
-                    borderRadius: 6,
-                    padding: 10,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 7,
-                    background: "var(--bg-panel)",
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                    }}
-                  >
-                    <span className="cog-step-label">
-                      New {linkIsHub ? "Passage Hub" : "Room"} linked to{" "}
-                      {selectedLocation.name}
-                    </span>
-                    {mode === "editor" && (
-                      <label
-                        style={{
-                          fontSize: "0.7rem",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 4,
-                          cursor: "pointer",
-                          color: linkIsHub ? "#c084fc" : "var(--text-secondary)",
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={linkIsHub}
-                          onChange={(e) => setLinkIsHub(e.target.checked)}
-                        />
-                        Passage Hub
-                      </label>
-                    )}
-                  </div>
-
-                  <input
-                    className="field-input"
-                    placeholder="Name of the new location"
-                    value={linkName}
-                    onChange={(e) => setLinkName(e.target.value)}
-                  />
-
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <select
-                      className="field-input"
-                      style={{ flex: 1 }}
-                      value={linkDirection}
-                      onChange={(e) =>
-                        setLinkDirection(e.target.value as CompassDirection)
-                      }
-                      title="Compass direction relative to current room"
-                    >
-                      {COMPASS_ORDER.map((d) => {
-                        const isOcc = occupiedDirections.has(d);
-                        return (
-                          <option key={d} value={d}>
-                            {d} {isOcc ? "(exit taken)" : "(free)"}
-                          </option>
-                        );
-                      })}
-                    </select>
-
-                    <input
-                      className="field-input"
-                      type="number"
-                      min={1}
-                      max={240}
-                      style={{ width: 85 }}
-                      value={linkMinutes}
-                      onChange={(e) => setLinkMinutes(e.target.value)}
-                      title="Travel minutes"
-                    />
-                    <span
-                      style={{
-                        fontSize: "0.7rem",
-                        color: "var(--text-muted)",
-                        alignSelf: "center",
-                      }}
-                    >
-                      min
-                    </span>
-                  </div>
-
-                  <textarea
-                    className="field-textarea"
-                    rows={3}
-                    placeholder="Sensory description of the new room..."
-                    value={linkDescription}
-                    onChange={(e) => setLinkDescription(e.target.value)}
-                  />
-
-                  <input
-                    className="field-input"
-                    placeholder="Environmental tags (comma separated)"
-                    value={linkTags}
-                    onChange={(e) => setLinkTags(e.target.value)}
-                  />
-
-                  {linkError && (
-                    <div style={{ fontSize: "0.72rem", color: "#fda4af" }}>
-                      {linkError}
-                    </div>
-                  )}
-
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: 6,
-                      justifyContent: "flex-end",
-                      marginTop: 2,
-                    }}
-                  >
-                    <button
-                      type="button"
-                      className="btn"
-                      style={{ padding: "3px 10px", fontSize: "0.74rem" }}
-                      onClick={() => setShowLinkForm(false)}
-                      disabled={isCreatingLink}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-amber"
-                      style={{ padding: "3px 10px", fontSize: "0.74rem" }}
-                      onClick={submitLinkForm}
-                      disabled={
-                        isCreatingLink ||
-                        !linkName.trim() ||
-                        !linkDescription.trim()
-                      }
-                    >
-                      {isCreatingLink ? "Creating..." : "Create Link"}
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                /* Connect to Existing Room Form (Editor mode) */
-                <div
-                  ref={connectFormRef}
-                  style={{
-                    border: "1px solid rgba(168, 85, 247, 0.45)",
-                    borderRadius: 6,
-                    padding: 10,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 7,
-                    background: "var(--bg-panel)",
-                  }}
-                >
-                  <div className="cog-step-label">
-                    Connect {selectedLocation.name} to Existing Room
-                  </div>
-
-                  <select
-                    className="field-select"
-                    value={connectTargetId}
-                    onChange={(e) => setConnectTargetId(e.target.value)}
-                  >
-                    <optgroup label="Locations">
-                      {locations
-                        .filter((l) => l.id !== selectedLocation.id)
-                        .map((l) => {
-                          const isAlreadyConnected = selectedLocExits.some(
-                            (ex) => ex.dest.id === l.id
-                          );
-                          return (
-                            <option
-                              key={l.id}
-                              value={l.id}
-                              disabled={isAlreadyConnected}
-                            >
-                              {l.name} {l.is_hub ? "(Hub)" : ""}{" "}
-                              {projectedTopology.dynamicPortalIds.has(l.id)
-                                ? "[Portal] "
-                                : ""}
-                              {isAlreadyConnected ? "(already connected)" : ""}
-                            </option>
-                          );
-                        })}
-                    </optgroup>
-                    {projectedTopology.visibleSupernodes.length > 0 && (
-                      <optgroup label="Containers (Supernodes)">
-                        {projectedTopology.visibleSupernodes.map((sn) => (
-                          <option
-                            key={`cont:${sn.container.id}`}
-                            value={`cont:${sn.container.id}`}
-                          >
-                            [Container] {sn.container.name} (
-                            {sn.descendantLocationCount} rooms,{" "}
-                            {sn.externalPortalsCount} portals)
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                  </select>
-
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <select
-                      className="field-input"
-                      style={{ flex: 1 }}
-                      value={connectDirection}
-                      onChange={(e) =>
-                        setConnectDirection(e.target.value as CompassDirection)
-                      }
-                    >
-                      {COMPASS_ORDER.map((d) => (
-                        <option key={d} value={d}>
-                          {d} {occupiedDirections.has(d) ? "(exit taken)" : ""}
-                        </option>
-                      ))}
-                    </select>
-
-                    <input
-                      className="field-input"
-                      type="number"
-                      min={1}
-                      max={240}
-                      style={{ width: 85 }}
-                      value={connectMinutes}
-                      onChange={(e) => setConnectMinutes(e.target.value)}
-                    />
-                    <span
-                      style={{
-                        fontSize: "0.7rem",
-                        color: "var(--text-muted)",
-                        alignSelf: "center",
-                      }}
-                    >
-                      min
-                    </span>
-                  </div>
-
-                  <label
-                    style={{
-                      fontSize: "0.72rem",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                      color: "var(--text-secondary)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={connectBidirectional}
-                      onChange={(e) =>
-                        setConnectBidirectional(e.target.checked)
-                      }
-                    />
-                    Create reciprocal return exit automatically
-                  </label>
-
-                  {connectError && (
-                    <div style={{ fontSize: "0.72rem", color: "#fda4af" }}>
-                      {connectError}
-                    </div>
-                  )}
-
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: 6,
-                      justifyContent: "flex-end",
-                    }}
-                  >
-                    <button
-                      type="button"
-                      className="btn"
-                      style={{ padding: "3px 10px", fontSize: "0.74rem" }}
-                      onClick={() => setShowConnectForm(false)}
-                      disabled={isConnecting}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-cyan"
-                      style={{ padding: "3px 10px", fontSize: "0.74rem" }}
-                      onClick={submitConnectForm}
-                      disabled={!connectTargetId || isConnecting}
-                    >
-                      {isConnecting ? "Connecting..." : "Add Connection"}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Connected Exits Section */}
-          <div>
-            <div
-              className="cog-step-label"
-              style={{
-                marginBottom: 6,
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-              }}
-            >
-              <span>Connected Exits ({selectedLocExits.length}/8)</span>
-            </div>
-
-            {selectedLocExits.length === 0 ? (
-              <div
-                style={{
-                  fontSize: "0.72rem",
-                  color: "var(--text-muted)",
-                  fontStyle: "italic",
-                }}
-              >
-                No exits leading out of this location.
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                {selectedLocExits.map(({ edge, dest }) => (
-                  <div
-                    key={edge.id}
-                    className="exit-pill"
-                    style={{ cursor: "pointer", position: "relative" }}
-                    onClick={() => selectLocationNode(dest.id)}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        fontSize: "0.76rem",
-                        fontWeight: 600,
-                        color: "#22d3ee",
-                      }}
-                    >
-                      <span>
-                        [{edge.compass_direction || "N"}] → {dest.name}
-                        {dest.is_hub && (
-                          <span
-                            style={{
-                              marginLeft: 5,
-                              color: "#c084fc",
-                              fontSize: "0.65rem",
-                            }}
-                          >
-                            (Hub)
-                          </span>
-                        )}
-                      </span>
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 6,
-                        }}
-                      >
-                        {editingEdgeId === edge.id ? (
-                          <div
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: 3,
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <input
-                              type="number"
-                              min={1}
-                              max={240}
-                              value={editMinutes}
-                              onChange={(e) => setEditMinutes(e.target.value)}
-                              style={{
-                                width: 44,
-                                padding: "1px 3px",
-                                fontSize: "0.7rem",
-                                background: "var(--bg-input, #0f172a)",
-                                border: "1px solid var(--accent-cyan, #06b6d4)",
-                                borderRadius: 3,
-                                color: "#e2e8f0",
-                                textAlign: "center",
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  handleSaveDistance(edge.id);
-                                } else if (e.key === "Escape") {
-                                  setEditingEdgeId(null);
-                                }
-                              }}
-                              autoFocus
-                              disabled={isUpdatingDistance}
-                            />
-                            <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>m</span>
-                            <button
-                              type="button"
-                              className="btn btn-cyan"
-                              style={{ padding: "1px 5px", fontSize: "0.68rem" }}
-                              onClick={() => handleSaveDistance(edge.id)}
-                              disabled={isUpdatingDistance}
-                              title="Save distance"
-                            >
-                              <Check size={10} />
-                            </button>
-                            <button
-                              type="button"
-                              className="btn"
-                              style={{ padding: "1px 4px", fontSize: "0.68rem" }}
-                              onClick={() => setEditingEdgeId(null)}
-                              disabled={isUpdatingDistance}
-                              title="Cancel"
-                            >
-                              <X size={10} />
-                            </button>
-                          </div>
-                        ) : (
-                          <span
-                            style={{
-                              color: onUpdateEdgeDistance ? "#38bdf8" : "var(--text-muted)",
-                              fontSize: "0.7rem",
-                              cursor: onUpdateEdgeDistance ? "pointer" : "default",
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: 3,
-                              padding: "1px 4px",
-                              borderRadius: 3,
-                              background: onUpdateEdgeDistance ? "rgba(56, 189, 248, 0.08)" : "transparent",
-                              border: onUpdateEdgeDistance ? "1px dashed rgba(56, 189, 248, 0.3)" : "none",
-                            }}
-                            title={onUpdateEdgeDistance ? "Click to edit distance / travel minutes" : undefined}
-                            onClick={(e) => {
-                              if (onUpdateEdgeDistance) {
-                                e.stopPropagation();
-                                setEditingEdgeId(edge.id);
-                                setEditMinutes(String(edge.travel_minutes));
-                              }
-                            }}
-                          >
-                            {edge.travel_minutes}m
-                            {onUpdateEdgeDistance && <Pencil size={9} style={{ opacity: 0.7 }} />}
-                          </span>
-                        )}
-
-                        {onDeleteEdge && (() => {
-                          const canRemove = canRemoveEdge(edge);
-                          return (
-                            <button
-                              type="button"
-                              className="item-remove-btn"
-                              style={{
-                                padding: 2,
-                                opacity: canRemove ? 1 : 0.3,
-                                cursor: canRemove ? "pointer" : "not-allowed",
-                              }}
-                              title={
-                                canRemove
-                                  ? "Remove this exit connection"
-                                  : "Cannot remove: both locations must retain a valid path to the starting hub"
-                              }
-                              disabled={!canRemove || isRemovingEdgeId === edge.id}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeleteExit(edge);
-                              }}
-                            >
-                              <Trash2 size={11} />
-                            </button>
-                          );
-                        })()}
-                      </div>
-                    </div>
-                    <div
-                      style={{
-                        fontSize: "0.7rem",
-                        color: "var(--text-secondary)",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 6,
-                      }}
-                    >
-                      <span>Via: {edge.direction_label}</span>
-                      {edge.is_locked_or_hidden && (
-                        <span
-                          style={{
-                            color: "var(--accent-rose)",
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: 3,
-                          }}
-                        >
-                          <Lock size={10} /> Hidden/Locked
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-            </>
-          )}
-        </div>
+            onPatchLocation={patchLocation}
+            onPatchContainer={patchContainer}
+            onResetCoordinates={resetCoordinates}
+            onDrillIntoContainer={drillIntoContainer}
+            onOverrideLocation={onOverrideLocation}
+            isOverriding={isOverriding}
+            onSaveCampaignLocationLore={onSaveCampaignLocationLore}
+            onSaveCampaignContainerLore={onSaveCampaignContainerLore}
+          />
+        )}
       </div>
     </div>
   );

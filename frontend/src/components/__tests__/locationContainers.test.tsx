@@ -15,10 +15,9 @@ import {
   projectTopologyForDepth,
 } from "../SpatialTopologyView";
 import {
-  WorldContainersTab,
   getDescendantContainerIds,
   validateContainersState,
-} from "../WorldContainersTab";
+} from "../map/mapValidation";
 import {
   LoreIndexModal,
   buildLoreIndexEntries,
@@ -327,9 +326,9 @@ describe("Location Containers Frontend Architecture", () => {
     ).toEqual([]);
   });
 
-  it("enforces cycle prevention, depth monotonicity, and L2+ lore prohibition in WorldContainersTab validation", () => {
+  it("enforces cycle prevention, depth monotonicity, and L2+ lore prohibition in container validation", () => {
     const { containers, locations } = makeHierarchyFixture();
-    expect(validateContainersState(containers, locations)).toBeNull();
+    expect(validateContainersState(containers, locations)).toEqual([]);
 
     // Cycle / descendant helper
     const descendants = getDescendantContainerIds("cont_city", containers);
@@ -342,8 +341,8 @@ describe("Location Containers Frontend Architecture", () => {
     const badDepth = containers.map((c) =>
       c.id === "cont_dist" ? { ...c, depth: 3 as const } : c
     );
-    expect(validateContainersState(badDepth, locations)).toMatch(
-      /strictly deeper/i
+    expect(validateContainersState(badDepth, locations).join(" ")).toMatch(
+      /cannot sit inside/i
     );
 
     // Invalid L2 lore prohibition
@@ -365,8 +364,8 @@ describe("Location Containers Frontend Architecture", () => {
           }
         : c
     );
-    expect(validateContainersState(badLore, locations)).toMatch(
-      /Level 1 landmarks/i
+    expect(validateContainersState(badLore, locations).join(" ")).toMatch(
+      /Level 1 containers/i
     );
 
     // Dangling location container reference
@@ -374,8 +373,8 @@ describe("Location Containers Frontend Architecture", () => {
       ...locations,
       { ...locations[0], id: "dangling", container_id: "cont_missing" },
     ];
-    expect(validateContainersState(containers, badLocs)).toMatch(
-      /non-existent container/i
+    expect(validateContainersState(containers, badLocs).join(" ")).toMatch(
+      /missing container/i
     );
   });
 
@@ -418,22 +417,7 @@ describe("Location Containers Frontend Architecture", () => {
     expect(mapHtml).toContain("Pacific Rim");
     expect(mapHtml).toContain("Afterlife Club");
     expect(mapHtml).toContain("[Entry/Exit Portal]");
-
-    const tabHtml = renderToStaticMarkup(
-      <WorldContainersTab
-        worldId="world_1"
-        containers={containers}
-        locations={locations}
-        worldLoreNodes={world.lore_nodes}
-        onChangeContainers={() => {}}
-        onChangeLocations={() => {}}
-        onChangeWorldLoreNodes={() => {}}
-        onOpenConvertModal={() => {}}
-      />
-    );
-    expect(tabHtml).toContain("Add Container");
-    expect(tabHtml).toContain("Sealed Bunker");
-    expect(tabHtml).toContain("Salt Flats Outpost");
+    expect(mapHtml).toContain("+ Container");
 
     const loreModalHtml = renderToStaticMarkup(
       <LoreIndexModal

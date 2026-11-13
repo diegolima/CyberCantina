@@ -522,11 +522,15 @@ export interface LoreNode {
 export interface LocationContainer {
   id: string;
   world_id: string;
+  created_at_turn_id?: string | null;
   parent_container_id?: string | null;
   depth: 1 | 2 | 3 | 4;
   name: string;
   description: string;
   environmental_tags: string[];
+  ui_x?: number | null;
+  ui_y?: number | null;
+  icon?: string | null;
   lore_nodes?: LoreNode[];
 }
 
@@ -534,6 +538,7 @@ export interface LocationNode {
   id: string;
   world_id: string;
   created_at_turn_id?: string | null;
+  superseded_at_turn_id?: string | null;
   container_id?: string | null;
   is_entry_exit?: boolean;
   name: string;
@@ -543,6 +548,10 @@ export interface LocationNode {
   is_starting_location: boolean;
   is_hub?: boolean;
   starting_message?: string;
+  ui_x?: number | null;
+  ui_y?: number | null;
+  icon?: string | null;
+  is_visited?: boolean;
   lore_nodes?: LoreNode[];
 }
 
@@ -786,6 +795,7 @@ export interface WorldStateSnapshot {
   campaign_elapsed_minutes?: number;
   active_location_id: string;
   scene_flags: string[];
+  visited_location_ids?: string[];
 }
 
 export interface ExtractedCharacterMemory {
@@ -1001,6 +1011,7 @@ export type EnrichFieldRole =
   | "player_turn_prompt"
   | "narrator_directive"
   | "location_description"
+  | "location_tags"
   | "character_persona"
   | "lore_content";
 
@@ -1015,8 +1026,16 @@ export type MagicContextRef =
     }
   | {
       scope: "world_location";
-      world_id: string;
+      world_id?: string | null;
       location_id?: string | null;
+      world_name?: string | null;
+      genre?: string | null;
+      tone?: string | null;
+      setting_overview?: string | null;
+      location_name?: string | null;
+      location_summary?: string | null;
+      location_description?: string | null;
+      existing_tags?: string[] | null;
     }
   | {
       scope: "character_field";

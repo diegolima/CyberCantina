@@ -429,7 +429,12 @@ def test_lore_nodes_check_constraint_migration(tmp_path: Path) -> None:
 
         # Container secret + campaign override allowed
         conn2.execute(
-            "INSERT INTO location_containers VALUES ('c1', 'w1', NULL, 1, 'Keep', '', '[]', '2026-01-01T00:00:00Z')"
+            """
+            INSERT INTO location_containers (
+                id, world_id, parent_container_id, depth, name, description, environmental_tags_json, created_at
+            )
+            VALUES ('c1', 'w1', NULL, 1, 'Keep', '', '[]', '2026-01-01T00:00:00Z')
+            """
         )
         conn2.execute(
             "INSERT INTO lore_nodes VALUES ('lr_csec', 'w1', NULL, 'c1', NULL, 'Keep Secret', 'secret', 'Secret door.', '[\"door\"]')"

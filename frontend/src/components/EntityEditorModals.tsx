@@ -14,7 +14,6 @@ import {
   Globe,
   History,
   Image as ImageIcon,
-  Layers,
   Loader2,
   Lock,
   Maximize2,
@@ -73,9 +72,9 @@ import {
 } from "./SpatialTopologyView";
 import { TagChipsInput, normalizeTagList } from "./TagChipsInput";
 import {
-  WorldContainersTab,
+  computeUnreachableLocationIds,
   validateContainersState,
-} from "./WorldContainersTab";
+} from "./map/mapValidation";
 
 export interface ClickToEditFieldProps {
   label?: string;
@@ -2590,7 +2589,7 @@ interface WorldInspectorModalProps {
   }) => Promise<WorldRecord>;
 }
 
-type WorldTab = "base" | "map" | "containers" | "lore";
+type WorldTab = "base" | "map" | "lore";
 
 export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   world,
@@ -2697,83 +2696,6 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   const [reimagining, setReimagining] = useState(false);
   const [reimagineError, setReimagineError] = useState<string | null>(null);
 
-  // Convert Location -> Container Modal state
-  const [convertSourceLoc, setConvertSourceLoc] = useState<LocationNode | null>(
-    null
-  );
-  const [convertContName, setConvertContName] = useState("");
-  const [convertContDepth, setConvertContDepth] = useState<1 | 2 | 3 | 4>(1);
-  const [convertParentId, setConvertParentId] = useState<string>("");
-  const [convertPortalName, setConvertPortalName] = useState("");
-  const [convertMigrateLore, setConvertMigrateLore] = useState(true);
-
-  const openConvertModal = (loc: LocationNode) => {
-    setConvertSourceLoc(loc);
-    setConvertContName(loc.name);
-    setConvertContDepth(1);
-    const parentCandidate = loc.container_id
-      ? containers.find((c) => c.id === loc.container_id && c.depth > 1)?.id ??
-        ""
-      : "";
-    setConvertParentId(parentCandidate);
-    setConvertPortalName(`${loc.name} Entrance`);
-    setConvertMigrateLore(true);
-  };
-
-  const handleExecuteConvert = () => {
-    if (!convertSourceLoc || !convertContName.trim() || !convertPortalName.trim()) {
-      return;
-    }
-    const newContId = `new_cont_${Date.now()}_${Math.random()
-      .toString(36)
-      .slice(2, 6)}`;
-    const newInteriorId = convertSourceLoc.id; // Keep edge connectivity intact cleanly
-    const origLore = convertSourceLoc.lore_nodes ?? [];
-    const movedToContainer =
-      convertContDepth === 1 && convertMigrateLore ? origLore : [];
-    const keptOnRoom =
-      convertContDepth === 1 && convertMigrateLore ? [] : origLore;
-
-    const newCont: LocationContainer = {
-      id: newContId,
-      world_id: world.id,
-      parent_container_id: convertParentId || null,
-      depth: convertContDepth,
-      name: convertContName.trim(),
-      description: convertSourceLoc.description || convertSourceLoc.summary || "",
-      environmental_tags: [...(convertSourceLoc.environmental_tags ?? [])],
-      lore_nodes: movedToContainer.map((ln) => ({
-        ...ln,
-        location_id: null,
-        container_id: newContId,
-      })),
-    };
-
-    setContainers((prev) => [...prev, newCont]);
-    setLocations((prev) =>
-      prev.map((l) =>
-        l.id === newInteriorId
-          ? {
-              ...l,
-              container_id: newContId,
-              is_entry_exit: true,
-              name: convertPortalName.trim(),
-              lore_nodes: keptOnRoom,
-            }
-          : l
-      )
-    );
-    markDirty();
-    setConvertSourceLoc(null);
-  };
-
-  const handleUpdateContainer = (updated: LocationContainer) => {
-    setContainers((prev) =>
-      prev.map((c) => (c.id === updated.id ? updated : c))
-    );
-    markDirty();
-  };
-
   const handleExecuteReimagine = async () => {
     if (!reimagineDescription.trim()) return;
     setReimagining(true);
@@ -2805,196 +2727,12 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
     if (!isDirty) setIsDirty(true);
   };
 
-  const handleSetStartingLocation = (targetLocId: string) => {
-    setLocations((prev) =>
-      prev.map((loc) => ({
-        ...loc,
-        is_starting_location: loc.id === targetLocId,
-      }))
-    );
-    markDirty();
-  };
-
-  const handleUpdateLocation = (updated: LocationNode) => {
-    setLocations((prev) =>
-      prev.map((loc) => (loc.id === updated.id ? updated : loc))
-    );
-    markDirty();
-  };
-
-  const handleDeleteLocation = (targetLocId: string) => {
-    if (locations.length <= 1) return;
-    const remaining = locations.filter((l) => l.id !== targetLocId);
-    const wasStarting = locations.find((l) => l.id === targetLocId)?.is_starting_location;
-    if (wasStarting && remaining.length > 0) {
-      remaining[0] = { ...remaining[0], is_starting_location: true };
-    }
-    setLocations(remaining);
-    setEdges((prev) =>
-      prev.filter(
-        (e) =>
-          e.from_location_id !== targetLocId && e.to_location_id !== targetLocId
-      )
-    );
-    markDirty();
-  };
-
-  const handleDeleteEdge = (edgeId: string) => {
-    const target = edges.find((e) => e.id === edgeId);
-    if (!target) return;
-    const startId =
-      locations.find((l) => l.is_starting_location)?.id ?? locations[0]?.id;
-    if (!startId) return;
-
-    const remaining = edges.filter(
-      (e) =>
-        e.id !== edgeId &&
-        !(
-          e.from_location_id === target.to_location_id &&
-          e.to_location_id === target.from_location_id
-        )
-    );
-
-    const adj = new Map<string, Set<string>>();
-    for (const e of remaining) {
-      if (!adj.has(e.from_location_id)) adj.set(e.from_location_id, new Set());
-      if (!adj.has(e.to_location_id)) adj.set(e.to_location_id, new Set());
-      adj.get(e.from_location_id)!.add(e.to_location_id);
-      adj.get(e.to_location_id)!.add(e.from_location_id);
-    }
-
-    const reachable = new Set<string>([startId]);
-    const queue = [startId];
-    while (queue.length > 0) {
-      const curr = queue.shift()!;
-      for (const nextId of adj.get(curr) ?? []) {
-        if (!reachable.has(nextId)) {
-          reachable.add(nextId);
-          queue.push(nextId);
-        }
-      }
-    }
-
-    if (
-      !reachable.has(target.from_location_id) ||
-      !reachable.has(target.to_location_id)
-    ) {
-      return;
-    }
-
-    setEdges(remaining);
-    markDirty();
-  };
-
-  const handleUpdateEdgeDistance = (payload: {
-    edgeId: string;
-    travel_minutes: number;
-  }) => {
-    const target = edges.find((e) => e.id === payload.edgeId);
-    if (!target) return;
-    setEdges((prev) =>
-      prev.map((e) => {
-        if (e.id === payload.edgeId) {
-          return { ...e, travel_minutes: payload.travel_minutes };
-        }
-        if (
-          e.from_location_id === target.to_location_id &&
-          e.to_location_id === target.from_location_id
-        ) {
-          return { ...e, travel_minutes: payload.travel_minutes };
-        }
-        return e;
-      })
-    );
-    markDirty();
-  };
-
-  const handleAddEdge = (payload: {
-    from_location_id: string;
-    to_location_id: string;
-    direction_label?: string;
-    compass_direction: CompassDirection;
-    travel_minutes: number;
-    bidirectional?: boolean;
-  }) => {
-    const newEdgeId = `edge_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-    const newEdge: LocationEdge = {
-      id: newEdgeId,
-      world_id: world.id,
-      from_location_id: payload.from_location_id,
-      to_location_id: payload.to_location_id,
-      direction_label: payload.direction_label || "Passage",
-      compass_direction: payload.compass_direction,
-      travel_minutes: payload.travel_minutes,
-      is_locked_or_hidden: false,
-    };
-    const nextEdges = [...edges, newEdge];
-    if (payload.bidirectional) {
-      const returnEdgeId = `edge_${Date.now()}_rev_${Math.random().toString(36).slice(2, 6)}`;
-      nextEdges.push({
-        id: returnEdgeId,
-        world_id: world.id,
-        from_location_id: payload.to_location_id,
-        to_location_id: payload.from_location_id,
-        direction_label: `Return passage`,
-        compass_direction: OPPOSITE_COMPASS[payload.compass_direction],
-        travel_minutes: payload.travel_minutes,
-        is_locked_or_hidden: false,
-      });
-    }
-    setEdges(nextEdges);
-    markDirty();
-  };
-
-  const handleCreateLinkedLocation = async (payload: {
-    from_location_id: string;
-    name: string;
-    compass_direction: CompassDirection;
-    travel_minutes: number;
-    description: string;
-    environmental_tags: string[];
-    is_hub?: boolean;
-    summary?: string;
-  }): Promise<string> => {
-    const newLocId = `new_loc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-    const fromLoc = locations.find((l) => l.id === payload.from_location_id);
-    const newLoc: LocationNode = {
-      id: newLocId,
-      world_id: world.id,
-      name: payload.name,
-      summary: payload.summary || payload.name,
-      description: payload.description,
-      environmental_tags: payload.environmental_tags,
-      is_starting_location: false,
-      is_hub: Boolean(payload.is_hub),
-    };
-    const fwdEdgeId = `new_edge_${Date.now()}_fwd`;
-    const revEdgeId = `new_edge_${Date.now()}_rev`;
-    const fwdEdge: LocationEdge = {
-      id: fwdEdgeId,
-      world_id: world.id,
-      from_location_id: payload.from_location_id,
-      to_location_id: newLocId,
-      direction_label: `Passage to ${payload.name}`,
-      compass_direction: payload.compass_direction,
-      travel_minutes: payload.travel_minutes,
-      is_locked_or_hidden: false,
-    };
-    const revEdge: LocationEdge = {
-      id: revEdgeId,
-      world_id: world.id,
-      from_location_id: newLocId,
-      to_location_id: payload.from_location_id,
-      direction_label: `Back to ${fromLoc?.name ?? "adjoining room"}`,
-      compass_direction: OPPOSITE_COMPASS[payload.compass_direction],
-      travel_minutes: payload.travel_minutes,
-      is_locked_or_hidden: false,
-    };
-    setLocations((prev) => [...prev, newLoc]);
-    setEdges((prev) => [...prev, fwdEdge, revEdge]);
-    markDirty();
-    return newLocId;
-  };
+  const reachabilityReport = computeUnreachableLocationIds(locations, edges);
+  const containerValidationErrors = validateContainersState(containers, locations);
+  const mapHasBlockingErrors =
+    Boolean(reachabilityReport.starterError) ||
+    reachabilityReport.unreachableIds.length > 0 ||
+    containerValidationErrors.length > 0;
 
   const invalidWorldLoreCount = loreNodes.filter((lore) => {
     const pendingRaw = pendingWorldLoreTagDrafts[lore.id] || "";
@@ -3123,13 +2861,23 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
           : [],
     }));
 
-    const containerValidationError = validateContainersState(
+    const containerErrors = validateContainersState(
       sanitizedContainers,
       sanitizedLocations
     );
-    if (containerValidationError) {
-      setActiveTab("containers");
-      setError(containerValidationError);
+    if (containerErrors.length > 0) {
+      setActiveTab("map");
+      setError(containerErrors[0]);
+      return;
+    }
+
+    const saveReach = computeUnreachableLocationIds(sanitizedLocations, edges);
+    if (saveReach.starterError || saveReach.unreachableIds.length > 0) {
+      setActiveTab("map");
+      setError(
+        saveReach.starterError ||
+          `${saveReach.unreachableIds.length} unlinked location(s) must be bidirectionally connected to the Starting Location before saving.`
+      );
       return;
     }
 
@@ -3233,17 +2981,6 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 !{invalidLocationLoreCount}
               </span>
             )}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === "containers"}
-            className={`modal-tab-btn ${activeTab === "containers" ? "active" : ""}`}
-            onClick={() => setActiveTab("containers")}
-          >
-            <Layers size={14} />
-            <span>Containers</span>
-            <span className="modal-tab-badge">{containers.length}</span>
           </button>
           <button
             type="button"
@@ -3428,47 +3165,29 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                   ""
                 }
                 mode="editor"
+                worldContext={{
+                  worldId: world.id,
+                  worldName: name,
+                  genre: globalRules.genre,
+                  tone: globalRules.tone,
+                  settingOverview: globalRules.setting_overview,
+                }}
+                hasUnsavedChanges={isDirty}
+                isSavingMap={saving}
+                onSaveMap={handleSave}
+                onChangeGraph={({
+                  containers: nextConts,
+                  locations: nextLocs,
+                  edges: nextEdges,
+                }) => {
+                  setContainers(nextConts);
+                  setLocations(nextLocs);
+                  setEdges(nextEdges);
+                  markDirty();
+                }}
                 onReimagineMap={() => setShowReimagineModal(true)}
-                onUpdateLocation={handleUpdateLocation}
-                onUpdateContainer={handleUpdateContainer}
-                onConvertToContainer={openConvertModal}
-                onDeleteLocation={handleDeleteLocation}
-                onSetStartingLocation={handleSetStartingLocation}
-                onAddEdge={handleAddEdge}
-                onDeleteEdge={handleDeleteEdge}
-                onUpdateEdgeDistance={handleUpdateEdgeDistance}
-                onCreateLinkedLocation={handleCreateLinkedLocation}
               />
             )}
-          </div>
-
-          {/* Containers Tab */}
-          <div
-            style={{
-              display: activeTab === "containers" ? "flex" : "none",
-              flexDirection: "column",
-              gap: 12,
-            }}
-          >
-            <WorldContainersTab
-              worldId={world.id}
-              containers={containers}
-              locations={locations}
-              worldLoreNodes={loreNodes}
-              onChangeContainers={(next) => {
-                setContainers(next);
-                markDirty();
-              }}
-              onChangeLocations={(next) => {
-                setLocations(next);
-                markDirty();
-              }}
-              onChangeWorldLoreNodes={(next) => {
-                setLoreNodes(next);
-                markDirty();
-              }}
-              onOpenConvertModal={openConvertModal}
-            />
           </div>
 
           {/* Lore Tab */}
@@ -3724,7 +3443,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 <button
                   type="button"
                   className="btn btn-cyan"
-                  disabled={saving || locations.length === 0}
+                  disabled={saving || locations.length === 0 || mapHasBlockingErrors}
                   onClick={handleSave}
                 >
                   <Check size={15} />
@@ -3737,7 +3456,9 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
               <div
                 style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}
               >
-                {isDirty
+                {mapHasBlockingErrors
+                  ? "Resolve unlinked locations or hierarchy errors on the Map tab before saving."
+                  : isDirty
                   ? "Unsaved edits ready. Saving preserves existing campaigns via silent versioning."
                   : "Click any field above to edit."}
               </div>
@@ -3760,7 +3481,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                   <button
                     type="button"
                     className="btn btn-amber"
-                    disabled={saving}
+                    disabled={saving || mapHasBlockingErrors}
                     onClick={handleSave}
                   >
                     <Check size={14} />
@@ -3875,7 +3596,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
               <div style={{ fontSize: "0.74rem", color: "var(--text-muted)" }}>
                 Note: Regenerating the map replaces current draft locations and
                 passages with the newly synthesized spatial topology. World
-                rules, overview, existing location containers (Containers tab),
+                rules, overview, existing location containers,
                 and world-level lore entries remain intact.
               </div>
 
@@ -3928,153 +3649,6 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
               >
                 <Sparkles size={14} />
                 {reimagining ? "Re-imagining Map..." : "Regenerate Map"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Convert Location -> Container Modal */}
-      {convertSourceLoc && (
-        <div
-          className="modal-backdrop"
-          style={{ zIndex: 85 }}
-          onClick={() => setConvertSourceLoc(null)}
-        >
-          <div
-            className="modal-panel"
-            style={{ width: "min(480px, 92vw)" }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Convert Location to Container"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="modal-header">
-              <span style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                <Layers size={16} color="var(--accent-amber)" />
-                Convert "{convertSourceLoc.name}" into Container
-              </span>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => setConvertSourceLoc(null)}
-              >
-                <X size={14} />
-              </button>
-            </div>
-            <div
-              className="modal-body"
-              style={{ display: "flex", flexDirection: "column", gap: 10 }}
-            >
-              <div className="field-group">
-                <label>New Container Name</label>
-                <input
-                  className="field-input"
-                  value={convertContName}
-                  onChange={(e) => setConvertContName(e.target.value)}
-                />
-              </div>
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: 8,
-                }}
-              >
-                <div className="field-group">
-                  <label>Container Depth</label>
-                  <select
-                    className="field-select"
-                    value={convertContDepth}
-                    onChange={(e) =>
-                      setConvertContDepth(Number(e.target.value) as 1 | 2 | 3 | 4)
-                    }
-                  >
-                    <option value={1}>L1 · Building / Landmark</option>
-                    <option value={2}>L2 · District / Zone</option>
-                    <option value={3}>L3 · City / Settlement</option>
-                    <option value={4}>L4 · Region / Realm</option>
-                  </select>
-                </div>
-                <div className="field-group">
-                  <label>Parent Container</label>
-                  <select
-                    className="field-select"
-                    value={convertParentId}
-                    onChange={(e) => setConvertParentId(e.target.value)}
-                  >
-                    <option value="">World Root</option>
-                    {containers
-                      .filter((c) => c.depth > convertContDepth)
-                      .map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name} (L{c.depth})
-                        </option>
-                      ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="field-group">
-                <label>Initial Interior Entry/Exit Portal Name</label>
-                <input
-                  className="field-input"
-                  value={convertPortalName}
-                  onChange={(e) => setConvertPortalName(e.target.value)}
-                />
-                <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>
-                  Existing passages preserve connectivity by attaching to this
-                  portal room.
-                </span>
-              </div>
-
-              {convertContDepth === 1 &&
-                (convertSourceLoc.lore_nodes?.length ?? 0) > 0 && (
-                  <label
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 7,
-                      fontSize: "0.76rem",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={convertMigrateLore}
-                      onChange={(e) => setConvertMigrateLore(e.target.checked)}
-                    />
-                    <span>
-                      Migrate {convertSourceLoc.lore_nodes!.length} lore
-                      entry/entries onto the new Level 1 container
-                    </span>
-                  </label>
-                )}
-            </div>
-            <div
-              className="modal-footer"
-              style={{
-                display: "flex",
-                justifyContent: "flex-end",
-                gap: 8,
-                padding: "12px 16px",
-              }}
-            >
-              <button
-                type="button"
-                className="btn"
-                onClick={() => setConvertSourceLoc(null)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn btn-amber"
-                disabled={!convertContName.trim() || !convertPortalName.trim()}
-                onClick={handleExecuteConvert}
-              >
-                Convert into Container
               </button>
             </div>
           </div>

@@ -57,10 +57,12 @@ import {
   CharacterChoiceSet,
   CharacterRecord,
   CognitionBlock,
-  CompassDirection,
   DiceMode,
   ItemEquipActionPayload,
+  LocationContainer,
+  LocationEdge,
   LocationLoreNodeDraft,
+  LocationNode,
   MemoryShard,
   NarrativeMode,
   PersonaRecord,
@@ -1147,60 +1149,14 @@ export const App: React.FC = () => {
     setBundle(updated);
   };
 
-  const handleCreateLinkedLocation = async (payload: {
-    from_location_id: string;
-    name: string;
-    compass_direction: string;
-    travel_minutes: number;
-    description: string;
-    environmental_tags: string[];
-  }): Promise<string | void> => {
-    if (!bundle || isStreaming || isPhase4Running) return;
-    const prevIds = new Set(bundle.visible_locations.map((l) => l.id));
-    const updated = await api.createLinkedLocation(bundle.campaign.id, payload);
-    setBundle(updated);
-    const updatedWorld = await api.getWorld(updated.campaign.world_id);
-    setCampaignWorld(updatedWorld);
-    return updated.visible_locations.find((l) => l.name === payload.name && !prevIds.has(l.id))?.id;
-  };
-
-  const handleConnectLocations = async (payload: {
-    from_location_id: string;
-    to_location_id: string;
-    direction_label?: string;
-    compass_direction: CompassDirection;
-    travel_minutes: number;
-    bidirectional?: boolean;
+  const handleSaveCampaignMap = async (payload: {
+    containers: LocationContainer[];
+    locations: LocationNode[];
+    edges: LocationEdge[];
   }) => {
     if (!bundle || isStreaming || isPhase4Running) return;
-    const updated = await api.connectCampaignLocations(bundle.campaign.id, payload);
+    const updated = await api.updateCampaignMap(bundle.campaign.id, payload);
     setBundle(updated);
-    const updatedWorld = await api.getWorld(updated.campaign.world_id);
-    setCampaignWorld(updatedWorld);
-  };
-
-  const handleDeleteCampaignEdge = async (edgeId: string) => {
-    if (!bundle || isStreaming || isPhase4Running) return;
-    const updated = await api.removeCampaignEdge(bundle.campaign.id, edgeId, true);
-    setBundle(updated);
-    const updatedWorld = await api.getWorld(updated.campaign.world_id);
-    setCampaignWorld(updatedWorld);
-  };
-
-  const handleUpdateCampaignEdgeDistance = async (payload: {
-    edgeId: string;
-    travel_minutes: number;
-  }) => {
-    if (!bundle || isStreaming || isPhase4Running) return;
-    const updated = await api.updateCampaignEdgeDistance(
-      bundle.campaign.id,
-      payload.edgeId,
-      payload.travel_minutes,
-      true
-    );
-    setBundle(updated);
-    const updatedWorld = await api.getWorld(updated.campaign.world_id);
-    setCampaignWorld(updatedWorld);
   };
 
   const handleCheckoutTurn = async (turnId: string) => {
@@ -1981,10 +1937,7 @@ export const App: React.FC = () => {
           memoryConfig={appSettings?.memory_config}
           pendingLocationOverrideId={pendingLocationOverrideId}
           onOverrideLocation={handleOverrideLocation}
-          onCreateLinkedLocation={handleCreateLinkedLocation}
-          onAddEdge={handleConnectLocations}
-          onDeleteEdge={handleDeleteCampaignEdge}
-          onUpdateEdgeDistance={handleUpdateCampaignEdgeDistance}
+          onSaveCampaignMap={handleSaveCampaignMap}
           onToggleItemEquip={handleToggleItemEquip}
           onUpdateCampaignMemories={handleUpdateCampaignMemories}
           onSaveCampaignLocationLore={handleSaveCampaignLocationLore}

@@ -41,6 +41,8 @@ def get_world(
         return get_repo().get_world(world_id, base_only=base_only, owner_id=current_user.id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/api/wizards/world/draft", response_model=WorldWizardDraft)
@@ -98,6 +100,8 @@ async def update_world(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 class ConvertLocationToContainerRequest(BaseModel):
@@ -174,3 +178,5 @@ def delete_world(
         return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

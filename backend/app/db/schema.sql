@@ -87,11 +87,15 @@ CREATE TABLE IF NOT EXISTS worlds (
 CREATE TABLE IF NOT EXISTS location_containers (
     id TEXT PRIMARY KEY,
     world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+    created_at_turn_id TEXT NULL,
     parent_container_id TEXT NULL REFERENCES location_containers(id) ON DELETE CASCADE,
     depth INTEGER NOT NULL CHECK (depth BETWEEN 1 AND 4),
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     environmental_tags_json TEXT NOT NULL DEFAULT '[]',
+    ui_x REAL NULL,
+    ui_y REAL NULL,
+    icon TEXT NULL,
     created_at TEXT NOT NULL
 );
 
@@ -102,6 +106,7 @@ CREATE TABLE IF NOT EXISTS location_nodes (
     id TEXT PRIMARY KEY,
     world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
     created_at_turn_id TEXT NULL,
+    superseded_at_turn_id TEXT NULL,
     container_id TEXT NULL REFERENCES location_containers(id) ON DELETE SET NULL,
     is_entry_exit INTEGER NOT NULL DEFAULT 0,
     name TEXT NOT NULL,
@@ -110,7 +115,10 @@ CREATE TABLE IF NOT EXISTS location_nodes (
     environmental_tags_json TEXT NOT NULL DEFAULT '[]',
     is_starting_location INTEGER NOT NULL DEFAULT 0,
     is_hub INTEGER NOT NULL DEFAULT 0,
-    starting_message TEXT NOT NULL DEFAULT ''
+    starting_message TEXT NOT NULL DEFAULT '',
+    ui_x REAL NULL,
+    ui_y REAL NULL,
+    icon TEXT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_location_nodes_world ON location_nodes(world_id);
@@ -305,8 +313,25 @@ CREATE TABLE IF NOT EXISTS world_state_snapshots (
     world_timestamp TEXT NOT NULL,
     active_location_id TEXT NOT NULL REFERENCES location_nodes(id),
     scene_flags_json TEXT NOT NULL DEFAULT '[]',
-    campaign_elapsed_minutes INTEGER NOT NULL DEFAULT 0
+    campaign_elapsed_minutes INTEGER NOT NULL DEFAULT 0,
+    visited_location_ids_json TEXT NOT NULL DEFAULT '[]'
 );
+
+CREATE TABLE IF NOT EXISTS campaign_spatial_overrides (
+    turn_id TEXT NOT NULL REFERENCES turn_nodes(id) ON DELETE CASCADE,
+    campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    entity_type TEXT NOT NULL CHECK (entity_type IN ('location', 'container')),
+    entity_id TEXT NOT NULL,
+    parent_id TEXT NULL,
+    is_entry_exit INTEGER NULL,
+    ui_x REAL NULL,
+    ui_y REAL NULL,
+    icon TEXT NULL,
+    metadata_override_json TEXT NULL,
+    PRIMARY KEY (turn_id, entity_type, entity_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_campaign_spatial_overrides_campaign ON campaign_spatial_overrides(campaign_id, turn_id);
 
 CREATE TABLE IF NOT EXISTS character_states (
     turn_id TEXT NOT NULL REFERENCES turn_nodes(id) ON DELETE CASCADE,

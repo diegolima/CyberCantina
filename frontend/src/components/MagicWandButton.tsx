@@ -1,5 +1,5 @@
 import React from "react";
-import { RefreshCw, RotateCcw, Sparkles, X } from "lucide-react";
+import { RefreshCw, RotateCcw, Sparkles, Wand2, X } from "lucide-react";
 import { UseMagicWandReturn } from "../types";
 
 export interface MagicWandButtonProps {
@@ -7,6 +7,9 @@ export interface MagicWandButtonProps {
   isInputEmpty: boolean;
   isSlashCommand: boolean;
   shortcutLabel?: string;
+  variant?: "pill" | "compact";
+  compactLabel?: string;
+  iconAccent?: "amber" | "violet";
 }
 
 export const MagicWandButton: React.FC<MagicWandButtonProps> = ({
@@ -14,18 +17,89 @@ export const MagicWandButton: React.FC<MagicWandButtonProps> = ({
   isInputEmpty,
   isSlashCommand,
   shortcutLabel = "Alt+Shift+E",
+  variant = "pill",
+  compactLabel = "AI assist",
+  iconAccent = "amber",
 }) => {
   const {
     status,
+    error,
     canEnrich,
     canRevert,
     isDirtyAfterApply,
-    error,
     triggerEnrich,
     cancelEnrich,
     revert,
     dismissUndo,
   } = wand;
+
+  const accentVar = iconAccent === "violet" ? "var(--accent-violet)" : "var(--accent-amber)";
+
+  if (variant === "compact") {
+    if (status === "enriching") {
+      return (
+        <span className="magic-wand-active-bar compact">
+          <RefreshCw size={11} className="spin-slow" color={accentVar} />
+          <span style={{ fontSize: "0.68rem", color: "var(--text-secondary)" }}>Generating...</span>
+          <button
+            type="button"
+            className="btn magic-wand-cancel-btn"
+            onClick={cancelEnrich}
+            title="Cancel AI generation"
+            aria-label="Cancel AI generation"
+          >
+            <X size={11} />
+          </button>
+        </span>
+      );
+    }
+
+    if (canRevert) {
+      return (
+        <span className="magic-wand-revert-bar compact">
+          <button
+            type="button"
+            className="btn magic-wand-revert-btn"
+            onClick={revert}
+            title="Revert to previous value"
+          >
+            <RotateCcw size={11} />
+            <span>Undo</span>
+          </button>
+          <button
+            type="button"
+            className="btn magic-wand-dismiss-btn"
+            onClick={dismissUndo}
+            title="Keep value and dismiss undo"
+            aria-label="Dismiss undo"
+          >
+            <X size={11} />
+          </button>
+        </span>
+      );
+    }
+
+    const compactTooltip = error
+      ? `AI assist error: ${error}`
+      : isInputEmpty
+      ? `${compactLabel}: Generate with AI`
+      : `${compactLabel}: Enhance with AI`;
+
+    return (
+      <span className="magic-wand-trigger-container compact">
+        <button
+          type="button"
+          className={`btn magic-wand-icon-btn ${iconAccent === "violet" ? "accent-violet" : "accent-amber"} ${status === "error" ? "has-error" : ""}`}
+          disabled={!canEnrich}
+          onClick={() => triggerEnrich("auto")}
+          title={compactTooltip}
+          aria-label={compactTooltip}
+        >
+          <Wand2 size={12} color={accentVar} />
+        </button>
+      </span>
+    );
+  }
 
   if (status === "enriching") {
     return (

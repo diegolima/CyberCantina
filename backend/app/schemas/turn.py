@@ -39,6 +39,8 @@ from app.schemas.world import (
     LocationNode,
     NeighborLocationView,
     normalize_compass_direction,
+    validate_container_hierarchy_integrity,
+    validate_world_reachability,
 )
 
 CheckRole = Literal[
@@ -335,6 +337,7 @@ class WorldStateSnapshot(BaseModel):
         ge=0,
         description="Monotonic in-campaign elapsed minutes accumulated since Turn 0.",
     )
+    visited_location_ids: list[str] = Field(default_factory=list)
 
 
 class ImprovisedLocationSpec(BaseModel):
@@ -974,6 +977,27 @@ class CampaignStateBundle(BaseModel):
     visible_locations: list[LocationNode]
     visible_edges: list[LocationEdge] = Field(default_factory=list)
     episodic_chunks: list[EpisodicChunkRecord]
+
+
+class CampaignMapUpdatePayload(BaseModel):
+    """Atomic turn-anchored spatial map update payload during an active campaign."""
+
+    containers: list[LocationContainer] = Field(default_factory=list)
+    locations: list[LocationNode] = Field(default_factory=list)
+    edges: list[LocationEdge] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_map(self) -> "CampaignMapUpdatePayload":
+        validate_container_hierarchy_integrity(
+            world_id=None,
+            containers=self.containers,
+            locations=self.locations,
+        )
+        validate_world_reachability(
+            locations=self.locations,
+            edges=self.edges,
+        )
+        return self
 
 
 class CampaignCharacterMemoriesUpdateRequest(BaseModel):

@@ -584,6 +584,7 @@ class LocationContainer(BaseModel):
 
     id: str
     world_id: str = ""
+    created_at_turn_id: str | None = None
     parent_container_id: str | None = None
     depth: int = Field(
         ...,
@@ -594,6 +595,9 @@ class LocationContainer(BaseModel):
     name: str = Field(..., min_length=1, max_length=160)
     description: str = ""
     environmental_tags: list[str] = Field(default_factory=list)
+    ui_x: float | None = None
+    ui_y: float | None = None
+    icon: str | None = None
     lore_nodes: list[LoreNode] = Field(
         default_factory=list,
         description="Scoped lore entries (strictly allowed only on depth=1 containers).",
@@ -645,8 +649,9 @@ class LocationNode(BaseModel):
     """Persisted spatial graph node."""
 
     id: str
-    world_id: str
+    world_id: str = ""
     created_at_turn_id: str | None = None
+    superseded_at_turn_id: str | None = None
     container_id: str | None = None
     is_entry_exit: bool = False
     name: str
@@ -659,6 +664,10 @@ class LocationNode(BaseModel):
         default="",
         description="Atmospheric Turn 0 opening scene prose if this room serves as campaign entry.",
     )
+    ui_x: float | None = None
+    ui_y: float | None = None
+    icon: str | None = None
+    is_visited: bool = False
     lore_nodes: list[LoreNode] = Field(default_factory=list)
 
     @model_validator(mode="before")
@@ -769,6 +778,56 @@ def validate_container_hierarchy_integrity(
             curr = c_by_id[curr.parent_container_id]
 
 
+def validate_world_reachability(
+    locations: list[LocationNode],
+    edges: list[LocationEdge],
+) -> None:
+    """Validate bidirectional reachability from the Starting Hub to every location in the graph."""
+    if not locations:
+        return
+    loc_by_id = {loc.id: loc for loc in locations}
+    starters = [loc.id for loc in locations if loc.is_starting_location]
+    if len(starters) != 1:
+        raise ValueError(
+            f"World must have exactly one Starting Location (found {len(starters)})."
+        )
+    start_id = starters[0]
+
+    fwd_adj: dict[str, list[str]] = {loc_id: [] for loc_id in loc_by_id}
+    rev_adj: dict[str, list[str]] = {loc_id: [] for loc_id in loc_by_id}
+    for edge in edges:
+        if edge.from_location_id in loc_by_id and edge.to_location_id in loc_by_id:
+            fwd_adj[edge.from_location_id].append(edge.to_location_id)
+            rev_adj[edge.to_location_id].append(edge.from_location_id)
+
+    def _bfs(adj: dict[str, list[str]]) -> set[str]:
+        visited: set[str] = {start_id}
+        queue = [start_id]
+        idx = 0
+        while idx < len(queue):
+            curr = queue[idx]
+            idx += 1
+            for nxt in adj.get(curr, ()):
+                if nxt not in visited:
+                    visited.add(nxt)
+                    queue.append(nxt)
+        return visited
+
+    fwd_reachable = _bfs(fwd_adj)
+    rev_reachable = _bfs(rev_adj)
+    unreachable = [
+        loc.name or loc.id
+        for loc in locations
+        if loc.id not in fwd_reachable or loc.id not in rev_reachable
+    ]
+    if unreachable:
+        preview = ", ".join(unreachable[:5])
+        suffix = f" (+{len(unreachable) - 5} more)" if len(unreachable) > 5 else ""
+        raise ValueError(
+            f"All locations must connect to and from Starting Hub '{loc_by_id[start_id].name}': unreachable {preview}{suffix}."
+        )
+
+
 class WorldRecord(BaseModel):
     """Complete persisted world with spatial topology and lore."""
 
@@ -818,6 +877,10 @@ class WorldUpdatePayload(BaseModel):
             world_id=None,
             containers=self.containers,
             locations=self.locations,
+        )
+        validate_world_reachability(
+            locations=self.locations,
+            edges=self.edges,
         )
         return self
 

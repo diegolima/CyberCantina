@@ -10,6 +10,7 @@ EnrichFieldRole = Literal[
     "player_turn_prompt",
     "narrator_directive",
     "location_description",
+    "location_tags",
     "character_persona",
     "lore_content",
 ]
@@ -26,8 +27,16 @@ class CampaignTurnEnrichContextRef(BaseModel):
 
 class WorldLocationEnrichContextRef(BaseModel):
     scope: Literal["world_location"] = "world_location"
-    world_id: str
+    world_id: str | None = None
     location_id: str | None = None
+    world_name: str | None = None
+    genre: str | None = None
+    tone: str | None = None
+    setting_overview: str | None = None
+    location_name: str | None = None
+    location_summary: str | None = None
+    location_description: str | None = None
+    existing_tags: list[str] | None = None
 
 
 class CharacterFieldEnrichContextRef(BaseModel):

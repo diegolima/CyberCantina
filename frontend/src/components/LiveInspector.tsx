@@ -7,10 +7,10 @@ import {
   Clock,
   Compass,
   Cpu,
+  DoorOpen,
   Flag,
   GitBranch,
   Lock,
-  MapPin,
   Maximize2,
   Navigation,
   ScrollText,
@@ -23,7 +23,10 @@ import {
   CharacterStateSnapshot,
   CompassDirection,
   ItemEquipActionPayload,
+  LocationContainer,
+  LocationEdge,
   LocationLoreNodeDraft,
+  LocationNode,
   MemoryShard,
   NeighborLocationView,
   RecalledMemoryItem,
@@ -36,9 +39,11 @@ import { LoreIndexModal } from "./inspector/LoreIndexModal";
 import {
   COMPASS_ANGLES,
   buildContainerBreadcrumbChain,
+  computeDynamicPortalIds,
   pickCompassSlot,
   SpatialTopologyView,
 } from "./SpatialTopologyView";
+import { resolveMapIconComponent } from "./map/mapIcons";
 
 const RECALL_SOURCE_LABEL: Record<RecalledMemoryItem["source_type"], string> = {
   lore: "Lore",
@@ -75,26 +80,10 @@ interface LiveInspectorProps {
   memoryConfig?: { working_memory_turns: number; episodic_chunk_size: number };
   pendingLocationOverrideId?: string | null;
   onOverrideLocation?: (locationId: string) => Promise<void> | void;
-  onCreateLinkedLocation?: (payload: {
-    from_location_id: string;
-    name: string;
-    compass_direction: string;
-    travel_minutes: number;
-    description: string;
-    environmental_tags: string[];
-  }) => Promise<string | void>;
-  onAddEdge?: (payload: {
-    from_location_id: string;
-    to_location_id: string;
-    direction_label?: string;
-    compass_direction: CompassDirection;
-    travel_minutes: number;
-    bidirectional?: boolean;
-  }) => Promise<void> | void;
-  onDeleteEdge?: (edgeId: string) => Promise<void> | void;
-  onUpdateEdgeDistance?: (payload: {
-    edgeId: string;
-    travel_minutes: number;
+  onSaveCampaignMap?: (payload: {
+    containers: LocationContainer[];
+    locations: LocationNode[];
+    edges: LocationEdge[];
   }) => Promise<void> | void;
   onToggleItemEquip?: (payload: ItemEquipActionPayload) => Promise<void> | void;
   onUpdateCampaignMemories?: (
@@ -122,10 +111,7 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   memoryConfig,
   pendingLocationOverrideId,
   onOverrideLocation,
-  onCreateLinkedLocation,
-  onAddEdge,
-  onDeleteEdge,
-  onUpdateEdgeDistance,
+  onSaveCampaignMap,
   onToggleItemEquip,
   onUpdateCampaignMemories,
   onSaveCampaignLocationLore,
@@ -257,6 +243,11 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
     [bundle.containers, world.containers]
   );
 
+  const containerMap = useMemo(
+    () => new Map(effectiveContainers.map((c) => [c.id, c])),
+    [effectiveContainers]
+  );
+
   const activeBreadcrumbChain = useMemo(
     () => buildContainerBreadcrumbChain(activeLoc.container_id, effectiveContainers),
     [activeLoc.container_id, effectiveContainers]
@@ -327,6 +318,11 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   }, [activeLoc.id, immediateNeighbors]);
 
   const activeEdges = bundle.visible_edges ?? world.edges;
+
+  const miniDynamicPortalIds = useMemo(
+    () => computeDynamicPortalIds(bundle.visible_locations, activeEdges),
+    [bundle.visible_locations, activeEdges]
+  );
 
   const selectedLocation = useMemo(
     () =>
@@ -410,6 +406,46 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
             marginBottom: 10,
           }}
         >
+          {/* Active Container Boundary Hint */}
+          {activeLoc.container_id && containerMap.get(activeLoc.container_id) && (() => {
+            const activeCont = containerMap.get(activeLoc.container_id)!;
+            const ContIcon = resolveMapIconComponent(
+              activeCont.icon,
+              "container",
+              activeCont.depth
+            );
+            return (
+              <g>
+                <rect
+                  x={124}
+                  y={62}
+                  width={82}
+                  height={66}
+                  rx={8}
+                  fill="rgba(245, 158, 11, 0.04)"
+                  stroke="rgba(245, 158, 11, 0.3)"
+                  strokeDasharray="3 3"
+                  strokeWidth={1}
+                />
+                <g>
+                  <ContIcon x={128} y={51} width={9} height={9} stroke="#fbbf24" />
+                  <text
+                    x={140}
+                    y={58}
+                    fill="#fbbf24"
+                    fontSize="7"
+                    fontWeight="700"
+                  >
+                    L{activeCont.depth} ·{" "}
+                    {activeCont.name.length > 12
+                      ? `${activeCont.name.slice(0, 11)}…`
+                      : activeCont.name}
+                  </text>
+                </g>
+              </g>
+            );
+          })()}
+
           {/* Subtle Compass Rose Guide Ring */}
           <ellipse
             cx={miniMapCenter.x}
@@ -439,6 +475,9 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
             if (!p2) return null;
             const midX = (miniMapCenter.x + p2.x) / 2;
             const midY = (miniMapCenter.y + p2.y) / 2;
+            const crossesContainer =
+              (nb.destination.container_id ?? null) !==
+              (activeLoc.container_id ?? null);
             return (
               <g key={nb.edge_id}>
                 <line
@@ -446,9 +485,15 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
                   y1={miniMapCenter.y}
                   x2={p2.x}
                   y2={p2.y}
-                  stroke="#06b6d4"
+                  stroke={crossesContainer ? "#22d3ee" : "#06b6d4"}
                   strokeWidth={2}
-                  strokeDasharray={nb.is_locked_or_hidden ? "4 3" : undefined}
+                  strokeDasharray={
+                    nb.is_locked_or_hidden
+                      ? "4 3"
+                      : crossesContainer
+                      ? "2 2"
+                      : undefined
+                  }
                 />
                 <text
                   x={midX}
@@ -458,7 +503,7 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
                   fontSize="7.5"
                   fontWeight="700"
                 >
-                  {nb.slot}
+                  {nb.slot} · {nb.travel_minutes}m
                 </text>
               </g>
             );
@@ -471,49 +516,127 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
               if (!pt) return null;
               const isCurrent = loc.id === activeLoc.id;
               const isSelected = loc.id === selectedLocId;
-              const fill = isCurrent
+              const isPortal = miniDynamicPortalIds.has(loc.id);
+              const isUnvisited = loc.is_visited === false;
+              const diffCont =
+                !isCurrent &&
+                loc.container_id &&
+                loc.container_id !== activeLoc.container_id
+                  ? containerMap.get(loc.container_id) ?? null
+                  : null;
+              const IconComp = resolveMapIconComponent(
+                loc.icon,
+                loc.is_hub ? "hub" : "location"
+              );
+              const strokeCol = isCurrent
                 ? "#f59e0b"
                 : loc.is_hub
                 ? "#a855f7"
-                : "#06b6d4";
+                : isSelected
+                ? "#22d3ee"
+                : "#0891b2";
+              const fillCol = isCurrent
+                ? "rgba(245, 158, 11, 0.25)"
+                : loc.is_hub
+                ? "rgba(168, 85, 247, 0.24)"
+                : "#0f172a";
+              const iconCol = isCurrent
+                ? "#fbbf24"
+                : loc.is_hub
+                ? "#e9d5ff"
+                : "#67e8f9";
               const shortName =
-                loc.name.length > 18 ? loc.name.slice(0, 17) + "…" : loc.name;
+                loc.name.length > 16 ? loc.name.slice(0, 15) + "…" : loc.name;
+              const hubRadius = isCurrent ? 13 : 11;
+              const hubPoints = Array.from({ length: 8 }, (_, k) => {
+                const a = (k * Math.PI) / 4 + Math.PI / 8;
+                return `${(pt.x + Math.cos(a) * hubRadius).toFixed(1)},${(
+                  pt.y +
+                  Math.sin(a) * hubRadius
+                ).toFixed(1)}`;
+              }).join(" ");
 
               return (
                 <g
                   key={loc.id}
-                  style={{ cursor: "pointer" }}
+                  style={{
+                    cursor: "pointer",
+                    opacity: isUnvisited && !isSelected ? 0.78 : 1,
+                  }}
                   onClick={() => setSelectedLocId(loc.id)}
                 >
                   {isSelected && (
                     <circle
                       cx={pt.x}
                       cy={pt.y}
-                      r={isCurrent ? 13 : 10}
+                      r={isCurrent ? 16 : 14}
                       fill="none"
                       stroke={isCurrent ? "#fbbf24" : "#38bdf8"}
-                      strokeWidth={1.5}
+                      strokeWidth={1.6}
                       strokeDasharray="2 2"
                     />
                   )}
-                  <circle
-                    cx={pt.x}
-                    cy={pt.y}
-                    r={isCurrent ? 9 : 6.5}
-                    fill={fill}
-                    stroke="#0b0e14"
-                    strokeWidth={2}
+                  {loc.is_hub ? (
+                    <polygon
+                      points={hubPoints}
+                      fill={fillCol}
+                      stroke={strokeCol}
+                      strokeWidth={1.7}
+                      strokeDasharray={isUnvisited ? "2 2" : undefined}
+                    />
+                  ) : (
+                    <rect
+                      x={pt.x - (isCurrent ? 12 : 10)}
+                      y={pt.y - (isCurrent ? 12 : 10)}
+                      width={isCurrent ? 24 : 20}
+                      height={isCurrent ? 24 : 20}
+                      rx={6}
+                      fill={fillCol}
+                      stroke={strokeCol}
+                      strokeWidth={1.7}
+                      strokeDasharray={isUnvisited ? "2 2" : undefined}
+                    />
+                  )}
+                  <IconComp
+                    x={pt.x - (isCurrent ? 6 : 5)}
+                    y={pt.y - (isCurrent ? 6 : 5)}
+                    width={isCurrent ? 12 : 10}
+                    height={isCurrent ? 12 : 10}
+                    stroke={iconCol}
                   />
+                  {isPortal && (
+                    <g>
+                      <polygon
+                        points={`${pt.x + 11},${pt.y - 14} ${pt.x + 15},${pt.y - 10} ${pt.x + 11},${pt.y - 6} ${pt.x + 7},${pt.y - 10}`}
+                        fill="#083344"
+                        stroke="#22d3ee"
+                        strokeWidth={1}
+                      />
+                    </g>
+                  )}
                   <text
                     x={pt.x}
-                    y={pt.y + (isCurrent ? 19 : 15)}
+                    y={pt.y + (isCurrent ? 21 : 18)}
                     textAnchor="middle"
                     fill={isCurrent ? "#fbbf24" : "#cbd5e1"}
-                    fontSize="9.5"
+                    fontSize="8.8"
                     fontWeight={isCurrent || isSelected ? "700" : "500"}
                   >
                     {shortName}
                   </text>
+                  {diffCont && (
+                    <text
+                      x={pt.x}
+                      y={pt.y + 27}
+                      textAnchor="middle"
+                      fill="#fbbf24"
+                      fontSize="7"
+                    >
+                      [{diffCont.name.length > 13
+                        ? `${diffCont.name.slice(0, 12)}…`
+                        : diffCont.name}]
+                    </text>
+                  )}
                 </g>
               );
             }
@@ -593,13 +716,45 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
                 display: "flex",
                 alignItems: "center",
                 gap: 5,
+                flexWrap: "wrap",
               }}
             >
-              <MapPin size={13} />
-              {selectedLocation.name}
+              {(() => {
+                const SelectedIcon = resolveMapIconComponent(
+                  selectedLocation.icon,
+                  selectedLocation.is_hub ? "hub" : "location"
+                );
+                return <SelectedIcon size={13} />;
+              })()}
+              <span>{selectedLocation.name}</span>
               {selectedLocation.is_hub && (
                 <span className="badge" style={{ fontSize: "0.62rem", padding: "1px 5px" }}>
                   HUB
+                </span>
+              )}
+              {miniDynamicPortalIds.has(selectedLocation.id) && (
+                <span
+                  className="badge"
+                  style={{
+                    fontSize: "0.6rem",
+                    padding: "1px 5px",
+                    color: "#22d3ee",
+                    borderColor: "rgba(6, 182, 212, 0.4)",
+                  }}
+                >
+                  <DoorOpen size={9} style={{ marginRight: 2 }} /> Portal
+                </span>
+              )}
+              {selectedLocation.is_visited === false && (
+                <span
+                  className="badge"
+                  style={{
+                    fontSize: "0.6rem",
+                    padding: "1px 5px",
+                    color: "#94a3b8",
+                  }}
+                >
+                  Unvisited
                 </span>
               )}
             </div>
@@ -739,13 +894,17 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
               defaultSelectedLocationId={selectedLocId}
               presentCharacterLocations={presentCharacterLocations}
               mode="campaign"
+              worldContext={{
+                worldId: world.id,
+                worldName: world.name,
+                genre: world.global_rules.genre,
+                tone: world.global_rules.tone,
+                settingOverview: world.global_rules.setting_overview,
+              }}
+              onSaveMap={onSaveCampaignMap}
               onClose={() => setShowFullMap(false)}
               onOverrideLocation={handleOverrideClick}
               isOverriding={isOverriding}
-              onCreateLinkedLocation={onCreateLinkedLocation}
-              onAddEdge={onAddEdge}
-              onDeleteEdge={onDeleteEdge}
-              onUpdateEdgeDistance={onUpdateEdgeDistance}
               onSaveCampaignLocationLore={onSaveCampaignLocationLore}
               onSaveCampaignContainerLore={onSaveCampaignContainerLore}
               isMutatingLocked={isMutatingLocked}
