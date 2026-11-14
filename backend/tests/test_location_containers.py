@@ -1196,3 +1196,207 @@ def test_world_forking_and_zcc_import_export_containers(
     assert forked_club.id != next(c for c in world.containers if c.name == "Afterlife Club").id
     forked_foyer = next(loc for loc in forked.locations if loc.name == "Main Floor")
     assert forked_foyer.container_id == forked_club.id
+
+
+def test_world_wizard_commit_preserves_contained_starting_hub_and_containers(
+    authed_client: tuple[TestClient, CantinaRepository],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /api/wizards/world/commit preserves L1/L2 containers, L1 lore vectors, portal flags, and pinned coords."""
+    client, repo = authed_client
+    monkeypatch.setattr(
+        "app.db.repository.embed_text",
+        AsyncMock(return_value=np.ones(8, dtype=np.float32)),
+    )
+
+    # 1. Exact user scenario + nested hierarchy: Starting Hub inside L1 inside L2, marked entry/exit portal
+    commit_payload = {
+        "name": "Orbital Bazaar",
+        "global_rules": {
+            "genre": "Sci-Fi Noir",
+            "tone": "Moody",
+            "setting_overview": "Zero-G market dock.",
+            "tech_or_magic_rules": "Pressurized domes.",
+            "starting_timestamp": "2094-11-14 23:15",
+        },
+        "containers": [
+            {
+                "id": "draft_l1_dock",
+                "parent_container_id": "draft_l2_ward",
+                "depth": 1,
+                "name": "Docking Concourse",
+                "description": "Customs hall and shuttle berths.",
+                "environmental_tags": ["airlock", "customs"],
+                "ui_x": 45.0,
+                "ui_y": -30.0,
+                "icon": "warehouse",
+                "lore_nodes": [
+                    {
+                        "title": "Dockmaster Tariff",
+                        "category": "rumor",
+                        "content": "Dockmaster Vex waives fees for urgent couriers.",
+                        "entity_tags": ["Dockmaster Vex", "tariff"],
+                    },
+                    {
+                        "title": "Smuggler Airlock Bypass",
+                        "category": "secret",
+                        "content": "Berth 9 vents directly into maintenance tubes.",
+                        "entity_tags": ["Berth 9", "bypass"],
+                    },
+                ],
+            },
+            {
+                "id": "draft_l2_ward",
+                "parent_container_id": None,
+                "depth": 2,
+                "name": "Spindle Ward",
+                "description": "Outer docking ring.",
+                "environmental_tags": ["low-g"],
+                "ui_x": 10.0,
+                "ui_y": 20.0,
+                "icon": "building",
+                "lore_nodes": [],
+            },
+        ],
+        "locations": [
+            {
+                "key": "loc_start_airlock",
+                "container_id": "draft_l1_dock",
+                "is_entry_exit": True,
+                "name": "Berth 4 Airlock",
+                "summary": "Pressurized arrival gate",
+                "description": "scuffed brass bulkhead overlooking the concourse.",
+                "environmental_tags": ["airlock", "brass"],
+                "is_starting_location": True,
+                "is_hub": True,
+                "starting_message": "Steam hisses as the outer seal disengages.",
+                "ui_x": 120.0,
+                "ui_y": -80.0,
+                "icon": "door-open",
+                "lore_nodes": [],
+            },
+            {
+                "key": "loc_root_gate",
+                "container_id": None,
+                "is_entry_exit": True,  # Root nodes must normalize is_entry_exit to False
+                "name": "Ring Transit Plaza",
+                "summary": "Open plaza outside Spindle Ward",
+                "description": "Open vacuum-domed tram plaza.",
+                "environmental_tags": ["tram"],
+                "is_starting_location": False,
+                "is_hub": False,
+                "ui_x": -110.0,
+                "ui_y": 90.0,
+                "icon": "compass",
+                "lore_nodes": [],
+            },
+        ],
+        "edges": [],
+        "lore_nodes": [
+            {
+                "title": "Station Charter",
+                "category": "history",
+                "content": "Founded as a free orbital port.",
+                "entity_tags": ["Station Charter"],
+            }
+        ],
+    }
+
+    resp = client.post("/api/wizards/world/commit", json=commit_payload)
+    assert resp.status_code == 200, resp.text
+    created = WorldRecord.model_validate(resp.json())
+
+    assert len(created.containers) == 2
+    saved_l2 = next(c for c in created.containers if c.name == "Spindle Ward")
+    saved_l1 = next(c for c in created.containers if c.name == "Docking Concourse")
+    assert saved_l2.id.startswith("cont_") and saved_l2.id != "draft_l2_ward"
+    assert saved_l1.id.startswith("cont_") and saved_l1.id != "draft_l1_dock"
+    assert saved_l1.parent_container_id == saved_l2.id
+    assert saved_l1.ui_x == 45.0 and saved_l1.ui_y == -30.0
+    assert saved_l1.icon == "warehouse"
+    assert {ln.title for ln in saved_l1.lore_nodes} == {
+        "Dockmaster Tariff",
+        "Smuggler Airlock Bypass",
+    }
+
+    saved_hub = next(loc for loc in created.locations if loc.is_starting_location)
+    assert saved_hub.name == "Berth 4 Airlock"
+    assert saved_hub.container_id == saved_l1.id
+    assert saved_hub.is_entry_exit is True
+    assert saved_hub.ui_x == 120.0 and saved_hub.ui_y == -80.0
+    assert saved_hub.icon == "door-open"
+
+    saved_root = next(loc for loc in created.locations if loc.name == "Ring Transit Plaza")
+    assert saved_root.container_id is None
+    assert saved_root.is_entry_exit is False
+
+    # Verify non-secret container_lore vector indexing (and secret exclusion)
+    conn = repo._connect()
+    try:
+        vec_rows = conn.execute(
+            "SELECT container_id, title FROM vector_entries WHERE world_id = ? AND source_type = 'container_lore'",
+            (created.id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert len(vec_rows) == 1
+    assert vec_rows[0]["container_id"] == saved_l1.id
+    assert "Dockmaster Tariff" in vec_rows[0]["title"]
+
+    # 2. Reject invalid container lore on depth > 1 and dangling container references
+    bad_l2_lore = {
+        **commit_payload,
+        "containers": [
+            {
+                **commit_payload["containers"][1],
+                "lore_nodes": [
+                    {
+                        "title": "Forbidden L2 Lore",
+                        "category": "rumor",
+                        "content": "Should fail.",
+                        "entity_tags": ["bad"],
+                    }
+                ],
+            }
+        ],
+        "locations": [
+            {
+                **commit_payload["locations"][1],
+                "is_starting_location": True,
+            }
+        ],
+    }
+    assert client.post("/api/wizards/world/commit", json=bad_l2_lore).status_code == 422
+
+    bad_dangling = {
+        **commit_payload,
+        "containers": [],
+    }
+    assert client.post("/api/wizards/world/commit", json=bad_dangling).status_code == 422
+
+    # 3. Backwards-compatible flat WorldWizardDraft without containers still succeeds
+    flat_payload = {
+        "name": "Flat Frontier",
+        "global_rules": commit_payload["global_rules"],
+        "locations": [
+            {
+                "key": "flat_start",
+                "name": "Outpost One",
+                "summary": "Frontier outpost",
+                "description": "A solitary metal dome.",
+                "environmental_tags": ["dust"],
+                "is_starting_location": True,
+                "is_hub": True,
+                "starting_message": "Dust swirls across the landing pad.",
+                "lore_nodes": [],
+            }
+        ],
+        "edges": [],
+        "lore_nodes": [],
+    }
+    flat_resp = client.post("/api/wizards/world/commit", json=flat_payload)
+    assert flat_resp.status_code == 200, flat_resp.text
+    flat_world = WorldRecord.model_validate(flat_resp.json())
+    assert flat_world.containers == []
+    assert flat_world.locations[0].container_id is None
+    assert flat_world.locations[0].is_entry_exit is False

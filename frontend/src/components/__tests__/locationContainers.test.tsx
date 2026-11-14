@@ -13,7 +13,13 @@ import {
   computeFullMapCoords,
   computePromotionCandidates,
   projectTopologyForDepth,
+  resolveInitialMapFocus,
 } from "../SpatialTopologyView";
+import { MapDetailsDrawer } from "../map/MapDetailsDrawer";
+import {
+  draftToWorldRecord,
+  worldStateToDraft,
+} from "../world/worldDraftMappers";
 import {
   getDescendantContainerIds,
   validateContainersState,
@@ -433,5 +439,179 @@ describe("Location Containers Frontend Architecture", () => {
     expect(loreModalHtml).toContain("Containers (1)");
     expect(loreModalHtml).toContain("Mercenary Etiquette");
     expect(loreModalHtml).not.toContain("Sub-pier Vault");
+  });
+
+  it("round-trips containers, L1 lore, portals, and layout coords across worldStateToDraft and draftToWorldRecord", () => {
+    const { containers, locations, edges, world } = makeHierarchyFixture();
+    const pinnedLocations: LocationNode[] = locations.map((loc) =>
+      loc.id === "loc_foyer"
+        ? {
+            ...loc,
+            is_starting_location: true,
+            is_hub: true,
+            is_entry_exit: true,
+            ui_x: 155,
+            ui_y: -75,
+            icon: "door-open",
+          }
+        : { ...loc, is_starting_location: false }
+    );
+    const rootPortalInvalid: LocationNode = {
+      ...pinnedLocations[2],
+      id: "loc_root_test",
+      name: "Root Plaza",
+      container_id: null,
+      is_entry_exit: true,
+      ui_x: 10,
+      ui_y: 20,
+      icon: "compass",
+    };
+
+    const draft = worldStateToDraft({
+      name: world.name,
+      global_rules: world.global_rules,
+      containers,
+      locations: [pinnedLocations[0], rootPortalInvalid],
+      edges: edges.slice(0, 0),
+      lore_nodes: world.lore_nodes,
+    });
+
+    expect(draft.containers).toHaveLength(5);
+    const l1Draft = draft.containers?.find((c) => c.id === "cont_club");
+    expect(l1Draft?.lore_nodes).toHaveLength(2);
+    expect(l1Draft?.lore_nodes?.[0].title).toBe("Mercenary Etiquette");
+
+    const hubDraft = draft.locations.find((l) => l.key === "loc_foyer");
+    expect(hubDraft?.container_id).toBe("cont_club");
+    expect(hubDraft?.is_entry_exit).toBe(true);
+    expect(hubDraft?.ui_x).toBe(155);
+    expect(hubDraft?.ui_y).toBe(-75);
+    expect(hubDraft?.icon).toBe("door-open");
+
+    const rootDraft = draft.locations.find((l) => l.key === "loc_root_test");
+    expect(rootDraft?.container_id).toBeNull();
+    expect(rootDraft?.is_entry_exit).toBe(false);
+
+    const reconstructed = draftToWorldRecord(draft);
+    expect(reconstructed.containers).toHaveLength(5);
+    const recHub = reconstructed.locations.find((l) => l.id === "loc_foyer");
+    expect(recHub?.container_id).toBe("cont_club");
+    expect(recHub?.is_entry_exit).toBe(true);
+    expect(recHub?.ui_x).toBe(155);
+    expect(recHub?.ui_y).toBe(-75);
+    expect(recHub?.icon).toBe("door-open");
+  });
+
+  it("resolves initial map focus to the focal location container and pan offset, and swaps editor badge copy", () => {
+    const { containers, locations, edges } = makeHierarchyFixture();
+    const pinnedLocs = locations.map((loc) =>
+      loc.id === "loc_foyer"
+        ? { ...loc, ui_x: 140, ui_y: -60 }
+        : loc.id === "loc_highway"
+          ? { ...loc, ui_x: 0, ui_y: 0 }
+          : loc
+    );
+
+    const focusPinned = resolveInitialMapFocus(containers, pinnedLocs, "loc_foyer");
+    expect(focusPinned.currentContainerId).toBe("cont_club");
+    expect(focusPinned.focalLocationId).toBe("loc_foyer");
+    expect(focusPinned.pan).toEqual({ x: -140, y: 60 });
+
+    const focusZero = resolveInitialMapFocus(containers, pinnedLocs, "loc_highway");
+    expect(focusZero.currentContainerId).toBe("cont_dist");
+    expect(focusZero.pan).toEqual({ x: 0, y: 0 });
+    expect(Object.is(focusZero.pan.x, 0)).toBe(true);
+    expect(Object.is(focusZero.pan.y, 0)).toBe(true);
+
+    const focusUnpinned = resolveInitialMapFocus(containers, pinnedLocs, "loc_vip");
+    expect(focusUnpinned.currentContainerId).toBe("cont_club");
+    expect(focusUnpinned.pan).toEqual({ x: 0, y: 0 });
+
+    const focusFallbackStart = resolveInitialMapFocus(containers, pinnedLocs, undefined);
+    expect(focusFallbackStart.currentContainerId).toBe("cont_club");
+
+    const focusDangling = resolveInitialMapFocus(
+      containers,
+      [{ ...pinnedLocs[0], container_id: "cont_nonexistent" }],
+      "loc_foyer"
+    );
+    expect(focusDangling.currentContainerId).toBeNull();
+
+    // Editor view opens inside Afterlife Club focused on Starting Hub with transform translate(-140, 60)
+    const editorMapHtml = renderToStaticMarkup(
+      <SpatialTopologyView
+        title="World Map Editor"
+        containers={containers}
+        locations={pinnedLocs}
+        edges={edges}
+        activeLocationId="loc_foyer"
+        mode="editor"
+      />
+    );
+    expect(editorMapHtml).toContain("Afterlife Club");
+    expect(editorMapHtml).toContain("transform=\"scale(1) translate(-140, 60)\"");
+
+    const clubContainer = containers.find((c) => c.id === "cont_club")!;
+    const editorDrawerHtml = renderToStaticMarkup(
+      <MapDetailsDrawer
+        mode="editor"
+        selectedLocation={null}
+        selectedContainer={clubContainer}
+        containers={containers}
+        allLocations={pinnedLocs}
+        dynamicPortalIds={new Set(["loc_foyer"])}
+        externalPortals={[]}
+        containerStats={{
+          descendantLocationCount: 2,
+          externalPortalsCount: 1,
+          hasActivePlayer: true,
+        }}
+        activeLocId="loc_foyer"
+        depthLabels={{
+          1: "Interior",
+          2: "District",
+          3: "Settlement",
+          4: "Region",
+        }}
+        onClose={() => {}}
+        onPatchLocation={() => {}}
+        onPatchContainer={() => {}}
+        onResetCoordinates={() => {}}
+        onDrillIntoContainer={() => {}}
+      />
+    );
+    expect(editorDrawerHtml).toContain("Contains Starting Hub");
+    expect(editorDrawerHtml).not.toContain("Party Present");
+
+    const campaignDrawerHtml = renderToStaticMarkup(
+      <MapDetailsDrawer
+        mode="campaign"
+        selectedLocation={null}
+        selectedContainer={clubContainer}
+        containers={containers}
+        allLocations={pinnedLocs}
+        dynamicPortalIds={new Set(["loc_foyer"])}
+        externalPortals={[]}
+        containerStats={{
+          descendantLocationCount: 2,
+          externalPortalsCount: 1,
+          hasActivePlayer: true,
+        }}
+        activeLocId="loc_foyer"
+        depthLabels={{
+          1: "Interior",
+          2: "District",
+          3: "Settlement",
+          4: "Region",
+        }}
+        onClose={() => {}}
+        onPatchLocation={() => {}}
+        onPatchContainer={() => {}}
+        onResetCoordinates={() => {}}
+        onDrillIntoContainer={() => {}}
+      />
+    );
+    expect(campaignDrawerHtml).toContain("Party Present");
+    expect(campaignDrawerHtml).not.toContain("Contains Starting Hub");
   });
 });

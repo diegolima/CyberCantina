@@ -119,8 +119,23 @@ export interface WorldRecord {
   lore_nodes: LoreNode[];
 }
 
+export interface LocationContainerDraft {
+  id: string;
+  parent_container_id?: string | null;
+  depth: 1 | 2 | 3 | 4;
+  name: string;
+  description: string;
+  environmental_tags: string[];
+  ui_x?: number | null;
+  ui_y?: number | null;
+  icon?: string | null;
+  lore_nodes?: LocationLoreNodeDraft[];
+}
+
 export interface LocationNodeDraft {
   key: string;
+  container_id?: string | null;
+  is_entry_exit?: boolean;
   name: string;
   summary: string;
   description: string;
@@ -128,6 +143,9 @@ export interface LocationNodeDraft {
   is_starting_location: boolean;
   is_hub?: boolean;
   starting_message?: string;
+  ui_x?: number | null;
+  ui_y?: number | null;
+  icon?: string | null;
   lore_nodes?: LocationLoreNodeDraft[];
 }
 
@@ -153,6 +171,7 @@ export interface WorldWizardSeed {
 export interface WorldWizardDraft {
   name: string;
   global_rules: WorldGlobalRules;
+  containers?: LocationContainerDraft[];
   locations: LocationNodeDraft[];
   edges: LocationEdgeDraft[];
   lore_nodes: Array<{

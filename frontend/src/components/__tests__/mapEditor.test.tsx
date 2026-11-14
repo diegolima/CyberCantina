@@ -737,6 +737,7 @@ describe("Interactive Map Editor & Mini-Map", () => {
         edges={edges}
         activeLocationId="loc_foyer"
         mode="editor"
+        initialContainerFocus="root"
         onSaveMap={() => {}}
         onChangeGraph={() => {}}
       />

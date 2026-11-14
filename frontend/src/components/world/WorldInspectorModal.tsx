@@ -44,6 +44,7 @@ interface WorldInspectorModalProps {
   onCommitDraft?: (payload: {
     name: string;
     global_rules: WorldGlobalRules;
+    containers: LocationContainer[];
     locations: LocationNode[];
     edges: LocationEdge[];
     lore_nodes: LoreNode[];

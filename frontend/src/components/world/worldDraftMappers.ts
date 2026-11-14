@@ -4,6 +4,7 @@ import {
 } from "../../types";
 import type {
   CompassDirection,
+  LocationContainer,
   LocationEdge,
   LocationEdgeDraft,
   LocationLoreCategory,
@@ -53,9 +54,12 @@ export function mapDraftToNodesAndEdges(
     }
 
     const isStart = idx === startIdx;
+    const containerId = loc.container_id ?? null;
     return {
       id,
       world_id: worldId,
+      container_id: containerId,
+      is_entry_exit: containerId ? Boolean(loc.is_entry_exit) : false,
       name: loc.name,
       summary: loc.summary,
       description: loc.description,
@@ -63,6 +67,9 @@ export function mapDraftToNodesAndEdges(
       is_starting_location: isStart,
       is_hub: Boolean(loc.is_hub),
       starting_message: loc.starting_message ?? "",
+      ui_x: loc.ui_x ?? null,
+      ui_y: loc.ui_y ?? null,
+      icon: loc.icon ?? null,
       lore_nodes: (loc.lore_nodes ?? []).map((ln, lIdx) => ({
         id: ln.id || `draft_loc_lore_${idx}_${lIdx}`,
         world_id: worldId,
@@ -152,6 +159,37 @@ export function draftToWorldRecord(draft: WorldWizardDraft): WorldRecord {
   const draftWorldId = "draft_world";
   const { locations, edges } = mapDraftToNodesAndEdges(draft, draftWorldId);
 
+  const containers: LocationContainer[] = (draft.containers ?? []).map(
+    (cont, idx) => ({
+      id: cont.id || `cont_${idx}`,
+      world_id: draftWorldId,
+      parent_container_id: cont.parent_container_id ?? null,
+      depth: cont.depth,
+      name: cont.name,
+      description: cont.description ?? "",
+      environmental_tags: [...(cont.environmental_tags ?? [])],
+      ui_x: cont.ui_x ?? null,
+      ui_y: cont.ui_y ?? null,
+      icon: cont.icon ?? null,
+      lore_nodes:
+        cont.depth === 1
+          ? (cont.lore_nodes ?? []).map((ln, lIdx) => ({
+              id: ln.id || `draft_cont_lore_${idx}_${lIdx}`,
+              world_id: draftWorldId,
+              container_id: cont.id || `cont_${idx}`,
+              title: ln.title,
+              category: LOCATION_LORE_CATEGORIES.includes(
+                ln.category as LocationLoreCategory
+              )
+                ? (ln.category as LocationLoreCategory)
+                : "rumor",
+              content: ln.content,
+              entity_tags: [...(ln.entity_tags ?? [])],
+            }))
+          : [],
+    })
+  );
+
   const lore_nodes: LoreNode[] = (draft.lore_nodes ?? []).map((lore, idx) => ({
     id: lore.id || `draft_lore_${idx}`,
     world_id: draftWorldId,
@@ -168,6 +206,7 @@ export function draftToWorldRecord(draft: WorldWizardDraft): WorldRecord {
     name: draft.name,
     global_rules: { ...draft.global_rules },
     created_at: new Date().toISOString(),
+    containers,
     locations,
     edges,
     lore_nodes,
@@ -177,6 +216,7 @@ export function draftToWorldRecord(draft: WorldWizardDraft): WorldRecord {
 export function worldStateToDraft(state: {
   name: string;
   global_rules: WorldGlobalRules;
+  containers?: LocationContainer[];
   locations: LocationNode[];
   edges: LocationEdge[];
   lore_nodes: LoreNode[];
@@ -186,8 +226,35 @@ export function worldStateToDraft(state: {
   return {
     name: state.name.trim() || "Untitled World",
     global_rules: state.global_rules,
+    containers: (state.containers ?? []).map((cont) => ({
+      id: cont.id,
+      parent_container_id: cont.parent_container_id ?? null,
+      depth: cont.depth,
+      name: cont.name.trim(),
+      description: (cont.description ?? "").trim(),
+      environmental_tags: [...(cont.environmental_tags ?? [])],
+      ui_x: cont.ui_x ?? null,
+      ui_y: cont.ui_y ?? null,
+      icon: cont.icon ?? null,
+      lore_nodes:
+        cont.depth === 1
+          ? (cont.lore_nodes ?? []).map((ln) => ({
+              id: ln.id,
+              title: ln.title.trim(),
+              category: LOCATION_LORE_CATEGORIES.includes(
+                ln.category as LocationLoreCategory
+              )
+                ? (ln.category as LocationLoreCategory)
+                : "rumor",
+              content: ln.content.trim(),
+              entity_tags: [...(ln.entity_tags ?? [])],
+            }))
+          : [],
+    })),
     locations: state.locations.map((loc, idx) => ({
       key: loc.id || `loc_${idx}`,
+      container_id: loc.container_id ?? null,
+      is_entry_exit: loc.container_id ? Boolean(loc.is_entry_exit) : false,
       name: loc.name.trim() || `Location ${idx + 1}`,
       summary: loc.summary.trim() || loc.name.trim() || `Location ${idx + 1}`,
       description:
@@ -198,6 +265,9 @@ export function worldStateToDraft(state: {
         : idx === 0,
       is_hub: Boolean(loc.is_hub),
       starting_message: loc.starting_message ?? "",
+      ui_x: loc.ui_x ?? null,
+      ui_y: loc.ui_y ?? null,
+      icon: loc.icon ?? null,
       lore_nodes: (loc.lore_nodes ?? []).map((ln) => ({
         id: ln.id,
         title: ln.title.trim(),

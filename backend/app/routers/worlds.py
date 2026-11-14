@@ -15,6 +15,7 @@ from app.schemas.world import (
     WorldMapReimagineRequest,
     WorldRecord,
     WorldUpdatePayload,
+    WorldWizardCommitPayload,
     WorldWizardDraft,
     WorldWizardSeed,
 )
@@ -81,7 +82,7 @@ async def wizard_reimagine_map(
 
 @router.post("/api/wizards/world/commit", response_model=WorldRecord)
 async def wizard_commit_world(
-    draft: WorldWizardDraft,
+    draft: WorldWizardCommitPayload,
     current_user: UserProfile = Depends(get_current_user),
 ) -> WorldRecord:
     return await get_repo().acreate_world_from_draft(draft, owner_id=current_user.id)

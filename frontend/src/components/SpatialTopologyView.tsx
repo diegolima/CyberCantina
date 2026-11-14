@@ -57,7 +57,9 @@ import {
   inferCompassDirection,
   pickCompassSlot,
   projectTopologyForDepth,
+  resolveInitialMapFocus,
   type GraphSnapshot,
+  type InitialMapFocus,
   type LinkDragState,
   type NodeDragState,
   type ProjectedContainerSupernode,
@@ -80,6 +82,8 @@ export {
   inferCompassDirection,
   pickCompassSlot,
   projectTopologyForDepth,
+  resolveInitialMapFocus,
+  type InitialMapFocus,
   type ProjectedContainerSupernode,
   type ProjectedDepthTopology,
   type ProjectedExternalPortalDestination,
@@ -115,6 +119,7 @@ export interface SpatialTopologyViewProps {
     loreNodes: LocationLoreNodeDraft[]
   ) => Promise<void> | void;
   isMutatingLocked?: boolean;
+  initialContainerFocus?: "active" | "root";
 }
 
 export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
@@ -138,6 +143,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   onSaveCampaignLocationLore,
   onSaveCampaignContainerLore,
   isMutatingLocked = false,
+  initialContainerFocus = "active",
 }) => {
   // Staged draft state for async editing in campaign (or standalone editor without onChangeGraph)
   const isControlledExternally = mode === "editor" && Boolean(onChangeGraph);
@@ -226,6 +232,13 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     setStatusNotice("Reverted last map action.");
   }, [undoStack, isMutatingLocked, isControlledExternally, onChangeGraph]);
 
+  // Resolve initial container scope and viewport center once on mount
+  const [initialFocus] = useState<InitialMapFocus>(() =>
+    initialContainerFocus === "root"
+      ? { currentContainerId: null, focalLocationId: null, pan: { x: 0, y: 0 } }
+      : resolveInitialMapFocus(propContainers, propLocations, activeLocationId)
+  );
+
   // Selection state (null = nothing selected, hides details drawer)
   const [selectedLocId, setSelectedLocId] = useState<string | null>(() =>
     defaultSelectedLocationId === null
@@ -239,13 +252,13 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     null
   );
   const [currentContainerId, setCurrentContainerId] = useState<string | null>(
-    null
+    initialFocus.currentContainerId
   );
   const [hoveredNodeKey, setHoveredNodeKey] = useState<string | null>(null);
 
   // Viewport transform
   const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [pan, setPan] = useState<{ x: number; y: number }>(initialFocus.pan);
   const panDragRef = useRef<{
     active: boolean;
     moved: boolean;

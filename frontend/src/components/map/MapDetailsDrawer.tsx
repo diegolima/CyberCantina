@@ -489,7 +489,7 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
             </span>
             {containerStats.hasActivePlayer && (
               <span style={{ color: "var(--accent-amber)", fontWeight: 600 }}>
-                · Party Present
+                {mode === "editor" ? "· Contains Starting Hub" : "· Party Present"}
               </span>
             )}
           </div>

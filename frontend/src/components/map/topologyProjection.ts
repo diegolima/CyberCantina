@@ -823,3 +823,57 @@ export function filterEdgesAfterDeletion(
       )
   );
 }
+
+export interface InitialMapFocus {
+  currentContainerId: string | null;
+  focalLocationId: string | null;
+  pan: { x: number; y: number };
+}
+
+/**
+ * Resolve initial container scope and pan offset for a focal location
+ * (`activeLocationId`, else `is_starting_location`, else first location).
+ */
+export function resolveInitialMapFocus(
+  containers: LocationContainer[],
+  locations: LocationNode[],
+  activeLocationId?: string | null
+): InitialMapFocus {
+  if (locations.length === 0) {
+    return {
+      currentContainerId: null,
+      focalLocationId: null,
+      pan: { x: 0, y: 0 },
+    };
+  }
+  const focalLoc =
+    (activeLocationId
+      ? locations.find((l) => l.id === activeLocationId)
+      : undefined) ||
+    locations.find((l) => l.is_starting_location) ||
+    locations[0];
+
+  const containerIds = new Set(containers.map((c) => c.id));
+  const rawContId = focalLoc?.container_id ?? null;
+  const currentContainerId =
+    rawContId && containerIds.has(rawContId) ? rawContId : null;
+
+  const hasPinnedCoords =
+    typeof focalLoc?.ui_x === "number" &&
+    Number.isFinite(focalLoc.ui_x) &&
+    typeof focalLoc?.ui_y === "number" &&
+    Number.isFinite(focalLoc.ui_y);
+
+  const pan = hasPinnedCoords
+    ? {
+        x: focalLoc.ui_x === 0 ? 0 : -(focalLoc.ui_x as number),
+        y: focalLoc.ui_y === 0 ? 0 : -(focalLoc.ui_y as number),
+      }
+    : { x: 0, y: 0 };
+
+  return {
+    currentContainerId,
+    focalLocationId: focalLoc?.id ?? null,
+    pan,
+  };
+}

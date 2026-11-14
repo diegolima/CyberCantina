@@ -16,6 +16,7 @@ from app.schemas.world import (
     WorldGlobalRules,
     WorldRecord,
     WorldUpdatePayload,
+    WorldWizardCommitPayload,
     WorldWizardDraft,
     normalize_compass_direction,
     pick_available_compass_direction,
@@ -121,21 +122,58 @@ class WorldsMixin:
 
     def create_world_from_draft(
         self,
-        draft: WorldWizardDraft,
+        draft: WorldWizardDraft | WorldWizardCommitPayload,
         world_id: str | None = None,
         lore_embeddings: list[np.ndarray] | None = None,
         owner_id: str | None = None,
         precomputed_embeddings: dict[tuple[str, str, str], np.ndarray] | None = None,
     ) -> WorldRecord:
-        """Persist a WorldWizardDraft (rules, initial locations, edges, lore) and index lore vectors."""
+        """Persist a WorldWizardDraft (rules, containers, locations, edges, lore) and index lore vectors."""
         w_id = world_id or f"world_{uuid.uuid4().hex[:10]}"
         now = utc_now_iso()
+        containers = list(getattr(draft, "containers", None) or [])
+        # Insert macro containers first (higher depth first) so parent rows exist before children.
+        sorted_containers = sorted(containers, key=lambda c: (-c.depth, c.name))
         conn = self._connect()
         try:
             conn.execute(
                 "INSERT INTO worlds (id, owner_id, name, global_rules_json, created_at) VALUES (?, ?, ?, ?, ?)",
                 (w_id, owner_id, draft.name, draft.global_rules.model_dump_json(), now),
             )
+
+            cont_id_map: dict[str, str] = {}
+            for cont in sorted_containers:
+                new_cont_id = f"cont_{uuid.uuid4().hex[:10]}"
+                cont_id_map[cont.id] = new_cont_id
+                mapped_parent_id: str | None = None
+                if cont.parent_container_id:
+                    mapped_parent_id = cont_id_map.get(cont.parent_container_id)
+                    if not mapped_parent_id:
+                        raise ValueError(
+                            f"Container '{cont.name}' references missing parent '{cont.parent_container_id}'."
+                        )
+                conn.execute(
+                    """
+                    INSERT INTO location_containers (
+                        id, world_id, created_at_turn_id, parent_container_id, depth, name,
+                        description, environmental_tags_json, ui_x, ui_y, icon, created_at
+                    )
+                    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        new_cont_id,
+                        w_id,
+                        mapped_parent_id,
+                        cont.depth,
+                        cont.name,
+                        cont.description,
+                        json.dumps(cont.environmental_tags),
+                        cont.ui_x,
+                        cont.ui_y,
+                        cont.icon,
+                        now,
+                    ),
+                )
 
             has_start = any(loc.is_starting_location for loc in draft.locations)
             key_to_loc_id: dict[str, str] = {}
@@ -144,25 +182,42 @@ class WorldsMixin:
                 key_to_loc_id[loc.key] = loc_id
                 is_start = 1 if (loc.is_starting_location or (not has_start and idx == 0)) else 0
                 is_hub = 1 if getattr(loc, "is_hub", False) else 0
+                raw_cont_id = getattr(loc, "container_id", None)
+                mapped_loc_cont = cont_id_map.get(raw_cont_id) if raw_cont_id else None
+                if raw_cont_id and not mapped_loc_cont:
+                    raise ValueError(
+                        f"Location '{loc.name}' references missing container '{raw_cont_id}'."
+                    )
+                is_portal = (
+                    1
+                    if (mapped_loc_cont is not None and getattr(loc, "is_entry_exit", False))
+                    else 0
+                )
                 starting_msg = getattr(loc, "starting_message", "") or ""
                 conn.execute(
                     """
                     INSERT INTO location_nodes (
-                        id, world_id, created_at_turn_id, name, summary,
-                        description, environmental_tags_json, is_starting_location, is_hub, starting_message
+                        id, world_id, created_at_turn_id, superseded_at_turn_id, container_id, name, summary,
+                        description, environmental_tags_json, is_starting_location, is_hub,
+                        is_entry_exit, starting_message, ui_x, ui_y, icon
                     )
-                    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         loc_id,
                         w_id,
+                        mapped_loc_cont,
                         loc.name,
                         loc.summary,
                         loc.description,
                         json.dumps(loc.environmental_tags),
                         is_start,
                         is_hub,
+                        is_portal,
                         starting_msg,
+                        getattr(loc, "ui_x", None),
+                        getattr(loc, "ui_y", None),
+                        getattr(loc, "icon", None),
                     ),
                 )
                 for loc_lore in loc.lore_nodes:
@@ -305,6 +360,54 @@ class WorldsMixin:
                     conn=conn,
                 )
 
+            for cont in sorted_containers:
+                if cont.depth != 1:
+                    continue
+                mapped_cont_id = cont_id_map.get(cont.id)
+                if not mapped_cont_id:
+                    continue
+                for cont_lore in getattr(cont, "lore_nodes", None) or []:
+                    cont_lore_id = f"lore_{uuid.uuid4().hex[:10]}"
+                    cont_tags_json = json.dumps(cont_lore.entity_tags)
+                    conn.execute(
+                        """
+                        INSERT INTO lore_nodes (
+                            id, world_id, location_id, container_id, campaign_id, title, category, content, entity_tags_json
+                        )
+                        VALUES (?, ?, NULL, ?, NULL, ?, ?, ?, ?)
+                        """,
+                        (
+                            cont_lore_id,
+                            w_id,
+                            mapped_cont_id,
+                            cont_lore.title,
+                            cont_lore.category,
+                            cont_lore.content,
+                            cont_tags_json,
+                        ),
+                    )
+                    if cont_lore.category != "secret":
+                        vec_title, vec_keywords = _location_lore_vector_fields(
+                            cont.name, cont_lore.title, cont_lore.entity_tags
+                        )
+                        vec_kw_json = json.dumps(vec_keywords)
+                        pre_cont_vec = (
+                            precomputed_embeddings.get((vec_title, cont_lore.content, vec_kw_json))
+                            if precomputed_embeddings
+                            else None
+                        )
+                        self.vector_store.upsert_entry(
+                            entry_id=cont_lore_id,
+                            source_type="container_lore",
+                            world_id=w_id,
+                            container_id=mapped_cont_id,
+                            title=vec_title,
+                            content=cont_lore.content,
+                            keywords=vec_keywords,
+                            embedding=pre_cont_vec,
+                            conn=conn,
+                        )
+
             conn.commit()
         finally:
             conn.close()
@@ -313,11 +416,11 @@ class WorldsMixin:
 
     async def acreate_world_from_draft(
         self,
-        draft: WorldWizardDraft,
+        draft: WorldWizardDraft | WorldWizardCommitPayload,
         world_id: str | None = None,
         owner_id: str | None = None,
     ) -> WorldRecord:
-        """Asynchronously pre-compute world & non-secret location lore embeddings and persist WorldWizardDraft."""
+        """Asynchronously pre-compute world, location, & L1 container lore embeddings and persist draft."""
         items_to_embed: list[tuple[tuple[str, str, str], str]] = []
         for lore in draft.lore_nodes:
             tags_json = json.dumps(lore.entity_tags)
@@ -339,6 +442,22 @@ class WorldsMixin:
                     (
                         (vec_title, loc_lore.content, vec_kw_json),
                         combine_entry_text(vec_title, loc_lore.content, vec_keywords),
+                    )
+                )
+        for cont in getattr(draft, "containers", None) or []:
+            if cont.depth != 1:
+                continue
+            for cont_lore in getattr(cont, "lore_nodes", None) or []:
+                if cont_lore.category == "secret":
+                    continue
+                vec_title, vec_keywords = _location_lore_vector_fields(
+                    cont.name, cont_lore.title, cont_lore.entity_tags
+                )
+                vec_kw_json = json.dumps(vec_keywords)
+                items_to_embed.append(
+                    (
+                        (vec_title, cont_lore.content, vec_kw_json),
+                        combine_entry_text(vec_title, cont_lore.content, vec_keywords),
                     )
                 )
         precomputed = await _compute_missing_embeddings(items_to_embed, {})

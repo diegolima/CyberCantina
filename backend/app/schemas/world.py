@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -501,13 +502,75 @@ class WorldWizardSeed(BaseModel):
 
 
 class WorldWizardDraft(BaseModel):
-    """AI-expanded world package produced by the World Wizard (strict on commit)."""
+    """AI-expanded world package produced by the World Wizard."""
 
     name: str
     global_rules: WorldGlobalRules
     locations: list[LocationNodeDraft]
     edges: list[LocationEdgeDraft]
     lore_nodes: list[WorldLoreNodeDraft]
+
+
+class LocationContainerDraft(BaseModel):
+    """User-authored spatial container draft preserved across World Wizard review -> commit."""
+
+    id: str = Field(..., min_length=1)
+    parent_container_id: str | None = None
+    depth: int = Field(..., ge=1, le=4)
+    name: str = Field(..., min_length=1, max_length=160)
+    description: str = ""
+    environmental_tags: list[str] = Field(default_factory=list)
+    ui_x: float | None = None
+    ui_y: float | None = None
+    icon: str | None = None
+    lore_nodes: list[LocationLoreNodeDraft] = Field(default_factory=list)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _validate_name(cls, v: Any) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("Container name cannot be empty.")
+        return v.strip()
+
+    @model_validator(mode="after")
+    def validate_lore_depth(self) -> "LocationContainerDraft":
+        if self.depth > 1 and self.lore_nodes:
+            raise ValueError(
+                f"Lore nodes are strictly forbidden on macro containers (depth={self.depth}). Lore is only allowed on Level 1 containers."
+            )
+        return self
+
+
+class LocationNodeCommitDraft(LocationNodeDraft):
+    """Draft location node extended with optional user-authored container, portal, and layout metadata on commit."""
+
+    container_id: str | None = None
+    is_entry_exit: bool = False
+    ui_x: float | None = None
+    ui_y: float | None = None
+    icon: str | None = None
+
+    @model_validator(mode="after")
+    def _normalize_root_portal(self) -> "LocationNodeCommitDraft":
+        if not self.container_id:
+            self.is_entry_exit = False
+        return self
+
+
+class WorldWizardCommitPayload(WorldWizardDraft):
+    """Strict World Wizard commit payload supporting user-authored containers, portals, and layout."""
+
+    locations: list[LocationNodeCommitDraft]  # type: ignore[assignment]
+    containers: list[LocationContainerDraft] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_containers(self) -> "WorldWizardCommitPayload":
+        validate_container_hierarchy_integrity(
+            world_id=None,
+            containers=self.containers,
+            locations=self.locations,
+        )
+        return self
 
 
 class WorldMapReimagineRequest(BaseModel):
@@ -736,17 +799,18 @@ def _enforce_world_level_lore_nodes(nodes: list[LoreNode]) -> list[LoreNode]:
 def validate_container_hierarchy_integrity(
     *,
     world_id: str | None,
-    containers: list[LocationContainer],
-    locations: list[LocationNode],
+    containers: Sequence[LocationContainer | LocationContainerDraft],
+    locations: Sequence[LocationNode | LocationNodeCommitDraft],
 ) -> None:
     """Validate container ID uniqueness, world scoping, dangling references, depth monotonicity, and absence of cycles."""
-    c_by_id: dict[str, LocationContainer] = {}
+    c_by_id: dict[str, LocationContainer | LocationContainerDraft] = {}
     for c in containers:
         if c.id in c_by_id:
             raise ValueError(f"Duplicate container ID '{c.id}'.")
-        if world_id and c.world_id and c.world_id != world_id:
+        c_world_id = getattr(c, "world_id", "")
+        if world_id and c_world_id and c_world_id != world_id:
             raise ValueError(
-                f"Container '{c.name}' world_id '{c.world_id}' does not match world '{world_id}'."
+                f"Container '{c.name}' world_id '{c_world_id}' does not match world '{world_id}'."
             )
         c_by_id[c.id] = c
 
