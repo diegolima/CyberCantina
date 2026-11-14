@@ -13,6 +13,9 @@ import {
   CONTAINER_CARD_RX,
   CONTAINER_CARD_W,
   CONTAINER_HOVER_PAD,
+  GHOST_CARD_H,
+  GHOST_CARD_RX,
+  GHOST_CARD_W,
   HUB_RADIUS,
   LOCATION_HOVER_RADIUS,
   LOCATION_PORT_RADIUS,
@@ -66,8 +69,10 @@ export interface SpatialTopologyCanvasProps {
   setHoveredNodeKey: React.Dispatch<React.SetStateAction<string | null>>;
   projectedTopology: ProjectedDepthTopology;
   fullMapCoords: Record<string, { x: number; y: number }>;
+  ghostCoords?: Record<string, { x: number; y: number }>;
   selectedContainer: LocationContainer | null;
   selectedLocation: LocationNode | null;
+  selectedGhostLocId?: string | null;
   activeLoc: LocationNode | undefined;
   activeNeighborIds: Set<string>;
   unreachableSet: Set<string>;
@@ -81,6 +86,7 @@ export interface SpatialTopologyCanvasProps {
   setStatusNotice: React.Dispatch<React.SetStateAction<string | null>>;
   setSelectedLocId: React.Dispatch<React.SetStateAction<string | null>>;
   setSelectedContainerId: React.Dispatch<React.SetStateAction<string | null>>;
+  setSelectedGhostLocId?: React.Dispatch<React.SetStateAction<string | null>>;
   setContextMenu: React.Dispatch<React.SetStateAction<MapContextMenuState | null>>;
   setMultiEdgeModalEdges: React.Dispatch<React.SetStateAction<LocationEdge[] | null>>;
   openContextMenuAt: (e: React.MouseEvent, target: MapContextMenuState["target"]) => void;
@@ -88,6 +94,7 @@ export interface SpatialTopologyCanvasProps {
   handleDeleteEdge: (edgeId: string) => void;
   handleDeleteEdgeGroup: (edgeIds: string[]) => void;
   drillIntoContainer: (contId: string | null) => void;
+  onJumpToContainer?: (containerId: string | null, focusLocId?: string) => void;
 }
 
 export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
@@ -108,8 +115,10 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
   setHoveredNodeKey,
   projectedTopology,
   fullMapCoords,
+  ghostCoords = {},
   selectedContainer,
   selectedLocation,
+  selectedGhostLocId = null,
   activeLoc,
   activeNeighborIds,
   unreachableSet,
@@ -121,6 +130,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
   setStatusNotice,
   setSelectedLocId,
   setSelectedContainerId,
+  setSelectedGhostLocId,
   setContextMenu,
   setMultiEdgeModalEdges,
   openContextMenuAt,
@@ -128,6 +138,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
   handleDeleteEdge,
   handleDeleteEdgeGroup,
   drillIntoContainer,
+  onJumpToContainer,
 }) => {
   const [isPanning, setIsPanning] = useState(false);
   const [hoveredEdgePairKey, setHoveredEdgePairKey] = useState<string | null>(null);
@@ -197,6 +208,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
         // Click on empty canvas deselects current element & hides details pane
         setSelectedLocId(null);
         setSelectedContainerId(null);
+        setSelectedGhostLocId?.(null);
         setContextMenu(null);
         setInlineEdgeEdit(null);
       }
@@ -220,6 +232,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
     setPan,
     setSelectedLocId,
     setSelectedContainerId,
+    setSelectedGhostLocId,
     setContextMenu,
     setInlineEdgeEdit,
   ]);
@@ -237,55 +250,131 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
 
   const renderedEdges = useMemo(() => {
     const focusedId = selectedContainer?.id || selectedLocation?.id;
-    return projectedTopology.projectedEdges
-      .map((edge) => {
-        const p1 = fullMapCoords[edge.sourceNodeId];
-        const p2 = fullMapCoords[edge.targetNodeId];
-        if (!p1 || !p2) return null;
 
-        const shape1 = shapeByNodeId.get(edge.sourceNodeId) ?? { kind: "location" };
-        const shape2 = shapeByNodeId.get(edge.targetNodeId) ?? { kind: "location" };
-        const clipped = computeEdgeClippedSegment(p1, shape1, p2, shape2);
+    const buildEdgeRenderItem = (params: {
+      edge: Pick<
+        LocationEdge,
+        "id" | "travel_minutes" | "is_locked_or_hidden"
+      > & {
+        sourceNodeId: string;
+        targetNodeId: string;
+        isAggregated: boolean;
+        containsLockedEdge: boolean;
+        rawEdge: LocationEdge;
+        groupedEdges?: LocationEdge[];
+      };
+      p1: { x: number; y: number } | undefined;
+      p2: { x: number; y: number } | undefined;
+      shape1: NodeShapeDescriptor;
+      shape2: NodeShapeDescriptor;
+      isDirect: boolean;
+      showLabel: boolean;
+      pairKey: string;
+      isGhost: boolean;
+    }) => {
+      const { edge, p1, p2, shape1, shape2, isDirect, showLabel, pairKey, isGhost } =
+        params;
+      if (!p1 || !p2) return null;
+      const clipped = computeEdgeClippedSegment(p1, shape1, p2, shape2);
+      const groupedCount = edge.groupedEdges?.length ?? 0;
+      const labelText = `${edge.travel_minutes}m${
+        edge.isAggregated && groupedCount > 1 ? ` · ${groupedCount}` : ""
+      }${edge.containsLockedEdge ? " 🔒" : ""}`;
+      const badgeWidth = computeDistanceBadgeWidth(labelText);
+      return {
+        edge,
+        clipped,
+        isDirect,
+        showLabel,
+        labelText,
+        badgeWidth,
+        pairKey,
+        isGhost,
+      };
+    };
 
-        const isDirect =
-          edge.sourceNodeId === activeLoc?.id ||
-          edge.targetNodeId === activeLoc?.id ||
-          edge.sourceNodeId === focusedId ||
-          edge.targetNodeId === focusedId;
+    const normalItems = projectedTopology.projectedEdges.map((edge) => {
+      const isDirect =
+        edge.sourceNodeId === activeLoc?.id ||
+        edge.targetNodeId === activeLoc?.id ||
+        edge.sourceNodeId === focusedId ||
+        edge.targetNodeId === focusedId;
+      const showLabel =
+        edge.sourceNodeId <= edge.targetNodeId ||
+        !projectedTopology.projectedEdges.some(
+          (o) =>
+            o.sourceNodeId === edge.targetNodeId &&
+            o.targetNodeId === edge.sourceNodeId
+        );
+      return buildEdgeRenderItem({
+        edge,
+        p1: fullMapCoords[edge.sourceNodeId],
+        p2: fullMapCoords[edge.targetNodeId],
+        shape1: shapeByNodeId.get(edge.sourceNodeId) ?? { kind: "location" },
+        shape2: shapeByNodeId.get(edge.targetNodeId) ?? { kind: "location" },
+        isDirect,
+        showLabel,
+        pairKey: [edge.sourceNodeId, edge.targetNodeId].sort().join("<->"),
+        isGhost: false,
+      });
+    });
 
-        const showLabel =
-          edge.sourceNodeId <= edge.targetNodeId ||
-          !projectedTopology.projectedEdges.some(
-            (o) =>
-              o.sourceNodeId === edge.targetNodeId &&
-              o.targetNodeId === edge.sourceNodeId
-          );
+    const ghostItems = projectedTopology.ghostEdges.map((ge) => {
+      const isOutgoing = ge.sourceNodeId === ge.portalLocationId;
+      const p1 = isOutgoing
+        ? fullMapCoords[ge.sourceNodeId]
+        : ghostCoords[ge.externalLocationId];
+      const p2 = isOutgoing
+        ? ghostCoords[ge.externalLocationId]
+        : fullMapCoords[ge.targetNodeId];
+      const shape1: NodeShapeDescriptor = isOutgoing
+        ? shapeByNodeId.get(ge.sourceNodeId) ?? { kind: "location" }
+        : { kind: "ghost" };
+      const shape2: NodeShapeDescriptor = isOutgoing
+        ? { kind: "ghost" }
+        : shapeByNodeId.get(ge.targetNodeId) ?? { kind: "location" };
+      const showLabel =
+        ge.sourceNodeId <= ge.targetNodeId ||
+        !projectedTopology.ghostEdges.some(
+          (o) =>
+            o.sourceNodeId === ge.targetNodeId &&
+            o.targetNodeId === ge.sourceNodeId
+        );
+      const isDirect =
+        ge.portalLocationId === activeLoc?.id ||
+        ge.portalLocationId === focusedId ||
+        ge.externalLocationId === selectedGhostLocId;
 
-        const groupedCount = edge.groupedEdges?.length ?? 0;
-        const labelText = `${edge.travel_minutes}m${
-          edge.isAggregated && groupedCount > 1 ? ` · ${groupedCount}` : ""
-        }${edge.containsLockedEdge ? " 🔒" : ""}`;
-        const badgeWidth = computeDistanceBadgeWidth(labelText);
-        const pairKey = [edge.sourceNodeId, edge.targetNodeId].sort().join("<->");
+      return buildEdgeRenderItem({
+        edge: {
+          ...ge,
+          isAggregated: false,
+          containsLockedEdge: ge.is_locked_or_hidden,
+        },
+        p1,
+        p2,
+        shape1,
+        shape2,
+        isDirect,
+        showLabel,
+        pairKey: `ghost:${[ge.portalLocationId, ge.externalLocationId].sort().join("<->")}`,
+        isGhost: true,
+      });
+    });
 
-        return {
-          edge,
-          clipped,
-          isDirect,
-          showLabel,
-          labelText,
-          badgeWidth,
-          pairKey,
-        };
-      })
-      .filter((item): item is NonNullable<typeof item> => item !== null);
+    return [...normalItems, ...ghostItems].filter(
+      (item): item is NonNullable<typeof item> => item !== null
+    );
   }, [
     projectedTopology.projectedEdges,
+    projectedTopology.ghostEdges,
     fullMapCoords,
+    ghostCoords,
     shapeByNodeId,
     activeLoc?.id,
     selectedContainer?.id,
     selectedLocation?.id,
+    selectedGhostLocId,
   ]);
 
   const activeInlineEdge = useMemo(() => {
@@ -416,7 +505,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
             >
               {/* Layer 1: Edge Lines & Active Link Rubber-Band */}
               <g data-layer="edge-lines">
-                {renderedEdges.map(({ edge, clipped, isDirect, pairKey }) => {
+                {renderedEdges.map(({ edge, clipped, isDirect, pairKey, isGhost }) => {
                   const openEdgeEdit = (ev: React.MouseEvent) => {
                     ev.stopPropagation();
                     if (edge.isAggregated && edge.groupedEdges) {
@@ -461,12 +550,17 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                         x2={clipped.x2}
                         y2={clipped.y2}
                         stroke={
-                          isDirect
+                          isGhost
+                            ? isDirect
+                              ? "#22d3ee"
+                              : "#64748b"
+                            : isDirect
                             ? "#06b6d4"
                             : edge.isAggregated
                             ? "#475569"
                             : "#334155"
                         }
+                        strokeOpacity={isGhost ? (isDirect ? 0.85 : 0.6) : 1}
                         strokeWidth={
                           edge.isAggregated
                             ? isDirect
@@ -477,7 +571,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                             : 1.5
                         }
                         strokeDasharray={
-                          edge.containsLockedEdge
+                          isGhost || edge.containsLockedEdge
                             ? "5 4"
                             : edge.isAggregated
                             ? "2 2"
@@ -1117,6 +1211,111 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                           </g>
                         );
                       })}
+                  </g>
+                );
+              })}
+
+              {/* Shared External Ghost Nodes (Cross-Boundary Portal Destinations) */}
+              {projectedTopology.ghostExternalNodes.map((ghost) => {
+                const pt = ghostCoords[ghost.destination.id];
+                if (!pt) return null;
+                const isSelected = selectedGhostLocId === ghost.destination.id;
+                const GhostIcon = resolveMapIconComponent(
+                  ghost.destination.icon,
+                  ghost.destination.is_hub ? "hub" : "location"
+                );
+                const truncatedName =
+                  ghost.destination.name.length > 16
+                    ? `${ghost.destination.name.slice(0, 15)}…`
+                    : ghost.destination.name;
+                const truncatedCont =
+                  ghost.destinationContainerName.length > 18
+                    ? `${ghost.destinationContainerName.slice(0, 17)}…`
+                    : ghost.destinationContainerName;
+
+                return (
+                  <g
+                    key={`ghost-node-${ghost.destination.id}`}
+                    data-node-kind="ghost"
+                    data-node-id={ghost.destination.id}
+                    style={{
+                      opacity: isSelected ? 0.94 : 0.72,
+                      cursor: isPanning ? "grabbing" : "pointer",
+                    }}
+                    onPointerDown={(e) => {
+                      if (e.button !== 0) return;
+                      e.stopPropagation();
+                      const wpt = clientToWorldPoint(
+                        e.clientX,
+                        e.clientY,
+                        svgRef.current,
+                        viewportGroupRef.current,
+                        pan,
+                        zoom
+                      );
+                      setNodeDrag({
+                        kind: "ghost",
+                        id: ghost.destination.id,
+                        startClientX: e.clientX,
+                        startClientY: e.clientY,
+                        pointerOffsetX: wpt.x - pt.x,
+                        pointerOffsetY: wpt.y - pt.y,
+                        origX: pt.x,
+                        origY: pt.y,
+                        currX: pt.x,
+                        currY: pt.y,
+                        hasMoved: false,
+                        hoverTarget: null,
+                      });
+                    }}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      onJumpToContainer?.(
+                        ghost.destination.container_id ?? null,
+                        ghost.destination.id
+                      );
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                  >
+                    <rect
+                      x={pt.x - GHOST_CARD_W / 2}
+                      y={pt.y - GHOST_CARD_H / 2}
+                      width={GHOST_CARD_W}
+                      height={GHOST_CARD_H}
+                      rx={GHOST_CARD_RX}
+                      fill="#0b0e14"
+                      fillOpacity={0.82}
+                      stroke={isSelected ? "#22d3ee" : "#475569"}
+                      strokeWidth={isSelected ? 1.8 : 1.2}
+                      strokeDasharray="4 3"
+                    />
+                    <GhostIcon
+                      size={13}
+                      x={pt.x - GHOST_CARD_W / 2 + 9}
+                      y={pt.y - 7}
+                      color={isSelected ? "#67e8f9" : "#94a3b8"}
+                    />
+                    <text
+                      x={pt.x - GHOST_CARD_W / 2 + 27}
+                      y={pt.y - 3}
+                      fill={isSelected ? "#e2e8f0" : "#cbd5e1"}
+                      fontSize="9.5"
+                      fontWeight="600"
+                    >
+                      {truncatedName}
+                    </text>
+                    <text
+                      x={pt.x - GHOST_CARD_W / 2 + 27}
+                      y={pt.y + 10}
+                      fill="#67e8f9"
+                      fillOpacity={0.85}
+                      fontSize="7.6"
+                    >
+                      ↗ {truncatedCont}
+                    </text>
                   </g>
                 );
               })}

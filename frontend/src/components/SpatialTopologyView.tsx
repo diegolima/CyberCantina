@@ -53,6 +53,7 @@ import {
   cloneGraph,
   computeDynamicPortalIds,
   computeFullMapCoords,
+  computeGhostNodeCoords,
   computePromotionCandidates,
   inferCompassDirection,
   pickCompassSlot,
@@ -65,6 +66,8 @@ import {
   type ProjectedContainerSupernode,
   type ProjectedDepthTopology,
   type ProjectedExternalPortalDestination,
+  type ProjectedGhostEdge,
+  type ProjectedGhostExternalNode,
   type ProjectedTopologyEdge,
   type PromotionCandidate,
   type PromotionPromptState,
@@ -78,6 +81,7 @@ export {
   buildContainerBreadcrumbChain,
   computeDynamicPortalIds,
   computeFullMapCoords,
+  computeGhostNodeCoords,
   computePromotionCandidates,
   inferCompassDirection,
   pickCompassSlot,
@@ -87,6 +91,8 @@ export {
   type ProjectedContainerSupernode,
   type ProjectedDepthTopology,
   type ProjectedExternalPortalDestination,
+  type ProjectedGhostEdge,
+  type ProjectedGhostExternalNode,
   type ProjectedTopologyEdge,
   type PromotionCandidate,
   type PromotionPromptState,
@@ -251,6 +257,12 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   const [selectedContainerId, setSelectedContainerId] = useState<string | null>(
     null
   );
+  const [selectedGhostLocId, setSelectedGhostLocId] = useState<string | null>(
+    null
+  );
+  const [ghostCoordsByView, setGhostCoordsByView] = useState<
+    Record<string, Record<string, { x: number; y: number }>>
+  >({});
   const [currentContainerId, setCurrentContainerId] = useState<string | null>(
     initialFocus.currentContainerId
   );
@@ -350,10 +362,10 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
 
   const selectedLocation = useMemo(
     () =>
-      !selectedContainerId && selectedLocId
+      !selectedContainerId && !selectedGhostLocId && selectedLocId
         ? workingLocations.find((l) => l.id === selectedLocId) ?? null
         : null,
-    [workingLocations, selectedLocId, selectedContainerId]
+    [workingLocations, selectedLocId, selectedContainerId, selectedGhostLocId]
   );
 
   const containerMap = useMemo(
@@ -389,6 +401,37 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       activeLoc?.id,
       presentCharacterLocations,
     ]
+  );
+
+  useEffect(() => {
+    if (
+      selectedGhostLocId &&
+      !projectedTopology.ghostExternalNodes.some(
+        (g) => g.destination.id === selectedGhostLocId
+      )
+    ) {
+      setSelectedGhostLocId(null);
+    }
+  }, [projectedTopology.ghostExternalNodes, selectedGhostLocId]);
+
+  const selectedGhost = useMemo(
+    () =>
+      selectedGhostLocId
+        ? projectedTopology.ghostExternalNodes.find(
+            (g) => g.destination.id === selectedGhostLocId
+          ) ?? null
+        : null,
+    [selectedGhostLocId, projectedTopology.ghostExternalNodes]
+  );
+
+  const selectedGhostEdges = useMemo(
+    () =>
+      selectedGhostLocId
+        ? projectedTopology.ghostEdges.filter(
+            (ge) => ge.externalLocationId === selectedGhostLocId
+          )
+        : [],
+    [selectedGhostLocId, projectedTopology.ghostEdges]
   );
 
   // Global validation reports (Reachability + Container invariants)
@@ -437,11 +480,57 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       pseudoEdges,
       projectedTopology.anchorNodeId
     );
-    if (nodeDrag && nodeDrag.hasMoved) {
+    if (nodeDrag && nodeDrag.hasMoved && nodeDrag.kind !== "ghost") {
       computed[nodeDrag.id] = { x: nodeDrag.currX, y: nodeDrag.currY };
     }
     return computed;
   }, [projectedTopology, nodeDrag]);
+
+  const ghostViewKey = currentContainerId ?? "__root__";
+  const currentGhostOverrides = ghostCoordsByView[ghostViewKey];
+  const ghostCoords = useMemo(() => {
+    const computed = computeGhostNodeCoords(
+      projectedTopology.ghostExternalNodes,
+      projectedTopology.ghostEdges,
+      fullMapCoords,
+      currentGhostOverrides
+    );
+    if (nodeDrag && nodeDrag.hasMoved && nodeDrag.kind === "ghost") {
+      computed[nodeDrag.id] = { x: nodeDrag.currX, y: nodeDrag.currY };
+    }
+    return computed;
+  }, [
+    projectedTopology.ghostExternalNodes,
+    projectedTopology.ghostEdges,
+    fullMapCoords,
+    currentGhostOverrides,
+    nodeDrag,
+  ]);
+
+  const handleMoveGhostNode = useCallback(
+    (externalLocId: string, x: number, y: number) => {
+      setGhostCoordsByView((prev) => ({
+        ...prev,
+        [ghostViewKey]: {
+          ...(prev[ghostViewKey] ?? {}),
+          [externalLocId]: { x, y },
+        },
+      }));
+    },
+    [ghostViewKey]
+  );
+
+  const handleResetGhostCoords = useCallback(
+    (externalLocId: string) => {
+      setGhostCoordsByView((prev) => {
+        const viewMap = prev[ghostViewKey];
+        if (!viewMap || !viewMap[externalLocId]) return prev;
+        const { [externalLocId]: _removed, ...rest } = viewMap;
+        return { ...prev, [ghostViewKey]: rest };
+      });
+    },
+    [ghostViewKey]
+  );
 
   const activeNeighborIds = useMemo(() => {
     if (!activeLoc) return new Set<string>();
@@ -466,11 +555,40 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   const drillIntoContainer = useCallback((contId: string | null) => {
     setCurrentContainerId(contId);
     setSelectedContainerId(null);
+    setSelectedGhostLocId(null);
     setContextMenu(null);
     setInlineEdgeEdit(null);
     setPan({ x: 0, y: 0 });
     setZoom(1);
   }, []);
+
+  const handleJumpToContainer = useCallback(
+    (targetContainerId: string | null, focusLocId?: string) => {
+      setCurrentContainerId(targetContainerId);
+      setSelectedContainerId(null);
+      setSelectedGhostLocId(null);
+      setSelectedLocId(focusLocId ?? null);
+      setContextMenu(null);
+      setInlineEdgeEdit(null);
+      setZoom(1);
+      const targetLoc = focusLocId ? locationMap.get(focusLocId) : undefined;
+      if (
+        targetLoc &&
+        typeof targetLoc.ui_x === "number" &&
+        Number.isFinite(targetLoc.ui_x) &&
+        typeof targetLoc.ui_y === "number" &&
+        Number.isFinite(targetLoc.ui_y)
+      ) {
+        setPan({
+          x: targetLoc.ui_x === 0 ? 0 : -targetLoc.ui_x,
+          y: targetLoc.ui_y === 0 ? 0 : -targetLoc.ui_y,
+        });
+      } else {
+        setPan({ x: 0, y: 0 });
+      }
+    },
+    [locationMap]
+  );
 
   const handleCenter = useCallback(() => {
     const targetId =
@@ -576,6 +694,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     containerMap,
     setSelectedContainerId,
     setSelectedLocId,
+    setSelectedGhostLocId,
+    onMoveGhostNode: handleMoveGhostNode,
     setStatusNotice,
     setGroupModal,
     setEmptyCanvasModal,
@@ -643,6 +763,14 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         return;
       }
 
+      if (selectedGhostLocId) {
+        e.preventDefault();
+        setStatusNotice(
+          "External ghost nodes are read-only here — delete the dashed boundary link line instead, or jump to its home container."
+        );
+        return;
+      }
+
       if (selectedContainerId) {
         e.preventDefault();
         const check = canDeleteContainer(selectedContainerId);
@@ -671,6 +799,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     isMutatingLocked,
     effectiveSaving,
     hasBlockingOverlayOpen,
+    selectedGhostLocId,
     selectedContainerId,
     selectedLocId,
     canDeleteContainer,
@@ -738,7 +867,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       : null;
   }, [selectedContainer, projectedTopology.visibleSupernodes]);
 
-  const hasDetailsOpen = Boolean(selectedLocation || selectedContainer);
+  const hasDetailsOpen = Boolean(
+    selectedLocation || selectedContainer || selectedGhost
+  );
 
   const validationSummary =
     reachabilityReport.starterError ||
@@ -829,13 +960,11 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         </div>
       )}
 
-      {/* Main Split Body: Canvas + Contextual Right Details Drawer */}
+      {/* Main Split Body: Canvas + Contextual Right Details Drawer (fixed split prevents SVG jump on click) */}
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: hasDetailsOpen
-            ? "minmax(460px, 1.85fr) minmax(300px, 1fr)"
-            : "1fr",
+          gridTemplateColumns: "minmax(460px, 1.85fr) minmax(300px, 1fr)",
           gap: 14,
           flex: 1,
           minHeight: 0,
@@ -896,8 +1025,10 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             setHoveredNodeKey={setHoveredNodeKey}
             projectedTopology={projectedTopology}
             fullMapCoords={fullMapCoords}
+            ghostCoords={ghostCoords}
             selectedContainer={selectedContainer}
             selectedLocation={selectedLocation}
+            selectedGhostLocId={selectedGhostLocId}
             activeLoc={activeLoc}
             activeNeighborIds={activeNeighborIds}
             unreachableSet={unreachableSet}
@@ -909,6 +1040,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             setStatusNotice={setStatusNotice}
             setSelectedLocId={setSelectedLocId}
             setSelectedContainerId={setSelectedContainerId}
+            setSelectedGhostLocId={setSelectedGhostLocId}
             setContextMenu={setContextMenu}
             setMultiEdgeModalEdges={setMultiEdgeModalEdges}
             openContextMenuAt={openContextMenuAt}
@@ -916,6 +1048,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             handleDeleteEdge={handleDeleteEdge}
             handleDeleteEdgeGroup={handleDeleteEdgeGroup}
             drillIntoContainer={drillIntoContainer}
+            onJumpToContainer={handleJumpToContainer}
           />
 
           {/* Context Menu & Dialogs */}
@@ -961,11 +1094,31 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                   pe.rawEdge.id === edgeId ||
                   pe.groupedEdges?.some((ge) => ge.id === edgeId)
               );
-              const srcId = projected?.sourceNodeId ?? edge.from_location_id;
-              const tgtId = projected?.targetNodeId ?? edge.to_location_id;
-              const p1 = fullMapCoords[srcId] ?? { x: 0, y: 0 };
-              const p2 = fullMapCoords[tgtId] ?? { x: 0, y: 0 };
+              const ghostProj = projected
+                ? undefined
+                : projectedTopology.ghostEdges.find(
+                    (ge) => ge.rawEdge.id === edgeId
+                  );
+              const srcId =
+                projected?.sourceNodeId ??
+                ghostProj?.sourceNodeId ??
+                edge.from_location_id;
+              const tgtId =
+                projected?.targetNodeId ??
+                ghostProj?.targetNodeId ??
+                edge.to_location_id;
+              const p1 =
+                (ghostProj && srcId === ghostProj.externalLocationId
+                  ? ghostCoords[srcId]
+                  : fullMapCoords[srcId]) ?? { x: 0, y: 0 };
+              const p2 =
+                (ghostProj && tgtId === ghostProj.externalLocationId
+                  ? ghostCoords[tgtId]
+                  : fullMapCoords[tgtId]) ?? { x: 0, y: 0 };
               const shapeFor = (id: string): NodeShapeDescriptor => {
+                if (ghostProj && id === ghostProj.externalLocationId) {
+                  return { kind: "ghost" };
+                }
                 if (containerMap.has(id)) return { kind: "container" };
                 return locationMap.get(id)?.is_hub
                   ? { kind: "hub" }
@@ -1031,12 +1184,17 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
 
         </div>
 
-        {/* Right Details Drawer (hidden when empty canvas clicked) */}
-        {hasDetailsOpen && (
+        {/* Right Details Drawer or Stable Empty Placeholder */}
+        {hasDetailsOpen ? (
           <MapDetailsDrawer
             mode={mode}
             selectedLocation={selectedLocation}
             selectedContainer={selectedContainer}
+            selectedGhost={selectedGhost}
+            selectedGhostEdges={selectedGhostEdges}
+            hasGhostOverride={Boolean(
+              selectedGhostLocId && currentGhostOverrides?.[selectedGhostLocId]
+            )}
             containers={workingContainers}
             allLocations={workingLocations}
             dynamicPortalIds={projectedTopology.dynamicPortalIds}
@@ -1059,16 +1217,49 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             onClose={() => {
               setSelectedLocId(null);
               setSelectedContainerId(null);
+              setSelectedGhostLocId(null);
             }}
             onPatchLocation={patchLocation}
             onPatchContainer={patchContainer}
             onResetCoordinates={resetCoordinates}
+            onResetGhostCoords={handleResetGhostCoords}
+            onDeleteEdge={handleDeleteEdge}
+            onJumpToContainer={handleJumpToContainer}
             onDrillIntoContainer={drillIntoContainer}
             onOverrideLocation={onOverrideLocation}
             isOverriding={isOverriding}
             onSaveCampaignLocationLore={onSaveCampaignLocationLore}
             onSaveCampaignContainerLore={onSaveCampaignContainerLore}
           />
+        ) : (
+          <div
+            aria-label="Map Element Details Placeholder"
+            style={{
+              background: "var(--bg-card)",
+              borderRadius: 8,
+              border: "1px dashed var(--border-subtle)",
+              padding: 18,
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+              alignItems: "center",
+              textAlign: "center",
+              gap: 8,
+              color: "var(--text-muted)",
+              fontSize: "0.75rem",
+              lineHeight: 1.5,
+            }}
+          >
+            <strong style={{ color: "var(--text-secondary)", fontSize: "0.8rem" }}>
+              No Map Element Selected
+            </strong>
+            <span>
+              Click any location, container, or external ghost destination to inspect its details.
+            </span>
+            <span style={{ fontSize: "0.7rem" }}>
+              Double-click a container card to enter it, or double-click a distance badge to edit travel time.
+            </span>
+          </div>
         )}
       </div>
     </div>

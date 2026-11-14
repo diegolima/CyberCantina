@@ -11,10 +11,13 @@ import {
   buildContainerBreadcrumbChain,
   computeDynamicPortalIds,
   computeFullMapCoords,
+  computeGhostNodeCoords,
   computePromotionCandidates,
   projectTopologyForDepth,
   resolveInitialMapFocus,
 } from "../SpatialTopologyView";
+import { computeEdgeClippedSegment } from "../map/mapGeometry";
+import { filterEdgesAfterDeletion } from "../map/topologyProjection";
 import { MapDetailsDrawer } from "../map/MapDetailsDrawer";
 import {
   draftToWorldRecord,
@@ -613,5 +616,188 @@ describe("Location Containers Frontend Architecture", () => {
     );
     expect(campaignDrawerHtml).toContain("Party Present");
     expect(campaignDrawerHtml).not.toContain("Contains Starting Hub");
+  });
+
+  it("projects shared external ghost nodes, preserves invariant split layout, and renders read-only ghost drawer controls", () => {
+    const { containers, locations, edges } = makeHierarchyFixture();
+
+    // Root view never emits ghost external nodes
+    const rootProj = projectTopologyForDepth(null, containers, locations, edges);
+    expect(rootProj.ghostExternalNodes).toHaveLength(0);
+    expect(rootProj.ghostEdges).toHaveLength(0);
+
+    // At L2 Watson District, loc_foyer -> loc_highway is visible via L1 Afterlife Club supernode,
+    // so only links outside Watson District (loc_highway -> loc_badlands) emit ghosts.
+    const distProj = projectTopologyForDepth(
+      "cont_dist",
+      containers,
+      locations,
+      edges
+    );
+    expect(distProj.ghostExternalNodes).toHaveLength(1);
+    expect(distProj.ghostExternalNodes[0].destination.id).toBe("loc_badlands");
+    expect(distProj.ghostExternalNodes[0].destinationContainerName).toBe(
+      "World Root"
+    );
+
+    // Two distinct portals inside Afterlife Club linking to the SAME external location (loc_highway)
+    // must share ONE ghost external node with 2 converging links.
+    const twoPortalEdges: LocationEdge[] = [
+      ...edges,
+      {
+        id: "e_vip_out",
+        world_id: "world_1",
+        from_location_id: "loc_vip",
+        to_location_id: "loc_highway",
+        direction_label: "Fire escape down to overpass",
+        compass_direction: "NE",
+        travel_minutes: 3,
+        is_locked_or_hidden: false,
+      },
+    ];
+    const sharedClubProj = projectTopologyForDepth(
+      "cont_club",
+      containers,
+      locations,
+      twoPortalEdges
+    );
+    expect(sharedClubProj.ghostExternalNodes).toHaveLength(1);
+    const sharedGhost = sharedClubProj.ghostExternalNodes[0];
+    expect(sharedGhost.destination.id).toBe("loc_highway");
+    expect(sharedGhost.destinationContainerName).toBe("Watson District");
+    expect(sharedGhost.connectedPortalIds).toEqual(["loc_foyer", "loc_vip"]);
+    expect(sharedClubProj.ghostEdges).toHaveLength(2); // e2, e_vip_out
+
+    // Deleting e_vip_out keeps the shared ghost node anchored by e2;
+    // deleting e2 removes symmetric halves (if any) and removes the ghost node completely.
+    const afterFirstDelete = filterEdgesAfterDeletion(twoPortalEdges, [
+      "e_vip_out",
+    ]);
+    const projAfterFirst = projectTopologyForDepth(
+      "cont_club",
+      containers,
+      locations,
+      afterFirstDelete
+    );
+    expect(projAfterFirst.ghostExternalNodes).toHaveLength(1);
+    expect(projAfterFirst.ghostExternalNodes[0].connectedPortalIds).toEqual([
+      "loc_foyer",
+    ]);
+
+    const afterSecondDelete = filterEdgesAfterDeletion(afterFirstDelete, [
+      "e2",
+    ]);
+    const projAfterSecond = projectTopologyForDepth(
+      "cont_club",
+      containers,
+      locations,
+      afterSecondDelete
+    );
+    expect(projAfterSecond.ghostExternalNodes).toHaveLength(0);
+    expect(projAfterSecond.ghostEdges).toHaveLength(0);
+
+    // Ghost coordinate computation + ephemeral overrides + ghost shape clipping
+    const visibleCoords = {
+      loc_foyer: { x: 0, y: 0 },
+      loc_vip: { x: 0, y: 120 },
+    };
+    const autoGhostCoords = computeGhostNodeCoords(
+      sharedClubProj.ghostExternalNodes,
+      sharedClubProj.ghostEdges,
+      visibleCoords
+    );
+    expect(autoGhostCoords.loc_highway).toBeDefined();
+    const overrideGhostCoords = computeGhostNodeCoords(
+      sharedClubProj.ghostExternalNodes,
+      sharedClubProj.ghostEdges,
+      visibleCoords,
+      { loc_highway: { x: 260, y: -40 } }
+    );
+    expect(overrideGhostCoords.loc_highway).toEqual({ x: 260, y: -40 });
+    const clippedGhost = computeEdgeClippedSegment(
+      { x: 0, y: 0 },
+      { kind: "location" },
+      { x: 260, y: 0 },
+      { kind: "ghost" }
+    );
+    expect(clippedGhost.x2).toBeLessThan(260);
+    expect(clippedGhost.collapsed).toBe(false);
+
+    // Invariant split grid even when unselected (defaultSelectedLocationId={null})
+    const unselectedRootHtml = renderToStaticMarkup(
+      <SpatialTopologyView
+        title="Stable Root Map"
+        containers={containers}
+        locations={locations}
+        edges={edges}
+        activeLocationId="loc_foyer"
+        defaultSelectedLocationId={null}
+        initialContainerFocus="root"
+        mode="editor"
+      />
+    );
+    expect(unselectedRootHtml).toContain(
+      "grid-template-columns:minmax(460px, 1.85fr) minmax(300px, 1fr)"
+    );
+    expect(unselectedRootHtml).toContain("No Map Element Selected");
+
+    // Drilled into Afterlife Club in editor mode renders dashed ghost link & shared ghost node
+    const drilledHtml = renderToStaticMarkup(
+      <SpatialTopologyView
+        title="Club Ghost View"
+        containers={containers}
+        locations={locations}
+        edges={twoPortalEdges}
+        activeLocationId="loc_foyer"
+        mode="editor"
+        onSaveMap={() => {}}
+        onChangeGraph={() => {}}
+      />
+    );
+    expect(drilledHtml).toContain('data-node-kind="ghost"');
+    expect(drilledHtml).toContain('data-node-id="loc_highway"');
+    expect(drilledHtml).toContain("Watson Overpass");
+    expect(drilledHtml).toContain("Watson District");
+    expect(drilledHtml).toContain('stroke-dasharray="5 4"');
+    // Portal External Boundary Links in MapDetailsDrawer includes inline Remove control
+    expect(drilledHtml).toContain("Remove link to Watson Overpass");
+
+    // Selected Ghost preview in MapDetailsDrawer is strictly read-only with Jump + Remove controls
+    const ghostDrawerHtml = renderToStaticMarkup(
+      <MapDetailsDrawer
+        mode="editor"
+        selectedLocation={null}
+        selectedContainer={null}
+        selectedGhost={sharedGhost}
+        selectedGhostEdges={sharedClubProj.ghostEdges}
+        hasGhostOverride
+        containers={containers}
+        allLocations={locations}
+        dynamicPortalIds={new Set(["loc_foyer"])}
+        externalPortals={[]}
+        containerStats={null}
+        depthLabels={{
+          1: "Building / Landmark",
+          2: "District / Zone",
+          3: "City / Settlement",
+          4: "Region / Planet / Realm",
+        }}
+        onClose={() => {}}
+        onPatchLocation={() => {}}
+        onPatchContainer={() => {}}
+        onResetCoordinates={() => {}}
+        onResetGhostCoords={() => {}}
+        onDeleteEdge={() => {}}
+        onJumpToContainer={() => {}}
+        onDrillIntoContainer={() => {}}
+      />
+    );
+    expect(ghostDrawerHtml).toContain("Read-Only Ghost");
+    expect(ghostDrawerHtml).toContain("Jump to Watson District");
+    expect(ghostDrawerHtml).toContain("Reset Stub");
+    expect(ghostDrawerHtml).toContain("Connected Portals Here (2)");
+    expect(ghostDrawerHtml).toContain("Remove link from Main Floor");
+    expect(ghostDrawerHtml).toContain("Remove link from VIP Booth");
+    expect(ghostDrawerHtml).not.toContain("Entry/Exit Portal");
   });
 });

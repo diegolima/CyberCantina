@@ -28,6 +28,10 @@ import {
 } from "./mapIcons";
 import { containerHasVisitedDescendants } from "./mapValidation";
 import { MapLoreSection } from "./MapLoreSection";
+import type {
+  ProjectedGhostEdge,
+  ProjectedGhostExternalNode,
+} from "./topologyProjection";
 
 export interface WorldPromptContext {
   worldId?: string;
@@ -56,6 +60,9 @@ export interface MapDetailsDrawerProps {
   mode: "editor" | "campaign";
   selectedLocation: LocationNode | null;
   selectedContainer: LocationContainer | null;
+  selectedGhost?: ProjectedGhostExternalNode | null;
+  selectedGhostEdges?: ProjectedGhostEdge[];
+  hasGhostOverride?: boolean;
   containers: LocationContainer[];
   allLocations: LocationNode[];
   dynamicPortalIds: Set<string>;
@@ -72,6 +79,9 @@ export interface MapDetailsDrawerProps {
   onPatchLocation: (locId: string, patch: Partial<LocationNode>) => void;
   onPatchContainer: (contId: string, patch: Partial<LocationContainer>) => void;
   onResetCoordinates: (kind: "location" | "container", id: string) => void;
+  onResetGhostCoords?: (externalLocId: string) => void;
+  onDeleteEdge?: (edgeId: string) => void;
+  onJumpToContainer?: (containerId: string | null, focusLocId?: string) => void;
   onDrillIntoContainer: (contId: string) => void;
   onOverrideLocation?: (locationId: string) => Promise<void> | void;
   isOverriding?: boolean;
@@ -197,6 +207,9 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
   mode,
   selectedLocation,
   selectedContainer,
+  selectedGhost = null,
+  selectedGhostEdges = [],
+  hasGhostOverride = false,
   containers,
   allLocations,
   dynamicPortalIds,
@@ -212,6 +225,9 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
   onPatchLocation,
   onPatchContainer,
   onResetCoordinates,
+  onResetGhostCoords,
+  onDeleteEdge,
+  onJumpToContainer,
   onDrillIntoContainer,
   onOverrideLocation,
   isOverriding = false,
@@ -347,8 +363,218 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
     maxWords: 32,
   });
 
-  if (!selectedLocation && !selectedContainer) {
+  if (!selectedLocation && !selectedContainer && !selectedGhost) {
     return null;
+  }
+
+  if (selectedGhost) {
+    const dest = selectedGhost.destination;
+    const GhostIcon = resolveMapIconComponent(
+      dest.icon,
+      dest.is_hub ? "hub" : "location"
+    );
+    const locLookup = new Map(allLocations.map((l) => [l.id, l]));
+    const seenPortalLinks = new Set<string>();
+    const uniqueLinks = selectedGhostEdges.filter((ge) => {
+      if (seenPortalLinks.has(ge.portalLocationId)) return false;
+      seenPortalLinks.add(ge.portalLocationId);
+      return true;
+    });
+
+    return (
+      <div
+        aria-label="Map Element Details"
+        style={{
+          background: "var(--bg-card)",
+          borderRadius: 8,
+          border: "1px solid var(--border-subtle)",
+          padding: 14,
+          display: "flex",
+          flexDirection: "column",
+          gap: 11,
+          overflowY: "auto",
+          minHeight: 0,
+          height: "100%",
+          maxHeight: "100%",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            <span
+              className="badge"
+              style={{
+                fontSize: "0.66rem",
+                color: "#67e8f9",
+                borderColor: "rgba(6, 182, 212, 0.45)",
+              }}
+            >
+              External Destination
+            </span>
+            <span className="badge" style={{ fontSize: "0.64rem" }}>
+              Read-Only Ghost
+            </span>
+          </div>
+          <button
+            type="button"
+            className="btn"
+            style={{ padding: "2px 7px", fontSize: "0.68rem" }}
+            onClick={onClose}
+            aria-label="Close details"
+          >
+            <X size={12} />
+          </button>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontSize: "0.92rem",
+            fontWeight: 700,
+            color: "var(--text-primary)",
+          }}
+        >
+          <GhostIcon size={16} color="var(--accent-cyan)" />
+          <span>{dest.name}</span>
+        </div>
+
+        <div
+          style={{
+            fontSize: "0.72rem",
+            color: "var(--text-secondary)",
+            background: "var(--bg-panel)",
+            padding: "6px 8px",
+            borderRadius: 5,
+            border: "1px solid var(--border-subtle)",
+          }}
+        >
+          Home Scope: <strong style={{ color: "#67e8f9" }}>{selectedGhost.destinationContainerName}</strong>
+        </div>
+
+        {dest.summary && (
+          <div
+            style={{
+              fontSize: "0.75rem",
+              color: "var(--text-secondary)",
+              lineHeight: 1.45,
+              background: "var(--bg-panel)",
+              padding: "8px 10px",
+              borderRadius: 6,
+              border: "1px solid var(--border-subtle)",
+            }}
+          >
+            {dest.summary}
+          </div>
+        )}
+
+        <div
+          style={{
+            fontSize: "0.7rem",
+            color: "var(--text-muted)",
+            lineHeight: 1.4,
+          }}
+        >
+          Drag this ghost stub on the canvas to organize your view without moving its real position. Narrative fields are read-only outside its home container.
+        </div>
+
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {onJumpToContainer && (
+            <button
+              type="button"
+              className="btn btn-cyan"
+              style={{
+                flex: 1,
+                fontSize: "0.74rem",
+                justifyContent: "center",
+                gap: 6,
+              }}
+              onClick={() => onJumpToContainer(dest.container_id ?? null, dest.id)}
+            >
+              <LogIn size={13} /> Jump to {selectedGhost.destinationContainerName}
+            </button>
+          )}
+          {hasGhostOverride && onResetGhostCoords && (
+            <button
+              type="button"
+              className="btn"
+              style={{ fontSize: "0.72rem", gap: 5 }}
+              onClick={() => onResetGhostCoords(dest.id)}
+            >
+              <RotateCcw size={12} /> Reset Stub
+            </button>
+          )}
+        </div>
+
+        <div
+          style={{
+            background: "var(--bg-panel)",
+            border: "1px solid rgba(6, 182, 212, 0.3)",
+            borderRadius: 6,
+            padding: "8px 9px",
+            fontSize: "0.72rem",
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+          }}
+        >
+          <span
+            style={{
+              fontWeight: 700,
+              color: "#67e8f9",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+          >
+            <MapPin size={11} /> Connected Portals Here ({uniqueLinks.length})
+          </span>
+          {uniqueLinks.map((ge) => {
+            const portalLoc = locLookup.get(ge.portalLocationId);
+            return (
+              <div
+                key={ge.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 6,
+                  color: "var(--text-secondary)",
+                }}
+              >
+                <span>
+                  {portalLoc?.name ?? ge.portalLocationId} ({ge.travel_minutes}m
+                  {ge.is_locked_or_hidden ? " 🔒" : ""})
+                </span>
+                {mode === "editor" && !isMutatingLocked && onDeleteEdge && (
+                  <button
+                    type="button"
+                    className="btn"
+                    title="Remove external boundary link"
+                    aria-label={`Remove link from ${portalLoc?.name ?? ge.portalLocationId}`}
+                    style={{
+                      padding: "2px 6px",
+                      fontSize: "0.68rem",
+                      color: "#fb7185",
+                      borderColor: "rgba(244, 63, 94, 0.35)",
+                    }}
+                    onClick={() => onDeleteEdge(ge.rawEdge.id)}
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
   }
 
 
@@ -1008,9 +1234,38 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
             <MapPin size={11} /> External Boundary Links ({externalPortals.length})
           </span>
           {externalPortals.map((ext) => (
-            <div key={ext.edgeId} style={{ color: "var(--text-secondary)" }}>
-              [{ext.compassDirection || "?"}] → {ext.destinationName} ({ext.destinationContainerName},{" "}
-              {ext.travelMinutes}m)
+            <div
+              key={ext.edgeId}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 6,
+                color: "var(--text-secondary)",
+              }}
+            >
+              <span>
+                [{ext.compassDirection || "?"}] → {ext.destinationName} ({ext.destinationContainerName},{" "}
+                {ext.travelMinutes}m)
+              </span>
+              {mode === "editor" && !isMutatingLocked && onDeleteEdge && (
+                <button
+                  type="button"
+                  className="btn"
+                  title="Remove external boundary link"
+                  aria-label={`Remove link to ${ext.destinationName}`}
+                  style={{
+                    padding: "1px 5px",
+                    fontSize: "0.66rem",
+                    color: "#fb7185",
+                    borderColor: "rgba(244, 63, 94, 0.35)",
+                    flexShrink: 0,
+                  }}
+                  onClick={() => onDeleteEdge(ext.edgeId)}
+                >
+                  <X size={10} />
+                </button>
+              )}
             </div>
           ))}
         </div>

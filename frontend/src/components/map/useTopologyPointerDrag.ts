@@ -36,6 +36,8 @@ export interface UseTopologyPointerDragParams {
   containerMap: Map<string, LocationContainer>;
   setSelectedContainerId: React.Dispatch<React.SetStateAction<string | null>>;
   setSelectedLocId: React.Dispatch<React.SetStateAction<string | null>>;
+  setSelectedGhostLocId: React.Dispatch<React.SetStateAction<string | null>>;
+  onMoveGhostNode: (externalLocId: string, x: number, y: number) => void;
   setStatusNotice: React.Dispatch<React.SetStateAction<string | null>>;
   setGroupModal: React.Dispatch<React.SetStateAction<GroupIntoContainerState | null>>;
   setEmptyCanvasModal: React.Dispatch<React.SetStateAction<EmptyCanvasLinkState | null>>;
@@ -79,6 +81,8 @@ export function useTopologyPointerDrag({
   containerMap,
   setSelectedContainerId,
   setSelectedLocId,
+  setSelectedGhostLocId,
+  onMoveGhostNode,
   setStatusNotice,
   setGroupModal,
   setEmptyCanvasModal,
@@ -176,7 +180,7 @@ export function useTopologyPointerDrag({
         const currY = Math.round(wpt.y - nodeDrag.pointerOffsetY);
 
         let hoverTarget: typeof nodeDrag.hoverTarget = null;
-        if (hasMoved) {
+        if (hasMoved && nodeDrag.kind !== "ghost") {
           const hit = hitTestNodeAt(currX, currY, {
             kind: nodeDrag.kind,
             id: nodeDrag.id,
@@ -233,10 +237,22 @@ export function useTopologyPointerDrag({
           // Treat as Left Click -> select & inspect
           if (nodeDrag.kind === "location") {
             setSelectedContainerId(null);
+            setSelectedGhostLocId(null);
             setSelectedLocId(nodeDrag.id);
+          } else if (nodeDrag.kind === "ghost") {
+            setSelectedContainerId(null);
+            setSelectedLocId(null);
+            setSelectedGhostLocId(nodeDrag.id);
           } else {
+            setSelectedGhostLocId(null);
             setSelectedContainerId(nodeDrag.id);
           }
+          setNodeDrag(null);
+          return;
+        }
+
+        if (nodeDrag.kind === "ghost") {
+          onMoveGhostNode(nodeDrag.id, nodeDrag.currX, nodeDrag.currY);
           setNodeDrag(null);
           return;
         }
@@ -392,6 +408,8 @@ export function useTopologyPointerDrag({
     propContainers,
     propLocations,
     executeImmediateContainerMove,
+    onMoveGhostNode,
+    setSelectedGhostLocId,
     locationMap,
     containerMap,
     patchLocation,

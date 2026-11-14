@@ -6,7 +6,7 @@ import type {
 } from "../../types";
 
 export interface NodeDragState {
-  kind: "location" | "container";
+  kind: "location" | "container" | "ghost";
   id: string;
   startClientX: number;
   startClientY: number;
@@ -188,6 +188,25 @@ export interface ProjectedExternalPortalDestination {
   destinationContainerName: string | null;
 }
 
+export interface ProjectedGhostExternalNode {
+  destination: LocationNode;
+  destinationContainerName: string;
+  connectedPortalIds: string[];
+}
+
+export interface ProjectedGhostEdge {
+  id: string;
+  portalLocationId: string;
+  externalLocationId: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  direction_label: string;
+  compass_direction?: CompassDirection | null;
+  travel_minutes: number;
+  is_locked_or_hidden: boolean;
+  rawEdge: LocationEdge;
+}
+
 export interface ProjectedDepthTopology {
   currentContainer: LocationContainer | null;
   breadcrumbs: LocationContainer[];
@@ -199,6 +218,8 @@ export interface ProjectedDepthTopology {
     string,
     ProjectedExternalPortalDestination[]
   >;
+  ghostExternalNodes: ProjectedGhostExternalNode[];
+  ghostEdges: ProjectedGhostEdge[];
   anchorNodeId: string;
 }
 
@@ -366,11 +387,50 @@ export function projectTopologyForDepth(
     string,
     ProjectedExternalPortalDestination[]
   > = {};
+  const ghostMap = new Map<string, ProjectedGhostExternalNode>();
+  const ghostEdges: ProjectedGhostEdge[] = [];
   const projectedEdges: ProjectedTopologyEdge[] = [];
   const aggregatedGroups = new Map<
     string,
     { sourceNodeId: string; targetNodeId: string; edges: LocationEdge[] }
   >();
+
+  const registerGhostLink = (
+    edge: LocationEdge,
+    portalLocId: string,
+    extLoc: LocationNode,
+    isOutgoingFromPortal: boolean
+  ) => {
+    if (!currentContainerId) return;
+    const destContName =
+      extLoc.container_id && byId.has(extLoc.container_id)
+        ? byId.get(extLoc.container_id)!.name
+        : "World Root";
+    let ghostEntry = ghostMap.get(extLoc.id);
+    if (!ghostEntry) {
+      ghostEntry = {
+        destination: extLoc,
+        destinationContainerName: destContName,
+        connectedPortalIds: [],
+      };
+      ghostMap.set(extLoc.id, ghostEntry);
+    }
+    if (!ghostEntry.connectedPortalIds.includes(portalLocId)) {
+      ghostEntry.connectedPortalIds.push(portalLocId);
+    }
+    ghostEdges.push({
+      id: `ghost:${edge.id}`,
+      portalLocationId: portalLocId,
+      externalLocationId: extLoc.id,
+      sourceNodeId: isOutgoingFromPortal ? portalLocId : extLoc.id,
+      targetNodeId: isOutgoingFromPortal ? extLoc.id : portalLocId,
+      direction_label: edge.direction_label,
+      compass_direction: edge.compass_direction,
+      travel_minutes: edge.travel_minutes,
+      is_locked_or_hidden: edge.is_locked_or_hidden,
+      rawEdge: edge,
+    });
+  };
 
   for (const edge of edges) {
     const fromVis = visibleByLocId.get(edge.from_location_id);
@@ -392,6 +452,17 @@ export function projectTopologyForDepth(
             destination: dest,
             destinationContainerName: destContName,
           });
+          registerGhostLink(edge, edge.from_location_id, dest, true);
+        }
+      }
+      continue;
+    }
+
+    if (!fromVis && toVis) {
+      if (toVis.kind === "location") {
+        const src = locMap.get(edge.from_location_id);
+        if (src) {
+          registerGhostLink(edge, edge.to_location_id, src, false);
         }
       }
       continue;
@@ -469,6 +540,8 @@ export function projectTopologyForDepth(
     projectedEdges,
     dynamicPortalIds,
     externalPortalsByLocationId,
+    ghostExternalNodes: Array.from(ghostMap.values()),
+    ghostEdges,
     anchorNodeId,
   };
 }
@@ -876,4 +949,106 @@ export function resolveInitialMapFocus(
     focalLocationId: focalLoc?.id ?? null,
     pan,
   };
+}
+
+/**
+ * Compute per-view coordinates for external ghost nodes using directional
+ * projection from connected portals (or ephemeral per-view drag overrides),
+ * pushed away from visible nodes and previously placed ghosts.
+ */
+export function computeGhostNodeCoords(
+  ghostNodes: ProjectedGhostExternalNode[],
+  ghostEdges: ProjectedGhostEdge[],
+  visibleCoords: Record<string, { x: number; y: number }>,
+  overrides?: Record<string, { x: number; y: number }>
+): Record<string, { x: number; y: number }> {
+  const result: Record<string, { x: number; y: number }> = {};
+  if (ghostNodes.length === 0) return result;
+
+  const occupied: Array<{ x: number; y: number }> = Object.values(visibleCoords);
+  const offsetDist = 148;
+  const minClearance = 108;
+
+  for (let gIdx = 0; gIdx < ghostNodes.length; gIdx++) {
+    const ghost = ghostNodes[gIdx];
+    const extId = ghost.destination.id;
+    const override = overrides?.[extId];
+    if (
+      override &&
+      typeof override.x === "number" &&
+      Number.isFinite(override.x) &&
+      typeof override.y === "number" &&
+      Number.isFinite(override.y)
+    ) {
+      result[extId] = { x: Math.round(override.x), y: Math.round(override.y) };
+      occupied.push(result[extId]);
+      continue;
+    }
+
+    const attachedEdges = ghostEdges.filter(
+      (ge) => ge.externalLocationId === extId
+    );
+    const candidateTargets: Array<{ x: number; y: number }> = [];
+    const seenPortal = new Set<string>();
+
+    for (const ge of attachedEdges) {
+      if (seenPortal.has(ge.portalLocationId)) continue;
+      const pPt = visibleCoords[ge.portalLocationId];
+      if (!pPt) continue;
+      seenPortal.add(ge.portalLocationId);
+      const rawDir =
+        ge.compass_direction && COMPASS_ORDER.includes(ge.compass_direction)
+          ? ge.compass_direction
+          : inferCompassDirection(null, ge.direction_label);
+      const outwardDir =
+        ge.sourceNodeId === ge.portalLocationId
+          ? rawDir
+          : OPPOSITE_COMPASS[rawDir];
+      const angle = COMPASS_ANGLES[outwardDir];
+      candidateTargets.push({
+        x: pPt.x + Math.cos(angle) * offsetDist,
+        y: pPt.y + Math.sin(angle) * offsetDist,
+      });
+    }
+
+    let gx = 0;
+    let gy = 0;
+    if (candidateTargets.length > 0) {
+      for (const ct of candidateTargets) {
+        gx += ct.x;
+        gy += ct.y;
+      }
+      gx /= candidateTargets.length;
+      gy /= candidateTargets.length;
+    } else {
+      const fallbackAngle = -Math.PI / 4 + gIdx * (Math.PI / 3);
+      gx = Math.cos(fallbackAngle) * offsetDist;
+      gy = Math.sin(fallbackAngle) * offsetDist;
+    }
+
+    // Light collision avoidance against visible nodes and earlier ghosts
+    for (let step = 0; step < 12; step++) {
+      let overlap = false;
+      for (const occ of occupied) {
+        const dx = gx - occ.x;
+        const dy = gy - occ.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < minClearance) {
+          overlap = true;
+          const angle =
+            dist > 1
+              ? Math.atan2(dy, dx)
+              : -Math.PI / 4 + (step + gIdx) * (Math.PI / 4);
+          gx += Math.cos(angle) * (minClearance - dist + 18);
+          gy += Math.sin(angle) * (minClearance - dist + 18);
+        }
+      }
+      if (!overlap) break;
+    }
+
+    result[extId] = { x: Math.round(gx), y: Math.round(gy) };
+    occupied.push(result[extId]);
+  }
+
+  return result;
 }
