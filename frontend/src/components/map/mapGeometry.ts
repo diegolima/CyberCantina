@@ -223,7 +223,9 @@ export function isEditableKeyboardTarget(target: unknown): boolean {
   }
   if (typeof el.closest === "function") {
     return Boolean(
-      el.closest("input, textarea, select, [contenteditable='true'], .tag-chips-container")
+      el.closest(
+        "input, textarea, select, [contenteditable='true'], .tag-chips-container, [aria-modal='true']"
+      )
     );
   }
   return false;

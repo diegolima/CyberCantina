@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUpRight,
   Clock,
@@ -9,6 +9,9 @@ import {
   LogIn,
   MapPin,
   Pencil,
+  RotateCcw,
+  Search,
+  Sparkles,
   Star,
   Trash2,
   Unlock,
@@ -20,6 +23,17 @@ import {
   LocationEdge,
   LocationNode,
 } from "../../types";
+import {
+  MAP_ICON_CATEGORIES,
+  MAP_ICON_OPTIONS,
+  filterMapIcons,
+  getDefaultMapIconKey,
+  getMapIconCategoryLabel,
+  getMapIconOption,
+  getSuggestedMapIcons,
+  type MapIconCategory,
+  type MapIconOption,
+} from "./mapIcons";
 import {
   CONTAINER_DEPTH_LABELS,
   parseCommittedEdgeMinutes,
@@ -1418,6 +1432,457 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
               </div>
             );
           })}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export interface MapIconBrowserModalProps {
+  isOpen: boolean;
+  title: string;
+  currentIconKey?: string | null;
+  kind: "location" | "hub" | "container";
+  depth?: 1 | 2 | 3 | 4;
+  genre?: string;
+  elementName?: string;
+  elementTags?: string[];
+  usedIconKeys?: string[];
+  onSelect: (iconKey: string | null) => void;
+  onClose: () => void;
+}
+
+type BrowserScope = "all" | "suggested" | "used" | MapIconCategory;
+
+export const MapIconBrowserModal: React.FC<MapIconBrowserModalProps> = ({
+  isOpen,
+  title,
+  currentIconKey,
+  kind,
+  depth,
+  genre,
+  elementName,
+  elementTags,
+  usedIconKeys = [],
+  onSelect,
+  onClose,
+}) => {
+  const [query, setQuery] = useState("");
+  const [scope, setScope] = useState<BrowserScope>("all");
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setQuery("");
+    setScope("all");
+    searchInputRef.current?.focus();
+  }, [isOpen]);
+
+  const defaultKey = getDefaultMapIconKey(kind, depth);
+  const effectiveKey = currentIconKey || defaultKey;
+
+  const suggestedIcons = useMemo(
+    () =>
+      getSuggestedMapIcons({
+        kind,
+        depth,
+        genre,
+        name: elementName,
+        tags: elementTags,
+        limit: 18,
+      }),
+    [kind, depth, genre, elementName, elementTags]
+  );
+
+  const usedIcons = useMemo(() => {
+    const seen = new Set<string>();
+    const list: MapIconOption[] = [];
+    for (const k of usedIconKeys) {
+      if (seen.has(k)) continue;
+      const opt = getMapIconOption(k);
+      if (opt) {
+        seen.add(k);
+        list.push(opt);
+      }
+    }
+    return list;
+  }, [usedIconKeys]);
+
+  const queryMatchedAll = useMemo(() => filterMapIcons(query, "all"), [query]);
+
+  const categoryCounts = useMemo(() => {
+    const counts: Record<MapIconCategory, number> = {
+      settlement: 0,
+      transit: 0,
+      wilderness: 0,
+      scifi: 0,
+      arcana: 0,
+      hazard: 0,
+    };
+    for (const opt of queryMatchedAll) {
+      counts[opt.category] += 1;
+    }
+    return counts;
+  }, [queryMatchedAll]);
+
+  const visibleIcons = useMemo(() => {
+    const filterList = (list: MapIconOption[]) => {
+      const allowed = new Set(queryMatchedAll.map((o) => o.key));
+      return list.filter((o) => allowed.has(o.key));
+    };
+    if (scope === "suggested") return filterList(suggestedIcons);
+    if (scope === "used") return filterList(usedIcons);
+    if (scope === "all") return queryMatchedAll;
+    return queryMatchedAll.filter((o) => o.category === scope);
+  }, [scope, queryMatchedAll, suggestedIcons, usedIcons]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Browse Map Icons"
+      style={{
+        position: "absolute",
+        inset: 0,
+        background: "rgba(9, 13, 22, 0.82)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 45,
+        padding: 16,
+      }}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClose();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          onClose();
+        }
+      }}
+    >
+      <div
+        style={{
+          width: "min(680px, 96%)",
+          height: "min(520px, 86%)",
+          background: "var(--bg-card)",
+          border: "1px solid var(--border-subtle)",
+          borderRadius: 10,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          boxShadow: "0 18px 48px rgba(0, 0, 0, 0.65)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            padding: "11px 14px",
+            borderBottom: "1px solid var(--border-subtle)",
+            gap: 10,
+          }}
+        >
+          <div>
+            <div style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--accent-cyan)" }}>
+              Choose Map Icon — {title}
+            </div>
+            <div style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>
+              {MAP_ICON_OPTIONS.length} worldbuilding icons across {MAP_ICON_CATEGORIES.length} categories
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {currentIconKey && currentIconKey !== defaultKey && (
+              <button
+                type="button"
+                className="btn"
+                style={{ padding: "4px 8px", fontSize: "0.7rem" }}
+                onClick={() => {
+                  onSelect(null);
+                  onClose();
+                }}
+              >
+                <RotateCcw size={11} /> Reset Default
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn"
+              style={{ padding: "4px 7px" }}
+              onClick={onClose}
+              aria-label="Close icon browser"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+
+        {/* Search bar */}
+        <div
+          style={{
+            padding: "8px 14px",
+            borderBottom: "1px solid var(--border-subtle)",
+            background: "var(--bg-panel)",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <Search size={14} color="var(--text-muted)" />
+          <input
+            ref={searchInputRef}
+            type="text"
+            aria-label="Search map icons"
+            placeholder="Search by place, motif, or tag (e.g. tavern, dock, clinic, crypt)..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="field-input"
+            style={{ flex: 1, fontSize: "0.76rem", padding: "5px 8px" }}
+          />
+          {query && (
+            <button
+              type="button"
+              className="btn"
+              style={{ padding: "4px 8px", fontSize: "0.69rem" }}
+              onClick={() => setQuery("")}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+
+        {/* Body: Sidebar + Grid */}
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: "grid",
+            gridTemplateColumns: "180px 1fr",
+          }}
+        >
+          {/* Category Sidebar */}
+          <div
+            role="tablist"
+            aria-label="Icon Categories"
+            style={{
+              borderRight: "1px solid var(--border-subtle)",
+              padding: 8,
+              display: "flex",
+              flexDirection: "column",
+              gap: 3,
+              overflowY: "auto",
+              background: "rgba(9, 13, 22, 0.35)",
+            }}
+          >
+            {[
+              {
+                id: "all" as const,
+                label: "All Icons",
+                count: queryMatchedAll.length,
+              },
+              {
+                id: "suggested" as const,
+                label: "Suggested",
+                count: suggestedIcons.filter((s) =>
+                  queryMatchedAll.some((m) => m.key === s.key)
+                ).length,
+                accent: "#c084fc",
+              },
+              ...(usedIcons.length > 0
+                ? [
+                    {
+                      id: "used" as const,
+                      label: "Used in World",
+                      count: usedIcons.filter((u) =>
+                        queryMatchedAll.some((m) => m.key === u.key)
+                      ).length,
+                    },
+                  ]
+                : []),
+            ].map((item) => {
+              const active = scope === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setScope(item.id)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "6px 8px",
+                    borderRadius: 6,
+                    border: active
+                      ? "1px solid rgba(6, 182, 212, 0.55)"
+                      : "1px solid transparent",
+                    background: active ? "rgba(6, 182, 212, 0.14)" : "transparent",
+                    color: active ? "#67e8f9" : "var(--text-secondary)",
+                    fontSize: "0.73rem",
+                    fontWeight: active ? 700 : 500,
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    {item.id === "suggested" && (
+                      <Sparkles size={11} color={item.accent} />
+                    )}
+                    {item.label}
+                  </span>
+                  <span style={{ fontSize: "0.66rem", opacity: 0.75 }}>{item.count}</span>
+                </button>
+              );
+            })}
+
+            <div style={{ borderTop: "1px solid var(--border-subtle)", margin: "4px 0" }} />
+
+            {MAP_ICON_CATEGORIES.map((cat) => {
+              const active = scope === cat.id;
+              return (
+                <button
+                  key={cat.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setScope(cat.id)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "6px 8px",
+                    borderRadius: 6,
+                    border: active
+                      ? "1px solid rgba(6, 182, 212, 0.55)"
+                      : "1px solid transparent",
+                    background: active ? "rgba(6, 182, 212, 0.14)" : "transparent",
+                    color: active ? "#67e8f9" : "var(--text-secondary)",
+                    fontSize: "0.72rem",
+                    fontWeight: active ? 700 : 500,
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  <span>{cat.label}</span>
+                  <span style={{ fontSize: "0.66rem", opacity: 0.75 }}>
+                    {categoryCounts[cat.id]}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Labeled Icon Grid */}
+          <div style={{ padding: 12, overflowY: "auto", minHeight: 0 }}>
+            {visibleIcons.length === 0 ? (
+              <div
+                style={{
+                  padding: "36px 16px",
+                  textAlign: "center",
+                  color: "var(--text-muted)",
+                  fontSize: "0.78rem",
+                }}
+              >
+                <div style={{ marginBottom: 8 }}>
+                  No icons match &ldquo;{query.trim()}&rdquo;.
+                </div>
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ fontSize: "0.72rem", padding: "4px 10px" }}
+                  onClick={() => {
+                    setQuery("");
+                    setScope("all");
+                  }}
+                >
+                  Show all icons
+                </button>
+              </div>
+            ) : (
+              <div
+                role="listbox"
+                aria-label="Icon browser results"
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(136px, 1fr))",
+                  gap: 6,
+                }}
+              >
+                {visibleIcons.map((opt) => {
+                  const Icon = opt.Icon;
+                  const isSelected = effectiveKey === opt.key;
+                  const catLabel = getMapIconCategoryLabel(opt.category);
+                  return (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      role="option"
+                      aria-selected={isSelected}
+                      onClick={() => {
+                        onSelect(opt.key);
+                        onClose();
+                      }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        padding: "7px 8px",
+                        borderRadius: 6,
+                        border: isSelected
+                          ? "1px solid var(--accent-cyan)"
+                          : "1px solid var(--border-subtle)",
+                        background: isSelected
+                          ? "rgba(6, 182, 212, 0.16)"
+                          : "var(--bg-panel)",
+                        color: isSelected ? "#67e8f9" : "var(--text-primary)",
+                        cursor: "pointer",
+                        textAlign: "left",
+                        minWidth: 0,
+                      }}
+                    >
+                      <Icon
+                        size={16}
+                        style={{ flexShrink: 0 }}
+                        color={isSelected ? "#22d3ee" : "#cbd5e1"}
+                      />
+                      <div style={{ minWidth: 0 }}>
+                        <div
+                          style={{
+                            fontSize: "0.72rem",
+                            fontWeight: 600,
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          {opt.label}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: "0.61rem",
+                            color: "var(--text-muted)",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          {catLabel}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

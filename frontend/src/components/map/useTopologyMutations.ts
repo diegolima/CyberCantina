@@ -11,7 +11,7 @@ import type {
   PassageHubCollisionState,
   StandaloneContainerCreateState,
 } from "./MapDialogs";
-import { getDefaultMapIconKey } from "./mapIcons";
+import { getDefaultMapIconKey, inferMapIconKey } from "./mapIcons";
 import type { PaletteItemKind } from "./MapPaletteBar";
 import {
   containerHasVisitedDescendants,
@@ -187,7 +187,11 @@ export function useTopologyMutations({
         lore_nodes: [],
         ui_x: Math.round(opts.x),
         ui_y: Math.round(opts.y),
-        icon: getDefaultMapIconKey("container", opts.depth),
+        icon: inferMapIconKey({
+          kind: "container",
+          depth: opts.depth,
+          name: opts.name,
+        }),
       };
 
       const nextLocs = [...workingLocations];
@@ -206,7 +210,11 @@ export function useTopologyMutations({
           is_starting_location: false,
           is_hub: false,
           is_visited: false,
-          icon: getDefaultMapIconKey("location"),
+          icon: inferMapIconKey({
+            kind: "location",
+            name: `${newCont.name} Entrance`,
+            tags: ["entrance"],
+          }),
         });
       }
 
@@ -786,7 +794,11 @@ export function useTopologyMutations({
           lore_nodes: [],
           ui_x: Math.round(st.dropX),
           ui_y: Math.round(st.dropY),
-          icon: getDefaultMapIconKey("container", depth),
+          icon: inferMapIconKey({
+            kind: "container",
+            depth,
+            name: opts.name,
+          }),
         };
         const portalLoc: LocationNode = {
           id: portalId,
@@ -800,7 +812,11 @@ export function useTopologyMutations({
           is_starting_location: false,
           is_hub: false,
           is_visited: false,
-          icon: getDefaultMapIconKey("location"),
+          icon: inferMapIconKey({
+            kind: "location",
+            name: `${opts.name} Entrance`,
+            tags: ["entrance"],
+          }),
         };
         const updatedSource =
           sourceLoc.container_id && !sourceLoc.is_entry_exit
@@ -844,7 +860,11 @@ export function useTopologyMutations({
         is_visited: false,
         ui_x: Math.round(st.dropX),
         ui_y: Math.round(st.dropY),
-        icon: getDefaultMapIconKey(isHub ? "hub" : "location"),
+        icon: inferMapIconKey({
+          kind: isHub ? "hub" : "location",
+          name: opts.name,
+          tags: isHub ? ["corridor"] : [],
+        }),
       };
 
       executeDirectEdgeCreation(
@@ -891,7 +911,12 @@ export function useTopologyMutations({
         lore_nodes: [],
         ui_x: Math.round(targetPt.x),
         ui_y: Math.round(targetPt.y),
-        icon: getDefaultMapIconKey("container", 1),
+        icon: inferMapIconKey({
+          kind: "container",
+          depth: 1,
+          name: containerName,
+          tags: targetLoc.environmental_tags ?? [],
+        }),
       };
 
       const nextLocs = workingLocations.map((l) => {
@@ -1185,7 +1210,16 @@ export function useTopologyMutations({
             })),
         ui_x: loc.ui_x ?? null,
         ui_y: loc.ui_y ?? null,
-        icon: getDefaultMapIconKey("container", 1),
+        icon:
+          loc.icon &&
+          loc.icon !== getDefaultMapIconKey(loc.is_hub ? "hub" : "location")
+            ? loc.icon
+            : inferMapIconKey({
+                kind: "container",
+                depth: 1,
+                name: loc.name,
+                tags: loc.environmental_tags ?? [],
+              }),
       };
       const nextLocs = workingLocations.map((l) =>
         l.id === locId

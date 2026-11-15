@@ -18,6 +18,7 @@ import {
   GroupIntoContainerState,
   MapContextMenu,
   MapContextMenuState,
+  MapIconBrowserModal,
   MultiEdgePopover,
   PassageHubCollisionModal,
   PassageHubCollisionState,
@@ -316,6 +317,25 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     () => resolveLiveEdgeModalEdges(multiEdgeModalEdges, workingEdges),
     [multiEdgeModalEdges, workingEdges]
   );
+  const [iconBrowserTarget, setIconBrowserTarget] = useState<{
+    targetKind: "location" | "container";
+    targetId: string;
+    kind: "location" | "hub" | "container";
+    depth?: 1 | 2 | 3 | 4;
+    currentIconKey?: string | null;
+    name?: string;
+    tags?: string[];
+  } | null>(null);
+  const usedMapIconKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const loc of workingLocations) {
+      if (loc.icon) keys.add(loc.icon);
+    }
+    for (const cont of workingContainers) {
+      if (cont.icon) keys.add(cont.icon);
+    }
+    return Array.from(keys);
+  }, [workingLocations, workingContainers]);
 
   // Inline edge travel-minutes editor
   const [inlineEdgeEdit, setInlineEdgeEdit] = useState<{
@@ -741,7 +761,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       groupModal ||
       standaloneContainerModal ||
       promotionPrompt ||
-      multiEdgeModalEdges
+      multiEdgeModalEdges ||
+      iconBrowserTarget
   );
 
   useEffect(() => {
@@ -1187,6 +1208,27 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             onConfirm={executeDirectEdgeCreation}
           />
 
+          <MapIconBrowserModal
+            isOpen={Boolean(iconBrowserTarget)}
+            title={iconBrowserTarget?.name || "Element"}
+            currentIconKey={iconBrowserTarget?.currentIconKey}
+            kind={iconBrowserTarget?.kind ?? "location"}
+            depth={iconBrowserTarget?.depth}
+            genre={worldContext?.genre}
+            elementName={iconBrowserTarget?.name}
+            elementTags={iconBrowserTarget?.tags}
+            usedIconKeys={usedMapIconKeys}
+            onSelect={(iconKey) => {
+              if (!iconBrowserTarget) return;
+              if (iconBrowserTarget.targetKind === "container") {
+                patchContainer(iconBrowserTarget.targetId, { icon: iconKey });
+              } else {
+                patchLocation(iconBrowserTarget.targetId, { icon: iconKey });
+              }
+            }}
+            onClose={() => setIconBrowserTarget(null)}
+          />
+
         </div>
 
         {/* Right Details Drawer or Stable Empty Placeholder */}
@@ -1235,6 +1277,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             isOverriding={isOverriding}
             onSaveCampaignLocationLore={onSaveCampaignLocationLore}
             onSaveCampaignContainerLore={onSaveCampaignContainerLore}
+            usedIconKeys={usedMapIconKeys}
+            onOpenIconBrowser={setIconBrowserTarget}
           />
         ) : (
           <div

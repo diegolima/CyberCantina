@@ -21,6 +21,7 @@ import { SpatialTopologyCanvas } from "../map/SpatialTopologyCanvas";
 import {
   EmptyCanvasCreateModal,
   GroupIntoContainerModal,
+  MapIconBrowserModal,
   MultiEdgePopover,
   PassageHubCollisionModal,
   StandaloneContainerCreateModal,
@@ -43,7 +44,15 @@ import {
   sanitizeEdgeMinutesInput,
   stepEdgeMinutesDraft,
 } from "../map/topologyProjection";
-import { getDefaultMapIconKey, resolveMapIconComponent } from "../map/mapIcons";
+import {
+  MAP_ICON_CATEGORIES,
+  MAP_ICON_OPTIONS,
+  filterMapIcons,
+  getDefaultMapIconKey,
+  getSuggestedMapIcons,
+  inferMapIconKey,
+  resolveMapIconComponent,
+} from "../map/mapIcons";
 import {
   computeUnreachableLocationIds,
   containerHasVisitedDescendants,
@@ -1084,5 +1093,152 @@ describe("Interactive Map Editor & Mini-Map", () => {
       />
     );
     expect(editedHtml).toContain('value="25"');
+  });
+
+  it("exposes curated 6-category icon catalog, search/suggestions, smart inference, and MapIconBrowserModal (v0.11.3)", () => {
+    const legacyKeys = [
+      "map-pin",
+      "building-2",
+      "home",
+      "store",
+      "beer",
+      "warehouse",
+      "landmark",
+      "castle",
+      "church",
+      "bed-double",
+      "git-branch",
+      "door-open",
+      "footprints",
+      "compass",
+      "train-front",
+      "anchor",
+      "rocket",
+      "map",
+      "globe-2",
+      "trees",
+      "mountain",
+      "waves",
+      "tent",
+      "flame",
+      "shield",
+      "key",
+      "wrench",
+      "cpu",
+      "radio",
+      "skull",
+      "layers",
+    ];
+    const allKeys = MAP_ICON_OPTIONS.map((o) => o.key);
+    expect(new Set(allKeys).size).toBe(MAP_ICON_OPTIONS.length);
+    expect(MAP_ICON_OPTIONS.length).toBeGreaterThanOrEqual(120);
+    for (const legacyKey of legacyKeys) {
+      expect(allKeys).toContain(legacyKey);
+    }
+    for (const cat of MAP_ICON_CATEGORIES) {
+      expect(MAP_ICON_OPTIONS.some((o) => o.category === cat.id)).toBe(true);
+    }
+
+    // Keyword search & category scoping
+    const tavernMatches = filterMapIcons("tavern", "all");
+    expect(tavernMatches.some((o) => o.key === "beer")).toBe(true);
+    const scifiServer = filterMapIcons("mainframe", "scifi");
+    expect(scifiServer.some((o) => o.key === "cpu")).toBe(true);
+    expect(filterMapIcons("mainframe", "wilderness")).toEqual([]);
+    expect(filterMapIcons("zzznomatch999", "all")).toEqual([]);
+
+    // Genre & keyword ranking
+    const cyberSuggestions = getSuggestedMapIcons({
+      kind: "location",
+      genre: "Cyberpunk Noir",
+      name: "Netrunner Clinic",
+      tags: ["neon", "terminal"],
+      limit: 6,
+    });
+    expect(
+      cyberSuggestions.some((o) => o.key === "terminal" || o.key === "hospital")
+    ).toBe(true);
+
+    // Smart inference on domain names vs generic placeholders
+    expect(
+      inferMapIconKey({ kind: "location", name: "Neon Cantina", tags: ["bar"] })
+    ).toBe("beer");
+    expect(
+      inferMapIconKey({ kind: "container", depth: 1, name: "Old Harbor", tags: [] })
+    ).toBe("anchor");
+    expect(
+      inferMapIconKey({ kind: "container", depth: 1, name: "Orbital Spaceport" })
+    ).toBe("rocket");
+    expect(
+      inferMapIconKey({ kind: "location", name: "Black Clinic", tags: ["ripperdoc"] })
+    ).toBe("heart-pulse");
+    expect(
+      inferMapIconKey({ kind: "location", name: "Royal Archive Library" })
+    ).toBe("library");
+    expect(inferMapIconKey({ kind: "location", name: "New Location 4" })).toBe(
+      "map-pin"
+    );
+    expect(inferMapIconKey({ kind: "hub", name: "Junction 2" })).toBe(
+      "git-branch"
+    );
+
+    // Modal target guard blocks Delete key inside aria-modal dialogs
+    expect(
+      isEditableKeyboardTarget({
+        tagName: "BUTTON",
+        closest: (sel: string) => (sel.includes("[aria-modal='true']") ? {} : null),
+      })
+    ).toBe(true);
+
+    // Drawer trigger + Browse All modal SSR checks
+    const { containers, locations } = makeRichWorldFixture();
+    const drawerWithBrowserHtml = renderToStaticMarkup(
+      <MapDetailsDrawer
+        mode="editor"
+        isMutatingLocked={false}
+        selectedLocation={locations[0]}
+        selectedContainer={null}
+        containers={containers}
+        allLocations={locations}
+        activeLocId={locations[0].id}
+        dynamicPortalIds={new Set()}
+        externalPortals={[]}
+        containerStats={null}
+        depthLabels={{
+          1: "Building / Landmark",
+          2: "District / Zone",
+          3: "City / Settlement",
+          4: "Region / Planet / Realm",
+        }}
+        usedIconKeys={["beer", "anchor"]}
+        onOpenIconBrowser={() => {}}
+        onClose={() => {}}
+        onPatchLocation={() => {}}
+        onPatchContainer={() => {}}
+        onResetCoordinates={() => {}}
+        onDrillIntoContainer={() => {}}
+      />
+    );
+    expect(drawerWithBrowserHtml).toContain("Browse All");
+
+    const browserModalHtml = renderToStaticMarkup(
+      <MapIconBrowserModal
+        isOpen={true}
+        title="Foyer"
+        currentIconKey="beer"
+        kind="location"
+        genre="Cyberpunk"
+        elementName="Neon Cantina"
+        elementTags={["bar"]}
+        usedIconKeys={["beer", "anchor"]}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />
+    );
+    expect(browserModalHtml).toContain('aria-label="Browse Map Icons"');
+    expect(browserModalHtml).toContain("Used in World");
+    expect(browserModalHtml).toContain("Suggested");
+    expect(browserModalHtml).toContain("Sci-Fi &amp; Tech");
+    expect(browserModalHtml).toContain("Cantina / Tavern");
   });
 });

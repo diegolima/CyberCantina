@@ -21,9 +21,11 @@ import {
   inferCompassDirection,
   pickCompassSlot,
 } from "../SpatialTopologyView";
+import { inferMapIconKey } from "../map/mapIcons";
 
 export function mapDraftToNodesAndEdges(
   draft: {
+    global_rules?: { genre?: string };
     locations: LocationNodeDraft[];
     edges: LocationEdgeDraft[];
   },
@@ -69,7 +71,14 @@ export function mapDraftToNodesAndEdges(
       starting_message: loc.starting_message ?? "",
       ui_x: loc.ui_x ?? null,
       ui_y: loc.ui_y ?? null,
-      icon: loc.icon ?? null,
+      icon:
+        loc.icon ||
+        inferMapIconKey({
+          kind: loc.is_hub ? "hub" : "location",
+          name: loc.name,
+          tags: loc.environmental_tags,
+          genre: draft.global_rules?.genre,
+        }),
       lore_nodes: (loc.lore_nodes ?? []).map((ln, lIdx) => ({
         id: ln.id || `draft_loc_lore_${idx}_${lIdx}`,
         world_id: worldId,
@@ -170,7 +179,15 @@ export function draftToWorldRecord(draft: WorldWizardDraft): WorldRecord {
       environmental_tags: [...(cont.environmental_tags ?? [])],
       ui_x: cont.ui_x ?? null,
       ui_y: cont.ui_y ?? null,
-      icon: cont.icon ?? null,
+      icon:
+        cont.icon ||
+        inferMapIconKey({
+          kind: "container",
+          depth: cont.depth,
+          name: cont.name,
+          tags: cont.environmental_tags,
+          genre: draft.global_rules?.genre,
+        }),
       lore_nodes:
         cont.depth === 1
           ? (cont.lore_nodes ?? []).map((ln, lIdx) => ({
