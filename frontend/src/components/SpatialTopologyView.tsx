@@ -59,6 +59,7 @@ import {
   pickCompassSlot,
   projectTopologyForDepth,
   resolveInitialMapFocus,
+  resolveLiveEdgeModalEdges,
   type GraphSnapshot,
   type InitialMapFocus,
   type LinkDragState,
@@ -311,6 +312,10 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   const [multiEdgeModalEdges, setMultiEdgeModalEdges] = useState<
     LocationEdge[] | null
   >(null);
+  const liveMultiEdgeModalEdges = useMemo(
+    () => resolveLiveEdgeModalEdges(multiEdgeModalEdges, workingEdges),
+    [multiEdgeModalEdges, workingEdges]
+  );
 
   // Inline edge travel-minutes editor
   const [inlineEdgeEdit, setInlineEdgeEdit] = useState<{
@@ -1166,7 +1171,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
           />
 
           <MultiEdgePopover
-            edges={multiEdgeModalEdges}
+            edges={liveMultiEdgeModalEdges}
             locationMap={locationMap}
             onClose={() => setMultiEdgeModalEdges(null)}
             onUpdateDistance={handleUpdateEdgeDistance}

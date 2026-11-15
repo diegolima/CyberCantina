@@ -846,6 +846,29 @@ export function makeUniqueId(prefix: string): string {
 }
 
 /**
+ * Keep only ASCII numeric digits for controlled inline/popover travel-minute drafts.
+ */
+export function sanitizeEdgeMinutesInput(raw: string): string {
+  return raw.replace(/[^\d]/g, "");
+}
+
+/**
+ * Resolve modal-tracked edges against live workingEdges so distance/lock updates
+ * immediately reflect inside MultiEdgePopover.
+ */
+export function resolveLiveEdgeModalEdges(
+  modalEdges: LocationEdge[] | null,
+  workingEdges: LocationEdge[]
+): LocationEdge[] | null {
+  if (!modalEdges || modalEdges.length === 0) return null;
+  const byId = new Map(workingEdges.map((edge) => [edge.id, edge]));
+  const resolved = modalEdges
+    .map((edge) => byId.get(edge.id))
+    .filter((edge): edge is LocationEdge => Boolean(edge));
+  return resolved.length > 0 ? resolved : null;
+}
+
+/**
  * Clamp and step an inline edge travel-minutes draft string by `delta`,
  * falling back to `fallbackMinutes` when the draft is blank/non-numeric.
  */

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ArrowUpRight,
   Clock,
@@ -20,7 +20,12 @@ import {
   LocationEdge,
   LocationNode,
 } from "../../types";
-import { CONTAINER_DEPTH_LABELS } from "./topologyProjection";
+import {
+  CONTAINER_DEPTH_LABELS,
+  parseCommittedEdgeMinutes,
+  sanitizeEdgeMinutesInput,
+  stepEdgeMinutesDraft,
+} from "./topologyProjection";
 
 export interface PassageHubCollisionState {
   sourceNodeId: string;
@@ -1189,7 +1194,63 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
   onToggleLocked,
   onDeleteEdge,
 }) => {
+  const [draftMinutesById, setDraftMinutesById] = useState<
+    Record<string, string>
+  >({});
+  const lastSyncedMinutesRef = useRef<Record<string, number>>({});
+
+  useEffect(() => {
+    if (!edges || edges.length === 0) {
+      setDraftMinutesById({});
+      lastSyncedMinutesRef.current = {};
+      return;
+    }
+    setDraftMinutesById((prev) => {
+      const next: Record<string, string> = {};
+      const nextSynced: Record<string, number> = {};
+      for (const edge of edges) {
+        const prevSynced = lastSyncedMinutesRef.current[edge.id];
+        if (prev[edge.id] === undefined || prevSynced !== edge.travel_minutes) {
+          next[edge.id] = String(edge.travel_minutes);
+        } else {
+          next[edge.id] = prev[edge.id];
+        }
+        nextSynced[edge.id] = edge.travel_minutes;
+      }
+      lastSyncedMinutesRef.current = nextSynced;
+      return next;
+    });
+  }, [edges]);
+
   if (!edges || edges.length === 0) return null;
+
+  const commitRowMinutes = (edge: LocationEdge, explicitDraft?: string) => {
+    const rawDraft =
+      explicitDraft ?? draftMinutesById[edge.id] ?? String(edge.travel_minutes);
+    const committed = parseCommittedEdgeMinutes(rawDraft);
+    const normalized = committed ?? edge.travel_minutes;
+    if (committed !== null && committed !== edge.travel_minutes) {
+      onUpdateDistance(edge.id, committed);
+    }
+    lastSyncedMinutesRef.current[edge.id] = normalized;
+    setDraftMinutesById((prev) => ({
+      ...prev,
+      [edge.id]: String(normalized),
+    }));
+  };
+
+  const handleClosePopover = () => {
+    for (const edge of edges) {
+      const draft = draftMinutesById[edge.id];
+      if (draft !== undefined) {
+        const committed = parseCommittedEdgeMinutes(draft);
+        if (committed !== null && committed !== edge.travel_minutes) {
+          onUpdateDistance(edge.id, committed);
+        }
+      }
+    }
+    onClose();
+  };
 
   return (
     <div
@@ -1208,7 +1269,7 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
       }}
       onClick={(e) => {
         e.stopPropagation();
-        onClose();
+        handleClosePopover();
       }}
     >
       <div
@@ -1241,7 +1302,7 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
             type="button"
             className="btn"
             style={{ padding: "2px 6px" }}
-            onClick={onClose}
+            onClick={handleClosePopover}
             aria-label="Close"
           >
             <X size={13} />
@@ -1252,6 +1313,8 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
           {edges.map((e) => {
             const fromName = locationMap.get(e.from_location_id)?.name ?? e.from_location_id;
             const toName = locationMap.get(e.to_location_id)?.name ?? e.to_location_id;
+            const draftValue =
+              draftMinutesById[e.id] ?? String(e.travel_minutes);
             return (
               <div
                 key={e.id}
@@ -1276,18 +1339,59 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
                   </div>
                 </div>
                 <input
-                  type="number"
-                  min={1}
-                  max={240}
+                  type="text"
+                  inputMode="numeric"
+                  aria-label={`Travel minutes for ${fromName} to ${toName}`}
                   className="field-input"
-                  style={{ padding: "3px 6px", fontSize: "0.73rem" }}
-                  value={e.travel_minutes}
+                  style={{
+                    padding: "3px 6px",
+                    fontSize: "0.73rem",
+                    textAlign: "center",
+                  }}
+                  value={draftValue}
                   onChange={(ev) => {
-                    const mins = Math.max(
-                      1,
-                      Math.min(240, parseInt(ev.target.value, 10) || 1)
-                    );
-                    onUpdateDistance(e.id, mins);
+                    const digitsOnly = sanitizeEdgeMinutesInput(ev.target.value);
+                    setDraftMinutesById((prev) => ({
+                      ...prev,
+                      [e.id]: digitsOnly,
+                    }));
+                  }}
+                  onBlur={() => commitRowMinutes(e)}
+                  onKeyDown={(ev) => {
+                    if (ev.key === "Enter") {
+                      ev.preventDefault();
+                      ev.stopPropagation();
+                      commitRowMinutes(e);
+                    } else if (ev.key === "Escape") {
+                      ev.preventDefault();
+                      ev.stopPropagation();
+                      setDraftMinutesById((prev) => ({
+                        ...prev,
+                        [e.id]: String(e.travel_minutes),
+                      }));
+                    } else if (ev.key === "ArrowUp") {
+                      ev.preventDefault();
+                      const stepped = stepEdgeMinutesDraft(
+                        draftValue,
+                        1,
+                        e.travel_minutes
+                      );
+                      setDraftMinutesById((prev) => ({
+                        ...prev,
+                        [e.id]: stepped,
+                      }));
+                    } else if (ev.key === "ArrowDown") {
+                      ev.preventDefault();
+                      const stepped = stepEdgeMinutesDraft(
+                        draftValue,
+                        -1,
+                        e.travel_minutes
+                      );
+                      setDraftMinutesById((prev) => ({
+                        ...prev,
+                        [e.id]: stepped,
+                      }));
+                    }
                   }}
                 />
                 <button

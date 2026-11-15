@@ -21,6 +21,7 @@ import { SpatialTopologyCanvas } from "../map/SpatialTopologyCanvas";
 import {
   EmptyCanvasCreateModal,
   GroupIntoContainerModal,
+  MultiEdgePopover,
   PassageHubCollisionModal,
   StandaloneContainerCreateModal,
 } from "../map/MapDialogs";
@@ -38,6 +39,8 @@ import {
 import {
   filterEdgesAfterDeletion,
   parseCommittedEdgeMinutes,
+  resolveLiveEdgeModalEdges,
+  sanitizeEdgeMinutesInput,
   stepEdgeMinutesDraft,
 } from "../map/topologyProjection";
 import { getDefaultMapIconKey, resolveMapIconComponent } from "../map/mapIcons";
@@ -975,5 +978,111 @@ describe("Interactive Map Editor & Mini-Map", () => {
     );
     expect(l2ContHtml).not.toContain("Enrich Description");
     expect(l2ContHtml).not.toContain("Suggest Tags");
+  });
+
+  it("keeps live multi-digit travel distances synchronized in inline editor and MultiEdgePopover", () => {
+    const { containers, locations, edges } = makeRichWorldFixture();
+
+    // 1. Digit sanitization permits empty intermediate state and preserves multi-digit strings
+    expect(sanitizeEdgeMinutesInput("")).toBe("");
+    expect(sanitizeEdgeMinutesInput("25")).toBe("25");
+    expect(sanitizeEdgeMinutesInput("2a5m")).toBe("25");
+
+    // 2. resolveLiveEdgeModalEdges keeps MultiEdgePopover synchronized with workingEdges mutations
+    const snapshot = [edges[2]];
+    const updatedWorkingEdges = edges.map((e) =>
+      e.id === edges[2].id ? { ...e, travel_minutes: 25, is_locked_or_hidden: true } : e
+    );
+    const liveResolved = resolveLiveEdgeModalEdges(snapshot, updatedWorkingEdges);
+    expect(liveResolved).toHaveLength(1);
+    expect(liveResolved?.[0].travel_minutes).toBe(25);
+    expect(liveResolved?.[0].is_locked_or_hidden).toBe(true);
+    expect(resolveLiveEdgeModalEdges([], updatedWorkingEdges)).toBeNull();
+    expect(
+      resolveLiveEdgeModalEdges(snapshot, updatedWorkingEdges.filter((e) => e.id !== edges[2].id))
+    ).toBeNull();
+
+    // 3. MultiEdgePopover renders numeric text input initialized to live travel_minutes
+    const locMap = new Map(locations.map((l) => [l.id, l]));
+    const popoverHtml = renderToStaticMarkup(
+      <MultiEdgePopover
+        edges={liveResolved}
+        locationMap={locMap}
+        onClose={() => {}}
+        onUpdateDistance={() => {}}
+        onToggleLocked={() => {}}
+        onDeleteEdge={() => {}}
+      />
+    );
+    expect(popoverHtml).toContain("Boundary Passages (1)");
+    expect(popoverHtml).toContain('inputMode="numeric"');
+    expect(popoverHtml).toContain('value="25"');
+
+    // 4. Editing either direction of an edge pair hides its SVG badge and shows typed value
+    const projected = projectTopologyForDepth(
+      null,
+      containers,
+      locations,
+      edges,
+      "loc_foyer"
+    );
+    const coords: Record<string, { x: number; y: number }> = {
+      ...computeFullMapCoords(locations, edges, "loc_foyer"),
+      cont_district: { x: 120, y: -40 },
+      cont_club: { x: 0, y: 0 },
+    };
+    // Reverse edge e4 shares the same pairKey as e3 (whose label is shown on the canvas)
+    const editedHtml = renderToStaticMarkup(
+      <SpatialTopologyCanvas
+        svgRef={{ current: null }}
+        canvasWrapRef={{ current: null }}
+        viewportGroupRef={{ current: null }}
+        panDragRef={{
+          current: {
+            active: false,
+            moved: false,
+            button: 0,
+            startClientX: 0,
+            startClientY: 0,
+            origPanX: 0,
+            origPanY: 0,
+          },
+        }}
+        mode="editor"
+        zoom={1}
+        setZoom={() => {}}
+        pan={{ x: 0, y: 0 }}
+        setPan={() => {}}
+        nodeDrag={null}
+        setNodeDrag={() => {}}
+        linkDrag={null}
+        setLinkDrag={() => {}}
+        hoveredNodeKey={null}
+        setHoveredNodeKey={() => {}}
+        projectedTopology={projected}
+        fullMapCoords={coords}
+        selectedContainer={null}
+        selectedLocation={null}
+        activeLoc={locations[0]}
+        activeNeighborIds={new Set()}
+        unreachableSet={new Set()}
+        occupiedSlotsByLocId={new Map()}
+        isMutatingLocked={false}
+        inlineEdgeEdit={{ edgeId: "e4", midX: 10, midY: 20, value: "25" }}
+        setInlineEdgeEdit={() => {}}
+        statusNotice={null}
+        setStatusNotice={() => {}}
+        setSelectedLocId={() => {}}
+        setSelectedContainerId={() => {}}
+        setContextMenu={() => {}}
+        setMultiEdgeModalEdges={() => {}}
+        openContextMenuAt={() => {}}
+        handleUpdateEdgeDistance={() => {}}
+        handleDeleteEdge={() => {}}
+        handleDeleteEdgeGroup={() => {}}
+        drillIntoContainer={() => {}}
+      />
+    );
+    expect(editedHtml).toContain('value="25"');
   });
 });
