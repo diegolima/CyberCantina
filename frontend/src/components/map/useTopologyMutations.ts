@@ -26,10 +26,101 @@ import {
   filterEdgesAfterDeletion,
   makeUniqueId,
   pickCompassSlot,
+  resolveAutoTargetSlot,
   type GraphSnapshot,
   type ProjectedDepthTopology,
   type PromotionPromptState,
 } from "./topologyProjection";
+
+/** Resolve a node or container supernode to its active gateway location and candidate members. */
+export function resolveNodeConnectionEndpoint(params: {
+  kind: "location" | "container";
+  id: string;
+  locationMap: Map<string, LocationNode>;
+  containerMap: Map<string, LocationContainer>;
+  workingContainers: LocationContainer[];
+  workingLocations: LocationNode[];
+  dynamicPortalIds: Set<string>;
+}): {
+  loc: LocationNode | null;
+  container: LocationContainer | null;
+  candidates: LocationNode[];
+} {
+  const {
+    kind,
+    id,
+    locationMap,
+    containerMap,
+    workingContainers,
+    workingLocations,
+    dynamicPortalIds,
+  } = params;
+  if (kind === "location") {
+    return {
+      loc: locationMap.get(id) ?? null,
+      container: null,
+      candidates: [],
+    };
+  }
+  const subIds = getDescendantContainerIds(id, workingContainers);
+  const inside = workingLocations.filter(
+    (l) => l.container_id != null && subIds.has(l.container_id)
+  );
+  const portal =
+    inside.find((l) => dynamicPortalIds.has(l.id)) ?? inside[0] ?? null;
+  return {
+    loc: portal,
+    container: containerMap.get(id) ?? null,
+    candidates: inside,
+  };
+}
+
+/** Build the forward/reverse LocationEdge pair respecting an explicit or auto-resolved target slot. */
+export function buildBidirectionalEdgePair(params: {
+  worldId: string;
+  fromLoc: LocationNode;
+  toLoc: LocationNode;
+  direction: CompassDirection;
+  targetDirection?: CompassDirection;
+  travelMinutes: number;
+  bidirectional: boolean;
+}): LocationEdge[] {
+  const {
+    worldId,
+    fromLoc,
+    toLoc,
+    direction,
+    targetDirection,
+    travelMinutes,
+    bidirectional,
+  } = params;
+  const revSlot = targetDirection ?? OPPOSITE_COMPASS[direction];
+  const edges: LocationEdge[] = [
+    {
+      id: makeUniqueId("edge_fwd"),
+      world_id: worldId,
+      from_location_id: fromLoc.id,
+      to_location_id: toLoc.id,
+      direction_label: `Passage to ${toLoc.name}`,
+      compass_direction: direction,
+      travel_minutes: travelMinutes,
+      is_locked_or_hidden: false,
+    },
+  ];
+  if (bidirectional) {
+    edges.push({
+      id: makeUniqueId("edge_rev"),
+      world_id: worldId,
+      from_location_id: toLoc.id,
+      to_location_id: fromLoc.id,
+      direction_label: `Return to ${fromLoc.name}`,
+      compass_direction: revSlot,
+      travel_minutes: travelMinutes,
+      is_locked_or_hidden: false,
+    });
+  }
+  return edges;
+}
 
 export interface UseTopologyMutationsParams {
   worldId: string;
@@ -351,7 +442,8 @@ export function useTopologyMutations({
       bidirectional: boolean,
       promoteIds: Set<string>,
       overrideLocations?: LocationNode[],
-      overrideContainers?: LocationContainer[]
+      overrideContainers?: LocationContainer[],
+      targetDirection?: CompassDirection
     ) => {
       const baseLocs = overrideLocations ?? workingLocations;
       const baseConts = overrideContainers ?? workingContainers;
@@ -362,31 +454,15 @@ export function useTopologyMutations({
             )
           : baseLocs;
 
-      const revSlot = OPPOSITE_COMPASS[direction];
-      const newEdges: LocationEdge[] = [
-        {
-          id: makeUniqueId("edge_fwd"),
-          world_id: worldId,
-          from_location_id: fromLoc.id,
-          to_location_id: toLoc.id,
-          direction_label: `Passage to ${toLoc.name}`,
-          compass_direction: direction,
-          travel_minutes: travelMinutes,
-          is_locked_or_hidden: false,
-        },
-      ];
-      if (bidirectional) {
-        newEdges.push({
-          id: makeUniqueId("edge_rev"),
-          world_id: worldId,
-          from_location_id: toLoc.id,
-          to_location_id: fromLoc.id,
-          direction_label: `Return to ${fromLoc.name}`,
-          compass_direction: revSlot,
-          travel_minutes: travelMinutes,
-          is_locked_or_hidden: false,
-        });
-      }
+      const newEdges = buildBidirectionalEdgePair({
+        worldId,
+        fromLoc,
+        toLoc,
+        direction,
+        targetDirection,
+        travelMinutes,
+        bidirectional,
+      });
 
       commitNextGraph({
         containers: baseConts,
@@ -395,7 +471,7 @@ export function useTopologyMutations({
       });
       setPromotionPrompt(null);
     },
-    [workingLocations, workingContainers, workingEdges, worldId, commitNextGraph]
+    [workingLocations, workingContainers, workingEdges, worldId, commitNextGraph, setPromotionPrompt]
   );
 
   // Resolve connecting a source L0 location and target visible entity (L0 or Container supernode)
@@ -407,35 +483,27 @@ export function useTopologyMutations({
       targetKind: "location" | "container";
       targetId: string;
       explicitTargetSlot?: CompassDirection;
+      travelMinutes?: number;
     }) => {
-      const resolveLocFromNode = (
-        kind: "location" | "container",
-        id: string
-      ): { loc: LocationNode | null; container: LocationContainer | null; candidates: LocationNode[] } => {
-        if (kind === "location") {
-          return {
-            loc: locationMap.get(id) ?? null,
-            container: null,
-            candidates: [],
-          };
-        }
-        const subIds = getDescendantContainerIds(id, workingContainers);
-        const inside = workingLocations.filter(
-          (l) => l.container_id != null && subIds.has(l.container_id)
-        );
-        const portal =
-          inside.find((l) => projectedTopology.dynamicPortalIds.has(l.id)) ??
-          inside[0] ??
-          null;
-        return {
-          loc: portal,
-          container: containerMap.get(id) ?? null,
-          candidates: inside,
-        };
-      };
-
-      const srcInfo = resolveLocFromNode(opts.sourceKind, opts.sourceId);
-      const tgtInfo = resolveLocFromNode(opts.targetKind, opts.targetId);
+      const minutes = Math.max(1, Math.min(240, opts.travelMinutes ?? 2));
+      const srcInfo = resolveNodeConnectionEndpoint({
+        kind: opts.sourceKind,
+        id: opts.sourceId,
+        locationMap,
+        containerMap,
+        workingContainers,
+        workingLocations,
+        dynamicPortalIds: projectedTopology.dynamicPortalIds,
+      });
+      const tgtInfo = resolveNodeConnectionEndpoint({
+        kind: opts.targetKind,
+        id: opts.targetId,
+        locationMap,
+        containerMap,
+        workingContainers,
+        workingLocations,
+        dynamicPortalIds: projectedTopology.dynamicPortalIds,
+      });
       if (!srcInfo.loc || !tgtInfo.loc) {
         setStatusNotice(
           "Cannot connect to an empty container — add a location or sub-container inside it first."
@@ -459,22 +527,41 @@ export function useTopologyMutations({
 
       const srcPt = fullMapCoords[opts.sourceId] ?? { x: 0, y: 0 };
       const tgtPt = fullMapCoords[opts.targetId] ?? { x: 100, y: 0 };
-      const targetSlot =
-        opts.explicitTargetSlot ?? OPPOSITE_COMPASS[opts.sourceSlot];
+      const targetOccupiedSet =
+        occupiedSlotsByLocId.get(tgtInfo.loc.id) ?? new Set<CompassDirection>();
+      const resolvedTarget = resolveAutoTargetSlot(
+        opts.sourceSlot,
+        targetOccupiedSet,
+        opts.explicitTargetSlot
+      );
 
-      // Check compass port collision on source or explicit target port
+      // Check compass port collision on source upfront (or explicit target on direct path)
       const srcExistingEdge = workingEdges.find(
         (e) =>
           e.from_location_id === srcInfo.loc!.id &&
           e.compass_direction === opts.sourceSlot
       );
-      const tgtExistingEdge = opts.explicitTargetSlot
-        ? workingEdges.find(
-            (e) =>
-              e.from_location_id === tgtInfo.loc!.id &&
-              e.compass_direction === opts.explicitTargetSlot
-          )
-        : undefined;
+      const isContainerBodyDrop =
+        opts.targetKind === "container" && !opts.explicitTargetSlot;
+      const candidates = computePromotionCandidates(
+        srcInfo.loc,
+        tgtInfo.loc,
+        containerMap,
+        projectedTopology.dynamicPortalIds
+      );
+      const needsModal =
+        isContainerBodyDrop ||
+        (tgtInfo.container != null && tgtInfo.candidates.length > 1) ||
+        candidates.length > 0;
+
+      const tgtExistingEdge =
+        !needsModal && resolvedTarget.collides
+          ? workingEdges.find(
+              (e) =>
+                e.from_location_id === tgtInfo.loc!.id &&
+                e.compass_direction === resolvedTarget.slot
+            )
+          : undefined;
 
       if (srcExistingEdge || tgtExistingEdge) {
         const collidingSide =
@@ -486,39 +573,26 @@ export function useTopologyMutations({
         const occEdge = srcExistingEdge || tgtExistingEdge!;
         const occOther =
           locationMap.get(occEdge.to_location_id)?.name ?? "another location";
-        const hubAnchor = collidingSide === "target" ? srcInfo.loc : tgtInfo.loc;
         setHubCollisionModal({
           sourceNodeId: srcInfo.loc.id,
           sourceName: srcInfo.loc.name,
           sourceSlot: opts.sourceSlot,
           targetNodeId: tgtInfo.loc.id,
           targetName: tgtInfo.loc.name,
-          targetSlot,
+          targetSlot: resolvedTarget.slot,
           collidingSide,
           occupiedByName: occOther,
           suggestedHubName: `${
             collidingSide === "target" ? tgtInfo.loc.name : srcInfo.loc.name
           } — Junction`,
-          travelMinutes: 2,
+          travelMinutes: minutes,
           x: Math.round((srcPt.x + tgtPt.x) / 2),
           y: Math.round((srcPt.y + tgtPt.y) / 2),
-          // Unused variable guard: hubAnchor kept for clarity
-          ...(hubAnchor ? {} : {}),
         });
         return;
       }
 
-      // If cross-container or multi-location target container needs location pick / portal promotion
-      const candidates = computePromotionCandidates(
-        srcInfo.loc,
-        tgtInfo.loc,
-        containerMap,
-        projectedTopology.dynamicPortalIds
-      );
-      if (
-        (tgtInfo.container && tgtInfo.candidates.length > 1) ||
-        candidates.length > 0
-      ) {
+      if (needsModal) {
         setPromotionPrompt({
           fromLocation: srcInfo.loc,
           toLocation: tgtInfo.loc,
@@ -529,7 +603,8 @@ export function useTopologyMutations({
           targetLocationCandidates: tgtInfo.candidates,
           chosenTargetLocationId: tgtInfo.loc.id,
           direction: opts.sourceSlot,
-          travelMinutes: 2,
+          explicitTargetSlot: opts.explicitTargetSlot,
+          travelMinutes: minutes,
           bidirectional: true,
           candidates,
         });
@@ -540,9 +615,12 @@ export function useTopologyMutations({
         srcInfo.loc,
         tgtInfo.loc,
         opts.sourceSlot,
-        2,
+        minutes,
         true,
-        new Set()
+        new Set(),
+        undefined,
+        undefined,
+        resolvedTarget.slot
       );
     },
     [
@@ -553,6 +631,85 @@ export function useTopologyMutations({
       projectedTopology.dynamicPortalIds,
       containerMap,
       fullMapCoords,
+      occupiedSlotsByLocId,
+      executeDirectEdgeCreation,
+      setStatusNotice,
+      setHubCollisionModal,
+      setPromotionPrompt,
+    ]
+  );
+
+  // Confirm handler for PortalPromotionModal (checks target collision after target location/slot pick)
+  const handleConfirmPortalPrompt = useCallback(
+    (
+      fromLoc: LocationNode,
+      toLoc: LocationNode,
+      direction: CompassDirection,
+      travelMinutes: number,
+      bidirectional: boolean,
+      promoteIds: Set<string>,
+      explicitTargetSlot?: CompassDirection
+    ) => {
+      const targetOccupiedSet =
+        occupiedSlotsByLocId.get(toLoc.id) ?? new Set<CompassDirection>();
+      const resolvedTarget = resolveAutoTargetSlot(
+        direction,
+        targetOccupiedSet,
+        explicitTargetSlot
+      );
+      if (resolvedTarget.collides) {
+        const occEdge = workingEdges.find(
+          (e) =>
+            e.from_location_id === toLoc.id &&
+            e.compass_direction === resolvedTarget.slot
+        );
+        const occOther = occEdge
+          ? locationMap.get(occEdge.to_location_id)?.name ?? "another location"
+          : "another location";
+        const srcPt =
+          fullMapCoords[fromLoc.id] ??
+          fullMapCoords[fromLoc.container_id ?? ""] ?? { x: 0, y: 0 };
+        const tgtPt =
+          fullMapCoords[toLoc.id] ??
+          fullMapCoords[toLoc.container_id ?? ""] ?? { x: 100, y: 0 };
+        setPromotionPrompt(null);
+        setHubCollisionModal({
+          sourceNodeId: fromLoc.id,
+          sourceName: fromLoc.name,
+          sourceSlot: direction,
+          targetNodeId: toLoc.id,
+          targetName: toLoc.name,
+          targetSlot: resolvedTarget.slot,
+          collidingSide: "target",
+          occupiedByName: occOther,
+          suggestedHubName: `${toLoc.name} — Junction`,
+          travelMinutes,
+          x: Math.round((srcPt.x + tgtPt.x) / 2),
+          y: Math.round((srcPt.y + tgtPt.y) / 2),
+          promoteIds: promoteIds.size > 0 ? Array.from(promoteIds) : undefined,
+        });
+        return;
+      }
+
+      executeDirectEdgeCreation(
+        fromLoc,
+        toLoc,
+        direction,
+        travelMinutes,
+        bidirectional,
+        promoteIds,
+        undefined,
+        undefined,
+        resolvedTarget.slot
+      );
+    },
+    [
+      occupiedSlotsByLocId,
+      workingEdges,
+      locationMap,
+      fullMapCoords,
+      setPromotionPrompt,
+      setHubCollisionModal,
       executeDirectEdgeCreation,
     ]
   );
@@ -728,9 +885,27 @@ export function useTopologyMutations({
         }
       );
 
+      const promoteSet = new Set(st.promoteIds ?? []);
+      const isHubBoundaryPortal = Boolean(
+        hubAnchorContainerId &&
+          promoteSet.size > 0 &&
+          (st.collidingSide === "target"
+            ? (srcLoc.container_id ?? null) !== hubAnchorContainerId
+            : (tgtLoc.container_id ?? null) !== hubAnchorContainerId)
+      );
+      const baseLocations =
+        promoteSet.size > 0
+          ? workingLocations.map((l) =>
+              promoteSet.has(l.id) ? { ...l, is_entry_exit: true } : l
+            )
+          : workingLocations;
+
       commitNextGraph({
         containers: workingContainers,
-        locations: [...workingLocations, hubNode],
+        locations: [
+          ...baseLocations,
+          isHubBoundaryPortal ? { ...hubNode, is_entry_exit: true } : hubNode,
+        ],
         edges: nextEdges,
       });
       setHubCollisionModal(null);
@@ -762,18 +937,15 @@ export function useTopologyMutations({
       if (!emptyCanvasModal) return;
       const st = emptyCanvasModal;
 
-      let sourceLoc: LocationNode | undefined;
-      if (st.sourceKind === "location") {
-        sourceLoc = locationMap.get(st.sourceId);
-      } else {
-        const subIds = getDescendantContainerIds(st.sourceId, workingContainers);
-        const inside = workingLocations.filter(
-          (l) => l.container_id != null && subIds.has(l.container_id)
-        );
-        sourceLoc =
-          inside.find((l) => projectedTopology.dynamicPortalIds.has(l.id)) ??
-          inside[0];
-      }
+      const sourceLoc = resolveNodeConnectionEndpoint({
+        kind: st.sourceKind,
+        id: st.sourceId,
+        locationMap,
+        containerMap,
+        workingContainers,
+        workingLocations,
+        dynamicPortalIds: projectedTopology.dynamicPortalIds,
+      }).loc;
       if (!sourceLoc) {
         setEmptyCanvasModal(null);
         return;
@@ -884,6 +1056,7 @@ export function useTopologyMutations({
     [
       emptyCanvasModal,
       locationMap,
+      containerMap,
       workingContainers,
       workingLocations,
       projectedTopology.dynamicPortalIds,
@@ -891,6 +1064,29 @@ export function useTopologyMutations({
       currentContainerId,
       executeDirectEdgeCreation,
     ]
+  );
+
+  // Confirm linking to an existing location across the world from empty-canvas drop
+  const handleLinkExistingFromEmptyCanvas = useCallback(
+    (opts: {
+      targetLocationId: string;
+      travelMinutes: number;
+      targetSlot?: CompassDirection;
+    }) => {
+      if (!emptyCanvasModal) return;
+      const st = emptyCanvasModal;
+      setEmptyCanvasModal(null);
+      initiateConnection({
+        sourceKind: st.sourceKind,
+        sourceId: st.sourceId,
+        sourceSlot: st.sourceSlot,
+        targetKind: "location",
+        targetId: opts.targetLocationId,
+        explicitTargetSlot: opts.targetSlot,
+        travelMinutes: opts.travelMinutes,
+      });
+    },
+    [emptyCanvasModal, setEmptyCanvasModal, initiateConnection]
   );
 
   // Confirm grouping L0 onto L0 into a new Level 1 container
@@ -1378,8 +1574,10 @@ export function useTopologyMutations({
     handleConfirmStandaloneContainerCreate,
     executeDirectEdgeCreation,
     initiateConnection,
+    handleConfirmPortalPrompt,
     handleConfirmHubCollision,
     handleConfirmEmptyCanvasCreate,
+    handleLinkExistingFromEmptyCanvas,
     handleConfirmGroupIntoContainer,
     executeImmediateContainerMove,
     canDeleteLocation,

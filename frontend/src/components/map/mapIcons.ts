@@ -3,18 +3,23 @@ import {
   Anchor,
   Atom,
   Axe,
+  Barrel,
   BatteryCharging,
   BedDouble,
   Beer,
   Bike,
+  Binoculars,
   Biohazard,
   Bomb,
   BookMarked,
   BookOpen,
+  BowArrow,
+  Bridge,
   Bug,
   Building,
   Building2,
   Bus,
+  CableCar,
   Car,
   Castle,
   Cctv,
@@ -28,9 +33,11 @@ import {
   Cpu,
   Crosshair,
   Crown,
+  Dam,
   Dices,
   DoorClosed,
   DoorOpen,
+  Drone,
   Droplet,
   Eye,
   Factory,
@@ -53,12 +60,14 @@ import {
   Home,
   Hospital,
   Hotel,
+  Houses,
   Key,
   Lamp,
   Landmark,
   Layers,
   Leaf,
   Library,
+  Lighthouse,
   Lock,
   LucideIcon,
   Map as MapIcon,
@@ -108,9 +117,12 @@ import {
   Telescope,
   Tent,
   Terminal,
+  TentTree,
   TestTube2,
   Theater,
   Ticket,
+  Tombstone,
+  TowerControl,
   TrainFront,
   TreePine,
   Trees,
@@ -166,7 +178,7 @@ const CATEGORY_LABEL_BY_ID = new Map<MapIconCategory, string>(
 );
 
 export const MAP_ICON_OPTIONS: MapIconOption[] = [
-  // Settlement & Venues (27)
+  // Settlement & Venues (29)
   {
     key: "map-pin",
     label: "Location Pin",
@@ -399,6 +411,35 @@ export const MAP_ICON_OPTIONS: MapIconOption[] = [
     Icon: Package,
   },
   {
+    key: "houses",
+    label: "Village / Hamlet",
+    category: "settlement",
+    keywords: [
+      "village",
+      "hamlet",
+      "houses",
+      "town",
+      "township",
+      "settlement",
+      "cluster",
+      "neighborhood",
+      "cottages",
+      "suburb",
+    ],
+    genres: ["fantasy", "modern", "horror"],
+    scales: ["container", "location", "hub"],
+    Icon: Houses,
+  },
+  {
+    key: "barrel",
+    label: "Cellar / Supply Hold",
+    category: "settlement",
+    keywords: ["barrel", "cask", "cellar", "brewery", "storage", "cargo", "ale"],
+    genres: ["fantasy", "modern", "horror"],
+    scales: ["location", "container"],
+    Icon: Barrel,
+  },
+  {
     key: "layers",
     label: "Multi-Level Complex",
     category: "settlement",
@@ -407,7 +448,7 @@ export const MAP_ICON_OPTIONS: MapIconOption[] = [
     Icon: Layers,
   },
 
-  // Transit & Portals (20)
+  // Transit & Portals (24)
   {
     key: "git-branch",
     label: "Passage Hub",
@@ -575,6 +616,42 @@ export const MAP_ICON_OPTIONS: MapIconOption[] = [
     Icon: Fence,
   },
   {
+    key: "bridge",
+    label: "Bridge / Crossing",
+    category: "transit",
+    keywords: ["bridge", "viaduct", "overpass", "span", "aqueduct", "crossing"],
+    genres: ["fantasy", "modern", "scifi", "horror"],
+    scales: ["location", "hub"],
+    Icon: Bridge,
+  },
+  {
+    key: "lighthouse",
+    label: "Lighthouse / Beacon",
+    category: "transit",
+    keywords: ["lighthouse", "beacon", "coast", "harbor", "tower", "signal"],
+    genres: ["fantasy", "modern", "horror"],
+    scales: ["location", "container"],
+    Icon: Lighthouse,
+  },
+  {
+    key: "cable-car",
+    label: "Cable Car / Skyway",
+    category: "transit",
+    keywords: ["cable", "gondola", "tram", "skyway", "lift", "ski", "mountain"],
+    genres: ["modern", "scifi", "fantasy"],
+    scales: ["location", "hub"],
+    Icon: CableCar,
+  },
+  {
+    key: "tower-control",
+    label: "Control / Watch Tower",
+    category: "transit",
+    keywords: ["control", "air", "tower", "watchtower", "spire", "radar"],
+    genres: ["modern", "scifi"],
+    scales: ["location", "container"],
+    Icon: TowerControl,
+  },
+  {
     key: "flag",
     label: "Outpost / Rally Point",
     category: "transit",
@@ -584,7 +661,7 @@ export const MAP_ICON_OPTIONS: MapIconOption[] = [
     Icon: Flag,
   },
 
-  // Nature & Terrain (22)
+  // Nature & Terrain (24)
   {
     key: "map",
     label: "District / Zone",
@@ -772,16 +849,34 @@ export const MAP_ICON_OPTIONS: MapIconOption[] = [
     Icon: Pickaxe,
   },
   {
-    key: "shovel",
-    label: "Trench / Barrow",
+    key: "tent-tree",
+    label: "Forest Camp / Outpost",
     category: "wilderness",
-    keywords: ["shovel", "trench", "barrow", "graveyard", "cemetery", "dig"],
+    keywords: ["tent", "camp", "woods", "glade", "outpost", "ranger", "bivouac"],
+    genres: ["fantasy", "modern", "horror"],
+    scales: ["container", "location"],
+    Icon: TentTree,
+  },
+  {
+    key: "dam",
+    label: "Dam / Canal Lock",
+    category: "wilderness",
+    keywords: ["dam", "hydro", "reservoir", "lock", "sluice", "floodgate", "river"],
+    genres: ["modern", "scifi", "fantasy"],
+    scales: ["location", "container"],
+    Icon: Dam,
+  },
+  {
+    key: "shovel",
+    label: "Trench / Excavation",
+    category: "wilderness",
+    keywords: ["shovel", "trench", "barrow", "excavation", "dig"],
     genres: ["horror", "fantasy", "modern"],
     scales: ["location"],
     Icon: Shovel,
   },
 
-  // Sci-Fi & Tech (20)
+  // Sci-Fi & Tech (21)
   {
     key: "cpu",
     label: "Server / Mainframe",
@@ -954,6 +1049,15 @@ export const MAP_ICON_OPTIONS: MapIconOption[] = [
     Icon: HeartPulse,
   },
   {
+    key: "drone",
+    label: "Drone Bay / Hangar",
+    category: "scifi",
+    keywords: ["drone", "uav", "hangar", "bay", "recon", "automated"],
+    genres: ["scifi", "modern"],
+    scales: ["location", "container"],
+    Icon: Drone,
+  },
+  {
     key: "syringe",
     label: "Chem Lab / Medpod",
     category: "scifi",
@@ -963,7 +1067,7 @@ export const MAP_ICON_OPTIONS: MapIconOption[] = [
     Icon: Syringe,
   },
 
-  // Lore, Faith & Civic (18)
+  // Lore, Faith & Civic (19)
   {
     key: "landmark",
     label: "Civic Hall / Monument",
@@ -1118,6 +1222,15 @@ export const MAP_ICON_OPTIONS: MapIconOption[] = [
     Icon: Ghost,
   },
   {
+    key: "tombstone",
+    label: "Graveyard / Memorial",
+    category: "arcana",
+    keywords: ["tombstone", "graveyard", "cemetery", "barrow", "crypt", "memorial"],
+    genres: ["horror", "fantasy", "modern"],
+    scales: ["container", "location"],
+    Icon: Tombstone,
+  },
+  {
     key: "users",
     label: "Assembly / Commons",
     category: "arcana",
@@ -1126,7 +1239,7 @@ export const MAP_ICON_OPTIONS: MapIconOption[] = [
     Icon: Users,
   },
 
-  // Security & Hazards (18)
+  // Security & Hazards (20)
   {
     key: "shield",
     label: "Garrison / Security",
@@ -1278,6 +1391,24 @@ export const MAP_ICON_OPTIONS: MapIconOption[] = [
     genres: ["scifi", "horror", "modern"],
     scales: ["container", "location"],
     Icon: Radiation,
+  },
+  {
+    key: "binoculars",
+    label: "Lookout / Recon Post",
+    category: "hazard",
+    keywords: ["binoculars", "lookout", "overlook", "recon", "scout", "vantage"],
+    genres: ["fantasy", "modern", "scifi", "horror"],
+    scales: ["location"],
+    Icon: Binoculars,
+  },
+  {
+    key: "bow-arrow",
+    label: "Hunting Lodge / Range",
+    category: "hazard",
+    keywords: ["bow", "arrow", "archery", "hunting", "lodge", "ranger", "range"],
+    genres: ["fantasy", "modern"],
+    scales: ["location", "container"],
+    Icon: BowArrow,
   },
   {
     key: "alert-triangle",
@@ -1498,6 +1629,12 @@ export function inferMapIconKey(params: {
     { key: "flask-conical", match: ["alchemy", "laboratory", "lab", "biolab", "chemistry"] },
     { key: "anchor", match: ["harbor", "harbour", "docks", "dockyard", "pier", "marina", "quay", "dock"] },
     { key: "ship", match: ["drydock", "ferry", "galleon", "warship"] },
+    { key: "lighthouse", match: ["lighthouse", "beacon"] },
+    { key: "bridge", match: ["bridge", "viaduct", "overpass", "aqueduct"] },
+    { key: "cable-car", match: ["cable car", "gondola", "skyway"] },
+    { key: "tower-control", match: ["control tower", "watchtower"] },
+    { key: "dam", match: ["hydro dam", "dam", "canal lock", "sluice"] },
+    { key: "drone", match: ["drone bay", "drone", "uav"] },
     { key: "plane", match: ["airfield", "airport", "helipad", "skyport", "hangar"] },
     { key: "train-front", match: ["subway", "metro", "monorail", "rail", "train", "tram"] },
     { key: "door-closed", match: ["airlock", "bulkhead", "hatch"] },
@@ -1526,14 +1663,20 @@ export function inferMapIconKey(params: {
     { key: "factory", match: ["factory", "foundry", "mill", "refinery", "plant"] },
     { key: "hammer", match: ["forge", "smithy", "blacksmith"] },
     { key: "wrench", match: ["workshop", "garage", "repair"] },
+    { key: "barrel", match: ["wine cellar", "barrel", "brewery", "supply hold"] },
+    { key: "houses", match: ["village", "hamlet", "township", "settlement", "neighborhood", "cottages"] },
     { key: "hotel", match: ["hotel", "inn", "hostel", "motel"] },
     { key: "home", match: ["safehouse", "house", "home", "cottage", "apartment"] },
+    { key: "tent-tree", match: ["forest camp", "woodland camp", "ranger camp"] },
     { key: "trees", match: ["forest", "woods", "woodland", "jungle", "grove", "park", "glade"] },
     { key: "mountain", match: ["mountain", "cavern", "cave", "peaks", "cliff", "canyon"] },
     { key: "waves", match: ["waterfront", "canal", "river", "sewer", "marsh", "swamp", "coast"] },
     { key: "tent", match: ["camp", "encampment", "outpost", "bivouac"] },
     { key: "pickaxe", match: ["mine", "quarry", "excavation"] },
-    { key: "shovel", match: ["graveyard", "cemetery", "barrow"] },
+    { key: "tombstone", match: ["graveyard", "cemetery", "barrow"] },
+    { key: "binoculars", match: ["lookout", "overlook", "recon post", "vantage"] },
+    { key: "bow-arrow", match: ["archery", "hunting lodge", "shooting range"] },
+    { key: "shovel", match: ["trench", "dig"] },
     { key: "footprints", match: ["alley", "alleyway", "trail", "corridor"] },
     { key: "compass", match: ["crossroads", "town square", "waypoint"] },
   ];

@@ -4,6 +4,13 @@ import type {
   LocationContainer,
   LocationNode,
 } from "../../types";
+import {
+  CONTAINER_HIT_HALF_H,
+  CONTAINER_HIT_HALF_W,
+  LOCATION_PORT_RADIUS,
+  PORT_HIT_RADIUS,
+  getContainerPortPoint,
+} from "./mapGeometry";
 import type { EmptyCanvasLinkState, GroupIntoContainerState } from "./MapDialogs";
 import { isValidContainerDrop } from "./mapValidation";
 import {
@@ -14,6 +21,88 @@ import {
   type NodeDragState,
   type ProjectedDepthTopology,
 } from "./topologyProjection";
+
+/** Pure world-space hit-test for visible container cards and location/hub nodes. */
+export function hitTestTopologyNodeAt(
+  wx: number,
+  wy: number,
+  projectedTopology: Pick<ProjectedDepthTopology, "visibleSupernodes" | "visibleLocations">,
+  fullMapCoords: Record<string, { x: number; y: number }>,
+  excludeKey?: { kind: "location" | "container"; id: string }
+): { kind: "location" | "container"; id: string } | null {
+  for (const sn of projectedTopology.visibleSupernodes) {
+    if (
+      excludeKey?.kind === "container" &&
+      excludeKey.id === sn.container.id
+    ) {
+      continue;
+    }
+    const pt = fullMapCoords[sn.container.id];
+    if (!pt) continue;
+    if (
+      Math.abs(wx - pt.x) <= CONTAINER_HIT_HALF_W &&
+      Math.abs(wy - pt.y) <= CONTAINER_HIT_HALF_H
+    ) {
+      return { kind: "container", id: sn.container.id };
+    }
+  }
+  for (const loc of projectedTopology.visibleLocations) {
+    if (excludeKey?.kind === "location" && excludeKey.id === loc.id) {
+      continue;
+    }
+    const pt = fullMapCoords[loc.id];
+    if (!pt) continue;
+    const radius = loc.is_hub ? 20 : 23;
+    if (Math.hypot(wx - pt.x, wy - pt.y) <= radius) {
+      return { kind: "location", id: loc.id };
+    }
+  }
+  return null;
+}
+
+/**
+ * Hit-test compass port dots (on both location nodes and container supernode perimeters)
+ * before falling back to card/node body hits (which carry no explicit slot).
+ */
+export function hitTestTopologyPortAt(
+  wx: number,
+  wy: number,
+  projectedTopology: Pick<ProjectedDepthTopology, "visibleSupernodes" | "visibleLocations">,
+  fullMapCoords: Record<string, { x: number; y: number }>,
+  excludeKind: "location" | "container",
+  excludeId: string
+): { kind: "location" | "container"; id: string; slot?: CompassDirection } | null {
+  const hitRadius = PORT_HIT_RADIUS + 1;
+  for (const loc of projectedTopology.visibleLocations) {
+    if (excludeKind === "location" && loc.id === excludeId) continue;
+    const pt = fullMapCoords[loc.id];
+    if (!pt) continue;
+    for (const slot of COMPASS_ORDER) {
+      const a = COMPASS_ANGLES[slot];
+      const px = pt.x + Math.cos(a) * LOCATION_PORT_RADIUS;
+      const py = pt.y + Math.sin(a) * LOCATION_PORT_RADIUS;
+      if (Math.hypot(wx - px, wy - py) <= hitRadius) {
+        return { kind: "location", id: loc.id, slot };
+      }
+    }
+  }
+  for (const sn of projectedTopology.visibleSupernodes) {
+    if (excludeKind === "container" && sn.container.id === excludeId) continue;
+    const pt = fullMapCoords[sn.container.id];
+    if (!pt) continue;
+    for (const slot of COMPASS_ORDER) {
+      const portPt = getContainerPortPoint(pt, COMPASS_ANGLES[slot]);
+      if (Math.hypot(wx - portPt.x, wy - portPt.y) <= hitRadius) {
+        return { kind: "container", id: sn.container.id, slot };
+      }
+    }
+  }
+  const bodyHit = hitTestTopologyNodeAt(wx, wy, projectedTopology, fullMapCoords, {
+    kind: excludeKind,
+    id: excludeId,
+  });
+  return bodyHit ? { kind: bodyHit.kind, id: bodyHit.id } : null;
+}
 
 export interface UseTopologyPointerDragParams {
   nodeDrag: NodeDragState | null;
@@ -99,33 +188,8 @@ export function useTopologyPointerDrag({
       wx: number,
       wy: number,
       excludeKey?: { kind: "location" | "container"; id: string }
-    ): { kind: "location" | "container"; id: string } | null => {
-      for (const sn of projectedTopology.visibleSupernodes) {
-        if (
-          excludeKey?.kind === "container" &&
-          excludeKey.id === sn.container.id
-        ) {
-          continue;
-        }
-        const pt = fullMapCoords[sn.container.id];
-        if (!pt) continue;
-        if (Math.abs(wx - pt.x) <= 76 && Math.abs(wy - pt.y) <= 28) {
-          return { kind: "container", id: sn.container.id };
-        }
-      }
-      for (const loc of projectedTopology.visibleLocations) {
-        if (excludeKey?.kind === "location" && excludeKey.id === loc.id) {
-          continue;
-        }
-        const pt = fullMapCoords[loc.id];
-        if (!pt) continue;
-        const radius = loc.is_hub ? 20 : 23;
-        if (Math.hypot(wx - pt.x, wy - pt.y) <= radius) {
-          return { kind: "location", id: loc.id };
-        }
-      }
-      return null;
-    },
+    ): { kind: "location" | "container"; id: string } | null =>
+      hitTestTopologyNodeAt(wx, wy, projectedTopology, fullMapCoords, excludeKey),
     [projectedTopology, fullMapCoords]
   );
 
@@ -136,24 +200,16 @@ export function useTopologyPointerDrag({
       wy: number,
       excludeKind: "location" | "container",
       excludeId: string
-    ): { kind: "location" | "container"; id: string; slot?: CompassDirection } | null => {
-      for (const loc of projectedTopology.visibleLocations) {
-        if (excludeKind === "location" && loc.id === excludeId) continue;
-        const pt = fullMapCoords[loc.id];
-        if (!pt) continue;
-        for (const slot of COMPASS_ORDER) {
-          const a = COMPASS_ANGLES[slot];
-          const px = pt.x + Math.cos(a) * 26;
-          const py = pt.y + Math.sin(a) * 26;
-          if (Math.hypot(wx - px, wy - py) <= 9) {
-            return { kind: "location", id: loc.id, slot };
-          }
-        }
-      }
-      const bodyHit = hitTestNodeAt(wx, wy, { kind: excludeKind, id: excludeId });
-      return bodyHit ? { kind: bodyHit.kind, id: bodyHit.id } : null;
-    },
-    [projectedTopology.visibleLocations, fullMapCoords, hitTestNodeAt]
+    ): { kind: "location" | "container"; id: string; slot?: CompassDirection } | null =>
+      hitTestTopologyPortAt(
+        wx,
+        wy,
+        projectedTopology,
+        fullMapCoords,
+        excludeKind,
+        excludeId
+      ),
+    [projectedTopology, fullMapCoords]
   );
 
   // Global window pointer move / up listeners for nodeDrag & linkDrag

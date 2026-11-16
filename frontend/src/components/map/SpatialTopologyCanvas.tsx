@@ -28,6 +28,7 @@ import {
   clampZoom,
   computeDistanceBadgeWidth,
   computeEdgeClippedSegment,
+  getContainerPortPoint,
   resolveCanvasCursor,
   type NodeShapeDescriptor,
 } from "./mapGeometry";
@@ -849,9 +850,14 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     {showPorts &&
                       !isMutatingLocked &&
                       COMPASS_ORDER.map((slot) => {
-                        const a = COMPASS_ANGLES[slot];
-                        const px = pt.x + Math.cos(a) * (cardW / 2 + 7);
-                        const py = pt.y + Math.sin(a) * (cardH / 2 + 7);
+                        const { x: px, y: py } = getContainerPortPoint(
+                          pt,
+                          COMPASS_ANGLES[slot]
+                        );
+                        const isTargetHovered =
+                          linkDrag?.hoverTarget?.kind === "container" &&
+                          linkDrag.hoverTarget.id === sn.container.id &&
+                          linkDrag.hoverTarget.slot === slot;
                         return (
                           <g
                             key={slot}
@@ -875,9 +881,9 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                             <circle
                               cx={px}
                               cy={py}
-                              r={3.8}
-                              fill="#0f172a"
-                              stroke="#22d3ee"
+                              r={isTargetHovered ? 5.2 : 3.8}
+                              fill={isTargetHovered ? "#22d3ee" : "#0f172a"}
+                              stroke={isTargetHovered ? "#a5f3fc" : "#22d3ee"}
                               strokeWidth={1.3}
                               pointerEvents="none"
                             />

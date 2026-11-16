@@ -17,7 +17,9 @@ import {
   projectTopologyForDepth,
 } from "../SpatialTopologyView";
 import { MapDetailsDrawer } from "../map/MapDetailsDrawer";
+import { PortalPromotionModal } from "../map/PortalPromotionModal";
 import { SpatialTopologyCanvas } from "../map/SpatialTopologyCanvas";
+import { TargetEdgeSelector } from "../map/TargetEdgeSelector";
 import {
   EmptyCanvasCreateModal,
   GroupIntoContainerModal,
@@ -34,16 +36,27 @@ import {
   computeDistanceBadgeWidth,
   computeEdgeClippedSegment,
   computeRayShapeExitDistance,
+  getContainerPortPoint,
   isEditableKeyboardTarget,
   resolveCanvasCursor,
 } from "../map/mapGeometry";
 import {
+  COMPASS_ANGLES,
+  COMPASS_ORDER,
+  buildContainerBreadcrumb,
   filterEdgesAfterDeletion,
+  getLocationOccupiedPorts,
   parseCommittedEdgeMinutes,
+  resolveAutoTargetSlot,
   resolveLiveEdgeModalEdges,
   sanitizeEdgeMinutesInput,
   stepEdgeMinutesDraft,
 } from "../map/topologyProjection";
+import {
+  buildBidirectionalEdgePair,
+  resolveNodeConnectionEndpoint,
+} from "../map/useTopologyMutations";
+import { hitTestTopologyPortAt } from "../map/useTopologyPointerDrag";
 import {
   MAP_ICON_CATEGORIES,
   MAP_ICON_OPTIONS,
@@ -1240,5 +1253,201 @@ describe("Interactive Map Editor & Mini-Map", () => {
     expect(browserModalHtml).toContain("Suggested");
     expect(browserModalHtml).toContain("Sci-Fi &amp; Tech");
     expect(browserModalHtml).toContain("Cantina / Tavern");
+  });
+
+  it("supports nearest-free target port resolution, container perimeter hit-testing, bidirectional target slots, and 1.73.0 worldbuilding icons", () => {
+    const { containers, locations, edges } = makeRichWorldFixture();
+    const locMap = new Map(locations.map((l) => [l.id, l]));
+    const contMap = new Map(containers.map((c) => [c.id, c]));
+
+    // 1. Upgraded 1.73.0 icon catalog includes Houses + 11 additional worldbuilding icons (137 total)
+    expect(MAP_ICON_OPTIONS.length).toBe(137);
+    const newKeys = [
+      "houses",
+      "barrel",
+      "bridge",
+      "lighthouse",
+      "cable-car",
+      "tower-control",
+      "tent-tree",
+      "dam",
+      "drone",
+      "tombstone",
+      "binoculars",
+      "bow-arrow",
+    ];
+    for (const k of newKeys) {
+      expect(MAP_ICON_OPTIONS.some((o) => o.key === k)).toBe(true);
+      expect(resolveMapIconComponent(k, "location")).toBeDefined();
+    }
+    const housesOpt = MAP_ICON_OPTIONS.find((o) => o.key === "houses");
+    expect(housesOpt?.category).toBe("settlement");
+    expect(inferMapIconKey({ kind: "container", depth: 1, name: "Oakbrook Village" })).toBe(
+      "houses"
+    );
+    expect(inferMapIconKey({ kind: "location", name: "Mossy Hamlet" })).toBe("houses");
+    expect(inferMapIconKey({ kind: "location", name: "Stone Bridge" })).toBe("bridge");
+    expect(inferMapIconKey({ kind: "location", name: "Old Graveyard" })).toBe(
+      "tombstone"
+    );
+
+    // 2. Nearest-free Auto target slot resolution + explicit override & collision check
+    const freeRes = resolveAutoTargetSlot("E", new Set());
+    expect(freeRes).toEqual({ slot: "W", collides: false, isFallback: false });
+
+    const fallbackRes = resolveAutoTargetSlot("E", new Set(["W"]));
+    expect(fallbackRes.collides).toBe(false);
+    expect(fallbackRes.isFallback).toBe(true);
+    expect(["NW", "SW"]).toContain(fallbackRes.slot);
+
+    const fullOccupied = new Set(COMPASS_ORDER);
+    const fullAutoRes = resolveAutoTargetSlot("E", fullOccupied);
+    expect(fullAutoRes).toEqual({ slot: "W", collides: true, isFallback: false });
+
+    const explicitColliding = resolveAutoTargetSlot("E", new Set(["N"]), "N");
+    expect(explicitColliding).toEqual({ slot: "N", collides: true, isFallback: false });
+
+    // 3. Reverse edge honors explicit/resolved targetDirection instead of hardcoding OPPOSITE_COMPASS
+    const builtPair = buildBidirectionalEdgePair({
+      worldId: "world_1",
+      fromLoc: locations[0],
+      toLoc: locations[1],
+      direction: "E",
+      targetDirection: "N",
+      travelMinutes: 7,
+      bidirectional: true,
+    });
+    expect(builtPair).toHaveLength(2);
+    expect(builtPair[0].compass_direction).toBe("E");
+    expect(builtPair[0].travel_minutes).toBe(7);
+    expect(builtPair[1].compass_direction).toBe("N");
+    expect(builtPair[1].travel_minutes).toBe(7);
+
+    // 4. Container breadcrumb & occupied port inspection
+    expect(buildContainerBreadcrumb(locations[0].container_id, containers)).toBeTruthy();
+    expect(buildContainerBreadcrumb(null, containers)).toBe("Top-Level");
+    const streetOccupied = getLocationOccupiedPorts(locations[1].id, edges, locMap);
+    expect(streetOccupied.size).toBeGreaterThanOrEqual(0);
+    const endpoint = resolveNodeConnectionEndpoint({
+      kind: "container",
+      id: containers[0].id,
+      locationMap: locMap,
+      containerMap: contMap,
+      workingContainers: containers,
+      workingLocations: locations,
+      dynamicPortalIds: new Set([locations[0].id]),
+    });
+    expect(endpoint.loc?.id).toBe(locations[0].id);
+
+    // 5. Container perimeter port hit-testing detects diagonal & cardinal dots before body hit
+    const contCenter = { x: 200, y: 120 };
+    const projMock = {
+      visibleSupernodes: [
+        {
+          container: containers[0],
+          directLocationCount: 2,
+          descendantLocationCount: 2,
+          externalPortalsCount: 1,
+          hasActivePlayer: false,
+          containsStart: false,
+          presentCharacterIds: [],
+          representativePortalLocationId: locations[0].id,
+        },
+      ],
+      visibleLocations: [],
+    };
+    const coords = { [containers[0].id]: contCenter };
+    const nePort = getContainerPortPoint(contCenter, COMPASS_ANGLES.NE);
+    const portHit = hitTestTopologyPortAt(
+      nePort.x,
+      nePort.y,
+      projMock,
+      coords,
+      "location",
+      "other_loc"
+    );
+    expect(portHit).toEqual({
+      kind: "container",
+      id: containers[0].id,
+      slot: "NE",
+    });
+
+    const bodyHit = hitTestTopologyPortAt(
+      contCenter.x,
+      contCenter.y,
+      projMock,
+      coords,
+      "location",
+      "other_loc"
+    );
+    expect(bodyHit).toEqual({ kind: "container", id: containers[0].id });
+
+    // 6. SSR assertions for TargetEdgeSelector, PortalPromotionModal & EmptyCanvasCreateModal "Existing" tab
+    const edgeSelectorHtml = renderToStaticMarkup(
+      <TargetEdgeSelector
+        sourceSlot="E"
+        targetName="Harbor Street"
+        selectedSlot={undefined}
+        occupiedPorts={new Map([["W", "Old Dock"]])}
+        onChange={() => {}}
+      />
+    );
+    expect(edgeSelectorHtml).toContain("Target Edge on");
+    expect(edgeSelectorHtml).toContain("Auto (");
+    expect(edgeSelectorHtml).toContain("nearest free compass port");
+
+    const portalModalHtml = renderToStaticMarkup(
+      <PortalPromotionModal
+        promotionPrompt={{
+          fromLocation: locations[1],
+          toLocation: locations[0],
+          targetContainerForLocationPick: containers[0],
+          targetLocationCandidates: [locations[0]],
+          chosenTargetLocationId: locations[0].id,
+          direction: "E",
+          explicitTargetSlot: undefined,
+          travelMinutes: 4,
+          bidirectional: true,
+          candidates: [],
+        }}
+        containerMap={contMap}
+        dynamicPortalIds={new Set([locations[0].id])}
+        edges={edges}
+        locationMap={locMap}
+        onChangePrompt={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+    expect(portalModalHtml).toContain("Connect to Container Target");
+    expect(portalModalHtml).toContain("Confirm &amp; Connect");
+    expect(portalModalHtml).toContain("Auto (");
+
+    const emptyExistingTabHtml = renderToStaticMarkup(
+      <EmptyCanvasCreateModal
+        state={{
+          sourceKind: "location",
+          sourceId: locations[0].id,
+          sourceName: locations[0].name,
+          sourceSlot: "S",
+          dropX: 40,
+          dropY: 120,
+          canCreateContainer: true,
+          availableDepths: [1, 2],
+        }}
+        existingTargets={[
+          {
+            location: locations[1],
+            breadcrumb: "Top-Level",
+            alreadyLinked: false,
+            occupiedPorts: new Map(),
+            isPortal: false,
+          },
+        ]}
+        onCancel={() => {}}
+        onCreate={() => {}}
+        onLinkExisting={() => {}}
+      />
+    );
+    expect(emptyExistingTabHtml).toContain("Existing");
   });
 });

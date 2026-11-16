@@ -17,7 +17,21 @@ export const GHOST_CARD_RX = 8;
 export const LOCATION_PORT_RADIUS = 26;
 export const LOCATION_HOVER_RADIUS = 34;
 export const CONTAINER_HOVER_PAD = 12;
+export const CONTAINER_PORT_OFFSET = 7;
+export const CONTAINER_HIT_HALF_W = CONTAINER_CARD_HALF_W + 2;
+export const CONTAINER_HIT_HALF_H = CONTAINER_CARD_HALF_H + 3;
 export const PORT_HIT_RADIUS = 8;
+
+/** Compute world-space coordinates for a container supernode perimeter port dot. */
+export function getContainerPortPoint(
+  center: { x: number; y: number },
+  angleRadians: number
+): { x: number; y: number } {
+  return {
+    x: center.x + Math.cos(angleRadians) * (CONTAINER_CARD_HALF_W + CONTAINER_PORT_OFFSET),
+    y: center.y + Math.sin(angleRadians) * (CONTAINER_CARD_HALF_H + CONTAINER_PORT_OFFSET),
+  };
+}
 
 export const MIN_MAP_ZOOM = 0.35;
 export const MAX_MAP_ZOOM = 3;

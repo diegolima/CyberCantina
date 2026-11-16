@@ -5,6 +5,7 @@ import {
   FolderPlus,
   GitBranch,
   Layers,
+  Link2,
   Lock,
   LogIn,
   MapPin,
@@ -23,6 +24,7 @@ import {
   LocationEdge,
   LocationNode,
 } from "../../types";
+import { TargetEdgeSelector } from "./TargetEdgeSelector";
 import {
   MAP_ICON_CATEGORIES,
   MAP_ICON_OPTIONS,
@@ -31,6 +33,7 @@ import {
   getMapIconCategoryLabel,
   getMapIconOption,
   getSuggestedMapIcons,
+  resolveMapIconComponent,
   type MapIconCategory,
   type MapIconOption,
 } from "./mapIcons";
@@ -54,6 +57,7 @@ export interface PassageHubCollisionState {
   travelMinutes: number;
   x: number;
   y: number;
+  promoteIds?: string[];
 }
 
 export interface PassageHubCollisionModalProps {
@@ -216,8 +220,17 @@ export interface EmptyCanvasLinkState {
   availableDepths: Array<1 | 2 | 3 | 4>;
 }
 
+export interface ExistingLinkTargetOption {
+  location: LocationNode;
+  breadcrumb: string;
+  alreadyLinked: boolean;
+  occupiedPorts: Map<CompassDirection, string>;
+  isPortal: boolean;
+}
+
 export interface EmptyCanvasCreateModalProps {
   state: EmptyCanvasLinkState | null;
+  existingTargets?: ExistingLinkTargetOption[];
   onCancel: () => void;
   onCreate: (opts: {
     kind: "location" | "hub" | "container";
@@ -225,17 +238,29 @@ export interface EmptyCanvasCreateModalProps {
     travelMinutes: number;
     containerDepth?: 1 | 2 | 3 | 4;
   }) => void;
+  onLinkExisting?: (opts: {
+    targetLocationId: string;
+    travelMinutes: number;
+    targetSlot?: CompassDirection;
+  }) => void;
 }
 
 export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
   state,
+  existingTargets = [],
   onCancel,
   onCreate,
+  onLinkExisting,
 }) => {
-  const [kind, setKind] = useState<"location" | "hub" | "container">("location");
+  const [kind, setKind] = useState<"location" | "hub" | "container" | "existing">(
+    "location"
+  );
   const [name, setName] = useState("");
   const [minutes, setMinutes] = useState("2");
   const [depth, setDepth] = useState<1 | 2 | 3 | 4>(1);
+  const [existingQuery, setExistingQuery] = useState("");
+  const [selectedExistingId, setSelectedExistingId] = useState<string>("");
+  const [targetSlot, setTargetSlot] = useState<CompassDirection | undefined>(undefined);
 
   useEffect(() => {
     if (state) {
@@ -243,8 +268,35 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
       setName("");
       setMinutes("2");
       setDepth(state.availableDepths[0] ?? 1);
+      setExistingQuery("");
+      setSelectedExistingId("");
+      setTargetSlot(undefined);
     }
   }, [state]);
+
+  const filteredExistingTargets = useMemo(() => {
+    const q = existingQuery.trim().toLowerCase();
+    const list = q
+      ? existingTargets.filter(
+          (item) =>
+            item.location.name.toLowerCase().includes(q) ||
+            item.breadcrumb.toLowerCase().includes(q)
+        )
+      : existingTargets;
+    return [...list].sort((a, b) => {
+      if (a.alreadyLinked !== b.alreadyLinked) {
+        return a.alreadyLinked ? 1 : -1;
+      }
+      return a.location.name.localeCompare(b.location.name);
+    });
+  }, [existingTargets, existingQuery]);
+
+  const selectedExisting = useMemo(
+    () =>
+      existingTargets.find((item) => item.location.id === selectedExistingId) ??
+      null,
+    [existingTargets, selectedExistingId]
+  );
 
   if (!state) return null;
 
@@ -255,11 +307,13 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
       ? "New District or Building"
       : "New Location Name";
 
+  const parsedMinutes = Math.max(1, Math.min(240, parseInt(minutes, 10) || 2));
+
   return (
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Create Connected Element"
+      aria-label="Create or Link Connected Element"
       style={{
         position: "absolute",
         inset: 0,
@@ -277,7 +331,7 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
     >
       <div
         style={{
-          width: "min(440px, 95%)",
+          width: "min(480px, 95%)",
           background: "var(--bg-card)",
           border: "1px solid rgba(6, 182, 212, 0.5)",
           borderRadius: 8,
@@ -298,7 +352,10 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
             color: "var(--accent-cyan)",
           }}
         >
-          <span>Create &amp; Connect from "{state.sourceName}" [{state.sourceSlot}]</span>
+          <span>
+            {kind === "existing" ? "Link Existing" : "Create & Connect"} from &ldquo;
+            {state.sourceName}&rdquo; [{state.sourceSlot}]
+          </span>
           <button
             type="button"
             className="btn"
@@ -310,15 +367,21 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
           </button>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+            gap: 6,
+          }}
+        >
           <button
             type="button"
             className="btn"
             onClick={() => setKind("location")}
             style={{
               justifyContent: "center",
-              fontSize: "0.73rem",
-              padding: "6px 6px",
+              fontSize: "0.72rem",
+              padding: "6px 5px",
               borderColor: kind === "location" ? "#22d3ee" : "var(--border-subtle)",
               background:
                 kind === "location" ? "rgba(6, 182, 212, 0.16)" : "var(--bg-panel)",
@@ -333,8 +396,8 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
             onClick={() => setKind("hub")}
             style={{
               justifyContent: "center",
-              fontSize: "0.73rem",
-              padding: "6px 6px",
+              fontSize: "0.72rem",
+              padding: "6px 5px",
               borderColor: kind === "hub" ? "#a855f7" : "var(--border-subtle)",
               background:
                 kind === "hub" ? "rgba(168, 85, 247, 0.16)" : "var(--bg-panel)",
@@ -355,8 +418,8 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
             }
             style={{
               justifyContent: "center",
-              fontSize: "0.73rem",
-              padding: "6px 6px",
+              fontSize: "0.72rem",
+              padding: "6px 5px",
               borderColor: kind === "container" ? "#f59e0b" : "var(--border-subtle)",
               background:
                 kind === "container" ? "rgba(245, 158, 11, 0.16)" : "var(--bg-panel)",
@@ -366,54 +429,263 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
           >
             <Layers size={13} /> Container
           </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => setKind("existing")}
+            title="Connect to an existing location anywhere in the world"
+            style={{
+              justifyContent: "center",
+              fontSize: "0.72rem",
+              padding: "6px 5px",
+              borderColor: kind === "existing" ? "#10b981" : "var(--border-subtle)",
+              background:
+                kind === "existing" ? "rgba(16, 185, 129, 0.16)" : "var(--bg-panel)",
+              color: kind === "existing" ? "#6ee7b7" : "var(--text-secondary)",
+            }}
+          >
+            <Link2 size={13} /> Existing
+          </button>
         </div>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: kind === "container" ? "1fr 110px 90px" : "1fr 90px",
-            gap: 8,
-          }}
-        >
-          <div className="field-group" style={{ gap: 4 }}>
-            <label style={{ fontSize: "0.72rem" }}>Name</label>
-            <input
-              className="field-input"
-              placeholder={placeholder}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              autoFocus
-            />
-          </div>
-          {kind === "container" && (
-            <div className="field-group" style={{ gap: 4 }}>
-              <label style={{ fontSize: "0.72rem" }}>Level</label>
-              <select
-                className="field-select"
-                value={depth}
-                onChange={(e) => setDepth(Number(e.target.value) as 1 | 2 | 3 | 4)}
-              >
-                {state.availableDepths.map((d) => (
-                  <option key={d} value={d}>
-                    L{d} — {CONTAINER_DEPTH_LABELS[d]}
-                    {d === 1 ? " (Lore)" : ""}
-                  </option>
-                ))}
-              </select>
+        {kind === "existing" ? (
+          <>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 88px",
+                gap: 8,
+                alignItems: "end",
+              }}
+            >
+              <div className="field-group" style={{ gap: 4 }}>
+                <label style={{ fontSize: "0.72rem" }}>
+                  Search World Locations
+                </label>
+                <div style={{ position: "relative" }}>
+                  <Search
+                    size={12}
+                    style={{
+                      position: "absolute",
+                      left: 9,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      color: "var(--text-muted)",
+                      pointerEvents: "none",
+                    }}
+                  />
+                  <input
+                    className="field-input"
+                    style={{ paddingLeft: 27 }}
+                    placeholder="Filter by location or container..."
+                    value={existingQuery}
+                    onChange={(e) => setExistingQuery(e.target.value)}
+                    autoFocus
+                  />
+                </div>
+              </div>
+              <div className="field-group" style={{ gap: 4 }}>
+                <label style={{ fontSize: "0.72rem" }}>Minutes</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={240}
+                  className="field-input"
+                  value={minutes}
+                  onChange={(e) => setMinutes(e.target.value)}
+                />
+              </div>
             </div>
-          )}
-          <div className="field-group" style={{ gap: 4 }}>
-            <label style={{ fontSize: "0.72rem" }}>Minutes</label>
-            <input
-              type="number"
-              min={1}
-              max={240}
-              className="field-input"
-              value={minutes}
-              onChange={(e) => setMinutes(e.target.value)}
-            />
+
+            <div
+              style={{
+                maxHeight: 165,
+                overflowY: "auto",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: 6,
+                background: "var(--bg-panel)",
+                display: "flex",
+                flexDirection: "column",
+              }}
+            >
+              {filteredExistingTargets.length === 0 ? (
+                <div
+                  style={{
+                    padding: "14px 10px",
+                    textAlign: "center",
+                    fontSize: "0.74rem",
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  {existingTargets.length === 0
+                    ? "No other locations available to link."
+                    : "No locations match that search."}
+                </div>
+              ) : (
+                filteredExistingTargets.map((item) => {
+                  const isSelected = selectedExisting?.location.id === item.location.id;
+                  const LocIcon = resolveMapIconComponent(
+                    item.location.icon,
+                    item.location.is_hub ? "hub" : "location"
+                  );
+                  return (
+                    <button
+                      key={item.location.id}
+                      type="button"
+                      disabled={item.alreadyLinked}
+                      onClick={() => {
+                        setSelectedExistingId(item.location.id);
+                        setTargetSlot(undefined);
+                      }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 8,
+                        width: "100%",
+                        textAlign: "left",
+                        padding: "7px 9px",
+                        border: "none",
+                        borderBottom: "1px solid rgba(51, 65, 85, 0.45)",
+                        background: isSelected
+                          ? "rgba(16, 185, 129, 0.16)"
+                          : "transparent",
+                        color: item.alreadyLinked
+                          ? "var(--text-muted)"
+                          : "var(--text-primary)",
+                        cursor: item.alreadyLinked ? "not-allowed" : "pointer",
+                        opacity: item.alreadyLinked ? 0.58 : 1,
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 7,
+                          minWidth: 0,
+                        }}
+                      >
+                        <LocIcon
+                          size={13}
+                          color={
+                            isSelected
+                              ? "#6ee7b7"
+                              : item.location.is_hub
+                              ? "#c084fc"
+                              : "#38bdf8"
+                          }
+                        />
+                        <span style={{ minWidth: 0 }}>
+                          <div
+                            style={{
+                              fontSize: "0.75rem",
+                              fontWeight: isSelected ? 700 : 600,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {item.location.name}
+                          </div>
+                          <div
+                            style={{
+                              fontSize: "0.66rem",
+                              color: "var(--text-muted)",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {item.breadcrumb}
+                          </div>
+                        </span>
+                      </span>
+                      <span
+                        style={{
+                          fontSize: "0.65rem",
+                          flexShrink: 0,
+                          color: item.alreadyLinked
+                            ? "#fbbf24"
+                            : item.isPortal
+                            ? "var(--accent-cyan)"
+                            : "var(--text-muted)",
+                        }}
+                      >
+                        {item.alreadyLinked
+                          ? "Already linked"
+                          : item.isPortal
+                          ? "[Portal]"
+                          : item.location.is_hub
+                          ? "[Hub]"
+                          : ""}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            {selectedExisting && (
+              <TargetEdgeSelector
+                sourceSlot={state.sourceSlot}
+                targetName={selectedExisting.location.name}
+                selectedSlot={targetSlot}
+                occupiedPorts={selectedExisting.occupiedPorts}
+                onChange={setTargetSlot}
+              />
+            )}
+          </>
+        ) : (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns:
+                kind === "container" ? "1fr 110px 90px" : "1fr 90px",
+              gap: 8,
+            }}
+          >
+            <div className="field-group" style={{ gap: 4 }}>
+              <label style={{ fontSize: "0.72rem" }}>Name</label>
+              <input
+                className="field-input"
+                placeholder={placeholder}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                autoFocus
+              />
+            </div>
+            {kind === "container" && (
+              <div className="field-group" style={{ gap: 4 }}>
+                <label style={{ fontSize: "0.72rem" }}>Level</label>
+                <select
+                  className="field-select"
+                  value={depth}
+                  onChange={(e) =>
+                    setDepth(Number(e.target.value) as 1 | 2 | 3 | 4)
+                  }
+                >
+                  {state.availableDepths.map((d) => (
+                    <option key={d} value={d}>
+                      L{d} — {CONTAINER_DEPTH_LABELS[d]}
+                      {d === 1 ? " (Lore)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div className="field-group" style={{ gap: 4 }}>
+              <label style={{ fontSize: "0.72rem" }}>Minutes</label>
+              <input
+                type="number"
+                min={1}
+                max={240}
+                className="field-input"
+                value={minutes}
+                onChange={(e) => setMinutes(e.target.value)}
+              />
+            </div>
           </div>
-        </div>
+        )}
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
           <button
@@ -424,21 +696,40 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
           >
             Cancel
           </button>
-          <button
-            type="button"
-            className="btn btn-cyan"
-            style={{ padding: "5px 12px", fontSize: "0.75rem" }}
-            onClick={() =>
-              onCreate({
-                kind,
-                name: name.trim() || placeholder,
-                travelMinutes: Math.max(1, Math.min(240, parseInt(minutes, 10) || 2)),
-                containerDepth: kind === "container" ? depth : undefined,
-              })
-            }
-          >
-            Create &amp; Link
-          </button>
+          {kind === "existing" ? (
+            <button
+              type="button"
+              className="btn btn-cyan"
+              disabled={!selectedExisting || selectedExisting.alreadyLinked || !onLinkExisting}
+              style={{ padding: "5px 12px", fontSize: "0.75rem" }}
+              onClick={() => {
+                if (!selectedExisting || !onLinkExisting) return;
+                onLinkExisting({
+                  targetLocationId: selectedExisting.location.id,
+                  travelMinutes: parsedMinutes,
+                  targetSlot,
+                });
+              }}
+            >
+              Link Existing Location
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-cyan"
+              style={{ padding: "5px 12px", fontSize: "0.75rem" }}
+              onClick={() =>
+                onCreate({
+                  kind,
+                  name: name.trim() || placeholder,
+                  travelMinutes: parsedMinutes,
+                  containerDepth: kind === "container" ? depth : undefined,
+                })
+              }
+            >
+              Create &amp; Link
+            </button>
+          )}
         </div>
       </div>
     </div>

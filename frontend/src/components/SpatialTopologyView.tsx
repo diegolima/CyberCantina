@@ -14,6 +14,7 @@ import {
 import {
   EmptyCanvasCreateModal,
   EmptyCanvasLinkState,
+  ExistingLinkTargetOption,
   GroupIntoContainerModal,
   GroupIntoContainerState,
   MapContextMenu,
@@ -42,13 +43,17 @@ import {
 import { PortalPromotionModal } from "./map/PortalPromotionModal";
 import { SpatialTopologyCanvas } from "./map/SpatialTopologyCanvas";
 import { TopologyHeaderToolbar } from "./map/TopologyHeaderToolbar";
-import { useTopologyMutations } from "./map/useTopologyMutations";
+import {
+  resolveNodeConnectionEndpoint,
+  useTopologyMutations,
+} from "./map/useTopologyMutations";
 import { useTopologyPointerDrag } from "./map/useTopologyPointerDrag";
 import {
   COMPASS_ANGLES,
   COMPASS_ORDER,
   CONTAINER_DEPTH_LABELS,
   OPPOSITE_COMPASS,
+  buildContainerBreadcrumb,
   buildContainerBreadcrumbChain,
   clientToWorldPoint,
   cloneGraph,
@@ -56,6 +61,7 @@ import {
   computeFullMapCoords,
   computeGhostNodeCoords,
   computePromotionCandidates,
+  getLocationOccupiedPorts,
   inferCompassDirection,
   pickCompassSlot,
   projectTopologyForDepth,
@@ -646,10 +652,11 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     canAddContainerHere,
     createStandaloneAt,
     handleConfirmStandaloneContainerCreate,
-    executeDirectEdgeCreation,
     initiateConnection,
+    handleConfirmPortalPrompt,
     handleConfirmHubCollision,
     handleConfirmEmptyCanvasCreate,
+    handleLinkExistingFromEmptyCanvas,
     handleConfirmGroupIntoContainer,
     executeImmediateContainerMove,
     canDeleteLocation,
@@ -697,6 +704,44 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     setMultiEdgeModalEdges,
     setPromotionPrompt,
   });
+
+  const emptyCanvasExistingTargets = useMemo<ExistingLinkTargetOption[]>(() => {
+    if (!emptyCanvasModal) return [];
+    const sourceLoc = resolveNodeConnectionEndpoint({
+      kind: emptyCanvasModal.sourceKind,
+      id: emptyCanvasModal.sourceId,
+      locationMap,
+      containerMap,
+      workingContainers,
+      workingLocations,
+      dynamicPortalIds: projectedTopology.dynamicPortalIds,
+    }).loc;
+    if (!sourceLoc) return [];
+    return workingLocations
+      .filter((loc) => loc.id !== sourceLoc.id)
+      .map((loc) => {
+        const alreadyLinked = workingEdges.some(
+          (e) =>
+            (e.from_location_id === sourceLoc.id && e.to_location_id === loc.id) ||
+            (e.from_location_id === loc.id && e.to_location_id === sourceLoc.id)
+        );
+        return {
+          location: loc,
+          breadcrumb: buildContainerBreadcrumb(loc.container_id, workingContainers),
+          alreadyLinked,
+          occupiedPorts: getLocationOccupiedPorts(loc.id, workingEdges, locationMap),
+          isPortal: projectedTopology.dynamicPortalIds.has(loc.id),
+        };
+      });
+  }, [
+    emptyCanvasModal,
+    locationMap,
+    containerMap,
+    workingContainers,
+    workingLocations,
+    workingEdges,
+    projectedTopology.dynamicPortalIds,
+  ]);
 
   useTopologyPointerDrag({
     nodeDrag,
@@ -1175,8 +1220,10 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
 
           <EmptyCanvasCreateModal
             state={emptyCanvasModal}
+            existingTargets={emptyCanvasExistingTargets}
             onCancel={() => setEmptyCanvasModal(null)}
             onCreate={handleConfirmEmptyCanvasCreate}
+            onLinkExisting={handleLinkExistingFromEmptyCanvas}
           />
 
           <GroupIntoContainerModal
@@ -1204,8 +1251,10 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             promotionPrompt={promotionPrompt}
             containerMap={containerMap}
             dynamicPortalIds={projectedTopology.dynamicPortalIds}
+            edges={workingEdges}
+            locationMap={locationMap}
             onChangePrompt={setPromotionPrompt}
-            onConfirm={executeDirectEdgeCreation}
+            onConfirm={handleConfirmPortalPrompt}
           />
 
           <MapIconBrowserModal

@@ -1,12 +1,15 @@
 import React from "react";
-import { DoorOpen } from "lucide-react";
+import { DoorOpen, X } from "lucide-react";
 import type {
   CompassDirection,
   LocationContainer,
+  LocationEdge,
   LocationNode,
 } from "../../types";
+import { TargetEdgeSelector } from "./TargetEdgeSelector";
 import {
   computePromotionCandidates,
+  getLocationOccupiedPorts,
   type PromotionPromptState,
 } from "./topologyProjection";
 
@@ -14,6 +17,8 @@ export interface PortalPromotionModalProps {
   promotionPrompt: PromotionPromptState | null;
   containerMap: Map<string, LocationContainer>;
   dynamicPortalIds: Set<string>;
+  edges?: LocationEdge[];
+  locationMap?: Map<string, LocationNode>;
   onChangePrompt: (next: PromotionPromptState | null) => void;
   onConfirm: (
     fromLoc: LocationNode,
@@ -21,7 +26,8 @@ export interface PortalPromotionModalProps {
     direction: CompassDirection,
     travelMinutes: number,
     bidirectional: boolean,
-    promoteIds: Set<string>
+    promoteIds: Set<string>,
+    explicitTargetSlot?: CompassDirection
   ) => void;
 }
 
@@ -29,19 +35,25 @@ export const PortalPromotionModal: React.FC<PortalPromotionModalProps> = ({
   promotionPrompt,
   containerMap,
   dynamicPortalIds,
+  edges = [],
+  locationMap = new Map(),
   onChangePrompt,
   onConfirm,
 }) => {
   if (!promotionPrompt) return null;
   const setPromotionPrompt = onChangePrompt;
-  const executeDirectEdgeCreation = onConfirm;
   const projectedTopology = { dynamicPortalIds };
+  const occupiedPorts = getLocationOccupiedPorts(
+    promotionPrompt.toLocation.id,
+    edges,
+    locationMap
+  );
 
   return (
             <div
               role="dialog"
               aria-modal="true"
-              aria-label="Entry/Exit Portal Promotion"
+              aria-label="Container Connection & Portal Setup"
               style={{
                 position: "absolute",
                 inset: 0,
@@ -52,11 +64,14 @@ export const PortalPromotionModal: React.FC<PortalPromotionModalProps> = ({
                 zIndex: 35,
                 padding: 16,
               }}
-              onClick={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                setPromotionPrompt(null);
+              }}
             >
               <div
                 style={{
-                  width: "min(440px, 95%)",
+                  width: "min(460px, 95%)",
                   background: "var(--bg-card)",
                   border: "1px solid rgba(6, 182, 212, 0.55)",
                   borderRadius: 8,
@@ -65,6 +80,7 @@ export const PortalPromotionModal: React.FC<PortalPromotionModalProps> = ({
                   flexDirection: "column",
                   gap: 10,
                 }}
+                onClick={(e) => e.stopPropagation()}
               >
                 <div
                   style={{
@@ -73,51 +89,118 @@ export const PortalPromotionModal: React.FC<PortalPromotionModalProps> = ({
                     color: "var(--accent-cyan)",
                     display: "flex",
                     alignItems: "center",
+                    justifyContent: "space-between",
                     gap: 7,
                   }}
                 >
-                  <DoorOpen size={16} />
-                  Cross-Boundary Connection &amp; Portal Setup
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+                    <DoorOpen size={16} />
+                    {promotionPrompt.candidates.length > 0
+                      ? "Cross-Boundary Connection & Portal Setup"
+                      : "Connect to Container Target"}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ padding: "2px 6px" }}
+                    onClick={() => setPromotionPrompt(null)}
+                    aria-label="Close"
+                  >
+                    <X size={13} />
+                  </button>
                 </div>
 
-                {promotionPrompt.targetContainerForLocationPick && (
+                <div style={{ fontSize: "0.76rem", color: "var(--text-secondary)" }}>
+                  Connecting{" "}
+                  <strong>{promotionPrompt.fromLocation.name}</strong>{" "}
+                  <span style={{ color: "var(--accent-cyan)" }}>
+                    [{promotionPrompt.direction}]
+                  </span>{" "}
+                  → <strong>{promotionPrompt.toLocation.name}</strong>
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: promotionPrompt.targetContainerForLocationPick
+                      ? "1fr 90px"
+                      : "1fr",
+                    gap: 8,
+                    alignItems: "end",
+                  }}
+                >
+                  {promotionPrompt.targetContainerForLocationPick && (
+                    <div className="field-group" style={{ gap: 4 }}>
+                      <label style={{ fontSize: "0.74rem", fontWeight: 600 }}>
+                        Target Location Inside{" "}
+                        {promotionPrompt.targetContainerForLocationPick.name}
+                      </label>
+                      <select
+                        className="field-select"
+                        value={promotionPrompt.chosenTargetLocationId}
+                        onChange={(e) => {
+                          const picked =
+                            promotionPrompt.targetLocationCandidates.find(
+                              (r) => r.id === e.target.value
+                            ) ?? promotionPrompt.toLocation;
+                          setPromotionPrompt({
+                            ...promotionPrompt,
+                            toLocation: picked,
+                            chosenTargetLocationId: picked.id,
+                            candidates: computePromotionCandidates(
+                              promotionPrompt.fromLocation,
+                              picked,
+                              containerMap,
+                              projectedTopology.dynamicPortalIds
+                            ),
+                          });
+                        }}
+                      >
+                        {promotionPrompt.targetLocationCandidates.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.name}
+                            {projectedTopology.dynamicPortalIds.has(r.id)
+                              ? " [Portal]"
+                              : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
                   <div className="field-group" style={{ gap: 4 }}>
-                    <label style={{ fontSize: "0.74rem", fontWeight: 600 }}>
-                      Select Target Location Inside{" "}
-                      {promotionPrompt.targetContainerForLocationPick.name}:
-                    </label>
-                    <select
-                      className="field-select"
-                      value={promotionPrompt.chosenTargetLocationId}
-                      onChange={(e) => {
-                        const picked =
-                          promotionPrompt.targetLocationCandidates.find(
-                            (r) => r.id === e.target.value
-                          ) ?? promotionPrompt.toLocation;
+                    <label style={{ fontSize: "0.72rem" }}>Minutes</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={240}
+                      className="field-input"
+                      value={promotionPrompt.travelMinutes}
+                      onChange={(e) =>
                         setPromotionPrompt({
                           ...promotionPrompt,
-                          toLocation: picked,
-                          chosenTargetLocationId: picked.id,
-                          candidates: computePromotionCandidates(
-                            promotionPrompt.fromLocation,
-                            picked,
-                            containerMap,
-                            projectedTopology.dynamicPortalIds
+                          travelMinutes: Math.max(
+                            1,
+                            Math.min(240, parseInt(e.target.value, 10) || 1)
                           ),
-                        });
-                      }}
-                    >
-                      {promotionPrompt.targetLocationCandidates.map((r) => (
-                        <option key={r.id} value={r.id}>
-                          {r.name}
-                          {projectedTopology.dynamicPortalIds.has(r.id)
-                            ? " [Portal]"
-                            : ""}
-                        </option>
-                      ))}
-                    </select>
+                        })
+                      }
+                    />
                   </div>
-                )}
+                </div>
+
+                <TargetEdgeSelector
+                  sourceSlot={promotionPrompt.direction}
+                  targetName={promotionPrompt.toLocation.name}
+                  selectedSlot={promotionPrompt.explicitTargetSlot}
+                  occupiedPorts={occupiedPorts}
+                  onChange={(slot) =>
+                    setPromotionPrompt({
+                      ...promotionPrompt,
+                      explicitTargetSlot: slot,
+                    })
+                  }
+                />
 
                 {promotionPrompt.candidates.length > 0 && (
                   <div
@@ -130,11 +213,8 @@ export const PortalPromotionModal: React.FC<PortalPromotionModalProps> = ({
                     }}
                   >
                     <div>
-                      Connecting{" "}
-                      <strong>{promotionPrompt.fromLocation.name}</strong> →{" "}
-                      <strong>{promotionPrompt.toLocation.name}</strong> crosses a
-                      Level 1 container boundary. Mark interior location(s) as
-                      Entry/Exit Portals:
+                      Crossing a Level 1 container boundary — mark interior
+                      location(s) as Entry/Exit Portals:
                     </div>
                     {promotionPrompt.candidates.map((cand) => (
                       <label
@@ -197,17 +277,18 @@ export const PortalPromotionModal: React.FC<PortalPromotionModalProps> = ({
                     className="btn btn-cyan"
                     style={{ padding: "4px 12px", fontSize: "0.74rem" }}
                     onClick={() =>
-                      executeDirectEdgeCreation(
+                      onConfirm(
                         promotionPrompt.fromLocation,
                         promotionPrompt.toLocation,
                         promotionPrompt.direction,
-                        promotionPrompt.travelMinutes,
+                        Math.max(1, Math.min(240, promotionPrompt.travelMinutes || 2)),
                         promotionPrompt.bidirectional,
                         new Set(
                           promotionPrompt.candidates
                             .filter((c) => c.promote)
                             .map((c) => c.location.id)
-                        )
+                        ),
+                        promotionPrompt.explicitTargetSlot
                       )
                     }
                   >

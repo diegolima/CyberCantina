@@ -135,6 +135,70 @@ export function pickCompassSlot(
   return base;
 }
 
+export interface TargetCompassResolution {
+  slot: CompassDirection;
+  collides: boolean;
+  isFallback: boolean;
+}
+
+/**
+ * Resolve target compass slot when connecting to a target location:
+ * - Explicit override uses that exact slot and reports whether it is occupied.
+ * - Auto mode starts from OPPOSITE_COMPASS[sourceSlot] and picks the nearest free
+ *   port around COMPASS_ORDER, only reporting collision when all 8 ports are full.
+ */
+export function resolveAutoTargetSlot(
+  sourceSlot: CompassDirection,
+  targetOccupied: Set<CompassDirection>,
+  explicitTargetSlot?: CompassDirection
+): TargetCompassResolution {
+  if (explicitTargetSlot) {
+    return {
+      slot: explicitTargetSlot,
+      collides: targetOccupied.has(explicitTargetSlot),
+      isFallback: false,
+    };
+  }
+  const preferred = OPPOSITE_COMPASS[sourceSlot];
+  const chosen = pickCompassSlot(preferred, targetOccupied);
+  const collides = targetOccupied.has(chosen);
+  return {
+    slot: chosen,
+    collides,
+    isFallback: !collides && chosen !== preferred,
+  };
+}
+
+/** Map occupied compass directions on a location to their connected destination names. */
+export function getLocationOccupiedPorts(
+  locationId: string,
+  edges: LocationEdge[],
+  locationMap: Map<string, LocationNode>
+): Map<CompassDirection, string> {
+  const occupied = new Map<CompassDirection, string>();
+  for (const edge of edges) {
+    if (edge.from_location_id !== locationId) continue;
+    const dir = edge.compass_direction;
+    if (!dir || !COMPASS_ORDER.includes(dir)) continue;
+    if (!occupied.has(dir)) {
+      occupied.set(
+        dir,
+        locationMap.get(edge.to_location_id)?.name ?? edge.to_location_id
+      );
+    }
+  }
+  return occupied;
+}
+
+/** Build a human-readable ancestor breadcrumb (e.g., "Region › District") for a container. */
+export function buildContainerBreadcrumb(
+  containerId: string | null | undefined,
+  containers: LocationContainer[]
+): string {
+  const chain = buildContainerBreadcrumbChain(containerId, containers);
+  return chain.length > 0 ? chain.map((c) => c.name).join(" › ") : "Top-Level";
+}
+
 export function compassFromVector(dx: number, dy: number): CompassDirection {
   const angle = Math.atan2(dy, dx);
   let best: CompassDirection = "N";
@@ -690,6 +754,7 @@ export interface PromotionPromptState {
   targetLocationCandidates: LocationNode[];
   chosenTargetLocationId: string;
   direction: CompassDirection;
+  explicitTargetSlot?: CompassDirection;
   travelMinutes: number;
   bidirectional: boolean;
   candidates: PromotionCandidate[];
