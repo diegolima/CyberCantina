@@ -722,6 +722,10 @@ class SchemaInitMixin:
                 conn.execute(
                     "ALTER TABLE characters ADD COLUMN communication_style_json TEXT NOT NULL DEFAULT '[]'"
                 )
+            if "unsupported_fields_json" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN unsupported_fields_json TEXT NOT NULL DEFAULT '{}'"
+                )
             conn.execute(
                 "UPDATE characters SET character_bio = physical_appearance WHERE character_bio = '' AND physical_appearance != ''"
             )
@@ -1092,16 +1096,11 @@ class SchemaInitMixin:
                         (json.dumps(new_eq), json.dumps(new_inv), row["turn_id"], row["character_id"]),
                     )
 
-            # Backfill default Kira Vance physical_appearance, initial_message, equipped, and inventory if upgrading an existing DB
+            # Backfill default Kira Vance initial_message, equipped, and inventory if upgrading an existing DB
             kira_row = conn.execute(
-                "SELECT id, physical_appearance, initial_message, equipped_json, inventory_json FROM characters WHERE id = 'char_kira_vance'"
+                "SELECT id, initial_message, equipped_json, inventory_json FROM characters WHERE id = 'char_kira_vance'"
             ).fetchone()
             if kira_row:
-                default_kira_appearance = (
-                    "34-year-old woman with a lean, steady build, tired yet observant hazel eyes, and silver-streaked "
-                    "dark hair tied back with a stainless-steel surgical clamp. Her left forearm is a brushed-chrome "
-                    "cybernetic prosthetic with micro-scalpel articulation and fine servo seams along the wrist."
-                )
                 default_kira_msg = (
                     "*Rain hammers against the armored glass of The Neon Rust, streaking the amber glow of the street signs "
                     "into blurred ribbons. Inside, the cantina is nearly empty—just the low hum of the transformer and a slow "
@@ -1126,11 +1125,6 @@ class SchemaInitMixin:
                         "Concealed Vespera trauma med-injector",
                     ]
                 )
-                if not kira_row["physical_appearance"]:
-                    conn.execute(
-                        "UPDATE characters SET physical_appearance = ? WHERE id = 'char_kira_vance'",
-                        (default_kira_appearance,),
-                    )
                 if not kira_row["initial_message"]:
                     conn.execute(
                         "UPDATE characters SET initial_message = ? WHERE id = 'char_kira_vance'",
@@ -1155,21 +1149,22 @@ class SchemaInitMixin:
                         (default_kira_inv,),
                     )
 
-            # Backfill any other pre-existing characters missing physical_appearance or initial_message
+            # Backfill any other pre-existing characters missing both character_bio and physical_appearance, or initial_message
             other_rows = conn.execute(
-                "SELECT id, name, tagline, physical_appearance, initial_message FROM characters WHERE physical_appearance = '' OR initial_message = ''"
+                "SELECT id, name, tagline, character_bio, physical_appearance, initial_message "
+                "FROM characters WHERE (character_bio = '' AND physical_appearance = '') OR initial_message = ''"
             ).fetchall()
             for r in other_rows:
-                new_app = r["physical_appearance"] or (
-                    f"{r['name']} has an observant, grounded physical presence shaped by their background ({r['tagline']})."
+                new_bio = r["character_bio"] or r["physical_appearance"] or (
+                    f"{r['name']} has an observant, grounded presence shaped by their background ({r['tagline']})."
                 )
                 new_msg = r["initial_message"] or (
                     f"*{r['name']} stands inside {{location_name}}. {{location_description}}*\n\n"
                     f"\"You're late,\" *{r['name']} says quietly, eyes scanning the room.*"
                 )
                 conn.execute(
-                    "UPDATE characters SET physical_appearance = ?, initial_message = ? WHERE id = ?",
-                    (new_app, new_msg, r["id"]),
+                    "UPDATE characters SET character_bio = ?, initial_message = ? WHERE id = ?",
+                    (new_bio, new_msg, r["id"]),
                 )
 
             # Backfill campaign_characters for any existing campaigns & turn character states

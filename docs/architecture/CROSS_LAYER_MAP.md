@@ -634,9 +634,11 @@ erDiagram
 | `frontend/src/components/character/CharacterMediaTab.tsx` |
 | `frontend/src/components/character/CharacterMemoriesTab.tsx` |
 | `frontend/src/components/character/CharacterPersonalityTab.tsx` |
+| `frontend/src/components/character/CharacterUnsupportedTab.tsx` |
 | `frontend/src/components/character/CharacterVoiceTab.tsx` |
 | `frontend/src/components/character/characterMediaUtils.ts` |
 | `frontend/src/components/character/index.ts` |
+| `frontend/src/components/character/unsupportedFields.ts` |
 
 #### `components/chat`
 

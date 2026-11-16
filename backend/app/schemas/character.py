@@ -759,8 +759,6 @@ class CharacterWizardLLMOutput(BaseModel):
     def _sync_bio_and_appearance(self) -> "CharacterWizardLLMOutput":
         if not self.character_bio and self.physical_appearance:
             self.character_bio = self.physical_appearance
-        elif not self.physical_appearance and self.character_bio:
-            self.physical_appearance = self.character_bio
         if self.modifications:
             seen = {f.lower() for f in self.distinctive_features}
             for m in self.modifications:
@@ -770,7 +768,7 @@ class CharacterWizardLLMOutput(BaseModel):
         return self
 
     def to_draft(self) -> "CharacterWizardDraft":
-        """Normalize '[Worn]'/'[Equipped]' string prefixes and convert to CharacterWizardDraft."""
+        """Normalize '[Worn]'/'[Equipped]' string prefixes and convert to canonical CharacterWizardDraft."""
         raw_eq = [s.strip() for s in self.equipped if isinstance(s, str) and s.strip()]
         raw_inv = [s.strip() for s in self.inventory if isinstance(s, str) and s.strip()]
         if not raw_eq and raw_inv:
@@ -786,20 +784,28 @@ class CharacterWizardLLMOutput(BaseModel):
             if separated_eq:
                 raw_eq = separated_eq
                 raw_inv = separated_inv
+        resolved_bio = self.character_bio or self.physical_appearance
+        merged_features = list(self.distinctive_features)
+        if self.modifications:
+            seen = {f.lower() for f in merged_features}
+            for m in self.modifications:
+                if m.strip() and m.strip().lower() not in seen:
+                    merged_features.append(m.strip())
+                    seen.add(m.strip().lower())
         return CharacterWizardDraft(
             name=self.name,
             tagline=self.tagline,
-            character_bio=self.character_bio,
-            physical_appearance=self.physical_appearance,
+            character_bio=resolved_bio,
+            physical_appearance="",
             species=self.species,
             sex=self.sex,
             pronouns=self.pronouns,
             age=self.age,
             build_and_height=self.build_and_height,
-            distinctive_features=list(self.distinctive_features),
+            distinctive_features=merged_features,
             posture=self.posture,
             mannerisms=list(self.mannerisms),
-            modifications=list(self.modifications),
+            modifications=[],
             visual_aesthetic=self.visual_aesthetic,
             personality_traits=list(self.personality_traits),
             core_persona=self.core_persona,
@@ -815,11 +821,162 @@ class CharacterWizardLLMOutput(BaseModel):
             tags=list(self.tags),
             creator=self.creator,
             creator_notes=self.creator_notes,
+            unsupported_fields={},
         )
 
 
-class CharacterWizardDraft(BaseModel):
-    """Structured AI-expanded character package produced by the Character Wizard."""
+MAX_UNSUPPORTED_KEYS = 64
+MAX_UNSUPPORTED_BYTES = 64 * 1024
+MAX_UNSUPPORTED_DEPTH = 8
+LEGACY_DEPRECATED_CHARACTER_KEYS: frozenset[str] = frozenset(
+    {"physical_appearance", "modifications"}
+)
+CANONICAL_CHARACTER_RECORD_KEYS: frozenset[str] = frozenset(
+    {
+        "id",
+        "world_id",
+        "pending_deletion",
+        "version",
+        "created_at",
+        "name",
+        "tagline",
+        "character_bio",
+        "species",
+        "sex",
+        "pronouns",
+        "age",
+        "build_and_height",
+        "distinctive_features",
+        "posture",
+        "mannerisms",
+        "visual_aesthetic",
+        "personality_traits",
+        "core_persona",
+        "moral_code",
+        "quirks_flaws",
+        "communication_style",
+        "initial_message",
+        "equipped",
+        "inventory",
+        "voice_anchors",
+        "baseline_psyche",
+        "memory_shards",
+        "tags",
+        "creator",
+        "creator_notes",
+        "portraits",
+        "gallery",
+        "unsupported_fields",
+    }
+)
+
+
+def _measure_json_depth(val: Any) -> int:
+    """Measure nested dict/list depth iteratively."""
+    if not isinstance(val, (dict, list)):
+        return 0
+    max_depth = 0
+    stack: list[tuple[Any, int]] = [(val, 1)]
+    while stack:
+        curr, depth = stack.pop()
+        if depth > max_depth:
+            max_depth = depth
+        if isinstance(curr, dict):
+            for child in curr.values():
+                if isinstance(child, (dict, list)):
+                    stack.append((child, depth + 1))
+        elif isinstance(curr, list):
+            for child in curr:
+                if isinstance(child, (dict, list)):
+                    stack.append((child, depth + 1))
+    return max_depth
+
+
+def sanitize_unsupported_fields(
+    raw: Any,
+    *,
+    strict: bool = False,
+) -> dict[str, Any]:
+    """Validate and bound arbitrary extension/legacy keys in unsupported_fields."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        if strict:
+            raise ValueError("unsupported_fields must be a JSON object.")
+        return {}
+
+    cleaned: dict[str, Any] = {}
+    for k, v in raw.items():
+        if not isinstance(k, str):
+            continue
+        key = k.strip()
+        if not key or key in CANONICAL_CHARACTER_RECORD_KEYS:
+            continue
+        if v is None:
+            continue
+        if isinstance(v, str) and not v.strip():
+            continue
+        if isinstance(v, list) and len(v) == 0:
+            continue
+        cleaned[key] = v
+
+    if len(cleaned) > MAX_UNSUPPORTED_KEYS:
+        if strict:
+            raise ValueError(
+                f"Too many unsupported fields ({len(cleaned)} > {MAX_UNSUPPORTED_KEYS})."
+            )
+        cleaned = dict(list(cleaned.items())[:MAX_UNSUPPORTED_KEYS])
+
+    for k, v in list(cleaned.items()):
+        depth = _measure_json_depth(v)
+        if depth > MAX_UNSUPPORTED_DEPTH:
+            if strict:
+                raise ValueError(
+                    f"Unsupported field '{k}' exceeds maximum nesting depth ({depth} > {MAX_UNSUPPORTED_DEPTH})."
+                )
+            cleaned.pop(k, None)
+
+    try:
+        encoded = json.dumps(cleaned, ensure_ascii=False).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        if strict:
+            raise ValueError("Unsupported fields must be JSON-serializable.") from exc
+        return {}
+
+    if len(encoded) > MAX_UNSUPPORTED_BYTES:
+        if strict:
+            raise ValueError(
+                f"Unsupported fields payload exceeds size limit ({len(encoded)} bytes > {MAX_UNSUPPORTED_BYTES} bytes)."
+            )
+        return {}
+
+    return cleaned
+
+
+def canonicalize_legacy_fields_into_unsupported(
+    *,
+    character_bio: str,
+    physical_appearance: str,
+    modifications: Sequence[str],
+    unsupported_fields: dict[str, Any] | None,
+) -> tuple[str, list[str], dict[str, Any]]:
+    """Move non-empty legacy fields into unsupported_fields (omitting bio duplicates) and clear old columns."""
+    clean_unsupported = sanitize_unsupported_fields(unsupported_fields, strict=False)
+    bio_norm = (character_bio or "").strip()
+    phys_norm = (physical_appearance or "").strip()
+
+    if phys_norm and phys_norm != bio_norm and "physical_appearance" not in clean_unsupported:
+        clean_unsupported["physical_appearance"] = phys_norm
+
+    clean_mods = [m.strip() for m in modifications if isinstance(m, str) and m.strip()]
+    if clean_mods and "modifications" not in clean_unsupported:
+        clean_unsupported["modifications"] = clean_mods
+
+    return "", [], sanitize_unsupported_fields(clean_unsupported, strict=False)
+
+
+class _CharacterFieldsBase(BaseModel):
+    """Shared persisted & draft character attributes with pure markup sanitization (no cross-field mutation)."""
 
     name: str
     tagline: str = Field(description="One-line evocative summary of the character.")
@@ -830,8 +987,7 @@ class CharacterWizardDraft(BaseModel):
     physical_appearance: str = Field(
         default="",
         description=(
-            "Dedicated immutable physical appearance (build, facial features, hair, eyes, "
-            "scars, permanent cyberware/augmentations) excluding temporary clothing or held items."
+            "Deprecated legacy physical appearance field retained strictly for backward-compatible reads."
         ),
     )
     species: str = Field(default="Human", description="Biological or mechanical origin.")
@@ -848,7 +1004,10 @@ class CharacterWizardDraft(BaseModel):
         default_factory=list,
         description="2-3 behavioral micro-actions and conversational tells (e.g. ['fidgets with signet ring when pressured']).",
     )
-    modifications: list[str] = Field(default_factory=list, description="Cyberware, implants, tattoos, or scars (auto-merged into distinctive_features).")
+    modifications: list[str] = Field(
+        default_factory=list,
+        description="Deprecated legacy modifications field retained strictly for backward-compatible reads.",
+    )
     visual_aesthetic: str = Field(default="", description="General clothing style or dress vibe (e.g. 'practical weathered techwear').")
     personality_traits: list[str] = Field(default_factory=list, description="3-5 high-level tropes and traits (chips).")
     core_persona: str = Field(
@@ -885,9 +1044,41 @@ class CharacterWizardDraft(BaseModel):
         default_factory=list,
         description="Starting carried inventory of tools, personal items, or stashed objects.",
     )
+    voice_anchors: list[VoiceAnchor] = Field(default_factory=list)
+    baseline_psyche: BaselinePsyche
+    memory_shards: list[MemoryShard] = Field(default_factory=list)
+    tags: list[str] = Field(
+        default_factory=list,
+        description="Optional categorization tags for filtering, grouping, and card export.",
+    )
+    creator: str = Field(
+        default="",
+        description="Optional author name, handle, or contact string for card export and SillyTavern compatibility.",
+    )
+    creator_notes: str = Field(
+        default="",
+        description="Optional built-in usage/roleplay guidance or scenario notes from the creator.",
+    )
+    portraits: dict[str, str] = Field(
+        default_factory=dict,
+        description="Map of emotional expression (e.g. 'default', 'happy') to media asset URL.",
+    )
+    gallery: list[GalleryImage] = Field(
+        default_factory=list,
+        description="List of uploaded photo album image assets.",
+    )
+    unsupported_fields: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Read-only deprecated or unrecognized future .zcc attributes excluded from LLM prompts.",
+    )
+
+    @field_validator("equipped", "inventory", mode="before")
+    @classmethod
+    def _coerce_items(cls, val: Any) -> list[ItemInstance]:
+        return coerce_item_list(val)
 
     @model_validator(mode="after")
-    def _sanitize_and_sync_fields(self) -> "CharacterWizardDraft":
+    def _sanitize_markup_fields(self) -> "_CharacterFieldsBase":
         for field_name in (
             "name",
             "tagline",
@@ -970,48 +1161,26 @@ class CharacterWizardDraft(BaseModel):
             item.name = sanitize_character_markup(item.name, single_line=True)
             item.note = sanitize_character_markup(item.note, single_line=True)
 
-        if not self.character_bio and self.physical_appearance:
-            self.character_bio = self.physical_appearance
-        elif not self.physical_appearance and self.character_bio:
-            self.physical_appearance = self.character_bio
-        if self.modifications:
-            seen = {f.lower() for f in self.distinctive_features}
-            for m in self.modifications:
-                if m.strip() and m.strip().lower() not in seen:
-                    self.distinctive_features.append(m.strip())
-                    seen.add(m.strip().lower())
+        self.unsupported_fields = sanitize_unsupported_fields(
+            self.unsupported_fields, strict=False
+        )
         return self
 
-    @field_validator("equipped", "inventory", mode="before")
-    @classmethod
-    def _coerce_items(cls, val: Any) -> list[ItemInstance]:
-        return coerce_item_list(val)
-    voice_anchors: list[VoiceAnchor] = Field(default_factory=list)
-    baseline_psyche: BaselinePsyche
-    memory_shards: list[MemoryShard] = Field(default_factory=list)
-    tags: list[str] = Field(
-        default_factory=list,
-        description="Optional categorization tags for filtering, grouping, and card export.",
-    )
-    creator: str = Field(
-        default="",
-        description="Optional author name, handle, or contact string for card export and SillyTavern compatibility.",
-    )
-    creator_notes: str = Field(
-        default="",
-        description="Optional built-in usage/roleplay guidance or scenario notes from the creator.",
-    )
-    portraits: dict[str, str] = Field(
-        default_factory=dict,
-        description="Map of emotional expression (e.g. 'default', 'happy') to media asset URL.",
-    )
-    gallery: list[GalleryImage] = Field(
-        default_factory=list,
-        description="List of uploaded photo album image assets.",
-    )
+
+class CharacterWizardDraft(_CharacterFieldsBase):
+    """Structured character draft produced by the Character Wizard or .zcc import."""
+
+    @model_validator(mode="after")
+    def _normalize_draft_fields(self) -> "CharacterWizardDraft":
+        if (
+            self.physical_appearance.strip()
+            and self.physical_appearance.strip() == self.character_bio.strip()
+        ):
+            self.physical_appearance = ""
+        return self
 
 
-class CharacterRecord(CharacterWizardDraft):
+class CharacterRecord(_CharacterFieldsBase):
     """Persisted character entity in SQLite."""
 
     id: str

@@ -159,8 +159,9 @@ def test_fallback_distillation():
     draft = _fallback_sillytavern_distillation(card)
 
     assert draft.name == "Libby"
-    assert "Libby" in draft.physical_appearance
-    assert "orange-red hair" in draft.physical_appearance
+    assert "Libby" in draft.character_bio
+    assert "orange-red hair" in draft.character_bio
+    assert draft.physical_appearance == ""
     assert "confident" in draft.core_persona
     assert draft.creator == "persia63"
     assert "female" in draft.tags

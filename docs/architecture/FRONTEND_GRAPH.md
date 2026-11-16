@@ -112,7 +112,7 @@ flowchart TD
 | `api` | 14 | `types` |
 | `components (root)` | 23 | `api`, `components/auth`, `components/character`, `components/chat`, `components/inspector`, `components/map`, `components/prompts`, `components/shared`, `components/wizard`, `components/world`, `hooks`, `providers`, `types`, `utils` |
 | `components/auth` | 12 | `api`, `components (root)`, `components/models`, `components/providers`, `components/shared`, `types`, `utils` |
-| `components/character` | 10 | `api`, `components (root)`, `components/shared`, `types` |
+| `components/character` | 12 | `api`, `components (root)`, `components/shared`, `types` |
 | `components/chat` | 7 | `components (root)`, `components/inspector`, `hooks`, `types`, `utils` |
 | `components/inspector` | 11 | `components (root)`, `components/map`, `types`, `utils` |
 | `components/map` | 14 | `components (root)`, `hooks`, `types` |

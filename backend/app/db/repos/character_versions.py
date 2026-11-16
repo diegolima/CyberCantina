@@ -13,6 +13,7 @@ from app.schemas.character import (
     CharacterVersionSummary,
     ItemInstance,
     MemoryShard,
+    canonicalize_legacy_fields_into_unsupported,
     dump_items_json,
 )
 from app.schemas.turn import CampaignStateBundle
@@ -281,13 +282,20 @@ class CharacterVersionsMixin:
             highest_version = max(orig.version, max_ver_row["max_v"] if max_ver_row else 0)
             new_version = highest_version + 1
 
+            clean_phys, clean_mods, clean_unsupported = canonicalize_legacy_fields_into_unsupported(
+                character_bio=payload.character_bio,
+                physical_appearance=payload.physical_appearance,
+                modifications=payload.modifications,
+                unsupported_fields=payload.unsupported_fields,
+            )
             distinctive_features_json = json.dumps(payload.distinctive_features)
             mannerisms_json = json.dumps(payload.mannerisms)
-            modifications_json = json.dumps(payload.modifications)
+            modifications_json = json.dumps(clean_mods)
             personality_traits_json = json.dumps(payload.personality_traits)
             moral_code_json = json.dumps(payload.moral_code)
             quirks_flaws_json = json.dumps(payload.quirks_flaws)
             communication_style_json = json.dumps(payload.communication_style)
+            unsupported_fields_json = json.dumps(clean_unsupported)
 
             if campaigns_using == 0:
                 # In-place update (zero active campaigns reference this character)
@@ -302,7 +310,7 @@ class CharacterVersionsMixin:
                         communication_style_json = ?, initial_message = ?, equipped_json = ?, inventory_json = ?,
                         voice_anchors_json = ?, baseline_psyche_json = ?, memory_shards_json = ?,
                         tags_json = ?, creator = ?, creator_notes = ?,
-                        portraits_json = ?, gallery_json = ?, version = ?
+                        portraits_json = ?, gallery_json = ?, unsupported_fields_json = ?, version = ?
                     WHERE id = ?
                     """,
                     (
@@ -314,7 +322,7 @@ class CharacterVersionsMixin:
                         payload.pronouns,
                         payload.age,
                         payload.character_bio,
-                        payload.physical_appearance,
+                        clean_phys,
                         payload.build_and_height,
                         distinctive_features_json,
                         payload.posture,
@@ -337,6 +345,7 @@ class CharacterVersionsMixin:
                         creator_notes_str,
                         portraits_json,
                         gallery_json,
+                        unsupported_fields_json,
                         new_version,
                         target_char_id,
                     ),
@@ -356,12 +365,12 @@ class CharacterVersionsMixin:
                     "pronouns": payload.pronouns,
                     "age": payload.age,
                     "character_bio": payload.character_bio,
-                    "physical_appearance": payload.physical_appearance,
+                    "physical_appearance": clean_phys,
                     "build_and_height": payload.build_and_height,
                     "distinctive_features": list(payload.distinctive_features),
                     "posture": payload.posture,
                     "mannerisms": list(payload.mannerisms),
-                    "modifications": list(payload.modifications),
+                    "modifications": list(clean_mods),
                     "visual_aesthetic": payload.visual_aesthetic,
                     "personality_traits": list(payload.personality_traits),
                     "core_persona": payload.core_persona,
@@ -377,6 +386,7 @@ class CharacterVersionsMixin:
                     "tags": clean_tags,
                     "creator": creator_str,
                     "creator_notes": creator_notes_str,
+                    "unsupported_fields": clean_unsupported,
                     "version": new_version,
                     "pending_deletion": False,
                     "created_at": now,
@@ -405,7 +415,7 @@ class CharacterVersionsMixin:
                         communication_style_json, initial_message, equipped_json, inventory_json,
                         voice_anchors_json, baseline_psyche_json, memory_shards_json,
                         tags_json, creator, creator_notes,
-                        portraits_json, gallery_json, version,
+                        portraits_json, gallery_json, unsupported_fields_json, version,
                         pending_deletion, created_at
                     )
                     VALUES (
@@ -416,7 +426,7 @@ class CharacterVersionsMixin:
                         ?, ?, ?, ?,
                         ?, ?, ?,
                         ?, ?, ?,
-                        ?, ?, ?,
+                        ?, ?, ?, ?,
                         0, ?
                     )
                     """,
@@ -431,7 +441,7 @@ class CharacterVersionsMixin:
                         payload.pronouns,
                         payload.age,
                         payload.character_bio,
-                        payload.physical_appearance,
+                        clean_phys,
                         payload.build_and_height,
                         distinctive_features_json,
                         payload.posture,
@@ -454,6 +464,7 @@ class CharacterVersionsMixin:
                         creator_notes_str,
                         portraits_json,
                         gallery_json,
+                        unsupported_fields_json,
                         new_version,
                         now,
                     ),
@@ -486,12 +497,12 @@ class CharacterVersionsMixin:
                     "pronouns": payload.pronouns,
                     "age": payload.age,
                     "character_bio": payload.character_bio,
-                    "physical_appearance": payload.physical_appearance,
+                    "physical_appearance": clean_phys,
                     "build_and_height": payload.build_and_height,
                     "distinctive_features": list(payload.distinctive_features),
                     "posture": payload.posture,
                     "mannerisms": list(payload.mannerisms),
-                    "modifications": list(payload.modifications),
+                    "modifications": list(clean_mods),
                     "visual_aesthetic": payload.visual_aesthetic,
                     "personality_traits": list(payload.personality_traits),
                     "core_persona": payload.core_persona,
@@ -507,6 +518,7 @@ class CharacterVersionsMixin:
                     "tags": clean_tags,
                     "creator": creator_str,
                     "creator_notes": creator_notes_str,
+                    "unsupported_fields": clean_unsupported,
                     "version": new_version,
                     "pending_deletion": False,
                     "created_at": now,
@@ -689,6 +701,7 @@ class CharacterVersionsMixin:
             communication_style_json = json.dumps(snap.communication_style)
             portraits_json = json.dumps(current_char.portraits)
             gallery_json = json.dumps([img.model_dump() for img in current_char.gallery])
+            unsupported_fields_json = json.dumps(snap.unsupported_fields or {})
 
             if campaigns_using == 0:
                 target_char_id = character_id
@@ -702,7 +715,7 @@ class CharacterVersionsMixin:
                         communication_style_json = ?, initial_message = ?, equipped_json = ?, inventory_json = ?,
                         voice_anchors_json = ?, baseline_psyche_json = ?, memory_shards_json = ?,
                         tags_json = ?, creator = ?, creator_notes = ?,
-                        portraits_json = ?, gallery_json = ?, version = ?
+                        portraits_json = ?, gallery_json = ?, unsupported_fields_json = ?, version = ?
                     WHERE id = ?
                     """,
                     (
@@ -737,6 +750,7 @@ class CharacterVersionsMixin:
                         snap.creator_notes,
                         portraits_json,
                         gallery_json,
+                        unsupported_fields_json,
                         snap.version,
                         target_char_id,
                     ),
@@ -762,7 +776,7 @@ class CharacterVersionsMixin:
                         communication_style_json, initial_message, equipped_json, inventory_json,
                         voice_anchors_json, baseline_psyche_json, memory_shards_json,
                         tags_json, creator, creator_notes,
-                        portraits_json, gallery_json, version,
+                        portraits_json, gallery_json, unsupported_fields_json, version,
                         pending_deletion, created_at
                     )
                     VALUES (
@@ -773,7 +787,7 @@ class CharacterVersionsMixin:
                         ?, ?, ?, ?,
                         ?, ?, ?,
                         ?, ?, ?,
-                        ?, ?, ?,
+                        ?, ?, ?, ?,
                         0, ?
                     )
                     """,
@@ -811,6 +825,7 @@ class CharacterVersionsMixin:
                         snap.creator_notes,
                         portraits_json,
                         gallery_json,
+                        unsupported_fields_json,
                         snap.version,
                         now,
                     ),

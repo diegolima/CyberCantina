@@ -190,7 +190,7 @@ export interface CharacterWizardDraft {
   name: string;
   tagline: string;
   character_bio?: string;
-  physical_appearance: string;
+  physical_appearance?: string;
   species?: string;
   sex?: string;
   pronouns?: string;
@@ -217,6 +217,7 @@ export interface CharacterWizardDraft {
   creator_notes?: string;
   portraits?: Record<string, string>;
   gallery?: GalleryImage[];
+  unsupported_fields?: Record<string, unknown>;
 }
 
 export interface SillyTavernImportResponse {

@@ -31,7 +31,7 @@ export const CharacterAppearanceTab: React.FC<CharacterAppearanceTabProps> = ({
   const postureValue = data.posture ?? "";
   const mannerismsValue = data.mannerisms ?? [];
   const aestheticValue = data.visual_aesthetic ?? "";
-  const bioText = (data.character_bio ?? data.physical_appearance ?? "").trim();
+  const bioText = (data.character_bio ?? "").trim();
 
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
   const [extractError, setExtractError] = useState<string | null>(null);
@@ -70,7 +70,6 @@ export const CharacterAppearanceTab: React.FC<CharacterAppearanceTabProps> = ({
       onChange({
         distinctive_features: nextFeatures,
         character_bio: res.rewritten_bio,
-        physical_appearance: res.rewritten_bio,
       });
     } catch (err: any) {
       setExtractError(err?.message || "Failed to extract features from bio.");
@@ -84,7 +83,6 @@ export const CharacterAppearanceTab: React.FC<CharacterAppearanceTabProps> = ({
     onChange({
       distinctive_features: undoSnapshot.prevFeatures,
       character_bio: undoSnapshot.prevBio,
-      physical_appearance: undoSnapshot.prevBio,
     });
     setUndoSnapshot(null);
     setExtractError(null);

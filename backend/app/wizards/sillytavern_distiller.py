@@ -253,7 +253,8 @@ def _fallback_sillytavern_distillation(
     return CharacterWizardDraft(
         name=name,
         tagline=tagline,
-        physical_appearance=physical_appearance,
+        character_bio=physical_appearance,
+        physical_appearance="",
         core_persona=core_persona,
         initial_message=initial_message,
         equipped=default_equipped,
@@ -330,8 +331,8 @@ async def distill_sillytavern_card(
         draft.creator_notes = card.creator_notes or draft.creator_notes
 
         # Ensure fallback defaults if LLM outputs empty strings
-        if not draft.physical_appearance.strip():
-            draft.physical_appearance = fallback.physical_appearance
+        if not draft.character_bio.strip():
+            draft.character_bio = fallback.character_bio
         if not draft.core_persona.strip():
             draft.core_persona = fallback.core_persona
         if not draft.initial_message.strip():

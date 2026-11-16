@@ -32,7 +32,7 @@ export const CharacterBaseTab: React.FC<CharacterBaseTabProps> = ({
   readOnly = false,
   worlds = [],
 }) => {
-  const bioValue = data.character_bio ?? data.physical_appearance ?? "";
+  const bioValue = data.character_bio ?? "";
   const speciesValue = data.species ?? "Human";
   const sexValue = data.sex ?? "";
   const pronounsValue = data.pronouns ?? "";
@@ -167,7 +167,6 @@ export const CharacterBaseTab: React.FC<CharacterBaseTabProps> = ({
         placeholder="High-level public background, origins, and core concept..."
         onChange={(val) => {
           handleFieldChange("character_bio", val);
-          handleFieldChange("physical_appearance", val);
         }}
       />
 

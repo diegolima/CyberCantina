@@ -484,8 +484,8 @@ def test_character_structured_appearance_and_personality_fields(temp_repo: Canti
     assert "Compulsive hand sanitizer user" in char.quirks_flaws
     assert "clipped" in char.communication_style
 
-    # Check that physical_appearance was populated from character_bio for backward compatibility
-    assert char.physical_appearance == "Slender frame with porcelain-white dermal coating."
+    # Canonical draft must NOT mirror character_bio into physical_appearance
+    assert char.physical_appearance == ""
 
     # Update character with new distinctive feature
     updated = temp_repo.update_character(
@@ -525,7 +525,12 @@ def test_character_structured_appearance_and_personality_fields(temp_repo: Canti
     assert updated.species == "Cyborg (Mark IV)"
     assert updated.age == "33"
     assert "luminescent dermal tattoo" in updated.distinctive_features
-    assert updated.physical_appearance == "Updated bio: fully re-calibrated cyberware."
+    assert updated.physical_appearance == ""
+    assert updated.modifications == []
+    assert updated.unsupported_fields.get("modifications") == [
+        "Sub-dermal neural link",
+        "Titanium knuckles",
+    ]
 
     # Verify version 1 snapshot retained original values
     v1_snap = temp_repo.get_character_version(char.id, 1, owner_id=user.id)
@@ -573,14 +578,29 @@ def test_character_modifications_auto_merge_and_extraction_endpoints(
         RewrittenDemeanorLLMOutput,
     )
 
-    # 1. Test auto-merging modifications into distinctive_features
-    draft = _make_sample_draft("Augmented Jack")
-    draft.distinctive_features = ["scar across nose"]
-    draft.modifications = ["cybernetic right arm", "subdermal armor"]
+    # 1. Test auto-merging modifications into distinctive_features during LLM output conversion
+    from app.schemas.character import CharacterWizardLLMOutput
+
+    llm_out = CharacterWizardLLMOutput(
+        name="Augmented Jack",
+        tagline="Chrome veteran",
+        character_bio="Former street enforcer.",
+        distinctive_features=["scar across nose"],
+        modifications=["cybernetic right arm", "subdermal armor"],
+        core_persona="Blunt, pragmatic survivor.",
+        baseline_psyche=BaselinePsyche(
+            core_drive="Stay free",
+            core_fear="Rust",
+            default_want="Get paid",
+            default_plan="- Check exits",
+        ),
+    )
+    draft = llm_out.to_draft()
     char = temp_repo.create_character_from_draft(draft)
     assert "scar across nose" in char.distinctive_features
     assert "cybernetic right arm" in char.distinctive_features
     assert "subdermal armor" in char.distinctive_features
+    assert char.modifications == []
 
     # 2. Test extraction endpoints with mocked LLM output
     user = temp_repo.create_user(username="extract_user", display_name="Extract Tester")
@@ -1066,7 +1086,7 @@ async def test_character_html_xml_markup_sanitization(monkeypatch):
     assert draft.name == "Soren Zaren"
     assert draft.tagline == "Smooth-talking fugitive & thief"
     assert draft.character_bio == "Born in the Lower City.\n\nOn the run after a noble heist."
-    assert draft.physical_appearance == "Sharp jawline with a white scar."
+    assert draft.physical_appearance == ""
     assert draft.core_persona == "Weaponizes warmth as a tactical shield."
     assert draft.distinctive_features[0] == "sultry hazel eyes"
     assert draft.equipped[0].name == "Fitted leather doublet"
@@ -1082,6 +1102,103 @@ async def test_character_html_xml_markup_sanitization(monkeypatch):
     assert "*The salt-crusted docks groan under the mist, patrols sweeping the pier.*" in draft.initial_message
     assert "*Soren leans beside a spice crate, tracing the faint scar on his brow.*" in draft.initial_message
     assert "*he murmurs softly.*" in draft.initial_message
+
+
+def test_zone1_bio_always_rendered_and_unsupported_excluded_and_cow_campaign_safety(
+    temp_repo: CantinaRepository,
+) -> None:
+    """Verify Zone 1 emits Bio unconditionally, excludes unsupported_fields, and CoW-forks keep legacy rows safe."""
+    from app.engine.phase2_context import build_zone1_static_system_prompt
+    from app.schemas.world import LocationNodeDraft, WorldGlobalRules, WorldWizardDraft
+
+    world = temp_repo.create_world_from_draft(
+        WorldWizardDraft(
+            name="Neo-Veridia",
+            global_rules=WorldGlobalRules(
+                genre="Cyberpunk",
+                setting_overview="A neon-lit rain-soaked metropolis.",
+            ),
+            locations=[
+                LocationNodeDraft(
+                    key="hub",
+                    name="Sector 9 Hub",
+                    summary="Rain-slicked square",
+                    description="Neon reflects off wet asphalt.",
+                    is_starting_location=True,
+                )
+            ],
+            edges=[],
+            lore_nodes=[],
+        )
+    )
+
+    # 1. Canonical character with structured appearance + bio + unsupported_fields
+    draft = _make_sample_draft("Dr. Elena Vance")
+    draft.character_bio = "Disgraced neurosurgeon running a back-alley clinic."
+    draft.physical_appearance = ""
+    draft.build_and_height = "172 cm"
+    draft.distinctive_features = ["silver hair", "chrome left hand"]
+    draft.unsupported_fields = {
+        "future_alignment": "SECRET_DO_NOT_INJECT_IN_PROMPT",
+        "physical_appearance": "LEGACY_APPEARANCE_DO_NOT_INJECT",
+    }
+    char = temp_repo.create_character_from_draft(draft, world_id=world.id)
+
+    prompt = build_zone1_static_system_prompt(world=world, character=char)
+    assert "Bio: Disgraced neurosurgeon running a back-alley clinic." in prompt
+    assert "SECRET_DO_NOT_INJECT_IN_PROMPT" not in prompt
+    assert "LEGACY_APPEARANCE_DO_NOT_INJECT" not in prompt
+
+    # 2. Re-running init_db() must NOT backfill physical_appearance onto canonical characters
+    temp_repo.init_db()
+    reloaded = temp_repo.get_character(char.id)
+    assert reloaded.physical_appearance == ""
+
+    # 3. Untouched legacy character in running campaign keeps its pinned row via CoW fork on edit
+    legacy_char = temp_repo.create_character_from_draft(
+        CharacterWizardDraft(
+            name="Legacy Runner",
+            tagline="Old school courier",
+            character_bio="",
+            physical_appearance="Tall courier with silver ocular implant.",
+            core_persona="Quiet and observant.",
+            initial_message="Ready.",
+            baseline_psyche=BaselinePsyche(
+                core_drive="Survive",
+                core_fear="Capture",
+                default_want="Deliver",
+                default_plan="- Move fast",
+            ),
+        ),
+        world_id=world.id,
+    )
+    camp = temp_repo.create_campaign(
+        name="Legacy Run",
+        world_id=world.id,
+        character_id=legacy_char.id,
+    )
+    forked = temp_repo.update_character(
+        legacy_char.id,
+        CharacterUpdatePayload(
+            name="Legacy Runner Updated",
+            tagline=legacy_char.tagline,
+            character_bio="Updated canonical bio.",
+            physical_appearance="",
+            core_persona=legacy_char.core_persona,
+            initial_message=legacy_char.initial_message,
+            baseline_psyche=legacy_char.baseline_psyche,
+            unsupported_fields={"physical_appearance": "Tall courier with silver ocular implant."},
+            world_id=world.id,
+        ),
+    )
+    assert forked.id != legacy_char.id
+    pinned_camp = temp_repo.get_campaign(camp.id)
+    assert pinned_camp.character_id == legacy_char.id
+    pinned_char = temp_repo.get_character(pinned_camp.character_id)
+    assert pinned_char.physical_appearance == "Tall courier with silver ocular implant."
+    pinned_prompt = build_zone1_static_system_prompt(world=world, character=pinned_char)
+    assert "Tall courier with silver ocular implant." in pinned_prompt
+
 
 
 

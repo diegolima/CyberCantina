@@ -28,8 +28,11 @@ from app.dependencies import (
     safe_resolve_media_path,
 )
 from app.schemas.character import (
+    CANONICAL_CHARACTER_RECORD_KEYS,
+    LEGACY_DEPRECATED_CHARACTER_KEYS,
     CharacterWizardDraft,
     GalleryImage,
+    sanitize_unsupported_fields,
 )
 from app.schemas.import_export import (
     EntitySummary,
@@ -107,6 +110,41 @@ def _safe_zip_read(zip_bytes: bytes) -> zipfile.ZipFile:
     return zf
 
 
+def _extract_character_unsupported_fields(
+    char_dict: dict[str, Any],
+    *,
+    strict: bool = False,
+) -> dict[str, Any]:
+    """Collect unrecognized future keys and non-duplicate deprecated legacy keys into unsupported_fields."""
+    raw_unsupported: dict[str, Any] = {}
+    nested_unsupported = char_dict.get("unsupported_fields")
+    if isinstance(nested_unsupported, dict):
+        for k, v in nested_unsupported.items():
+            if isinstance(k, str) and k not in CANONICAL_CHARACTER_RECORD_KEYS:
+                raw_unsupported[k] = v
+
+    for k, v in char_dict.items():
+        if not isinstance(k, str):
+            continue
+        if k in CANONICAL_CHARACTER_RECORD_KEYS or k in LEGACY_DEPRECATED_CHARACTER_KEYS:
+            continue
+        raw_unsupported[k] = v
+
+    bio_norm = char_dict.get("character_bio")
+    bio_str = bio_norm.strip() if isinstance(bio_norm, str) else ""
+    raw_phys = char_dict.get("physical_appearance")
+    if isinstance(raw_phys, str) and raw_phys.strip() and raw_phys.strip() != bio_str:
+        raw_unsupported["physical_appearance"] = raw_phys.strip()
+
+    raw_mods = char_dict.get("modifications")
+    if isinstance(raw_mods, list):
+        clean_mods = [m.strip() for m in raw_mods if isinstance(m, str) and m.strip()]
+        if clean_mods:
+            raw_unsupported["modifications"] = clean_mods
+
+    return sanitize_unsupported_fields(raw_unsupported, strict=strict)
+
+
 # ---------------------------------------------------------------------------
 # EXPORT IMPLEMENTATION
 # ---------------------------------------------------------------------------
@@ -152,6 +190,24 @@ def build_zcc_export(
             continue
 
         char_data = char.model_dump()
+        char_data.pop("unsupported_fields", None)
+        bio_norm = (char.character_bio or "").strip()
+        phys_norm = str(char_data.get("physical_appearance") or "").strip()
+        if not phys_norm or phys_norm == bio_norm:
+            char_data.pop("physical_appearance", None)
+        if not char_data.get("modifications"):
+            char_data.pop("modifications", None)
+
+        for ext_k, ext_v in (char.unsupported_fields or {}).items():
+            if ext_k in CANONICAL_CHARACTER_RECORD_KEYS:
+                continue
+            if ext_k == "physical_appearance" and (
+                not isinstance(ext_v, str) or not ext_v.strip() or ext_v.strip() == bio_norm
+            ):
+                continue
+            if ext_k == "modifications" and (not isinstance(ext_v, list) or len(ext_v) == 0):
+                continue
+            char_data[ext_k] = ext_v
 
         # If the character's world is not included in the bundle, strip world and lore artifact links
         if char.world_id not in exported_world_ids:
@@ -369,6 +425,22 @@ def inspect_uploaded_file(
                     )
                 )
 
+        # Detect unsupported/future or deprecated character fields for non-blocking preview warning
+        warnings: list[str] = []
+        for c in characters_raw:
+            if not isinstance(c, dict):
+                continue
+            c_name = str(c.get("name") or "Unnamed Character").strip() or "Unnamed Character"
+            ext_fields = _extract_character_unsupported_fields(c, strict=False)
+            if ext_fields:
+                keys_list = list(ext_fields.keys())
+                preview = ", ".join(keys_list[:5])
+                suffix = f" (+{len(keys_list) - 5} more)" if len(keys_list) > 5 else ""
+                warnings.append(
+                    f"Character '{c_name}' contains unsupported or deprecated fields ({preview}{suffix}). "
+                    "They will be preserved read-only under the Unsupported tab and excluded from AI roleplay context."
+                )
+
         # Summaries for UI
         char_summaries = [
             EntitySummary(
@@ -427,6 +499,7 @@ def inspect_uploaded_file(
             worlds=world_summaries,
             personas=persona_summaries,
             conflicts=conflicts,
+            warnings=warnings,
         )
 
     # B) Check PNG or JSON SillyTavern card
@@ -838,21 +911,22 @@ async def commit_staged_import(
                 if existing:
                     final_name = f"{p_name} (Imported)"
 
+            raw_age = p.get("age")
             persona_payload = PersonaCreatePayload(
                 name=final_name,
-                species=p.get("species", "Human"),
-                age=p.get("age"),
-                age_is_secret=bool(p.get("age_is_secret", True)),
-                sex=p.get("sex", ""),
-                pronouns=p.get("pronouns", ""),
-                persona_bio=p.get("persona_bio", ""),
-                tags=p.get("tags", []),
-                build_and_height=p.get("build_and_height", ""),
-                distinctive_features=p.get("distinctive_features", []),
-                physical_appearance=p.get("physical_appearance", ""),
-                equipped=p.get("equipped", []),
-                inventory=p.get("inventory", []),
-                lore_entries=p.get("lore_entries", []),
+                species=p.get("species") or "Human",
+                age=str(raw_age) if raw_age is not None else None,
+                age_is_secret=True if p.get("age_is_secret") is None else bool(p.get("age_is_secret")),
+                sex=p.get("sex") or "",
+                pronouns=p.get("pronouns") or "",
+                persona_bio=p.get("persona_bio") or "",
+                tags=p.get("tags") or [],
+                build_and_height=p.get("build_and_height") or "",
+                distinctive_features=p.get("distinctive_features") or [],
+                physical_appearance=p.get("physical_appearance") or "",
+                equipped=p.get("equipped") or [],
+                inventory=p.get("inventory") or [],
+                lore_entries=p.get("lore_entries") or [],
             )
             repo.create_persona(persona_payload, owner_id=user_id, persona_id=new_p_id)
             imported_personas.append(final_name)
@@ -946,23 +1020,46 @@ async def commit_staged_import(
                     it_copy["lore_id"] = id_remap.get(it_copy["lore_id"])
                 clean_inventory.append(it_copy)
 
+            # Extract unknown/future keys and distinct deprecated legacy fields into unsupported_fields
+            try:
+                unsupported_fields = _extract_character_unsupported_fields(c, strict=True)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
             # Build CharacterWizardDraft
+            raw_char_age = c.get("age")
             draft = CharacterWizardDraft(
                 name=final_name,
-                tagline=c.get("tagline", ""),
-                physical_appearance=c.get("physical_appearance", ""),
-                core_persona=c.get("core_persona", ""),
-                initial_message=c.get("initial_message", ""),
+                tagline=c.get("tagline") or "",
+                character_bio=c.get("character_bio") or "",
+                physical_appearance="",
+                species=c.get("species") or "Human",
+                sex=c.get("sex") or "",
+                pronouns=c.get("pronouns") or "",
+                age=str(raw_char_age) if raw_char_age is not None else "",
+                build_and_height=c.get("build_and_height") or "",
+                distinctive_features=c.get("distinctive_features") or [],
+                posture=c.get("posture") or "",
+                mannerisms=c.get("mannerisms") or [],
+                modifications=[],
+                visual_aesthetic=c.get("visual_aesthetic") or "",
+                personality_traits=c.get("personality_traits") or [],
+                core_persona=c.get("core_persona") or "",
+                moral_code=c.get("moral_code") or [],
+                quirks_flaws=c.get("quirks_flaws") or [],
+                communication_style=c.get("communication_style") or [],
+                initial_message=c.get("initial_message") or "",
                 equipped=clean_equipped,
                 inventory=clean_inventory,
-                voice_anchors=c.get("voice_anchors", []),
-                baseline_psyche=c.get("baseline_psyche", {}),
-                memory_shards=c.get("memory_shards", []),
-                tags=c.get("tags", []),
-                creator=c.get("creator", ""),
-                creator_notes=c.get("creator_notes", ""),
+                voice_anchors=c.get("voice_anchors") or [],
+                baseline_psyche=c.get("baseline_psyche") or {},
+                memory_shards=c.get("memory_shards") or [],
+                tags=c.get("tags") or [],
+                creator=c.get("creator") or "",
+                creator_notes=c.get("creator_notes") or "",
                 portraits=new_portraits,
                 gallery=new_gallery,
+                unsupported_fields=unsupported_fields,
             )
 
             repo.create_character_from_draft(

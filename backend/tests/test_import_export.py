@@ -482,3 +482,229 @@ def test_export_single_character_with_world_included(client_and_repo):
         assert "worlds.json" in zf.namelist()
         chars = json.loads(zf.read("characters.json").decode("utf-8"))
         assert chars[0]["world_id"] == world.id
+
+
+def test_zcc_import_preserves_all_character_fields(client_and_repo):
+    client, repo, user = client_and_repo
+
+    char_draft = CharacterWizardDraft(
+        name="Kira Vance",
+        tagline="The scalpel is sharper than the truth.",
+        character_bio="Former corporate trauma surgeon now operating an underground clinic in Sector 9.",
+        species="Human",
+        sex="Female",
+        pronouns="she/her",
+        age="34",
+        build_and_height="170 cm",
+        distinctive_features=[
+            "Piercing icy-grey eyes",
+            "Cauterized wrist-barcode",
+            "Subdermal data-shard interface port",
+        ],
+        posture="Tense and efficient, standing with a slight forward lean.",
+        mannerisms=["Taps a closed scalpel handle against her palm when thinking."],
+        visual_aesthetic="Muted charcoal and rust utilitarian medical-tech wear.",
+        personality_traits=["cynical", "hyper-observant"],
+        core_persona="Treats every conversation like medical triage.",
+        moral_code=["No freebies", "Never hand a patient over to security"],
+        quirks_flaws=["Fixates on corporate logos"],
+        communication_style=["clipped", "dryly sarcastic"],
+        initial_message="State who sent you before my drink goes flat.",
+        baseline_psyche=BaselinePsyche(
+            core_drive="Broadcast the atmospheric ledger.",
+            core_fear="Mind wipe by corporate cleaners.",
+            default_want="Diagnose the newcomer's motive.",
+            default_plan="- Scan for trackers\n- Demand upfront payment",
+        ),
+        memory_shards=[
+            MemoryShard(
+                title="The Order of Silence",
+                content="Copied the encrypted ledger onto a subdermal shard.",
+                keywords=["ledger", "shard"],
+            )
+        ],
+        tags=["paranoid", "razor-sharp"],
+        creator="Tester",
+        creator_notes="Keep dialogue terse.",
+    )
+    created = repo.create_character_from_draft(char_draft, owner_id=user.id)
+
+    # 1. Export & verify canonical export omits deprecated/unsupported keys
+    export_resp = client.get(f"/api/export/character/{created.id}")
+    assert export_resp.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(export_resp.content)) as zf:
+        chars_payload = json.loads(zf.read("characters.json").decode("utf-8"))
+        manifest_payload = json.loads(zf.read("manifest.json").decode("utf-8"))
+    assert "physical_appearance" not in chars_payload[0]
+    assert "modifications" not in chars_payload[0]
+    assert "unsupported_fields" not in chars_payload[0]
+    chars_payload[0]["name"] = "Kira Vance Archive"
+
+    patched_buf = io.BytesIO()
+    with zipfile.ZipFile(patched_buf, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest_payload))
+        zf.writestr("characters.json", json.dumps(chars_payload))
+
+    inspect_resp = client.post(
+        "/api/import/inspect",
+        files={"file": ("kira.zcc", patched_buf.getvalue(), "application/octet-stream")},
+    )
+    assert inspect_resp.status_code == 200
+    assert inspect_resp.json()["warnings"] == []
+    token = inspect_resp.json()["staged_token"]
+
+    commit_resp = client.post(
+        "/api/import/commit",
+        json={"staged_token": token, "default_conflict_strategy": "copy"},
+    )
+    assert commit_resp.status_code == 200
+    assert commit_resp.json()["success"] is True
+
+    imported = next(c for c in repo.list_characters() if c.name == "Kira Vance Archive")
+    assert imported.character_bio == char_draft.character_bio
+    assert imported.physical_appearance == ""
+    assert imported.modifications == []
+    assert imported.unsupported_fields == {}
+    assert imported.species == "Human"
+    assert imported.sex == "Female"
+    assert imported.pronouns == "she/her"
+    assert imported.age == "34"
+    assert imported.build_and_height == "170 cm"
+    assert "Piercing icy-grey eyes" in imported.distinctive_features
+    assert "Subdermal data-shard interface port" in imported.distinctive_features
+    assert imported.posture == char_draft.posture
+    assert imported.mannerisms == char_draft.mannerisms
+    assert imported.visual_aesthetic == char_draft.visual_aesthetic
+    assert imported.personality_traits == char_draft.personality_traits
+    assert imported.moral_code == char_draft.moral_code
+    assert imported.quirks_flaws == char_draft.quirks_flaws
+    assert imported.communication_style == char_draft.communication_style
+
+
+def test_zcc_future_and_legacy_unsupported_fields_roundtrip_and_bounds(client_and_repo):
+    client, repo, user = client_and_repo
+    from app.schemas.character import CharacterUpdatePayload
+
+    base_draft = CharacterWizardDraft(
+        name="Future Traveler",
+        tagline="Imported from v0.99",
+        character_bio="Canonical bio text.",
+        core_persona="Calm observer.",
+        initial_message="Greetings.",
+        baseline_psyche=BaselinePsyche(
+            core_drive="Observe",
+            core_fear="Loss",
+            default_want="Talk",
+            default_plan="- Listen",
+        ),
+    )
+    base_char = repo.create_character_from_draft(base_draft, owner_id=user.id)
+    exp = client.get(f"/api/export/character/{base_char.id}")
+    with zipfile.ZipFile(io.BytesIO(exp.content)) as zf:
+        chars_payload = json.loads(zf.read("characters.json").decode("utf-8"))
+        manifest_payload = json.loads(zf.read("manifest.json").decode("utf-8"))
+
+    # Add unknown future keys + distinct legacy physical_appearance & modifications
+    chars_payload[0]["name"] = "Future Traveler Imported"
+    chars_payload[0]["voice_id"] = "elevenlabs_v99"
+    chars_payload[0]["custom_metrics"] = {"luck": 9, "karma": -2}
+    chars_payload[0]["physical_appearance"] = "Distinct legacy appearance prose."
+    chars_payload[0]["modifications"] = ["Old optic zoom"]
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest_payload))
+        zf.writestr("characters.json", json.dumps(chars_payload))
+
+    insp = client.post(
+        "/api/import/inspect",
+        files={"file": ("future.zcc", buf.getvalue(), "application/octet-stream")},
+    )
+    assert insp.status_code == 200
+    insp_data = insp.json()
+    assert len(insp_data["warnings"]) == 1
+    assert "voice_id" in insp_data["warnings"][0]
+
+    commit = client.post(
+        "/api/import/commit",
+        json={"staged_token": insp_data["staged_token"], "default_conflict_strategy": "copy"},
+    )
+    assert commit.status_code == 200
+
+    imported = next(c for c in repo.list_characters() if c.name == "Future Traveler Imported")
+    assert imported.physical_appearance == ""
+    assert imported.modifications == []
+    assert imported.unsupported_fields == {
+        "voice_id": "elevenlabs_v99",
+        "custom_metrics": {"luck": 9, "karma": -2},
+        "physical_appearance": "Distinct legacy appearance prose.",
+        "modifications": ["Old optic zoom"],
+    }
+
+    # Saving unrelated fields preserves unsupported_fields
+    updated = repo.update_character(
+        imported.id,
+        CharacterUpdatePayload(
+            name=imported.name,
+            tagline="Updated tagline",
+            character_bio=imported.character_bio,
+            core_persona=imported.core_persona,
+            initial_message=imported.initial_message,
+            baseline_psyche=imported.baseline_psyche,
+            unsupported_fields=imported.unsupported_fields,
+        ),
+        owner_id=user.id,
+    )
+    assert updated.tagline == "Updated tagline"
+    assert updated.unsupported_fields == imported.unsupported_fields
+
+    # Re-export emits unsupported keys at top level without wrapper key
+    re_exp = client.get(f"/api/export/character/{updated.id}")
+    with zipfile.ZipFile(io.BytesIO(re_exp.content)) as zf:
+        re_chars = json.loads(zf.read("characters.json").decode("utf-8"))
+    assert "unsupported_fields" not in re_chars[0]
+    assert re_chars[0]["voice_id"] == "elevenlabs_v99"
+    assert re_chars[0]["custom_metrics"] == {"luck": 9, "karma": -2}
+    assert re_chars[0]["physical_appearance"] == "Distinct legacy appearance prose."
+    assert re_chars[0]["modifications"] == ["Old optic zoom"]
+
+    # Deleting unsupported_fields omits them from DB and subsequent export
+    cleaned = repo.update_character(
+        updated.id,
+        CharacterUpdatePayload(
+            name=updated.name,
+            tagline=updated.tagline,
+            character_bio=updated.character_bio,
+            core_persona=updated.core_persona,
+            initial_message=updated.initial_message,
+            baseline_psyche=updated.baseline_psyche,
+            unsupported_fields={},
+        ),
+        owner_id=user.id,
+    )
+    assert cleaned.unsupported_fields == {}
+    clean_exp = client.get(f"/api/export/character/{cleaned.id}")
+    with zipfile.ZipFile(io.BytesIO(clean_exp.content)) as zf:
+        clean_chars = json.loads(zf.read("characters.json").decode("utf-8"))
+    assert "voice_id" not in clean_chars[0]
+    assert "physical_appearance" not in clean_chars[0]
+    assert "modifications" not in clean_chars[0]
+
+    # Bounds rejection: > 64 unsupported keys returns HTTP 400
+    too_many = dict(chars_payload[0])
+    for i in range(70):
+        too_many[f"extra_key_{i}"] = f"val_{i}"
+    bad_buf = io.BytesIO()
+    with zipfile.ZipFile(bad_buf, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest_payload))
+        zf.writestr("characters.json", json.dumps([too_many]))
+    bad_insp = client.post(
+        "/api/import/inspect",
+        files={"file": ("too_many.zcc", bad_buf.getvalue(), "application/octet-stream")},
+    )
+    bad_commit = client.post(
+        "/api/import/commit",
+        json={"staged_token": bad_insp.json()["staged_token"], "default_conflict_strategy": "copy"},
+    )
+    assert bad_commit.status_code == 400

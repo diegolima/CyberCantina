@@ -488,7 +488,7 @@ def _fallback_character_expansion(
         name=seed.name,
         tagline=f"{seed.archetype} ({kw_str})",
         character_bio=seed.rough_notes.strip() if seed.rough_notes.strip() else f"{seed.name} is an active {seed.archetype}{setting_note}, recognized as {seed.role_in_story}.",
-        physical_appearance=seed.rough_notes.strip() if seed.rough_notes.strip() else f"{seed.name} is an active {seed.archetype}{setting_note}, recognized as {seed.role_in_story}.",
+        physical_appearance="",
         species=demo["species"],
         sex=demo["sex"],
         pronouns=demo["pronouns"],

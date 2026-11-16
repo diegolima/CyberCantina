@@ -113,7 +113,7 @@ export const CharacterWizardModal: React.FC<CharacterWizardModalProps> = ({
       name: name.trim() || "New Character",
       tagline: archetype.trim() || "Independent Operative",
       character_bio: roughNotes.trim() || `${name} is an active ${archetype}.`,
-      physical_appearance: roughNotes.trim() || `${name} is an active ${archetype}.`,
+      physical_appearance: "",
       species: demo.species,
       sex: demo.sex,
       pronouns: demo.pronouns,

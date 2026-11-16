@@ -127,8 +127,7 @@ async def generate_character_draft(
                 world_note = f" in {world.name}" if world else ""
                 notes_part = f" {seed.rough_notes.strip()}" if seed.rough_notes.strip() else ""
                 draft.character_bio = f"{draft.name} is an active {seed.archetype}{world_note}, operating as {seed.role_in_story}.{notes_part}".strip()
-            if not draft.physical_appearance:
-                draft.physical_appearance = f"{draft.name} has an {demo['build']}, standing at {draft.build_and_height}, featuring {', '.join(draft.distinctive_features[:3])}."
+            draft.physical_appearance = ""
             if not draft.mannerisms:
                 draft.mannerisms = fallback.mannerisms
             else:
@@ -231,10 +230,6 @@ async def generate_character_draft(
             world_note = f" within {world.name}" if world else ""
             notes_part = f" {seed.rough_notes.strip()}" if seed.rough_notes.strip() else ""
             character_bio = f"{name} is an active {seed.archetype}{world_note}, operating as {seed.role_in_story}.{notes_part}".strip() or fallback.character_bio
-
-        physical_appearance = sanitize_character_markup(p1_out.physical_appearance or "")
-        if not physical_appearance:
-            physical_appearance = f"{name} has an {build_hint}, standing at {build_and_height}, featuring {', '.join(features[:3])}."
 
         mannerisms = [
             _clean_mannerism(sanitize_character_markup(m, single_line=True))
@@ -415,7 +410,7 @@ async def generate_character_draft(
             name=name,
             tagline=tagline,
             character_bio=character_bio,
-            physical_appearance=physical_appearance,
+            physical_appearance="",
             species=species,
             sex=sex,
             pronouns=pronouns,

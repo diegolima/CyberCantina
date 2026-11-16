@@ -177,6 +177,7 @@ CREATE TABLE IF NOT EXISTS characters (
     creator_notes TEXT NOT NULL DEFAULT '',
     portraits_json TEXT NOT NULL DEFAULT '{}',
     gallery_json TEXT NOT NULL DEFAULT '[]',
+    unsupported_fields_json TEXT NOT NULL DEFAULT '{}',
     version INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL
 );

@@ -181,7 +181,11 @@ def build_zone1_static_system_prompt(
         appearance_parts.append(f"- Mannerisms & Behavioral Tells:\n{mannerism_lines}")
     if character.visual_aesthetic:
         appearance_parts.append(f"- Visual Aesthetic: {character.visual_aesthetic}")
-    if not appearance_parts and character.physical_appearance.strip():
+    if (
+        not appearance_parts
+        and character.physical_appearance.strip()
+        and character.physical_appearance.strip() != character.character_bio.strip()
+    ):
         appearance_parts.append(f"- Overview: {character.physical_appearance.strip()}")
 
     appearance_line = (
@@ -200,8 +204,8 @@ def build_zone1_static_system_prompt(
     if character.age:
         identity_items.append(f"Age: {character.age}")
     identity_prefix = f"Demographics: {', '.join(identity_items)}\n" if identity_items else ""
-    if character.character_bio and character.character_bio != character.physical_appearance:
-        identity_prefix += f"Bio: {character.character_bio}\n"
+    if character.character_bio.strip():
+        identity_prefix += f"Bio: {character.character_bio.strip()}\n"
 
     persona_parts: list[str] = []
     if character.personality_traits:
@@ -214,6 +218,11 @@ def build_zone1_static_system_prompt(
     full_persona = "\n".join(persona_parts)
 
     tagline_with_identity = f"{character.tagline}\n{identity_prefix}".strip() if identity_prefix else character.tagline
+    legacy_appearance_fallback = (
+        character.physical_appearance.strip()
+        or ", ".join(character.distinctive_features)
+        or character.character_bio.strip()
+    )
 
     template = prompt_template or get_default_prompt("actor_zone1_system")
     base = render_template(
@@ -226,7 +235,7 @@ def build_zone1_static_system_prompt(
         tech_or_magic_rules=world.global_rules.tech_or_magic_rules,
         tagline=tagline_with_identity,
         appearance_section=appearance_line,
-        physical_appearance=character.physical_appearance,
+        physical_appearance=legacy_appearance_fallback,
         core_persona=full_persona,
         core_drive=character.baseline_psyche.core_drive,
         core_fear=character.baseline_psyche.core_fear,
@@ -268,10 +277,21 @@ def build_zone1_ensemble_system_prompt(
         if c.posture:
             appearance_parts.append(f"Posture: {c.posture}")
         if c.modifications:
-            appearance_parts.append(f"Cyberware: {', '.join(c.modifications)}")
+            seen_features = {f.strip().lower() for f in c.distinctive_features}
+            extra_mods = [
+                m.strip()
+                for m in c.modifications
+                if m.strip() and m.strip().lower() not in seen_features
+            ]
+            if extra_mods:
+                appearance_parts.append(f"Cyberware: {', '.join(extra_mods)}")
         if c.mannerisms:
             appearance_parts.append(f"Tells: {', '.join(c.mannerisms)}")
-        if not appearance_parts and c.physical_appearance.strip():
+        if (
+            not appearance_parts
+            and c.physical_appearance.strip()
+            and c.physical_appearance.strip() != c.character_bio.strip()
+        ):
             appearance_parts.append(c.physical_appearance.strip())
         app_text = f"  Appearance: {'; '.join(appearance_parts)}\n" if appearance_parts else ""
 

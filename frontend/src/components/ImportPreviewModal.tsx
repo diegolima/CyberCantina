@@ -435,6 +435,39 @@ export const ImportPreviewModal: React.FC<ImportPreviewModalProps> = ({
                     </div>
                   </div>
 
+                  {/* Non-blocking Warnings (e.g. unsupported/deprecated fields) */}
+                  {inspectResult.warnings && inspectResult.warnings.length > 0 && (
+                    <div
+                      style={{
+                        border: "1px solid rgba(245, 158, 11, 0.3)",
+                        background: "rgba(245, 158, 11, 0.08)",
+                        borderRadius: 6,
+                        padding: 10,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 6,
+                        fontSize: "0.8rem",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          fontWeight: 600,
+                          color: "var(--accent-amber)",
+                        }}
+                      >
+                        <AlertTriangle size={14} />
+                        Compatibility Notice
+                      </div>
+                      {inspectResult.warnings.map((w, idx) => (
+                        <div key={idx}>{w}</div>
+                      ))}
+                    </div>
+                  )}
+
                   {/* Conflict Resolution Section if names collide */}
                   {inspectResult.conflicts.length > 0 && (
                     <div

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
+  AlertTriangle,
   Brain,
   Check,
   Database,
@@ -20,10 +21,15 @@ import {
   CharacterAppearanceTab,
   CharacterPersonalityTab,
   CharacterVoiceTab,
+  CharacterUnsupportedTab,
   CharacterBaseData,
   CharacterAppearanceData,
   CharacterPersonalityData,
   CharacterVoiceData,
+  appendLegacyBio,
+  buildUnsupportedFieldsState,
+  filterRemainingUnsupportedFields,
+  mergeUniqueDistinctiveFeatures,
 } from ".";
 import type {
   CharacterRecord,
@@ -57,7 +63,8 @@ type CharacterTab =
   | "voice"
   | "memories"
   | "inventory"
-  | "media";
+  | "media"
+  | "unsupported";
 
 export const CharacterInspectorModal: React.FC<
   CharacterInspectorModalProps
@@ -66,12 +73,7 @@ export const CharacterInspectorModal: React.FC<
   const [name, setName] = useState(character.name);
   const [tagline, setTagline] = useState(character.tagline);
   const [worldId, setWorldId] = useState<string>(character.world_id ?? "");
-  const [characterBio, setCharacterBio] = useState(
-    character.character_bio ?? character.physical_appearance ?? ""
-  );
-  const [physicalAppearance, setPhysicalAppearance] = useState(
-    character.physical_appearance ?? ""
-  );
+  const [characterBio, setCharacterBio] = useState(character.character_bio ?? "");
   const [species, setSpecies] = useState(character.species ?? "Human");
   const [sex, setSex] = useState(character.sex ?? "");
   const [pronouns, setPronouns] = useState(character.pronouns ?? "");
@@ -79,13 +81,15 @@ export const CharacterInspectorModal: React.FC<
   const [buildAndHeight, setBuildAndHeight] = useState(
     character.build_and_height ?? ""
   );
-  const initialFeatures = [
-    ...(character.distinctive_features ?? []),
-    ...(character.modifications ?? []).filter(
-      (m) => !(character.distinctive_features ?? []).includes(m)
-    ),
-  ];
-  const [distinctiveFeatures, setDistinctiveFeatures] = useState<string[]>(initialFeatures);
+  const [distinctiveFeatures, setDistinctiveFeatures] = useState<string[]>(
+    character.distinctive_features ?? []
+  );
+  const [unsupportedFields, setUnsupportedFields] = useState<Record<string, unknown>>(() =>
+    buildUnsupportedFieldsState(character)
+  );
+  const [stagedUnsupportedDeletes, setStagedUnsupportedDeletes] = useState<Set<string>>(
+    () => new Set()
+  );
   const [posture, setPosture] = useState(character.posture ?? "");
   const [mannerisms, setMannerisms] = useState<string[]>(
     character.mannerisms ?? []
@@ -201,20 +205,19 @@ export const CharacterInspectorModal: React.FC<
       setName(latestCharacter.name);
       setTagline(latestCharacter.tagline);
       setWorldId(latestCharacter.world_id ?? "");
-      setCharacterBio(latestCharacter.character_bio ?? latestCharacter.physical_appearance ?? "");
-      setPhysicalAppearance(latestCharacter.physical_appearance ?? "");
+      setCharacterBio(latestCharacter.character_bio ?? "");
       setSpecies(latestCharacter.species ?? "Human");
       setSex(latestCharacter.sex ?? "");
       setPronouns(latestCharacter.pronouns ?? "");
       setAge(latestCharacter.age ?? "");
       setBuildAndHeight(latestCharacter.build_and_height ?? "");
-      const characterMergedFeatures = [
-        ...(latestCharacter.distinctive_features ?? []),
-        ...(latestCharacter.modifications ?? []).filter(
-          (m) => !(latestCharacter.distinctive_features ?? []).includes(m)
-        ),
-      ];
-      setDistinctiveFeatures(characterMergedFeatures);
+      setDistinctiveFeatures(latestCharacter.distinctive_features ?? []);
+      const nextUnsupported = buildUnsupportedFieldsState(latestCharacter);
+      setUnsupportedFields(nextUnsupported);
+      setStagedUnsupportedDeletes(new Set());
+      if (activeTab === "unsupported" && Object.keys(nextUnsupported).length === 0) {
+        setActiveTab("base");
+      }
       setPosture(latestCharacter.posture ?? "");
       setMannerisms(latestCharacter.mannerisms ?? []);
       setVisualAesthetic(latestCharacter.visual_aesthetic ?? "");
@@ -248,20 +251,19 @@ export const CharacterInspectorModal: React.FC<
       setName(snap.name);
       setTagline(snap.tagline);
       setWorldId(snap.world_id ?? "");
-      setCharacterBio(snap.character_bio ?? snap.physical_appearance ?? "");
-      setPhysicalAppearance(snap.physical_appearance ?? "");
+      setCharacterBio(snap.character_bio ?? "");
       setSpecies(snap.species ?? "Human");
       setSex(snap.sex ?? "");
       setPronouns(snap.pronouns ?? "");
       setAge(snap.age ?? "");
       setBuildAndHeight(snap.build_and_height ?? "");
-      const snapMergedFeatures = [
-        ...(snap.distinctive_features ?? []),
-        ...(snap.modifications ?? []).filter(
-          (m) => !(snap.distinctive_features ?? []).includes(m)
-        ),
-      ];
-      setDistinctiveFeatures(snapMergedFeatures);
+      setDistinctiveFeatures(snap.distinctive_features ?? []);
+      const snapUnsupported = buildUnsupportedFieldsState(snap);
+      setUnsupportedFields(snapUnsupported);
+      setStagedUnsupportedDeletes(new Set());
+      if (activeTab === "unsupported" && Object.keys(snapUnsupported).length === 0) {
+        setActiveTab("base");
+      }
       setPosture(snap.posture ?? "");
       setMannerisms(snap.mannerisms ?? []);
       setVisualAesthetic(snap.visual_aesthetic ?? "");
@@ -310,20 +312,19 @@ export const CharacterInspectorModal: React.FC<
       setName(updated.name);
       setTagline(updated.tagline);
       setWorldId(updated.world_id ?? "");
-      setCharacterBio(updated.character_bio ?? updated.physical_appearance ?? "");
-      setPhysicalAppearance(updated.physical_appearance ?? "");
+      setCharacterBio(updated.character_bio ?? "");
       setSpecies(updated.species ?? "Human");
       setSex(updated.sex ?? "");
       setPronouns(updated.pronouns ?? "");
       setAge(updated.age ?? "");
       setBuildAndHeight(updated.build_and_height ?? "");
-      const updatedFeatures = [
-        ...(updated.distinctive_features ?? []),
-        ...(updated.modifications ?? []).filter(
-          (m) => !(updated.distinctive_features ?? []).includes(m)
-        ),
-      ];
-      setDistinctiveFeatures(updatedFeatures);
+      setDistinctiveFeatures(updated.distinctive_features ?? []);
+      const restoredUnsupported = buildUnsupportedFieldsState(updated);
+      setUnsupportedFields(restoredUnsupported);
+      setStagedUnsupportedDeletes(new Set());
+      if (activeTab === "unsupported" && Object.keys(restoredUnsupported).length === 0) {
+        setActiveTab("base");
+      }
       setPosture(updated.posture ?? "");
       setMannerisms(updated.mannerisms ?? []);
       setVisualAesthetic(updated.visual_aesthetic ?? "");
@@ -395,11 +396,15 @@ export const CharacterInspectorModal: React.FC<
     try {
       const cleanEquipped = sanitizeItemsForSave(equipped);
       const cleanInventory = sanitizeItemsForSave(inventory);
+      const remainingUnsupported = filterRemainingUnsupportedFields(
+        unsupportedFields,
+        stagedUnsupportedDeletes
+      );
       const updated = await api.updateCharacter(characterId, {
         name: name.trim() || latestCharacter.name,
         tagline: tagline.trim(),
         character_bio: characterBio.trim(),
-        physical_appearance: (characterBio.trim() || physicalAppearance.trim()),
+        physical_appearance: "",
         species: species.trim() || "Human",
         sex: sex.trim(),
         pronouns: pronouns.trim(),
@@ -427,11 +432,18 @@ export const CharacterInspectorModal: React.FC<
         portraits: portraits,
         gallery: gallery,
         world_id: worldId || null,
+        unsupported_fields: remainingUnsupported,
       });
       setLatestCharacter(updated);
       setCharacterId(updated.id);
       setEquipped(normalizeItemList(updated.equipped));
       setInventory(normalizeItemList(updated.inventory));
+      const nextUnsupported = buildUnsupportedFieldsState(updated);
+      setUnsupportedFields(nextUnsupported);
+      setStagedUnsupportedDeletes(new Set());
+      if (activeTab === "unsupported" && Object.keys(nextUnsupported).length === 0) {
+        setActiveTab("base");
+      }
       setVersion(updated.version);
       setSelectedVersion(updated.version);
       setIsDirty(false);
@@ -450,11 +462,6 @@ export const CharacterInspectorModal: React.FC<
     if (updated.tagline !== undefined) setTagline(updated.tagline);
     if (updated.character_bio !== undefined) {
       setCharacterBio(updated.character_bio);
-      setPhysicalAppearance(updated.character_bio);
-    }
-    if (updated.physical_appearance !== undefined) {
-      setPhysicalAppearance(updated.physical_appearance);
-      setCharacterBio(updated.physical_appearance);
     }
     if (updated.species !== undefined) setSpecies(updated.species);
     if (updated.sex !== undefined) setSex(updated.sex);
@@ -492,19 +499,57 @@ export const CharacterInspectorModal: React.FC<
   const handleAppearanceChange = (updated: Partial<CharacterAppearanceData>) => {
     markDirty();
     if (updated.character_bio !== undefined) setCharacterBio(updated.character_bio);
-    if (updated.physical_appearance !== undefined) setPhysicalAppearance(updated.physical_appearance);
     if (updated.build_and_height !== undefined) setBuildAndHeight(updated.build_and_height);
     if (updated.distinctive_features !== undefined) setDistinctiveFeatures(updated.distinctive_features);
     if (updated.posture !== undefined) setPosture(updated.posture);
     if (updated.mannerisms !== undefined) setMannerisms(updated.mannerisms);
-    if (updated.modifications !== undefined && updated.modifications.length > 0) {
-      setDistinctiveFeatures((prev) => [
-        ...prev,
-        ...updated.modifications!.filter((m) => !prev.includes(m)),
-      ]);
-    }
     if (updated.visual_aesthetic !== undefined) setVisualAesthetic(updated.visual_aesthetic);
   };
+
+  const handleStageUnsupportedDelete = (key: string) => {
+    markDirty();
+    setStagedUnsupportedDeletes((prev) => {
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+  };
+
+  const handleUndoUnsupportedDelete = (key: string) => {
+    setStagedUnsupportedDeletes((prev) => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+  };
+
+  const handleCopyLegacyPhysicalToBio = (text: string, deleteAfter: boolean) => {
+    markDirty();
+    setCharacterBio((prev) => appendLegacyBio(prev, text));
+    if (deleteAfter) {
+      setStagedUnsupportedDeletes((prev) => {
+        const next = new Set(prev);
+        next.add("physical_appearance");
+        return next;
+      });
+    }
+  };
+
+  const handleMoveLegacyModificationsToFeatures = (mods: unknown) => {
+    markDirty();
+    setDistinctiveFeatures((prev) => mergeUniqueDistinctiveFeatures(prev, mods));
+    setStagedUnsupportedDeletes((prev) => {
+      const next = new Set(prev);
+      next.add("modifications");
+      return next;
+    });
+  };
+
+  const unsupportedKeys = Object.keys(unsupportedFields);
+  const remainingUnsupportedCount = unsupportedKeys.filter(
+    (k) => !stagedUnsupportedDeletes.has(k)
+  ).length;
+  const hasUnsupportedTab = unsupportedKeys.length > 0;
 
   const handlePersonalityChange = (updated: Partial<CharacterPersonalityData>) => {
     markDirty();
@@ -700,6 +745,20 @@ export const CharacterInspectorModal: React.FC<
               {Object.keys(portraits).length + gallery.length}
             </span>
           </button>
+          {hasUnsupportedTab && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "unsupported"}
+              className={`modal-tab-btn ${activeTab === "unsupported" ? "active" : ""}`}
+              onClick={() => setActiveTab("unsupported")}
+              style={{ color: activeTab === "unsupported" ? "var(--accent-amber)" : "var(--accent-amber)" }}
+            >
+              <AlertTriangle size={14} />
+              <span>Unsupported</span>
+              <span className="modal-tab-badge">{remainingUnsupportedCount}</span>
+            </button>
+          )}
         </div>
 
         <div className="modal-body">
@@ -731,7 +790,6 @@ export const CharacterInspectorModal: React.FC<
                 tagline,
                 world_id: worldId,
                 character_bio: characterBio,
-                physical_appearance: physicalAppearance,
                 species,
                 sex,
                 pronouns,
@@ -758,7 +816,6 @@ export const CharacterInspectorModal: React.FC<
             <CharacterAppearanceTab
               data={{
                 character_bio: characterBio,
-                physical_appearance: physicalAppearance,
                 build_and_height: buildAndHeight,
                 distinctive_features: distinctiveFeatures,
                 posture,
@@ -845,6 +902,20 @@ export const CharacterInspectorModal: React.FC<
             viewingHistory={viewingHistory}
             onSaved={onSaved}
           />
+
+          {hasUnsupportedTab && (
+            <CharacterUnsupportedTab
+              isActive={activeTab === "unsupported"}
+              unsupportedFields={unsupportedFields}
+              stagedDeletes={stagedUnsupportedDeletes}
+              characterBio={characterBio}
+              readOnly={viewingHistory}
+              onStageDelete={handleStageUnsupportedDelete}
+              onUndoDelete={handleUndoUnsupportedDelete}
+              onCopyLegacyPhysicalToBio={handleCopyLegacyPhysicalToBio}
+              onMoveLegacyModificationsToFeatures={handleMoveLegacyModificationsToFeatures}
+            />
+          )}
 
           {error && <div style={{ color: "#fda4af" }}>{error}</div>}
         </div>

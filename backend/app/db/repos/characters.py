@@ -79,6 +79,7 @@ class CharactersMixin(CharacterVersionsMixin):
             moral_code_json = json.dumps(draft.moral_code)
             quirks_flaws_json = json.dumps(draft.quirks_flaws)
             communication_style_json = json.dumps(draft.communication_style)
+            unsupported_fields_json = json.dumps(draft.unsupported_fields or {})
             conn.execute(
                 """
                 INSERT INTO characters (
@@ -88,7 +89,8 @@ class CharactersMixin(CharacterVersionsMixin):
                     personality_traits_json, core_persona, moral_code_json, quirks_flaws_json,
                     communication_style_json, initial_message, equipped_json, inventory_json,
                     voice_anchors_json, baseline_psyche_json, memory_shards_json, tags_json,
-                    creator, creator_notes, portraits_json, gallery_json, version, created_at
+                    creator, creator_notes, portraits_json, gallery_json, unsupported_fields_json,
+                    version, created_at
                 )
                 VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -97,7 +99,8 @@ class CharactersMixin(CharacterVersionsMixin):
                     ?, ?, ?, ?,
                     ?, ?, ?, ?,
                     ?, ?, ?, ?,
-                    ?, ?, ?, ?, 1, ?
+                    ?, ?, ?, ?, ?,
+                    1, ?
                 )
                 """,
                 (
@@ -134,6 +137,7 @@ class CharactersMixin(CharacterVersionsMixin):
                     creator_notes_str,
                     portraits_json,
                     gallery_json,
+                    unsupported_fields_json,
                     now,
                 ),
             )
@@ -169,6 +173,7 @@ class CharactersMixin(CharacterVersionsMixin):
                 "tags": clean_tags,
                 "creator": creator_str,
                 "creator_notes": creator_notes_str,
+                "unsupported_fields": dict(draft.unsupported_fields or {}),
                 "version": 1,
                 "pending_deletion": False,
                 "created_at": now,
@@ -402,12 +407,8 @@ class CharactersMixin(CharacterVersionsMixin):
             sex=row["sex"] if "sex" in row_keys and row["sex"] else "",
             pronouns=row["pronouns"] if "pronouns" in row_keys and row["pronouns"] else "",
             age=row["age"] if "age" in row_keys and row["age"] else "",
-            character_bio=(
-                row["character_bio"]
-                if "character_bio" in row_keys and row["character_bio"]
-                else (row["physical_appearance"] if "physical_appearance" in row_keys else "")
-            ),
-            physical_appearance=row["physical_appearance"] if "physical_appearance" in row_keys else "",
+            character_bio=row["character_bio"] if "character_bio" in row_keys and row["character_bio"] else "",
+            physical_appearance=row["physical_appearance"] if "physical_appearance" in row_keys and row["physical_appearance"] else "",
             build_and_height=row["build_and_height"] if "build_and_height" in row_keys and row["build_and_height"] else "",
             distinctive_features=json.loads(row["distinctive_features_json"] or "[]") if "distinctive_features_json" in row_keys and row["distinctive_features_json"] else [],
             posture=row["posture"] if "posture" in row_keys and row["posture"] else "",
@@ -436,6 +437,7 @@ class CharactersMixin(CharacterVersionsMixin):
                 GalleryImage.model_validate(img)
                 for img in json.loads(row["gallery_json"] or "[]")
             ] if "gallery_json" in row_keys and row["gallery_json"] else [],
+            unsupported_fields=json.loads(row["unsupported_fields_json"] or "{}") if "unsupported_fields_json" in row_keys and row["unsupported_fields_json"] else {},
             version=row["version"] if "version" in row_keys and row["version"] is not None else 1,
             pending_deletion=bool(row["pending_deletion"]) if "pending_deletion" in row_keys else False,
             created_at=row["created_at"],

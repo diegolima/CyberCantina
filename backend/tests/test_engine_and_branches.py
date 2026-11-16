@@ -895,7 +895,8 @@ async def test_character_appearance_initial_message_and_dynamic_inventory(
         ),
         world=world,
     )
-    assert draft.physical_appearance.strip() != ""
+    assert draft.character_bio.strip() != ""
+    assert draft.physical_appearance == ""
     assert draft.initial_message.strip() != ""
     assert len(draft.equipped) >= 1 or len(draft.inventory) >= 1
 
@@ -905,7 +906,8 @@ async def test_character_appearance_initial_message_and_dynamic_inventory(
         CharacterUpdatePayload(
             name="Kaelen Vex",
             tagline=created.tagline,
-            physical_appearance="Tall, lean courier with a silver ocular implant and a jagged scar across his left cheek.",
+            character_bio="Tall, lean courier with a silver ocular implant and a jagged scar across his left cheek.",
+            physical_appearance="",
             core_persona=created.core_persona,
             initial_message="*Inside {location_name}, Kaelen checks his chronometer.*\n\n\"You brought the package?\"",
             equipped=["Armored synth-leather jacket", "Cargo trousers"],
@@ -916,7 +918,8 @@ async def test_character_appearance_initial_message_and_dynamic_inventory(
             world_id=world.id,
         ),
     )
-    assert "silver ocular implant" in updated.physical_appearance
+    assert "silver ocular implant" in updated.character_bio
+    assert updated.physical_appearance == ""
     assert "You brought the package?" in updated.initial_message
     assert "Armored synth-leather jacket" in updated.equipped
     assert "Silver neural key" in updated.inventory
