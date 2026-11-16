@@ -189,9 +189,11 @@ class WorldsMixin:
 
             has_start = any(loc.is_starting_location for loc in draft.locations)
             key_to_loc_id: dict[str, str] = {}
+            key_to_loc_name: dict[str, str] = {}
             for idx, loc in enumerate(draft.locations):
                 loc_id = f"loc_{uuid.uuid4().hex[:10]}"
                 key_to_loc_id[loc.key] = loc_id
+                key_to_loc_name[loc.key] = loc.name
                 is_start = 1 if (loc.is_starting_location or (not has_start and idx == 0)) else 0
                 is_hub = 1 if getattr(loc, "is_hub", False) else 0
                 raw_cont_id = getattr(loc, "container_id", None)
@@ -287,6 +289,10 @@ class WorldsMixin:
                 )
                 fwd_dir = pick_available_compass_direction(preferred_dir, from_occ)
                 from_occ.add(fwd_dir)
+                fwd_label = (
+                    edge.direction_label.strip()
+                    or f"Passage to {key_to_loc_name.get(edge.to_key, edge.to_key)}"
+                )
                 conn.execute(
                     """
                     INSERT INTO location_edges (
@@ -300,7 +306,7 @@ class WorldsMixin:
                         w_id,
                         from_id,
                         to_id,
-                        edge.direction_label,
+                        fwd_label,
                         fwd_dir,
                         edge.travel_minutes,
                         1 if edge.is_locked_or_hidden else 0,
@@ -313,6 +319,10 @@ class WorldsMixin:
                         OPPOSITE_COMPASS[fwd_dir], to_occ
                     )
                     to_occ.add(rev_dir)
+                    rev_label = (
+                        edge.reverse_direction_label.strip()
+                        or f"Return to {key_to_loc_name.get(edge.from_key, edge.from_key)}"
+                    )
                     conn.execute(
                         """
                         INSERT INTO location_edges (
@@ -326,7 +336,7 @@ class WorldsMixin:
                             w_id,
                             to_id,
                             from_id,
-                            edge.reverse_direction_label or f"Return to {edge.from_key}",
+                            rev_label,
                             rev_dir,
                             edge.travel_minutes,
                             1 if edge.is_locked_or_hidden else 0,

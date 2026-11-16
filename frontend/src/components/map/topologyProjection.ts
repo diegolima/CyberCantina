@@ -852,7 +852,7 @@ export function worldPointToWrapperPoint(
   worldY: number,
   svgEl: SVGSVGElement | null,
   wrapEl: HTMLElement | null,
-  groupEl: SVGGElement | null,
+  _groupEl: SVGGElement | null,
   pan: { x: number; y: number },
   zoom: number
 ): { x: number; y: number } | null {
@@ -862,16 +862,18 @@ export function worldPointToWrapperPoint(
   const originLeft = wrapRect.left + (wrapEl.clientLeft || 0);
   const originTop = wrapRect.top + (wrapEl.clientTop || 0);
 
+  const vbX = (worldX + pan.x) * zoom;
+  const vbY = (worldY + pan.y) * zoom;
+
   if (
-    groupEl &&
     typeof svgEl.createSVGPoint === "function" &&
-    typeof groupEl.getScreenCTM === "function"
+    typeof svgEl.getScreenCTM === "function"
   ) {
-    const ctm = groupEl.getScreenCTM();
+    const ctm = svgEl.getScreenCTM();
     if (ctm) {
       const pt = svgEl.createSVGPoint();
-      pt.x = worldX;
-      pt.y = worldY;
+      pt.x = vbX;
+      pt.y = vbY;
       const screenPt = pt.matrixTransform(ctm);
       return {
         x: screenPt.x - originLeft,
@@ -883,8 +885,6 @@ export function worldPointToWrapperPoint(
   const svgRect = svgEl.getBoundingClientRect();
   if (svgRect.width <= 0 || svgRect.height <= 0) return null;
   const scale = Math.min(svgRect.width / 680, svgRect.height / 520) || 1;
-  const vbX = (worldX + pan.x) * zoom;
-  const vbY = (worldY + pan.y) * zoom;
   return {
     x: svgRect.left + svgRect.width / 2 + vbX * scale - originLeft,
     y: svgRect.top + svgRect.height / 2 + vbY * scale - originTop,
@@ -968,6 +968,152 @@ export function filterEdgesAfterDeletion(
           edge.to_location_id === t.from_location_id
       )
   );
+}
+
+const AUTO_EDGE_LABEL_PREFIXES = [
+  "Passage to ",
+  "Return to ",
+  "Return passage to ",
+  "Back to ",
+  "To ",
+] as const;
+
+/**
+ * Sync auto-generated template `direction_label` values on incoming edges when
+ * a location is renamed or converted, leaving custom labels untouched.
+ */
+export function syncEdgeLabelsForLocationRename(
+  edges: LocationEdge[],
+  locationId: string,
+  oldName: string,
+  newName: string
+): LocationEdge[] {
+  const oldTrimmed = oldName.trim();
+  const newTrimmed = newName.trim();
+  if (!oldTrimmed || !newTrimmed || oldTrimmed === newTrimmed) {
+    return edges;
+  }
+  const oldLower = oldTrimmed.toLowerCase();
+  let changed = false;
+  const next = edges.map((edge) => {
+    if (edge.to_location_id !== locationId) return edge;
+    const rawTrimmed = edge.direction_label.trim();
+    const rawLower = rawTrimmed.toLowerCase();
+    for (const prefix of AUTO_EDGE_LABEL_PREFIXES) {
+      const expected = `${prefix.toLowerCase()}${oldLower}`;
+      if (rawLower === expected) {
+        changed = true;
+        return {
+          ...edge,
+          direction_label: `${prefix}${newTrimmed}`,
+        };
+      }
+    }
+    return edge;
+  });
+  return changed ? next : edges;
+}
+
+export interface BidirectionalProjectedBundle {
+  allEdges: LocationEdge[];
+  passagePairCount: number;
+  minTravelMinutes: number;
+  containsLockedEdge: boolean;
+}
+
+/**
+ * Merge forward and reverse projected edges between two endpoints so collapsed
+ * supernode badges, tooltips, and popovers reflect both directions uniformly.
+ */
+export function resolveBidirectionalProjectedBundle(
+  edge: Pick<
+    ProjectedTopologyEdge,
+    "sourceNodeId" | "targetNodeId" | "rawEdge" | "groupedEdges" | "travel_minutes" | "containsLockedEdge"
+  >,
+  projectedEdges: ProjectedTopologyEdge[]
+): BidirectionalProjectedBundle {
+  const collected = new Map<string, LocationEdge>();
+  const addEdge = (item: LocationEdge) => {
+    if (!collected.has(item.id)) {
+      collected.set(item.id, item);
+    }
+  };
+
+  for (const ge of edge.groupedEdges ?? [edge.rawEdge]) {
+    addEdge(ge);
+  }
+  for (const candidate of projectedEdges) {
+    const isSamePair =
+      (candidate.sourceNodeId === edge.sourceNodeId &&
+        candidate.targetNodeId === edge.targetNodeId) ||
+      (candidate.sourceNodeId === edge.targetNodeId &&
+        candidate.targetNodeId === edge.sourceNodeId);
+    if (!isSamePair) continue;
+    for (const ge of candidate.groupedEdges ?? [candidate.rawEdge]) {
+      addEdge(ge);
+    }
+  }
+
+  const allEdges = Array.from(collected.values()).sort((a, b) => {
+    if (a.from_location_id !== b.from_location_id) {
+      return a.from_location_id.localeCompare(b.from_location_id);
+    }
+    if (a.to_location_id !== b.to_location_id) {
+      return a.to_location_id.localeCompare(b.to_location_id);
+    }
+    return a.id.localeCompare(b.id);
+  });
+
+  const pairKeys = new Set<string>();
+  let minTravelMinutes = edge.travel_minutes;
+  let containsLockedEdge = edge.containsLockedEdge;
+  if (allEdges.length > 0) {
+    minTravelMinutes = Infinity;
+    containsLockedEdge = false;
+    for (const item of allEdges) {
+      pairKeys.add([item.from_location_id, item.to_location_id].sort().join("<->"));
+      if (item.travel_minutes < minTravelMinutes) {
+        minTravelMinutes = item.travel_minutes;
+      }
+      if (item.is_locked_or_hidden) {
+        containsLockedEdge = true;
+      }
+    }
+  }
+
+  return {
+    allEdges,
+    passagePairCount: pairKeys.size || 1,
+    minTravelMinutes: Number.isFinite(minTravelMinutes)
+      ? minTravelMinutes
+      : edge.travel_minutes,
+    containsLockedEdge,
+  };
+}
+
+/**
+ * Resolve the list of directed edges to open in MultiEdgePopover for a clicked
+ * edge ID (plus its reciprocal edge, or an explicit bundle of edge IDs).
+ */
+export function resolveEdgePairForDialog(
+  edgeId: string,
+  workingEdges: LocationEdge[],
+  groupedEdgeIds?: string[]
+): LocationEdge[] {
+  if (groupedEdgeIds && groupedEdgeIds.length > 0) {
+    const idSet = new Set(groupedEdgeIds);
+    const matched = workingEdges.filter((e) => idSet.has(e.id));
+    if (matched.length > 0) return matched;
+  }
+  const target = workingEdges.find((e) => e.id === edgeId);
+  if (!target) return [];
+  const reciprocal = workingEdges.filter(
+    (e) =>
+      e.id !== target.id &&
+      e.from_location_id === target.to_location_id &&
+      e.to_location_id === target.from_location_id
+  );
+  return [target, ...reciprocal];
 }
 
 export interface InitialMapFocus {

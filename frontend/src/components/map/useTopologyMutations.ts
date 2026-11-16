@@ -27,6 +27,7 @@ import {
   makeUniqueId,
   pickCompassSlot,
   resolveAutoTargetSlot,
+  syncEdgeLabelsForLocationRename,
   type GraphSnapshot,
   type ProjectedDepthTopology,
   type PromotionPromptState,
@@ -203,19 +204,29 @@ export function useTopologyMutations({
 }: UseTopologyMutationsParams) {
   const patchLocation = useCallback(
     (locId: string, patch: Partial<LocationNode>) => {
+      const oldLoc = locationMap.get(locId);
       const nextLocs = workingLocations.map((l) =>
         l.id === locId ? { ...l, ...patch } : l
       );
+      const nextEdges =
+        oldLoc && patch.name !== undefined && patch.name.trim() !== ""
+          ? syncEdgeLabelsForLocationRename(
+              workingEdges,
+              locId,
+              oldLoc.name,
+              patch.name
+            )
+          : workingEdges;
       commitNextGraph(
         {
           containers: workingContainers,
           locations: nextLocs,
-          edges: workingEdges,
+          edges: nextEdges,
         },
         false
       );
     },
-    [workingLocations, workingContainers, workingEdges, commitNextGraph]
+    [locationMap, workingLocations, workingContainers, workingEdges, commitNextGraph]
   );
 
   const patchContainer = useCallback(
@@ -1417,19 +1428,28 @@ export function useTopologyMutations({
                 tags: loc.environmental_tags ?? [],
               }),
       };
+      const convertedName = keepVisitedImmutable ? loc.name : `${loc.name} Entrance`;
       const nextLocs = workingLocations.map((l) =>
         l.id === locId
           ? {
               ...l,
               container_id: contId,
               is_entry_exit: true,
-              name: keepVisitedImmutable ? l.name : `${loc.name} Entrance`,
+              name: convertedName,
               lore_nodes: keepVisitedImmutable ? l.lore_nodes : [],
               ui_x: null,
               ui_y: null,
             }
           : l
       );
+      const nextEdges = keepVisitedImmutable
+        ? workingEdges
+        : syncEdgeLabelsForLocationRename(
+            workingEdges,
+            locId,
+            loc.name,
+            convertedName
+          );
       // Verify visited containment monotonicity in campaign mode
       if (mode === "campaign" && loc.is_visited) {
         const checkCont = validateVisitedAncestorContainment(
@@ -1446,7 +1466,7 @@ export function useTopologyMutations({
       commitNextGraph({
         containers: [...workingContainers, newCont],
         locations: nextLocs,
-        edges: workingEdges,
+        edges: nextEdges,
       });
       setSelectedLocId(null);
       setSelectedContainerId(contId);
@@ -1529,6 +1549,83 @@ export function useTopologyMutations({
     [workingEdges, workingContainers, workingLocations, commitNextGraph]
   );
 
+  const handleUpdateEdgeLabel = useCallback(
+    (edgeId: string, directionLabel: string) => {
+      const trimmed = directionLabel.trim();
+      if (!trimmed) return;
+      const target = workingEdges.find((e) => e.id === edgeId);
+      if (!target || target.direction_label === trimmed) return;
+      const nextEdges = workingEdges.map((e) =>
+        e.id === edgeId ? { ...e, direction_label: trimmed } : e
+      );
+      commitNextGraph({
+        containers: workingContainers,
+        locations: workingLocations,
+        edges: nextEdges,
+      });
+    },
+    [workingEdges, workingContainers, workingLocations, commitNextGraph]
+  );
+
+  const handleCommitEdgeEdits = useCallback(
+    (
+      updates: Array<{
+        edgeId: string;
+        travelMinutes?: number;
+        directionLabel?: string;
+      }>
+    ) => {
+      if (updates.length === 0) return;
+      let nextEdges = workingEdges;
+      let changed = false;
+
+      for (const upd of updates) {
+        const target = nextEdges.find((e) => e.id === upd.edgeId);
+        if (!target) continue;
+
+        if (upd.travelMinutes !== undefined) {
+          const clamped = Math.max(
+            1,
+            Math.min(240, Math.round(upd.travelMinutes) || 1)
+          );
+          nextEdges = nextEdges.map((e) => {
+            if (
+              (e.id === upd.edgeId ||
+                (e.from_location_id === target.to_location_id &&
+                  e.to_location_id === target.from_location_id)) &&
+              e.travel_minutes !== clamped
+            ) {
+              changed = true;
+              return { ...e, travel_minutes: clamped };
+            }
+            return e;
+          });
+        }
+
+        if (upd.directionLabel !== undefined) {
+          const trimmed = upd.directionLabel.trim();
+          if (trimmed) {
+            nextEdges = nextEdges.map((e) => {
+              if (e.id === upd.edgeId && e.direction_label !== trimmed) {
+                changed = true;
+                return { ...e, direction_label: trimmed };
+              }
+              return e;
+            });
+          }
+        }
+      }
+
+      if (!changed) return;
+      commitNextGraph({
+        containers: workingContainers,
+        locations: workingLocations,
+        edges: nextEdges,
+      });
+    },
+    [workingEdges, workingContainers, workingLocations, commitNextGraph]
+  );
+
   const deleteEdgeIds = useCallback(
     (edgeIds: string[]) => {
       const nextEdges = filterEdgesAfterDeletion(workingEdges, edgeIds);
@@ -1589,6 +1686,8 @@ export function useTopologyMutations({
     handleConvertLocationToContainer,
     handleSetStartingLocation,
     handleUpdateEdgeDistance,
+    handleUpdateEdgeLabel,
+    handleCommitEdgeEdits,
     handleToggleEdgeLocked,
     handleDeleteEdge,
     handleDeleteEdgeGroup,

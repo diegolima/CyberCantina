@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -10,6 +10,7 @@ import {
   Lock,
   LogIn,
   MapPin,
+  Pencil,
   RotateCcw,
   Search,
   Sparkles,
@@ -61,6 +62,7 @@ export interface ExternalPortalEntry {
   edgeId: string;
   destinationName: string;
   destinationContainerName: string;
+  directionLabel?: string;
   compassDirection?: string | null;
   travelMinutes: number;
   isLockedOrHidden: boolean;
@@ -91,6 +93,7 @@ export interface MapDetailsDrawerProps {
   onResetCoordinates: (kind: "location" | "container", id: string) => void;
   onResetGhostCoords?: (externalLocId: string) => void;
   onDeleteEdge?: (edgeId: string) => void;
+  onInspectEdgePair?: (edgeId: string, groupedEdgeIds?: string[]) => void;
   onJumpToContainer?: (containerId: string | null, focusLocId?: string) => void;
   onDrillIntoContainer: (contId: string) => void;
   onOverrideLocation?: (locationId: string) => Promise<void> | void;
@@ -578,6 +581,7 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
   onResetCoordinates,
   onResetGhostCoords,
   onDeleteEdge,
+  onInspectEdgePair,
   onJumpToContainer,
   onDrillIntoContainer,
   onOverrideLocation,
@@ -593,6 +597,11 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
   selectedContIdRef.current = selectedContainer?.id ?? null;
   const selectedContDepthRef = useRef<number | null>(selectedContainer?.depth ?? null);
   selectedContDepthRef.current = selectedContainer?.depth ?? null;
+
+  const [nameDraft, setNameDraft] = useState(selectedLocation?.name ?? "");
+  useEffect(() => {
+    setNameDraft(selectedLocation?.name ?? "");
+  }, [selectedLocation?.id, selectedLocation?.name]);
 
   const isLocNarrativeLocked =
     isMutatingLocked ||
@@ -890,6 +899,9 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
           </span>
           {uniqueLinks.map((ge) => {
             const portalLoc = locLookup.get(ge.portalLocationId);
+            const matchingGhostEdgeIds = selectedGhostEdges
+              .filter((item) => item.portalLocationId === ge.portalLocationId)
+              .map((item) => item.rawEdge.id);
             return (
               <div
                 key={ge.id}
@@ -901,27 +913,62 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
                   color: "var(--text-secondary)",
                 }}
               >
-                <span>
-                  {portalLoc?.name ?? ge.portalLocationId} ({ge.travel_minutes}m
-                  {ge.is_locked_or_hidden ? " 🔒" : ""})
-                </span>
-                {mode === "editor" && !isMutatingLocked && onDeleteEdge && (
-                  <button
-                    type="button"
-                    className="btn"
-                    title="Remove external boundary link"
-                    aria-label={`Remove link from ${portalLoc?.name ?? ge.portalLocationId}`}
-                    style={{
-                      padding: "2px 6px",
-                      fontSize: "0.68rem",
-                      color: "#fb7185",
-                      borderColor: "rgba(244, 63, 94, 0.35)",
-                    }}
-                    onClick={() => onDeleteEdge(ge.rawEdge.id)}
-                  >
-                    Remove
-                  </button>
-                )}
+                <div style={{ minWidth: 0 }}>
+                  <div>
+                    {portalLoc?.name ?? ge.portalLocationId} ({ge.travel_minutes}m
+                    {ge.is_locked_or_hidden ? " 🔒" : ""})
+                  </div>
+                  {ge.direction_label && (
+                    <div
+                      style={{
+                        fontSize: "0.66rem",
+                        color: "var(--text-muted)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                      title={ge.direction_label}
+                    >
+                      via {ge.direction_label}
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: "inline-flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                  {!isMutatingLocked && onInspectEdgePair && (
+                    <button
+                      type="button"
+                      className="btn"
+                      title="Edit passage label & details"
+                      aria-label={`Edit link from ${portalLoc?.name ?? ge.portalLocationId}`}
+                      style={{
+                        padding: "2px 6px",
+                        fontSize: "0.68rem",
+                      }}
+                      onClick={() =>
+                        onInspectEdgePair(ge.rawEdge.id, matchingGhostEdgeIds)
+                      }
+                    >
+                      <Pencil size={10} />
+                    </button>
+                  )}
+                  {mode === "editor" && !isMutatingLocked && onDeleteEdge && (
+                    <button
+                      type="button"
+                      className="btn"
+                      title="Remove external boundary link"
+                      aria-label={`Remove link from ${portalLoc?.name ?? ge.portalLocationId}`}
+                      style={{
+                        padding: "2px 6px",
+                        fontSize: "0.68rem",
+                        color: "#fb7185",
+                        borderColor: "rgba(244, 63, 94, 0.35)",
+                      }}
+                      onClick={() => onDeleteEdge(ge.rawEdge.id)}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -1451,10 +1498,19 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
         <input
           className="field-input"
           disabled={isLocNarrativeLocked}
-          value={selectedLocation.name}
-          onChange={(e) =>
-            onPatchLocation(selectedLocation.id, { name: e.target.value })
-          }
+          value={nameDraft}
+          onChange={(e) => {
+            const nextVal = e.target.value;
+            setNameDraft(nextVal);
+            if (nextVal.trim() !== "") {
+              onPatchLocation(selectedLocation.id, { name: nextVal });
+            }
+          }}
+          onBlur={() => {
+            if (nameDraft.trim() === "") {
+              setNameDraft(selectedLocation.name);
+            }
+          }}
         />
       </div>
 
@@ -1632,28 +1688,62 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
                 color: "var(--text-secondary)",
               }}
             >
-              <span>
-                [{ext.compassDirection || "?"}] → {ext.destinationName} ({ext.destinationContainerName},{" "}
-                {ext.travelMinutes}m)
-              </span>
-              {mode === "editor" && !isMutatingLocked && onDeleteEdge && (
-                <button
-                  type="button"
-                  className="btn"
-                  title="Remove external boundary link"
-                  aria-label={`Remove link to ${ext.destinationName}`}
-                  style={{
-                    padding: "1px 5px",
-                    fontSize: "0.66rem",
-                    color: "#fb7185",
-                    borderColor: "rgba(244, 63, 94, 0.35)",
-                    flexShrink: 0,
-                  }}
-                  onClick={() => onDeleteEdge(ext.edgeId)}
-                >
-                  <X size={10} />
-                </button>
-              )}
+              <div style={{ minWidth: 0 }}>
+                <span>
+                  [{ext.compassDirection || "?"}] → {ext.destinationName} ({ext.destinationContainerName},{" "}
+                  {ext.travelMinutes}m)
+                </span>
+                {ext.directionLabel && (
+                  <div
+                    style={{
+                      fontSize: "0.66rem",
+                      color: "var(--text-muted)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                    title={ext.directionLabel}
+                  >
+                    via {ext.directionLabel}
+                  </div>
+                )}
+              </div>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                {!isMutatingLocked && onInspectEdgePair && (
+                  <button
+                    type="button"
+                    className="btn"
+                    title="Edit passage label & details"
+                    aria-label={`Edit link to ${ext.destinationName}`}
+                    style={{
+                      padding: "1px 5px",
+                      fontSize: "0.66rem",
+                      flexShrink: 0,
+                    }}
+                    onClick={() => onInspectEdgePair(ext.edgeId)}
+                  >
+                    <Pencil size={10} />
+                  </button>
+                )}
+                {mode === "editor" && !isMutatingLocked && onDeleteEdge && (
+                  <button
+                    type="button"
+                    className="btn"
+                    title="Remove external boundary link"
+                    aria-label={`Remove link to ${ext.destinationName}`}
+                    style={{
+                      padding: "1px 5px",
+                      fontSize: "0.66rem",
+                      color: "#fb7185",
+                      borderColor: "rgba(244, 63, 94, 0.35)",
+                      flexShrink: 0,
+                    }}
+                    onClick={() => onDeleteEdge(ext.edgeId)}
+                  >
+                    <X size={10} />
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>

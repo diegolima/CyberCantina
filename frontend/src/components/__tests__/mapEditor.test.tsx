@@ -23,6 +23,7 @@ import { TargetEdgeSelector } from "../map/TargetEdgeSelector";
 import {
   EmptyCanvasCreateModal,
   GroupIntoContainerModal,
+  MapContextMenu,
   MapIconBrowserModal,
   MultiEdgePopover,
   PassageHubCollisionModal,
@@ -48,9 +49,13 @@ import {
   getLocationOccupiedPorts,
   parseCommittedEdgeMinutes,
   resolveAutoTargetSlot,
+  resolveBidirectionalProjectedBundle,
+  resolveEdgePairForDialog,
   resolveLiveEdgeModalEdges,
   sanitizeEdgeMinutesInput,
   stepEdgeMinutesDraft,
+  syncEdgeLabelsForLocationRename,
+  worldPointToWrapperPoint,
 } from "../map/topologyProjection";
 import {
   buildBidirectionalEdgePair,
@@ -1563,5 +1568,445 @@ describe("Interactive Map Editor & Mini-Map", () => {
     );
     expect(foyerDrawerHtml).toContain("[Entry/Exit Portal]");
     expect(coords["loc_hub"]).toBeDefined();
+  });
+
+  it("auto-syncs template direction_label on rename, exposes editable edge labels, merges bidirectional aggregated badges, and keeps inline overlay coordinates live (v0.14.1)", () => {
+    const { containers, locations, edges } = makeRichWorldFixture();
+
+    // 1. syncEdgeLabelsForLocationRename updates all 5 template prefixes targeting locationId and handles regex chars
+    const sampleEdges: LocationEdge[] = [
+      {
+        id: "t1",
+        world_id: "w1",
+        from_location_id: "a",
+        to_location_id: "b",
+        direction_label: "Passage to Passage (1-M)",
+        compass_direction: "N",
+        travel_minutes: 2,
+        is_locked_or_hidden: false,
+      },
+      {
+        id: "t2",
+        world_id: "w1",
+        from_location_id: "c",
+        to_location_id: "b",
+        direction_label: "Return to Passage (1-M)",
+        compass_direction: "S",
+        travel_minutes: 2,
+        is_locked_or_hidden: false,
+      },
+      {
+        id: "t3",
+        world_id: "w1",
+        from_location_id: "d",
+        to_location_id: "b",
+        direction_label: "To Passage (1-M)",
+        compass_direction: "E",
+        travel_minutes: 2,
+        is_locked_or_hidden: false,
+      },
+      {
+        id: "t4",
+        world_id: "w1",
+        from_location_id: "e",
+        to_location_id: "b",
+        direction_label: "Back to Passage (1-M)",
+        compass_direction: "W",
+        travel_minutes: 2,
+        is_locked_or_hidden: false,
+      },
+      {
+        id: "t5",
+        world_id: "w1",
+        from_location_id: "f",
+        to_location_id: "b",
+        direction_label: "Return passage to Passage (1-M)",
+        compass_direction: "NE",
+        travel_minutes: 2,
+        is_locked_or_hidden: false,
+      },
+      {
+        id: "custom",
+        world_id: "w1",
+        from_location_id: "g",
+        to_location_id: "b",
+        direction_label: "Rusted iron hatch",
+        compass_direction: "NW",
+        travel_minutes: 2,
+        is_locked_or_hidden: true,
+      },
+      {
+        id: "outgoing",
+        world_id: "w1",
+        from_location_id: "b",
+        to_location_id: "a",
+        direction_label: "Passage to Passage (1-M)",
+        compass_direction: "S",
+        travel_minutes: 2,
+        is_locked_or_hidden: false,
+      },
+    ];
+
+    // Trailing space or blank newName leaves edges referentially unchanged
+    expect(
+      syncEdgeLabelsForLocationRename(sampleEdges, "b", "Passage (1-M)", "")
+    ).toBe(sampleEdges);
+    expect(
+      syncEdgeLabelsForLocationRename(
+        sampleEdges,
+        "b",
+        "Passage (1-M)",
+        "Passage (1-M) "
+      )
+    ).toBe(sampleEdges);
+
+    const renamed = syncEdgeLabelsForLocationRename(
+      sampleEdges,
+      "b",
+      "Passage (1-M)",
+      "Tunnel 1-M"
+    );
+    expect(renamed.find((e) => e.id === "t1")?.direction_label).toBe(
+      "Passage to Tunnel 1-M"
+    );
+    expect(renamed.find((e) => e.id === "t2")?.direction_label).toBe(
+      "Return to Tunnel 1-M"
+    );
+    expect(renamed.find((e) => e.id === "t3")?.direction_label).toBe(
+      "To Tunnel 1-M"
+    );
+    expect(renamed.find((e) => e.id === "t4")?.direction_label).toBe(
+      "Back to Tunnel 1-M"
+    );
+    expect(renamed.find((e) => e.id === "t5")?.direction_label).toBe(
+      "Return passage to Tunnel 1-M"
+    );
+    expect(renamed.find((e) => e.id === "custom")?.direction_label).toBe(
+      "Rusted iron hatch"
+    );
+    expect(renamed.find((e) => e.id === "outgoing")?.direction_label).toBe(
+      "Passage to Passage (1-M)"
+    );
+
+    // 2. resolveEdgePairForDialog resolves both directions or explicit bundles
+    const pair = resolveEdgePairForDialog("e1", edges);
+    expect(pair.map((e) => e.id)).toEqual(["e1", "e2"]);
+    expect(resolveEdgePairForDialog("e1", edges, ["e3", "e4"]).map((e) => e.id)).toEqual([
+      "e3",
+      "e4",
+    ]);
+
+    // 3. resolveBidirectionalProjectedBundle merges reverse locks/minutes and counts undirected pairs
+    const twoContLocs: LocationNode[] = [
+      ...locations,
+      {
+        id: "loc_clinic_main",
+        world_id: "world_1",
+        container_id: "cont_clinic",
+        is_entry_exit: true,
+        name: "Clinic Bay",
+        summary: "Sterile room.",
+        description: "Fluorescent lights buzz.",
+        environmental_tags: [],
+        is_starting_location: false,
+      },
+      {
+        id: "loc_clinic_back",
+        world_id: "world_1",
+        container_id: "cont_clinic",
+        is_entry_exit: true,
+        name: "Clinic Backdoor",
+        summary: "Alley exit.",
+        description: "Dumpsters outside.",
+        environmental_tags: [],
+        is_starting_location: false,
+      },
+    ];
+    const crossEdges: LocationEdge[] = [
+      ...edges,
+      {
+        id: "cx1_fwd",
+        world_id: "world_1",
+        from_location_id: "loc_foyer",
+        to_location_id: "loc_clinic_main",
+        direction_label: "Passage to Clinic Bay",
+        compass_direction: "W",
+        travel_minutes: 8,
+        is_locked_or_hidden: false,
+      },
+      {
+        id: "cx1_rev",
+        world_id: "world_1",
+        from_location_id: "loc_clinic_main",
+        to_location_id: "loc_foyer",
+        direction_label: "Return to Main Floor",
+        compass_direction: "E",
+        travel_minutes: 3,
+        is_locked_or_hidden: true,
+      },
+      {
+        id: "cx2_fwd",
+        world_id: "world_1",
+        from_location_id: "loc_hub",
+        to_location_id: "loc_clinic_back",
+        direction_label: "Passage to Clinic Backdoor",
+        compass_direction: "N",
+        travel_minutes: 6,
+        is_locked_or_hidden: false,
+      },
+      {
+        id: "cx2_rev",
+        world_id: "world_1",
+        from_location_id: "loc_clinic_back",
+        to_location_id: "loc_hub",
+        direction_label: "Return to Canal Junction",
+        compass_direction: "S",
+        travel_minutes: 6,
+        is_locked_or_hidden: false,
+      },
+    ];
+    const rootCrossProj = projectTopologyForDepth(
+      null,
+      containers,
+      twoContLocs,
+      crossEdges,
+      "loc_foyer"
+    );
+    const aggFwd = rootCrossProj.projectedEdges.find(
+      (pe) =>
+        pe.sourceNodeId === "cont_clinic" && pe.targetNodeId === "cont_district"
+    )!;
+    const mergedBundle = resolveBidirectionalProjectedBundle(
+      aggFwd,
+      rootCrossProj.projectedEdges
+    );
+    expect(mergedBundle.passagePairCount).toBe(2);
+    expect(mergedBundle.minTravelMinutes).toBe(3);
+    expect(mergedBundle.containsLockedEdge).toBe(true);
+    expect(mergedBundle.allEdges).toHaveLength(4);
+
+    const crossCoords: Record<string, { x: number; y: number }> = {
+      ...computeFullMapCoords(twoContLocs, crossEdges, "loc_foyer"),
+      cont_district: { x: 140, y: 0 },
+      cont_clinic: { x: -140, y: 0 },
+      loc_street: { x: 0, y: 180 },
+    };
+    const crossCanvasHtml = renderToStaticMarkup(
+      <SpatialTopologyCanvas
+        svgRef={{ current: null }}
+        canvasWrapRef={{ current: null }}
+        viewportGroupRef={{ current: null }}
+        panDragRef={{
+          current: {
+            active: false,
+            moved: false,
+            button: 0,
+            startClientX: 0,
+            startClientY: 0,
+            origPanX: 0,
+            origPanY: 0,
+          },
+        }}
+        mode="editor"
+        zoom={1}
+        setZoom={() => {}}
+        pan={{ x: 0, y: 0 }}
+        setPan={() => {}}
+        nodeDrag={null}
+        setNodeDrag={() => {}}
+        linkDrag={null}
+        setLinkDrag={() => {}}
+        hoveredNodeKey={null}
+        setHoveredNodeKey={() => {}}
+        projectedTopology={rootCrossProj}
+        fullMapCoords={crossCoords}
+        selectedContainer={null}
+        selectedLocation={null}
+        activeLoc={twoContLocs[0]}
+        activeNeighborIds={new Set()}
+        unreachableSet={new Set()}
+        occupiedSlotsByLocId={new Map()}
+        isMutatingLocked={false}
+        inlineEdgeEdit={null}
+        setInlineEdgeEdit={() => {}}
+        statusNotice={null}
+        setStatusNotice={() => {}}
+        setSelectedLocId={() => {}}
+        setSelectedContainerId={() => {}}
+        setContextMenu={() => {}}
+        setMultiEdgeModalEdges={() => {}}
+        openContextMenuAt={() => {}}
+        handleUpdateEdgeDistance={() => {}}
+        handleDeleteEdge={() => {}}
+        handleDeleteEdgeGroup={() => {}}
+        drillIntoContainer={() => {}}
+      />
+    );
+    expect(crossCanvasHtml).toContain("3m · 2 🔒");
+    expect(crossCanvasHtml).not.toContain("m · 1");
+
+    // 4. MultiEdgePopover renders editable passage label inputs while preserving Boundary Passages (N)
+    const locMap = new Map(twoContLocs.map((l) => [l.id, l]));
+    const popoverHtml = renderToStaticMarkup(
+      <MultiEdgePopover
+        edges={mergedBundle.allEdges}
+        locationMap={locMap}
+        onClose={() => {}}
+        onUpdateDistance={() => {}}
+        onUpdateLabel={() => {}}
+        onCommitEdgeEdits={() => {}}
+        onToggleLocked={() => {}}
+        onDeleteEdge={() => {}}
+      />
+    );
+    expect(popoverHtml).toContain("Boundary Passages (4)");
+    expect(popoverHtml).toContain('aria-label="Passage label for Main Floor to Clinic Bay"');
+    expect(popoverHtml).toContain('value="Passage to Clinic Bay"');
+
+    // 5. MapContextMenu shows label-edit action for single edge & bundle actions for multi-bundle
+    const singleCtxHtml = renderToStaticMarkup(
+      <MapContextMenu
+        menu={{ x: 10, y: 20, target: { kind: "edge", edgeId: "e1" } }}
+        locations={locations}
+        containers={containers}
+        edges={edges}
+        mode="editor"
+        canDeleteContainer={() => ({ allowed: true })}
+        canDeleteLocation={() => ({ allowed: true })}
+        canConvertLocation={() => ({ allowed: true })}
+        canMoveOutToParent={() => ({ allowed: true, parentLabel: "Root" })}
+        onClose={() => {}}
+        onInspect={() => {}}
+        onEnterContainer={() => {}}
+        onSetStartingLocation={() => {}}
+        onConvertToContainer={() => {}}
+        onMoveOutToParent={() => {}}
+        onDeleteLocation={() => {}}
+        onDeleteContainer={() => {}}
+        onEditEdgeDistance={() => {}}
+        onEditEdgeDetails={() => {}}
+        onToggleEdgeLocked={() => {}}
+        onDeleteEdge={() => {}}
+        onDeleteEdgeGroup={() => {}}
+      />
+    );
+    expect(singleCtxHtml).toContain("Edit Passage Labels &amp; Details...");
+
+    const bundleCtxHtml = renderToStaticMarkup(
+      <MapContextMenu
+        menu={{
+          x: 10,
+          y: 20,
+          target: {
+            kind: "edge",
+            edgeId: "cx1_fwd",
+            groupedEdgeIds: mergedBundle.allEdges.map((e) => e.id),
+            pairCount: 2,
+          },
+        }}
+        locations={twoContLocs}
+        containers={containers}
+        edges={crossEdges}
+        mode="editor"
+        canDeleteContainer={() => ({ allowed: true })}
+        canDeleteLocation={() => ({ allowed: true })}
+        canConvertLocation={() => ({ allowed: true })}
+        canMoveOutToParent={() => ({ allowed: true, parentLabel: "Root" })}
+        onClose={() => {}}
+        onInspect={() => {}}
+        onEnterContainer={() => {}}
+        onSetStartingLocation={() => {}}
+        onConvertToContainer={() => {}}
+        onMoveOutToParent={() => {}}
+        onDeleteLocation={() => {}}
+        onDeleteContainer={() => {}}
+        onEditEdgeDistance={() => {}}
+        onEditEdgeDetails={() => {}}
+        onToggleEdgeLocked={() => {}}
+        onDeleteEdge={() => {}}
+        onDeleteEdgeGroup={() => {}}
+      />
+    );
+    expect(bundleCtxHtml).toContain("Manage Boundary Passages (2)...");
+    expect(bundleCtxHtml).toContain("Delete All 2 Passages");
+
+    // 6. MapDetailsDrawer renders directionLabel & edit button for externalPortals
+    const drawerWithPortalHtml = renderToStaticMarkup(
+      <MapDetailsDrawer
+        mode="editor"
+        isMutatingLocked={false}
+        selectedLocation={locations[0]}
+        selectedContainer={null}
+        containers={containers}
+        allLocations={locations}
+        activeLocId={locations[0].id}
+        dynamicPortalIds={new Set(["loc_foyer"])}
+        externalPortals={[
+          {
+            edgeId: "cx1_fwd",
+            destinationName: "Clinic Bay",
+            destinationContainerName: "Viktor Clinic",
+            directionLabel: "Passage to Clinic Bay",
+            compassDirection: "W",
+            travelMinutes: 8,
+            isLockedOrHidden: false,
+          },
+        ]}
+        containerStats={null}
+        depthLabels={{
+          1: "Building / Landmark",
+          2: "District / Zone",
+          3: "City / Settlement",
+          4: "Region / Planet / Realm",
+        }}
+        onClose={() => {}}
+        onPatchLocation={() => {}}
+        onPatchContainer={() => {}}
+        onResetCoordinates={() => {}}
+        onInspectEdgePair={() => {}}
+        onDeleteEdge={() => {}}
+        onDrillIntoContainer={() => {}}
+      />
+    );
+    expect(drawerWithPortalHtml).toContain("via Passage to Clinic Bay");
+    expect(drawerWithPortalHtml).toContain('aria-label="Edit link to Clinic Bay"');
+
+    // 7. worldPointToWrapperPoint uses live pan/zoom with svgEl.getScreenCTM() (not stale groupEl)
+    const mockWrap = {
+      getBoundingClientRect: () => ({ left: 100, top: 50, width: 680, height: 520 }),
+      clientLeft: 0,
+      clientTop: 0,
+    } as unknown as HTMLElement;
+    const mockSvg = {
+      getBoundingClientRect: () => ({ left: 100, top: 50, width: 680, height: 520 }),
+      getScreenCTM: () => ({ a: 1, b: 0, c: 0, d: 1, e: 440, f: 310 }),
+      createSVGPoint: () => {
+        const pt = {
+          x: 0,
+          y: 0,
+          matrixTransform: (m: { e: number; f: number }) => ({
+            x: pt.x + m.e,
+            y: pt.y + m.f,
+          }),
+        };
+        return pt;
+      },
+    } as unknown as SVGSVGElement;
+    const staleGroup = {
+      getScreenCTM: () => {
+        throw new Error("Should not rely on stale groupEl.getScreenCTM()");
+      },
+    } as unknown as SVGGElement;
+    const mapped = worldPointToWrapperPoint(
+      10,
+      20,
+      mockSvg,
+      mockWrap,
+      staleGroup,
+      { x: 5, y: -10 },
+      2
+    );
+    // vbX = (10 + 5) * 2 = 30, vbY = (20 - 10) * 2 = 20 -> +440-100 = 370, +310-50 = 280
+    expect(mapped).toEqual({ x: 370, y: 280 });
   });
 });

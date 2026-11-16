@@ -65,6 +65,7 @@ import {
   inferCompassDirection,
   pickCompassSlot,
   projectTopologyForDepth,
+  resolveEdgePairForDialog,
   resolveInitialMapFocus,
   resolveLiveEdgeModalEdges,
   type GraphSnapshot,
@@ -237,6 +238,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     const prev = undoStack[undoStack.length - 1];
     const nextStack = undoStack.slice(0, -1);
     setUndoStack(nextStack);
+    setInlineEdgeEdit(null);
+    setContextMenu(null);
     if (isControlledExternally && onChangeGraph) {
       onChangeGraph(prev);
     } else {
@@ -382,6 +385,15 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       setSelectedLocId(null);
     }
   }, [workingLocations, selectedLocId]);
+
+  useEffect(() => {
+    if (
+      inlineEdgeEdit &&
+      !workingEdges.some((e) => e.id === inlineEdgeEdit.edgeId)
+    ) {
+      setInlineEdgeEdit(null);
+    }
+  }, [workingEdges, inlineEdgeEdit]);
 
   const activeLoc = useMemo(
     () =>
@@ -668,6 +680,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     handleConvertLocationToContainer,
     handleSetStartingLocation,
     handleUpdateEdgeDistance,
+    handleUpdateEdgeLabel,
+    handleCommitEdgeEdits,
     handleToggleEdgeLocked,
     handleDeleteEdge,
     handleDeleteEdgeGroup,
@@ -910,6 +924,17 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     setContextMenu({ x: clampedX, y: clampedY, target });
   };
 
+  const openEdgeDetailsPopover = useCallback(
+    (edgeId: string, groupedEdgeIds?: string[]) => {
+      const pair = resolveEdgePairForDialog(edgeId, workingEdges, groupedEdgeIds);
+      if (pair.length > 0) {
+        setInlineEdgeEdit(null);
+        setMultiEdgeModalEdges(pair);
+      }
+    },
+    [workingEdges]
+  );
+
   const selectedExternalPortals = useMemo(() => {
     if (!selectedLocation) return [];
     return (projectedTopology.externalPortalsByLocationId[selectedLocation.id] ?? []).map(
@@ -917,6 +942,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         edgeId: ext.edge.id,
         destinationName: ext.destination.name,
         destinationContainerName: ext.destinationContainerName ?? "World Root",
+        directionLabel: ext.edge.direction_label,
         compassDirection: ext.edge.compass_direction,
         travelMinutes: ext.edge.travel_minutes,
         isLockedOrHidden: ext.edge.is_locked_or_hidden,
@@ -1208,8 +1234,10 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                 value: String(edge.travel_minutes),
               });
             }}
+            onEditEdgeDetails={openEdgeDetailsPopover}
             onToggleEdgeLocked={handleToggleEdgeLocked}
             onDeleteEdge={handleDeleteEdge}
+            onDeleteEdgeGroup={handleDeleteEdgeGroup}
           />
 
           <PassageHubCollisionModal
@@ -1241,8 +1269,11 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
           <MultiEdgePopover
             edges={liveMultiEdgeModalEdges}
             locationMap={locationMap}
+            isMutatingLocked={isMutatingLocked}
             onClose={() => setMultiEdgeModalEdges(null)}
             onUpdateDistance={handleUpdateEdgeDistance}
+            onUpdateLabel={handleUpdateEdgeLabel}
+            onCommitEdgeEdits={handleCommitEdgeEdits}
             onToggleLocked={handleToggleEdgeLocked}
             onDeleteEdge={handleDeleteEdge}
           />
@@ -1320,6 +1351,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             onResetCoordinates={resetCoordinates}
             onResetGhostCoords={handleResetGhostCoords}
             onDeleteEdge={handleDeleteEdge}
+            onInspectEdgePair={openEdgeDetailsPopover}
             onJumpToContainer={handleJumpToContainer}
             onDrillIntoContainer={drillIntoContainer}
             onOverrideLocation={onOverrideLocation}

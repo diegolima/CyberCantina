@@ -18,6 +18,7 @@ from app.engine.clerk_placement import (
 from app.routers.campaigns import CampaignCreateRequest, create_campaign
 from app.schemas.auth import UserProfile
 from app.schemas.world import (
+    LocationEdgeDraft,
     LocationNodeDraft,
     WorldGlobalRules,
     WorldUpdatePayload,
@@ -253,3 +254,54 @@ async def test_create_campaign_character_focus_flow(temp_repo: CantinaRepository
     assert root_turn.depth_index == 0
     assert root_turn.actor_id == char.id
     assert root_turn.cognition.skipped is True
+
+
+def test_create_world_from_draft_resolves_location_names_for_blank_edge_labels(
+    temp_repo: CantinaRepository, test_user: UserProfile
+) -> None:
+    """Verify omitted/blank edge labels resolve to display names rather than internal keys."""
+    draft = WorldWizardDraft(
+        name="Name Fallback Test",
+        global_rules=WorldGlobalRules(
+            genre="Sci-Fi",
+            tone="Grounded",
+            setting_overview="A test station.",
+            tech_or_magic_rules="Hard sci-fi.",
+            starting_timestamp="2144-05-12 12:00",
+        ),
+        locations=[
+            LocationNodeDraft(
+                key="loc_alpha_slug",
+                name="Atrium Alpha",
+                summary="Entry atrium.",
+                description="Glass and steel.",
+                environmental_tags=["glass"],
+                is_starting_location=True,
+            ),
+            LocationNodeDraft(
+                key="loc_beta_slug",
+                name="Sump Beta",
+                summary="Lower sump.",
+                description="Damp pipes.",
+                environmental_tags=["pipes"],
+                is_starting_location=False,
+            ),
+        ],
+        edges=[
+            LocationEdgeDraft(
+                from_key="loc_alpha_slug",
+                to_key="loc_beta_slug",
+                direction_label="",
+                reverse_direction_label="",
+                compass_direction="S",
+                travel_minutes=3,
+                bidirectional=True,
+            )
+        ],
+        lore_nodes=[],
+    )
+    saved = temp_repo.create_world_from_draft(draft, owner_id=test_user.id)
+    fwd = next(e for e in saved.edges if e.from_location_id != e.to_location_id and e.compass_direction == "S")
+    rev = next(e for e in saved.edges if e.id != fwd.id)
+    assert fwd.direction_label == "Passage to Sump Beta"
+    assert rev.direction_label == "Return to Atrium Alpha"

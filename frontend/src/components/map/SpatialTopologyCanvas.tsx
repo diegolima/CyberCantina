@@ -37,6 +37,7 @@ import {
   COMPASS_ORDER,
   clientToWorldPoint,
   parseCommittedEdgeMinutes,
+  resolveBidirectionalProjectedBundle,
   sanitizeEdgeMinutesInput,
   stepEdgeMinutesDraft,
   worldPointToWrapperPoint,
@@ -256,7 +257,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
     const buildEdgeRenderItem = (params: {
       edge: Pick<
         LocationEdge,
-        "id" | "travel_minutes" | "is_locked_or_hidden"
+        "id" | "travel_minutes" | "is_locked_or_hidden" | "direction_label"
       > & {
         sourceNodeId: string;
         targetNodeId: string;
@@ -264,6 +265,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
         containsLockedEdge: boolean;
         rawEdge: LocationEdge;
         groupedEdges?: LocationEdge[];
+        passagePairCount?: number;
       };
       p1: { x: number; y: number } | undefined;
       p2: { x: number; y: number } | undefined;
@@ -278,17 +280,28 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
         params;
       if (!p1 || !p2) return null;
       const clipped = computeEdgeClippedSegment(p1, shape1, p2, shape2);
-      const groupedCount = edge.groupedEdges?.length ?? 0;
+      const passagePairCount =
+        edge.passagePairCount ?? (edge.groupedEdges?.length ?? 0);
       const labelText = `${edge.travel_minutes}m${
-        edge.isAggregated && groupedCount > 1 ? ` · ${groupedCount}` : ""
+        edge.isAggregated && passagePairCount > 1 ? ` · ${passagePairCount}` : ""
       }${edge.containsLockedEdge ? " 🔒" : ""}`;
       const badgeWidth = computeDistanceBadgeWidth(labelText);
+      const hoverTitle =
+        edge.isAggregated && edge.groupedEdges && edge.groupedEdges.length > 1
+          ? `${passagePairCount > 1 ? `${passagePairCount} boundary passages: ` : ""}${edge.groupedEdges
+              .map((ge) => ge.direction_label)
+              .join(" · ")}`
+          : `${edge.direction_label} (${edge.travel_minutes}m${
+              edge.containsLockedEdge ? " · locked" : ""
+            })`;
       return {
         edge,
         clipped,
         isDirect,
         showLabel,
         labelText,
+        hoverTitle,
+        passagePairCount,
         badgeWidth,
         pairKey,
         isGhost,
@@ -308,8 +321,23 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
             o.sourceNodeId === edge.targetNodeId &&
             o.targetNodeId === edge.sourceNodeId
         );
+      const bundle = edge.isAggregated
+        ? resolveBidirectionalProjectedBundle(
+            edge,
+            projectedTopology.projectedEdges
+          )
+        : null;
+      const effectiveEdge = bundle
+        ? {
+            ...edge,
+            travel_minutes: bundle.minTravelMinutes,
+            containsLockedEdge: bundle.containsLockedEdge,
+            groupedEdges: bundle.allEdges,
+            passagePairCount: bundle.passagePairCount,
+          }
+        : edge;
       return buildEdgeRenderItem({
-        edge,
+        edge: effectiveEdge,
         p1: fullMapCoords[edge.sourceNodeId],
         p2: fullMapCoords[edge.targetNodeId],
         shape1: shapeByNodeId.get(edge.sourceNodeId) ?? { kind: "location" },
@@ -398,10 +426,16 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
   const openEdgeEditor = (
     ev: React.MouseEvent,
     edge: (typeof renderedEdges)[number]["edge"],
-    clipped: (typeof renderedEdges)[number]["clipped"]
+    clipped: (typeof renderedEdges)[number]["clipped"],
+    passagePairCount: number
   ) => {
     ev.stopPropagation();
-    if (edge.isAggregated && edge.groupedEdges && edge.groupedEdges.length > 1) {
+    if (
+      edge.isAggregated &&
+      edge.groupedEdges &&
+      edge.groupedEdges.length > 1 &&
+      passagePairCount > 1
+    ) {
       setMultiEdgeModalEdges(edge.groupedEdges);
     } else {
       setInlineEdgeEdit({
@@ -526,7 +560,16 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
             >
               {/* Layer 1: Edge Lines & Active Link Rubber-Band */}
               <g data-layer="edge-lines">
-                {renderedEdges.map(({ edge, clipped, isDirect, pairKey, isGhost }) => {
+                {renderedEdges.map(
+                  ({
+                    edge,
+                    clipped,
+                    isDirect,
+                    hoverTitle,
+                    passagePairCount,
+                    pairKey,
+                    isGhost,
+                  }) => {
                   return (
                     <g
                       key={edge.id}
@@ -538,10 +581,19 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                         openContextMenuAt(ev, {
                           kind: "edge",
                           edgeId: edge.rawEdge.id,
+                          ...(edge.isAggregated && edge.groupedEdges?.length
+                            ? {
+                                groupedEdgeIds: edge.groupedEdges.map((ge) => ge.id),
+                                pairCount: passagePairCount,
+                              }
+                            : {}),
                         })
                       }
-                      onDoubleClick={(ev) => openEdgeEditor(ev, edge, clipped)}
+                      onDoubleClick={(ev) =>
+                        openEdgeEditor(ev, edge, clipped, passagePairCount)
+                      }
                     >
+                      <title>{hoverTitle}</title>
                       {/* Invisible wide hit-target so thin lines hover & click cleanly */}
                       <line
                         x1={clipped.x1}
@@ -609,7 +661,17 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
               {/* Layer 2: Opaque Distance Badges (painted above all edge lines) */}
               <g data-layer="edge-badges">
                 {renderedEdges.map(
-                  ({ edge, clipped, isDirect, showLabel, labelText, badgeWidth, pairKey }) => {
+                  ({
+                    edge,
+                    clipped,
+                    isDirect,
+                    showLabel,
+                    labelText,
+                    hoverTitle,
+                    passagePairCount,
+                    badgeWidth,
+                    pairKey,
+                  }) => {
                     if (!showLabel) return null;
                     if (
                       activeInlineEdge &&
@@ -631,10 +693,19 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                           openContextMenuAt(ev, {
                             kind: "edge",
                             edgeId: edge.rawEdge.id,
+                            ...(edge.isAggregated && edge.groupedEdges?.length
+                              ? {
+                                  groupedEdgeIds: edge.groupedEdges.map((ge) => ge.id),
+                                  pairCount: passagePairCount,
+                                }
+                              : {}),
                           })
                         }
-                        onDoubleClick={(ev) => openEdgeEditor(ev, edge, clipped)}
+                        onDoubleClick={(ev) =>
+                          openEdgeEditor(ev, edge, clipped, passagePairCount)
+                        }
                       >
+                        <title>{hoverTitle}</title>
                         <rect
                           x={clipped.midX - badgeWidth / 2}
                           y={clipped.midY - 9}
@@ -1332,16 +1403,22 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
               {/* Layer 4: World-Editor Hover Quick-Delete Link Control */}
               {isEditorQuickDeleteEnabled && hoveredEdgePairKey && (
                 <g data-layer="edge-quick-delete">
-                  {renderedEdges.map(({ edge, clipped, showLabel, badgeWidth, pairKey }) => {
+                  {renderedEdges.map(
+                    ({
+                      edge,
+                      clipped,
+                      showLabel,
+                      passagePairCount,
+                      badgeWidth,
+                      pairKey,
+                    }) => {
                     if (!showLabel || hoveredEdgePairKey !== pairKey) return null;
                     // Anchor compact circled X on the top-right corner of the distance badge
                     const qx = clipped.midX + badgeWidth / 2 - 1;
                     const qy = clipped.midY - 9;
                     const deleteTitle =
-                      edge.isAggregated &&
-                      edge.groupedEdges &&
-                      edge.groupedEdges.length > 1
-                        ? `Delete all ${edge.groupedEdges.length} linked passages`
+                      edge.isAggregated && passagePairCount > 1
+                        ? `Delete all ${passagePairCount} linked passages`
                         : "Delete link";
                     return (
                       <g

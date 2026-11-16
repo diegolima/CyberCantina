@@ -1155,7 +1155,12 @@ export const StandaloneContainerCreateModal: React.FC<StandaloneContainerCreateM
 export type ContextMenuTarget =
   | { kind: "location"; id: string }
   | { kind: "container"; id: string }
-  | { kind: "edge"; edgeId: string };
+  | {
+      kind: "edge";
+      edgeId: string;
+      groupedEdgeIds?: string[];
+      pairCount?: number;
+    };
 
 export interface MapContextMenuState {
   x: number;
@@ -1185,8 +1190,10 @@ export interface MapContextMenuProps {
   onDeleteLocation: (locId: string) => void;
   onDeleteContainer: (contId: string) => void;
   onEditEdgeDistance: (edgeId: string) => void;
+  onEditEdgeDetails?: (edgeId: string, groupedEdgeIds?: string[]) => void;
   onToggleEdgeLocked: (edgeId: string) => void;
   onDeleteEdge: (edgeId: string) => void;
+  onDeleteEdgeGroup?: (edgeIds: string[]) => void;
 }
 
 const menuItemStyle = (disabled = false, danger = false): React.CSSProperties => ({
@@ -1228,8 +1235,10 @@ export const MapContextMenu: React.FC<MapContextMenuProps> = ({
   onDeleteLocation,
   onDeleteContainer,
   onEditEdgeDistance,
+  onEditEdgeDetails,
   onToggleEdgeLocked,
   onDeleteEdge,
+  onDeleteEdgeGroup,
 }) => {
   if (!menu) return null;
 
@@ -1426,58 +1435,125 @@ export const MapContextMenu: React.FC<MapContextMenuProps> = ({
         );
       })()}
 
-      {edge && (
-        <>
-          <div
-            style={{
-              padding: "3px 9px 5px",
-              fontSize: "0.68rem",
-              fontWeight: 700,
-              color: "#67e8f9",
-              borderBottom: "1px solid var(--border-subtle)",
-              marginBottom: 2,
-            }}
-          >
-            Passage ({edge.travel_minutes}m)
-          </div>
-          <button
-            type="button"
-            style={menuItemStyle()}
-            onClick={() => {
-              onEditEdgeDistance(edge.id);
-              onClose();
-            }}
-          >
-            <Clock size={13} color="#22d3ee" />
-            <span>Edit Travel Minutes</span>
-          </button>
-          <button
-            type="button"
-            style={menuItemStyle()}
-            onClick={() => {
-              onToggleEdgeLocked(edge.id);
-              onClose();
-            }}
-          >
-            {edge.is_locked_or_hidden ? <Unlock size={13} /> : <Lock size={13} />}
-            <span>
-              {edge.is_locked_or_hidden ? "Mark Accessible" : "Mark Locked / Hidden"}
-            </span>
-          </button>
-          <div style={{ borderTop: "1px solid var(--border-subtle)", margin: "2px 0" }} />
-          <button
-            type="button"
-            style={menuItemStyle(false, true)}
-            onClick={() => {
-              onDeleteEdge(edge.id);
-              onClose();
-            }}
-          >
-            <Trash2 size={13} />
-            <span>Delete Passage</span>
-          </button>
-        </>
-      )}
+      {edge && target.kind === "edge" && (() => {
+        const isMultiBundle =
+          Boolean(target.pairCount && target.pairCount > 1) &&
+          Boolean(target.groupedEdgeIds && target.groupedEdgeIds.length > 1);
+        if (isMultiBundle) {
+          const bundleIds = target.groupedEdgeIds!;
+          return (
+            <>
+              <div
+                style={{
+                  padding: "3px 9px 5px",
+                  fontSize: "0.68rem",
+                  fontWeight: 700,
+                  color: "#67e8f9",
+                  borderBottom: "1px solid var(--border-subtle)",
+                  marginBottom: 2,
+                }}
+              >
+                Boundary Passages ({target.pairCount})
+              </div>
+              {onEditEdgeDetails && (
+                <button
+                  type="button"
+                  style={menuItemStyle()}
+                  onClick={() => {
+                    onEditEdgeDetails(edge.id, bundleIds);
+                    onClose();
+                  }}
+                >
+                  <Pencil size={13} color="#22d3ee" />
+                  <span>Manage Boundary Passages ({target.pairCount})...</span>
+                </button>
+              )}
+              {onDeleteEdgeGroup && (
+                <>
+                  <div style={{ borderTop: "1px solid var(--border-subtle)", margin: "2px 0" }} />
+                  <button
+                    type="button"
+                    style={menuItemStyle(false, true)}
+                    onClick={() => {
+                      onDeleteEdgeGroup(bundleIds);
+                      onClose();
+                    }}
+                  >
+                    <Trash2 size={13} />
+                    <span>Delete All {target.pairCount} Passages</span>
+                  </button>
+                </>
+              )}
+            </>
+          );
+        }
+
+        return (
+          <>
+            <div
+              style={{
+                padding: "3px 9px 5px",
+                fontSize: "0.68rem",
+                fontWeight: 700,
+                color: "#67e8f9",
+                borderBottom: "1px solid var(--border-subtle)",
+                marginBottom: 2,
+              }}
+            >
+              Passage ({edge.travel_minutes}m)
+            </div>
+            {onEditEdgeDetails && (
+              <button
+                type="button"
+                style={menuItemStyle()}
+                onClick={() => {
+                  onEditEdgeDetails(edge.id, target.groupedEdgeIds);
+                  onClose();
+                }}
+              >
+                <Pencil size={13} color="#22d3ee" />
+                <span>Edit Passage Labels &amp; Details...</span>
+              </button>
+            )}
+            <button
+              type="button"
+              style={menuItemStyle()}
+              onClick={() => {
+                onEditEdgeDistance(edge.id);
+                onClose();
+              }}
+            >
+              <Clock size={13} color="#22d3ee" />
+              <span>Edit Travel Minutes</span>
+            </button>
+            <button
+              type="button"
+              style={menuItemStyle()}
+              onClick={() => {
+                onToggleEdgeLocked(edge.id);
+                onClose();
+              }}
+            >
+              {edge.is_locked_or_hidden ? <Unlock size={13} /> : <Lock size={13} />}
+              <span>
+                {edge.is_locked_or_hidden ? "Mark Accessible" : "Mark Locked / Hidden"}
+              </span>
+            </button>
+            <div style={{ borderTop: "1px solid var(--border-subtle)", margin: "2px 0" }} />
+            <button
+              type="button"
+              style={menuItemStyle(false, true)}
+              onClick={() => {
+                onDeleteEdge(edge.id);
+                onClose();
+              }}
+            >
+              <Trash2 size={13} />
+              <span>Delete Passage</span>
+            </button>
+          </>
+        );
+      })()}
     </div>
   );
 };
@@ -1485,8 +1561,17 @@ export const MapContextMenu: React.FC<MapContextMenuProps> = ({
 export interface MultiEdgePopoverProps {
   edges: LocationEdge[] | null;
   locationMap: Map<string, LocationNode>;
+  isMutatingLocked?: boolean;
   onClose: () => void;
   onUpdateDistance: (edgeId: string, minutes: number) => void;
+  onUpdateLabel?: (edgeId: string, directionLabel: string) => void;
+  onCommitEdgeEdits?: (
+    updates: Array<{
+      edgeId: string;
+      travelMinutes?: number;
+      directionLabel?: string;
+    }>
+  ) => void;
   onToggleLocked: (edgeId: string) => void;
   onDeleteEdge: (edgeId: string) => void;
 }
@@ -1494,8 +1579,11 @@ export interface MultiEdgePopoverProps {
 export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
   edges,
   locationMap,
+  isMutatingLocked = false,
   onClose,
   onUpdateDistance,
+  onUpdateLabel,
+  onCommitEdgeEdits,
   onToggleLocked,
   onDeleteEdge,
 }) => {
@@ -1503,11 +1591,17 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
     Record<string, string>
   >({});
   const lastSyncedMinutesRef = useRef<Record<string, number>>({});
+  const [draftLabelsById, setDraftLabelsById] = useState<
+    Record<string, string>
+  >({});
+  const lastSyncedLabelsRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
     if (!edges || edges.length === 0) {
       setDraftMinutesById({});
       lastSyncedMinutesRef.current = {};
+      setDraftLabelsById({});
+      lastSyncedLabelsRef.current = {};
       return;
     }
     setDraftMinutesById((prev) => {
@@ -1525,11 +1619,27 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
       lastSyncedMinutesRef.current = nextSynced;
       return next;
     });
+    setDraftLabelsById((prev) => {
+      const next: Record<string, string> = {};
+      const nextSynced: Record<string, string> = {};
+      for (const edge of edges) {
+        const prevSynced = lastSyncedLabelsRef.current[edge.id];
+        if (prev[edge.id] === undefined || prevSynced !== edge.direction_label) {
+          next[edge.id] = edge.direction_label;
+        } else {
+          next[edge.id] = prev[edge.id];
+        }
+        nextSynced[edge.id] = edge.direction_label;
+      }
+      lastSyncedLabelsRef.current = nextSynced;
+      return next;
+    });
   }, [edges]);
 
   if (!edges || edges.length === 0) return null;
 
   const commitRowMinutes = (edge: LocationEdge, explicitDraft?: string) => {
+    if (isMutatingLocked) return;
     const rawDraft =
       explicitDraft ?? draftMinutesById[edge.id] ?? String(edge.travel_minutes);
     const committed = parseCommittedEdgeMinutes(rawDraft);
@@ -1544,13 +1654,65 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
     }));
   };
 
+  const commitRowLabel = (edge: LocationEdge, explicitDraft?: string) => {
+    if (isMutatingLocked) return;
+    const rawDraft =
+      explicitDraft ?? draftLabelsById[edge.id] ?? edge.direction_label;
+    const trimmed = rawDraft.trim();
+    const normalized = trimmed || edge.direction_label;
+    if (trimmed && trimmed !== edge.direction_label) {
+      onUpdateLabel?.(edge.id, trimmed);
+    }
+    lastSyncedLabelsRef.current[edge.id] = normalized;
+    setDraftLabelsById((prev) => ({
+      ...prev,
+      [edge.id]: normalized,
+    }));
+  };
+
   const handleClosePopover = () => {
-    for (const edge of edges) {
-      const draft = draftMinutesById[edge.id];
-      if (draft !== undefined) {
-        const committed = parseCommittedEdgeMinutes(draft);
-        if (committed !== null && committed !== edge.travel_minutes) {
-          onUpdateDistance(edge.id, committed);
+    if (!isMutatingLocked) {
+      const batchUpdates: Array<{
+        edgeId: string;
+        travelMinutes?: number;
+        directionLabel?: string;
+      }> = [];
+      for (const edge of edges) {
+        const minDraft = draftMinutesById[edge.id];
+        const committedMin =
+          minDraft !== undefined ? parseCommittedEdgeMinutes(minDraft) : null;
+        const nextMin =
+          committedMin !== null && committedMin !== edge.travel_minutes
+            ? committedMin
+            : undefined;
+
+        const lblDraft = draftLabelsById[edge.id];
+        const trimmedLbl = lblDraft !== undefined ? lblDraft.trim() : "";
+        const nextLbl =
+          trimmedLbl && trimmedLbl !== edge.direction_label
+            ? trimmedLbl
+            : undefined;
+
+        if (nextMin !== undefined || nextLbl !== undefined) {
+          batchUpdates.push({
+            edgeId: edge.id,
+            travelMinutes: nextMin,
+            directionLabel: nextLbl,
+          });
+        }
+      }
+      if (batchUpdates.length > 0) {
+        if (onCommitEdgeEdits) {
+          onCommitEdgeEdits(batchUpdates);
+        } else {
+          for (const upd of batchUpdates) {
+            if (upd.travelMinutes !== undefined) {
+              onUpdateDistance(upd.edgeId, upd.travelMinutes);
+            }
+            if (upd.directionLabel !== undefined) {
+              onUpdateLabel?.(upd.edgeId, upd.directionLabel);
+            }
+          }
         }
       }
     }
@@ -1579,7 +1741,7 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
     >
       <div
         style={{
-          width: "min(460px, 95%)",
+          width: "min(520px, 95%)",
           background: "var(--bg-card)",
           border: "1px solid var(--border-subtle)",
           borderRadius: 8,
@@ -1620,12 +1782,14 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
             const toName = locationMap.get(e.to_location_id)?.name ?? e.to_location_id;
             const draftValue =
               draftMinutesById[e.id] ?? String(e.travel_minutes);
+            const draftLabel =
+              draftLabelsById[e.id] ?? e.direction_label;
             return (
               <div
                 key={e.id}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1fr 72px auto auto",
+                  gridTemplateColumns: "1fr 68px auto auto",
                   gap: 6,
                   alignItems: "center",
                   background: "var(--bg-panel)",
@@ -1635,12 +1799,56 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
                   fontSize: "0.73rem",
                 }}
               >
-                <div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
                   <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>
                     {fromName} → {toName}
                   </div>
-                  <div style={{ color: "var(--text-muted)", fontSize: "0.68rem" }}>
-                    [{e.compass_direction || "?"}] {e.direction_label}
+                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                    <span
+                      style={{
+                        color: "var(--accent-cyan)",
+                        fontSize: "0.66rem",
+                        fontWeight: 700,
+                        flexShrink: 0,
+                      }}
+                    >
+                      [{e.compass_direction || "?"}]
+                    </span>
+                    <input
+                      type="text"
+                      aria-label={`Passage label for ${fromName} to ${toName}`}
+                      className="field-input"
+                      disabled={isMutatingLocked}
+                      style={{
+                        padding: "2px 6px",
+                        fontSize: "0.7rem",
+                        minWidth: 0,
+                        width: "100%",
+                      }}
+                      value={draftLabel}
+                      onChange={(ev) => {
+                        const val = ev.target.value;
+                        setDraftLabelsById((prev) => ({
+                          ...prev,
+                          [e.id]: val,
+                        }));
+                      }}
+                      onBlur={() => commitRowLabel(e)}
+                      onKeyDown={(ev) => {
+                        if (ev.key === "Enter") {
+                          ev.preventDefault();
+                          ev.stopPropagation();
+                          commitRowLabel(e);
+                        } else if (ev.key === "Escape") {
+                          ev.preventDefault();
+                          ev.stopPropagation();
+                          setDraftLabelsById((prev) => ({
+                            ...prev,
+                            [e.id]: e.direction_label,
+                          }));
+                        }
+                      }}
+                    />
                   </div>
                 </div>
                 <input
@@ -1648,6 +1856,7 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
                   inputMode="numeric"
                   aria-label={`Travel minutes for ${fromName} to ${toName}`}
                   className="field-input"
+                  disabled={isMutatingLocked}
                   style={{
                     padding: "3px 6px",
                     fontSize: "0.73rem",
@@ -1702,6 +1911,7 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
                 <button
                   type="button"
                   className="btn"
+                  disabled={isMutatingLocked}
                   style={{ padding: "4px 6px" }}
                   title={e.is_locked_or_hidden ? "Locked / Hidden" : "Accessible"}
                   onClick={() => onToggleLocked(e.id)}
@@ -1715,6 +1925,7 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
                 <button
                   type="button"
                   className="item-remove-btn"
+                  disabled={isMutatingLocked}
                   title="Delete passage"
                   onClick={() => onDeleteEdge(e.id)}
                 >
