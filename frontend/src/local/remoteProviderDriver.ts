@@ -33,24 +33,124 @@ export class RemoteDriverError extends Error {
   }
 }
 
+function isBlockedLiteralHost(host: string): boolean {
+  const bare = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+  if (bare === "0.0.0.0" || bare === "::" || bare === "0:0:0:0:0:0:0:0") {
+    return true;
+  }
+  if (bare.startsWith("169.254.") || /^fe[89ab][0-9a-f]:/i.test(bare)) {
+    return true;
+  }
+  // WHATWG URL normalizes IPv4-mapped IPv6 literals to ::ffff:XXXX:YYYY
+  if (bare === "::ffff:0:0" || /^::ffff:a9fe:/i.test(bare)) {
+    return true;
+  }
+  return false;
+}
+
 export function normalizeRemoteBaseUrl(
   type: ProviderType | "ollama" | "openrouter" | "aihorde",
   rawUrl?: string | null
 ): string {
-  const trimmed = (rawUrl ?? "").trim().replace(/\/+$/, "");
+  const trimmed = (rawUrl ?? "").trim();
+  if (!trimmed) {
+    if (type === "openrouter") {
+      return "https://openrouter.ai/api/v1";
+    }
+    if (type === "aihorde") {
+      return "https://oai.stablehorde.net/v1";
+    }
+    throw new RemoteDriverError("invalid_url", "Server URL is required.");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new RemoteDriverError("invalid_url", "Server URL is not a valid URL.");
+  }
+
+  if (type === "openrouter" || type === "aihorde") {
+    if (parsed.protocol !== "https:") {
+      throw new RemoteDriverError("invalid_url", "Cloud provider URL must use https://.");
+    }
+  } else if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new RemoteDriverError("invalid_url", "Server URL must use http:// or https://.");
+  }
+  const protocol = parsed.protocol === "https:" ? "https:" : "http:";
+
+  if (parsed.username || parsed.password) {
+    throw new RemoteDriverError(
+      "invalid_url",
+      "Credentials in the URL are not allowed; use the API key field."
+    );
+  }
+  if (parsed.search || parsed.hash) {
+    throw new RemoteDriverError(
+      "invalid_url",
+      "Server URL must not contain a query string or fragment."
+    );
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  if (!host) {
+    throw new RemoteDriverError("invalid_url", "Server URL has no host.");
+  }
+  if (isBlockedLiteralHost(host)) {
+    throw new RemoteDriverError(
+      "blocked_by_policy",
+      "Link-local, metadata, or unspecified addresses are not allowed."
+    );
+  }
+
+  let portSuffix = "";
+  if (parsed.port) {
+    const portNum = Number.parseInt(parsed.port, 10);
+    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535 || String(portNum) !== parsed.port) {
+      throw new RemoteDriverError("invalid_url", "Server URL has an invalid port.");
+    }
+    portSuffix = `:${portNum}`;
+  }
+
+  const schemeEnd = trimmed.indexOf("://");
+  const afterScheme = schemeEnd >= 0 ? trimmed.slice(schemeEnd + 3) : "";
+  const pathStart = afterScheme.search(/[/?#]/);
+  const rawPath = pathStart >= 0 ? afterScheme.slice(pathStart).split(/[?#]/, 1)[0] : "";
+  const segments = rawPath.split("/");
+  if (
+    segments.some((seg) => {
+      const lower = seg.toLowerCase();
+      return (
+        lower === "." ||
+        lower === ".." ||
+        lower === "%2e" ||
+        lower === "%2e%2e" ||
+        lower === ".%2e" ||
+        lower === "%2e."
+      );
+    })
+  ) {
+    throw new RemoteDriverError("invalid_url", "Server URL must not contain path traversal segments.");
+  }
+
+  let path = parsed.pathname.replace(/\/+$/, "");
   if (type === "openrouter") {
-    return trimmed || "https://openrouter.ai/api/v1";
+    if (!path) {
+      path = "/api/v1";
+    }
+  } else if (type === "aihorde") {
+    if (!path || !path.endsWith("/v1")) {
+      path = path ? `${path}/v1` : "/v1";
+    }
+  } else {
+    if (path.endsWith("/v1")) {
+      path = path.slice(0, -3).replace(/\/+$/, "");
+    } else if (path.endsWith("/api")) {
+      path = path.slice(0, -4).replace(/\/+$/, "");
+    }
   }
-  if (type === "aihorde") {
-    return trimmed || "https://oai.stablehorde.net/v1";
-  }
-  let cleaned = trimmed;
-  if (cleaned.endsWith("/v1")) {
-    cleaned = cleaned.slice(0, -3).replace(/\/+$/, "");
-  } else if (cleaned.endsWith("/api")) {
-    cleaned = cleaned.slice(0, -4).replace(/\/+$/, "");
-  }
-  return cleaned;
+
+  return `${protocol}//${host}${portSuffix}${path}`;
 }
 
 function bearerHeaders(token?: string | null): Record<string, string> {
@@ -196,20 +296,23 @@ export async function probeRemoteProvider(opts: {
   configVersion?: number;
   signal?: AbortSignal;
 }): Promise<ProviderProbeResponse> {
-  const root = normalizeRemoteBaseUrl(opts.type, opts.baseUrl);
-  const cleanToken = (opts.token ?? "").trim();
-
-  if (!root) {
+  let root: string;
+  try {
+    root = normalizeRemoteBaseUrl(opts.type, opts.baseUrl);
+  } catch (err) {
+    const code = err instanceof RemoteDriverError ? err.code : "invalid_url";
+    const message = err instanceof Error ? err.message : "Invalid server URL.";
     return buildProbeResponse({
       providerId: opts.providerId,
       reachable: false,
       protocol: null,
       models: [],
-      errorCode: "invalid_url",
-      error: "Server URL is required.",
+      errorCode: code === "blocked_by_policy" ? "blocked_by_policy" : "invalid_url",
+      error: message,
       configVersion: opts.configVersion,
     });
   }
+  const cleanToken = (opts.token ?? "").trim();
 
   const timeoutCtrl = new AbortController();
   const timer = setTimeout(() => timeoutCtrl.abort(), 5000);

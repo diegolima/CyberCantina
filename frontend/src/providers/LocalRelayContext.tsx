@@ -90,6 +90,8 @@ export const LocalRelayProvider: React.FC<{
   const inflightRef = useRef<Map<string, AbortController>>(new Map());
   const mountedRef = useRef(true);
   const webgpuCapRef = useRef<{ supported: boolean; reason?: string }>({ supported: false });
+  const allProvidersRef = useRef<LLMProvider[]>([]);
+  allProvidersRef.current = allProviders;
 
   const hasBrowserProviders = allProviders.some(
     (p) =>
@@ -115,6 +117,7 @@ export const LocalRelayProvider: React.FC<{
         new Set(list.map((p) => p.id))
       );
       setAllProviders(list);
+      allProvidersRef.current = list;
       setBrowserProviders(
         list.filter((p) => p.type === "browser_ollama" || p.type === "webgpu")
       );
@@ -222,6 +225,80 @@ export const LocalRelayProvider: React.FC<{
       }
     };
 
+    const resolveAuthorizedRemoteBaseUrl = async (
+      providerId: string | null | undefined,
+      driver: "ollama" | "openrouter" | "aihorde"
+    ): Promise<string | null> => {
+      if (!providerId) {
+        throw new RemoteDriverError("invalid_url", "Remote relay request is missing provider_id.");
+      }
+      const match = (list: LLMProvider[]) =>
+        list.find(
+          (p) =>
+            p.id === providerId &&
+            p.is_enabled &&
+            p.type === driver &&
+            p.credential_storage === "browser"
+        );
+      let provider = match(allProvidersRef.current);
+      if (!provider) {
+        try {
+          const refreshed = await api.listProviders();
+          if (mountedRef.current) {
+            setAllProviders(refreshed);
+            setBrowserProviders(
+              refreshed.filter((p) => p.type === "browser_ollama" || p.type === "webgpu")
+            );
+          }
+          allProvidersRef.current = refreshed;
+          provider = match(refreshed);
+        } catch {
+          // fall through to rejection below
+        }
+      }
+      if (!provider) {
+        throw new RemoteDriverError(
+          "blocked_by_policy",
+          "Provider is not registered for browser-credentialed relay on this account."
+        );
+      }
+      return provider.base_url;
+    };
+
+    const executeLlmDispatch = async (
+      req: RelayLlmRequest,
+      emitChunk: (delta: string) => void,
+      signal: AbortSignal
+    ) => {
+      if (req.driver === "webgpu") {
+        return webGpuDriver.run(req, emitChunk, signal);
+      }
+      if (req.driver === "browser_ollama") {
+        return runBrowserOllamaChat(req, emitChunk, signal);
+      }
+      if (req.driver !== "ollama" && req.driver !== "openrouter" && req.driver !== "aihorde") {
+        throw new RemoteDriverError("inference_failed", "Unsupported relay driver.");
+      }
+      const remoteDriver = req.driver;
+      const authorizedBaseUrl = await resolveAuthorizedRemoteBaseUrl(
+        req.provider_id,
+        remoteDriver
+      );
+      const token = getProviderCredential(activeUserId, req.provider_id);
+      const cleanReq: RelayLlmRequest = {
+        type: "llm.request",
+        request_id: String(req.request_id || ""),
+        driver: remoteDriver,
+        provider_id: req.provider_id ?? null,
+        mode: req.mode === "stream" ? "stream" : "complete",
+        base_url: authorizedBaseUrl ?? undefined,
+        model: String(req.model || ""),
+        messages: Array.isArray(req.messages) ? req.messages : [],
+        options: req.options,
+      };
+      return runRemoteProviderChat(cleanReq, token, emitChunk, signal);
+    };
+
     const handleLlmRequest = async (ws: WebSocket, req: RelayLlmRequest) => {
       const controller = new AbortController();
       inflightRef.current.set(req.request_id, controller);
@@ -230,15 +307,7 @@ export const LocalRelayProvider: React.FC<{
         const emitChunk = (delta: string) => {
           sendJson(ws, { type: "llm.chunk", request_id: req.request_id, delta });
         };
-        let result;
-        if (req.driver === "webgpu") {
-          result = await webGpuDriver.run(req, emitChunk, controller.signal);
-        } else if (req.driver === "browser_ollama") {
-          result = await runBrowserOllamaChat(req, emitChunk, controller.signal);
-        } else {
-          const token = getProviderCredential(activeUserId, req.provider_id);
-          result = await runRemoteProviderChat(req, token, emitChunk, controller.signal);
-        }
+        const result = await executeLlmDispatch(req, emitChunk, controller.signal);
 
         sendJson(ws, {
           type: "llm.done",
@@ -310,12 +379,34 @@ export const LocalRelayProvider: React.FC<{
         return;
       }
 
+      const remoteDriver = req.driver as "ollama" | "openrouter" | "aihorde";
+      let authorizedBaseUrl: string | null = null;
+      try {
+        authorizedBaseUrl = await resolveAuthorizedRemoteBaseUrl(req.provider_id, remoteDriver);
+      } catch (err) {
+        const code = err instanceof RemoteDriverError ? err.code : "blocked_by_policy";
+        const message =
+          err instanceof Error
+            ? err.message
+            : "Provider is not authorized for browser-credentialed relay.";
+        sendJson(ws, {
+          type: "probe.result",
+          request_id: req.request_id,
+          reachable: false,
+          protocol: null,
+          models: [],
+          error_code: code,
+          error: message,
+        });
+        return;
+      }
+
       const token = getProviderCredential(activeUserId, req.provider_id);
       const res = await probeRemoteProvider({
-        type: req.driver as "ollama" | "openrouter" | "aihorde",
-        baseUrl: req.base_url,
+        type: remoteDriver,
+        baseUrl: authorizedBaseUrl,
         token,
-        requireToken: req.driver === "openrouter" || req.driver === "aihorde",
+        requireToken: remoteDriver === "openrouter" || remoteDriver === "aihorde",
         providerId: req.provider_id,
       });
       sendJson(ws, {

@@ -7,6 +7,7 @@ import {
   setProviderCredential,
 } from "../credentialVault";
 import {
+  normalizeRemoteBaseUrl,
   probeRemoteProvider,
   RemoteDriverError,
   runRemoteProviderChat,
@@ -206,5 +207,69 @@ describe("remoteProviderDriver", () => {
         () => {}
       )
     ).rejects.toBeInstanceOf(RemoteDriverError);
+  });
+
+  it("normalizes valid remote URLs and rejects unsafe schemes, credentials, queries, fragments, traversal, and metadata IPs", async () => {
+    expect(normalizeRemoteBaseUrl("openrouter", "")).toBe("https://openrouter.ai/api/v1");
+    expect(normalizeRemoteBaseUrl("openrouter", "https://openrouter.ai")).toBe("https://openrouter.ai/api/v1");
+    expect(normalizeRemoteBaseUrl("aihorde", "https://oai.stablehorde.net")).toBe("https://oai.stablehorde.net/v1");
+    expect(normalizeRemoteBaseUrl("ollama", "https://ollama.example.com:8443/v1/")).toBe(
+      "https://ollama.example.com:8443"
+    );
+    expect(normalizeRemoteBaseUrl("ollama", "http://192.168.1.50:11434/api")).toBe(
+      "http://192.168.1.50:11434"
+    );
+
+    const invalidCases: Array<{ type: "ollama" | "openrouter" | "aihorde"; url: string }> = [
+      { type: "ollama", url: "" },
+      { type: "ollama", url: "not-a-url" },
+      { type: "ollama", url: "javascript:alert(1)" },
+      { type: "ollama", url: "ftp://ollama.example.com" },
+      { type: "openrouter", url: "http://openrouter.ai/api/v1" },
+      { type: "aihorde", url: "http://oai.stablehorde.net/v1" },
+      { type: "ollama", url: "https://user:pass@ollama.example.com" },
+      { type: "openrouter", url: "https://openrouter.ai/api/v1?x=1" },
+      { type: "openrouter", url: "https://openrouter.ai/api/v1#frag" },
+      { type: "ollama", url: "https://ollama.example.com/../secret" },
+      { type: "ollama", url: "http://169.254.169.254/latest/meta-data" },
+      { type: "ollama", url: "http://0.0.0.0:11434" },
+      { type: "ollama", url: "http://[::ffff:169.254.169.254]:11434" },
+      { type: "ollama", url: "http://[fe80::1]:11434" },
+    ];
+
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (const c of invalidCases) {
+      expect(() => normalizeRemoteBaseUrl(c.type, c.url)).toThrow(RemoteDriverError);
+
+      const probe = await probeRemoteProvider({
+        type: c.type,
+        baseUrl: c.url,
+        token: "tok-secret",
+      });
+      expect(probe.reachable).toBe(false);
+      expect(["invalid_url", "blocked_by_policy"]).toContain(probe.error_code);
+
+      await expect(
+        runRemoteProviderChat(
+          {
+            type: "llm.request",
+            request_id: "r-bad-url",
+            driver: c.type,
+            provider_id: "prov_bad",
+            mode: "complete",
+            base_url: c.url,
+            model: "test-model",
+            messages: [{ role: "user", content: "hi" }],
+            options: { temperature: 0.7, max_tokens: 64 },
+          },
+          "tok-secret",
+          () => {}
+        )
+      ).rejects.toBeInstanceOf(RemoteDriverError);
+    }
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

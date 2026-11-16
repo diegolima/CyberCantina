@@ -122,12 +122,16 @@ async def update_settings(
             confirm_credential_purge=confirm_credential_purge,
         )
     except CredentialPurgeRequiredError as exc:
+        msg = (
+            f"Enabling Browser Only will purge stored credentials from "
+            f"{exc.affected_providers} personal provider(s) across {exc.affected_users} user(s)."
+        )
         return JSONResponse(
             status_code=409,
             content={
                 "detail": {
                     "code": "user_credentials_purge_required",
-                    "message": str(exc),
+                    "message": msg,
                     "affected_providers": exc.affected_providers,
                     "affected_users": exc.affected_users,
                 }
