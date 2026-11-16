@@ -1,13 +1,24 @@
 import React, { useEffect, useState } from "react";
-import { AlertTriangle, Fingerprint, KeyRound, Lock } from "lucide-react";
+import {
+  AlertTriangle,
+  Fingerprint,
+  Info,
+  KeyRound,
+  Lock,
+  LogIn,
+  UserPlus,
+} from "lucide-react";
 import { api } from "../../api";
 import { AuthSessionResponse } from "../../types";
+import { PasswordField } from "./PasswordField";
 
 export interface AuthScreenProps {
   singleUserMode: boolean;
   allowSelfRegistration?: boolean;
   onAuthenticated: (res: AuthSessionResponse) => void;
 }
+
+type InvalidAuthField = "username" | "password" | "confirmPassword" | null;
 
 export const AuthScreen: React.FC<AuthScreenProps> = ({
   singleUserMode,
@@ -21,29 +32,43 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const [confirmPassword, setConfirmPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [invalidField, setInvalidField] = useState<InvalidAuthField>(null);
+
+  const showModeTabs = !singleUserMode && allowSelfRegistration;
 
   useEffect(() => {
     if (!allowSelfRegistration && mode === "register") {
       setMode("login");
+      setInvalidField(null);
     }
   }, [allowSelfRegistration, mode]);
+
+  const switchMode = (nextMode: "login" | "register") => {
+    setMode(nextMode);
+    setError(null);
+    setInvalidField(null);
+  };
 
   const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setInvalidField(null);
 
     if (!username.trim()) {
       setError("Username is required.");
+      setInvalidField("username");
       return;
     }
 
     if (mode === "register") {
       if (!password) {
         setError("Password is required.");
+        setInvalidField("password");
         return;
       }
       if (password !== confirmPassword) {
         setError("Passwords do not match.");
+        setInvalidField("confirmPassword");
         return;
       }
     }
@@ -73,6 +98,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
   const handlePasskeyLogin = async () => {
     setError(null);
+    setInvalidField(null);
     setBusy(true);
     try {
       const res = await api.loginWithPasskey(username.trim() || undefined);
@@ -96,107 +122,165 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
           </span>
         </div>
 
-        <div className="modal-body" style={{ gap: 14 }}>
-          {!singleUserMode && allowSelfRegistration && (
-            <div className="Inspector-tabs" style={{ marginBottom: 4 }}>
-              <button
-                type="button"
-                className={`tab-btn ${mode === "login" ? "active" : ""}`}
-                onClick={() => {
-                  setMode("login");
-                  setError(null);
-                }}
-              >
-                Sign In
-              </button>
-              <button
-                type="button"
-                className={`tab-btn ${mode === "register" ? "active" : ""}`}
-                onClick={() => {
-                  setMode("register");
-                  setError(null);
-                }}
-              >
-                Create Account
-              </button>
-            </div>
-          )}
-
-          {!singleUserMode && !allowSelfRegistration && (
-            <div
-              style={{
-                padding: "8px 10px",
-                borderRadius: 6,
-                background: "rgba(56, 189, 248, 0.08)",
-                border: "1px solid rgba(56, 189, 248, 0.25)",
-                fontSize: "0.76rem",
-                color: "var(--text-secondary)",
-              }}
+        {showModeTabs && (
+          <div
+            className="modal-tabs"
+            role="tablist"
+            aria-label="Authentication mode"
+          >
+            <button
+              id="auth-tab-login"
+              type="button"
+              role="tab"
+              aria-selected={mode === "login"}
+              aria-controls="auth-mode-panel"
+              className={`modal-tab-btn ${mode === "login" ? "active" : ""}`}
+              disabled={busy}
+              onClick={() => switchMode("login")}
             >
-              Self-registration is currently disabled. Sign in with an account
-              created by the server administrator.
+              <LogIn size={14} />
+              <span>Sign In</span>
+            </button>
+            <button
+              id="auth-tab-register"
+              type="button"
+              role="tab"
+              aria-selected={mode === "register"}
+              aria-controls="auth-mode-panel"
+              className={`modal-tab-btn ${mode === "register" ? "active" : ""}`}
+              disabled={busy}
+              onClick={() => switchMode("register")}
+            >
+              <UserPlus size={14} />
+              <span>Create Account</span>
+            </button>
+          </div>
+        )}
+
+        <div
+          id="auth-mode-panel"
+          className="modal-body"
+          role={showModeTabs ? "tabpanel" : undefined}
+          aria-labelledby={
+            showModeTabs
+              ? mode === "login"
+                ? "auth-tab-login"
+                : "auth-tab-register"
+              : undefined
+          }
+          style={{ gap: 14 }}
+        >
+          {!singleUserMode && !allowSelfRegistration && (
+            <div className="auth-alert auth-alert-info">
+              <Info size={15} style={{ flexShrink: 0 }} />
+              <span>
+                Self-registration is currently disabled. Sign in with an account
+                created by the server administrator.
+              </span>
             </div>
           )}
 
           {error && (
-            <div className="auth-alert auth-alert-error">
-              <AlertTriangle size={15} />
+            <div
+              id="auth-form-error"
+              className="auth-alert auth-alert-error"
+              role="alert"
+              aria-live="assertive"
+            >
+              <AlertTriangle size={15} style={{ flexShrink: 0 }} />
               <span>{error}</span>
             </div>
           )}
 
           <form
             onSubmit={handlePasswordSubmit}
+            noValidate
             style={{ display: "flex", flexDirection: "column", gap: 12 }}
           >
-            <div className="form-group">
-              <label className="form-label">Username</label>
+            <div className="field-group">
+              <label htmlFor="auth-username">Username</label>
               <input
+                id="auth-username"
                 type="text"
-                className="form-input"
+                className="field-input"
                 value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                onChange={(e) => {
+                  setUsername(e.target.value);
+                  if (invalidField === "username") {
+                    setInvalidField(null);
+                    setError(null);
+                  }
+                }}
                 placeholder="Enter your username..."
+                autoComplete="username"
+                disabled={busy}
                 autoFocus
                 required
+                aria-invalid={invalidField === "username" || undefined}
+                aria-describedby={
+                  invalidField === "username" && error
+                    ? "auth-form-error"
+                    : undefined
+                }
               />
             </div>
 
             {mode === "register" && (
-              <div className="form-group">
-                <label className="form-label">Display Name</label>
+              <div className="field-group">
+                <label htmlFor="auth-display-name">Display Name</label>
                 <input
+                  id="auth-display-name"
                   type="text"
-                  className="form-input"
+                  className="field-input"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
                   placeholder="How your name appears in the studio..."
+                  autoComplete="name"
+                  disabled={busy}
                 />
               </div>
             )}
 
-            <div className="form-group">
-              <label className="form-label">Password</label>
-              <input
-                type="password"
-                className="form-input"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter password..."
-              />
-            </div>
+            <PasswordField
+              id="auth-password"
+              label="Password"
+              value={password}
+              onChange={(e) => {
+                setPassword(e.target.value);
+                if (invalidField === "password") {
+                  setInvalidField(null);
+                  setError(null);
+                }
+              }}
+              placeholder="Enter password..."
+              autoComplete={mode === "login" ? "current-password" : "new-password"}
+              disabled={busy}
+              required={mode === "register"}
+              invalid={invalidField === "password"}
+              describedBy="auth-form-error"
+              resetKey={mode}
+            />
 
             {mode === "register" && (
-              <div className="form-group">
-                <label className="form-label">Confirm Password</label>
-                <input
-                  type="password"
-                  className="form-input"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Confirm password..."
-                />
-              </div>
+              <PasswordField
+                id="auth-confirm-password"
+                label="Confirm Password"
+                value={confirmPassword}
+                onChange={(e) => {
+                  setConfirmPassword(e.target.value);
+                  if (invalidField === "confirmPassword") {
+                    setInvalidField(null);
+                    setError(null);
+                  }
+                }}
+                placeholder="Confirm password..."
+                autoComplete="new-password"
+                disabled={busy}
+                required
+                invalid={invalidField === "confirmPassword"}
+                describedBy="auth-form-error"
+                resetKey={mode}
+              />
             )}
 
             <button
@@ -204,6 +288,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               className="btn btn-amber"
               style={{ width: "100%", marginTop: 4 }}
               disabled={busy}
+              aria-busy={busy}
             >
               <KeyRound size={15} />
               <span>
@@ -218,37 +303,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
           {mode === "login" && (
             <>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  margin: "2px 0",
-                }}
-              >
-                <div
-                  style={{
-                    flex: 1,
-                    height: 1,
-                    background: "var(--border-subtle)",
-                  }}
-                />
-                <span
-                  style={{
-                    fontSize: "0.7rem",
-                    color: "var(--text-muted)",
-                    textTransform: "uppercase",
-                  }}
-                >
-                  or
-                </span>
-                <div
-                  style={{
-                    flex: 1,
-                    height: 1,
-                    background: "var(--border-subtle)",
-                  }}
-                />
+              <div className="auth-divider">
+                <span>or</span>
               </div>
 
               <button
@@ -257,6 +313,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 style={{ width: "100%" }}
                 onClick={handlePasskeyLogin}
                 disabled={busy}
+                aria-busy={busy}
               >
                 <Fingerprint size={16} />
                 <span>Sign In with Passkey</span>

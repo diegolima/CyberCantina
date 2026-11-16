@@ -2,6 +2,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { AuthScreen } from "../auth/AuthScreen";
+import { InitialSetupScreen } from "../auth/InitialSetupScreen";
 import { AdminServerConfigTab } from "../auth/AdminServerConfigTab";
 import { AdminUsersTab } from "../auth/AdminUsersTab";
 import { ProfileAccountTab } from "../auth/ProfileAccountTab";
@@ -93,6 +94,68 @@ describe("Server Configuration, Self-Registration Toggle, Quotas & Activity UI",
     );
     expect(closedHtml).not.toContain("Create Account");
     expect(closedHtml).toContain("Self-registration is currently disabled");
+    expect(closedHtml).toContain("auth-alert-info");
+    expect(closedHtml).not.toContain("modal-tabs");
+  });
+
+  it("renders CyberCantina modal tabs, field-group inputs, and a11y attributes on AuthScreen", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(AuthScreen, {
+        singleUserMode: false,
+        allowSelfRegistration: true,
+        onAuthenticated: vi.fn(),
+      })
+    );
+
+    expect(html).toContain('class="modal-tabs"');
+    expect(html).toContain('class="modal-tab-btn active"');
+    expect(html).toContain('role="tablist"');
+    expect(html).toContain('role="tab"');
+    expect(html).toContain('aria-selected="true"');
+    expect(html).toContain('role="tabpanel"');
+
+    expect(html).not.toContain("Inspector-tabs");
+    expect(html).not.toContain('class="tab-btn');
+    expect(html).not.toContain("form-group");
+    expect(html).not.toContain("form-label");
+    expect(html).not.toContain("form-input");
+
+    expect(html).toContain('class="field-group"');
+    expect(html).toContain('class="field-input"');
+    expect(html).toContain('for="auth-username"');
+    expect(html).toContain('id="auth-username"');
+    expect(html).toContain('autoComplete="username"');
+    expect(html).toContain('for="auth-password"');
+    expect(html).toContain('id="auth-password"');
+    expect(html).toContain('autoComplete="current-password"');
+    expect(html).toContain('class="field-visibility-btn"');
+    expect(html).toContain('aria-label="Show password"');
+    expect(html).toContain('aria-pressed="false"');
+    expect(html).toContain('class="auth-divider"');
+  });
+
+  it("renders CyberCantina field primitives, bindings, and password toggle on InitialSetupScreen", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(InitialSetupScreen, {
+        onComplete: vi.fn(),
+      })
+    );
+
+    expect(html).not.toContain("form-group");
+    expect(html).not.toContain("form-label");
+    expect(html).not.toContain("form-input");
+
+    expect(html).toContain('class="field-group"');
+    expect(html).toContain('class="field-input"');
+    expect(html).toContain('for="setup-username"');
+    expect(html).toContain('id="setup-username"');
+    expect(html).toContain('for="setup-display-name"');
+    expect(html).toContain('id="setup-display-name"');
+    expect(html).toContain('for="setup-password"');
+    expect(html).toContain('id="setup-password"');
+    expect(html).toContain('autoComplete="new-password"');
+    expect(html).toContain('aria-label="Show admin password"');
+    expect(html).toContain('aria-pressed="false"');
   });
 
   it("renders AdminServerConfigTab with quota, self-registration, and Chloromancer controls", () => {

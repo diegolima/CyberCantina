@@ -605,6 +605,7 @@ erDiagram
 | `frontend/src/components/auth/AuthScreen.tsx` |
 | `frontend/src/components/auth/FeedbackModal.tsx` |
 | `frontend/src/components/auth/InitialSetupScreen.tsx` |
+| `frontend/src/components/auth/PasswordField.tsx` |
 | `frontend/src/components/auth/ProfileAccountTab.tsx` |
 | `frontend/src/components/auth/ProfileModal.tsx` |
 | `frontend/src/components/auth/ProfilePreferencesTab.tsx` |

@@ -249,6 +249,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
                   <button
                     type="submit"
                     className="btn btn-amber"
+                    style={{ flexShrink: 0 }}
                     disabled={savingName}
                   >
                     {savingName ? "Saving..." : "Save"}

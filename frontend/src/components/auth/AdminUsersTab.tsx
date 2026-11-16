@@ -668,6 +668,7 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
                         <button
                           type="submit"
                           className="btn btn-amber"
+                          style={{ flexShrink: 0 }}
                           disabled={
                             actionBusy ||
                             editUsername.trim() === selectedUser.username

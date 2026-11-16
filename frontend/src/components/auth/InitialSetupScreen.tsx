@@ -2,10 +2,13 @@ import React, { useState } from "react";
 import { AlertTriangle, Shield } from "lucide-react";
 import { api } from "../../api";
 import { AuthSessionResponse } from "../../types";
+import { PasswordField } from "./PasswordField";
 
 export interface InitialSetupScreenProps {
   onComplete: (res: AuthSessionResponse) => void;
 }
+
+type InvalidSetupField = "username" | "confirmPassword" | null;
 
 export const InitialSetupScreen: React.FC<InitialSetupScreenProps> = ({
   onComplete,
@@ -17,6 +20,7 @@ export const InitialSetupScreen: React.FC<InitialSetupScreenProps> = ({
   const [showBlankWarning, setShowBlankWarning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [invalidField, setInvalidField] = useState<InvalidSetupField>(null);
 
   const handleSubmit = async (
     e: React.FormEvent,
@@ -24,14 +28,17 @@ export const InitialSetupScreen: React.FC<InitialSetupScreenProps> = ({
   ) => {
     e.preventDefault();
     setError(null);
+    setInvalidField(null);
 
     if (!username.trim()) {
       setError("Please enter an administrator username.");
+      setInvalidField("username");
       return;
     }
 
     if (password && password !== confirmPassword) {
       setError("Passwords do not match.");
+      setInvalidField("confirmPassword");
       return;
     }
 
@@ -69,6 +76,7 @@ export const InitialSetupScreen: React.FC<InitialSetupScreenProps> = ({
         <form
           className="modal-body"
           onSubmit={(e) => handleSubmit(e, false)}
+          noValidate
           style={{ gap: 14 }}
         >
           <p
@@ -84,70 +92,103 @@ export const InitialSetupScreen: React.FC<InitialSetupScreenProps> = ({
           </p>
 
           {error && (
-            <div className="auth-alert auth-alert-error">
-              <AlertTriangle size={15} />
+            <div
+              id="setup-form-error"
+              className="auth-alert auth-alert-error"
+              role="alert"
+              aria-live="assertive"
+            >
+              <AlertTriangle size={15} style={{ flexShrink: 0 }} />
               <span>{error}</span>
             </div>
           )}
 
-          <div className="form-group">
-            <label className="form-label">Admin Username</label>
+          <div className="field-group">
+            <label htmlFor="setup-username">Admin Username</label>
             <input
+              id="setup-username"
               type="text"
-              className="form-input"
+              className="field-input"
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              onChange={(e) => {
+                setUsername(e.target.value);
+                if (invalidField === "username") {
+                  setInvalidField(null);
+                  setError(null);
+                }
+              }}
               placeholder="admin"
+              autoComplete="username"
+              disabled={submitting}
               autoFocus
               required
+              aria-invalid={invalidField === "username" || undefined}
+              aria-describedby={
+                invalidField === "username" && error
+                  ? "setup-form-error"
+                  : undefined
+              }
             />
           </div>
 
-          <div className="form-group">
-            <label className="form-label">Display Name</label>
+          <div className="field-group">
+            <label htmlFor="setup-display-name">Display Name</label>
             <input
+              id="setup-display-name"
               type="text"
-              className="form-input"
+              className="field-input"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="Administrator"
+              autoComplete="name"
+              disabled={submitting}
             />
           </div>
 
-          <div className="form-group">
-            <label className="form-label">
-              Admin Password{" "}
-              <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>
-                (Leave blank for local single-user mode)
-              </span>
-            </label>
-            <input
-              type="password"
-              className="form-input"
-              value={password}
-              onChange={(e) => {
-                setPassword(e.target.value);
-                if (e.target.value) setShowBlankWarning(false);
-              }}
-              placeholder="Enter a strong password or leave blank..."
-            />
-          </div>
+          <PasswordField
+            id="setup-password"
+            label="Admin Password"
+            labelHint="(Leave blank for local single-user mode)"
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              if (e.target.value) setShowBlankWarning(false);
+              if (invalidField === "confirmPassword") {
+                setInvalidField(null);
+                setError(null);
+              }
+            }}
+            placeholder="Enter a strong password or leave blank..."
+            autoComplete="new-password"
+            disabled={submitting}
+          />
 
           {password && (
-            <div className="form-group">
-              <label className="form-label">Confirm Password</label>
-              <input
-                type="password"
-                className="form-input"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Confirm password..."
-              />
-            </div>
+            <PasswordField
+              id="setup-confirm-password"
+              label="Confirm Password"
+              value={confirmPassword}
+              onChange={(e) => {
+                setConfirmPassword(e.target.value);
+                if (invalidField === "confirmPassword") {
+                  setInvalidField(null);
+                  setError(null);
+                }
+              }}
+              placeholder="Confirm password..."
+              autoComplete="new-password"
+              disabled={submitting}
+              invalid={invalidField === "confirmPassword"}
+              describedBy="setup-form-error"
+            />
           )}
 
           {showBlankWarning && !password && (
-            <div className="auth-warning-box">
+            <div
+              className="auth-warning-box"
+              role="region"
+              aria-label="Blank password confirmation"
+            >
               <div
                 style={{
                   display: "flex",
@@ -194,6 +235,7 @@ export const InitialSetupScreen: React.FC<InitialSetupScreenProps> = ({
                   className="btn btn-amber"
                   onClick={(e) => handleSubmit(e, true)}
                   disabled={submitting}
+                  aria-busy={submitting}
                 >
                   {submitting
                     ? "Initializing..."
@@ -215,6 +257,7 @@ export const InitialSetupScreen: React.FC<InitialSetupScreenProps> = ({
                 type="submit"
                 className="btn btn-amber"
                 disabled={submitting}
+                aria-busy={submitting}
               >
                 {submitting
                   ? "Saving..."
