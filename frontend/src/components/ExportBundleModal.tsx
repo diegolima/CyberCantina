@@ -631,9 +631,9 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
                     )}
                     <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       <div style={{ fontSize: "0.85rem", fontWeight: 500 }}>{p.name}</div>
-                      {p.physical_appearance && (
+                      {(p.persona_bio || p.build_and_height || p.physical_appearance) && (
                         <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis" }}>
-                          {p.physical_appearance}
+                          {p.persona_bio || p.build_and_height || p.physical_appearance}
                         </div>
                       )}
                     </div>

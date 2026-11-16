@@ -118,6 +118,7 @@ export interface WorldRecord {
   locations: LocationNode[];
   edges: LocationEdge[];
   lore_nodes: LoreNode[];
+  unsupported_fields?: Record<string, unknown>;
 }
 
 export interface LocationContainerDraft {

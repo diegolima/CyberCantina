@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from typing import Any
 import numpy as np
 from app.db.vector_store import combine_entry_text
 from app.schemas.world import (
@@ -18,8 +19,10 @@ from app.schemas.world import (
     WorldUpdatePayload,
     WorldWizardCommitPayload,
     WorldWizardDraft,
+    extract_world_unsupported_fields,
     normalize_compass_direction,
     pick_available_compass_direction,
+    sanitize_world_unsupported_fields,
 )
 from app.db.repos.base import (
     _remap_character_items_for_world_update,
@@ -127,6 +130,7 @@ class WorldsMixin:
         lore_embeddings: list[np.ndarray] | None = None,
         owner_id: str | None = None,
         precomputed_embeddings: dict[tuple[str, str, str], np.ndarray] | None = None,
+        unsupported_fields: dict[str, Any] | None = None,
     ) -> WorldRecord:
         """Persist a WorldWizardDraft (rules, containers, locations, edges, lore) and index lore vectors."""
         w_id = world_id or f"world_{uuid.uuid4().hex[:10]}"
@@ -134,11 +138,19 @@ class WorldsMixin:
         containers = list(getattr(draft, "containers", None) or [])
         # Insert macro containers first (higher depth first) so parent rows exist before children.
         sorted_containers = sorted(containers, key=lambda c: (-c.depth, c.name))
+        clean_unsupported = sanitize_world_unsupported_fields(unsupported_fields or {}, strict=True)
         conn = self._connect()
         try:
             conn.execute(
-                "INSERT INTO worlds (id, owner_id, name, global_rules_json, created_at) VALUES (?, ?, ?, ?, ?)",
-                (w_id, owner_id, draft.name, draft.global_rules.model_dump_json(), now),
+                "INSERT INTO worlds (id, owner_id, name, global_rules_json, unsupported_fields_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    w_id,
+                    owner_id,
+                    draft.name,
+                    draft.global_rules.model_dump_json(),
+                    json.dumps(clean_unsupported),
+                    now,
+                ),
             )
 
             cont_id_map: dict[str, str] = {}
@@ -614,16 +626,30 @@ class WorldsMixin:
 
         lore_nodes = [self._row_to_lore_node(r) for r in lore_rows]
 
+        w_keys = w_row.keys()
+        raw_rules_dict = json.loads(w_row["global_rules_json"] or "{}")
+        stored_unsupported = json.loads(
+            w_row["unsupported_fields_json"]
+            if "unsupported_fields_json" in w_keys and w_row["unsupported_fields_json"]
+            else "{}"
+        )
+        unsupported_fields = extract_world_unsupported_fields(
+            {
+                "global_rules": raw_rules_dict if isinstance(raw_rules_dict, dict) else {},
+                "unsupported_fields": stored_unsupported if isinstance(stored_unsupported, dict) else {},
+            }
+        )
         return WorldRecord(
             id=w_row["id"],
             name=w_row["name"],
-            global_rules=WorldGlobalRules.model_validate_json(w_row["global_rules_json"]),
-            pending_deletion=bool(w_row["pending_deletion"]) if "pending_deletion" in w_row.keys() else False,
+            global_rules=WorldGlobalRules.model_validate(raw_rules_dict),
+            pending_deletion=bool(w_row["pending_deletion"]) if "pending_deletion" in w_keys else False,
             created_at=w_row["created_at"],
             containers=containers,
             locations=locations,
             edges=edges,
             lore_nodes=lore_nodes,
+            unsupported_fields=unsupported_fields,
         )
 
     def update_world(
@@ -682,13 +708,18 @@ class WorldsMixin:
 
             has_start = any(loc.is_starting_location for loc in base_locations)
             reuse_ids = campaigns_using == 0
+            effective_unsupported = sanitize_world_unsupported_fields(
+                orig.unsupported_fields if payload.unsupported_fields is None else payload.unsupported_fields,
+                strict=True,
+            )
+            unsupported_json = json.dumps(effective_unsupported)
 
             if reuse_ids:
                 # In-place update (zero active campaigns reference this world)
                 target_world_id = world_id
                 conn.execute(
-                    "UPDATE worlds SET name = ?, global_rules_json = ? WHERE id = ?",
-                    (payload.name, payload.global_rules.model_dump_json(), target_world_id),
+                    "UPDATE worlds SET name = ?, global_rules_json = ?, unsupported_fields_json = ? WHERE id = ?",
+                    (payload.name, payload.global_rules.model_dump_json(), unsupported_json, target_world_id),
                 )
                 conn.execute(
                     "DELETE FROM location_edges WHERE world_id = ? AND created_at_turn_id IS NULL",
@@ -724,14 +755,15 @@ class WorldsMixin:
                 target_world_id = f"world_{uuid.uuid4().hex[:10]}"
                 conn.execute(
                     """
-                    INSERT INTO worlds (id, owner_id, name, global_rules_json, pending_deletion, created_at)
-                    VALUES (?, ?, ?, ?, 0, ?)
+                    INSERT INTO worlds (id, owner_id, name, global_rules_json, unsupported_fields_json, pending_deletion, created_at)
+                    VALUES (?, ?, ?, ?, ?, 0, ?)
                     """,
                     (
                         target_world_id,
                         effective_owner_id,
                         payload.name,
                         payload.global_rules.model_dump_json(),
+                        unsupported_json,
                         now,
                     ),
                 )

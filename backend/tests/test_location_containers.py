@@ -7,6 +7,7 @@ container lore overrides, world forking/in-place updates, and .zcc ZIP round-tri
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -1402,3 +1403,51 @@ def test_world_wizard_commit_preserves_contained_starting_hub_and_containers(
     assert flat_world.containers == []
     assert flat_world.locations[0].container_id is None
     assert flat_world.locations[0].is_entry_exit is False
+
+
+def test_location_container_ops_preserve_world_unsupported_fields(temp_repo: CantinaRepository) -> None:
+    """Deleting a container or wrapping a location into a container must preserve world unsupported_fields."""
+    temp_repo.create_user(
+        username="container_ext",
+        display_name="Container Ext",
+        role="user",
+        user_id="user_container_ext",
+    )
+    world = _create_hierarchical_world(temp_repo, owner_id="user_container_ext")
+    conn = temp_repo._connect()
+    try:
+        ext_payload = {
+            "calendar_system": "Lunar Decans",
+            "global_rules.narrative_style": "Gilded noir",
+        }
+        conn.execute(
+            "UPDATE worlds SET unsupported_fields_json = ? WHERE id = ?",
+            (json.dumps(ext_payload), world.id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with_ext = temp_repo.get_world(world.id)
+    assert with_ext is not None
+    assert with_ext.unsupported_fields == ext_payload
+
+    club = next(c for c in with_ext.containers if c.name == "Afterlife Club")
+    lizzies = next(c for c in with_ext.containers if c.name == "Lizzies Bar")
+    after_delete = temp_repo.delete_location_container(
+        with_ext.id,
+        club.id,
+        reassign_to_container_id=lizzies.id,
+        lore_disposal="reassign",
+        owner_id="user_container_ext",
+    )
+    assert after_delete.unsupported_fields == ext_payload
+
+    badlands = next(loc for loc in after_delete.locations if loc.name == "Salt Flats Outpost")
+    after_convert = temp_repo.convert_location_to_container(
+        after_delete.id,
+        badlands.id,
+        owner_id="user_container_ext",
+    )
+    assert after_convert.unsupported_fields == ext_payload
+

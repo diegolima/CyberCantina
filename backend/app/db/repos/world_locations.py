@@ -119,6 +119,7 @@ class WorldLocationsMixin:
             locations=updated_locations,
             edges=orig.edges,
             lore_nodes=updated_world_lore,
+            unsupported_fields=orig.unsupported_fields,
         )
         return self.update_world(world_id, payload, owner_id=owner_id)
 
@@ -184,6 +185,7 @@ class WorldLocationsMixin:
             locations=updated_locations,
             edges=orig.edges,
             lore_nodes=orig.lore_nodes,
+            unsupported_fields=orig.unsupported_fields,
         )
         return self.update_world(world_id, payload, owner_id=owner_id)
 

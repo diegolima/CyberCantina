@@ -512,6 +512,7 @@ erDiagram
 | `backend/app/schemas/prompt.py` | Schemas for Prompt Presets, Template Customization, and Documentation. |
 | `backend/app/schemas/provider.py` | Pydantic schemas and domain records for LLM providers. |
 | `backend/app/schemas/turn.py` | Turn pipeline, mechanics/RNG, state snapshot, and campaign tree schemas. |
+| `backend/app/schemas/unsupported.py` | Shared bounded validation helpers for entity unsupported_fields extension containers. |
 | `backend/app/schemas/world.py` | World settings, spatial topology graph, and lore schemas. |
 
 #### `app.security`
@@ -728,6 +729,7 @@ erDiagram
 | :--- |
 | `frontend/src/components/shared/AdminMessageBannerList.tsx` |
 | `frontend/src/components/shared/ClickToEditField.tsx` |
+| `frontend/src/components/shared/UnsupportedFieldsTab.tsx` |
 
 #### `components/wizard`
 
@@ -803,3 +805,4 @@ erDiagram
 | `frontend/src/utils/mentions.ts` |
 | `frontend/src/utils/narratorCognition.ts` |
 | `frontend/src/utils/noteSearch.ts` |
+| `frontend/src/utils/unsupportedFields.ts` |

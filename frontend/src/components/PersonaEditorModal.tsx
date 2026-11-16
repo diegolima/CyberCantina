@@ -1,5 +1,7 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
+  AlertTriangle,
+  ArrowRight,
   Check,
   ChevronDown,
   ChevronUp,
@@ -21,9 +23,16 @@ import {
   PersonaLoreEntry,
   PersonaRecord,
 } from "../types";
+import {
+  DEPRECATED_PERSONA_KEYS,
+  appendLegacyText,
+  buildPersonaUnsupportedFieldsState,
+  filterRemainingUnsupportedFields,
+} from "../utils/unsupportedFields";
 import { TagChipsInput } from "./TagChipsInput";
+import { UnsupportedFieldsTab } from "./shared/UnsupportedFieldsTab";
 
-export type PersonaTab = "base" | "appearance" | "lore" | "inventory";
+export type PersonaTab = "base" | "appearance" | "lore" | "inventory" | "unsupported";
 
 interface PersonaEditorModalProps {
   persona?: PersonaRecord | null;
@@ -62,8 +71,14 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
   const [tags, setTags] = useState<string[]>(persona?.tags ?? []);
 
   // Appearance Tab Fields
-  const [buildAndHeight, setBuildAndHeight] = useState(
-    persona?.build_and_height ?? ""
+  const [buildAndHeight, setBuildAndHeight] = useState(persona?.build_and_height ?? "");
+  const unsupportedFields = useMemo(
+    () => (persona ? buildPersonaUnsupportedFieldsState(persona) : {}),
+    [persona]
+  );
+  const unsupportedKeysCount = Object.keys(unsupportedFields).length;
+  const [stagedUnsupportedDeletes, setStagedUnsupportedDeletes] = useState<Set<string>>(
+    () => new Set()
   );
   const [distinctiveFeatures, setDistinctiveFeatures] = useState<string[]>(
     persona?.distinctive_features ?? []
@@ -131,6 +146,29 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
     setLoreEntries([...loreEntries, newLore]);
   };
 
+  const handleStageUnsupportedDelete = (key: string) => {
+    setStagedUnsupportedDeletes((prev) => {
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+  };
+
+  const handleUndoUnsupportedDelete = (key: string) => {
+    setStagedUnsupportedDeletes((prev) => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+  };
+
+  const handleCopyLegacyPhysicalToBio = (text: string, deleteAfter: boolean) => {
+    setPersonaBio((prev) => appendLegacyText(prev, text));
+    if (deleteAfter) {
+      handleStageUnsupportedDelete("physical_appearance");
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
@@ -179,6 +217,11 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
               : [l.title.trim().toLowerCase()],
         }));
 
+      const remainingUnsupported = filterRemainingUnsupportedFields(
+        unsupportedFields,
+        stagedUnsupportedDeletes
+      );
+
       const payload: PersonaCreatePayload = {
         name: name.trim(),
         species: species.trim() || "Human",
@@ -190,10 +233,11 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
         tags: tags.map((t) => t.trim()).filter(Boolean),
         build_and_height: buildAndHeight.trim(),
         distinctive_features: distinctiveFeatures.map((f) => f.trim()).filter(Boolean),
-        physical_appearance: persona?.physical_appearance ?? "",
+        physical_appearance: "",
         equipped: cleanEquipped,
         inventory: cleanInventory,
         lore_entries: cleanLore,
+        unsupported_fields: remainingUnsupported,
       };
 
       let result: PersonaRecord;
@@ -326,6 +370,21 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
               <span className="modal-tab-badge">{equipped.length + inventory.length}</span>
             )}
           </button>
+          {unsupportedKeysCount > 0 && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "unsupported"}
+              className={`modal-tab-btn ${activeTab === "unsupported" ? "active" : ""}`}
+              onClick={() => setActiveTab("unsupported")}
+            >
+              <AlertTriangle size={14} />
+              <span>Unsupported</span>
+              <span className="modal-tab-badge">
+                {Math.max(0, unsupportedKeysCount - stagedUnsupportedDeletes.size)}
+              </span>
+            </button>
+          )}
         </div>
 
         {/* Modal Body / Form */}
@@ -1062,6 +1121,44 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
                 )}
               </div>
             </div>
+
+            {unsupportedKeysCount > 0 && (
+              <UnsupportedFieldsTab
+                isActive={activeTab === "unsupported"}
+                unsupportedFields={unsupportedFields}
+                stagedDeletes={stagedUnsupportedDeletes}
+                readOnly={isReadOnly}
+                accentColor="emerald"
+                deprecatedKeys={DEPRECATED_PERSONA_KEYS}
+                saveActionLabel={isEditing ? "Save Changes" : "Create Persona"}
+                onStageDelete={handleStageUnsupportedDelete}
+                onUndoDelete={handleUndoUnsupportedDelete}
+                renderFieldActions={(key, value) =>
+                  key === "physical_appearance" && typeof value === "string" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => handleCopyLegacyPhysicalToBio(value, false)}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+                      >
+                        <ArrowRight size={13} />
+                        {personaBio.trim() ? "Append to Bio" : "Copy to Bio"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => handleCopyLegacyPhysicalToBio(value, true)}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+                      >
+                        <ArrowRight size={13} />
+                        Move to Bio &amp; Delete
+                      </button>
+                    </>
+                  ) : null
+                }
+              />
+            )}
           </div>
 
           {/* Modal Footer */}

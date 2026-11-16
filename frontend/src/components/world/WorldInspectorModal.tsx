@@ -1,6 +1,8 @@
-import React, { useRef, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
+  AlertTriangle,
+  ArrowRight,
   BookOpen,
   Check,
   Compass,
@@ -28,6 +30,12 @@ import type {
   WorldLoreCategory,
   WorldRecord,
 } from "../../types";
+import {
+  DEPRECATED_WORLD_KEYS,
+  appendLegacyText,
+  buildWorldUnsupportedFieldsState,
+  filterRemainingUnsupportedFields,
+} from "../../utils/unsupportedFields";
 import { SpatialTopologyView } from "../SpatialTopologyView";
 import { TagChipsInput, normalizeTagList } from "../TagChipsInput";
 import {
@@ -35,6 +43,7 @@ import {
   validateContainersState,
 } from "../map/mapValidation";
 import { ClickToEditField } from "../shared/ClickToEditField";
+import { UnsupportedFieldsTab } from "../shared/UnsupportedFieldsTab";
 import { mapDraftToNodesAndEdges } from "./worldDraftMappers";
 
 interface WorldInspectorModalProps {
@@ -59,7 +68,7 @@ interface WorldInspectorModalProps {
   }) => Promise<WorldRecord>;
 }
 
-type WorldTab = "base" | "map" | "lore" | "settings";
+export type WorldTab = "base" | "map" | "lore" | "settings" | "unsupported";
 
 export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   world,
@@ -132,6 +141,56 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   const [exportingWorld, setExportingWorld] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const loreListBottomRef = useRef<HTMLDivElement | null>(null);
+
+  const unsupportedFields = useMemo(
+    () => buildWorldUnsupportedFieldsState(world),
+    [world]
+  );
+  const unsupportedKeysCount = Object.keys(unsupportedFields).length;
+  const [stagedUnsupportedDeletes, setStagedUnsupportedDeletes] = useState<Set<string>>(
+    () => new Set()
+  );
+
+  const handleStageUnsupportedDelete = (key: string) => {
+    if (isCampaignMode) return;
+    setStagedUnsupportedDeletes((prev) => {
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+    markDirty();
+  };
+
+  const handleUndoUnsupportedDelete = (key: string) => {
+    if (isCampaignMode) return;
+    setStagedUnsupportedDeletes((prev) => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+    markDirty();
+  };
+
+  const handleMigrateWorldRuleText = (
+    key: string,
+    targetField: "tone" | "tech_or_magic_rules",
+    text: string,
+    deleteAfter: boolean
+  ) => {
+    if (isCampaignMode) return;
+    setGlobalRules((prev) => ({
+      ...prev,
+      [targetField]: appendLegacyText(prev[targetField] || "", text),
+    }));
+    if (deleteAfter) {
+      setStagedUnsupportedDeletes((prev) => {
+        const next = new Set(prev);
+        next.add(key);
+        return next;
+      });
+    }
+    markDirty();
+  };
 
   const handleAddWorldLoreNode = () => {
     const newId = `new_lore_${Date.now()}`;
@@ -391,6 +450,10 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
 
     setSaving(true);
     setError(null);
+    const remainingUnsupported = filterRemainingUnsupportedFields(
+      unsupportedFields,
+      stagedUnsupportedDeletes
+    );
     const payload = {
       name: name.trim() || world.name,
       global_rules: globalRules,
@@ -403,7 +466,17 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
       const updated =
         mode === "wizard" && onCommitDraft
           ? await onCommitDraft(payload)
-          : await api.updateWorld(world.id, payload);
+          : await api.updateWorld(world.id, {
+              ...payload,
+              unsupported_fields: remainingUnsupported,
+            });
+      setStagedUnsupportedDeletes(new Set());
+      if (
+        activeTab === "unsupported" &&
+        Object.keys(updated.unsupported_fields ?? {}).length === 0
+      ) {
+        setActiveTab("base");
+      }
       onSaved(updated);
     } catch (err) {
       setError(String(err));
@@ -519,6 +592,21 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             <SlidersHorizontal size={14} />
             <span>World Settings</span>
           </button>
+          {unsupportedKeysCount > 0 && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "unsupported"}
+              className={`modal-tab-btn ${activeTab === "unsupported" ? "active" : ""}`}
+              onClick={() => setActiveTab("unsupported")}
+            >
+              <AlertTriangle size={14} />
+              <span>Unsupported</span>
+              <span className="modal-tab-badge">
+                {Math.max(0, unsupportedKeysCount - stagedUnsupportedDeletes.size)}
+              </span>
+            </button>
+          )}
         </div>
 
         <div className="modal-body">
@@ -994,6 +1082,95 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
               </div>
             </label>
           </div>
+
+          {unsupportedKeysCount > 0 && (
+            <UnsupportedFieldsTab
+              isActive={activeTab === "unsupported"}
+              unsupportedFields={unsupportedFields}
+              stagedDeletes={stagedUnsupportedDeletes}
+              readOnly={isCampaignMode || isMutatingLocked}
+              accentColor="cyan"
+              deprecatedKeys={DEPRECATED_WORLD_KEYS}
+              saveActionLabel="Save Changes"
+              onStageDelete={handleStageUnsupportedDelete}
+              onUndoDelete={handleUndoUnsupportedDelete}
+              renderFieldActions={(key, value) => {
+                if (typeof value !== "string") return null;
+                if (
+                  key === "global_rules.narrative_style" ||
+                  key === "global_rules.sensory_profile"
+                ) {
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() =>
+                          handleMigrateWorldRuleText(key, "tone", value, false)
+                        }
+                        style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+                      >
+                        <ArrowRight size={13} />
+                        {globalRules.tone.trim() ? "Append to Tone" : "Copy to Tone"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() =>
+                          handleMigrateWorldRuleText(key, "tone", value, true)
+                        }
+                        style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+                      >
+                        <ArrowRight size={13} />
+                        Move to Tone &amp; Delete
+                      </button>
+                    </>
+                  );
+                }
+                if (key === "global_rules.taboos_and_limits") {
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() =>
+                          handleMigrateWorldRuleText(
+                            key,
+                            "tech_or_magic_rules",
+                            value,
+                            false
+                          )
+                        }
+                        style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+                      >
+                        <ArrowRight size={13} />
+                        {globalRules.tech_or_magic_rules.trim()
+                          ? "Append to World Rules"
+                          : "Copy to World Rules"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() =>
+                          handleMigrateWorldRuleText(
+                            key,
+                            "tech_or_magic_rules",
+                            value,
+                            true
+                          )
+                        }
+                        style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+                      >
+                        <ArrowRight size={13} />
+                        Move to World Rules &amp; Delete
+                      </button>
+                    </>
+                  );
+                }
+                return null;
+              }}
+            />
+          )}
 
           {error && (
             <div

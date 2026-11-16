@@ -340,7 +340,7 @@ def test_consolidated_item_endpoint_security_and_swipe_backfill(
     conn = repo._connect()
     try:
         conn.execute(
-            "INSERT INTO worlds VALUES ('world_foreign', 'user_other_tenant', 'Foreign World', ?, 0, '2026-01-01T00:00:00Z')",
+            "INSERT INTO worlds (id, owner_id, name, global_rules_json, pending_deletion, created_at) VALUES ('world_foreign', 'user_other_tenant', 'Foreign World', ?, 0, '2026-01-01T00:00:00Z')",
             (world.global_rules.model_dump_json(),),
         )
         conn.execute(

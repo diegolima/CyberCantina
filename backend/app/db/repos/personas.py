@@ -13,9 +13,11 @@ from app.schemas.persona import (
     PersonaRecord,
     PersonaTurnStateSnapshot,
     PersonaUpdatePayload,
+    canonicalize_persona_legacy_fields,
     default_persona_id_for_user,
     get_default_persona,
     is_default_persona_id,
+    sanitize_persona_unsupported_fields,
 )
 from app.db.repos.base import utc_now_iso
 
@@ -37,6 +39,14 @@ class PersonasMixin:
         lore_json = json.dumps([entry.model_dump() for entry in draft.lore_entries])
         tags_json = json.dumps(draft.tags or [])
         features_json = json.dumps(draft.distinctive_features or [])
+        persona_bio = (draft.persona_bio or "").strip()
+        canonical_physical, unsupported_fields = canonicalize_persona_legacy_fields(
+            persona_bio=persona_bio,
+            physical_appearance=draft.physical_appearance,
+            unsupported_fields=draft.unsupported_fields,
+            strict=True,
+        )
+        unsupported_json = json.dumps(unsupported_fields)
 
         conn = self._connect()
         try:
@@ -46,9 +56,9 @@ class PersonasMixin:
                     id, owner_id, name, species, age, age_is_secret, sex, pronouns,
                     persona_bio, tags_json, build_and_height, distinctive_features_json,
                     physical_appearance, equipped_json, inventory_json, lore_entries_json,
-                    created_at, updated_at
+                    unsupported_fields_json, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     p_id,
@@ -59,14 +69,15 @@ class PersonasMixin:
                     1 if draft.age_is_secret else 0,
                     (draft.sex or "").strip(),
                     (draft.pronouns or "").strip(),
-                    (draft.persona_bio or "").strip(),
+                    persona_bio,
                     tags_json,
                     (draft.build_and_height or "").strip(),
                     features_json,
-                    draft.physical_appearance.strip(),
+                    canonical_physical,
                     equipped_json,
                     inventory_json,
                     lore_json,
+                    unsupported_json,
                     now,
                     now,
                 ),
@@ -224,10 +235,22 @@ class PersonasMixin:
             if payload.distinctive_features is not None
             else getattr(existing, "distinctive_features", [])
         )
-        physical_appearance = (
-            payload.physical_appearance.strip()
-            if payload.physical_appearance is not None
-            else existing.physical_appearance
+        if payload.physical_appearance is not None:
+            raw_physical_appearance = payload.physical_appearance.strip()
+        elif payload.unsupported_fields is None:
+            raw_physical_appearance = existing.physical_appearance
+        else:
+            raw_physical_appearance = ""
+        raw_unsupported = (
+            payload.unsupported_fields
+            if payload.unsupported_fields is not None
+            else existing.unsupported_fields
+        )
+        physical_appearance, unsupported_fields = canonicalize_persona_legacy_fields(
+            persona_bio=persona_bio,
+            physical_appearance=raw_physical_appearance,
+            unsupported_fields=raw_unsupported,
+            strict=True,
         )
         equipped = (
             [it.model_dump() for it in payload.equipped]
@@ -252,7 +275,8 @@ class PersonasMixin:
                 UPDATE personas
                 SET name = ?, species = ?, age = ?, age_is_secret = ?, sex = ?, pronouns = ?,
                     persona_bio = ?, tags_json = ?, build_and_height = ?, distinctive_features_json = ?,
-                    physical_appearance = ?, equipped_json = ?, inventory_json = ?, lore_entries_json = ?, updated_at = ?
+                    physical_appearance = ?, equipped_json = ?, inventory_json = ?, lore_entries_json = ?,
+                    unsupported_fields_json = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -270,6 +294,7 @@ class PersonasMixin:
                     json.dumps(equipped),
                     json.dumps(inventory),
                     json.dumps(lore),
+                    json.dumps(unsupported_fields),
                     now,
                     persona_id,
                 ),
@@ -325,6 +350,21 @@ class PersonasMixin:
         features_raw = json.loads(
             r["distinctive_features_json"] if "distinctive_features_json" in r_keys and r["distinctive_features_json"] else "[]"
         )
+        unsupported_raw = json.loads(
+            r["unsupported_fields_json"] if "unsupported_fields_json" in r_keys and r["unsupported_fields_json"] else "{}"
+        )
+        persona_bio = r["persona_bio"] if "persona_bio" in r_keys and r["persona_bio"] else ""
+        raw_physical = r["physical_appearance"] if "physical_appearance" in r_keys and r["physical_appearance"] else ""
+        unsupported_fields = sanitize_persona_unsupported_fields(unsupported_raw)
+        # Surface untouched legacy DB physical_appearance dynamically without mutating the row on read.
+        if (
+            raw_physical.strip()
+            and raw_physical.strip() != persona_bio.strip()
+            and "physical_appearance" not in unsupported_fields
+        ):
+            unsupported_fields = sanitize_persona_unsupported_fields(
+                {**unsupported_fields, "physical_appearance": raw_physical.strip()}
+            )
         return PersonaRecord(
             id=r["id"],
             owner_id=r["owner_id"] if "owner_id" in r_keys else None,
@@ -334,14 +374,15 @@ class PersonasMixin:
             age_is_secret=bool(r["age_is_secret"]) if "age_is_secret" in r_keys else True,
             sex=r["sex"] if "sex" in r_keys and r["sex"] else "",
             pronouns=r["pronouns"] if "pronouns" in r_keys and r["pronouns"] else "",
-            persona_bio=r["persona_bio"] if "persona_bio" in r_keys and r["persona_bio"] else "",
+            persona_bio=persona_bio,
             tags=[str(t) for t in tags_raw if str(t).strip()],
             build_and_height=r["build_and_height"] if "build_and_height" in r_keys and r["build_and_height"] else "",
             distinctive_features=[str(f) for f in features_raw if str(f).strip()],
-            physical_appearance=r["physical_appearance"] if "physical_appearance" in r_keys else "",
+            physical_appearance=raw_physical,
             equipped=[PersonaItemInstance.model_validate(it) for it in equipped_raw],
             inventory=[PersonaItemInstance.model_validate(it) for it in inventory_raw],
             lore_entries=[PersonaLoreEntry.model_validate(entry) for entry in lore_raw],
+            unsupported_fields=unsupported_fields,
             created_at=r["created_at"],
             updated_at=r["updated_at"] if "updated_at" in r_keys else r["created_at"],
         )

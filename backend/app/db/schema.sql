@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS worlds (
     owner_id TEXT NULL REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     global_rules_json TEXT NOT NULL,
+    unsupported_fields_json TEXT NOT NULL DEFAULT '{}',
     pending_deletion INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
@@ -210,6 +211,7 @@ CREATE TABLE IF NOT EXISTS personas (
     equipped_json TEXT NOT NULL DEFAULT '[]',
     inventory_json TEXT NOT NULL DEFAULT '[]',
     lore_entries_json TEXT NOT NULL DEFAULT '[]',
+    unsupported_fields_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

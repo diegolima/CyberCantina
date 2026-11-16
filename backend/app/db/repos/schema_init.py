@@ -338,6 +338,10 @@ class SchemaInitMixin:
                 conn.execute(
                     "ALTER TABLE worlds ADD COLUMN owner_id TEXT NULL REFERENCES users(id) ON DELETE CASCADE"
                 )
+            if "unsupported_fields_json" not in world_cols:
+                conn.execute(
+                    "ALTER TABLE worlds ADD COLUMN unsupported_fields_json TEXT NOT NULL DEFAULT '{}'"
+                )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_worlds_owner ON worlds(owner_id)"
             )
@@ -509,6 +513,8 @@ class SchemaInitMixin:
                 conn.execute("ALTER TABLE personas ADD COLUMN build_and_height TEXT NOT NULL DEFAULT ''")
             if "distinctive_features_json" not in persona_cols:
                 conn.execute("ALTER TABLE personas ADD COLUMN distinctive_features_json TEXT NOT NULL DEFAULT '[]'")
+            if "unsupported_fields_json" not in persona_cols:
+                conn.execute("ALTER TABLE personas ADD COLUMN unsupported_fields_json TEXT NOT NULL DEFAULT '{}'")
 
             # Purge any invalid legacy persona rows without an owner
             conn.execute("DELETE FROM personas WHERE owner_id IS NULL")

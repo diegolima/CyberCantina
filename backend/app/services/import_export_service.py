@@ -43,9 +43,20 @@ from app.schemas.import_export import (
     ZccManifest,
     ZccManifestContents,
 )
-from app.schemas.persona import PersonaCreatePayload, PersonaRecord
+from app.schemas.persona import (
+    CANONICAL_PERSONA_RECORD_KEYS,
+    LEGACY_DEPRECATED_PERSONA_KEYS,
+    PersonaCreatePayload,
+    PersonaRecord,
+    canonicalize_persona_legacy_fields,
+)
 from app.schemas.world import (
+    CANONICAL_WORLD_GLOBAL_RULE_KEYS,
+    CANONICAL_WORLD_RECORD_KEYS,
+    WorldGlobalRules,
     WorldRecord,
+    extract_world_unsupported_fields,
+    find_nested_world_unsupported_keys,
 )
 from app.wizards.sillytavern_parser import extract_card_from_bytes
 
@@ -143,6 +154,95 @@ def _extract_character_unsupported_fields(
             raw_unsupported["modifications"] = clean_mods
 
     return sanitize_unsupported_fields(raw_unsupported, strict=strict)
+
+
+def _extract_persona_unsupported_fields(
+    persona_dict: dict[str, Any],
+    *,
+    strict: bool = False,
+) -> dict[str, Any]:
+    """Collect unrecognized future keys and distinct legacy physical_appearance into unsupported_fields."""
+    raw_unsupported: dict[str, Any] = {}
+    nested_unsupported = persona_dict.get("unsupported_fields")
+    if isinstance(nested_unsupported, dict):
+        for k, v in nested_unsupported.items():
+            if isinstance(k, str) and k not in CANONICAL_PERSONA_RECORD_KEYS:
+                raw_unsupported[k] = v
+
+    for k, v in persona_dict.items():
+        if not isinstance(k, str):
+            continue
+        if k in CANONICAL_PERSONA_RECORD_KEYS or k in LEGACY_DEPRECATED_PERSONA_KEYS:
+            continue
+        raw_unsupported[k] = v
+
+    bio_norm = persona_dict.get("persona_bio")
+    bio_str = bio_norm.strip() if isinstance(bio_norm, str) else ""
+    raw_phys = persona_dict.get("physical_appearance")
+    phys_str = raw_phys.strip() if isinstance(raw_phys, str) else ""
+    if phys_str and phys_str != bio_str:
+        raw_unsupported["physical_appearance"] = phys_str
+    _, merged = canonicalize_persona_legacy_fields(
+        persona_bio=bio_str,
+        physical_appearance="",
+        unsupported_fields=raw_unsupported,
+        strict=strict,
+    )
+    return merged
+
+
+def _serialize_persona_for_zcc(persona: PersonaRecord) -> dict[str, Any]:
+    """Serialize a PersonaRecord for .zcc export with top-level unsupported_fields re-emission."""
+    persona_data = persona.model_dump()
+    persona_data.pop("unsupported_fields", None)
+    bio_norm = (persona.persona_bio or "").strip()
+    phys_norm = str(persona_data.get("physical_appearance") or "").strip()
+    if not phys_norm or phys_norm == bio_norm:
+        persona_data.pop("physical_appearance", None)
+    for ext_k, ext_v in (persona.unsupported_fields or {}).items():
+        if ext_k in CANONICAL_PERSONA_RECORD_KEYS:
+            continue
+        if ext_k == "physical_appearance" and (
+            not isinstance(ext_v, str) or not ext_v.strip() or ext_v.strip() == bio_norm
+        ):
+            continue
+        persona_data[ext_k] = ext_v
+    return persona_data
+
+
+def _serialize_world_for_zcc(world: WorldRecord) -> dict[str, Any]:
+    """Serialize a WorldRecord for .zcc export, restoring top-level and global_rules.* extension keys."""
+    world_data = world.model_dump()
+    world_data.pop("unsupported_fields", None)
+    rules_dict = world_data.get("global_rules")
+    if not isinstance(rules_dict, dict):
+        rules_dict = {}
+        world_data["global_rules"] = rules_dict
+    for ext_k, ext_v in (world.unsupported_fields or {}).items():
+        if ext_k.startswith("global_rules."):
+            sub_k = ext_k[len("global_rules."):]
+            if not sub_k or sub_k in CANONICAL_WORLD_GLOBAL_RULE_KEYS:
+                continue
+            rules_dict[sub_k] = ext_v
+        else:
+            if ext_k in CANONICAL_WORLD_RECORD_KEYS:
+                continue
+            world_data[ext_k] = ext_v
+    return world_data
+
+
+def _format_unsupported_fields_warning(
+    entity_label: str,
+    entity_name: str,
+    keys_list: list[str],
+) -> str:
+    """Format a non-blocking import inspect warning for unsupported/deprecated fields."""
+    preview = ", ".join(keys_list[:5])
+    suffix = f" (+{len(keys_list) - 5} more)" if len(keys_list) > 5 else ""
+    return (
+        f"{entity_label} '{entity_name}' contains unsupported or deprecated fields ({preview}{suffix}). "
+        "They will be preserved read-only under the Unsupported tab and excluded from AI roleplay context."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -260,8 +360,8 @@ def build_zcc_export(
 
         exported_characters_json.append(char_data)
 
-    exported_worlds_json = [w.model_dump() for w in worlds]
-    exported_personas_json = [p.model_dump() for p in personas]
+    exported_worlds_json = [_serialize_world_for_zcc(w) for w in worlds]
+    exported_personas_json = [_serialize_persona_for_zcc(p) for p in personas]
 
     # 4. Build Manifest
     manifest = ZccManifest(
@@ -425,7 +525,7 @@ def inspect_uploaded_file(
                     )
                 )
 
-        # Detect unsupported/future or deprecated character fields for non-blocking preview warning
+        # Detect unsupported/future or deprecated fields across Characters, Worlds & Personas
         warnings: list[str] = []
         for c in characters_raw:
             if not isinstance(c, dict):
@@ -433,12 +533,36 @@ def inspect_uploaded_file(
             c_name = str(c.get("name") or "Unnamed Character").strip() or "Unnamed Character"
             ext_fields = _extract_character_unsupported_fields(c, strict=False)
             if ext_fields:
-                keys_list = list(ext_fields.keys())
-                preview = ", ".join(keys_list[:5])
-                suffix = f" (+{len(keys_list) - 5} more)" if len(keys_list) > 5 else ""
                 warnings.append(
-                    f"Character '{c_name}' contains unsupported or deprecated fields ({preview}{suffix}). "
-                    "They will be preserved read-only under the Unsupported tab and excluded from AI roleplay context."
+                    _format_unsupported_fields_warning("Character", c_name, list(ext_fields.keys()))
+                )
+
+        for w in worlds_raw:
+            if not isinstance(w, dict):
+                continue
+            w_name = str(w.get("name") or "Unnamed World").strip() or "Unnamed World"
+            ext_fields = extract_world_unsupported_fields(w, strict=False)
+            if ext_fields:
+                warnings.append(
+                    _format_unsupported_fields_warning("World", w_name, list(ext_fields.keys()))
+                )
+            nested_keys = find_nested_world_unsupported_keys(w)
+            if nested_keys:
+                preview = ", ".join(nested_keys[:5])
+                suffix = f" (+{len(nested_keys) - 5} more)" if len(nested_keys) > 5 else ""
+                warnings.append(
+                    f"World '{w_name}' contains unrecognized keys on nested map entities ({preview}{suffix}) "
+                    "which cannot be preserved in this version."
+                )
+
+        for p in personas_raw:
+            if not isinstance(p, dict):
+                continue
+            p_name = str(p.get("name") or "Unnamed Persona").strip() or "Unnamed Persona"
+            ext_fields = _extract_persona_unsupported_fields(p, strict=False)
+            if ext_fields:
+                warnings.append(
+                    _format_unsupported_fields_warning("Persona", p_name, list(ext_fields.keys()))
                 )
 
         # Summaries for UI
@@ -649,12 +773,25 @@ async def commit_staged_import(
                 if existing:
                     final_name = f"{w_name} (Imported)"
 
+            try:
+                world_unsupported = extract_world_unsupported_fields(w, strict=True)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            canonical_rules = WorldGlobalRules.model_validate(w.get("global_rules") or {})
+
             now = utc_now_iso()
             conn = repo._connect()
             try:
                 conn.execute(
-                    "INSERT INTO worlds (id, owner_id, name, global_rules_json, created_at) VALUES (?, ?, ?, ?, ?)",
-                    (new_world_id, user_id, final_name, json.dumps(w.get("global_rules", {})), now),
+                    "INSERT INTO worlds (id, owner_id, name, global_rules_json, unsupported_fields_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        new_world_id,
+                        user_id,
+                        final_name,
+                        canonical_rules.model_dump_json(),
+                        json.dumps(world_unsupported),
+                        now,
+                    ),
                 )
 
                 # Containers (topological order: depth 4 down to 1 so parent_container_id FK always exists)
@@ -884,6 +1021,8 @@ async def commit_staged_import(
             finally:
                 conn.close()
 
+        except HTTPException:
+            raise
         except Exception as exc:
             logger.exception("Failed importing world '%s': %s", w_name, exc)
             errors.append(f"World '{w_name}': {exc}")
@@ -911,6 +1050,11 @@ async def commit_staged_import(
                 if existing:
                     final_name = f"{p_name} (Imported)"
 
+            try:
+                persona_unsupported = _extract_persona_unsupported_fields(p, strict=True)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
             raw_age = p.get("age")
             persona_payload = PersonaCreatePayload(
                 name=final_name,
@@ -923,13 +1067,16 @@ async def commit_staged_import(
                 tags=p.get("tags") or [],
                 build_and_height=p.get("build_and_height") or "",
                 distinctive_features=p.get("distinctive_features") or [],
-                physical_appearance=p.get("physical_appearance") or "",
+                physical_appearance="",
                 equipped=p.get("equipped") or [],
                 inventory=p.get("inventory") or [],
                 lore_entries=p.get("lore_entries") or [],
+                unsupported_fields=persona_unsupported,
             )
             repo.create_persona(persona_payload, owner_id=user_id, persona_id=new_p_id)
             imported_personas.append(final_name)
+        except HTTPException:
+            raise
         except Exception as exc:
             logger.exception("Failed importing persona '%s': %s", p_name, exc)
             errors.append(f"Persona '{p_name}': {exc}")

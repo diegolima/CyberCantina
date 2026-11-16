@@ -708,3 +708,219 @@ def test_zcc_future_and_legacy_unsupported_fields_roundtrip_and_bounds(client_an
         json={"staged_token": bad_insp.json()["staged_token"], "default_conflict_strategy": "copy"},
     )
     assert bad_commit.status_code == 400
+
+
+def test_zcc_world_and_persona_unsupported_fields_roundtrip_and_bounds(client_and_repo):
+    """Worlds and Personas preserve legacy/unknown fields in unsupported_fields, round-trip in .zcc, and enforce bounds."""
+    client, repo, user = client_and_repo
+    from app.schemas.persona import PersonaCreatePayload, PersonaUpdatePayload
+    from app.schemas.world import WorldGlobalRules, WorldUpdatePayload
+
+    # Seed base persona and base world
+    base_persona = repo.create_persona(
+        PersonaCreatePayload(
+            name="Archivist Mara",
+            persona_bio="Curator of orbital archives.",
+        ),
+        owner_id=user.id,
+    )
+    base_world_draft = WorldWizardDraft(
+        name="Orbital Ring",
+        global_rules=WorldGlobalRules(
+            genre="Sci-Fi",
+            tone="Atmospheric",
+            setting_overview="An ancient rotating habitat ring.",
+            tech_or_magic_rules="Hard vacuum engineering.",
+        ),
+        locations=[
+            LocationNodeDraft(
+                key="loc_hub",
+                name="Docking Concourse",
+                summary="Primary hub",
+                description="Pressurized arrival concourse.",
+                environmental_tags=["orbital", "dock"],
+                is_starting_location=True,
+                is_hub=True,
+            )
+        ],
+        edges=[],
+        lore_nodes=[],
+    )
+    base_world = repo.create_world_from_draft(
+        base_world_draft,
+        owner_id=user.id,
+    )
+
+    # Export bundle containing world + persona
+    exp_resp = client.post(
+        "/api/export/bundle",
+        json={
+            "character_ids": [],
+            "world_ids": [base_world.id],
+            "persona_ids": [base_persona.id],
+            "description": "World & Persona bundle",
+        },
+    )
+    assert exp_resp.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(exp_resp.content)) as zf:
+        manifest_payload = json.loads(zf.read("manifest.json").decode("utf-8"))
+        worlds_payload = json.loads(zf.read("worlds.json").decode("utf-8"))
+        personas_payload = json.loads(zf.read("personas.json").decode("utf-8"))
+
+    # Inject legacy global_rules + unknown world/nested keys + alias conflict + alias consumption check
+    worlds_payload[0]["name"] = "Orbital Ring Imported"
+    worlds_payload[0]["calendar_system"] = "13-month solar ledger"
+    worlds_payload[0]["global_rules"]["narrative_style"] = "Second-person tactile"
+    worlds_payload[0]["global_rules"]["sensory_profile"] = "Ozone and cold copper"
+    worlds_payload[0]["global_rules"]["taboos_and_limits"] = "No FTL teleportation"
+    worlds_payload[0]["global_rules"]["mood"] = "Conflicting secondary tone"
+    worlds_payload[0]["locations"][0]["future_weather"] = "Acid Drizzle"
+
+    # Inject unknown persona keys + distinct legacy physical_appearance
+    personas_payload[0]["name"] = "Archivist Mara Imported"
+    personas_payload[0]["favorite_drink"] = "Synthetic chamomile"
+    personas_payload[0]["physical_appearance"] = "Silver spectacles and grease-stained apron."
+
+    archive_buf = io.BytesIO()
+    with zipfile.ZipFile(archive_buf, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest_payload))
+        zf.writestr("worlds.json", json.dumps(worlds_payload))
+        zf.writestr("personas.json", json.dumps(personas_payload))
+
+    insp = client.post(
+        "/api/import/inspect",
+        files={"file": ("world_persona_future.zcc", archive_buf.getvalue(), "application/octet-stream")},
+    )
+    assert insp.status_code == 200
+    insp_data = insp.json()
+    warnings_text = "\n".join(insp_data["warnings"])
+    assert "calendar_system" in warnings_text
+    assert "locations.future_weather" in warnings_text
+    assert "cannot be preserved in this version" in warnings_text
+    assert "favorite_drink" in warnings_text
+
+    commit = client.post(
+        "/api/import/commit",
+        json={"staged_token": insp_data["staged_token"], "default_conflict_strategy": "copy"},
+    )
+    assert commit.status_code == 200
+
+    imp_world = next(w for w in repo.list_worlds(owner_id=user.id) if w.name == "Orbital Ring Imported")
+    assert imp_world.unsupported_fields == {
+        "calendar_system": "13-month solar ledger",
+        "global_rules.narrative_style": "Second-person tactile",
+        "global_rules.sensory_profile": "Ozone and cold copper",
+        "global_rules.taboos_and_limits": "No FTL teleportation",
+        "global_rules.mood": "Conflicting secondary tone",
+    }
+
+    # Check consumed alias is NOT duplicated into unsupported_fields when tone was empty
+    clean_locations = [
+        {k: v for k, v in loc.items() if k != "future_weather"}
+        for loc in worlds_payload[0]["locations"]
+    ]
+    consumed_world_raw = {
+        "name": "Alias Consumed World",
+        "global_rules": {
+            "genre": "Noir",
+            "tone": "",
+            "atmosphere": "Rain-slicked tension",
+            "setting_overview": "Drowned metropolis.",
+            "tech_or_magic_rules": "Clockwork",
+        },
+        "locations": clean_locations,
+        "edges": worlds_payload[0]["edges"],
+        "containers": worlds_payload[0]["containers"],
+        "lore_nodes": [],
+    }
+    alias_buf = io.BytesIO()
+    with zipfile.ZipFile(alias_buf, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest_payload))
+        zf.writestr("worlds.json", json.dumps([consumed_world_raw]))
+    alias_insp = client.post(
+        "/api/import/inspect",
+        files={"file": ("alias_consumed.zcc", alias_buf.getvalue(), "application/octet-stream")},
+    )
+    assert alias_insp.status_code == 200
+    assert alias_insp.json()["warnings"] == []
+    alias_commit = client.post(
+        "/api/import/commit",
+        json={"staged_token": alias_insp.json()["staged_token"], "default_conflict_strategy": "copy"},
+    )
+    assert alias_commit.status_code == 200
+    alias_world = next(w for w in repo.list_worlds(owner_id=user.id) if w.name == "Alias Consumed World")
+    assert alias_world.global_rules.tone == "Rain-slicked tension"
+    assert alias_world.unsupported_fields == {}
+
+    imp_persona = next(p for p in repo.list_personas(owner_id=user.id) if p.name == "Archivist Mara Imported")
+    assert imp_persona.physical_appearance == ""
+    assert imp_persona.unsupported_fields == {
+        "favorite_drink": "Synthetic chamomile",
+        "physical_appearance": "Silver spectacles and grease-stained apron.",
+    }
+
+    # Updating unrelated world fields without unsupported_fields preserves existing unsupported_fields
+    partial_world = repo.update_world(
+        imp_world.id,
+        WorldUpdatePayload(
+            name="Orbital Ring Edited",
+            global_rules=WorldGlobalRules(**imp_world.global_rules.model_dump()),
+            containers=imp_world.containers,
+            locations=imp_world.locations,
+            edges=imp_world.edges,
+            lore_nodes=imp_world.lore_nodes,
+        ),
+        owner_id=user.id,
+    )
+    assert partial_world.unsupported_fields == imp_world.unsupported_fields
+
+    # Re-export restores top-level & global_rules.* keys without wrapper key
+    re_exp = client.post(
+        "/api/export/bundle",
+        json={
+            "character_ids": [],
+            "world_ids": [partial_world.id],
+            "persona_ids": [imp_persona.id],
+            "description": "Round-trip check",
+        },
+    )
+    assert re_exp.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(re_exp.content)) as zf:
+        re_worlds = json.loads(zf.read("worlds.json").decode("utf-8"))
+        re_personas = json.loads(zf.read("personas.json").decode("utf-8"))
+    assert "unsupported_fields" not in re_worlds[0]
+    assert re_worlds[0]["calendar_system"] == "13-month solar ledger"
+    assert re_worlds[0]["global_rules"]["narrative_style"] == "Second-person tactile"
+    assert re_worlds[0]["global_rules"]["mood"] == "Conflicting secondary tone"
+    assert "unsupported_fields" not in re_personas[0]
+    assert re_personas[0]["favorite_drink"] == "Synthetic chamomile"
+    assert re_personas[0]["physical_appearance"] == "Silver spectacles and grease-stained apron."
+
+    # Deleting via update omits keys on subsequent export
+    cleaned_persona = repo.update_persona(
+        imp_persona.id,
+        PersonaUpdatePayload(unsupported_fields={}),
+        owner_id=user.id,
+    )
+    assert cleaned_persona.unsupported_fields == {}
+
+    # Bounds rejection: deep nesting (> depth 8) on persona triggers HTTP 400
+    deep_obj: object = "leaf"
+    for _ in range(11):
+        deep_obj = {"nested": deep_obj}
+    bad_p = dict(personas_payload[0])
+    bad_p["deep_ext"] = deep_obj
+    bad_p_buf = io.BytesIO()
+    with zipfile.ZipFile(bad_p_buf, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest_payload))
+        zf.writestr("personas.json", json.dumps([bad_p]))
+    bad_p_insp = client.post(
+        "/api/import/inspect",
+        files={"file": ("deep_persona.zcc", bad_p_buf.getvalue(), "application/octet-stream")},
+    )
+    bad_p_commit = client.post(
+        "/api/import/commit",
+        json={"staged_token": bad_p_insp.json()["staged_token"], "default_conflict_strategy": "copy"},
+    )
+    assert bad_p_commit.status_code == 400
+

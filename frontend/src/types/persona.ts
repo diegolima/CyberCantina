@@ -41,6 +41,7 @@ export interface PersonaRecord {
   equipped: PersonaItemInstance[];
   inventory: PersonaItemInstance[];
   lore_entries: PersonaLoreEntry[];
+  unsupported_fields?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
@@ -60,6 +61,7 @@ export interface PersonaCreatePayload {
   equipped?: PersonaItemInstance[];
   inventory?: PersonaItemInstance[];
   lore_entries?: PersonaLoreEntry[];
+  unsupported_fields?: Record<string, unknown>;
 }
 
 export interface PersonaUpdatePayload {
@@ -77,6 +79,7 @@ export interface PersonaUpdatePayload {
   equipped?: PersonaItemInstance[];
   inventory?: PersonaItemInstance[];
   lore_entries?: PersonaLoreEntry[];
+  unsupported_fields?: Record<string, unknown>;
 }
 
 export interface PersonaTurnStateSnapshot {

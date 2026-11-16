@@ -466,7 +466,13 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
                     </span>
                   </div>
                   <div style={{ color: "var(--text-secondary)", lineHeight: 1.4 }}>
-                    {selectedPersona.physical_appearance || "No physical appearance specified."}
+                    {selectedPersona.persona_bio ||
+                      selectedPersona.build_and_height ||
+                      (selectedPersona.distinctive_features?.length
+                        ? selectedPersona.distinctive_features.join(", ")
+                        : "") ||
+                      selectedPersona.physical_appearance ||
+                      "No persona description specified."}
                   </div>
                   <div style={{ display: "flex", gap: 12, marginTop: 2, color: "var(--text-muted)", fontSize: "0.72rem" }}>
                     <span>Equipped: {selectedPersona.equipped?.length ?? 0}</span>

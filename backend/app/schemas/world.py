@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.schemas.unsupported import sanitize_unsupported_fields_dict
+
 CompassDirection = Literal["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 SharedLoreCategory = Literal["history", "culture", "faction", "rumor"]
 WorldLoreCategory = Literal["history", "culture", "faction", "rumor", "artifact"]
@@ -908,6 +910,10 @@ class WorldRecord(BaseModel):
     locations: list[LocationNode] = Field(default_factory=list)
     edges: list[LocationEdge] = Field(default_factory=list)
     lore_nodes: list[LoreNode] = Field(default_factory=list)
+    unsupported_fields: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Read-only deprecated or unrecognized future .zcc attributes excluded from LLM prompts.",
+    )
 
     @field_validator("lore_nodes")
     @classmethod
@@ -924,6 +930,210 @@ class WorldRecord(BaseModel):
         return self
 
 
+CANONICAL_WORLD_GLOBAL_RULE_KEYS: frozenset[str] = frozenset(
+    {
+        "genre",
+        "tone",
+        "setting_overview",
+        "tech_or_magic_rules",
+        "starting_timestamp",
+        "describe_on_first_visit",
+    }
+)
+LEGACY_DEPRECATED_WORLD_GLOBAL_RULE_KEYS: frozenset[str] = frozenset(
+    {"narrative_style", "sensory_profile", "taboos_and_limits"}
+)
+WORLD_GLOBAL_RULE_GENRE_ALIASES: tuple[str, ...] = (
+    "genre_and_tone",
+    "genre_tone",
+    "genre_setting",
+)
+WORLD_GLOBAL_RULE_TONE_ALIASES: tuple[str, ...] = (
+    "mood",
+    "atmosphere",
+    "narrative_tone",
+)
+CANONICAL_WORLD_RECORD_KEYS: frozenset[str] = frozenset(
+    {
+        "id",
+        "name",
+        "global_rules",
+        "pending_deletion",
+        "created_at",
+        "containers",
+        "locations",
+        "edges",
+        "lore_nodes",
+        "unsupported_fields",
+    }
+)
+CANONICAL_CONTAINER_KEYS: frozenset[str] = frozenset(
+    {
+        "id",
+        "world_id",
+        "created_at_turn_id",
+        "parent_container_id",
+        "depth",
+        "name",
+        "description",
+        "environmental_tags",
+        "ui_x",
+        "ui_y",
+        "icon",
+        "lore_nodes",
+        "created_at",
+    }
+)
+CANONICAL_LOCATION_KEYS: frozenset[str] = frozenset(
+    {
+        "id",
+        "world_id",
+        "created_at_turn_id",
+        "superseded_at_turn_id",
+        "container_id",
+        "is_entry_exit",
+        "name",
+        "summary",
+        "description",
+        "environmental_tags",
+        "is_starting_location",
+        "is_hub",
+        "starting_message",
+        "ui_x",
+        "ui_y",
+        "icon",
+        "is_visited",
+        "lore_nodes",
+    }
+)
+CANONICAL_EDGE_KEYS: frozenset[str] = frozenset(
+    {
+        "id",
+        "world_id",
+        "from_location_id",
+        "to_location_id",
+        "direction_label",
+        "compass_direction",
+        "travel_minutes",
+        "is_locked_or_hidden",
+        "created_at_turn_id",
+        "superseded_at_turn_id",
+    }
+)
+CANONICAL_LORE_KEYS: frozenset[str] = frozenset(
+    {
+        "id",
+        "world_id",
+        "location_id",
+        "container_id",
+        "campaign_id",
+        "title",
+        "category",
+        "content",
+        "entity_tags",
+    }
+)
+
+
+def sanitize_world_unsupported_fields(
+    raw: Any,
+    *,
+    strict: bool = False,
+) -> dict[str, Any]:
+    """Validate and bound arbitrary extension/legacy keys in world unsupported_fields."""
+    return sanitize_unsupported_fields_dict(
+        raw,
+        blocked_keys=CANONICAL_WORLD_RECORD_KEYS,
+        strict=strict,
+    )
+
+
+def extract_world_unsupported_fields(
+    raw_world_dict: dict[str, Any],
+    *,
+    strict: bool = False,
+) -> dict[str, Any]:
+    """Extract top-level unknown world keys and legacy/unknown global_rules keys into unsupported_fields."""
+    raw_unsupported: dict[str, Any] = {}
+    nested_ext = raw_world_dict.get("unsupported_fields")
+    if isinstance(nested_ext, dict):
+        for k, v in nested_ext.items():
+            if isinstance(k, str) and k not in CANONICAL_WORLD_RECORD_KEYS:
+                raw_unsupported[k] = v
+
+    for k, v in raw_world_dict.items():
+        if not isinstance(k, str) or k in CANONICAL_WORLD_RECORD_KEYS:
+            continue
+        raw_unsupported[k] = v
+
+    raw_rules = raw_world_dict.get("global_rules")
+    if isinstance(raw_rules, dict):
+        raw_genre = str(raw_rules.get("genre") or "").strip()
+        raw_tone = str(raw_rules.get("tone") or "").strip()
+
+        consumed_aliases: set[str] = set()
+        effective_genre = raw_genre
+        if not effective_genre:
+            for alias in WORLD_GLOBAL_RULE_GENRE_ALIASES:
+                val = raw_rules.get(alias)
+                if isinstance(val, str) and val.strip():
+                    effective_genre = val.strip()
+                    consumed_aliases.add(alias)
+                    break
+
+        effective_tone = raw_tone
+        if not effective_tone:
+            for alias in WORLD_GLOBAL_RULE_TONE_ALIASES:
+                val = raw_rules.get(alias)
+                if isinstance(val, str) and val.strip():
+                    effective_tone = val.strip()
+                    consumed_aliases.add(alias)
+                    break
+
+        for rk, rv in raw_rules.items():
+            if not isinstance(rk, str) or rk in CANONICAL_WORLD_GLOBAL_RULE_KEYS:
+                continue
+            if rk in consumed_aliases:
+                continue
+            if rk in WORLD_GLOBAL_RULE_GENRE_ALIASES and isinstance(rv, str) and rv.strip() == effective_genre:
+                continue
+            if rk in WORLD_GLOBAL_RULE_TONE_ALIASES and isinstance(rv, str) and rv.strip() == effective_tone:
+                continue
+            raw_unsupported[f"global_rules.{rk}"] = rv
+
+    return sanitize_world_unsupported_fields(raw_unsupported, strict=strict)
+
+
+def find_nested_world_unsupported_keys(raw_world_dict: dict[str, Any]) -> list[str]:
+    """Identify unrecognized keys on nested world sub-entities for non-blocking import warnings."""
+    found: list[str] = []
+
+    def _scan(items: Any, prefix: str, allowed: frozenset[str]) -> None:
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            for k in item.keys():
+                if isinstance(k, str) and k not in allowed:
+                    label = f"{prefix}.{k}"
+                    if label not in found:
+                        found.append(label)
+
+    _scan(raw_world_dict.get("containers"), "containers", CANONICAL_CONTAINER_KEYS)
+    _scan(raw_world_dict.get("locations"), "locations", CANONICAL_LOCATION_KEYS)
+    _scan(raw_world_dict.get("edges"), "edges", CANONICAL_EDGE_KEYS)
+    _scan(raw_world_dict.get("lore_nodes"), "lore_nodes", CANONICAL_LORE_KEYS)
+
+    for cont in raw_world_dict.get("containers") or []:
+        if isinstance(cont, dict):
+            _scan(cont.get("lore_nodes"), "containers.lore_nodes", CANONICAL_LORE_KEYS)
+    for loc in raw_world_dict.get("locations") or []:
+        if isinstance(loc, dict):
+            _scan(loc.get("lore_nodes"), "locations.lore_nodes", CANONICAL_LORE_KEYS)
+    return found
+
+
 class WorldUpdatePayload(BaseModel):
     """Payload for updating a world (in-place if unused, or silently forked if used by a campaign)."""
 
@@ -933,6 +1143,7 @@ class WorldUpdatePayload(BaseModel):
     locations: list[LocationNode] = Field(default_factory=list)
     edges: list[LocationEdge] = Field(default_factory=list)
     lore_nodes: list[LoreNode] = Field(default_factory=list)
+    unsupported_fields: dict[str, Any] | None = None
 
     @field_validator("lore_nodes")
     @classmethod

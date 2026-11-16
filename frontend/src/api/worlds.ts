@@ -39,7 +39,7 @@ export const worldsApi = {
     payload: Pick<
       WorldRecord,
       "name" | "global_rules" | "containers" | "locations" | "edges" | "lore_nodes"
-    >
+    > & { unsupported_fields?: Record<string, unknown> }
   ) =>
     fetchJson<WorldRecord>(`${API_BASE}/worlds/${worldId}`, {
       method: "PUT",

@@ -30,6 +30,7 @@ from app.engine.phase2_context import (
     build_zone1_ensemble_system_prompt,
     build_zone1_narrator_system_prompt,
     build_zone1_static_system_prompt,
+    format_zone1_player_protagonist_block,
     resolve_character_known_persona,
 )
 from app.engine.phase3_cognition import (
@@ -261,7 +262,11 @@ def test_persona_crud_and_snapshot_isolation(temp_repo: CantinaRepository) -> No
     assert camp_reloaded.persona_snapshot is not None
     assert camp_reloaded.persona_snapshot.name == "Deckard Shaw"  # Pristine!
     assert camp_reloaded.persona_snapshot.age == "38"  # Pristine!
-    assert camp_reloaded.persona_snapshot.physical_appearance == payload.physical_appearance
+    assert camp_reloaded.persona_snapshot.physical_appearance == ""
+    assert (
+        camp_reloaded.persona_snapshot.unsupported_fields.get("physical_appearance")
+        == payload.physical_appearance
+    )
     assert len(camp_reloaded.persona_snapshot.inventory) == 2  # Pristine!
 
     # 5. DELETE master Persona template
@@ -756,6 +761,11 @@ def test_personas_api_endpoints(authed_client: tuple[TestClient, CantinaReposito
     assert res_create.status_code == 201
     created_data = res_create.json()
     assert created_data["name"] == "Valerie Wells"
+    assert created_data["physical_appearance"] == ""
+    assert (
+        created_data["unsupported_fields"]["physical_appearance"]
+        == "Neon cybernetic braids, chrome aviator glasses."
+    )
     pid = created_data["id"]
 
     # 3. Get persona
@@ -1039,5 +1049,109 @@ def test_persona_knowledge_provenance_sqlite_serialization(temp_repo: CantinaRep
     assert "item_deck" in dumped_from_st
     loaded_from_st = json.loads(dumped_from_st)
     assert loaded_from_st["item_deck"]["learned_from"] == "player"
+
+
+def test_persona_legacy_canonicalization_dedup_and_zone1_exclusion(temp_repo: CantinaRepository) -> None:
+    """Personas deduplicate identical bio/appearance, keep distinct legacy data under unsupported_fields, and exclude it from Zone 1."""
+    owner_id = _get_or_create_test_user(temp_repo)
+
+    # 1. Exact duplicate physical_appearance == persona_bio is discarded cleanly
+    dup = temp_repo.create_persona(
+        PersonaCreatePayload(
+            name="Mirror Duplicate",
+            persona_bio="Crisp charcoal blazer and brass goggles.",
+            physical_appearance="Crisp charcoal blazer and brass goggles.",
+        ),
+        owner_id=owner_id,
+    )
+    assert dup.physical_appearance == ""
+    assert dup.unsupported_fields == {}
+
+    # 2. Distinct legacy physical_appearance is moved to unsupported_fields and preserved across partial updates
+    distinct = temp_repo.create_persona(
+        PersonaCreatePayload(
+            name="Legacy Traveler",
+            persona_bio="Former courier from the inner ring.",
+            physical_appearance="Tall silhouette, copper circuit tattoos.",
+            unsupported_fields={"future_reputation": 42},
+        ),
+        owner_id=owner_id,
+    )
+    assert distinct.physical_appearance == ""
+    assert distinct.unsupported_fields == {
+        "future_reputation": 42,
+        "physical_appearance": "Tall silhouette, copper circuit tattoos.",
+    }
+
+    # Partial update preserving unsupported_fields
+    partial = temp_repo.update_persona(
+        distinct.id,
+        PersonaUpdatePayload(name="Legacy Traveler II"),
+        owner_id=owner_id,
+    )
+    assert partial.unsupported_fields == distinct.unsupported_fields
+
+    # Explicit removal clears legacy key
+    cleaned = temp_repo.update_persona(
+        distinct.id,
+        PersonaUpdatePayload(unsupported_fields={"future_reputation": 42}),
+        owner_id=owner_id,
+    )
+    assert cleaned.unsupported_fields == {"future_reputation": 42}
+    assert cleaned.physical_appearance == ""
+
+    # 3. Pre-v0.14.0 raw DB row surfaces legacy physical_appearance on read without mutating DB
+    conn = temp_repo._connect()
+    try:
+        conn.execute(
+            """
+            INSERT INTO personas (
+                id, owner_id, name, species, age, age_is_secret, sex, pronouns,
+                persona_bio, tags_json, build_and_height, distinctive_features_json,
+                physical_appearance, equipped_json, inventory_json, lore_entries_json,
+                unsupported_fields_json, created_at, updated_at
+            )
+            VALUES (?, ?, 'PreMigration Persona', 'Human', '30', 0, '', '', 'Veteran scout.', '[]', '', '[]', 'Legacy cape.', '[]', '[]', '[]', '{}', ?, ?)
+            """,
+            ("persona_premig_01", owner_id, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    premig = temp_repo.get_persona("persona_premig_01", owner_id=owner_id)
+    assert premig is not None
+    assert premig.physical_appearance == "Legacy cape."
+    assert premig.unsupported_fields == {"physical_appearance": "Legacy cape."}
+
+    # 4. Zone 1 exclusion vs frozen legacy campaign snapshot
+    legacy_snapshot = PersonaRecord(
+        id="persona_frozen_camp",
+        owner_id=owner_id,
+        name="Frozen Hero",
+        persona_bio="",
+        physical_appearance="Legacy frozen cloak.",
+        unsupported_fields={
+            "future_aura": "DO_NOT_INJECT_AURA",
+            "physical_appearance": "DO_NOT_INJECT_UNSUPPORTED_PHYS",
+        },
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+    z1_player = format_zone1_player_protagonist_block(legacy_snapshot)
+    assert "Legacy frozen cloak." in z1_player
+    assert "DO_NOT_INJECT_AURA" not in z1_player
+    assert "DO_NOT_INJECT_UNSUPPORTED_PHYS" not in z1_player
+
+    known = resolve_character_known_persona(
+        legacy_snapshot,
+        PersonaTurnStateSnapshot(turn_id="t0"),
+        [],
+    )
+    assert known is not None
+    assert known.physical_appearance == "Legacy frozen cloak."
+    assert "DO_NOT_INJECT_AURA" not in repr(known)
+    assert "DO_NOT_INJECT_UNSUPPORTED_PHYS" not in repr(known)
+
 
 

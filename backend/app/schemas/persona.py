@@ -7,6 +7,7 @@ import re
 from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 from app.schemas.character import ItemFlag
+from app.schemas.unsupported import sanitize_unsupported_fields_dict
 
 DisclosureDetectionMode = Literal["llm_intent", "token_matching", "hybrid"]
 
@@ -177,8 +178,66 @@ class PersonaRecord(BaseModel):
         default_factory=list,
         description="Secret background facets. Default is_secret: True.",
     )
+    unsupported_fields: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Read-only deprecated or unrecognized future .zcc attributes excluded from LLM prompts.",
+    )
     created_at: str
     updated_at: str
+
+
+LEGACY_DEPRECATED_PERSONA_KEYS: frozenset[str] = frozenset({"physical_appearance"})
+CANONICAL_PERSONA_RECORD_KEYS: frozenset[str] = frozenset(
+    {
+        "id",
+        "owner_id",
+        "name",
+        "species",
+        "age",
+        "age_is_secret",
+        "sex",
+        "pronouns",
+        "persona_bio",
+        "tags",
+        "build_and_height",
+        "distinctive_features",
+        "equipped",
+        "inventory",
+        "lore_entries",
+        "unsupported_fields",
+        "created_at",
+        "updated_at",
+    }
+)
+
+
+def sanitize_persona_unsupported_fields(
+    raw: Any,
+    *,
+    strict: bool = False,
+) -> dict[str, Any]:
+    """Validate and bound arbitrary extension/legacy keys in persona unsupported_fields."""
+    return sanitize_unsupported_fields_dict(
+        raw,
+        blocked_keys=CANONICAL_PERSONA_RECORD_KEYS,
+        strict=strict,
+    )
+
+
+def canonicalize_persona_legacy_fields(
+    *,
+    persona_bio: str,
+    physical_appearance: str,
+    unsupported_fields: dict[str, Any] | None,
+    strict: bool = False,
+) -> tuple[str, dict[str, Any]]:
+    """Move non-duplicate legacy physical_appearance into unsupported_fields and clear the old column."""
+    clean_unsupported = sanitize_persona_unsupported_fields(unsupported_fields, strict=strict)
+    bio_norm = (persona_bio or "").strip()
+    phys_norm = (physical_appearance or "").strip()
+    if phys_norm and phys_norm != bio_norm and "physical_appearance" not in clean_unsupported:
+        clean_unsupported["physical_appearance"] = phys_norm
+    return "", sanitize_persona_unsupported_fields(clean_unsupported, strict=strict)
 
 
 DEFAULT_PERSONA_NAME = "User"
@@ -216,6 +275,7 @@ def get_default_persona(owner_id: str = "default_user") -> PersonaRecord:
         equipped=[],
         inventory=[],
         lore_entries=[],
+        unsupported_fields={},
         created_at="2025-01-01T00:00:00Z",
         updated_at="2025-01-01T00:00:00Z",
     )
@@ -238,6 +298,7 @@ class PersonaCreatePayload(BaseModel):
     equipped: list[PersonaItemInstance] = Field(default_factory=list)
     inventory: list[PersonaItemInstance] = Field(default_factory=list)
     lore_entries: list[PersonaLoreEntry] = Field(default_factory=list)
+    unsupported_fields: dict[str, Any] = Field(default_factory=dict)
 
 
 class PersonaUpdatePayload(BaseModel):
@@ -257,6 +318,7 @@ class PersonaUpdatePayload(BaseModel):
     equipped: list[PersonaItemInstance] | None = None
     inventory: list[PersonaItemInstance] | None = None
     lore_entries: list[PersonaLoreEntry] | None = None
+    unsupported_fields: dict[str, Any] | None = None
 
 
 class PersonaTurnStateSnapshot(BaseModel):
