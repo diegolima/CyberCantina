@@ -1,4 +1,5 @@
 import type { DisclosureDetectionMode } from "./persona";
+import type { PublicAdminMessage } from "./adminMessages";
 import type {
   AppSettings,
   EffectiveWarning,
@@ -39,6 +40,7 @@ export interface AuthStatusResponse {
   authenticated: boolean;
   allow_self_registration?: boolean;
   inactive_user_purge_days?: number | null;
+  login_messages?: PublicAdminMessage[];
   user?: UserProfile | null;
 }
 

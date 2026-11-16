@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.db.repos import (
+    AdminMessagesMixin,
     AuthUsersMixin,
     CampaignMapOpsMixin,
     CampaignsMixin,
@@ -28,6 +29,7 @@ from app.db.vector_store import embed_text
 
 
 class CantinaRepository(
+    AdminMessagesMixin,
     NotesMixin,
     ChloromancerMixin,
     CampaignMapOpsMixin,

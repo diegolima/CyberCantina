@@ -4,6 +4,7 @@ import {
   Check,
   Cpu,
   FileText,
+  Megaphone,
   Server,
   Sliders,
   UserCog,
@@ -19,16 +20,26 @@ import { ProvidersProvider } from "../providers/ProvidersContext";
 import { AdminUsersTab } from "./AdminUsersTab";
 import { AdminModelsTab } from "./AdminModelsTab";
 import { AdminServerConfigTab } from "./AdminServerConfigTab";
+import { AdminCommunicationTab } from "./AdminCommunicationTab";
+
+export type AdminModalTab =
+  | "users"
+  | "providers"
+  | "models"
+  | "prompts"
+  | "server"
+  | "communication";
 
 export interface AdminModalProps {
   currentUser: UserProfile;
   singleUserMode: boolean;
-  initialTab?: "users" | "providers" | "models" | "prompts" | "server";
+  initialTab?: AdminModalTab;
   inactiveUserPurgeDays?: number | null;
   onClose: () => void;
   onCurrentUserUpdated: (updated: UserProfile) => void;
   onAccountDeleted?: (deletedUserId: string) => Promise<void>;
   onSettingsUpdated?: (updated: AppSettings) => void;
+  onMessagesUpdated?: () => Promise<void> | void;
 }
 
 const AdminModalInner: React.FC<AdminModalProps> = ({
@@ -40,10 +51,13 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
   onCurrentUserUpdated,
   onAccountDeleted,
   onSettingsUpdated,
+  onMessagesUpdated,
 }) => {
-  const [activeTab, setActiveTab] = useState<
-    "users" | "providers" | "models" | "prompts" | "server"
-  >(initialTab ?? "users");
+  const [activeTab, setActiveTab] = useState<AdminModalTab>(
+    singleUserMode && initialTab === "communication"
+      ? "users"
+      : (initialTab ?? "users")
+  );
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [filterQuery, setFilterQuery] = useState("");
   const [selectedUserId, setSelectedUserId] = useState<string | null>(
@@ -186,6 +200,12 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
     loadUsers();
   }, []);
 
+  useEffect(() => {
+    if (singleUserMode && activeTab === "communication") {
+      setActiveTab("users");
+    }
+  }, [singleUserMode, activeTab]);
+
 
   return (
     <div className="modal-backdrop">
@@ -195,13 +215,15 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
           maxWidth:
             activeTab === "models" ||
             activeTab === "prompts" ||
-            activeTab === "server"
+            activeTab === "server" ||
+            activeTab === "communication"
               ? 880
               : 740,
           width:
             activeTab === "models" ||
             activeTab === "prompts" ||
-            activeTab === "server"
+            activeTab === "server" ||
+            activeTab === "communication"
               ? "min(880px, 95vw)"
               : undefined,
           transition: "max-width 0.2s ease",
@@ -268,6 +290,24 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
           >
             <Sliders size={14} />
             Server Configuration
+          </button>
+          <button
+            type="button"
+            className={`modal-tab-btn ${
+              activeTab === "communication" ? "active" : ""
+            }${singleUserMode ? " is-disabled" : ""}`}
+            disabled={singleUserMode}
+            title={
+              singleUserMode
+                ? "Communication messages are disabled in single-user passwordless mode. Set an admin password to enable multi-user mode."
+                : undefined
+            }
+            onClick={() => {
+              if (!singleUserMode) setActiveTab("communication");
+            }}
+          >
+            <Megaphone size={14} />
+            Communication
           </button>
         </div>
 
@@ -381,6 +421,15 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
               setStatusMsg={setStatusMsg}
               setErrorMsg={setErrorMsg}
               onUsersChanged={loadUsers}
+            />
+          )}
+
+          {/* Admin Communication Tab */}
+          {activeTab === "communication" && !singleUserMode && (
+            <AdminCommunicationTab
+              setStatusMsg={setStatusMsg}
+              setErrorMsg={setErrorMsg}
+              onMessagesUpdated={onMessagesUpdated}
             />
           )}
         </div>

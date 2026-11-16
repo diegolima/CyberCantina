@@ -12,6 +12,7 @@ from typing import Any
 
 from app.config import settings
 from app.db.repository import CantinaRepository
+from app.housekeeping.purge_admin_messages import run_admin_messages_purge
 from app.housekeeping.purge_inactive import run_inactive_user_purge
 from app.schemas.housekeeping import (
     ChloromancerJobInfo,
@@ -67,6 +68,25 @@ class ChloromancerScheduler:
                 is_enabled=lambda: bool(
                     settings.inactive_user_purge_days and settings.inactive_user_purge_days > 0
                 ),
+            )
+        )
+
+        async def _purge_admin_messages_runner(
+            repo: CantinaRepository, trigger: str, actor_user_id: str | None
+        ) -> dict[str, Any] | None:
+            return await asyncio.to_thread(
+                run_admin_messages_purge,
+                repo,
+                trigger=trigger,
+                actor_user_id=actor_user_id,
+            )
+
+        self.register_job(
+            _RegisteredJob(
+                job_id="purge_admin_messages",
+                description="Permanently delete archived admin communication messages soft-deleted or expired more than 7 days ago.",
+                runner=_purge_admin_messages_runner,
+                is_enabled=lambda: True,
             )
         )
 

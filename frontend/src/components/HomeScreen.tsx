@@ -23,9 +23,11 @@ import {
   CampaignRecord,
   CharacterRecord,
   PersonaRecord,
+  PublicAdminMessage,
   UserProfile,
   WorldRecord,
 } from "../types";
+import { AdminMessageBannerList } from "./shared/AdminMessageBannerList";
 import {
   EntityCategory,
   getCategoryPrimaryImages,
@@ -42,6 +44,7 @@ export interface HomeScreenProps {
   activePersona: PersonaRecord | null;
   currentUser: UserProfile | null;
   singleUserMode: boolean;
+  homeMessages?: PublicAdminMessage[];
   notesCount?: number;
   onSelectCampaign: (campaign: CampaignRecord) => void;
   onInspectCharacter: (character: CharacterRecord) => void;
@@ -202,6 +205,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   activePersona,
   currentUser,
   singleUserMode,
+  homeMessages = [],
   notesCount,
   onSelectCampaign,
   onInspectCharacter,
@@ -411,6 +415,15 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               Welcome to your central control deck. Explore worlds, manage characters, configure personas, or dive straight into active campaigns.
             </div>
           </div>
+
+          {!singleUserMode && homeMessages.length > 0 && (
+            <AdminMessageBannerList
+              messages={homeMessages}
+              surface="home"
+              userId={currentUser?.id}
+              className="home-admin-msg-stack"
+            />
+          )}
 
           {showWebGpuNotice && (
             <div

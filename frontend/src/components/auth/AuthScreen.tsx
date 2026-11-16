@@ -9,12 +9,14 @@ import {
   UserPlus,
 } from "lucide-react";
 import { api } from "../../api";
-import { AuthSessionResponse } from "../../types";
+import { AuthSessionResponse, PublicAdminMessage } from "../../types";
+import { AdminMessageBannerList } from "../shared/AdminMessageBannerList";
 import { PasswordField } from "./PasswordField";
 
 export interface AuthScreenProps {
   singleUserMode: boolean;
   allowSelfRegistration?: boolean;
+  loginMessages?: PublicAdminMessage[];
   onAuthenticated: (res: AuthSessionResponse) => void;
 }
 
@@ -23,6 +25,7 @@ type InvalidAuthField = "username" | "password" | "confirmPassword" | null;
 export const AuthScreen: React.FC<AuthScreenProps> = ({
   singleUserMode,
   allowSelfRegistration = true,
+  loginMessages = [],
   onAuthenticated,
 }) => {
   const [mode, setMode] = useState<"login" | "register">("login");
@@ -112,7 +115,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
   return (
     <div className="auth-stage-backdrop">
-      <div className="modal-panel" style={{ maxWidth: 440, width: "100%" }}>
+      <div className="auth-stage-stack">
+        {!singleUserMode && loginMessages.length > 0 && (
+          <AdminMessageBannerList messages={loginMessages} surface="login" />
+        )}
+        <div className="modal-panel" style={{ maxWidth: 440, width: "100%" }}>
         <div className="modal-header">
           <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <Lock size={18} color="var(--accent-amber)" />
@@ -321,6 +328,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             </>
           )}
         </div>
+      </div>
       </div>
     </div>
   );

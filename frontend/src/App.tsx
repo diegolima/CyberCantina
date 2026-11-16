@@ -26,6 +26,7 @@ import {
   CharacterRecord,
   PersonaRecord,
   ProfileModelSettingsResponse,
+  PublicAdminMessage,
   UserNote,
   UserProfile,
   WorldRecord,
@@ -37,6 +38,8 @@ export const App: React.FC = () => {
   const [singleUserMode, setSingleUserMode] = useState(false);
   const [allowSelfRegistration, setAllowSelfRegistration] = useState(true);
   const [inactiveUserPurgeDays, setInactiveUserPurgeDays] = useState<number | null>(null);
+  const [loginMessages, setLoginMessages] = useState<PublicAdminMessage[]>([]);
+  const [homeMessages, setHomeMessages] = useState<PublicAdminMessage[]>([]);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
@@ -47,7 +50,7 @@ export const App: React.FC = () => {
     "behavior" | "prompts" | "models" | "providers" | undefined
   >(undefined);
   const [adminInitialTab, setAdminInitialTab] = useState<
-    "users" | "providers" | "models" | "prompts" | "server"
+    "users" | "providers" | "models" | "prompts" | "server" | "communication"
   >("users");
   const [profileModels, setProfileModels] =
     useState<ProfileModelSettingsResponse | null>(null);
@@ -225,8 +228,17 @@ export const App: React.FC = () => {
     setCampaignCharacter(null);
   };
 
+  const refreshHomeMessages = async () => {
+    try {
+      const msgs = await api.getHomeMessages();
+      setHomeMessages(msgs);
+    } catch {
+      setHomeMessages([]);
+    }
+  };
+
   const loadWorkspaceData = async () => {
-    const [camps, wList, cList, cfg, userNotes, personaList, profModels] = await Promise.all([
+    const [camps, wList, cList, cfg, userNotes, personaList, profModels, homeMsgs] = await Promise.all([
       api.listCampaigns(),
       api.listWorlds(),
       api.listCharacters(),
@@ -234,7 +246,9 @@ export const App: React.FC = () => {
       api.listNotes().catch(() => [] as UserNote[]),
       api.listPersonas().catch(() => [] as PersonaRecord[]),
       api.getProfileModels().catch(() => null),
+      api.getHomeMessages().catch(() => [] as PublicAdminMessage[]),
     ]);
+    setHomeMessages(homeMsgs);
     setCampaigns(camps);
     setWorlds(wList);
     setCharacters(cList);
@@ -266,6 +280,10 @@ export const App: React.FC = () => {
     setSingleUserMode(status.single_user_mode);
     setAllowSelfRegistration(status.allow_self_registration ?? true);
     setInactiveUserPurgeDays(status.inactive_user_purge_days ?? null);
+    setLoginMessages(status.login_messages ?? []);
+    if (status.single_user_mode) {
+      setHomeMessages([]);
+    }
     setCurrentUser(status.user ?? null);
     return status;
   };
@@ -562,6 +580,7 @@ export const App: React.FC = () => {
       <AuthScreen
         singleUserMode={singleUserMode}
         allowSelfRegistration={allowSelfRegistration}
+        loginMessages={loginMessages}
         onAuthenticated={handleAuthenticated}
       />
     );
@@ -655,6 +674,7 @@ export const App: React.FC = () => {
           activePersona={activePersona}
           currentUser={currentUser}
           singleUserMode={singleUserMode}
+          homeMessages={homeMessages}
           notesCount={notes.length}
           onSelectCampaign={(c) => loadCampaignBundle(c.id)}
           onInspectCharacter={(c) => setInspectingCharacter(c)}
@@ -830,6 +850,9 @@ export const App: React.FC = () => {
         adminInitialTab={adminInitialTab}
         inactiveUserPurgeDays={inactiveUserPurgeDays}
         setAppSettings={setAppSettings}
+        onMessagesUpdated={async () => {
+          await Promise.all([refreshAuthStatus(), refreshHomeMessages()]);
+        }}
         showNotesModal={showNotesModal}
         setShowNotesModal={setShowNotesModal}
         notesModalInitialId={notesModalInitialId}

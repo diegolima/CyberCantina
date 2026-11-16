@@ -9,6 +9,11 @@
 | `GET` | `/api/admin/chloromancer/status` | `app.routers.admin_housekeeping.admin_chloromancer_status` | `ChloromancerStatusResponse` | `frontend/src/api/auth.ts` |
 | `POST` | `/api/admin/embeddings/reindex` | `app.routers.settings.reindex_embeddings` | `dict` | `frontend/src/api/settings.ts` |
 | `GET` | `/api/admin/embeddings/status` | `app.routers.settings.embedding_status` | `dict` | `frontend/src/api/settings.ts` |
+| `GET` | `/api/admin/messages` | `app.routers.admin_messages.admin_list_messages` | `AdminMessageListResponse` | `frontend/src/api/adminMessages.ts` |
+| `POST` | `/api/admin/messages` | `app.routers.admin_messages.admin_create_message` | `AdminMessageRecord` | `frontend/src/api/adminMessages.ts` |
+| `PUT` | `/api/admin/messages/reorder` | `app.routers.admin_messages.admin_reorder_messages` | `list` | `frontend/src/api/adminMessages.ts` |
+| `DELETE` | `/api/admin/messages/{message_id}` | `app.routers.admin_messages.admin_delete_message` | `dict` | `frontend/src/api/adminMessages.ts` |
+| `PUT` | `/api/admin/messages/{message_id}` | `app.routers.admin_messages.admin_update_message` | `AdminMessageRecord` | `frontend/src/api/adminMessages.ts` |
 | `GET` | `/api/admin/users` | `app.routers.auth.admin_list_users` | `list` | `frontend/src/api/auth.ts` |
 | `POST` | `/api/admin/users` | `app.routers.auth.admin_create_user` | `UserProfile` | `frontend/src/api/auth.ts` |
 | `DELETE` | `/api/admin/users/{user_id}` | `app.routers.auth.admin_delete_user` | `dict` | `frontend/src/api/auth.ts` |
@@ -66,6 +71,7 @@
 | `WS` | `/api/local-relay/ws` | `app.routers.local_relay.local_relay_ws` | — | *(backend-only / test / SSE)* |
 | `POST` | `/api/mechanics/choice-preview` | `app.routers.mechanics.preview_choices` | `ChoicePreviewResponse` | `frontend/src/api/campaigns.ts` |
 | `GET` | `/api/media/characters/{character_id}/{category}/{filename}` | `app.routers.characters.get_character_media` | — | *(backend-only / test / SSE)* |
+| `GET` | `/api/messages/home` | `app.routers.admin_messages.list_home_messages` | `list` | `frontend/src/api/adminMessages.ts` |
 | `GET` | `/api/notes` | `app.routers.notes.list_my_notes` | `list` | `frontend/src/api/notes.ts` |
 | `POST` | `/api/notes` | `app.routers.notes.create_my_note` | `UserNoteRecord` | `frontend/src/api/notes.ts` |
 | `DELETE` | `/api/notes/{note_id}` | `app.routers.notes.delete_my_note` | `dict` | `frontend/src/api/notes.ts` |
@@ -211,6 +217,7 @@ erDiagram
 | `app_meta` | — |
 | `providers` | `users` |
 | `chloromancer_runs` | — |
+| `admin_messages` | — |
 
 ## 3. Domain Package File Index
 
@@ -250,6 +257,7 @@ erDiagram
 | File | Summary |
 | :--- | :--- |
 | `backend/app/db/repos/__init__.py` | Domain repository mixins composed into CantinaRepository. |
+| `backend/app/db/repos/admin_messages.py` | Admin communication messages persistence and lifecycle queries. |
 | `backend/app/db/repos/arrival_descriptions.py` | Pure helpers for resolving cosmetic first-visit arrival description cards. |
 | `backend/app/db/repos/auth_users.py` | Users, passkeys, sessions, and per-user model settings persistence. |
 | `backend/app/db/repos/base.py` | Core SQLite connection, media helpers, and vector/provider bindings. |
@@ -421,6 +429,7 @@ erDiagram
 | File | Summary |
 | :--- | :--- |
 | `backend/app/housekeeping/__init__.py` | Chloromancer background housekeeping scheduler and maintenance jobs. |
+| `backend/app/housekeeping/purge_admin_messages.py` | Chloromancer housekeeping job to purge deleted and expired admin messages. |
 | `backend/app/housekeeping/purge_inactive.py` | Deterministic inactive-user purge job and dry-run preview for Chloromancer. |
 | `backend/app/housekeeping/scheduler.py` | In-process async Chloromancer housekeeping scheduler. |
 
@@ -460,6 +469,7 @@ erDiagram
 | :--- | :--- |
 | `backend/app/routers/__init__.py` | FastAPI APIRouter modules for CyberCantina. |
 | `backend/app/routers/admin_housekeeping.py` | Admin housekeeping router for Chloromancer scheduler status, dry-run preview, and manual triggers. |
+| `backend/app/routers/admin_messages.py` | Admin Communication Messages router (public Home delivery + admin CRUD/reorder/archive). |
 | `backend/app/routers/auth.py` | Authentication, passkeys, user profiles, and admin user management router. |
 | `backend/app/routers/campaigns.py` | Campaign Management, Turn Streaming & Spatial State API Router. |
 | `backend/app/routers/characters.py` | Characters, versioning, SillyTavern importer, and character media router. |
@@ -489,6 +499,7 @@ erDiagram
 | File | Summary |
 | :--- | :--- |
 | `backend/app/schemas/__init__.py` | Pydantic v2 data contracts for CyberCantina. |
+| `backend/app/schemas/admin_messages.py` | Pydantic v2 schemas for Admin Communication Messages. |
 | `backend/app/schemas/affective.py` | Core Pydantic schemas, enums, and archetype presets for the CARE psychology engine. |
 | `backend/app/schemas/auth.py` | Pydantic schemas for Multi-User Authentication, WebAuthn Passkeys, Profile, and Admin. |
 | `backend/app/schemas/character.py` | Character, psyche, memory shard, and cognition schemas. |
@@ -552,6 +563,7 @@ erDiagram
 
 | File |
 | :--- |
+| `frontend/src/api/adminMessages.ts` |
 | `frontend/src/api/auth.ts` |
 | `frontend/src/api/campaigns.ts` |
 | `frontend/src/api/characters.ts` |
@@ -598,6 +610,7 @@ erDiagram
 
 | File |
 | :--- |
+| `frontend/src/components/auth/AdminCommunicationTab.tsx` |
 | `frontend/src/components/auth/AdminModal.tsx` |
 | `frontend/src/components/auth/AdminModelsTab.tsx` |
 | `frontend/src/components/auth/AdminServerConfigTab.tsx` |
@@ -711,6 +724,7 @@ erDiagram
 
 | File |
 | :--- |
+| `frontend/src/components/shared/AdminMessageBannerList.tsx` |
 | `frontend/src/components/shared/ClickToEditField.tsx` |
 
 #### `components/wizard`
@@ -762,6 +776,7 @@ erDiagram
 
 | File |
 | :--- |
+| `frontend/src/types/adminMessages.ts` |
 | `frontend/src/types/affective.ts` |
 | `frontend/src/types/auth.ts` |
 | `frontend/src/types/character.ts` |
@@ -779,6 +794,7 @@ erDiagram
 
 | File |
 | :--- |
+| `frontend/src/utils/adminMessageState.ts` |
 | `frontend/src/utils/choiceCommand.ts` |
 | `frontend/src/utils/entityImages.ts` |
 | `frontend/src/utils/importExportLogic.ts` |

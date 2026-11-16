@@ -32,6 +32,7 @@ from app.dependencies import (
 from app.engine.llm_client import auto_configure_ollama_models, llm_client
 from app.housekeeping import chloromancer_scheduler
 from app.routers.admin_housekeeping import router as admin_housekeeping_router
+from app.routers.admin_messages import router as admin_messages_router
 from app.routers.auth import router as auth_router
 from app.routers.campaigns import _execute_turn_stream_events, router as campaigns_router
 from app.routers.characters import router as characters_router
@@ -182,6 +183,7 @@ async def attach_relay_tab_context(request: Request, call_next):
 # Register modular domain routers
 app.include_router(auth_router)
 app.include_router(admin_housekeeping_router)
+app.include_router(admin_messages_router)
 app.include_router(settings_router)
 app.include_router(providers_router)
 app.include_router(local_relay_router)

@@ -482,3 +482,24 @@ CREATE TABLE IF NOT EXISTS chloromancer_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_chloromancer_runs_job_started
     ON chloromancer_runs(job_id, started_at DESC);
+
+-- Admin communication messages (login, home, or both)
+CREATE TABLE IF NOT EXISTS admin_messages (
+    id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL DEFAULT 1,
+    placement TEXT NOT NULL CHECK (placement IN ('login', 'home', 'both')),
+    title TEXT NOT NULL CHECK (length(trim(title)) >= 1),
+    message TEXT NOT NULL CHECK (length(trim(message)) >= 1),
+    urgency TEXT NOT NULL DEFAULT 'info' CHECK (urgency IN ('info', 'warning', 'critical')),
+    dismissable INTEGER NOT NULL DEFAULT 1 CHECK (dismissable IN (0, 1)),
+    starts_at TEXT NULL,
+    expires_at TEXT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_admin_messages_active
+    ON admin_messages(deleted_at, urgency, sort_order, created_at);
+CREATE INDEX IF NOT EXISTS idx_admin_messages_purge
+    ON admin_messages(deleted_at, expires_at);

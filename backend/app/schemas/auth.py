@@ -12,6 +12,7 @@ from app.config import (
     ModelProfile,
     ProviderCredentialStoreMode,
 )
+from app.schemas.admin_messages import PublicAdminMessage
 
 UserRole = Literal["user", "admin"]
 
@@ -47,6 +48,7 @@ class AuthStatusResponse(BaseModel):
     user: UserProfile | None = None
     allow_self_registration: bool = True
     inactive_user_purge_days: int | None = None
+    login_messages: list[PublicAdminMessage] = Field(default_factory=list)
 
 
 class InitialSetupRequest(BaseModel):

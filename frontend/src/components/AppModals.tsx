@@ -81,9 +81,16 @@ export interface AppModalsProps {
   setProfileModels: React.Dispatch<React.SetStateAction<ProfileModelSettingsResponse | null>>;
   showAdminModal: boolean;
   setShowAdminModal: React.Dispatch<React.SetStateAction<boolean>>;
-  adminInitialTab: "users" | "providers" | "models" | "prompts" | "server";
+  adminInitialTab:
+    | "users"
+    | "providers"
+    | "models"
+    | "prompts"
+    | "server"
+    | "communication";
   inactiveUserPurgeDays?: number | null;
   setAppSettings: React.Dispatch<React.SetStateAction<AppSettings | null>>;
+  onMessagesUpdated?: () => Promise<void> | void;
   showNotesModal: boolean;
   setShowNotesModal: React.Dispatch<React.SetStateAction<boolean>>;
   notesModalInitialId: string | undefined;
@@ -169,6 +176,7 @@ export const AppModals: React.FC<AppModalsProps> = ({
   adminInitialTab,
   inactiveUserPurgeDays = null,
   setAppSettings,
+  onMessagesUpdated,
   showNotesModal,
   setShowNotesModal,
   notesModalInitialId,
@@ -354,6 +362,7 @@ export const AppModals: React.FC<AppModalsProps> = ({
             void refreshAuthStatus();
             void api.getProfileModels().then(setProfileModels).catch(() => {});
           }}
+          onMessagesUpdated={onMessagesUpdated}
         />
       )}
 

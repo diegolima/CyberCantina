@@ -1,3 +1,4 @@
+import { adminMessagesApi } from "./adminMessages";
 import { authApi } from "./auth";
 import { campaignsApi } from "./campaigns";
 import { charactersApi } from "./characters";
@@ -24,6 +25,7 @@ export {
 } from "./stream";
 
 export const api = {
+  ...adminMessagesApi,
   ...authApi,
   ...settingsApi,
   ...providersApi,

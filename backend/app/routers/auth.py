@@ -22,9 +22,11 @@ from app.auth import (
     verify_password,
 )
 from app.config import settings
+from app.db.repos.base import utc_now_iso
 from app.db.seed import ensure_default_seed
 from app.dependencies import attach_user_media_stats, get_repo, issue_session_response
 from app.providers.seeder import auto_provision_webgpu_for_user
+from app.schemas.admin_messages import PublicAdminMessage
 from app.schemas.auth import (
     AdminChangeUsernameRequest,
     AdminCreateUserRequest,
@@ -61,12 +63,19 @@ def get_auth_status(
     user_count = repo.count_users()
     setup_required = user_count == 0
     single_user_mode = repo.is_single_user_passwordless_mode()
+    login_messages: list[PublicAdminMessage] = []
+    if not setup_required and not single_user_mode:
+        login_messages = [
+            PublicAdminMessage.model_validate(row)
+            for row in repo.list_visible_admin_messages("login", utc_now_iso())
+        ]
     return AuthStatusResponse(
         setup_required=setup_required,
         single_user_mode=single_user_mode,
         authenticated=current_user is not None,
         allow_self_registration=bool(settings.allow_self_registration),
         inactive_user_purge_days=settings.inactive_user_purge_days,
+        login_messages=login_messages,
         user=attach_user_media_stats(repo, current_user) if current_user else None,
     )
 
