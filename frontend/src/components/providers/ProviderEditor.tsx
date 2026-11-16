@@ -1,12 +1,19 @@
 import React, { useEffect, useState } from "react";
 import { AlertTriangle, Check, Copy, Loader2, Plug, Trash2 } from "lucide-react";
 import { ApiError, api } from "../../api";
+import {
+  deleteProviderCredential,
+  getProviderCredential,
+  setProviderCredential,
+} from "../../local/credentialVault";
 import { probeBrowserOllama } from "../../local/ollamaDriver";
+import { probeRemoteProvider } from "../../local/remoteProviderDriver";
 import { checkWebGpuAdapter, getWebGpuModelInfos } from "../../local/webgpuCatalog";
 import { useOptionalLocalRelay } from "../../providers/LocalRelayContext";
 import {
   LLMProvider,
   ProviderColor,
+  ProviderCredentialStoreMode,
   ProviderProbeResponse,
   ProviderReference,
   ProviderScope,
@@ -16,8 +23,19 @@ import { PROVIDER_COLORS, ProviderColorPill, describeProbeError } from "./Provid
 import { useProviders } from "./ProvidersContext";
 
 type EditorProps =
-  | { mode: "edit"; provider: LLMProvider; deleteOnly?: boolean; onDone: () => void }
-  | { mode: "create"; scope: ProviderScope; onDone: () => void };
+  | {
+      mode: "edit";
+      provider: LLMProvider;
+      credentialStoreMode?: ProviderCredentialStoreMode;
+      deleteOnly?: boolean;
+      onDone: () => void;
+    }
+  | {
+      mode: "create";
+      scope: ProviderScope;
+      credentialStoreMode?: ProviderCredentialStoreMode;
+      onDone: () => void;
+    };
 
 const PRESET_CLOUD_HOSTS = new Set(["openrouter.ai", "oai.stablehorde.net"]);
 
@@ -53,12 +71,24 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
   const existing = props.mode === "edit" ? props.provider : null;
   const deleteOnly = props.mode === "edit" && props.deleteOnly;
   const scope: ProviderScope = existing ? existing.scope : (props as { scope: ProviderScope }).scope;
+  const credentialStoreMode: ProviderCredentialStoreMode =
+    props.credentialStoreMode ?? "prefer_server";
+  const initialStoreInBrowser =
+    scope === "user" &&
+    (credentialStoreMode === "browser_only"
+      ? true
+      : credentialStoreMode === "server_only"
+        ? false
+        : existing
+          ? existing.credential_storage === "browser"
+          : credentialStoreMode === "prefer_browser");
 
   const [providerType, setProviderType] = useState<ProviderType>(existing?.type ?? "ollama");
   const [name, setName] = useState(existing?.name ?? "");
   const [url, setUrl] = useState(existing?.base_url ?? "");
   const [token, setToken] = useState("");
   const [clearToken, setClearToken] = useState(false);
+  const [storeInBrowser, setStoreInBrowser] = useState(initialStoreInBrowser);
   const [color, setColor] = useState<ProviderColor>(existing?.color ?? "neutral");
   const [enabled, setEnabled] = useState(existing?.is_enabled ?? true);
   const [saving, setSaving] = useState(false);
@@ -76,6 +106,57 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
   const isBrowserOllama = providerType === "browser_ollama";
   const isBrowserLocal = isWebGpu || isBrowserOllama;
   const showBrowserTypes = true;
+  const showBrowserCredentialOption = !isBrowserLocal && scope === "user";
+  const browserCheckDisabled =
+    deleteOnly ||
+    credentialStoreMode === "server_only" ||
+    credentialStoreMode === "browser_only";
+  const effectiveStoreInBrowser = showBrowserCredentialOption
+    ? credentialStoreMode === "browser_only"
+      ? true
+      : credentialStoreMode === "server_only"
+        ? false
+        : storeInBrowser
+    : false;
+  const isPausedBrowserUnderServerOnly =
+    props.mode === "edit" &&
+    showBrowserCredentialOption &&
+    existing?.credential_storage === "browser" &&
+    credentialStoreMode === "server_only";
+  const vaultToken = existing
+    ? getProviderCredential(relay?.currentUserId, existing.id)
+    : null;
+  const hasExistingBrowserToken = Boolean(
+    existing?.credential_storage === "browser" && vaultToken
+  );
+  const hasExistingServerToken = Boolean(
+    existing?.credential_storage !== "browser" && existing?.has_bearer_token
+  );
+  const effectiveHasSavedToken = effectiveStoreInBrowser
+    ? hasExistingBrowserToken
+    : hasExistingServerToken;
+  const isRemoteHttpMixedContent = (() => {
+    if (
+      !effectiveStoreInBrowser ||
+      providerType !== "ollama" ||
+      typeof window === "undefined" ||
+      window.location.protocol !== "https:"
+    ) {
+      return false;
+    }
+    try {
+      const parsed = new URL(url.trim());
+      const host = parsed.hostname.toLowerCase();
+      return (
+        parsed.protocol === "http:" &&
+        host !== "localhost" &&
+        host !== "127.0.0.1" &&
+        host !== "[::1]"
+      );
+    } catch {
+      return false;
+    }
+  })();
 
   useEffect(() => {
     if (!isWebGpu) return;
@@ -89,14 +170,26 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
   }, [isWebGpu]);
 
   const urlMissing = providerType === "ollama" && url.trim() === "";
-  const tokenMissing = providerType === "openrouter" && props.mode === "create" && !token.trim();
+  const canReuseExistingOrVaultOpenRouterKey =
+    props.mode === "edit" &&
+    (effectiveStoreInBrowser
+      ? hasExistingBrowserToken
+      : existing?.credential_storage === "browser"
+        ? isPausedBrowserUnderServerOnly || Boolean(vaultToken)
+        : hasExistingServerToken);
+  const tokenMissing =
+    (providerType === "openrouter" ||
+      (providerType === "aihorde" && effectiveStoreInBrowser)) &&
+    !token.trim() &&
+    !canReuseExistingOrVaultOpenRouterKey;
   const hostChanged =
     !!existing &&
     !isBrowserLocal &&
     existing.base_url !== null &&
     hostOf(url) !== null &&
     hostOf(url) !== hostOf(existing.base_url);
-  const tokenRequired = hostChanged && !!existing?.has_bearer_token && !token && !clearToken;
+  const tokenRequired =
+    hostChanged && effectiveHasSavedToken && !token && !clearToken;
   const canSave = !urlMissing && !tokenMissing && !saving && !tokenRequired && (props.mode === "create" || name.trim() !== "");
 
   const defaultUrlFor = (ptype: ProviderType): string => {
@@ -175,6 +268,34 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
         }
         return;
       }
+      if (effectiveStoreInBrowser) {
+        relay?.ensureConnected();
+        const candidateToken =
+          token.trim() ||
+          (existing?.credential_storage === "browser" ? vaultToken : null);
+        const localRes = await probeRemoteProvider({
+          type: providerType as "ollama" | "openrouter" | "aihorde",
+          baseUrl: effectiveUrl,
+          token: candidateToken,
+          requireToken:
+            providerType === "openrouter" || providerType === "aihorde",
+          providerId: existing?.id ?? null,
+          configVersion: existing?.version ?? 0,
+        });
+        if (existing && existing.credential_storage === "browser") {
+          const synced = await api.reportClientProbe(existing.id, {
+            reachable: localRes.reachable,
+            protocol: localRes.protocol,
+            models: localRes.models,
+            error_code: localRes.error_code,
+            error: localRes.error,
+          });
+          setTestResult(synced);
+        } else {
+          setTestResult(localRes);
+        }
+        return;
+      }
       const result = await api.probeProviderDraft({
         provider_id: existing?.id ?? null,
         type: providerType,
@@ -195,32 +316,93 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
     setConflict(false);
     try {
       const effectiveUrl = url.trim() || defaultUrlFor(providerType);
+      const userId = relay?.currentUserId;
       if (props.mode === "create") {
-        await store.create({
+        const created = await store.create({
           name: name.trim() || null,
           type: providerType,
           scope,
           color,
           is_enabled: enabled,
+          credential_storage: effectiveStoreInBrowser ? "browser" : "server",
           settings: {
             base_url: effectiveUrl,
-            bearer_token: isBrowserLocal ? null : token || null,
+            bearer_token:
+              isBrowserLocal || effectiveStoreInBrowser ? null : token || null,
           },
         });
+        if (effectiveStoreInBrowser) {
+          relay?.ensureConnected();
+          if (token.trim()) {
+            setProviderCredential(userId, created.id, token.trim());
+          }
+          void relay?.refreshProviders();
+        }
       } else {
         const p = props.provider;
-        await store.update(p.id, {
-          expected_version: p.version,
-          name: name.trim() !== p.name ? name.trim() : undefined,
-          color: color !== p.color ? color : undefined,
-          is_enabled: enabled !== p.is_enabled ? enabled : undefined,
-          base_url:
-            !isWebGpu && url.trim() !== (p.base_url ?? "")
-              ? effectiveUrl || undefined
-              : undefined,
-          bearer_token: isBrowserLocal ? undefined : token || undefined,
-          clear_bearer_token: isBrowserLocal ? undefined : clearToken || undefined,
-        });
+        if (showBrowserCredentialOption && effectiveStoreInBrowser) {
+          relay?.ensureConnected();
+          const updated = await store.update(p.id, {
+            expected_version: p.version,
+            name: name.trim() !== p.name ? name.trim() : undefined,
+            color: color !== p.color ? color : undefined,
+            is_enabled: enabled !== p.is_enabled ? enabled : undefined,
+            base_url:
+              !isWebGpu && url.trim() !== (p.base_url ?? "")
+                ? effectiveUrl || undefined
+                : undefined,
+            clear_bearer_token: p.has_bearer_token ? true : undefined,
+            credential_storage: "browser",
+          });
+          if (clearToken) {
+            deleteProviderCredential(userId, updated.id);
+          } else if (token.trim()) {
+            setProviderCredential(userId, updated.id, token.trim());
+          } else if (p.credential_storage !== "browser") {
+            deleteProviderCredential(userId, updated.id);
+          }
+          void relay?.refreshProviders();
+        } else if (isPausedBrowserUnderServerOnly && !token.trim()) {
+          // Preserve paused browser state when only editing metadata under server_only.
+          await store.update(p.id, {
+            expected_version: p.version,
+            name: name.trim() !== p.name ? name.trim() : undefined,
+            color: color !== p.color ? color : undefined,
+            is_enabled: enabled !== p.is_enabled ? enabled : undefined,
+            base_url:
+              !isWebGpu && url.trim() !== (p.base_url ?? "")
+                ? effectiveUrl || undefined
+                : undefined,
+          });
+        } else {
+          const migrationToken =
+            !token.trim() &&
+            p.credential_storage === "browser" &&
+            !isPausedBrowserUnderServerOnly
+              ? vaultToken || ""
+              : token.trim();
+          const updated = await store.update(p.id, {
+            expected_version: p.version,
+            name: name.trim() !== p.name ? name.trim() : undefined,
+            color: color !== p.color ? color : undefined,
+            is_enabled: enabled !== p.is_enabled ? enabled : undefined,
+            base_url:
+              !isWebGpu && url.trim() !== (p.base_url ?? "")
+                ? effectiveUrl || undefined
+                : undefined,
+            bearer_token: isBrowserLocal
+              ? undefined
+              : migrationToken || undefined,
+            clear_bearer_token: isBrowserLocal
+              ? undefined
+              : clearToken || undefined,
+            credential_storage: isBrowserLocal ? undefined : "server",
+          });
+          if (showBrowserCredentialOption) {
+            deleteProviderCredential(userId, updated.id);
+            void relay?.refreshProviders();
+          }
+        }
       }
       props.onDone();
     } catch (err) {
@@ -440,6 +622,13 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
 
       {!isBrowserLocal && (
         <div className="form-group">
+          {isPausedBrowserUnderServerOnly && (
+            <div className="provider-warning" role="status" style={{ marginBottom: 8 }}>
+              <AlertTriangle size={13} /> Browser-stored credentials are currently disabled by the
+              administrator. Enter a key below to store it on the server, or wait until browser
+              storage is re-enabled.
+            </div>
+          )}
           <label className="form-label">
             {providerType === "openrouter"
               ? "OpenRouter API Key"
@@ -450,7 +639,9 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
               {providerType === "openrouter"
                 ? "(required, sk-or-v1-...)"
                 : providerType === "aihorde"
-                ? "(optional, defaults to anonymous 0000000000)"
+                ? effectiveStoreInBrowser
+                  ? "(required when stored in browser)"
+                  : "(optional, defaults to anonymous 0000000000)"
                 : "(optional, for hosted/cloud endpoints)"}
             </span>
           </label>
@@ -461,18 +652,76 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
             value={token}
             disabled={deleteOnly || clearToken}
             placeholder={
-              existing?.has_bearer_token
-                ? "•••••••• saved. Type to replace"
-                : providerType === "openrouter"
-                ? "sk-or-v1-..."
-                : providerType === "aihorde"
-                ? "Leave blank to use anonymous key (0000000000)"
-                : "Leave empty if not needed"
+              effectiveHasSavedToken
+                ? effectiveStoreInBrowser
+                  ? "•••••••• saved in this browser. Type to replace"
+                  : "•••••••• saved. Type to replace"
+                : props.mode === "edit" &&
+                    existing?.credential_storage === "browser" &&
+                    effectiveStoreInBrowser
+                  ? "No key saved in this browser — enter key"
+                  : props.mode === "edit" &&
+                      existing?.credential_storage !== "browser" &&
+                      effectiveStoreInBrowser &&
+                      existing?.has_bearer_token
+                    ? "Re-enter key to store in this browser"
+                    : providerType === "openrouter"
+                      ? "sk-or-v1-..."
+                      : providerType === "aihorde"
+                        ? effectiveStoreInBrowser
+                          ? "Enter your AI Horde API key"
+                          : "Leave blank to use anonymous key (0000000000)"
+                        : "Leave empty if not needed"
             }
             onChange={(e) => setToken(e.target.value)}
           />
-          {existing?.has_bearer_token && (
-            <label className="provider-inline-check">
+          {showBrowserCredentialOption && (
+            <label
+              className="provider-inline-check"
+              style={{
+                marginTop: 6,
+                opacity: browserCheckDisabled ? 0.72 : 1,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={effectiveStoreInBrowser}
+                disabled={browserCheckDisabled}
+                onChange={(e) => {
+                  setStoreInBrowser(e.target.checked);
+                  setTestResult(null);
+                }}
+              />
+              <span>
+                Store in Browser only{" "}
+                <span className="form-hint">
+                  {credentialStoreMode === "server_only"
+                    ? "(disabled by administrator: server storage only)"
+                    : credentialStoreMode === "browser_only"
+                      ? "(enforced by administrator)"
+                      : "(key stays in this browser; requests run directly from your browser)"}
+                </span>
+              </span>
+            </label>
+          )}
+          {props.mode === "edit" &&
+            existing?.credential_storage !== "browser" &&
+            effectiveStoreInBrowser &&
+            existing?.has_bearer_token && (
+              <div className="form-hint" style={{ marginTop: 4 }}>
+                The existing server-stored key cannot be retrieved; enter it above to move it to
+                this browser (saving clears the server copy).
+              </div>
+            )}
+          {isRemoteHttpMixedContent && (
+            <div className="provider-warning" role="status" style={{ marginTop: 6 }}>
+              <AlertTriangle size={13} /> This page is loaded over HTTPS; browsers block direct{" "}
+              <code>http://</code> requests to non-loopback Ollama servers. Use an{" "}
+              <code>https://</code> reverse proxy with <code>OLLAMA_ORIGINS</code> CORS enabled.
+            </div>
+          )}
+          {effectiveHasSavedToken && (
+            <label className="provider-inline-check" style={{ marginTop: 4 }}>
               <input
                 type="checkbox"
                 checked={clearToken}
@@ -482,7 +731,7 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
                   if (e.target.checked) setToken("");
                 }}
               />
-              Remove the saved token
+              {effectiveStoreInBrowser ? "Remove the browser-saved token" : "Remove the saved token"}
             </label>
           )}
           {tokenRequired && (

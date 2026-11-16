@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 ProviderType = Literal["ollama", "openrouter", "aihorde", "browser_ollama", "webgpu"]
 ProviderScope = Literal["system", "user"]
 ProviderColor = Literal["neutral", "cyan", "purple", "indigo", "bronze"]
+CredentialStorage = Literal["server", "browser"]
 ProbeErrorCode = Literal[
     "dns_failure",
     "connect_refused",
@@ -25,9 +26,11 @@ ProbeErrorCode = Literal[
     "rate_limited",
     "relay_offline",
     "webgpu_unsupported",
+    "browser_credential_missing",
+    "cors_or_network_error",
     "unknown",
 ]
-UnusableReason = Literal["disabled", "byop_disabled"]
+UnusableReason = Literal["disabled", "byop_disabled", "browser_storage_disabled"]
 
 MAX_PROVIDER_NAME_LENGTH = 60
 
@@ -74,6 +77,7 @@ class ProviderCreatePayload(BaseModel):
     scope: ProviderScope = "user"
     color: ProviderColor = "neutral"
     is_enabled: bool = True
+    credential_storage: CredentialStorage = "server"
     settings: OllamaProviderSettings
 
 
@@ -85,6 +89,7 @@ class ProviderUpdatePayload(BaseModel):
     base_url: str | None = None
     bearer_token: str | None = Field(default=None, description="Set or rotate the token.")
     clear_bearer_token: bool = False
+    credential_storage: CredentialStorage | None = None
 
 
 class ProviderDraft(BaseModel):
@@ -106,6 +111,7 @@ class ProviderResponse(BaseModel):
     is_enabled: bool
     base_url: str | None = None
     has_bearer_token: bool
+    credential_storage: CredentialStorage = "server"
     usable: bool = True
     unusable_reason: UnusableReason | None = None
     cached_models: list[ProviderModelInfo] = Field(default_factory=list)
@@ -165,6 +171,7 @@ class ProviderRecord:
     is_enabled: bool
     base_url: str
     secret_enc: bytes | None = field(default=None, repr=False)
+    credential_storage: CredentialStorage = "server"
     network_restricted: bool = False
     cached_models: list[ProviderModelInfo] = field(default_factory=list)
     models_hash: str | None = None

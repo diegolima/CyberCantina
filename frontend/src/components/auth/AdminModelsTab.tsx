@@ -347,6 +347,66 @@ export const AdminModelsTab: React.FC<AdminModelsTabProps> = ({
                       Users can pick their own provider, model and sampling in Profile → Models. When off, the
                       defaults above apply to everyone.
                     </div>
+
+                    <div
+                      style={{
+                        marginTop: 8,
+                        paddingTop: 10,
+                        borderTop: "1px solid var(--border-subtle)",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 6,
+                        opacity: appSettingsForm.allow_user_providers ? 1 : 0.6,
+                      }}
+                    >
+                      <label
+                        htmlFor="provider-credential-store-select"
+                        style={{
+                          fontWeight: 600,
+                          fontSize: "0.84rem",
+                          color: "var(--text-primary)",
+                        }}
+                      >
+                        Provider Credential Store
+                      </label>
+                      <select
+                        id="provider-credential-store-select"
+                        className="field-select"
+                        disabled={!appSettingsForm.allow_user_providers}
+                        value={appSettingsForm.provider_credential_store ?? "prefer_server"}
+                        onChange={(e) =>
+                          setAppSettingsForm({
+                            ...appSettingsForm,
+                            provider_credential_store: e.target.value as
+                              | "server_only"
+                              | "prefer_server"
+                              | "prefer_browser"
+                              | "browser_only",
+                          })
+                        }
+                      >
+                        <option value="server_only">
+                          Server Only (forbid browser-stored credentials)
+                        </option>
+                        <option value="prefer_server">
+                          Prefer Server (default; users may opt into browser-only)
+                        </option>
+                        <option value="prefer_browser">
+                          Prefer Browser (default new keys to browser-only; server allowed)
+                        </option>
+                        <option value="browser_only">
+                          Browser Only (forbid server storage; purge personal DB keys)
+                        </option>
+                      </select>
+                      <div className="form-hint" style={{ fontSize: "0.74rem" }}>
+                        Applies only to personal (<code>user</code>-scoped) providers. Shared system
+                        providers, Local Ollama (Browser), and Browser WebGPU are unaffected.{" "}
+                        {appSettingsForm.provider_credential_store === "server_only" &&
+                          "Existing browser-stored providers are paused while preserving keys in users' browsers."}
+                        {appSettingsForm.provider_credential_store === "browser_only" &&
+                          "Saving Browser Only will prompt to permanently purge any stored personal provider credentials from the database."}
+                      </div>
+                    </div>
                   </div>
 
                   {/* Character Agent Dispatch Mode */}

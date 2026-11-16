@@ -1,5 +1,10 @@
 import type { DisclosureDetectionMode } from "./persona";
-import type { AppSettings, EffectiveWarning, ModelProfile } from "./providers";
+import type {
+  AppSettings,
+  EffectiveWarning,
+  ModelProfile,
+  ProviderCredentialStoreMode,
+} from "./providers";
 import type { AgentDispatchMode } from "./turn";
 
 export type UserRole = "user" | "admin";
@@ -121,6 +126,7 @@ export interface UserModelSettingsPayload {
 export interface ProfileModelSettingsResponse {
   allow_user_model_overrides: boolean;
   allow_user_providers?: boolean;
+  provider_credential_store?: ProviderCredentialStoreMode;
   warnings?: EffectiveWarning[];
   effective_clerk_mirrors_actor?: boolean;
   user_clerk_mirrors_actor?: boolean | null;

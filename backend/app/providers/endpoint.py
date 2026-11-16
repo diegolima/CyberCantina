@@ -22,3 +22,4 @@ class ResolvedEndpoint:
     owner_id: str | None = None
     # Requesting user for system-scoped browser providers (where owner_id is None).
     caller_user_id: str | None = None
+    credential_storage: str = "server"

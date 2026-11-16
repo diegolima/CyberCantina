@@ -12,11 +12,18 @@ import { API_BASE, fetchJson } from "./client";
 export const settingsApi = {
   getSettings: () => fetchJson<AppSettings>(`${API_BASE}/settings`),
 
-  updateSettings: (settings: AppSettings) =>
-    fetchJson<SettingsUpdateResponse>(`${API_BASE}/settings`, {
+  updateSettings: (
+    settings: AppSettings,
+    opts?: { confirmCredentialPurge?: boolean }
+  ) => {
+    const q = opts?.confirmCredentialPurge
+      ? "?confirm_credential_purge=true"
+      : "";
+    return fetchJson<SettingsUpdateResponse>(`${API_BASE}/settings${q}`, {
       method: "PUT",
       body: JSON.stringify(settings),
-    }),
+    });
+  },
 
   getEmbeddingStatus: () =>
     fetchJson<{ fingerprint: string; stale_entries: number }>(

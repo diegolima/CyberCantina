@@ -968,6 +968,15 @@ class SchemaInitMixin:
                     "ALTER TABLE episodic_chunks ADD COLUMN salience_score INTEGER NOT NULL DEFAULT 5"
                 )
 
+            prov_cols = {
+                r["name"]
+                for r in conn.execute("PRAGMA table_info(providers)").fetchall()
+            }
+            if prov_cols and "credential_storage" not in prov_cols:
+                conn.execute(
+                    "ALTER TABLE providers ADD COLUMN credential_storage TEXT NOT NULL DEFAULT 'server' CHECK (credential_storage IN ('server', 'browser'))"
+                )
+
             # Backfill compass_direction for any pre-existing location_edges missing it
             missing_dir_edges = conn.execute(
                 "SELECT id, from_location_id, direction_label FROM location_edges WHERE compass_direction IS NULL"

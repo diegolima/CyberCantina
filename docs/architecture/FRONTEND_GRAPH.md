@@ -119,7 +119,7 @@ flowchart TD
 | `components/wizard` | 2 | `api`, `components (root)`, `types` |
 | `components/world` | 2 | `api`, `components (root)`, `components/map`, `components/shared`, `types` |
 | `hooks` | 2 | `api`, `types` |
-| `local` | 5 | `types` |
+| `local` | 7 | `types` |
 | `main` | 1 | `App`, `styles.css` |
 | `providers` | 1 | `api`, `local`, `types` |
 | `types` | 12 | *(leaf)* |

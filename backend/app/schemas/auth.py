@@ -6,7 +6,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.config import AgentDispatchMode, EmbeddingProfile, ModelProfile
+from app.config import (
+    AgentDispatchMode,
+    EmbeddingProfile,
+    ModelProfile,
+    ProviderCredentialStoreMode,
+)
 
 UserRole = Literal["user", "admin"]
 
@@ -158,13 +163,21 @@ class EffectiveWarning(BaseModel):
     """Why a user's saved override could not be honored (never silently hidden)."""
 
     role: Literal["actor", "clerk"]
-    code: Literal["not_found", "disabled", "byop_disabled", "no_token", "missing_provider"]
+    code: Literal[
+        "not_found",
+        "disabled",
+        "byop_disabled",
+        "browser_storage_disabled",
+        "no_token",
+        "missing_provider",
+    ]
     provider_id: str | None = None
 
 
 class ProfileModelSettingsResponse(BaseModel):
     allow_user_model_overrides: bool
     allow_user_providers: bool = False
+    provider_credential_store: ProviderCredentialStoreMode = "prefer_server"
     warnings: list[EffectiveWarning] = Field(default_factory=list)
     effective_clerk_mirrors_actor: bool = False
     user_clerk_mirrors_actor: bool | None = None

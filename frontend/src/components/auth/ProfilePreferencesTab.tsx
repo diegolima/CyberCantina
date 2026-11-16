@@ -363,6 +363,9 @@ export const ProfilePreferencesTab: React.FC<ProfilePreferencesTabProps> = ({
                 <ProvidersManager
                   variant="profile"
                   allowUserProviders={!!modelSettings?.allow_user_providers}
+                  credentialStoreMode={
+                    modelSettings?.provider_credential_store ?? "prefer_server"
+                  }
                 />
               )}
 
@@ -761,11 +764,13 @@ export const ProfilePreferencesTab: React.FC<ProfilePreferencesTabProps> = ({
                         Your saved {w.role} choice is not usable (
                         {w.code === "byop_disabled"
                           ? "personal providers are disabled"
-                          : w.code === "disabled"
-                            ? "the provider is disabled"
-                            : w.code === "missing_provider"
-                              ? "no provider selected"
-                              : "the provider is gone"}
+                          : w.code === "browser_storage_disabled"
+                            ? "browser-stored provider credentials are disabled"
+                            : w.code === "disabled"
+                              ? "the provider is disabled"
+                              : w.code === "missing_provider"
+                                ? "no provider selected"
+                                : "the provider is gone"}
                         ). The system default is used until you choose again.
                       </span>
                     </div>

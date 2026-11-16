@@ -132,6 +132,8 @@ class CallTarget:
     provider_type: str = "ollama"
     owner_id: str | None = None
     caller_user_id: str | None = None
+    provider_id: str | None = None
+    credential_storage: str = "server"
 
 
 def get_chat_completions_url(target: CallTarget) -> str:
@@ -150,8 +152,8 @@ async def build_call_target(profile: ModelProfile, role: str = "model") -> CallT
     endpoint = profile.resolved or (resolve_system_profile(profile, role) if profile.provider_id else None)
     if endpoint is not None:
         ptype = endpoint.type
-        if ptype in ("browser_ollama", "webgpu"):
-            root = endpoint.root_url if ptype == "webgpu" else get_ollama_root_url(endpoint.root_url)
+        if ptype in ("browser_ollama", "webgpu") or endpoint.credential_storage == "browser":
+            root = get_ollama_root_url(endpoint.root_url) if ptype in ("browser_ollama", "ollama") else endpoint.root_url
             return CallTarget(
                 root,
                 {},
@@ -159,6 +161,8 @@ async def build_call_target(profile: ModelProfile, role: str = "model") -> CallT
                 provider_type=ptype,
                 owner_id=endpoint.owner_id,
                 caller_user_id=endpoint.caller_user_id,
+                provider_id=endpoint.provider_id,
+                credential_storage=endpoint.credential_storage,
             )
         if endpoint.network_restricted:
             try:
@@ -415,7 +419,7 @@ class LLMClient:
 
         target = await build_call_target(active_profile)
 
-        if target.provider_type in ("browser_ollama", "webgpu"):
+        if target.provider_type in ("browser_ollama", "webgpu") or target.credential_storage == "browser":
             ctx = getattr(active_profile, "context_size", None)
             if target.provider_type == "webgpu" and ctx is not None:
                 ctx = min(int(ctx), get_webgpu_max_context(active_profile.model))
@@ -433,6 +437,7 @@ class LLMClient:
                 json_schema=json_schema,
                 disable_reasoning=disable_reasoning,
                 timeout=active_profile.timeout_seconds,
+                provider_id=target.provider_id,
             )
             content = (res.content or "").strip()
             if content:
@@ -649,7 +654,7 @@ class LLMClient:
         active_profile = profile or settings.actor_profile
         target = await build_call_target(active_profile)
 
-        if target.provider_type in ("browser_ollama", "webgpu"):
+        if target.provider_type in ("browser_ollama", "webgpu") or target.credential_storage == "browser":
             ctx = getattr(active_profile, "context_size", None)
             if target.provider_type == "webgpu" and ctx is not None:
                 ctx = min(int(ctx), get_webgpu_max_context(active_profile.model))
@@ -665,6 +670,7 @@ class LLMClient:
                 keep_alive=format_ollama_keep_alive(getattr(active_profile, "keep_alive_minutes", 30)),
                 disable_reasoning=disable_reasoning,
                 timeout=active_profile.timeout_seconds,
+                provider_id=target.provider_id,
             ):
                 yield delta
             return

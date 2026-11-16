@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 
 from app.auth import get_current_user, require_admin
 from app.config import (
@@ -22,8 +24,9 @@ from app.dependencies import (
     resolve_effective_models,
 )
 from app.engine.llm_client import OllamaStatusResponse, query_ollama_status
+from app.providers.probe import probe_service
 from app.providers.resolver import ProviderUnavailableError, resolve_endpoint
-from app.providers.settings_service import apply_settings
+from app.providers.settings_service import CredentialPurgeRequiredError, apply_settings
 from app.security.url_policy import UrlBlockedError, assert_url_allowed, normalize_base_url
 from app.schemas.auth import (
     ProfileModelSettingsResponse,
@@ -105,19 +108,42 @@ def get_settings(
 
 
 @router.put("/api/settings", response_model=SettingsUpdateResponse)
-def update_settings(
+async def update_settings(
     updated: AppSettings,
+    confirm_credential_purge: bool = Query(default=False),
     _admin: UserProfile = Depends(require_admin),
-) -> SettingsUpdateResponse:
+) -> SettingsUpdateResponse | JSONResponse:
+    repo = get_repo()
     try:
-        result = apply_settings(updated, get_repo().providers, persist=persist_settings)
+        result = apply_settings(
+            updated,
+            repo.providers,
+            persist=persist_settings,
+            confirm_credential_purge=confirm_credential_purge,
+        )
+    except CredentialPurgeRequiredError as exc:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": {
+                    "code": "user_credentials_purge_required",
+                    "message": str(exc),
+                    "affected_providers": exc.affected_providers,
+                    "affected_users": exc.affected_users,
+                }
+            },
+        )
     except HTTPException:
         raise
     except OSError as exc:
         logger.error("Could not persist settings: %s", exc)
         raise HTTPException(status_code=500, detail="Settings could not be saved to disk.") from exc
+    if result.purged_provider_ids:
+        for pid in result.purged_provider_ids:
+            probe_service.invalidate(pid)
+        await asyncio.to_thread(repo.providers.compact_after_purge)
     logger.info("Updated global app settings")
-    stale = get_repo().vector_store.count_stale_entries()
+    stale = repo.vector_store.count_stale_entries()
     payload = result.settings.model_dump()
     return SettingsUpdateResponse(
         **payload,
@@ -222,6 +248,7 @@ def get_profile_models(
     return ProfileModelSettingsResponse(
         allow_user_model_overrides=settings.allow_user_model_overrides,
         allow_user_providers=settings.allow_user_providers,
+        provider_credential_store=settings.provider_credential_store,
         warnings=eff.warnings,
         has_override=has_override,
         effective_actor_profile=_public_profile(eff.actor, current_user, fallback_ctx=actor_ctx_fallback),

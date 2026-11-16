@@ -737,7 +737,9 @@ erDiagram
 
 | File |
 | :--- |
+| `frontend/src/local/credentialVault.ts` |
 | `frontend/src/local/ollamaDriver.ts` |
+| `frontend/src/local/remoteProviderDriver.ts` |
 | `frontend/src/local/types.ts` |
 | `frontend/src/local/webgpu.worker.ts` |
 | `frontend/src/local/webgpuCatalog.ts` |

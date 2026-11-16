@@ -454,6 +454,7 @@ CREATE TABLE IF NOT EXISTS providers (
     is_enabled INTEGER NOT NULL DEFAULT 1,
     settings_json TEXT NOT NULL,
     secret_enc BLOB NULL,
+    credential_storage TEXT NOT NULL DEFAULT 'server' CHECK (credential_storage IN ('server', 'browser')),
     network_restricted INTEGER NOT NULL DEFAULT 0,
     cached_models_json TEXT NULL,
     models_hash TEXT NULL,

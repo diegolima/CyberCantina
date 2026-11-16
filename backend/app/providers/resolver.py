@@ -10,7 +10,14 @@ from app.providers.endpoint import ResolvedEndpoint
 from app.schemas.provider import ProviderRecord
 from app.security.secret_box import SecretDecryptionError
 
-UnavailableCode = Literal["not_found", "not_visible", "disabled", "byop_disabled", "no_token"]
+UnavailableCode = Literal[
+    "not_found",
+    "not_visible",
+    "disabled",
+    "byop_disabled",
+    "browser_storage_disabled",
+    "no_token",
+]
 
 
 class ProviderUnavailableError(RuntimeError):
@@ -25,6 +32,7 @@ class ProviderUnavailableError(RuntimeError):
             "not_visible": "the provider is not available to this account",
             "disabled": "the provider is disabled",
             "byop_disabled": "personal providers are currently disabled by the administrator",
+            "browser_storage_disabled": "browser-stored provider credentials are disabled by the administrator",
             "no_token": "the provider credential could not be decrypted",
         }
         super().__init__(
@@ -39,6 +47,12 @@ def visibility_problem(record: ProviderRecord, user_id: str | None) -> Unavailab
             return "not_visible"
         if not settings.allow_user_providers:
             return "byop_disabled"
+        if (
+            record.credential_storage == "browser"
+            and record.type not in ("browser_ollama", "webgpu")
+            and settings.provider_credential_store == "server_only"
+        ):
+            return "browser_storage_disabled"
     if not record.is_enabled:
         return "disabled"
     return None
@@ -64,10 +78,13 @@ def resolve_endpoint(
         raise ProviderUnavailableError(
             "not_found" if problem == "not_visible" else problem, role=role, provider_id=profile.provider_id
         )
-    try:
-        token = active.bearer_token(record)
-    except SecretDecryptionError as exc:
-        raise ProviderUnavailableError("no_token", role=role, provider_id=profile.provider_id) from exc
+    if record.credential_storage == "browser":
+        token = None
+    else:
+        try:
+            token = active.bearer_token(record)
+        except SecretDecryptionError as exc:
+            raise ProviderUnavailableError("no_token", role=role, provider_id=profile.provider_id) from exc
     return ResolvedEndpoint(
         provider_id=record.id,
         type=record.type,
@@ -76,6 +93,7 @@ def resolve_endpoint(
         timeout_seconds=getattr(profile, "timeout_seconds", 15.0),
         network_restricted=record.network_restricted,
         owner_id=record.owner_id,
+        credential_storage=record.credential_storage,
     )
 
 

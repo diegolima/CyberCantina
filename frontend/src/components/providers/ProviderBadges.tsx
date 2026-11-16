@@ -39,6 +39,10 @@ export function describeProbeError(code: ProbeErrorCode | null | undefined): str
       return "Browser inference relay is offline. Keep this tab open and connected.";
     case "webgpu_unsupported":
       return "WebGPU is not available in this browser.";
+    case "browser_credential_missing":
+      return "No API key or token is saved in this browser for this provider.";
+    case "cors_or_network_error":
+      return "Browser blocked or could not reach the endpoint (check CORS or HTTPS/Mixed Content).";
     default:
       return "The server could not be reached.";
   }

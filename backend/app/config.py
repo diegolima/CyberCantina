@@ -21,6 +21,7 @@ SETTINGS_FILE_PATH = Path(
 )
 
 AgentDispatchMode = Literal["sequential", "parallel"]
+ProviderCredentialStoreMode = Literal["server_only", "prefer_server", "prefer_browser", "browser_only"]
 
 DEFAULT_ACTOR_CONTEXT_SIZE = 12288
 DEFAULT_CLERK_CONTEXT_SIZE = 8192
@@ -224,6 +225,13 @@ class AppSettings(BaseModel):
         description=(
             "When True (BYOP), users can register their own private providers. Forces "
             "allow_user_model_overrides to True."
+        ),
+    )
+    provider_credential_store: ProviderCredentialStoreMode = Field(
+        default="prefer_server",
+        description=(
+            "Governs where personal (scope='user') provider credentials may be stored: "
+            "'server_only', 'prefer_server', 'prefer_browser', or 'browser_only'."
         ),
     )
     clerk_mirrors_actor: bool = Field(

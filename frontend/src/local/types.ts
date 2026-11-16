@@ -10,10 +10,18 @@ export interface RelayLlmOptions {
   disable_reasoning?: boolean;
 }
 
+export type RelayDriver =
+  | "browser_ollama"
+  | "webgpu"
+  | "ollama"
+  | "openrouter"
+  | "aihorde";
+
 export interface RelayLlmRequest {
   type: "llm.request";
   request_id: string;
-  driver: "browser_ollama" | "webgpu";
+  driver: RelayDriver;
+  provider_id?: string | null;
   mode: "complete" | "stream";
   base_url?: string;
   model: string;
@@ -24,7 +32,8 @@ export interface RelayLlmRequest {
 export interface RelayProbeRequest {
   type: "probe.request";
   request_id: string;
-  driver: "browser_ollama" | "webgpu";
+  driver: RelayDriver;
+  provider_id?: string | null;
   base_url?: string;
 }
 

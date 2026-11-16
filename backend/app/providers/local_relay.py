@@ -24,7 +24,7 @@ relay_tab_context: ContextVar[str | None] = ContextVar("relay_tab_context", defa
 # Set per authenticated request so system-scoped browser providers route to the calling user.
 relay_user_context: ContextVar[str | None] = ContextVar("relay_user_context", default=None)
 
-BrowserDriver = Literal["browser_ollama", "webgpu"]
+BrowserDriver = Literal["browser_ollama", "webgpu", "ollama", "openrouter", "aihorde"]
 
 
 class RelayUnavailableError(RuntimeError):
@@ -232,6 +232,7 @@ class LocalRelayHub:
         json_schema: dict[str, Any] | None,
         disable_reasoning: bool,
         timeout: float,
+        provider_id: str | None = None,
     ) -> RelayCompletionResult:
         session = self._pick_session(user_id, relay_tab_context.get())
         request_id = f"req_{uuid.uuid4().hex}"
@@ -248,6 +249,7 @@ class LocalRelayHub:
             "type": "llm.request",
             "request_id": request_id,
             "driver": driver,
+            "provider_id": provider_id,
             "mode": "complete",
             "base_url": base_url,
             "model": model,
@@ -284,6 +286,7 @@ class LocalRelayHub:
         keep_alive: str | int,
         disable_reasoning: bool,
         timeout: float,
+        provider_id: str | None = None,
     ) -> AsyncIterator[str]:
         session = self._pick_session(user_id, relay_tab_context.get())
         request_id = f"req_{uuid.uuid4().hex}"
@@ -299,6 +302,7 @@ class LocalRelayHub:
             "type": "llm.request",
             "request_id": request_id,
             "driver": driver,
+            "provider_id": provider_id,
             "mode": "stream",
             "base_url": base_url,
             "model": model,
@@ -368,6 +372,7 @@ class LocalRelayHub:
                     "type": "probe.request",
                     "request_id": request_id,
                     "driver": driver,
+                    "provider_id": provider_id,
                     "base_url": base_url,
                 }
             )

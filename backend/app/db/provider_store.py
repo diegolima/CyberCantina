@@ -63,6 +63,8 @@ class ProviderStore:
     def _row_to_record(row: sqlite3.Row) -> ProviderRecord:
         settings = json.loads(row["settings_json"] or "{}")
         cached_raw = json.loads(row["cached_models_json"] or "[]")
+        raw_storage = row["credential_storage"] if "credential_storage" in row.keys() else "server"
+        cred_storage = "browser" if raw_storage == "browser" else "server"
         return ProviderRecord(
             id=row["id"],
             name=row["name"],
@@ -74,6 +76,7 @@ class ProviderStore:
             is_enabled=bool(row["is_enabled"]),
             base_url=settings.get("base_url", ""),
             secret_enc=row["secret_enc"],
+            credential_storage=cred_storage,
             network_restricted=bool(row["network_restricted"]),
             cached_models=[ProviderModelInfo.model_validate(m) for m in cached_raw],
             models_hash=row["models_hash"],
@@ -169,6 +172,7 @@ class ProviderStore:
         base_url: str,
         bearer_token: str | None,
         network_restricted: bool,
+        credential_storage: str = "server",
         conn: sqlite3.Connection | None = None,
     ) -> ProviderRecord:
         if name is None or not name.strip():
@@ -190,7 +194,8 @@ class ProviderStore:
             raise ProviderNameConflictError(f"A provider named '{display}' already exists.")
         now = _now()
         provider_id = f"prov_{uuid.uuid4().hex[:16]}"
-        secret = self.box.seal(bearer_token) if bearer_token else None
+        storage = "browser" if credential_storage == "browser" else "server"
+        secret = self.box.seal(bearer_token) if (bearer_token and storage == "server") else None
         owns = conn is None
         active = conn or self._connect()
         try:
@@ -198,12 +203,12 @@ class ProviderStore:
                 active.execute(
                     """
                     INSERT INTO providers (id, name, name_key, type, scope, owner_id, color, is_enabled,
-                        settings_json, secret_enc, network_restricted, version, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                        settings_json, secret_enc, credential_storage, network_restricted, version, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                     """,
                     (
                         provider_id, display, key, type, scope, owner_id, color, 1 if is_enabled else 0,
-                        json.dumps({"base_url": base_url}), secret, 1 if network_restricted else 0, now, now,
+                        json.dumps({"base_url": base_url}), secret, storage, 1 if network_restricted else 0, now, now,
                     ),
                 )
             except sqlite3.IntegrityError as exc:
@@ -218,7 +223,7 @@ class ProviderStore:
             record = ProviderRecord(
                 id=provider_id, name=display, name_key=key, type=type, scope=scope, owner_id=owner_id,
                 color=color, is_enabled=is_enabled, base_url=base_url, secret_enc=secret,
-                network_restricted=network_restricted, version=1, created_at=now, updated_at=now,
+                credential_storage=storage, network_restricted=network_restricted, version=1, created_at=now, updated_at=now,
             )
         return record
 
@@ -233,6 +238,7 @@ class ProviderStore:
         base_url: str | None = None,
         bearer_token: str | None = None,
         clear_bearer_token: bool = False,
+        credential_storage: str | None = None,
     ) -> ProviderRecord:
         current = self.get(provider_id)
         if current is None:
@@ -245,10 +251,13 @@ class ProviderStore:
                 new_key, scope=current.scope, owner_id=current.owner_id, exclude_id=provider_id
             ):
                 raise ProviderNameConflictError(f"A provider named '{new_name}' already exists.")
+        new_storage = current.credential_storage
+        if credential_storage is not None:
+            new_storage = "browser" if credential_storage == "browser" else "server"
         secret = current.secret_enc
-        if clear_bearer_token:
+        if clear_bearer_token or new_storage == "browser":
             secret = None
-        if bearer_token:
+        if bearer_token and new_storage == "server":
             secret = self.box.seal(bearer_token)
         conn = self._connect()
         try:
@@ -256,14 +265,14 @@ class ProviderStore:
                 cur = conn.execute(
                     """
                     UPDATE providers SET name = ?, name_key = ?, color = ?, is_enabled = ?, settings_json = ?,
-                        secret_enc = ?, version = version + 1, updated_at = ?
+                        secret_enc = ?, credential_storage = ?, version = version + 1, updated_at = ?
                     WHERE id = ? AND version = ?
                     """,
                     (
                         new_name, new_key, color or current.color,
                         1 if (current.is_enabled if is_enabled is None else is_enabled) else 0,
                         json.dumps({"base_url": base_url if base_url is not None else current.base_url}),
-                        secret, _now(), provider_id, expected_version,
+                        secret, new_storage, _now(), provider_id, expected_version,
                     ),
                 )
             except sqlite3.IntegrityError as exc:
@@ -284,6 +293,68 @@ class ProviderStore:
             cur = conn.execute("DELETE FROM providers WHERE id = ?", (provider_id,))
             conn.commit()
             return cur.rowcount > 0
+        finally:
+            conn.close()
+
+    def count_user_stored_credentials(self) -> tuple[int, int]:
+        """Return (provider_count, distinct_user_count) for user-scoped providers holding secret_enc."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS provider_count, COUNT(DISTINCT owner_id) AS user_count
+                FROM providers
+                WHERE scope = 'user' AND secret_enc IS NOT NULL
+                """
+            ).fetchone()
+            return (int(row["provider_count"]), int(row["user_count"]))
+        finally:
+            conn.close()
+
+    def purge_user_credentials(self) -> list[str]:
+        """Clear all user-scoped stored secrets and switch personal credentialed providers to browser mode."""
+        conn = self._connect()
+        now = _now()
+        try:
+            rows = conn.execute(
+                """
+                SELECT id FROM providers
+                WHERE scope = 'user'
+                  AND (
+                    secret_enc IS NOT NULL
+                    OR (credential_storage = 'server' AND type IN ('ollama', 'openrouter', 'aihorde'))
+                  )
+                """
+            ).fetchall()
+            ids = [str(r["id"]) for r in rows]
+            if ids:
+                conn.execute(
+                    """
+                    UPDATE providers
+                    SET secret_enc = NULL,
+                        credential_storage = 'browser',
+                        version = version + 1,
+                        last_error_code = NULL,
+                        updated_at = ?
+                    WHERE scope = 'user'
+                      AND (
+                        secret_enc IS NOT NULL
+                        OR (credential_storage = 'server' AND type IN ('ollama', 'openrouter', 'aihorde'))
+                      )
+                    """,
+                    (now,),
+                )
+                conn.commit()
+            return ids
+        finally:
+            conn.close()
+
+    def compact_after_purge(self) -> None:
+        """Truncate WAL and VACUUM SQLite so cleared credential pages are reclaimed on disk."""
+        conn = self._connect()
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+            conn.execute("VACUUM;")
         finally:
             conn.close()
 

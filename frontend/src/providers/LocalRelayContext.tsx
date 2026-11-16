@@ -8,7 +8,16 @@ import React, {
   useState,
 } from "react";
 import { api, getRelayTabId, getStoredSessionToken } from "../api";
+import {
+  getProviderCredential,
+  pruneMissingProviderCredentials,
+} from "../local/credentialVault";
 import { runBrowserOllamaChat, probeBrowserOllama } from "../local/ollamaDriver";
+import {
+  probeRemoteProvider,
+  RemoteDriverError,
+  runRemoteProviderChat,
+} from "../local/remoteProviderDriver";
 import {
   ContextClampNotice,
   RelayLlmRequest,
@@ -22,6 +31,7 @@ import { LLMProvider, UserProfile } from "../types";
 export type RelayWsState = "idle" | "connecting" | "connected" | "reconnecting";
 
 export interface LocalRelayContextValue {
+  currentUserId: string | null;
   wsState: RelayWsState;
   hasBrowserProviders: boolean;
   allProviders: LLMProvider[];
@@ -81,7 +91,14 @@ export const LocalRelayProvider: React.FC<{
   const mountedRef = useRef(true);
   const webgpuCapRef = useRef<{ supported: boolean; reason?: string }>({ supported: false });
 
-  const hasBrowserProviders = browserProviders.some((p) => p.is_enabled && p.usable);
+  const hasBrowserProviders = allProviders.some(
+    (p) =>
+      p.is_enabled &&
+      p.usable &&
+      (p.type === "browser_ollama" ||
+        p.type === "webgpu" ||
+        p.credential_storage === "browser")
+  );
   const shouldConnect = Boolean(currentUser && (hasBrowserProviders || forceConnect));
 
   const refreshProviders = useCallback(async () => {
@@ -93,6 +110,10 @@ export const LocalRelayProvider: React.FC<{
     try {
       const list = await api.listProviders();
       if (!mountedRef.current) return;
+      pruneMissingProviderCredentials(
+        currentUser.id,
+        new Set(list.map((p) => p.id))
+      );
       setAllProviders(list);
       setBrowserProviders(
         list.filter((p) => p.type === "browser_ollama" || p.type === "webgpu")
@@ -209,10 +230,15 @@ export const LocalRelayProvider: React.FC<{
         const emitChunk = (delta: string) => {
           sendJson(ws, { type: "llm.chunk", request_id: req.request_id, delta });
         };
-        const result =
-          req.driver === "webgpu"
-            ? await webGpuDriver.run(req, emitChunk, controller.signal)
-            : await runBrowserOllamaChat(req, emitChunk, controller.signal);
+        let result;
+        if (req.driver === "webgpu") {
+          result = await webGpuDriver.run(req, emitChunk, controller.signal);
+        } else if (req.driver === "browser_ollama") {
+          result = await runBrowserOllamaChat(req, emitChunk, controller.signal);
+        } else {
+          const token = getProviderCredential(activeUserId, req.provider_id);
+          result = await runRemoteProviderChat(req, token, emitChunk, controller.signal);
+        }
 
         sendJson(ws, {
           type: "llm.done",
@@ -226,9 +252,11 @@ export const LocalRelayProvider: React.FC<{
           const msg = String(err?.message || "Local browser inference failed.");
           const lower = msg.toLowerCase();
           let code = "inference_failed";
-          if (req.driver === "webgpu" && (lower.includes("webgpu") || lower.includes("adapter"))) {
+          if (err instanceof RemoteDriverError) {
+            code = err.code;
+          } else if (req.driver === "webgpu" && (lower.includes("webgpu") || lower.includes("adapter"))) {
             code = "webgpu_unsupported";
-          } else if (lower.includes("not installed") || lower.includes("model") && lower.includes("not found")) {
+          } else if (lower.includes("not installed") || (lower.includes("model") && lower.includes("not found"))) {
             code = "model_not_found";
           } else if (err instanceof TypeError || lower.includes("failed to fetch") || lower.includes("networkerror")) {
             code = "cors_or_network_error";
@@ -268,7 +296,28 @@ export const LocalRelayProvider: React.FC<{
         return;
       }
 
-      const res = await probeBrowserOllama(req.base_url);
+      if (req.driver === "browser_ollama") {
+        const res = await probeBrowserOllama(req.base_url);
+        sendJson(ws, {
+          type: "probe.result",
+          request_id: req.request_id,
+          reachable: res.reachable,
+          protocol: res.protocol,
+          models: res.models,
+          error_code: res.error_code,
+          error: res.error,
+        });
+        return;
+      }
+
+      const token = getProviderCredential(activeUserId, req.provider_id);
+      const res = await probeRemoteProvider({
+        type: req.driver as "ollama" | "openrouter" | "aihorde",
+        baseUrl: req.base_url,
+        token,
+        requireToken: req.driver === "openrouter" || req.driver === "aihorde",
+        providerId: req.provider_id,
+      });
       sendJson(ws, {
         type: "probe.result",
         request_id: req.request_id,
@@ -368,6 +417,7 @@ export const LocalRelayProvider: React.FC<{
 
   const value = useMemo<LocalRelayContextValue>(
     () => ({
+      currentUserId: activeUserId,
       wsState,
       hasBrowserProviders,
       allProviders,
@@ -385,6 +435,7 @@ export const LocalRelayProvider: React.FC<{
       ensureConnected,
     }),
     [
+      activeUserId,
       wsState,
       hasBrowserProviders,
       allProviders,

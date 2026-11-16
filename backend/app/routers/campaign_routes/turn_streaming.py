@@ -767,7 +767,8 @@ async def _execute_turn_stream_events_unlocked(
 
 _RELAY_ERROR_MESSAGES = {
     "webgpu_unsupported": "WebGPU is not supported or enabled in this browser. Switch to Local Ollama or a cloud provider in Profile > Models.",
-    "cors_or_network_error": "Could not connect to local Ollama from your browser. Verify Ollama is running with OLLAMA_ORIGINS configured and Local Network Access allowed.",
+    "cors_or_network_error": "Could not connect to the provider from your browser. Verify network access, HTTPS/Mixed Content, and CORS configuration.",
+    "browser_credential_missing": "No credential is saved in this browser for the selected provider. Open Profile > Providers to re-enter your API key or token.",
     "model_not_found": "The selected local model is not installed in Ollama. Pull the model or select an installed one in Profile > Models.",
     "inference_failed": "Local browser model execution failed. Check browser GPU memory or Ollama logs.",
 }

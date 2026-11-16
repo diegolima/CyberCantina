@@ -10,7 +10,7 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { api } from "../../api";
+import { ApiError, api } from "../../api";
 import { PromptPresetsManager } from "../PromptPresetsManager";
 import { AppSettings, UserProfile } from "../../types";
 import { FeedbackModal } from "./FeedbackModal";
@@ -60,6 +60,11 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
   const [modelsDeckInvalid, setModelsDeckInvalid] = useState(0);
   const [staleEmbeddings, setStaleEmbeddings] = useState(0);
   const [reindexing, setReindexing] = useState(false);
+  const [pendingPurgeConfirm, setPendingPurgeConfirm] = useState<{
+    affectedProviders: number;
+    affectedUsers: number;
+    message: string;
+  } | null>(null);
 
   const loadSettings = async () => {
     try {
@@ -99,28 +104,52 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
     }
   };
 
-  const handleSaveSettings = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submitSettingsUpdate = async (confirmCredentialPurge: boolean) => {
     if (!appSettingsForm) return;
     setSavingSettings(true);
     setErrorMsg(null);
     setStatusMsg(null);
     try {
       // The server is the authority: adopt its response (including the BYOP-coerced overrides flag).
-      const updated = await api.updateSettings(appSettingsForm);
+      const updated = await api.updateSettings(appSettingsForm, {
+        confirmCredentialPurge,
+      });
+      setPendingPurgeConfirm(null);
       setAppSettingsForm(updated);
       setStaleEmbeddings(updated.stale_embedding_entries);
       onSettingsUpdated?.(updated);
       setStatusMsg(
         updated.embedding_reindex_required
           ? "Settings saved. Stored memories use a different embedding model and are ignored until reindexed."
-          : "Global system model settings and policies saved successfully."
+          : confirmCredentialPurge
+            ? "Settings saved and stored personal provider credentials were purged from the database."
+            : "Global system model settings and policies saved successfully."
       );
     } catch (err: any) {
+      if (
+        err instanceof ApiError &&
+        err.status === 409 &&
+        err.code === "user_credentials_purge_required"
+      ) {
+        const detail = err.payload?.detail ?? {};
+        setPendingPurgeConfirm({
+          affectedProviders: Number(detail.affected_providers ?? 0),
+          affectedUsers: Number(detail.affected_users ?? 0),
+          message:
+            String(detail.message || "") ||
+            "Enabling Browser Only will permanently delete stored personal provider credentials from the database.",
+        });
+        return;
+      }
       setErrorMsg(err?.message || "Failed to save system model settings.");
     } finally {
       setSavingSettings(false);
     }
+  };
+
+  const handleSaveSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await submitSettingsUpdate(false);
   };
 
 
@@ -312,6 +341,9 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
             <ProvidersManager
               variant="admin"
               allowUserProviders={!!appSettingsForm?.allow_user_providers}
+              credentialStoreMode={
+                appSettingsForm?.provider_credential_store ?? "prefer_server"
+              }
             />
           )}
 
@@ -361,6 +393,76 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
           message={feedback.message}
           onConfirm={feedback.onConfirm}
         />
+      )}
+
+      {pendingPurgeConfirm && (
+        <div className="modal-backdrop" style={{ zIndex: 1200 }}>
+          <div className="modal-panel" style={{ maxWidth: 480, padding: 0 }}>
+            <div
+              className="modal-header"
+              style={{ borderColor: "rgba(244, 63, 94, 0.4)" }}
+            >
+              <span
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  color: "#fda4af",
+                }}
+              >
+                <AlertTriangle size={18} />
+                Purge Stored Personal Credentials?
+              </span>
+            </div>
+            <div
+              className="modal-body"
+              style={{
+                padding: "18px 20px",
+                fontSize: "0.86rem",
+                lineHeight: 1.55,
+                color: "var(--text-secondary)",
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+              }}
+            >
+              <p style={{ margin: 0 }}>{pendingPurgeConfirm.message}</p>
+              <p style={{ margin: 0 }}>
+                Affected: <strong>{pendingPurgeConfirm.affectedProviders}</strong>{" "}
+                personal provider(s) across{" "}
+                <strong>{pendingPurgeConfirm.affectedUsers}</strong> user
+                account(s). Shared system providers are unaffected. Affected
+                users will need to re-enter their API keys in their browser.
+              </p>
+            </div>
+            <div
+              style={{
+                padding: "12px 20px",
+                borderTop: "1px solid var(--border-subtle)",
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 8,
+              }}
+            >
+              <button
+                type="button"
+                className="btn"
+                disabled={savingSettings}
+                onClick={() => setPendingPurgeConfirm(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={savingSettings}
+                onClick={() => void submitSettingsUpdate(true)}
+              >
+                {savingSettings ? "Purging..." : "Purge Credentials & Save"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

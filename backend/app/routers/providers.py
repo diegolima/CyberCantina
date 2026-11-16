@@ -73,8 +73,9 @@ def _to_response(record: ProviderRecord, user: UserProfile) -> ProviderResponse:
         is_enabled=record.is_enabled,
         base_url=record.base_url if show_url else None,
         has_bearer_token=bool(record.secret_enc),
+        credential_storage=record.credential_storage,
         usable=problem is None,
-        unusable_reason=problem if problem in ("disabled", "byop_disabled") else None,  # type: ignore[arg-type]
+        unusable_reason=problem if problem in ("disabled", "byop_disabled", "browser_storage_disabled") else None,  # type: ignore[arg-type]
         cached_models=cached_models,
         last_probed_at=record.last_probed_at,
         last_error_code=record.last_error_code,  # type: ignore[arg-type]
@@ -136,8 +137,35 @@ async def create_provider(
     allow_private = _is_admin(user)
 
     raw_token = (payload.settings.bearer_token or "").strip()
+    storage = payload.credential_storage
+    if payload.scope == "system":
+        if storage == "browser":
+            raise HTTPException(
+                status_code=422,
+                detail="Shared system providers must store credentials on the server.",
+            )
+    elif _is_browser_provider(payload.type):
+        storage = "server"
+    else:
+        policy = settings.provider_credential_store
+        if policy == "server_only" and storage == "browser":
+            raise HTTPException(
+                status_code=422,
+                detail="Browser-stored provider credentials are disabled by the administrator.",
+            )
+        if policy == "browser_only" and (storage != "browser" or raw_token):
+            raise HTTPException(
+                status_code=422,
+                detail="Personal provider credentials must be stored in your browser.",
+            )
+        if storage == "browser" and raw_token:
+            raise HTTPException(
+                status_code=422,
+                detail="Browser-stored credentials cannot be sent to the server.",
+            )
+
     if payload.type == "openrouter":
-        if not raw_token:
+        if storage == "server" and not raw_token:
             raise HTTPException(status_code=422, detail="OpenRouter requires an API key (Bearer token).")
         raw_url = (payload.settings.base_url or "").strip() or "https://openrouter.ai/api/v1"
     elif payload.type == "aihorde":
@@ -165,6 +193,7 @@ async def create_provider(
             base_url=url.root,
             bearer_token=raw_token or None,
             network_restricted=not allow_private,
+            credential_storage=storage,
         )
         if payload.type == "webgpu":
             store.record_probe(
@@ -224,6 +253,63 @@ async def update_provider(
                 ).model_dump(),
             )
 
+    raw_token = (payload.bearer_token or "").strip()
+    next_storage: str | None = payload.credential_storage
+    clear_token = payload.clear_bearer_token
+
+    if record.scope == "system":
+        if next_storage == "browser":
+            raise HTTPException(
+                status_code=422,
+                detail="Shared system providers must store credentials on the server.",
+            )
+        next_storage = "server" if next_storage is not None else None
+    elif _is_browser_provider(record.type):
+        next_storage = "server" if next_storage is not None else None
+        raw_token = ""
+        clear_token = False
+    else:
+        policy = settings.provider_credential_store
+        if policy == "browser_only":
+            if next_storage == "server" or raw_token:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Personal provider credentials must be stored in your browser.",
+                )
+            next_storage = "browser"
+            clear_token = True
+        elif policy == "server_only":
+            if next_storage == "browser":
+                raise HTTPException(
+                    status_code=422,
+                    detail="Browser-stored provider credentials are disabled by the administrator.",
+                )
+            if record.credential_storage == "browser":
+                if raw_token:
+                    next_storage = "server"
+                elif next_storage == "server":
+                    if record.type == "openrouter":
+                        raise HTTPException(
+                            status_code=422,
+                            detail="OpenRouter requires an API key (Bearer token).",
+                        )
+                    next_storage = "server"
+        else:
+            effective_storage = next_storage or record.credential_storage
+            if effective_storage == "browser":
+                if raw_token:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="Browser-stored credentials cannot be sent to the server.",
+                    )
+                clear_token = True
+            elif record.credential_storage == "browser" and effective_storage == "server":
+                if record.type == "openrouter" and not raw_token:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="OpenRouter requires an API key (Bearer token).",
+                    )
+
     try:
         updated = store.update(
             provider_id,
@@ -232,8 +318,9 @@ async def update_provider(
             color=payload.color,
             is_enabled=payload.is_enabled,
             base_url=new_url,
-            bearer_token=(payload.bearer_token or "").strip() or None,
-            clear_bearer_token=payload.clear_bearer_token,
+            bearer_token=raw_token or None,
+            clear_bearer_token=clear_token,
+            credential_storage=next_storage,
         )
     except ProviderNameConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -287,8 +374,15 @@ async def probe_provider(
     if record.scope == "system" and not _is_admin(user):
         # Users only see the last server-side status; they cannot trigger connections to system providers.
         raise HTTPException(status_code=403, detail="Only administrators can check system providers.")
-    if record.scope == "user" and visibility_problem(record, user.id):
-        raise HTTPException(status_code=403, detail="Personal providers are disabled by the administrator.")
+    if record.scope == "user":
+        prob = visibility_problem(record, user.id)
+        if prob == "byop_disabled":
+            raise HTTPException(status_code=403, detail="Personal providers are disabled by the administrator.")
+        if prob == "browser_storage_disabled":
+            raise HTTPException(
+                status_code=403,
+                detail="Browser-stored provider credentials are disabled by the administrator.",
+            )
     if not _is_admin(user):
         try:
             probe_service.user_limiter.check(user.id)
@@ -300,7 +394,7 @@ async def probe_provider(
                 config_version=record.version,
                 probed_at="",
             )
-    if _is_browser_provider(record.type):
+    if _is_browser_provider(record.type) or record.credential_storage == "browser":
         probed_at = datetime.now(timezone.utc).isoformat()
         resp = await local_relay_hub.probe(
             user_id=user.id,
@@ -311,7 +405,8 @@ async def probe_provider(
             probed_at=probed_at,
         )
         if resp.reachable:
-            store.record_probe(record.id, models=resp.models, error_code=None, probed_at=probed_at)
+            persist_models = None if record.type == "openrouter" else resp.models
+            store.record_probe(record.id, models=persist_models, error_code=None, probed_at=probed_at)
         elif resp.error_code and resp.error_code != "relay_offline":
             store.record_probe(record.id, models=None, error_code=resp.error_code, probed_at=probed_at)
         return _public_probe(resp, privileged=_can_manage(record, user))
@@ -325,17 +420,32 @@ def report_client_probe(
     report: ClientProbeReport,
     user: UserProfile = Depends(get_current_user),
 ) -> ProviderProbeResponse:
-    """Persist a client-executed probe for a browser-local provider owned by the caller."""
+    """Persist a client-executed probe for a browser-local or browser-credentialed provider."""
     store = _store()
     record = _visible_or_404(store, provider_id, user)
     if not _can_manage(record, user):
         raise HTTPException(status_code=403, detail="You are not allowed to update this provider.")
-    if not _is_browser_provider(record.type):
-        raise HTTPException(status_code=422, detail="Client probes are only valid for browser-local providers.")
+    if not _is_browser_provider(record.type) and record.credential_storage != "browser":
+        raise HTTPException(
+            status_code=422,
+            detail="Client probes are only valid for browser-local or browser-credentialed providers.",
+        )
+    if record.scope == "user":
+        prob = visibility_problem(record, user.id)
+        if prob == "byop_disabled":
+            raise HTTPException(status_code=403, detail="Personal providers are disabled by the administrator.")
+        if prob == "browser_storage_disabled":
+            raise HTTPException(
+                status_code=403,
+                detail="Browser-stored provider credentials are disabled by the administrator.",
+            )
     probed_at = datetime.now(timezone.utc).isoformat()
     models = get_webgpu_model_infos() if (record.type == "webgpu" and report.reachable and not report.models) else report.models
     if report.reachable:
-        store.record_probe(record.id, models=models, error_code=None, probed_at=probed_at)
+        persist_models = None if (record.type == "openrouter" and not models) else models
+        store.record_probe(record.id, models=persist_models, error_code=None, probed_at=probed_at)
+        if record.type == "openrouter" and not models:
+            models = openrouter_catalog_service.get_cached_models_sync() or record.cached_models
     else:
         store.record_probe(record.id, models=None, error_code=report.error_code or "unknown", probed_at=probed_at)
     return ProviderProbeResponse(
@@ -364,6 +474,11 @@ async def probe_draft(draft: ProviderDraft, user: UserProfile = Depends(get_curr
             return ProviderProbeResponse(reachable=False, error_code="rate_limited", probed_at="")
     store = _store()
     token = (draft.bearer_token or "").strip() or None
+    if not _is_admin(user) and settings.provider_credential_store == "browser_only" and token:
+        raise HTTPException(
+            status_code=422,
+            detail="Personal provider credentials must be stored and tested in your browser.",
+        )
     restricted = not _is_admin(user)
     default_draft_url = (
         "https://openrouter.ai/api/v1"

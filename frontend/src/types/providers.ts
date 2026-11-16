@@ -42,6 +42,7 @@ export interface AppSettings {
   allow_user_model_overrides: boolean;
   /** BYOP: users may register private providers. Forces allow_user_model_overrides on (server-enforced). */
   allow_user_providers?: boolean;
+  provider_credential_store?: ProviderCredentialStoreMode;
   clerk_mirrors_actor?: boolean;
   /** Optimistic-concurrency counter; echo back what you loaded. */
   settings_revision?: number;
@@ -66,6 +67,12 @@ export type ProviderType =
   | "webgpu";
 export type ProviderScope = "system" | "user";
 export type ProviderColor = "neutral" | "cyan" | "purple" | "indigo" | "bronze";
+export type CredentialStorage = "server" | "browser";
+export type ProviderCredentialStoreMode =
+  | "server_only"
+  | "prefer_server"
+  | "prefer_browser"
+  | "browser_only";
 export type ProbeErrorCode =
   | "dns_failure"
   | "connect_refused"
@@ -80,6 +87,8 @@ export type ProbeErrorCode =
   | "rate_limited"
   | "relay_offline"
   | "webgpu_unsupported"
+  | "browser_credential_missing"
+  | "cors_or_network_error"
   | "unknown";
 
 export interface ProviderModelInfo {
@@ -105,8 +114,9 @@ export interface LLMProvider {
   /** Only present for admins and the owner. */
   base_url: string | null;
   has_bearer_token: boolean;
+  credential_storage?: CredentialStorage;
   usable: boolean;
-  unusable_reason: "disabled" | "byop_disabled" | null;
+  unusable_reason: "disabled" | "byop_disabled" | "browser_storage_disabled" | null;
   cached_models: ProviderModelInfo[];
   last_probed_at: string | null;
   last_error_code: ProbeErrorCode | null;
@@ -121,6 +131,7 @@ export interface ProviderCreatePayload {
   scope: ProviderScope;
   color: ProviderColor;
   is_enabled: boolean;
+  credential_storage?: CredentialStorage;
   settings: { base_url: string; bearer_token?: string | null };
 }
 
@@ -132,6 +143,7 @@ export interface ProviderUpdatePayload {
   base_url?: string;
   bearer_token?: string;
   clear_bearer_token?: boolean;
+  credential_storage?: CredentialStorage;
 }
 
 export interface ProviderDraft {
@@ -182,7 +194,13 @@ export interface ProviderReference {
 
 export interface EffectiveWarning {
   role: "actor" | "clerk";
-  code: "not_found" | "disabled" | "byop_disabled" | "no_token" | "missing_provider";
+  code:
+    | "not_found"
+    | "disabled"
+    | "byop_disabled"
+    | "browser_storage_disabled"
+    | "no_token"
+    | "missing_provider";
   provider_id?: string | null;
 }
 

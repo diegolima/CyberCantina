@@ -8,7 +8,12 @@ import React, {
   useState,
 } from "react";
 import { api } from "../../api";
+import {
+  deleteProviderCredential,
+  getProviderCredential,
+} from "../../local/credentialVault";
 import { probeBrowserOllama } from "../../local/ollamaDriver";
+import { probeRemoteProvider } from "../../local/remoteProviderDriver";
 import { checkWebGpuAdapter, getWebGpuModelInfos } from "../../local/webgpuCatalog";
 import { useOptionalLocalRelay } from "../../providers/LocalRelayContext";
 import {
@@ -141,6 +146,26 @@ export const ProvidersProvider: React.FC<{
                 probed_at: new Date().toISOString(),
                 from_cache: false,
               };
+        } else if (target.credential_storage === "browser") {
+          const token = getProviderCredential(relay?.currentUserId, id);
+          const localRes = await probeRemoteProvider({
+            type: target.type as "ollama" | "openrouter" | "aihorde",
+            baseUrl: target.base_url,
+            token,
+            requireToken:
+              target.type === "openrouter" || target.type === "aihorde",
+            providerId: id,
+            configVersion: version,
+            signal: controller.signal,
+          });
+          const report: ClientProbeReport = {
+            reachable: localRes.reachable,
+            protocol: localRes.protocol,
+            models: localRes.models,
+            error_code: localRes.error_code,
+            error: localRes.error,
+          };
+          result = await api.reportClientProbe(id, report, controller.signal);
         } else {
           result = await api.probeProvider(id, { force: opts?.force, signal: controller.signal });
         }
@@ -165,7 +190,7 @@ export const ProvidersProvider: React.FC<{
         if (inflight.current.get(id) === controller) inflight.current.delete(id);
       }
     },
-    [abortProbe, probeSystem]
+    [abortProbe, probeSystem, relay?.currentUserId]
   );
 
   const probeAll = useCallback(
@@ -252,6 +277,7 @@ export const ProvidersProvider: React.FC<{
   const remove = useCallback(
     async (id: string) => {
       await api.deleteProvider(id);
+      deleteProviderCredential(relay?.currentUserId, id);
       abortProbe(id);
       commitProviders(providersRef.current.filter((p) => p.id !== id));
       setStatus((s) => {

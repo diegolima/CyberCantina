@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
-import { LLMProvider } from "../../types";
+import { LLMProvider, ProviderCredentialStoreMode } from "../../types";
 import { ProviderChip } from "./ProviderBadges";
 import { ProviderCard } from "./ProviderCard";
 import { ProviderEditor } from "./ProviderEditor";
@@ -16,10 +16,16 @@ export interface ProvidersManagerProps {
   variant: "admin" | "profile";
   /** BYOP policy from the server (admin toggle). */
   allowUserProviders: boolean;
+  /** Admin policy governing personal provider credential storage. */
+  credentialStoreMode?: ProviderCredentialStoreMode;
 }
 
 /** Provider fleet management. */
-export const ProvidersManager: React.FC<ProvidersManagerProps> = ({ variant, allowUserProviders }) => {
+export const ProvidersManager: React.FC<ProvidersManagerProps> = ({
+  variant,
+  allowUserProviders,
+  credentialStoreMode = "prefer_server",
+}) => {
   const store = useProviders();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -36,6 +42,7 @@ export const ProvidersManager: React.FC<ProvidersManagerProps> = ({ variant, all
       status={store.status[p.id]}
       expanded={expandedId === p.id}
       canEdit={canEdit}
+      credentialStoreMode={credentialStoreMode}
       onToggle={() => setExpandedId((cur) => (cur === p.id ? null : p.id))}
       onProbe={() => void store.probe(p.id, { force: true })}
     />
@@ -68,11 +75,16 @@ export const ProvidersManager: React.FC<ProvidersManagerProps> = ({ variant, all
             </button>
           )}
         </div>
-        {adding && isAdminArea && (
-          <div className="provider-card expanded">
-            <ProviderEditor mode="create" scope="system" onDone={() => setAdding(false)} />
-          </div>
-        )}
+          {adding && isAdminArea && (
+            <div className="provider-card expanded">
+              <ProviderEditor
+                mode="create"
+                scope="system"
+                credentialStoreMode={credentialStoreMode}
+                onDone={() => setAdding(false)}
+              />
+            </div>
+          )}
         {system.length === 0 && !store.loading && (
           <div className="providers-empty">No system providers are configured yet.</div>
         )}
@@ -105,7 +117,12 @@ export const ProvidersManager: React.FC<ProvidersManagerProps> = ({ variant, all
           )}
           {adding && canAddPersonal && (
             <div className="provider-card expanded">
-              <ProviderEditor mode="create" scope="user" onDone={() => setAdding(false)} />
+              <ProviderEditor
+                mode="create"
+                scope="user"
+                credentialStoreMode={credentialStoreMode}
+                onDone={() => setAdding(false)}
+              />
             </div>
           )}
           {allowUserProviders && personal.length === 0 && !adding && (
