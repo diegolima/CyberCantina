@@ -991,27 +991,6 @@ class TurnsBranchesMixin:
             except KeyError:
                 pass
 
-        # Evaluate effective branch-level portal flags dynamically across active branch edges
-        loc_container_by_id = {loc.id: loc.container_id for loc in world_filtered.locations}
-        cross_boundary_loc_ids: set[str] = set()
-        for edge in world_filtered.edges:
-            if (
-                edge.from_location_id in loc_container_by_id
-                and edge.to_location_id in loc_container_by_id
-                and loc_container_by_id[edge.from_location_id] != loc_container_by_id[edge.to_location_id]
-            ):
-                cross_boundary_loc_ids.add(edge.from_location_id)
-                cross_boundary_loc_ids.add(edge.to_location_id)
-
-        for loc in world_filtered.locations:
-            if loc.container_id is not None and loc.id in cross_boundary_loc_ids:
-                loc.is_entry_exit = True
-        if active_loc.container_id is not None and active_loc.id in cross_boundary_loc_ids:
-            active_loc.is_entry_exit = True
-        for nb in neighbors:
-            if nb.destination.container_id is not None and nb.destination.id in cross_boundary_loc_ids:
-                nb.destination.is_entry_exit = True
-
         return CampaignStateBundle(
             campaign=campaign,
             active_branch_turns=branch_turns,

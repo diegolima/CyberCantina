@@ -752,7 +752,7 @@ def test_improvised_exploration_inheritance_and_dynamic_portals(temp_repo: Canti
     assert hub_nodes[0].container_id == club.id
     assert hub_nodes[0].is_entry_exit is True
 
-    # 4. Dynamic campaign portals via connect_campaign_locations without mutating base DB location_nodes
+    # 4. Campaign connections and base cross-container edges must NOT dynamically synthesize portal flags
     temp_repo.connect_campaign_locations(
         camp.id,
         from_location_id=vip.id,  # raw is_entry_exit == False
@@ -769,8 +769,10 @@ def test_improvised_exploration_inheritance_and_dynamic_portals(temp_repo: Canti
     assert raw_vip_portal == 0  # Base DB row untouched!
 
     bundle_conn = temp_repo.get_campaign_state_bundle(camp.id)
-    vis_vip = next(loc for loc in bundle_conn.visible_locations if loc.id == vip.id)
-    assert vis_vip.is_entry_exit is True
+    vis_by_name = {loc.name: loc for loc in bundle_conn.visible_locations}
+    assert vis_by_name["VIP Booth"].is_entry_exit is False
+    assert vis_by_name["Watson Overpass"].is_entry_exit is False
+    assert vis_by_name["Main Floor"].is_entry_exit is True
 
 
 def test_zone4_hierarchy_prompt_lca_cues_and_zone1_stability(temp_repo: CantinaRepository) -> None:

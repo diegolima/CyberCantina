@@ -895,7 +895,7 @@ describe("Interactive Map Editor & Mini-Map", () => {
     expect(canvasEditHtml).toContain('aria-label="Increase travel minutes"');
     expect(canvasEditHtml).toContain('aria-label="Travel minutes"');
     expect(canvasEditHtml).toContain('stroke-width="14"');
-    expect(canvasEditHtml).not.toContain("· 1");
+    expect(canvasEditHtml).not.toContain("m · 1");
 
     // 3. Atomic edge & aggregated bundle deletion removes reverse pairs in one pass
     const afterSingleDelete = filterEdgesAfterDeletion(edges, ["e1"]);
@@ -1449,5 +1449,119 @@ describe("Interactive Map Editor & Mini-Map", () => {
       />
     );
     expect(emptyExistingTabHtml).toContain("Existing");
+  });
+
+  it("renders portal badges strictly for explicitly marked entry/exit locations while preserving ghost links", () => {
+    const { containers, locations, edges } = makeRichWorldFixture();
+
+    // loc_hub sits in Depth-2 cont_district with is_entry_exit: false, even though it links cross-boundary
+    // into cont_club (loc_foyer, is_entry_exit: true) and root (loc_street, is_entry_exit: false).
+    const distProj = projectTopologyForDepth(
+      "cont_district",
+      containers,
+      locations,
+      edges,
+      "loc_foyer"
+    );
+    expect(Array.from(distProj.dynamicPortalIds)).toEqual(["loc_foyer"]);
+    expect(distProj.dynamicPortalIds.has("loc_hub")).toBe(false);
+    expect(distProj.dynamicPortalIds.has("loc_street")).toBe(false);
+    // Ghost external links remain active from edges regardless of portal mark
+    expect(distProj.ghostExternalNodes.map((g) => g.destination.id)).toContain(
+      "loc_street"
+    );
+
+    const coords = computeFullMapCoords(
+      distProj.visibleLocations,
+      distProj.projectedEdges.map((pe) => pe.rawEdge),
+      distProj.anchorNodeId
+    );
+
+    // District view canvas has only loc_hub visible (unmarked) -> zero cyan portal diamonds (#083344)
+    const distViewHtml = renderToStaticMarkup(
+      <SpatialTopologyView
+        title="District Check"
+        containers={containers}
+        locations={locations}
+        edges={edges}
+        activeLocationId="loc_hub"
+        mode="editor"
+      />
+    );
+    expect(distViewHtml).toContain("Canal Junction");
+    expect(distViewHtml).toContain("Harbor Pier");
+    expect(distViewHtml).not.toContain('fill="#083344"');
+
+    // Inside cont_club where loc_foyer IS marked is_entry_exit: true, cyan portal diamond renders
+    const clubViewHtml = renderToStaticMarkup(
+      <SpatialTopologyView
+        title="Club Check"
+        containers={containers}
+        locations={locations}
+        edges={edges}
+        activeLocationId="loc_foyer"
+        mode="editor"
+      />
+    );
+    expect(clubViewHtml).toContain("Main Floor");
+    expect(clubViewHtml).toContain('fill="#083344"');
+
+    // Inspecting unmarked loc_hub in MapDetailsDrawer does NOT show [Entry/Exit Portal] badge
+    const hubDrawerHtml = renderToStaticMarkup(
+      <MapDetailsDrawer
+        mode="editor"
+        isMutatingLocked={false}
+        selectedLocation={locations[1]} // loc_hub (is_entry_exit: false)
+        selectedContainer={null}
+        containers={containers}
+        allLocations={locations}
+        activeLocId={locations[0].id}
+        dynamicPortalIds={distProj.dynamicPortalIds}
+        externalPortals={[]}
+        containerStats={null}
+        depthLabels={{
+          1: "Building / Landmark",
+          2: "District / Zone",
+          3: "City / Settlement",
+          4: "Region / Planet / Realm",
+        }}
+        onClose={() => {}}
+        onPatchLocation={() => {}}
+        onPatchContainer={() => {}}
+        onResetCoordinates={() => {}}
+        onDrillIntoContainer={() => {}}
+      />
+    );
+    expect(hubDrawerHtml).toContain("Canal Junction");
+    expect(hubDrawerHtml).not.toContain("[Entry/Exit Portal]");
+
+    // Inspecting marked loc_foyer in MapDetailsDrawer DOES show [Entry/Exit Portal] badge
+    const foyerDrawerHtml = renderToStaticMarkup(
+      <MapDetailsDrawer
+        mode="editor"
+        isMutatingLocked={false}
+        selectedLocation={locations[0]} // loc_foyer (is_entry_exit: true)
+        selectedContainer={null}
+        containers={containers}
+        allLocations={locations}
+        activeLocId={locations[0].id}
+        dynamicPortalIds={distProj.dynamicPortalIds}
+        externalPortals={[]}
+        containerStats={null}
+        depthLabels={{
+          1: "Building / Landmark",
+          2: "District / Zone",
+          3: "City / Settlement",
+          4: "Region / Planet / Realm",
+        }}
+        onClose={() => {}}
+        onPatchLocation={() => {}}
+        onPatchContainer={() => {}}
+        onResetCoordinates={() => {}}
+        onDrillIntoContainer={() => {}}
+      />
+    );
+    expect(foyerDrawerHtml).toContain("[Entry/Exit Portal]");
+    expect(coords["loc_hub"]).toBeDefined();
   });
 });

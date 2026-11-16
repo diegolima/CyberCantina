@@ -306,30 +306,15 @@ export function buildContainerBreadcrumbChain(
   return chainRev.reverse();
 }
 
-/** Determine dynamic portals: static is_entry_exit OR active cross-boundary edge endpoint. */
+/** Collect explicit portal IDs from containerized locations marked with `is_entry_exit`. */
 export function computeDynamicPortalIds(
   locations: LocationNode[],
-  edges: LocationEdge[]
+  _edges?: LocationEdge[]
 ): Set<string> {
-  const locContainer = new Map<string, string | null>(
-    locations.map((l) => [l.id, l.container_id ?? null])
-  );
   const portals = new Set<string>();
   for (const loc of locations) {
-    if (loc.is_entry_exit) portals.add(loc.id);
-  }
-  for (const edge of edges) {
-    if (
-      !locContainer.has(edge.from_location_id) ||
-      !locContainer.has(edge.to_location_id)
-    ) {
-      continue;
-    }
-    const cFrom = locContainer.get(edge.from_location_id) ?? null;
-    const cTo = locContainer.get(edge.to_location_id) ?? null;
-    if (cFrom !== cTo) {
-      if (cFrom !== null) portals.add(edge.from_location_id);
-      if (cTo !== null) portals.add(edge.to_location_id);
+    if (loc.container_id && loc.is_entry_exit) {
+      portals.add(loc.id);
     }
   }
   return portals;

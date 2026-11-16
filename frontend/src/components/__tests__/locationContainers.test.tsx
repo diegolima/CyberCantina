@@ -320,6 +320,27 @@ describe("Location Containers Frontend Architecture", () => {
     const highway = locations.find((l) => l.id === "loc_highway")!;
     const foyer = locations.find((l) => l.id === "loc_foyer")!;
     const portals = computeDynamicPortalIds(locations, []);
+    expect(Array.from(portals)).toEqual(["loc_foyer"]);
+
+    // Cross-container edges alone must NOT mark unmarked nodes (like Watson Overpass or stale root flags) as portals
+    const crossEdgePortals = computeDynamicPortalIds(
+      locations.map((l) =>
+        l.id === "loc_badlands" ? { ...l, is_entry_exit: true } : l
+      ),
+      [
+        ...locations.slice(0, 1).map(() => ({
+          id: "e_cross_unmarked",
+          world_id: "world_1",
+          from_location_id: "loc_highway",
+          to_location_id: "loc_foyer",
+          direction_label: "Club Entrance",
+          compass_direction: "S" as const,
+          travel_minutes: 1,
+          is_locked_or_hidden: false,
+        })),
+      ]
+    );
+    expect(Array.from(crossEdgePortals)).toEqual(["loc_foyer"]);
 
     // Single non-portal L1 endpoint -> external macro road
     const single = computePromotionCandidates(vip, highway, contById, portals);
