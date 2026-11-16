@@ -418,6 +418,101 @@ body {
   background: rgba(15, 23, 42, 0.9);
 }
 
+/* Cosmetic First-Visit Arrival Cards */
+.arrival-turn-card {
+  border-left: 3px solid #10b981;
+  background: rgba(6, 78, 59, 0.22);
+  overflow-anchor: none;
+}
+
+.arrival-cards-panel {
+  border-left: 3px solid #10b981;
+  background: rgba(6, 78, 59, 0.16);
+  border-radius: 6px;
+  padding: 9px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-anchor: none;
+}
+
+.arrival-cards-panel-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #6ee7b7;
+  letter-spacing: 0.02em;
+}
+
+.arrival-cards-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.arrival-card-item {
+  border: 1px solid rgba(16, 185, 129, 0.28);
+  border-radius: 6px;
+  background: rgba(11, 18, 28, 0.72);
+  overflow: hidden;
+}
+
+.arrival-card-item--open {
+  border-color: rgba(16, 185, 129, 0.48);
+}
+
+.arrival-card-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  padding: 7px 10px;
+  cursor: pointer;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.arrival-card-header:hover {
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.arrival-card-title-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.arrival-card-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #ecfdf5;
+}
+
+.arrival-card-scope-badge {
+  font-size: 0.66rem;
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.14);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 999px;
+  padding: 1px 7px;
+  flex-shrink: 0;
+}
+
+.arrival-card-body {
+  padding: 6px 12px 10px 28px;
+  font-size: 0.84rem;
+  line-height: 1.52;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  border-top: 1px solid rgba(16, 185, 129, 0.15);
+}
+
 .user-bubble-narrator-cue {
   align-self: center;
   background: rgba(139, 92, 246, 0.12);

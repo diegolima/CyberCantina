@@ -6,10 +6,15 @@ import json
 import sqlite3
 import uuid
 from typing import Any
+from app.schemas.character import CognitionBlock
 from app.schemas.turn import (
     CampaignStateBundle,
     ImprovisedLocationSpec,
+    PostTurnStateDelta,
+    PreTurnAnalysis,
+    WorldStateSnapshot,
 )
+from app.db.repos.arrival_descriptions import build_first_visit_arrival
 from app.schemas.world import (
     OPPOSITE_COMPASS,
     LocationContainer,
@@ -45,31 +50,106 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
         leaf_turn = self.get_turn_node(campaign.active_leaf_turn_id)
         old_loc_id = leaf_turn.world_snapshot.active_location_id
 
-        new_flags: list[str] = [f"At {target_loc.name}"]
-        merged_visited = list(
-            dict.fromkeys(
-                [*(leaf_turn.world_snapshot.visited_location_ids or []), target_loc.id]
-            )
+        branch_turns = self.get_branch_turn_chain(leaf_turn.id)
+        valid_turn_ids = {t.id for t in branch_turns}
+        world = self.get_world(campaign.world_id, valid_turn_ids=valid_turn_ids)
+        world_target = next((loc for loc in world.locations if loc.id == location_id), target_loc)
+
+        new_flags: list[str] = [f"At {world_target.name}"]
+        arrival_cards, merged_visited, merged_visited_containers = build_first_visit_arrival(
+            target_location=world_target,
+            containers=world.containers,
+            locations=world.locations,
+            prev_visited_locations=leaf_turn.world_snapshot.visited_location_ids or [],
+            prev_visited_containers=leaf_turn.world_snapshot.visited_container_ids or [],
+            describe_on_first_visit=campaign.world_settings.describe_on_first_visit,
         )
+
+        if arrival_cards:
+            arrival_turn_id = f"turn_{uuid.uuid4().hex[:10]}"
+            all_prev_states = dict(leaf_turn.character_states or {})
+            if leaf_turn.character_state.character_id not in all_prev_states:
+                all_prev_states[leaf_turn.character_state.character_id] = leaf_turn.character_state
+
+            def _moved_state(st):
+                should_move = (
+                    st.current_location_id == old_loc_id
+                    or st.character_id == leaf_turn.actor_id
+                    or st.character_id == campaign.character_id
+                )
+                return st.model_copy(
+                    update={
+                        "turn_id": arrival_turn_id,
+                        "current_location_id": world_target.id if should_move else st.current_location_id,
+                    }
+                )
+
+            primary_prev = (
+                all_prev_states.get(campaign.character_id)
+                or leaf_turn.character_state
+            )
+            moved_primary = _moved_state(primary_prev)
+            moved_extras = [
+                _moved_state(st)
+                for cid, st in all_prev_states.items()
+                if cid != moved_primary.character_id
+            ]
+            self.save_turn_node(
+                turn_id=arrival_turn_id,
+                campaign_id=campaign.id,
+                parent_turn_id=leaf_turn.id,
+                depth_index=leaf_turn.depth_index + 1,
+                user_message="",
+                actor_id="__arrival__",
+                raw_prose="",
+                cognition=CognitionBlock(skipped=True),
+                pre_turn=PreTurnAnalysis(active_speaker_id="__arrival__", speaker_order=[]),
+                world_snapshot=WorldStateSnapshot(
+                    turn_id=arrival_turn_id,
+                    world_timestamp=leaf_turn.world_snapshot.world_timestamp,
+                    active_location_id=world_target.id,
+                    scene_flags=new_flags,
+                    campaign_elapsed_minutes=leaf_turn.world_snapshot.campaign_elapsed_minutes,
+                    visited_location_ids=merged_visited,
+                    visited_container_ids=merged_visited_containers,
+                ),
+                character_state=moved_primary,
+                extra_character_states=moved_extras,
+                recalled_items=[],
+                post_turn=PostTurnStateDelta(
+                    elapsed_minutes=0,
+                    transition_type="move_existing",
+                    target_location_id=world_target.id,
+                    first_visit_cards=arrival_cards,
+                ),
+            )
+            return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
 
         conn = self._connect()
         try:
             conn.execute(
                 """
                 UPDATE world_state_snapshots
-                SET active_location_id = ?, scene_flags_json = ?, visited_location_ids_json = ?
+                SET active_location_id = ?, scene_flags_json = ?,
+                    visited_location_ids_json = ?, visited_container_ids_json = ?
                 WHERE turn_id = ?
                 """,
-                (target_loc.id, json.dumps(new_flags), json.dumps(merged_visited), leaf_turn.id),
+                (
+                    world_target.id,
+                    json.dumps(new_flags),
+                    json.dumps(merged_visited),
+                    json.dumps(merged_visited_containers),
+                    leaf_turn.id,
+                ),
             )
-            # Move characters who were present at old_loc_id (plus primary actor) to target_loc.id
+            # Move characters who were present at old_loc_id (plus primary actor) to world_target.id
             conn.execute(
                 """
                 UPDATE character_states
                 SET current_location_id = ?
                 WHERE turn_id = ? AND (current_location_id = ? OR character_id = ?)
                 """,
-                (target_loc.id, leaf_turn.id, old_loc_id, leaf_turn.actor_id),
+                (world_target.id, leaf_turn.id, old_loc_id, leaf_turn.actor_id),
             )
             conn.commit()
         finally:

@@ -10,9 +10,12 @@ from app.schemas.persona import PersonaRecord, get_default_persona
 from app.schemas.turn import (
     CampaignRecord,
     CampaignStateBundle,
+    CampaignWorldSettings,
+    PostTurnStateDelta,
     PreTurnAnalysis,
     WorldStateSnapshot,
 )
+from app.db.repos.arrival_descriptions import build_first_visit_arrival
 from app.db.repos.base import _delete_campaign_rows, _dump_care_state_json, utc_now_iso
 
 
@@ -56,6 +59,7 @@ class CampaignsMixin:
         prompt_preset_id: str | None = None,
         owner_id: str | None = None,
         actor_id: str | None = None,
+        start_focus: str | None = None,
         skip_turn_0_cognition: bool = True,
     ) -> CampaignRecord:
         """Create a new campaign and initialize Turn 0 (opening scene snapshot)."""
@@ -103,15 +107,31 @@ class CampaignsMixin:
         )
         loc_map = character_locations or {}
         primary_loc_id = loc_map.get(character.id, start_loc.id)
+        camp_world_settings = CampaignWorldSettings(
+            describe_on_first_visit=getattr(
+                world.global_rules, "describe_on_first_visit", True
+            )
+        )
 
         conn = self._connect()
         try:
             conn.execute(
                 """
-                INSERT INTO campaigns (id, owner_id, name, world_id, character_id, persona_id, persona_snapshot_json, active_leaf_turn_id, prompt_preset_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+                INSERT INTO campaigns (id, owner_id, name, world_id, character_id, persona_id, persona_snapshot_json, active_leaf_turn_id, prompt_preset_id, world_settings_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
                 """,
-                (camp_id, owner_id, name, world_id, character_id, persona_id, persona_snapshot_json, prompt_preset_id, now),
+                (
+                    camp_id,
+                    owner_id,
+                    name,
+                    world_id,
+                    character_id,
+                    persona_id,
+                    persona_snapshot_json,
+                    prompt_preset_id,
+                    camp_world_settings.model_dump_json(),
+                    now,
+                ),
             )
             for cid in all_char_ids:
                 conn.execute(
@@ -146,12 +166,30 @@ class CampaignsMixin:
                 f"\"You're late,\" {character.name} says quietly, eyes scanning the room."
             )
 
-        root_turn_id = f"turn_{uuid.uuid4().hex[:10]}"
-        root_visited_ids = list(
-            dict.fromkeys(
-                [primary_loc_id, *[loc_map.get(ec.id, start_loc.id) for ec in extra_characters]]
-            )
+        effective_actor_id = actor_id or character.id
+        effective_start_focus = start_focus or (
+            "world" if effective_actor_id == "__narrator__" else "character"
         )
+        char_init_msg = (character.initial_message or "").strip()
+        has_custom_opening = bool(opening_prose and opening_prose.strip())
+        skip_turn_0_location_card = (not has_custom_opening) and (
+            "{location_description}" in char_init_msg or not char_init_msg
+        )
+        root_cards, root_visited_ids, root_visited_container_ids = build_first_visit_arrival(
+            target_location=primary_loc,
+            containers=world.containers,
+            locations=world.locations,
+            prev_visited_locations=[],
+            prev_visited_containers=[],
+            describe_on_first_visit=camp_world_settings.describe_on_first_visit,
+            skip_location_card=skip_turn_0_location_card,
+            suppress_cards=(effective_start_focus == "world"),
+            extra_visited_location_ids=[
+                loc_map.get(ec.id, start_loc.id) for ec in extra_characters
+            ],
+        )
+
+        root_turn_id = f"turn_{uuid.uuid4().hex[:10]}"
         root_snapshot = WorldStateSnapshot(
             turn_id=root_turn_id,
             world_timestamp=world.global_rules.starting_timestamp,
@@ -159,6 +197,7 @@ class CampaignsMixin:
             scene_flags=["Scene Opening"],
             campaign_elapsed_minutes=0,
             visited_location_ids=root_visited_ids,
+            visited_container_ids=root_visited_container_ids,
         )
         root_care = seed_initial_care_state(
             character.baseline_psyche,
@@ -248,6 +287,11 @@ class CampaignsMixin:
             character_state=root_char_state,
             extra_character_states=extra_states,
             recalled_items=[],
+            post_turn=(
+                PostTurnStateDelta(elapsed_minutes=0, first_visit_cards=root_cards)
+                if root_cards
+                else None
+            ),
         )
         if persona:
             self.save_campaign_persona_turn_state(
@@ -372,6 +416,14 @@ class CampaignsMixin:
                 persona_snapshot = default_p
                 if not persona_id:
                     persona_id = default_p.id
+            world_settings = CampaignWorldSettings()
+            if "world_settings_json" in r.keys() and r["world_settings_json"]:
+                try:
+                    world_settings = CampaignWorldSettings.model_validate_json(
+                        r["world_settings_json"]
+                    )
+                except Exception:
+                    pass
             return CampaignRecord(
                 id=r["id"],
                 name=r["name"],
@@ -382,6 +434,7 @@ class CampaignsMixin:
                 participant_character_ids=participant_ids,
                 active_leaf_turn_id=r["active_leaf_turn_id"],
                 prompt_preset_id=preset_id,
+                world_settings=world_settings,
                 created_at=r["created_at"],
             )
         finally:
@@ -413,6 +466,25 @@ class CampaignsMixin:
         finally:
             conn.close()
         return self.get_campaign(campaign_id, owner_id=owner_id)
+
+    def update_campaign_world_settings(
+        self,
+        campaign_id: str,
+        world_settings: CampaignWorldSettings,
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
+        """Update per-campaign world settings forward-only without touching the base world."""
+        self.get_campaign(campaign_id, owner_id=owner_id)
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE campaigns SET world_settings_json = ? WHERE id = ?",
+                (world_settings.model_dump_json(), campaign_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
 
     def delete_campaign(
         self, campaign_id: str, owner_id: str | None = None

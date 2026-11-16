@@ -124,10 +124,10 @@ def resolve_character_previous_state(
     # Only rewind across narrator turns if current_state holds a detached narrator placeholder
     # or lacks a self-contained CARE snapshot (never overwrite valid narrator-decayed CARE states).
     if current_state.mood_label == "Objective / Detached" or (
-        parent_turn.actor_id == "__narrator__" and current_state.care_state is None
+        parent_turn.actor_id in ("__narrator__", "__arrival__") and current_state.care_state is None
     ):
         for turn in reversed(branch_turns):
-            if turn.actor_id == "__narrator__":
+            if turn.actor_id in ("__narrator__", "__arrival__"):
                 continue
             hist_state = turn.character_states.get(
                 character.id,

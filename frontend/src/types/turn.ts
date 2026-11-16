@@ -44,6 +44,19 @@ export interface WorldStateSnapshot {
   active_location_id: string;
   scene_flags: string[];
   visited_location_ids?: string[];
+  visited_container_ids?: string[];
+}
+
+export interface CampaignWorldSettings {
+  describe_on_first_visit: boolean;
+}
+
+export interface FirstVisitDescriptionCard {
+  entity_type: "container" | "location";
+  entity_id: string;
+  depth: number;
+  title: string;
+  description: string;
 }
 
 export interface ExtractedCharacterMemory {
@@ -129,6 +142,7 @@ export interface PostTurnStateDelta {
   arbitration_notes?: string[];
   arbitration_rulings?: ArbitrationRulingRecord[];
   compacted_character_ids?: string[];
+  first_visit_cards?: FirstVisitDescriptionCard[];
 }
 
 export type Phase5AgentKind = "world_clerk" | "character";
@@ -402,6 +416,7 @@ export interface CampaignRecord {
   participant_character_ids?: string[];
   active_leaf_turn_id?: string | null;
   prompt_preset_id?: string | null;
+  world_settings?: CampaignWorldSettings;
   created_at: string;
   persona_id?: string | null;
   persona_snapshot?: PersonaRecord | null;

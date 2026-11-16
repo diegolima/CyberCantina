@@ -369,6 +369,23 @@ class WorldStateSnapshot(BaseModel):
         description="Monotonic in-campaign elapsed minutes accumulated since Turn 0.",
     )
     visited_location_ids: list[str] = Field(default_factory=list)
+    visited_container_ids: list[str] = Field(default_factory=list)
+
+
+class CampaignWorldSettings(BaseModel):
+    """Per-campaign world behavior settings copied from base world defaults."""
+
+    describe_on_first_visit: bool = True
+
+
+class FirstVisitDescriptionCard(BaseModel):
+    """Cosmetic atmospheric description card injected when arriving at an unvisited entity."""
+
+    entity_type: Literal["container", "location"]
+    entity_id: str
+    depth: int = 0
+    title: str
+    description: str
 
 
 class ImprovisedLocationSpec(BaseModel):
@@ -807,6 +824,10 @@ class PostTurnStateDelta(BaseModel):
         default_factory=list,
         description="Character IDs whose aged ephemeral memories were consolidated into a compacted shard this turn.",
     )
+    first_visit_cards: list[FirstVisitDescriptionCard] = Field(
+        default_factory=list,
+        description="Cosmetic first-visit location and container description cards attached to this turn.",
+    )
 
 
 CharacterSpotlightRole = Literal["primary_speaker", "co_present"]
@@ -988,6 +1009,7 @@ class CampaignRecord(BaseModel):
     participant_character_ids: list[str] = Field(default_factory=list)
     active_leaf_turn_id: str | None = None
     prompt_preset_id: str | None = None
+    world_settings: CampaignWorldSettings = Field(default_factory=CampaignWorldSettings)
     created_at: str
 
 

@@ -88,6 +88,10 @@ class CampaignEdgeDistanceUpdateRequest(BaseModel):
     update_reciprocal: bool = True
 
 
+class CampaignWorldSettingsPatchRequest(BaseModel):
+    describe_on_first_visit: bool = True
+
+
 class CampaignTurnGate:
     """Keyed per-campaign asyncio.Lock registry serializing turn streams, swipes, and deletes."""
 

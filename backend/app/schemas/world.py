@@ -263,6 +263,10 @@ class WorldGlobalRules(BaseModel):
         default="2094-11-14 23:15",
         description="Initial world clock timestamp (YYYY-MM-DD HH:MM).",
     )
+    describe_on_first_visit: bool = Field(
+        default=True,
+        description="Default campaign setting: display cosmetic atmospheric description cards on first entry to unvisited locations/containers.",
+    )
 
     @model_validator(mode="before")
     @classmethod

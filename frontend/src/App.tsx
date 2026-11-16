@@ -175,6 +175,7 @@ export const App: React.FC = () => {
     liveStream,
     handleSendTurn,
     handleOverrideLocation,
+    handleUpdateCampaignWorldSettings,
     handleToggleItemEquip,
     handleUpdateCampaignMemories,
     handleSaveCampaignLocationLore,
@@ -758,6 +759,7 @@ export const App: React.FC = () => {
           memoryConfig={appSettings?.memory_config}
           pendingLocationOverrideId={pendingLocationOverrideId}
           onOverrideLocation={handleOverrideLocation}
+          onUpdateCampaignWorldSettings={handleUpdateCampaignWorldSettings}
           onSaveCampaignMap={handleSaveCampaignMap}
           onToggleItemEquip={handleToggleItemEquip}
           onUpdateCampaignMemories={handleUpdateCampaignMemories}

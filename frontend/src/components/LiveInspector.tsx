@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import {
   CampaignStateBundle,
+  CampaignWorldSettings,
   CharacterRecord,
   CharacterStateSnapshot,
   CompassDirection,
@@ -25,6 +26,7 @@ import { CampaignCharacterModal } from "./inspector/CampaignCharacterModal";
 import { InspectorLocationCard } from "./inspector/InspectorLocationCard";
 import { InspectorInternalsSection } from "./inspector/InspectorInternalsSection";
 import { LoreIndexModal } from "./inspector/LoreIndexModal";
+import { WorldInspectorModal } from "./world/WorldInspectorModal";
 import {
   COMPASS_ANGLES,
   buildContainerBreadcrumbChain,
@@ -75,6 +77,9 @@ interface LiveInspectorProps {
     loreNodes: LocationLoreNodeDraft[]
   ) => Promise<void> | void;
   onCheckoutTurn?: (turnId: string) => Promise<void> | void;
+  onUpdateCampaignWorldSettings?: (
+    settings: CampaignWorldSettings
+  ) => Promise<void> | void;
   isMutatingLocked?: boolean;
   worlds?: WorldRecord[];
 }
@@ -93,11 +98,13 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   onSaveCampaignLocationLore,
   onSaveCampaignContainerLore,
   onCheckoutTurn,
+  onUpdateCampaignWorldSettings,
   isMutatingLocked = false,
   worlds = [],
 }) => {
   const activeLoc = bundle.active_location;
   const [selectedLocId, setSelectedLocId] = useState<string>(activeLoc.id);
+  const [showWorldSheet, setShowWorldSheet] = useState(false);
   const [showFullMap, setShowFullMap] = useState(false);
   const [isOverriding, setIsOverriding] = useState(false);
   const [showExits, setShowExits] = usePersistentState<boolean>("map.exits", false);
@@ -365,7 +372,26 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
         onOverrideLocation={onOverrideLocation}
         handleOverrideClick={handleOverrideClick}
         handleOpenFullMap={handleOpenFullMap}
+        onOpenWorldSheet={() => setShowWorldSheet(true)}
       />
+
+      {/* Campaign World Sheet Modal (Read-only overview/map/lore + Campaign World Settings) */}
+      {showWorldSheet && (
+        <WorldInspectorModal
+          world={{
+            ...world,
+            containers: effectiveContainers,
+            locations: bundle.visible_locations,
+            edges: activeEdges,
+          }}
+          mode="campaign"
+          campaignWorldSettings={bundle.campaign.world_settings}
+          isMutatingLocked={isMutatingLocked}
+          onSaveCampaignWorldSettings={onUpdateCampaignWorldSettings}
+          onClose={() => setShowWorldSheet(false)}
+          onSaved={() => setShowWorldSheet(false)}
+        />
+      )}
 
       {/* Full Zoomable Map Modal */}
       {showFullMap && (

@@ -79,6 +79,7 @@ from app.routers.campaign_routes.schemas_and_gate import (  # noqa: F401
     LinkedLocationCreateRequest,
     CampaignEdgeCreateRequest,
     CampaignEdgeDistanceUpdateRequest,
+    CampaignWorldSettingsPatchRequest,
     CampaignTurnGate,
     campaign_turn_gate,
 )
@@ -91,6 +92,7 @@ from app.routers.campaign_routes.crud_and_state import (  # noqa: F401
     get_campaign_state,
     checkout_campaign_branch,
     override_campaign_location,
+    update_campaign_world_settings,
     toggle_campaign_item_equip,
     update_campaign_character_memories,
     delete_campaign_last_turn,

@@ -61,7 +61,9 @@ class TurnsBranchesMixin:
         """Persist a new turn node + snapshots and advance campaign active_leaf_turn_id."""
         now = utc_now_iso()
         eff_cognitions = cognitions if cognitions is not None else (
-            {actor_id: cognition} if actor_id != "__narrator__" and not cognition.skipped else {}
+            {actor_id: cognition}
+            if actor_id not in ("__narrator__", "__arrival__") and not cognition.skipped
+            else {}
         )
         cognitions_payload = {
             "cognitions": {cid: c.model_dump() for cid, c in eff_cognitions.items()},
@@ -112,25 +114,37 @@ class TurnsBranchesMixin:
                     ]
                 )
             )
-            if not world_snapshot.visited_location_ids and parent_turn_id is not None:
+            visited_container_ids = list(
+                dict.fromkeys(world_snapshot.visited_container_ids or [])
+            )
+            if parent_turn_id is not None and (
+                not world_snapshot.visited_location_ids or not world_snapshot.visited_container_ids
+            ):
                 parent_ws = conn.execute(
-                    "SELECT visited_location_ids_json FROM world_state_snapshots WHERE turn_id = ?",
+                    "SELECT visited_location_ids_json, visited_container_ids_json FROM world_state_snapshots WHERE turn_id = ?",
                     (parent_turn_id,),
                 ).fetchone()
-                if parent_ws and parent_ws["visited_location_ids_json"]:
-                    try:
-                        parent_visited = json.loads(parent_ws["visited_location_ids_json"] or "[]")
-                    except Exception:
-                        parent_visited = []
-                    visited_ids = list(dict.fromkeys([*parent_visited, *visited_ids]))
+                if parent_ws:
+                    if not world_snapshot.visited_location_ids and parent_ws["visited_location_ids_json"]:
+                        try:
+                            parent_visited = json.loads(parent_ws["visited_location_ids_json"] or "[]")
+                        except Exception:
+                            parent_visited = []
+                        visited_ids = list(dict.fromkeys([*parent_visited, *visited_ids]))
+                    if not world_snapshot.visited_container_ids and parent_ws["visited_container_ids_json"]:
+                        try:
+                            parent_conts = json.loads(parent_ws["visited_container_ids_json"] or "[]")
+                        except Exception:
+                            parent_conts = []
+                        visited_container_ids = list(dict.fromkeys([*parent_conts, *visited_container_ids]))
 
             conn.execute(
                 """
                 INSERT INTO world_state_snapshots (
                     turn_id, world_timestamp, active_location_id, scene_flags_json,
-                    campaign_elapsed_minutes, visited_location_ids_json
+                    campaign_elapsed_minutes, visited_location_ids_json, visited_container_ids_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     turn_id,
@@ -139,6 +153,7 @@ class TurnsBranchesMixin:
                     json.dumps(world_snapshot.scene_flags),
                     int(world_snapshot.campaign_elapsed_minutes),
                     json.dumps(visited_ids),
+                    json.dumps(visited_container_ids),
                 ),
             )
 
@@ -279,15 +294,23 @@ class TurnsBranchesMixin:
                 (post_turn.model_dump_json(), turn_id),
             )
             existing_ws = conn.execute(
-                "SELECT visited_location_ids_json FROM world_state_snapshots WHERE turn_id = ?",
+                "SELECT visited_location_ids_json, visited_container_ids_json FROM world_state_snapshots WHERE turn_id = ?",
                 (turn_id,),
             ).fetchone()
             existing_visited: list[str] = []
+            existing_visited_containers: list[str] = []
             if existing_ws and existing_ws["visited_location_ids_json"]:
                 try:
                     existing_visited = json.loads(existing_ws["visited_location_ids_json"] or "[]")
                 except Exception:
                     existing_visited = []
+            if existing_ws and existing_ws["visited_container_ids_json"]:
+                try:
+                    existing_visited_containers = json.loads(
+                        existing_ws["visited_container_ids_json"] or "[]"
+                    )
+                except Exception:
+                    existing_visited_containers = []
             merged_visited = list(
                 dict.fromkeys(
                     [
@@ -301,11 +324,20 @@ class TurnsBranchesMixin:
                     ]
                 )
             )
+            merged_visited_containers = list(
+                dict.fromkeys(
+                    [
+                        *existing_visited_containers,
+                        *(updated_world_snapshot.visited_container_ids or []),
+                    ]
+                )
+            )
             conn.execute(
                 """
                 UPDATE world_state_snapshots
                 SET world_timestamp = ?, active_location_id = ?, scene_flags_json = ?,
-                    campaign_elapsed_minutes = ?, visited_location_ids_json = ?
+                    campaign_elapsed_minutes = ?, visited_location_ids_json = ?,
+                    visited_container_ids_json = ?
                 WHERE turn_id = ?
                 """,
                 (
@@ -314,6 +346,7 @@ class TurnsBranchesMixin:
                     json.dumps(updated_world_snapshot.scene_flags),
                     int(updated_world_snapshot.campaign_elapsed_minutes),
                     json.dumps(merged_visited),
+                    json.dumps(merged_visited_containers),
                     turn_id,
                 ),
             )
@@ -656,6 +689,7 @@ class TurnsBranchesMixin:
                     ws.scene_flags_json,
                     ws.campaign_elapsed_minutes,
                     ws.visited_location_ids_json,
+                    ws.visited_container_ids_json,
                     cs.character_id AS cs_character_id,
                     cs.current_location_id,
                     cs.mood_label,
@@ -672,7 +706,7 @@ class TurnsBranchesMixin:
                 FROM turn_nodes t
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
                 JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = (
-                    CASE WHEN t.actor_id = '__narrator__' THEN (SELECT character_id FROM campaigns WHERE id = t.campaign_id)
+                    CASE WHEN t.actor_id IN ('__narrator__', '__arrival__') THEN (SELECT character_id FROM campaigns WHERE id = t.campaign_id)
                     ELSE t.actor_id END
                 )
                 WHERE t.id = ?
@@ -708,6 +742,7 @@ class TurnsBranchesMixin:
                     ws.scene_flags_json,
                     ws.campaign_elapsed_minutes,
                     ws.visited_location_ids_json,
+                    ws.visited_container_ids_json,
                     cs.character_id AS cs_character_id,
                     cs.current_location_id,
                     cs.mood_label,
@@ -725,7 +760,7 @@ class TurnsBranchesMixin:
                 JOIN turn_nodes t ON t.id = bp.id
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
                 JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = (
-                    CASE WHEN t.actor_id = '__narrator__' THEN (SELECT character_id FROM campaigns WHERE id = t.campaign_id)
+                    CASE WHEN t.actor_id IN ('__narrator__', '__arrival__') THEN (SELECT character_id FROM campaigns WHERE id = t.campaign_id)
                     ELSE t.actor_id END
                 )
                 ORDER BY t.depth_index ASC
@@ -750,6 +785,7 @@ class TurnsBranchesMixin:
                     ws.scene_flags_json,
                     ws.campaign_elapsed_minutes,
                     ws.visited_location_ids_json,
+                    ws.visited_container_ids_json,
                     cs.character_id AS cs_character_id,
                     cs.current_location_id,
                     cs.mood_label,
@@ -766,7 +802,7 @@ class TurnsBranchesMixin:
                 FROM turn_nodes t
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
                 JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = (
-                    CASE WHEN t.actor_id = '__narrator__' THEN (SELECT character_id FROM campaigns WHERE id = t.campaign_id)
+                    CASE WHEN t.actor_id IN ('__narrator__', '__arrival__') THEN (SELECT character_id FROM campaigns WHERE id = t.campaign_id)
                     ELSE t.actor_id END
                 )
                 WHERE t.campaign_id = ?
@@ -1030,7 +1066,7 @@ class TurnsBranchesMixin:
                     }
             except Exception:
                 pass
-        if not cognitions_map and r["actor_id"] != "__narrator__" and not base_cog.skipped:
+        if not cognitions_map and r["actor_id"] not in ("__narrator__", "__arrival__") and not base_cog.skipped:
             cognitions_map = {r["actor_id"]: base_cog}
 
         whispers_list: list[CharacterWhisper] = []
@@ -1070,6 +1106,11 @@ class TurnsBranchesMixin:
                 visited_location_ids=(
                     json.loads(r["visited_location_ids_json"] or "[]")
                     if "visited_location_ids_json" in r.keys()
+                    else []
+                ),
+                visited_container_ids=(
+                    json.loads(r["visited_container_ids_json"] or "[]")
+                    if "visited_container_ids_json" in r.keys()
                     else []
                 ),
             ),

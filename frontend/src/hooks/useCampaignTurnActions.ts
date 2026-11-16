@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, streamCampaignTurn } from "../api";
 import type {
   CampaignStateBundle,
+  CampaignWorldSettings,
   CharacterChoiceSet,
   DiceMode,
   ItemEquipActionPayload,
@@ -443,6 +444,17 @@ export function useCampaignTurnActions({
     setPendingLocationOverrideId(locationId);
   };
 
+  const handleUpdateCampaignWorldSettings = async (
+    worldSettings: CampaignWorldSettings
+  ) => {
+    if (!bundle || isStreaming || isPhase4Running) return;
+    const updated = await api.updateWorldSettings(
+      bundle.campaign.id,
+      worldSettings
+    );
+    setBundle(updated);
+  };
+
   const handleToggleItemEquip = async (payload: ItemEquipActionPayload) => {
     if (!bundle || isStreaming || isPhase4Running) return;
     try {
@@ -539,6 +551,7 @@ export function useCampaignTurnActions({
     liveStream,
     handleSendTurn,
     handleOverrideLocation,
+    handleUpdateCampaignWorldSettings,
     handleToggleItemEquip,
     handleUpdateCampaignMemories,
     handleSaveCampaignLocationLore,

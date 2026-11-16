@@ -4,6 +4,7 @@ export interface WorldGlobalRules {
   setting_overview: string;
   tech_or_magic_rules: string;
   starting_timestamp: string;
+  describe_on_first_visit?: boolean;
 }
 
 export type CompassDirection = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";

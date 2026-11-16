@@ -43,6 +43,7 @@
 | `DELETE` | `/api/campaigns/{campaign_id}/turns/last` | `app.routers.campaign_routes.crud_and_state.delete_campaign_last_turn` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/turns/stream` | `app.routers.campaign_routes.turn_streaming.stream_campaign_turn` | — | `frontend/src/api/stream.ts` |
 | `DELETE` | `/api/campaigns/{campaign_id}/turns/{turn_id}` | `app.routers.campaign_routes.crud_and_state.delete_campaign_turn` | `CampaignStateBundle` | *(backend-only / test / SSE)* |
+| `PATCH` | `/api/campaigns/{campaign_id}/world-settings` | `app.routers.campaign_routes.crud_and_state.update_campaign_world_settings` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `GET` | `/api/characters` | `app.routers.characters.list_characters` | `list` | `frontend/src/api/characters.ts` |
 | `DELETE` | `/api/characters/{character_id}` | `app.routers.characters.delete_character` | `dict` | `frontend/src/api/characters.ts` |
 | `GET` | `/api/characters/{character_id}` | `app.routers.characters.get_character` | `CharacterRecord` | `frontend/src/api/characters.ts` |
@@ -249,6 +250,7 @@ erDiagram
 | File | Summary |
 | :--- | :--- |
 | `backend/app/db/repos/__init__.py` | Domain repository mixins composed into CantinaRepository. |
+| `backend/app/db/repos/arrival_descriptions.py` | Pure helpers for resolving cosmetic first-visit arrival description cards. |
 | `backend/app/db/repos/auth_users.py` | Users, passkeys, sessions, and per-user model settings persistence. |
 | `backend/app/db/repos/base.py` | Core SQLite connection, media helpers, and vector/provider bindings. |
 | `backend/app/db/repos/campaign_lore_items.py` | Campaign item equip toggles and location/container lore overrides. |
@@ -626,10 +628,12 @@ erDiagram
 
 | File |
 | :--- |
+| `frontend/src/components/chat/ArrivalDescriptionCards.tsx` |
 | `frontend/src/components/chat/ChatComposer.tsx` |
 | `frontend/src/components/chat/DirectorChoicesDrawer.tsx` |
 | `frontend/src/components/chat/LiveStreamingTurnCard.tsx` |
 | `frontend/src/components/chat/TurnCard.tsx` |
+| `frontend/src/components/chat/arrivalHelpers.ts` |
 | `frontend/src/components/chat/chatHelpers.tsx` |
 
 #### `components/inspector`

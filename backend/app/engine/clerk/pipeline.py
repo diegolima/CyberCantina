@@ -11,6 +11,7 @@ from app.config import (
     ModelProfile,
     settings,
 )
+from app.db.repos.arrival_descriptions import build_first_visit_arrival
 from app.db.repository import CantinaRepository
 from app.engine.affective_engine import (
     MechanicalTurnSignals,
@@ -396,7 +397,11 @@ async def run_phase5_post_turn_clerk(
     existing_chunks = repo.get_branch_episodic_chunks(campaign_id, valid_turn_ids)
     max_summarized_depth = max((c.end_turn_depth for c in existing_chunks), default=0)
 
-    unsummarized = [t for t in branch_turns if t.depth_index > max_summarized_depth]
+    unsummarized = [
+        t
+        for t in branch_turns
+        if t.depth_index > max_summarized_depth and t.actor_id != "__arrival__"
+    ]
     wm_limit = (
         working_memory_turns
         if working_memory_turns is not None
@@ -533,19 +538,50 @@ async def run_phase5_post_turn_clerk(
             max_flags=eff_max_flags,
         )
     prev_visited = list(completed_turn.world_snapshot.visited_location_ids or [])
-    merged_visited = list(
-        dict.fromkeys(
-            [
-                *prev_visited,
-                *(
+    prev_visited_containers = list(
+        completed_turn.world_snapshot.visited_container_ids or []
+    )
+    first_visit_cards = []
+    merged_visited_containers = list(prev_visited_containers)
+    try:
+        camp_rec = repo.get_campaign(campaign_id)
+        world_rec = repo.get_world(world_id, valid_turn_ids=valid_turn_ids)
+        target_loc_obj = next(
+            (loc for loc in world_rec.locations if loc.id == new_location_id),
+            None,
+        )
+        if target_loc_obj is None:
+            target_loc_obj = repo.get_location(new_location_id)
+        first_visit_cards, merged_visited, merged_visited_containers = (
+            build_first_visit_arrival(
+                target_location=target_loc_obj,
+                containers=world_rec.containers,
+                locations=world_rec.locations,
+                prev_visited_locations=prev_visited,
+                prev_visited_containers=prev_visited_containers,
+                describe_on_first_visit=camp_rec.world_settings.describe_on_first_visit,
+                extra_visited_location_ids=(
                     [completed_turn.world_snapshot.active_location_id]
                     if completed_turn.world_snapshot.active_location_id
                     else []
                 ),
-                *([new_location_id] if new_location_id else []),
-            ]
+            )
         )
-    )
+    except Exception:
+        merged_visited = list(
+            dict.fromkeys(
+                [
+                    *prev_visited,
+                    *(
+                        [completed_turn.world_snapshot.active_location_id]
+                        if completed_turn.world_snapshot.active_location_id
+                        else []
+                    ),
+                    *([new_location_id] if new_location_id else []),
+                ]
+            )
+        )
+
     updated_world_snapshot = WorldStateSnapshot(
         turn_id=completed_turn.id,
         world_timestamp=new_timestamp,
@@ -553,6 +589,7 @@ async def run_phase5_post_turn_clerk(
         active_location_id=new_location_id,
         scene_flags=merged_flags,
         visited_location_ids=merged_visited,
+        visited_container_ids=merged_visited_containers,
     )
 
     # 3. Permanent Custody Protection + Two-Tier Inventory Contention Detection & Clerk Arbitration
@@ -956,6 +993,7 @@ async def run_phase5_post_turn_clerk(
         character_names={ch.id: ch.name for ch in scene_characters},
         arbitration_rulings=arbitration_rulings,
         compacted_character_ids=[ch.id for ch, _idxs, _aged in compaction_jobs],
+        first_visit_cards=first_visit_cards,
     )
 
     primary_char_state = updated_states_by_char.get(

@@ -6,6 +6,7 @@ import {
   Compass,
   Globe,
   Plus,
+  SlidersHorizontal,
   Sparkles,
   Trash2,
   Upload,
@@ -17,6 +18,7 @@ import {
   WORLD_LORE_CATEGORIES,
 } from "../../types";
 import type {
+  CampaignWorldSettings,
   LocationContainer,
   LocationEdge,
   LocationLoreCategory,
@@ -39,7 +41,13 @@ interface WorldInspectorModalProps {
   world: WorldRecord;
   onClose: () => void;
   onSaved: (updated: WorldRecord) => void;
-  mode?: "inspector" | "wizard";
+  mode?: "inspector" | "wizard" | "campaign";
+  initialTab?: WorldTab;
+  campaignWorldSettings?: CampaignWorldSettings;
+  onSaveCampaignWorldSettings?: (
+    settings: CampaignWorldSettings
+  ) => Promise<void> | void;
+  isMutatingLocked?: boolean;
   onBackToSeed?: () => void;
   onCommitDraft?: (payload: {
     name: string;
@@ -51,19 +59,32 @@ interface WorldInspectorModalProps {
   }) => Promise<WorldRecord>;
 }
 
-type WorldTab = "base" | "map" | "lore";
+type WorldTab = "base" | "map" | "lore" | "settings";
 
 export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   world,
   onClose,
   onSaved,
   mode = "inspector",
+  initialTab = "base",
+  campaignWorldSettings,
+  onSaveCampaignWorldSettings,
+  isMutatingLocked = false,
   onBackToSeed,
   onCommitDraft,
 }) => {
-  const [activeTab, setActiveTab] = useState<WorldTab>("base");
+  const isCampaignMode = mode === "campaign";
+  const [activeTab, setActiveTab] = useState<WorldTab>(initialTab);
   const [name, setName] = useState(world.name);
-  const [globalRules, setGlobalRules] = useState({ ...world.global_rules });
+  const [globalRules, setGlobalRules] = useState<WorldGlobalRules>({
+    describe_on_first_visit: true,
+    ...world.global_rules,
+  });
+  const [campaignDescribeFirstVisit, setCampaignDescribeFirstVisit] = useState<boolean>(
+    campaignWorldSettings?.describe_on_first_visit ??
+      world.global_rules.describe_on_first_visit ??
+      true
+  );
   const [containers, setContainers] = useState<LocationContainer[]>(
     (world.containers ?? []).map((cont) => ({
       ...cont,
@@ -231,6 +252,26 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   );
 
   const handleSave = async () => {
+    if (isCampaignMode) {
+      if (!onSaveCampaignWorldSettings) {
+        onSaved(world);
+        return;
+      }
+      setSaving(true);
+      setError(null);
+      try {
+        await onSaveCampaignWorldSettings({
+          describe_on_first_visit: campaignDescribeFirstVisit,
+        });
+        onSaved(world);
+      } catch (err) {
+        setError(String(err));
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
     if (locations.length === 0) {
       setError("At least one location is required.");
       return;
@@ -454,7 +495,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             <BookOpen size={14} />
             <span>Lore</span>
             <span className="modal-tab-badge">{loreNodes.length}</span>
-            {invalidWorldLoreCount > 0 && (
+            {invalidWorldLoreCount > 0 && !isCampaignMode && (
               <span
                 className="modal-tab-badge"
                 style={{
@@ -467,6 +508,16 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 !{invalidWorldLoreCount}
               </span>
             )}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "settings"}
+            className={`modal-tab-btn ${activeTab === "settings" ? "active" : ""}`}
+            onClick={() => setActiveTab("settings")}
+          >
+            <SlidersHorizontal size={14} />
+            <span>World Settings</span>
           </button>
         </div>
 
@@ -491,6 +542,8 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             >
               {mode === "wizard"
                 ? "Click on any field below to edit it, or switch to the Map and Lore tabs above to customize locations, passages, and GraphRAG lore before committing your world."
+                : isCampaignMode
+                ? "Base world identity and rules are pinned to this campaign's snapshot. Adjust campaign behavior in the World Settings tab."
                 : "Click on any field below to edit it. Active campaigns running in this world remain pinned to their original world snapshot automatically."}
             </div>
 
@@ -504,6 +557,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
               <ClickToEditField
                 label="World Name"
                 value={name}
+                readOnly={isCampaignMode}
                 onChange={(val) => {
                   setName(val);
                   markDirty();
@@ -512,6 +566,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
               <ClickToEditField
                 label="Genre"
                 value={globalRules.genre}
+                readOnly={isCampaignMode}
                 onChange={(val) => {
                   setGlobalRules({ ...globalRules, genre: val });
                   markDirty();
@@ -520,6 +575,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
               <ClickToEditField
                 label="Starting Clock (YYYY-MM-DD HH:MM)"
                 value={globalRules.starting_timestamp}
+                readOnly={isCampaignMode}
                 onChange={(val) => {
                   setGlobalRules({ ...globalRules, starting_timestamp: val });
                   markDirty();
@@ -530,6 +586,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             <ClickToEditField
               label="Narrative Tone & Stylistic Atmosphere"
               value={globalRules.tone}
+              readOnly={isCampaignMode}
               onChange={(val) => {
                 setGlobalRules({ ...globalRules, tone: val });
                 markDirty();
@@ -539,6 +596,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             <ClickToEditField
               label="Setting Overview (Zone 1 Static Prefix)"
               value={globalRules.setting_overview}
+              readOnly={isCampaignMode}
               multiline
               rows={3}
               onChange={(val) => {
@@ -550,6 +608,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             <ClickToEditField
               label="Technology / Magic / World Consistency Rules"
               value={globalRules.tech_or_magic_rules}
+              readOnly={isCampaignMode}
               multiline
               rows={2}
               onChange={(val) => {
@@ -626,7 +685,8 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                   locations[0]?.id ??
                   ""
                 }
-                mode="editor"
+                mode={isCampaignMode ? "campaign" : "editor"}
+                isMutatingLocked={isCampaignMode || isMutatingLocked}
                 worldContext={{
                   worldId: world.id,
                   worldName: name,
@@ -636,18 +696,24 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 }}
                 hasUnsavedChanges={isDirty}
                 isSavingMap={saving}
-                onSaveMap={handleSave}
-                onChangeGraph={({
-                  containers: nextConts,
-                  locations: nextLocs,
-                  edges: nextEdges,
-                }) => {
-                  setContainers(nextConts);
-                  setLocations(nextLocs);
-                  setEdges(nextEdges);
-                  markDirty();
-                }}
-                onReimagineMap={() => setShowReimagineModal(true)}
+                onSaveMap={isCampaignMode ? undefined : handleSave}
+                onChangeGraph={
+                  isCampaignMode
+                    ? undefined
+                    : ({
+                        containers: nextConts,
+                        locations: nextLocs,
+                        edges: nextEdges,
+                      }) => {
+                        setContainers(nextConts);
+                        setLocations(nextLocs);
+                        setEdges(nextEdges);
+                        markDirty();
+                      }
+                }
+                onReimagineMap={
+                  isCampaignMode ? undefined : () => setShowReimagineModal(true)
+                }
               />
             )}
           </div>
@@ -693,14 +759,16 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                   <BookOpen size={13} color="var(--accent-violet)" />
                   World Macro Lore — Factions, History, Culture &amp; Rumors ({loreNodes.length})
                 </span>
-                <button
-                  type="button"
-                  className="btn"
-                  style={{ padding: "3px 8px", fontSize: "0.72rem" }}
-                  onClick={handleAddWorldLoreNode}
-                >
-                  <Plus size={12} /> Add Lore Node
-                </button>
+                {!isCampaignMode && (
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ padding: "3px 8px", fontSize: "0.72rem" }}
+                    onClick={handleAddWorldLoreNode}
+                  >
+                    <Plus size={12} /> Add Lore Node
+                  </button>
+                )}
               </div>
 
               {loreNodes.length === 0 ? (
@@ -748,6 +816,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                         <ClickToEditField
                           label="Lore Title"
                           value={lore.title}
+                          readOnly={isCampaignMode}
                           onChange={(val) => {
                             const next = [...loreNodes];
                             next[idx] = { ...next[idx], title: val };
@@ -759,6 +828,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                           <label>Category</label>
                           <select
                             className="field-select"
+                            disabled={isCampaignMode}
                             value={lore.category}
                             onChange={(e) => {
                               const next = [...loreNodes];
@@ -782,6 +852,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                           <TagChipsInput
                             value={lore.entity_tags}
                             accentVariant="violet"
+                            disabled={isCampaignMode}
                             placeholder="Add keyword & press Enter..."
                             onDraftChange={(draftStr) => {
                               setPendingWorldLoreTagDrafts((prev) => ({
@@ -800,28 +871,31 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                             }}
                           />
                         </div>
-                        <button
-                          type="button"
-                          className="item-remove-btn"
-                          style={{ marginTop: 22 }}
-                          onClick={() => {
-                            setLoreNodes(loreNodes.filter((_, i) => i !== idx));
-                            setPendingWorldLoreTagDrafts((prev) => {
-                              const copy = { ...prev };
-                              delete copy[lore.id];
-                              return copy;
-                            });
-                            markDirty();
-                          }}
-                          title="Remove lore node"
-                        >
-                          <Trash2 size={13} />
-                        </button>
+                        {!isCampaignMode && (
+                          <button
+                            type="button"
+                            className="item-remove-btn"
+                            style={{ marginTop: 22 }}
+                            onClick={() => {
+                              setLoreNodes(loreNodes.filter((_, i) => i !== idx));
+                              setPendingWorldLoreTagDrafts((prev) => {
+                                const copy = { ...prev };
+                                delete copy[lore.id];
+                                return copy;
+                              });
+                              markDirty();
+                            }}
+                            title="Remove lore node"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )}
                       </div>
 
                       <ClickToEditField
                         label="Lore Content"
                         value={lore.content}
+                        readOnly={isCampaignMode}
                         multiline
                         rows={2}
                         onChange={(val) => {
@@ -836,7 +910,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 })
               )}
               <div ref={loreListBottomRef} />
-              {loreNodes.length > 0 && (
+              {loreNodes.length > 0 && !isCampaignMode && (
                 <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
                   <button
                     type="button"
@@ -849,6 +923,76 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 </div>
               )}
             </div>
+          </div>
+
+          {/* World Settings Tab */}
+          <div
+            style={{
+              display: activeTab === "settings" ? "flex" : "none",
+              flexDirection: "column",
+              gap: 14,
+            }}
+          >
+            <div
+              style={{
+                fontSize: "0.76rem",
+                color: "var(--text-secondary)",
+                background: "var(--bg-card)",
+                padding: "9px 12px",
+                borderRadius: 6,
+                border: "1px solid var(--border-subtle)",
+                lineHeight: 1.45,
+              }}
+            >
+              {isCampaignMode
+                ? "These settings apply strictly to this running campaign starting from future arrivals. They never modify the base world or rewrite earlier turns."
+                : "Default world settings inherited when launching new campaigns. Updating this toggle never alters already running campaigns."}
+            </div>
+
+            <label
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 10,
+                background: "var(--bg-card)",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: 8,
+                padding: "12px 14px",
+                cursor: isCampaignMode && isMutatingLocked ? "not-allowed" : "pointer",
+                opacity: isCampaignMode && isMutatingLocked ? 0.65 : 1,
+              }}
+            >
+              <input
+                type="checkbox"
+                style={{ marginTop: 3 }}
+                disabled={isCampaignMode && isMutatingLocked}
+                checked={
+                  isCampaignMode
+                    ? campaignDescribeFirstVisit
+                    : globalRules.describe_on_first_visit ?? true
+                }
+                onChange={(e) => {
+                  const nextVal = e.target.checked;
+                  if (isCampaignMode) {
+                    setCampaignDescribeFirstVisit(nextVal);
+                  } else {
+                    setGlobalRules({
+                      ...globalRules,
+                      describe_on_first_visit: nextVal,
+                    });
+                  }
+                  markDirty();
+                }}
+              />
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>
+                  Describe on First Visit
+                </span>
+                <span style={{ fontSize: "0.76rem", color: "var(--text-secondary)", lineHeight: 1.45 }}>
+                  Automatically show collapsible atmospheric description cards from the world map when arriving at unvisited locations or containers—without extra LLM calls or context overhead.
+                </span>
+              </div>
+            </label>
           </div>
 
           {error && (
@@ -918,24 +1062,30 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
               <div
                 style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}
               >
-                {mapHasBlockingErrors
+                {isCampaignMode
+                  ? isDirty
+                    ? "Unsaved campaign setting change ready. Applies from future turns only."
+                    : "Adjust World Settings to customize this campaign independently."
+                  : mapHasBlockingErrors
                   ? "Resolve unlinked locations or hierarchy errors on the Map tab before saving."
                   : isDirty
                   ? "Unsaved edits ready. Saving preserves existing campaigns via silent versioning."
                   : "Click any field above to edit."}
               </div>
               <div style={{ display: "flex", gap: 10 }}>
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={exportingWorld}
-                  onClick={handleExportWorld}
-                  title="Export this world as a .zcc package"
-                  style={{ display: "flex", alignItems: "center", gap: 6 }}
-                >
-                  <Upload size={14} color="var(--accent-cyan)" />
-                  {exportingWorld ? "Exporting..." : "Export (.zcc)"}
-                </button>
+                {!isCampaignMode && (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={exportingWorld}
+                    onClick={handleExportWorld}
+                    title="Export this world as a .zcc package"
+                    style={{ display: "flex", alignItems: "center", gap: 6 }}
+                  >
+                    <Upload size={14} color="var(--accent-cyan)" />
+                    {exportingWorld ? "Exporting..." : "Export (.zcc)"}
+                  </button>
+                )}
                 <button type="button" className="btn" onClick={onClose}>
                   {isDirty ? "Cancel" : "Close"}
                 </button>
@@ -943,7 +1093,11 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                   <button
                     type="button"
                     className="btn btn-amber"
-                    disabled={saving || mapHasBlockingErrors}
+                    disabled={
+                      saving ||
+                      (!isCampaignMode && mapHasBlockingErrors) ||
+                      (isCampaignMode && isMutatingLocked)
+                    }
                     onClick={handleSave}
                   >
                     <Check size={14} />

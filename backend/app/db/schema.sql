@@ -225,6 +225,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     persona_snapshot_json TEXT NULL,
     active_leaf_turn_id TEXT NULL,
     prompt_preset_id TEXT NULL REFERENCES prompt_presets(id) ON DELETE SET NULL,
+    world_settings_json TEXT NOT NULL DEFAULT '{"describe_on_first_visit": true}',
     created_at TEXT NOT NULL
 );
 
@@ -317,7 +318,8 @@ CREATE TABLE IF NOT EXISTS world_state_snapshots (
     active_location_id TEXT NOT NULL REFERENCES location_nodes(id),
     scene_flags_json TEXT NOT NULL DEFAULT '[]',
     campaign_elapsed_minutes INTEGER NOT NULL DEFAULT 0,
-    visited_location_ids_json TEXT NOT NULL DEFAULT '[]'
+    visited_location_ids_json TEXT NOT NULL DEFAULT '[]',
+    visited_container_ids_json TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS campaign_spatial_overrides (

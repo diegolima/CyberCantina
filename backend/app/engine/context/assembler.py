@@ -263,6 +263,7 @@ def assemble_four_zone_messages(
         t
         for t in branch_turns
         if t.depth_index > max_summarized_depth
+        and t.actor_id != "__arrival__"
         and (is_narrator or was_character_present_on_turn(t, character.id))
     ]
     wm_limit = (

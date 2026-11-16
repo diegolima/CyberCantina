@@ -1,6 +1,7 @@
 import type {
   CampaignRecord,
   CampaignStateBundle,
+  CampaignWorldSettings,
   CharacterChoiceSet,
   ChoicePreviewResponse,
   CreateCampaignPayload,
@@ -49,6 +50,15 @@ export const campaignsApi = {
       {
         method: "POST",
         body: JSON.stringify({ location_id: locationId }),
+      }
+    ),
+
+  updateWorldSettings: (campaignId: string, worldSettings: CampaignWorldSettings) =>
+    fetchJson<CampaignStateBundle>(
+      `${API_BASE}/campaigns/${campaignId}/world-settings`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(worldSettings),
       }
     ),
 

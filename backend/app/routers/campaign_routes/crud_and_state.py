@@ -20,6 +20,7 @@ from app.schemas.turn import (
     CampaignCharacterMemoriesUpdateRequest,
     CampaignRecord,
     CampaignStateBundle,
+    CampaignWorldSettings,
 )
 from fastapi import (
     BackgroundTasks,
@@ -32,6 +33,7 @@ from app.routers.campaign_routes.schemas_and_gate import (
     BranchCheckoutRequest,
     CampaignAddCharacterRequest,
     CampaignCreateRequest,
+    CampaignWorldSettingsPatchRequest,
     ItemEquipToggleRequest,
     LocationOverrideRequest,
     campaign_turn_gate,
@@ -122,6 +124,7 @@ async def create_campaign(
             persona_id=req.persona_id,
             owner_id=current_user.id,
             actor_id=actor_id,
+            start_focus=req.start_focus,
             skip_turn_0_cognition=True,
         )
         return repo.get_campaign_state_bundle(camp.id, owner_id=current_user.id)
@@ -227,6 +230,23 @@ def override_campaign_location(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/api/campaigns/{campaign_id}/world-settings", response_model=CampaignStateBundle)
+def update_campaign_world_settings(
+    campaign_id: str,
+    req: CampaignWorldSettingsPatchRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Update campaign-scoped world settings forward-only without modifying base worlds."""
+    try:
+        return _resolve_facade_attr("get_repo", get_repo)().update_campaign_world_settings(
+            campaign_id,
+            CampaignWorldSettings(describe_on_first_visit=req.describe_on_first_visit),
+            owner_id=current_user.id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/api/campaigns/{campaign_id}/item-equip", response_model=CampaignStateBundle)

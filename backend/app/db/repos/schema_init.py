@@ -796,6 +796,56 @@ class SchemaInitMixin:
                             (json.dumps(visited_ids), ws_row["turn_id"]),
                         )
 
+            if "visited_container_ids_json" not in ws_cols:
+                conn.execute(
+                    "ALTER TABLE world_state_snapshots ADD COLUMN visited_container_ids_json TEXT NOT NULL DEFAULT '[]'"
+                )
+                cont_parent_map = {
+                    r["id"]: r["parent_container_id"]
+                    for r in conn.execute("SELECT id, parent_container_id FROM location_containers").fetchall()
+                }
+                loc_cont_map = {
+                    r["id"]: r["container_id"]
+                    for r in conn.execute("SELECT id, container_id FROM location_nodes").fetchall()
+                }
+                for ws_row in conn.execute(
+                    "SELECT turn_id, visited_location_ids_json, active_location_id FROM world_state_snapshots"
+                ).fetchall():
+                    try:
+                        vis_locs = json.loads(ws_row["visited_location_ids_json"] or "[]")
+                    except Exception:
+                        vis_locs = []
+                    if ws_row["active_location_id"] and ws_row["active_location_id"] not in vis_locs:
+                        vis_locs.append(ws_row["active_location_id"])
+                    vis_conts: list[str] = []
+                    seen_conts: set[str] = set()
+                    for lid in vis_locs:
+                        cid = loc_cont_map.get(lid)
+                        chain: list[str] = []
+                        loop_guard: set[str] = set()
+                        while cid and cid not in loop_guard:
+                            loop_guard.add(cid)
+                            chain.append(cid)
+                            cid = cont_parent_map.get(cid)
+                        for anc in reversed(chain):
+                            if anc not in seen_conts:
+                                seen_conts.add(anc)
+                                vis_conts.append(anc)
+                    if vis_conts:
+                        conn.execute(
+                            "UPDATE world_state_snapshots SET visited_container_ids_json = ? WHERE turn_id = ?",
+                            (json.dumps(vis_conts), ws_row["turn_id"]),
+                        )
+
+            camp_cols = {
+                r["name"]
+                for r in conn.execute("PRAGMA table_info(campaigns)").fetchall()
+            }
+            if "world_settings_json" not in camp_cols:
+                conn.execute(
+                    "ALTER TABLE campaigns ADD COLUMN world_settings_json TEXT NOT NULL DEFAULT '{\"describe_on_first_visit\": true}'"
+                )
+
             cont_cols = {
                 r["name"]
                 for r in conn.execute("PRAGMA table_info(location_containers)").fetchall()

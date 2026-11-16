@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Compass,
   DoorOpen,
+  Globe,
   Lock,
   Maximize2,
   Navigation,
@@ -43,6 +44,7 @@ export interface InspectorLocationCardProps {
   onOverrideLocation?: (locationId: string) => Promise<void> | void;
   handleOverrideClick: (targetLocId: string) => Promise<void>;
   handleOpenFullMap: () => void;
+  onOpenWorldSheet?: () => void;
 }
 
 export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
@@ -65,6 +67,7 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
   onOverrideLocation,
   handleOverrideClick,
   handleOpenFullMap,
+  onOpenWorldSheet,
 }) => {
   return (
       <div className="inspector-card">
@@ -81,16 +84,30 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
             <Compass size={13} color="var(--accent-cyan)" />
             Adjacent Map ({immediateNeighbors.length}/8 exits)
           </span>
-          <button
-            type="button"
-            className="btn"
-            style={{ padding: "2px 7px", fontSize: "0.68rem" }}
-            onClick={handleOpenFullMap}
-            title="Expand full zoomable world map"
-          >
-            <Maximize2 size={11} />
-            Expand Map ({bundle.visible_locations.length})
-          </button>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+            {onOpenWorldSheet && (
+              <button
+                type="button"
+                className="btn"
+                style={{ padding: "2px 7px", fontSize: "0.68rem" }}
+                onClick={onOpenWorldSheet}
+                title="Open World Sheet & campaign World Settings"
+              >
+                <Globe size={11} />
+                World Sheet
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn"
+              style={{ padding: "2px 7px", fontSize: "0.68rem" }}
+              onClick={handleOpenFullMap}
+              title="Expand full zoomable world map"
+            >
+              <Maximize2 size={11} />
+              Expand Map ({bundle.visible_locations.length})
+            </button>
+          </div>
         </div>
 
         <svg

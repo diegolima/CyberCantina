@@ -27,6 +27,7 @@ import type {
 import { getCharacterEmotionPortrait } from "../../utils/entityImages";
 import { isNarratorTurnNode, isTurnCognitionSkipped } from "../../utils/narratorCognition";
 import type { ActiveAgentModalTarget } from "../inspector/AgentChangesModal";
+import { ArrivalDescriptionCards } from "./ArrivalDescriptionCards";
 import {
   getTierBadgeClass,
   renderFormattedProse,
@@ -49,6 +50,9 @@ export interface TurnCardProps {
   cogOpen: boolean;
   memOpen: boolean;
   phase4ProgressByTurn: Record<string, Phase4TurnProgress>;
+  lastTurnId?: string;
+  arrivalManualOverrides?: Record<string, boolean>;
+  onToggleArrivalCard?: (cardKey: string, currentlyExpanded: boolean) => void;
   onToggleCognition: (turnId: string) => void;
   onToggleMemories: (turnId: string) => void;
   onCheckoutTurn: (turnId: string) => void;
@@ -75,6 +79,9 @@ export const TurnCard: React.FC<TurnCardProps> = ({
   cogOpen,
   memOpen,
   phase4ProgressByTurn,
+  lastTurnId,
+  arrivalManualOverrides = {},
+  onToggleArrivalCard = () => {},
   onToggleCognition,
   onToggleMemories,
   onCheckoutTurn,
@@ -90,7 +97,65 @@ export const TurnCard: React.FC<TurnCardProps> = ({
     setShowRetainedIds((prev) => ({ ...prev, [id]: !prev[id] }));
   const isRoot = turn.depth_index === 0;
   const isLastTurn = !isRoot && turnIdx === bundle.active_branch_turns.length - 1;
+  const isArrivalTurn = turn.actor_id === "__arrival__";
   const isNarratorTurn = turn.actor_id === "__narrator__";
+  const firstVisitCards = turn.post_turn?.first_visit_cards ?? [];
+  const effectiveLastTurnId =
+    lastTurnId ??
+    bundle.active_branch_turns[bundle.active_branch_turns.length - 1]?.id;
+
+  if (isArrivalTurn) {
+    return (
+      <div key={turn.id} className="turn-card arrival-turn-card">
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+          }}
+        >
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: "0.74rem",
+              fontWeight: 600,
+              color: "#6ee7b7",
+              letterSpacing: "0.02em",
+            }}
+          >
+            <Compass size={13} color="#34d399" />
+            Arrival Description
+          </span>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: "0.7rem", color: "var(--text-muted)" }}>
+            <span>• {turn.world_snapshot.world_timestamp}</span>
+            {isLastTurn && hasDeleteLastHandler && (
+              <button
+                type="button"
+                className="btn btn-danger"
+                style={{ padding: "2px 7px", fontSize: "0.69rem" }}
+                disabled={isBusy || isDeletingTurn}
+                onClick={onDeleteLast}
+                title="Undo map move & remove arrival description"
+              >
+                <Trash2 size={11} />
+                Delete
+              </button>
+            )}
+          </div>
+        </div>
+        <ArrivalDescriptionCards
+          turnId={turn.id}
+          lastTurnId={effectiveLastTurnId}
+          cards={firstVisitCards}
+          manualOverrides={arrivalManualOverrides}
+          onToggleCard={onToggleArrivalCard}
+        />
+      </div>
+    );
+  }
   const isCueMessage = turn.user_message.startsWith("[") && turn.user_message.endsWith("]");
   const toggleCognition = onToggleCognition;
   const toggleMemories = onToggleMemories;
@@ -955,6 +1020,22 @@ export const TurnCard: React.FC<TurnCardProps> = ({
                   );
                 })()}
               <div className="prose-body">{renderFormattedProse(turn.raw_prose)}</div>
+
+              {firstVisitCards.length > 0 && (
+                <div className="arrival-cards-panel">
+                  <div className="arrival-cards-panel-label">
+                    <Compass size={12} color="#34d399" />
+                    <span>First Visit</span>
+                  </div>
+                  <ArrivalDescriptionCards
+                    turnId={turn.id}
+                    lastTurnId={effectiveLastTurnId}
+                    cards={firstVisitCards}
+                    manualOverrides={arrivalManualOverrides}
+                    onToggleCard={onToggleArrivalCard}
+                  />
+                </div>
+              )}
 
               {/* Turn Footer: Clock, Post-Turn Delta, Phase 4 Agent Mutation Pills, Swipe/Regenerate */}
               <div

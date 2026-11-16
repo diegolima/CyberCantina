@@ -35,6 +35,7 @@ import {
 } from "./inspector/AgentChangesModal";
 import type { ChatStageProps } from "./chat/chatHelpers";
 import { TurnCard } from "./chat/TurnCard";
+import { getLatestBranchTurnId } from "./chat/arrivalHelpers";
 import { LiveStreamingTurnCard } from "./chat/LiveStreamingTurnCard";
 import { ChatComposer } from "./chat/ChatComposer";
 
@@ -60,6 +61,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const [diceOverride, setDiceOverride] = useState<string>("");
   const [openCognitionIds, setOpenCognitionIds] = useState<Record<string, boolean>>({});
   const [openMemoryIds, setOpenMemoryIds] = useState<Record<string, boolean>>({});
+  const [arrivalManualOverrides, setArrivalManualOverrides] = useState<Record<string, boolean>>({});
   const [editingTurn, setEditingTurn] = useState<TurnNodeRecord | null>(null);
   const stashedDraftRef = useRef<{
     inputText: string;
@@ -91,6 +93,19 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   // Magic Wand Integration
   const lastBranchTurn =
     bundle.active_branch_turns[bundle.active_branch_turns.length - 1];
+  const lastTurnId = getLatestBranchTurnId(bundle.active_branch_turns);
+
+  // When a new turn is committed, collapse all past description cards (clearing manual overrides)
+  useEffect(() => {
+    setArrivalManualOverrides({});
+  }, [lastTurnId]);
+
+  const handleToggleArrivalCard = (cardKey: string, currentlyExpanded: boolean) => {
+    setArrivalManualOverrides((prev) => ({
+      ...prev,
+      [cardKey]: !currentlyExpanded,
+    }));
+  };
   const effectiveWandParentId = editingTurn
     ? (editingTurn.parent_turn_id ?? null)
     : (lastBranchTurn?.id ?? null);
@@ -1011,6 +1026,9 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               cogOpen={cogOpen}
               memOpen={memOpen}
               phase4ProgressByTurn={phase4ProgressByTurn}
+              lastTurnId={lastTurnId}
+              arrivalManualOverrides={arrivalManualOverrides}
+              onToggleArrivalCard={handleToggleArrivalCard}
               onToggleCognition={toggleCognition}
               onToggleMemories={toggleMemories}
               onCheckoutTurn={onCheckoutTurn}
