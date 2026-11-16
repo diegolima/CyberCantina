@@ -15,7 +15,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from app.config import ModelProfile, persist_settings, settings
-from app.providers.local_relay import local_relay_hub, relay_user_context
+from app.providers.local_relay import RelayUnavailableError, local_relay_hub, relay_user_context
 from app.providers.models import parse_aihorde_models, parse_ollama_tags
 from app.providers.probe import bearer_headers
 from app.providers.resolver import ProviderUnavailableError, resolve_system_profile
@@ -612,6 +612,8 @@ class LLMClient:
             )
             parsed = extract_json_object(raw)
             return schema_cls.model_validate(parsed)
+        except (RelayUnavailableError, ProviderUnavailableError):
+            raise
         except Exception as first_exc:
             logger.warning(
                 "Structured JSON schema call for %s failed (%s); retrying with json_mode.",

@@ -179,6 +179,8 @@ export const LocalRelayProvider: React.FC<{
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [activeJobs]);
 
+  const activeUserId = currentUser?.id ?? null;
+
   useEffect(() => {
     if (!shouldConnect) {
       if (wsRef.current) {
@@ -354,7 +356,7 @@ export const LocalRelayProvider: React.FC<{
         wsRef.current = null;
       }
     };
-  }, [shouldConnect]);
+  }, [shouldConnect, activeUserId]);
 
   const dismissClampNotice = useCallback(() => setClampNotice(null), []);
   const preloadWebGpu = useCallback(async (model: string, contextSize?: number | null) => {

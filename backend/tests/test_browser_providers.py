@@ -212,6 +212,18 @@ def test_ws_relay_auth_origin_and_status(env) -> None:
         ):
             pass
 
+    # Origin matching X-Forwarded-Host is accepted
+    with client.websocket_connect(
+        "/api/local-relay/ws?tab_id=t-xfh",
+        headers={"Origin": "https://alpha.cybercantina.io", "X-Forwarded-Host": "alpha.cybercantina.io"},
+    ) as ws:
+        ws.send_json({"type": "relay.auth", "token": alice_tok})
+        ws.send_json({"type": "relay.hello", "webgpu_supported": True})
+        time.sleep(0.05)
+        st = client.get("/api/local-relay/status", headers=alice_h)
+        assert st.status_code == 200
+        assert any(t["tab_id"] == "t-xfh" for t in st.json()["tabs"])
+
     # Unauthenticated WS (no cookies, bad relay.auth) closes with 4401
     anon_client = TestClient(main_module.app)
     with anon_client.websocket_connect("/api/local-relay/ws?tab_id=t1") as ws:
@@ -260,9 +272,22 @@ async def test_llm_client_routes_browser_providers_over_relay_with_retry_and_str
         resolved=wg_endpoint,
     )
 
-    # Offline relay raises RelayUnavailableError immediately
+    # Offline relay raises RelayUnavailableError immediately (and complete_structured does not retry it)
     with pytest.raises(RelayUnavailableError):
         await client.complete_text([{"role": "user", "content": "hi"}], profile=wg_profile)
+    complete_calls = 0
+    orig_complete_text = client.complete_text
+
+    async def counted_complete_text(*args, **kwargs):
+        nonlocal complete_calls
+        complete_calls += 1
+        return await orig_complete_text(*args, **kwargs)
+
+    client.complete_text = counted_complete_text  # type: ignore[method-assign]
+    with pytest.raises(RelayUnavailableError):
+        await client.complete_structured([{"role": "user", "content": "hi"}], _StructuredChoice, profile=wg_profile)
+    assert complete_calls == 1
+    client.complete_text = orig_complete_text  # type: ignore[method-assign]
 
     seen_requests: list[dict] = []
 
@@ -428,3 +453,108 @@ async def test_first_boot_webgpu_default_when_server_ollama_unreachable(tmp_path
         )
         is False
     )
+
+
+def test_world_wizard_draft_with_sole_webgpu_provider_and_new_user(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reproduce: sole system WebGPU provider, clerk mirrors actor, BYOP on, new user drafts world over relay."""
+    client, _repo, admin_h, make_user = env
+    wg = client.post(
+        "/api/providers",
+        headers=admin_h,
+        json={"name": "Browser WebGPU", "type": "webgpu", "scope": "system", "settings": {}},
+    )
+    assert wg.status_code == 201
+    wg_id = wg.json()["id"]
+
+    monkeypatch.setattr(settings, "allow_user_providers", True)
+    monkeypatch.setattr(settings, "clerk_mirrors_actor", True)
+    monkeypatch.setattr(settings, "allow_offline_fallback", False)
+    monkeypatch.setattr(
+        settings,
+        "actor_profile",
+        ModelProfile(provider_id=wg_id, model=DEFAULT_WEBGPU_MODEL, context_size=DEFAULT_WEBGPU_CONTEXT_SIZE),
+    )
+
+    alice_h, alice_id, _ = make_user("alice_world_wg")
+
+    class _FakeWebSocket:
+        async def send_json(self, payload: dict) -> None:
+            if payload.get("type") == "llm.request":
+                world_json = json.dumps(
+                    {
+                        "name": "Helios-7",
+                        "global_rules": {
+                            "genre": "Hard Sci-Fi",
+                            "tone": "Claustrophobic",
+                            "setting_overview": "A quarantined deep-space mining spindle.",
+                            "tech_or_magic_rules": "Zero-G industrial tech.",
+                            "starting_timestamp": "2094-11-14 21:00",
+                        },
+                        "locations": [
+                            {
+                                "key": "oxygen_garden",
+                                "name": "The Oxygen Garden",
+                                "summary": "Low-G hydroponics cantina.",
+                                "description": "Humid air and dim amber grow lamps.",
+                                "environmental_tags": ["hydroponics", "low-g"],
+                                "is_starting_location": True,
+                                "is_hub": True,
+                                "starting_message": "Steam curls past the hydroponic trays.",
+                            },
+                            {
+                                "key": "docking_ring",
+                                "name": "Docking Ring",
+                                "summary": "Pressurized airlock corridor.",
+                                "description": "Heavy bulkheads line the ring.",
+                                "environmental_tags": ["airlock"],
+                                "is_starting_location": False,
+                                "is_hub": False,
+                            },
+                        ],
+                        "edges": [
+                            {
+                                "from_key": "oxygen_garden",
+                                "to_key": "docking_ring",
+                                "direction_label": "Bulkhead hatch",
+                                "reverse_direction_label": "Back to cantina",
+                                "compass_direction": "N",
+                                "travel_minutes": 2,
+                                "bidirectional": True,
+                            }
+                        ],
+                        "lore_nodes": [],
+                    }
+                )
+                await local_relay_hub.handle_message(
+                    sess,
+                    {"type": "llm.done", "request_id": payload["request_id"], "content": world_json},
+                )
+
+        async def close(self, code: int = 1000) -> None:
+            return None
+
+    sess = local_relay_hub.register(alice_id, "world-tab-1", _FakeWebSocket())  # type: ignore[arg-type]
+    try:
+        resp = client.post(
+            "/api/wizards/world/draft",
+            headers={**alice_h, "X-Cantina-Tab-Id": "world-tab-1"},
+            json={
+                "name": "Helios-7",
+                "genre_and_tone": "Hard Sci-Fi",
+                "core_premise": "Quarantined spindle.",
+                "initial_hub_concept": "The Oxygen Garden",
+                "location_count": 3,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["name"] == "Helios-7"
+        assert len(resp.json()["locations"]) == 2
+    finally:
+        local_relay_hub.unregister(alice_id, "world-tab-1", sess)
+
+
+def test_nginx_conf_proxies_local_relay_websocket() -> None:
+    nginx_conf = (Path(__file__).resolve().parents[2] / "frontend" / "nginx.conf").read_text(encoding="utf-8")
+    assert "location = /api/local-relay/ws" in nginx_conf
+    assert "proxy_set_header Upgrade $http_upgrade;" in nginx_conf
+    assert "proxy_set_header Connection $connection_upgrade;" in nginx_conf

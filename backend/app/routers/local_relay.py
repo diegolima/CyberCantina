@@ -40,10 +40,14 @@ def _allowed_ws_origins(websocket: WebSocket) -> set[str]:
                 "http://testserver",
             }
         )
-    host = (websocket.headers.get("host") or "").strip()
-    if host:
-        allowed.add(f"http://{host}")
-        allowed.add(f"https://{host}")
+    for header_name in ("host", "x-forwarded-host"):
+        raw_host = (websocket.headers.get(header_name) or "").strip()
+        if raw_host:
+            for candidate in raw_host.split(","):
+                host = candidate.strip()
+                if host:
+                    allowed.add(f"http://{host}")
+                    allowed.add(f"https://{host}")
     return allowed
 
 
