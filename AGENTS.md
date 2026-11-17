@@ -31,3 +31,6 @@
   - Backend: `cd backend && .venv/bin/ruff check app tests && .venv/bin/tach check` and `backend/.venv/bin/pytest backend/tests`
   - Frontend: `npm --prefix frontend run arch:check && npm --prefix frontend run build && npm --prefix frontend test`
   - Architecture docs (enforced in CI via `--check`; regenerate when modules, docstrings, routes, tables, or imports change): `backend/.venv/bin/python scripts/generate_arch_docs.py && backend/.venv/bin/python scripts/generate_arch_docs.py --check`
+
+## Post-Push Deployment
+- **Alpha CI Watch & Server Restart**: After pushing commits to `main` (unless the user explicitly says not to deploy), invoke the `cybercantina-alpha-deploy` skill (when available) to monitor the GitHub Actions workflows for the pushed commit and restart the alpha test server once the new `:alpha` images succeed.
