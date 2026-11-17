@@ -58,6 +58,12 @@ export interface ChatStageProps {
   onCheckoutTurn: (turnId: string) => void;
   onDeleteLastTurn?: () => Promise<void> | void;
   onCloseCampaign?: () => void;
+  showSidebarToggle?: boolean;
+  isSidebarOpen?: boolean;
+  onToggleSidebar?: () => void;
+  isInspectorOpen?: boolean;
+  onToggleInspector?: () => void;
+  hasInspectorAttention?: boolean;
 }
 
 export function renderFormattedProse(text: string): React.ReactNode {

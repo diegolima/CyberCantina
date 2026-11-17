@@ -3,6 +3,9 @@ import {
   Clock,
   LogOut,
   MapPin,
+  Menu,
+  PanelRightClose,
+  PanelRightOpen,
 } from "lucide-react";
 import {
   CharacterChoiceOption,
@@ -54,6 +57,12 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   onCheckoutTurn,
   onDeleteLastTurn,
   onCloseCampaign,
+  showSidebarToggle = false,
+  isSidebarOpen = false,
+  onToggleSidebar,
+  isInspectorOpen = true,
+  onToggleInspector,
+  hasInspectorAttention = false,
 }) => {
   const isBusy = isStreaming || isPhase4Running;
   const [inputText, setInputText] = useState("");
@@ -956,45 +965,90 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   return (
     <main className="chat-stage">
       <header className="stage-header">
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ fontWeight: 700, fontSize: "1.02rem" }}>
-              {bundle.campaign.name}
+        <div className="stage-header-left">
+          {showSidebarToggle && onToggleSidebar && (
+            <button
+              type="button"
+              className={`btn stage-panel-toggle ${isSidebarOpen ? "active" : ""}`}
+              onClick={onToggleSidebar}
+              aria-expanded={isSidebarOpen}
+              aria-controls="app-sidebar-aside"
+              aria-label={isSidebarOpen ? "Close navigation sidebar" : "Open navigation sidebar"}
+              title="Toggle navigation sidebar"
+            >
+              <Menu size={16} />
+            </button>
+          )}
+          <div className="stage-header-main">
+            <div className="stage-title-row">
+              <div className="stage-campaign-title" title={bundle.campaign.name}>
+                {bundle.campaign.name}
+              </div>
+              {onCloseCampaign && (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-close-campaign"
+                  onClick={onCloseCampaign}
+                  title="Close campaign and return to Home"
+                  aria-label="Close campaign and return to Home"
+                >
+                  <LogOut size={12} />
+                  <span className="btn-close-campaign-label">Close Campaign</span>
+                </button>
+              )}
             </div>
-            {onCloseCampaign && (
-              <button
-                type="button"
-                className="btn btn-sm btn-close-campaign"
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 5,
-                  padding: "2px 8px",
-                  fontSize: "0.72rem",
-                  color: "var(--text-secondary)",
-                }}
-                onClick={onCloseCampaign}
-                title="Close campaign and return to Home"
-              >
-                <LogOut size={12} />
-                <span>Close Campaign</span>
-              </button>
-            )}
-          </div>
-          <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
-            Actor: <strong style={{ color: "var(--accent-amber)" }}>{character.name}</strong>{" "}
-            — {character.tagline}
+            <div className="stage-actor-line">
+              Actor: <strong style={{ color: "var(--accent-amber)" }}>{character.name}</strong>
+              {character.tagline && (
+                <span className="stage-actor-tagline"> — {character.tagline}</span>
+              )}
+            </div>
           </div>
         </div>
-        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-          <span className="badge">
-            <MapPin size={13} color="var(--accent-cyan)" />
-            {bundle.active_location.name}
-          </span>
-          <span className="badge">
-            <Clock size={13} color="var(--accent-amber)" />
-            {bundle.current_world_snapshot.world_timestamp}
-          </span>
+        <div className="stage-header-actions">
+          <div className="stage-header-badges">
+            <span className="badge">
+              <MapPin size={13} color="var(--accent-cyan)" />
+              {bundle.active_location.name}
+            </span>
+            <span className="badge">
+              <Clock size={13} color="var(--accent-amber)" />
+              {bundle.current_world_snapshot.world_timestamp}
+            </span>
+          </div>
+          {onToggleInspector && (
+            <button
+              type="button"
+              className={`btn stage-panel-toggle stage-inspector-toggle ${
+                isInspectorOpen ? "active" : ""
+              }`}
+              onClick={onToggleInspector}
+              aria-expanded={isInspectorOpen}
+              aria-controls="live-inspector-aside"
+              aria-label={
+                isInspectorOpen
+                  ? "Hide World & Mind Inspector"
+                  : "Show World & Mind Inspector"
+              }
+              title={
+                isInspectorOpen
+                  ? "Hide World & Mind Inspector"
+                  : "Show World & Mind Inspector"
+              }
+            >
+              {isInspectorOpen ? (
+                <PanelRightClose size={16} />
+              ) : (
+                <PanelRightOpen size={16} />
+              )}
+              {hasInspectorAttention && !isInspectorOpen && (
+                <span
+                  className="stage-attention-dot"
+                  title="Pending location override staged"
+                />
+              )}
+            </button>
+          )}
         </div>
       </header>
 

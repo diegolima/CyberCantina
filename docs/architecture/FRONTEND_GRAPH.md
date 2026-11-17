@@ -100,6 +100,7 @@ flowchart TD
     b_13 --> b_19
     b_14 --> b_1
     b_14 --> b_18
+    b_14 --> b_19
     b_15 --> b_18
     b_16 --> b_0
     b_17 --> b_1
@@ -126,9 +127,9 @@ flowchart TD
 | `components/shared` | 4 | `types`, `utils` |
 | `components/wizard` | 2 | `api`, `components (root)`, `types` |
 | `components/world` | 3 | `api`, `components (root)`, `components/map`, `components/shared`, `types`, `utils` |
-| `hooks` | 2 | `api`, `types` |
+| `hooks` | 3 | `api`, `types`, `utils` |
 | `local` | 7 | `types` |
 | `main` | 1 | `App`, `styles.css` |
 | `providers` | 1 | `api`, `local`, `types` |
 | `types` | 13 | *(leaf)* |
-| `utils` | 8 | `types` |
+| `utils` | 9 | `types` |

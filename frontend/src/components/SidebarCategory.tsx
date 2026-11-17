@@ -21,6 +21,8 @@ export interface SidebarCategoryProps<T> {
   onNewClick?: () => void;
   newButtonTitle?: string;
   defaultExpanded?: boolean;
+  expanded?: boolean;
+  onExpandedChange?: (next: boolean) => void;
 }
 
 export function SidebarCategory<T>({
@@ -33,8 +35,19 @@ export function SidebarCategory<T>({
   onNewClick,
   newButtonTitle,
   defaultExpanded = false,
+  expanded: controlledExpanded,
+  onExpandedChange,
 }: SidebarCategoryProps<T>) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [uncontrolledExpanded, setUncontrolledExpanded] = useState(defaultExpanded);
+  const expanded = controlledExpanded ?? uncontrolledExpanded;
+  const toggleExpanded = () => {
+    const next = !expanded;
+    if (onExpandedChange) {
+      onExpandedChange(next);
+    } else {
+      setUncontrolledExpanded(next);
+    }
+  };
   const [searchQuery, setSearchQuery] = useState("");
   const [page, setPage] = useState(0);
 
@@ -59,7 +72,7 @@ export function SidebarCategory<T>({
     <div className="sidebar-section">
       <div
         className="sidebar-category-header"
-        onClick={() => setExpanded((prev) => !prev)}
+        onClick={toggleExpanded}
       >
         <div className="sidebar-category-title">
           {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -150,18 +163,34 @@ export function SidebarCategory<T>({
   );
 }
 
-export const RelaySidebarBadge: React.FC = () => {
+export const RelaySidebarBadge: React.FC<{ compact?: boolean }> = ({
+  compact = false,
+}) => {
   const relay = useOptionalLocalRelay();
   if (!relay || !relay.hasBrowserProviders) return null;
   const connected = relay.wsState === "connected";
+  const statusTitle = relay.webgpuLoadedModel
+    ? `Browser relay ${relay.wsState} · WebGPU loaded: ${relay.webgpuLoadedModel}`
+    : `Browser inference relay: ${relay.wsState}`;
+
+  if (compact) {
+    return (
+      <div
+        className={`relay-status-pill relay-status-pill--compact ${
+          connected ? "connected" : "offline"
+        }`}
+        title={statusTitle}
+        aria-label={statusTitle}
+      >
+        <Cpu size={14} />
+      </div>
+    );
+  }
+
   return (
     <div
       className={`relay-status-pill ${connected ? "connected" : "offline"}`}
-      title={
-        relay.webgpuLoadedModel
-          ? `Browser relay ${relay.wsState} · WebGPU loaded: ${relay.webgpuLoadedModel}`
-          : `Browser inference relay: ${relay.wsState}`
-      }
+      title={statusTitle}
     >
       <Cpu size={13} />
       <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

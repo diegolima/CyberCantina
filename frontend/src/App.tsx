@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   api,
   setOnUnauthorizedHandler,
@@ -17,6 +17,8 @@ import { AppModals } from "./components/AppModals";
 import { NotesFlyout } from "./components/NotesDrawer";
 import { LocalRelayProvider } from "./providers/LocalRelayContext";
 import { useCampaignTurnActions } from "./hooks/useCampaignTurnActions";
+import { useResponsiveCampaignLayout } from "./hooks/useResponsiveCampaignLayout";
+import { getShellClassNames } from "./utils/campaignLayout";
 import { slugifyTag } from "./utils/noteSearch";
 import {
   AppSettings,
@@ -195,6 +197,23 @@ export const App: React.FC = () => {
   const ACTIVE_CAMPAIGN_STORAGE_KEY = "cybercantina_active_campaign_id";
   const DEFAULT_PERSONA_STORAGE_KEY = "cybercantina_default_persona_id";
 
+  const handlePanelOpened = useCallback(() => {
+    setShowNotesFlyout(false);
+  }, []);
+
+  const layout = useResponsiveCampaignLayout({
+    hasCampaign: Boolean(bundle),
+    hasTopPopoverOpen: showNotesFlyout,
+    onPanelOpened: handlePanelOpened,
+  });
+
+  // Close overlay drawer automatically when NotesFlyout opens on tablet/mobile.
+  useEffect(() => {
+    if (showNotesFlyout && layout.activeOverlayDrawer !== "none") {
+      layout.closeOverlays();
+    }
+  }, [showNotesFlyout, layout.activeOverlayDrawer, layout.closeOverlays]);
+
   const handleSetDefaultPersona = (p: PersonaRecord) => {
     setActivePersona(p);
     try {
@@ -204,6 +223,7 @@ export const App: React.FC = () => {
 
   const loadCampaignBundle = async (campaignId: string) => {
     setPendingLocationOverrideId(null);
+    layout.closeOverlays();
     const stateBundle = await api.getCampaignState(campaignId);
     setBundle(stateBundle);
     try {
@@ -599,9 +619,22 @@ export const App: React.FC = () => {
 
   return (
     <LocalRelayProvider currentUser={currentUser}>
-    <div className={`studio-shell ${!bundle ? "no-campaign" : ""}`}>
+    <div className={getShellClassNames(layout, Boolean(bundle))}>
+      {bundle && layout.showBackdrop && (
+        <div
+          className="drawer-backdrop"
+          onClick={layout.closeOverlays}
+          aria-hidden="true"
+        />
+      )}
       {/* Left Sidebar: 4 Collapsible, Searchable, Paged Categories (Active in play mode) */}
       <AppSidebar
+        mode={layout.leftMode}
+        onToggleCollapse={layout.toggleSidebar}
+        onCloseOverlay={layout.closeOverlays}
+        expandedCategories={layout.expandedCategories}
+        onToggleCategory={layout.setCategoryExpanded}
+        onExpandToCategory={layout.expandSidebarToCategory}
         bundle={bundle}
         personas={personas}
         characters={characters}
@@ -675,6 +708,12 @@ export const App: React.FC = () => {
           onCheckoutTurn={handleCheckoutTurn}
           onDeleteLastTurn={handleDeleteLastTurn}
           onCloseCampaign={handleCloseCampaign}
+          showSidebarToggle={layout.showMobileMenuButton}
+          isSidebarOpen={layout.isSidebarOpen}
+          onToggleSidebar={layout.toggleSidebar}
+          isInspectorOpen={layout.isInspectorOpen}
+          onToggleInspector={layout.toggleInspector}
+          hasInspectorAttention={Boolean(pendingLocationOverrideId)}
         />
       ) : (
         <HomeScreen
@@ -781,6 +820,8 @@ export const App: React.FC = () => {
       {/* Right Live World & Mind Inspector (rendered only when campaign is open) */}
       {bundle && campaignWorld && campaignCharacter && (
         <LiveInspector
+          mode={layout.rightMode}
+          onClose={layout.toggleInspector}
           bundle={bundle}
           world={campaignWorld}
           character={campaignCharacter}

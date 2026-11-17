@@ -770,6 +770,7 @@ erDiagram
 | :--- |
 | `frontend/src/hooks/useCampaignTurnActions.ts` |
 | `frontend/src/hooks/useMagicWand.ts` |
+| `frontend/src/hooks/useResponsiveCampaignLayout.ts` |
 
 #### `local`
 
@@ -818,6 +819,7 @@ erDiagram
 | File |
 | :--- |
 | `frontend/src/utils/adminMessageState.ts` |
+| `frontend/src/utils/campaignLayout.ts` |
 | `frontend/src/utils/choiceCommand.ts` |
 | `frontend/src/utils/entityImages.ts` |
 | `frontend/src/utils/importExportLogic.ts` |

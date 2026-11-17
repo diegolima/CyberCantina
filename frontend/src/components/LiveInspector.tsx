@@ -2,9 +2,12 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   Clock,
   GitBranch,
+  PanelRightClose,
   ScrollText,
   Search,
+  X,
 } from "lucide-react";
+import type { RightPanelMode } from "../utils/campaignLayout";
 import {
   CampaignStateBundle,
   CampaignWorldSettings,
@@ -49,6 +52,9 @@ function moodShifted(
 }
 
 interface LiveInspectorProps {
+  id?: string;
+  mode?: RightPanelMode;
+  onClose?: () => void;
   bundle: CampaignStateBundle;
   world: WorldRecord;
   character: CharacterRecord;
@@ -85,6 +91,9 @@ interface LiveInspectorProps {
 }
 
 export const LiveInspector: React.FC<LiveInspectorProps> = ({
+  id = "live-inspector-aside",
+  mode = "expanded",
+  onClose,
   bundle,
   world,
   character,
@@ -335,13 +344,43 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
     setShowFullMap(true);
   };
 
+  const inspectorClassName = [
+    "inspector",
+    mode === "overlay" ? "inspector--overlay" : "",
+    mode === "hidden" ? "inspector--hidden" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <aside className="inspector">
+    <aside
+      id={id}
+      className={inspectorClassName}
+      aria-hidden={mode === "hidden" ? true : undefined}
+    >
       {/* 1. World Clock */}
       <div className="inspector-card">
-        <div className="sidebar-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <Clock size={13} color="var(--accent-amber)" />
-          World Clock
+        <div
+          className="sidebar-label inspector-top-row"
+          style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}
+        >
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <Clock size={13} color="var(--accent-amber)" />
+            World Clock
+          </span>
+          {onClose && (
+            <button
+              type="button"
+              className="btn btn-ghost inspector-collapse-btn"
+              onClick={onClose}
+              title={mode === "overlay" ? "Close inspector" : "Collapse inspector"}
+              aria-label={mode === "overlay" ? "Close inspector" : "Collapse inspector"}
+              aria-expanded={mode !== "hidden"}
+              aria-controls={id}
+            >
+              {mode === "overlay" ? <X size={15} /> : <PanelRightClose size={15} />}
+            </button>
+          )}
         </div>
         <div className="clock-display">
           <span>{bundle.current_world_snapshot.world_timestamp}</span>

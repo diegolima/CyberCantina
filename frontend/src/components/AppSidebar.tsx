@@ -4,6 +4,8 @@ import {
   FolderKanban,
   Globe,
   LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   StickyNote,
   User,
@@ -21,9 +23,17 @@ import {
   UserProfile,
   WorldRecord,
 } from "../types";
+import type { LeftPanelMode, SidebarCategoryKey } from "../utils/campaignLayout";
 import { RelaySidebarBadge, SidebarCategory } from "./SidebarCategory";
 
 export interface AppSidebarProps {
+  id?: string;
+  mode?: LeftPanelMode;
+  onToggleCollapse?: () => void;
+  onCloseOverlay?: () => void;
+  expandedCategories?: Partial<Record<SidebarCategoryKey, boolean>>;
+  onToggleCategory?: (key: SidebarCategoryKey, next: boolean) => void;
+  onExpandToCategory?: (key: SidebarCategoryKey) => void;
   bundle: CampaignStateBundle | null;
   personas: PersonaRecord[];
   characters: CharacterRecord[];
@@ -67,6 +77,13 @@ export interface AppSidebarProps {
 }
 
 export const AppSidebar: React.FC<AppSidebarProps> = ({
+  id = "app-sidebar-aside",
+  mode = "expanded",
+  onToggleCollapse,
+  onCloseOverlay,
+  expandedCategories,
+  onToggleCategory,
+  onExpandToCategory,
   bundle,
   personas,
   characters,
@@ -102,27 +119,193 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   handleRequestDeleteCampaign,
   handleLogout,
 }) => {
-  return (
-    <>
-      {bundle && (
-        <aside className="sidebar">
-          <div
-            className="brand-header"
-            style={{ cursor: "pointer" }}
+  if (!bundle) {
+    return null;
+  }
+
+  if (mode === "rail") {
+    const railCategories: Array<{
+      key: SidebarCategoryKey;
+      label: string;
+      count: number;
+      icon: React.ReactNode;
+    }> = [
+      {
+        key: "personas",
+        label: `Personas (${personas.length})`,
+        count: personas.length,
+        icon: <UserCheck size={17} color="var(--accent-emerald)" />,
+      },
+      {
+        key: "characters",
+        label: `Characters (${characters.length})`,
+        count: characters.length,
+        icon: <Users size={17} color="var(--accent-amber)" />,
+      },
+      {
+        key: "worlds",
+        label: `Worlds (${worlds.length})`,
+        count: worlds.length,
+        icon: <Globe size={17} color="var(--accent-cyan)" />,
+      },
+      {
+        key: "campaigns",
+        label: `Campaigns (${campaigns.length})`,
+        count: campaigns.length,
+        icon: <FolderKanban size={17} color="var(--accent-emerald)" />,
+      },
+    ];
+
+    return (
+      <aside id={id} className="sidebar sidebar--rail">
+        <div className="brand-header brand-header--rail">
+          <button
+            type="button"
+            className="btn btn-ghost rail-icon-btn"
             onClick={handleCloseCampaign}
             title="Return to Home page"
+            aria-label="Return to Home page"
           >
-            <div className="brand-title">
-              <Flame size={20} color="var(--accent-amber)" />
-              <span>CYBERCANTINA</span>
-            </div>
-          </div>
+            <Flame size={19} color="var(--accent-amber)" />
+          </button>
+          {onToggleCollapse && (
+            <button
+              type="button"
+              className="btn btn-ghost rail-icon-btn rail-expand-btn"
+              onClick={onToggleCollapse}
+              title="Expand sidebar"
+              aria-label="Expand sidebar"
+              aria-expanded={false}
+              aria-controls={id}
+            >
+              <PanelLeftOpen size={15} />
+            </button>
+          )}
+        </div>
 
-        {/* 1. Personas (+new) */}
-        <SidebarCategory
-          title="Personas"
-          icon={<UserCheck size={14} color="var(--accent-emerald)" />}
-          items={personas}
+        <nav className="rail-categories" aria-label="Campaign catalog">
+          {railCategories.map((cat) => (
+            <button
+              key={cat.key}
+              type="button"
+              className="btn btn-ghost rail-icon-btn rail-category-btn"
+              onClick={() => onExpandToCategory?.(cat.key)}
+              title={cat.label}
+              aria-label={cat.label}
+            >
+              {cat.icon}
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-bottom-area sidebar-bottom-area--rail">
+          <RelaySidebarBadge compact />
+          <button
+            type="button"
+            className={`btn btn-ghost rail-icon-btn ${
+              showNotesFlyout ? "active" : ""
+            }`}
+            onClick={() => setShowNotesFlyout((prev) => !prev)}
+            title="Open Player Notes scratchpad"
+            aria-label="Open Player Notes scratchpad"
+            aria-expanded={showNotesFlyout}
+          >
+            <StickyNote size={16} color="var(--accent-amber)" />
+            {notes.length > 0 && <span className="rail-badge-dot" />}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost rail-icon-btn"
+            onClick={() => {
+              setProfileInitialTab("identity");
+              setShowProfileModal(true);
+            }}
+            title={`User Profile (@${currentUser.username})`}
+            aria-label="Open User Profile"
+          >
+            <User size={16} color="var(--accent-cyan)" />
+          </button>
+          {!singleUserMode && (
+            <button
+              type="button"
+              className="btn btn-ghost rail-icon-btn"
+              onClick={handleLogout}
+              title="Sign out"
+              aria-label="Sign out"
+            >
+              <LogOut size={15} />
+            </button>
+          )}
+          {currentUser.role === "admin" && (
+            <button
+              type="button"
+              className="btn btn-ghost rail-icon-btn"
+              onClick={() => {
+                setAdminInitialTab("users");
+                setShowAdminModal(true);
+              }}
+              title="Open Admin Area"
+              aria-label="Open Admin Area"
+            >
+              <UserCog size={16} color="var(--accent-amber)" />
+            </button>
+          )}
+        </div>
+      </aside>
+    );
+  }
+
+  const sidebarClassName = [
+    "sidebar",
+    mode === "overlay" ? "sidebar--overlay" : "",
+    mode === "hidden" ? "sidebar--hidden" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const collapseAction =
+    mode === "overlay" ? onCloseOverlay ?? onToggleCollapse : onToggleCollapse;
+
+  return (
+    <aside
+      id={id}
+      className={sidebarClassName}
+      aria-hidden={mode === "hidden" ? true : undefined}
+    >
+      <div className="brand-header">
+        <div
+          className="brand-title"
+          style={{ cursor: "pointer" }}
+          onClick={handleCloseCampaign}
+          title="Return to Home page"
+        >
+          <Flame size={20} color="var(--accent-amber)" />
+          <span>CYBERCANTINA</span>
+        </div>
+        {collapseAction && (
+          <button
+            type="button"
+            className="btn btn-ghost sidebar-collapse-btn"
+            onClick={collapseAction}
+            title={mode === "overlay" ? "Close sidebar" : "Collapse sidebar to icon rail"}
+            aria-label={mode === "overlay" ? "Close sidebar" : "Collapse sidebar to icon rail"}
+            aria-expanded={mode !== "hidden"}
+            aria-controls={id}
+          >
+            {mode === "overlay" ? <X size={16} /> : <PanelLeftClose size={16} />}
+          </button>
+        )}
+      </div>
+
+      {/* 1. Personas (+new) */}
+      <SidebarCategory
+        title="Personas"
+        icon={<UserCheck size={14} color="var(--accent-emerald)" />}
+        items={personas}
+        expanded={expandedCategories?.personas}
+        onExpandedChange={
+          onToggleCategory ? (next) => onToggleCategory("personas", next) : undefined
+        }
           searchPlaceholder="Search personas, appearance, lore..."
           onNewClick={() => {
             setEditingPersona(null);
@@ -256,6 +439,10 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           title="Characters"
           icon={<Users size={14} color="var(--accent-amber)" />}
           items={characters}
+          expanded={expandedCategories?.characters}
+          onExpandedChange={
+            onToggleCategory ? (next) => onToggleCategory("characters", next) : undefined
+          }
           searchPlaceholder="Search characters, tags, creators..."
           onNewClick={() => setShowCharWizard(true)}
           newButtonTitle="Create a new Character with AI Wizard"
@@ -374,6 +561,10 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           title="Worlds"
           icon={<Globe size={14} color="var(--accent-cyan)" />}
           items={worlds}
+          expanded={expandedCategories?.worlds}
+          onExpandedChange={
+            onToggleCategory ? (next) => onToggleCategory("worlds", next) : undefined
+          }
           searchPlaceholder="Search worlds..."
           onNewClick={() => setShowWorldWizard(true)}
           newButtonTitle="Create a new World & Spatial Graph with AI Wizard"
@@ -442,6 +633,10 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           title="Campaigns"
           icon={<FolderKanban size={14} color="var(--accent-emerald)" />}
           items={campaigns}
+          expanded={expandedCategories?.campaigns}
+          onExpandedChange={
+            onToggleCategory ? (next) => onToggleCategory("campaigns", next) : undefined
+          }
           searchPlaceholder="Search campaigns..."
           onNewClick={
             worlds.length > 0 && characters.length > 0
@@ -601,7 +796,5 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
           )}
         </div>
       </aside>
-      )}
-    </>
   );
 };
