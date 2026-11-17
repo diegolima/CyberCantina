@@ -180,6 +180,8 @@ class ProviderStore:
                 base_label = "OpenRouter"
             elif type == "aihorde":
                 base_label = "AI Horde"
+            elif type == "nanogpt":
+                base_label = "NanoGPT"
             elif type == "browser_ollama":
                 base_label = "Local Ollama (Browser)"
             elif type == "webgpu":
@@ -322,7 +324,7 @@ class ProviderStore:
                 WHERE scope = 'user'
                   AND (
                     secret_enc IS NOT NULL
-                    OR (credential_storage = 'server' AND type IN ('ollama', 'openrouter', 'aihorde'))
+                    OR (credential_storage = 'server' AND type IN ('ollama', 'openrouter', 'aihorde', 'nanogpt'))
                   )
                 """
             ).fetchall()
@@ -339,7 +341,7 @@ class ProviderStore:
                     WHERE scope = 'user'
                       AND (
                         secret_enc IS NOT NULL
-                        OR (credential_storage = 'server' AND type IN ('ollama', 'openrouter', 'aihorde'))
+                        OR (credential_storage = 'server' AND type IN ('ollama', 'openrouter', 'aihorde', 'nanogpt'))
                       )
                     """,
                     (now,),

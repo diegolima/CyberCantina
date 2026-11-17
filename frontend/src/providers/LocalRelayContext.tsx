@@ -16,6 +16,7 @@ import { runBrowserOllamaChat, probeBrowserOllama } from "../local/ollamaDriver"
 import {
   probeRemoteProvider,
   RemoteDriverError,
+  RemoteProviderDriverType,
   runRemoteProviderChat,
 } from "../local/remoteProviderDriver";
 import {
@@ -227,7 +228,7 @@ export const LocalRelayProvider: React.FC<{
 
     const resolveAuthorizedRemoteBaseUrl = async (
       providerId: string | null | undefined,
-      driver: "ollama" | "openrouter" | "aihorde"
+      driver: RemoteProviderDriverType
     ): Promise<string | null> => {
       if (!providerId) {
         throw new RemoteDriverError("invalid_url", "Remote relay request is missing provider_id.");
@@ -276,7 +277,12 @@ export const LocalRelayProvider: React.FC<{
       if (req.driver === "browser_ollama") {
         return runBrowserOllamaChat(req, emitChunk, signal);
       }
-      if (req.driver !== "ollama" && req.driver !== "openrouter" && req.driver !== "aihorde") {
+      if (
+        req.driver !== "ollama" &&
+        req.driver !== "openrouter" &&
+        req.driver !== "aihorde" &&
+        req.driver !== "nanogpt"
+      ) {
         throw new RemoteDriverError("inference_failed", "Unsupported relay driver.");
       }
       const remoteDriver = req.driver;
@@ -379,7 +385,7 @@ export const LocalRelayProvider: React.FC<{
         return;
       }
 
-      const remoteDriver = req.driver as "ollama" | "openrouter" | "aihorde";
+      const remoteDriver = req.driver as RemoteProviderDriverType;
       let authorizedBaseUrl: string | null = null;
       try {
         authorizedBaseUrl = await resolveAuthorizedRemoteBaseUrl(req.provider_id, remoteDriver);

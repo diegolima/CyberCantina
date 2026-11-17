@@ -7,7 +7,10 @@ import {
   setProviderCredential,
 } from "../../local/credentialVault";
 import { probeBrowserOllama } from "../../local/ollamaDriver";
-import { probeRemoteProvider } from "../../local/remoteProviderDriver";
+import {
+  probeRemoteProvider,
+  RemoteProviderDriverType,
+} from "../../local/remoteProviderDriver";
 import { checkWebGpuAdapter, getWebGpuModelInfos } from "../../local/webgpuCatalog";
 import { useOptionalLocalRelay } from "../../providers/LocalRelayContext";
 import {
@@ -37,7 +40,48 @@ type EditorProps =
       onDone: () => void;
     };
 
-const PRESET_CLOUD_HOSTS = new Set(["openrouter.ai", "oai.stablehorde.net"]);
+const PRESET_CLOUD_HOSTS = new Set([
+  "openrouter.ai",
+  "oai.stablehorde.net",
+  "nano-gpt.com",
+  "api.nano-gpt.com",
+]);
+
+const DEFAULT_URL_BY_TYPE: Record<ProviderType, string> = {
+  ollama: "",
+  openrouter: "https://openrouter.ai/api/v1",
+  aihorde: "https://oai.stablehorde.net/v1",
+  nanogpt: "https://nano-gpt.com/api/v1",
+  browser_ollama: "http://localhost:11434",
+  webgpu: "webgpu://browser",
+};
+
+const DEFAULT_NAME_BY_TYPE: Record<ProviderType, string> = {
+  ollama: "",
+  openrouter: "OpenRouter",
+  aihorde: "AI Horde",
+  nanogpt: "NanoGPT",
+  browser_ollama: "Local Ollama (Browser)",
+  webgpu: "Browser WebGPU",
+};
+
+const PRESET_NAMES = new Set([
+  "Ollama",
+  "OpenRouter",
+  "AI Horde",
+  "NanoGPT",
+  "Local Ollama (Browser)",
+  "Browser WebGPU",
+]);
+
+const PRESET_URLS = new Set([
+  "https://openrouter.ai/api/v1",
+  "https://oai.stablehorde.net/v1",
+  "https://nano-gpt.com/api/v1",
+  "https://api.nano-gpt.com/api/v1",
+  "http://localhost:11434",
+  "webgpu://browser",
+]);
 
 function isPresetCloudOrSentinelUrl(raw: string): boolean {
   const trimmed = raw.trim();
@@ -179,6 +223,7 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
         : hasExistingServerToken);
   const tokenMissing =
     (providerType === "openrouter" ||
+      providerType === "nanogpt" ||
       (providerType === "aihorde" && effectiveStoreInBrowser)) &&
     !token.trim() &&
     !canReuseExistingOrVaultOpenRouterKey;
@@ -192,12 +237,20 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
     hostChanged && effectiveHasSavedToken && !token && !clearToken;
   const canSave = !urlMissing && !tokenMissing && !saving && !tokenRequired && (props.mode === "create" || name.trim() !== "");
 
-  const defaultUrlFor = (ptype: ProviderType): string => {
-    if (ptype === "openrouter") return "https://openrouter.ai/api/v1";
-    if (ptype === "aihorde") return "https://oai.stablehorde.net/v1";
-    if (ptype === "browser_ollama") return "http://localhost:11434";
-    if (ptype === "webgpu") return "webgpu://browser";
-    return "";
+  const defaultUrlFor = (ptype: ProviderType): string => DEFAULT_URL_BY_TYPE[ptype] ?? "";
+
+  const selectProviderType = (nextType: ProviderType) => {
+    setProviderType(nextType);
+    setTestResult(null);
+    setNeedsCorsSetup(false);
+    if (!name || PRESET_NAMES.has(name)) {
+      setName(DEFAULT_NAME_BY_TYPE[nextType]);
+    }
+    if (nextType === "webgpu") {
+      setUrl(DEFAULT_URL_BY_TYPE.webgpu);
+    } else if (!url || PRESET_URLS.has(url) || isPresetCloudOrSentinelUrl(url)) {
+      setUrl(DEFAULT_URL_BY_TYPE[nextType]);
+    }
   };
 
   const handleTest = async () => {
@@ -274,7 +327,7 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
           token.trim() ||
           (existing?.credential_storage === "browser" ? vaultToken : null);
         const localRes = await probeRemoteProvider({
-          type: providerType as "ollama" | "openrouter" | "aihorde",
+          type: providerType as RemoteProviderDriverType,
           baseUrl: effectiveUrl,
           token: candidateToken,
           requireToken:
@@ -451,13 +504,7 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
             disabled={deleteOnly || props.mode === "edit"}
             className={`btn ${providerType === "ollama" ? "btn--primary" : "btn--subtle"}`}
             style={{ padding: "7px 10px", fontSize: "0.8rem" }}
-            onClick={() => {
-              setProviderType("ollama");
-              setTestResult(null);
-              setNeedsCorsSetup(false);
-              if (["OpenRouter", "AI Horde", "Local Ollama (Browser)", "Browser WebGPU"].includes(name)) setName("");
-              if (url === "https://openrouter.ai/api/v1" || url === "https://oai.stablehorde.net/v1" || url === "webgpu://browser") setUrl("");
-            }}
+            onClick={() => selectProviderType("ollama")}
           >
             Ollama (Host Server)
           </button>
@@ -468,17 +515,7 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
                 disabled={deleteOnly || props.mode === "edit"}
                 className={`btn ${providerType === "browser_ollama" ? "btn--primary" : "btn--subtle"}`}
                 style={{ padding: "7px 10px", fontSize: "0.8rem" }}
-                onClick={() => {
-                  setProviderType("browser_ollama");
-                  setTestResult(null);
-                  setNeedsCorsSetup(false);
-                  if (!name || ["Ollama", "OpenRouter", "AI Horde", "Browser WebGPU"].includes(name)) {
-                    setName("Local Ollama (Browser)");
-                  }
-                  if (isPresetCloudOrSentinelUrl(url)) {
-                    setUrl("http://localhost:11434");
-                  }
-                }}
+                onClick={() => selectProviderType("browser_ollama")}
               >
                 {scope === "system" ? "Local Ollama (User's Browser)" : "Local Ollama (Browser)"}
               </button>
@@ -487,15 +524,7 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
                 disabled={deleteOnly || props.mode === "edit"}
                 className={`btn ${providerType === "webgpu" ? "btn--primary" : "btn--subtle"}`}
                 style={{ padding: "7px 10px", fontSize: "0.8rem" }}
-                onClick={() => {
-                  setProviderType("webgpu");
-                  setTestResult(null);
-                  setNeedsCorsSetup(false);
-                  if (!name || ["Ollama", "OpenRouter", "AI Horde", "Local Ollama (Browser)"].includes(name)) {
-                    setName("Browser WebGPU");
-                  }
-                  setUrl("webgpu://browser");
-                }}
+                onClick={() => selectProviderType("webgpu")}
               >
                 In-Browser WebGPU
               </button>
@@ -506,32 +535,25 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
             disabled={deleteOnly || props.mode === "edit"}
             className={`btn ${providerType === "openrouter" ? "btn--primary" : "btn--subtle"}`}
             style={{ padding: "7px 10px", fontSize: "0.8rem" }}
-            onClick={() => {
-              setProviderType("openrouter");
-              setTestResult(null);
-              setNeedsCorsSetup(false);
-              if (!name || ["Ollama", "AI Horde", "Local Ollama (Browser)", "Browser WebGPU"].includes(name)) setName("OpenRouter");
-              if (!url || url === "https://oai.stablehorde.net/v1" || url === "webgpu://browser" || url === "http://localhost:11434") {
-                setUrl("https://openrouter.ai/api/v1");
-              }
-            }}
+            onClick={() => selectProviderType("openrouter")}
           >
             OpenRouter (Cloud API)
           </button>
           <button
             type="button"
             disabled={deleteOnly || props.mode === "edit"}
+            className={`btn ${providerType === "nanogpt" ? "btn--primary" : "btn--subtle"}`}
+            style={{ padding: "7px 10px", fontSize: "0.8rem" }}
+            onClick={() => selectProviderType("nanogpt")}
+          >
+            NanoGPT (Cloud API)
+          </button>
+          <button
+            type="button"
+            disabled={deleteOnly || props.mode === "edit"}
             className={`btn ${providerType === "aihorde" ? "btn--primary" : "btn--subtle"}`}
             style={{ padding: "7px 10px", fontSize: "0.8rem" }}
-            onClick={() => {
-              setProviderType("aihorde");
-              setTestResult(null);
-              setNeedsCorsSetup(false);
-              if (!name || ["Ollama", "OpenRouter", "Local Ollama (Browser)", "Browser WebGPU"].includes(name)) setName("AI Horde");
-              if (!url || url === "https://openrouter.ai/api/v1" || url === "webgpu://browser" || url === "http://localhost:11434") {
-                setUrl("https://oai.stablehorde.net/v1");
-              }
-            }}
+            onClick={() => selectProviderType("aihorde")}
           >
             AI Horde (Crowdsourced)
           </button>
@@ -549,6 +571,8 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
               props.mode === "create"
                 ? providerType === "openrouter"
                   ? "Defaults to “OpenRouter”"
+                  : providerType === "nanogpt"
+                  ? "Defaults to “NanoGPT”"
                   : providerType === "aihorde"
                   ? "Defaults to “AI Horde”"
                   : providerType === "browser_ollama"
@@ -568,6 +592,8 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
               {isBrowserOllama ? "Local Ollama URL" : "Server URL"}{" "}
               {providerType === "openrouter" ? (
                 <span className="form-hint">(default: openrouter.ai/api/v1)</span>
+              ) : providerType === "nanogpt" ? (
+                <span className="form-hint">(default: nano-gpt.com/api/v1)</span>
               ) : providerType === "aihorde" ? (
                 <span className="form-hint">(default: oai.stablehorde.net/v1)</span>
               ) : isBrowserOllama ? (
@@ -581,6 +607,8 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
               placeholder={
                 providerType === "openrouter"
                   ? "https://openrouter.ai/api/v1"
+                  : providerType === "nanogpt"
+                  ? "https://nano-gpt.com/api/v1"
                   : providerType === "aihorde"
                   ? "https://oai.stablehorde.net/v1"
                   : "http://localhost:11434"
@@ -632,12 +660,16 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
           <label className="form-label">
             {providerType === "openrouter"
               ? "OpenRouter API Key"
+              : providerType === "nanogpt"
+              ? "NanoGPT API Key"
               : providerType === "aihorde"
               ? "AI Horde API Key"
               : "Bearer token"}{" "}
             <span className="form-hint">
               {providerType === "openrouter"
                 ? "(required, sk-or-v1-...)"
+                : providerType === "nanogpt"
+                ? "(required)"
                 : providerType === "aihorde"
                 ? effectiveStoreInBrowser
                   ? "(required when stored in browser)"
@@ -667,11 +699,13 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
                     ? "Re-enter key to store in this browser"
                     : providerType === "openrouter"
                       ? "sk-or-v1-..."
-                      : providerType === "aihorde"
-                        ? effectiveStoreInBrowser
-                          ? "Enter your AI Horde API key"
-                          : "Leave blank to use anonymous key (0000000000)"
-                        : "Leave empty if not needed"
+                      : providerType === "nanogpt"
+                        ? "Enter your NanoGPT API key"
+                        : providerType === "aihorde"
+                          ? effectiveStoreInBrowser
+                            ? "Enter your AI Horde API key"
+                            : "Leave blank to use anonymous key (0000000000)"
+                          : "Leave empty if not needed"
             }
             onChange={(e) => setToken(e.target.value)}
           />
@@ -782,6 +816,9 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
               <Check size={13} /> Connected ({testResult.protocol === "openai_compat" ? "OpenAI-compatible" : "Ollama"}):{" "}
               {testResult.chat_models.length} chat model(s), {testResult.embedding_models.length} embedding
               model(s).
+              {providerType === "nanogpt" && (
+                <span> (Reachability &amp; catalog verified; API key is checked on first turn.)</span>
+              )}
             </>
           ) : (
             <>

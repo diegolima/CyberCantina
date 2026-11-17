@@ -48,8 +48,10 @@ function isBlockedLiteralHost(host: string): boolean {
   return false;
 }
 
+export type RemoteProviderDriverType = "ollama" | "openrouter" | "aihorde" | "nanogpt";
+
 export function normalizeRemoteBaseUrl(
-  type: ProviderType | "ollama" | "openrouter" | "aihorde",
+  type: ProviderType | RemoteProviderDriverType,
   rawUrl?: string | null
 ): string {
   const trimmed = (rawUrl ?? "").trim();
@@ -59,6 +61,9 @@ export function normalizeRemoteBaseUrl(
     }
     if (type === "aihorde") {
       return "https://oai.stablehorde.net/v1";
+    }
+    if (type === "nanogpt") {
+      return "https://nano-gpt.com/api/v1";
     }
     throw new RemoteDriverError("invalid_url", "Server URL is required.");
   }
@@ -70,7 +75,7 @@ export function normalizeRemoteBaseUrl(
     throw new RemoteDriverError("invalid_url", "Server URL is not a valid URL.");
   }
 
-  if (type === "openrouter" || type === "aihorde") {
+  if (type === "openrouter" || type === "aihorde" || type === "nanogpt") {
     if (parsed.protocol !== "https:") {
       throw new RemoteDriverError("invalid_url", "Cloud provider URL must use https://.");
     }
@@ -134,7 +139,7 @@ export function normalizeRemoteBaseUrl(
   }
 
   let path = parsed.pathname.replace(/\/+$/, "");
-  if (type === "openrouter") {
+  if (type === "openrouter" || type === "nanogpt") {
     if (!path) {
       path = "/api/v1";
     }
@@ -244,6 +249,40 @@ function parseAiHordeModels(payload: any): ProviderModelInfo[] {
   return models;
 }
 
+function parseNanoGptModels(chatPayload: any, embedPayload?: any): ProviderModelInfo[] {
+  const seen = new Set<string>();
+  const models: ProviderModelInfo[] = [];
+  const chatRaw = Array.isArray(chatPayload?.data) ? chatPayload.data : [];
+  for (const item of chatRaw) {
+    const id = typeof item?.id === "string" ? item.id.trim() : "";
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    models.push({
+      name: id,
+      size_mb: 0,
+      parameter_size: "",
+      quantization_level: "",
+      family: id.includes("/") ? id.split("/")[0] : "",
+      is_embedding: isEmbeddingName(id),
+    });
+  }
+  const embedRaw = Array.isArray(embedPayload?.data) ? embedPayload.data : [];
+  for (const item of embedRaw) {
+    const id = typeof item?.id === "string" ? item.id.trim() : "";
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    models.push({
+      name: id,
+      size_mb: 0,
+      parameter_size: "",
+      quantization_level: "",
+      family: id.includes("/") ? id.split("/")[0] : "",
+      is_embedding: true,
+    });
+  }
+  return models;
+}
+
 function buildProbeResponse(opts: {
   providerId?: string | null;
   reachable: boolean;
@@ -288,7 +327,7 @@ function classifyFetchError(
 }
 
 export async function probeRemoteProvider(opts: {
-  type: "ollama" | "openrouter" | "aihorde";
+  type: RemoteProviderDriverType;
   baseUrl?: string | null;
   token?: string | null;
   requireToken?: boolean;
@@ -465,6 +504,96 @@ export async function probeRemoteProvider(opts: {
         protocol: null,
         models: [],
         errorCode: resp.status === 502 ? "connect_refused" : "unknown",
+        error: `HTTP ${resp.status}`,
+        configVersion: opts.configVersion,
+      });
+    }
+
+    if (opts.type === "nanogpt") {
+      // Reachability-only probe: /models is public and does not verify the API key.
+      const headers = bearerHeaders(cleanToken);
+      const resp = await fetch(`${root}/models`, {
+        method: "GET",
+        headers,
+        signal: combinedSignal,
+      });
+      if (resp.ok) {
+        let chatPayload: any;
+        try {
+          chatPayload = await resp.json();
+        } catch {
+          return buildProbeResponse({
+            providerId: opts.providerId,
+            reachable: false,
+            protocol: null,
+            models: [],
+            errorCode: "bad_payload",
+            error: "NanoGPT returned a non-JSON model list.",
+            configVersion: opts.configVersion,
+          });
+        }
+        if (!chatPayload || !Array.isArray(chatPayload.data)) {
+          return buildProbeResponse({
+            providerId: opts.providerId,
+            reachable: false,
+            protocol: null,
+            models: [],
+            errorCode: "bad_payload",
+            error: "NanoGPT returned an unexpected model list.",
+            configVersion: opts.configVersion,
+          });
+        }
+        let embedPayload: any = null;
+        try {
+          const embedResp = await fetch(`${root}/embedding-models`, {
+            method: "GET",
+            headers,
+            signal: combinedSignal,
+          });
+          if (embedResp.ok) {
+            embedPayload = await embedResp.json();
+          }
+        } catch {
+          // Embedding catalog is supplemental to chat model discovery.
+        }
+        return buildProbeResponse({
+          providerId: opts.providerId,
+          reachable: true,
+          protocol: "openai_compat",
+          models: parseNanoGptModels(chatPayload, embedPayload),
+          errorCode: null,
+          error: null,
+          configVersion: opts.configVersion,
+        });
+      }
+      if (resp.status === 401 || resp.status === 403) {
+        return buildProbeResponse({
+          providerId: opts.providerId,
+          reachable: false,
+          protocol: null,
+          models: [],
+          errorCode: resp.status === 401 ? "unauthorized" : "forbidden",
+          error: `HTTP ${resp.status}`,
+          configVersion: opts.configVersion,
+        });
+      }
+      if (resp.status === 404) {
+        return buildProbeResponse({
+          providerId: opts.providerId,
+          reachable: false,
+          protocol: null,
+          models: [],
+          errorCode: "not_found",
+          error: "NanoGPT /models endpoint was not found.",
+          configVersion: opts.configVersion,
+        });
+      }
+      return buildProbeResponse({
+        providerId: opts.providerId,
+        reachable: false,
+        protocol: null,
+        models: [],
+        errorCode: "unknown",
         error: `HTTP ${resp.status}`,
         configVersion: opts.configVersion,
       });
@@ -686,14 +815,16 @@ export async function runRemoteProviderChat(
   onChunk: (delta: string) => void,
   signal?: AbortSignal
 ): Promise<RelayDriverResult> {
-  const driver = req.driver as "ollama" | "openrouter" | "aihorde";
+  const driver = req.driver as RemoteProviderDriverType;
   const root = normalizeRemoteBaseUrl(driver, req.base_url);
   const cleanToken = (token ?? "").trim();
 
-  if ((driver === "openrouter" || driver === "aihorde") && !cleanToken) {
+  if ((driver === "openrouter" || driver === "aihorde" || driver === "nanogpt") && !cleanToken) {
+    const label =
+      driver === "openrouter" ? "OpenRouter" : driver === "nanogpt" ? "NanoGPT" : "AI Horde";
     throw new RemoteDriverError(
       "browser_credential_missing",
-      `No ${driver === "openrouter" ? "OpenRouter" : "AI Horde"} credential is stored in this browser.`
+      `No ${label} credential is stored in this browser.`
     );
   }
 
@@ -797,7 +928,7 @@ export async function runRemoteProviderChat(
     }
 
     const v1Url =
-      driver === "openrouter" || driver === "aihorde"
+      driver === "openrouter" || driver === "aihorde" || driver === "nanogpt"
         ? `${root}/chat/completions`
         : `${root}/v1/chat/completions`;
     const headers: Record<string, string> = {
@@ -816,7 +947,7 @@ export async function runRemoteProviderChat(
     if (req.mode === "complete" && (req.options.json_mode || req.options.json_schema)) {
       basePayload.response_format = { type: "json_object" };
     }
-    if (driver === "openrouter" && req.options.disable_reasoning) {
+    if ((driver === "openrouter" || driver === "nanogpt") && req.options.disable_reasoning) {
       basePayload.reasoning = { effort: "none" };
     } else if (driver === "aihorde" && req.options.disable_reasoning) {
       basePayload.reasoning_effort = "none";
@@ -835,7 +966,11 @@ export async function runRemoteProviderChat(
 
     if (resp.status === 400) {
       const errText = (await resp.text().catch(() => "")).toLowerCase();
-      if (driver === "openrouter" && activePayload.reasoning && errText.includes("reasoning")) {
+      if (
+        (driver === "openrouter" || driver === "nanogpt") &&
+        activePayload.reasoning &&
+        errText.includes("reasoning")
+      ) {
         activePayload = { ...activePayload, reasoning: { exclude: true } };
         resp = await postOai(activePayload);
         if (resp.status === 400) {

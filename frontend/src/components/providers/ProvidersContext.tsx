@@ -13,7 +13,10 @@ import {
   getProviderCredential,
 } from "../../local/credentialVault";
 import { probeBrowserOllama } from "../../local/ollamaDriver";
-import { probeRemoteProvider } from "../../local/remoteProviderDriver";
+import {
+  probeRemoteProvider,
+  RemoteProviderDriverType,
+} from "../../local/remoteProviderDriver";
 import { checkWebGpuAdapter, getWebGpuModelInfos } from "../../local/webgpuCatalog";
 import { useOptionalLocalRelay } from "../../providers/LocalRelayContext";
 import {
@@ -149,7 +152,7 @@ export const ProvidersProvider: React.FC<{
         } else if (target.credential_storage === "browser") {
           const token = getProviderCredential(relay?.currentUserId, id);
           const localRes = await probeRemoteProvider({
-            type: target.type as "ollama" | "openrouter" | "aihorde",
+            type: target.type as RemoteProviderDriverType,
             baseUrl: target.base_url,
             token,
             requireToken:

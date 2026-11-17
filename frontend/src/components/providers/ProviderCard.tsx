@@ -43,7 +43,9 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
     ? hasProviderCredential(relay?.currentUserId, provider.id)
     : false;
   const requiresKey =
-    provider.type === "openrouter" || provider.type === "aihorde";
+    provider.type === "openrouter" ||
+    provider.type === "aihorde" ||
+    provider.type === "nanogpt";
 
   return (
     <div className={`provider-card ${expanded ? "expanded" : ""} ${unusable ? "unusable" : ""}`}>

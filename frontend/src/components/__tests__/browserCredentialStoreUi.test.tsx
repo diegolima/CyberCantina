@@ -170,5 +170,44 @@ describe("Browser credential store UI", () => {
       </ProvidersProvider>
     );
     expect(pausedHtml).toContain("Browser Storage Disabled");
+
+    const nanoGptMissingHtml = renderToStaticMarkup(
+      <ProvidersProvider probeSystem={false}>
+        <ProviderCard
+          provider={{
+            ...USER_BROWSER_OR,
+            id: "prov_u_ng",
+            name: "My NanoGPT",
+            type: "nanogpt",
+            base_url: "https://nano-gpt.com/api/v1",
+          }}
+          expanded={false}
+          canEdit={true}
+          credentialStoreMode="prefer_browser"
+          onToggle={vi.fn()}
+          onProbe={vi.fn()}
+        />
+      </ProvidersProvider>
+    );
+    expect(nanoGptMissingHtml).toContain("Key missing in this browser");
+
+    const nanoGptEditorHtml = renderToStaticMarkup(
+      <ProvidersProvider probeSystem={false}>
+        <ProviderEditor
+          mode="edit"
+          provider={{
+            ...USER_BROWSER_OR,
+            id: "prov_u_ng",
+            name: "My NanoGPT",
+            type: "nanogpt",
+            base_url: "https://nano-gpt.com/api/v1",
+          }}
+          credentialStoreMode="prefer_browser"
+          onDone={vi.fn()}
+        />
+      </ProvidersProvider>
+    );
+    expect(nanoGptEditorHtml).toContain("NanoGPT (Cloud API)");
+    expect(nanoGptEditorHtml).toContain("NanoGPT API Key");
   });
 });

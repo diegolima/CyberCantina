@@ -63,6 +63,7 @@ export type ProviderType =
   | "ollama"
   | "openrouter"
   | "aihorde"
+  | "nanogpt"
   | "browser_ollama"
   | "webgpu";
 export type ProviderScope = "system" | "user";

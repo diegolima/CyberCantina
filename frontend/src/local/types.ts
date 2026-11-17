@@ -15,7 +15,8 @@ export type RelayDriver =
   | "webgpu"
   | "ollama"
   | "openrouter"
-  | "aihorde";
+  | "aihorde"
+  | "nanogpt";
 
 export interface RelayLlmRequest {
   type: "llm.request";

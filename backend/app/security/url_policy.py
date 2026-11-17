@@ -40,6 +40,7 @@ class NormalizedUrl:
 
 OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 AIHORDE_DEFAULT_BASE_URL = "https://oai.stablehorde.net/v1"
+NANOGPT_DEFAULT_BASE_URL = "https://nano-gpt.com/api/v1"
 BROWSER_OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
 WEBGPU_SENTINEL_URL = "webgpu://browser"
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
@@ -55,6 +56,8 @@ def normalize_base_url(raw: str, *, provider_type: str = "ollama") -> Normalized
             text = OPENROUTER_DEFAULT_BASE_URL
         elif provider_type == "aihorde":
             text = AIHORDE_DEFAULT_BASE_URL
+        elif provider_type == "nanogpt":
+            text = NANOGPT_DEFAULT_BASE_URL
         elif provider_type == "browser_ollama":
             text = BROWSER_OLLAMA_DEFAULT_BASE_URL
         else:
@@ -73,7 +76,7 @@ def normalize_base_url(raw: str, *, provider_type: str = "ollama") -> Normalized
     except ValueError as exc:
         raise UrlBlockedError("invalid_url", "Server URL has an invalid port.") from exc
     path = parts.path.rstrip("/")
-    if provider_type == "openrouter":
+    if provider_type in ("openrouter", "nanogpt"):
         if not path:
             path = "/api/v1"
     elif provider_type == "aihorde":

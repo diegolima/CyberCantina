@@ -276,7 +276,7 @@ async def embed_text(text: str) -> np.ndarray:
             else:
                 base = profile.base_url.rstrip("/")
                 token = profile.api_key if profile.api_key not in ("", "ollama") else None
-            is_remote_v1 = endpoint is not None and endpoint.type in ("openrouter", "aihorde")
+            is_remote_v1 = endpoint is not None and endpoint.type in ("openrouter", "aihorde", "nanogpt")
             if is_remote_v1:
                 v1_url = endpoint.root_url.rstrip("/")
                 root_url = v1_url

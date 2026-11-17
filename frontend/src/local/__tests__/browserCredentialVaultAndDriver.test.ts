@@ -209,9 +209,96 @@ describe("remoteProviderDriver", () => {
     ).rejects.toBeInstanceOf(RemoteDriverError);
   });
 
+  it("probes NanoGPT for reachability without requiring a token and merges embedding models", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ data: [{ id: "openai/gpt-5" }, { id: "deepseek/deepseek-r1:fast" }] }),
+          { status: 200 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ data: [{ id: "cohere/embed-5-fast" }] }),
+          { status: 200 }
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await probeRemoteProvider({
+      type: "nanogpt",
+      baseUrl: "https://nano-gpt.com/api/v1",
+      token: null,
+    });
+
+    expect(res.reachable).toBe(true);
+    expect(res.protocol).toBe("openai_compat");
+    expect(res.chat_models).toEqual(["openai/gpt-5", "deepseek/deepseek-r1:fast"]);
+    expect(res.embedding_models).toEqual(["cohere/embed-5-fast"]);
+    expect(fetchMock.mock.calls[0][0]).toBe("https://nano-gpt.com/api/v1/models");
+    expect(fetchMock.mock.calls[1][0]).toBe("https://nano-gpt.com/api/v1/embedding-models");
+  });
+
+  it("streams NanoGPT SSE deltas and requires a browser token for chat", async () => {
+    await expect(
+      runRemoteProviderChat(
+        {
+          type: "llm.request",
+          request_id: "r-ng-missing",
+          driver: "nanogpt",
+          provider_id: "prov_ng",
+          mode: "complete",
+          base_url: "https://nano-gpt.com/api/v1",
+          model: "openai/gpt-5",
+          messages: [{ role: "user", content: "hi" }],
+          options: { temperature: 0.7, max_tokens: 64 },
+        },
+        null,
+        () => {}
+      )
+    ).rejects.toMatchObject({ code: "browser_credential_missing" });
+
+    const encoder = new TextEncoder();
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"Nano "}}]}\n\n'));
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"GPT"}}]}\n\n'));
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn().mockResolvedValue(new Response(body, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const chunks: string[] = [];
+    const res = await runRemoteProviderChat(
+      {
+        type: "llm.request",
+        request_id: "r-ng-stream",
+        driver: "nanogpt",
+        provider_id: "prov_ng",
+        mode: "stream",
+        base_url: "https://api.nano-gpt.com",
+        model: "openai/gpt-5",
+        messages: [{ role: "user", content: "hi" }],
+        options: { temperature: 0.7, max_tokens: 128, disable_reasoning: true },
+      },
+      "ng-live",
+      (d) => chunks.push(d)
+    );
+
+    expect(chunks.join("")).toBe("Nano GPT");
+    expect(res.content).toBe("Nano GPT");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.nano-gpt.com/api/v1/chat/completions");
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe("Bearer ng-live");
+  });
+
   it("normalizes valid remote URLs and rejects unsafe schemes, credentials, queries, fragments, traversal, and metadata IPs", async () => {
     expect(normalizeRemoteBaseUrl("openrouter", "")).toBe("https://openrouter.ai/api/v1");
     expect(normalizeRemoteBaseUrl("openrouter", "https://openrouter.ai")).toBe("https://openrouter.ai/api/v1");
+    expect(normalizeRemoteBaseUrl("nanogpt", "")).toBe("https://nano-gpt.com/api/v1");
+    expect(normalizeRemoteBaseUrl("nanogpt", "https://api.nano-gpt.com")).toBe("https://api.nano-gpt.com/api/v1");
     expect(normalizeRemoteBaseUrl("aihorde", "https://oai.stablehorde.net")).toBe("https://oai.stablehorde.net/v1");
     expect(normalizeRemoteBaseUrl("ollama", "https://ollama.example.com:8443/v1/")).toBe(
       "https://ollama.example.com:8443"
@@ -220,16 +307,18 @@ describe("remoteProviderDriver", () => {
       "http://192.168.1.50:11434"
     );
 
-    const invalidCases: Array<{ type: "ollama" | "openrouter" | "aihorde"; url: string }> = [
+    const invalidCases: Array<{ type: "ollama" | "openrouter" | "aihorde" | "nanogpt"; url: string }> = [
       { type: "ollama", url: "" },
       { type: "ollama", url: "not-a-url" },
       { type: "ollama", url: "javascript:alert(1)" },
       { type: "ollama", url: "ftp://ollama.example.com" },
       { type: "openrouter", url: "http://openrouter.ai/api/v1" },
+      { type: "nanogpt", url: "http://nano-gpt.com/api/v1" },
       { type: "aihorde", url: "http://oai.stablehorde.net/v1" },
       { type: "ollama", url: "https://user:pass@ollama.example.com" },
       { type: "openrouter", url: "https://openrouter.ai/api/v1?x=1" },
       { type: "openrouter", url: "https://openrouter.ai/api/v1#frag" },
+      { type: "nanogpt", url: "https://nano-gpt.com/api/v1?x=1" },
       { type: "ollama", url: "https://ollama.example.com/../secret" },
       { type: "ollama", url: "http://169.254.169.254/latest/meta-data" },
       { type: "ollama", url: "http://0.0.0.0:11434" },

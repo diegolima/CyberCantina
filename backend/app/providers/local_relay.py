@@ -24,7 +24,7 @@ relay_tab_context: ContextVar[str | None] = ContextVar("relay_tab_context", defa
 # Set per authenticated request so system-scoped browser providers route to the calling user.
 relay_user_context: ContextVar[str | None] = ContextVar("relay_user_context", default=None)
 
-BrowserDriver = Literal["browser_ollama", "webgpu", "ollama", "openrouter", "aihorde"]
+BrowserDriver = Literal["browser_ollama", "webgpu", "ollama", "openrouter", "aihorde", "nanogpt"]
 
 
 class RelayUnavailableError(RuntimeError):

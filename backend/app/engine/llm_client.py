@@ -136,8 +136,11 @@ class CallTarget:
     credential_storage: str = "server"
 
 
+_CLOUD_OPENAI_PROVIDER_TYPES = ("openrouter", "aihorde", "nanogpt")
+
+
 def get_chat_completions_url(target: CallTarget) -> str:
-    if target.provider_type in ("openrouter", "aihorde"):
+    if target.provider_type in _CLOUD_OPENAI_PROVIDER_TYPES:
         return f"{target.root_url.rstrip('/')}/chat/completions"
     return f"{get_openai_v1_url(target.root_url)}/chat/completions"
 
@@ -169,14 +172,14 @@ async def build_call_target(profile: ModelProfile, role: str = "model") -> CallT
                 await assert_url_allowed(normalize_base_url(endpoint.root_url, provider_type=ptype), allow_private=False)
             except UrlBlockedError as exc:
                 raise RuntimeError(f"Provider endpoint blocked by network policy: {exc}") from exc
-        if ptype == "openrouter":
+        if ptype in ("openrouter", "nanogpt"):
             oai = {
                 "Authorization": f"Bearer {endpoint.bearer_token or ''}",
                 "Content-Type": "application/json",
                 "HTTP-Referer": "http://localhost:5173",
                 "X-Title": "Cybercantina",
             }
-            return CallTarget(endpoint.root_url, {}, oai, provider_type="openrouter")
+            return CallTarget(endpoint.root_url, {}, oai, provider_type=ptype)
 
         if ptype == "aihorde":
             token = (endpoint.bearer_token or "").strip() or "0000000000"
@@ -450,7 +453,7 @@ class LLMClient:
         client = await self.get_http_client(timeout=active_profile.timeout_seconds)
 
         # 1. Try native Ollama /api/chat first (only for Ollama providers)
-        if target.provider_type not in ("openrouter", "aihorde"):
+        if target.provider_type not in _CLOUD_OPENAI_PROVIDER_TYPES:
             ollama_root = target.root_url
             ollama_chat_url = f"{ollama_root}/api/chat"
             ollama_opts = _build_ollama_options(
@@ -532,7 +535,7 @@ class LLMClient:
         }
         if json_mode or json_schema is not None:
             oai_payload["response_format"] = {"type": "json_object"}
-        if target.provider_type == "openrouter" and disable_reasoning:
+        if target.provider_type in ("openrouter", "nanogpt") and disable_reasoning:
             oai_payload["reasoning"] = {"effort": "none"}
         elif target.provider_type == "aihorde" and disable_reasoning:
             oai_payload["reasoning_effort"] = "none"
@@ -542,7 +545,7 @@ class LLMClient:
 
         async with sem:
             resp = await client.post(v1_url, headers=headers, json=oai_payload, timeout=active_profile.timeout_seconds)
-            if resp.status_code == 400 and target.provider_type == "openrouter" and disable_reasoning and "reasoning" in resp.text.lower():
+            if resp.status_code == 400 and target.provider_type in ("openrouter", "nanogpt") and disable_reasoning and "reasoning" in resp.text.lower():
                 # If the model enforces reasoning (e.g. DeepSeek R1), retry with exclude: True to omit CoT
                 retry_oai = dict(oai_payload)
                 retry_oai["reasoning"] = {"exclude": True}
@@ -678,7 +681,7 @@ class LLMClient:
         client = await self.get_http_client(timeout=active_profile.timeout_seconds)
 
         # 1. Prefer native Ollama streaming on /api/chat (only for Ollama providers)
-        if target.provider_type not in ("openrouter", "aihorde"):
+        if target.provider_type not in _CLOUD_OPENAI_PROVIDER_TYPES:
             ollama_root = target.root_url
             ollama_chat_url = f"{ollama_root}/api/chat"
             stream_opts = _build_ollama_options(
@@ -757,7 +760,7 @@ class LLMClient:
             "max_tokens": stream_tokens,
             "stream": True,
         }
-        if target.provider_type == "openrouter" and disable_reasoning:
+        if target.provider_type in ("openrouter", "nanogpt") and disable_reasoning:
             oai_payload["reasoning"] = {"effort": "none"}
         elif target.provider_type == "aihorde" and disable_reasoning:
             oai_payload["reasoning_effort"] = "none"
@@ -774,7 +777,7 @@ class LLMClient:
                         if resp.status_code == 400:
                             err_bytes = await resp.aread()
                             err_text = err_bytes.decode("utf-8", errors="ignore").lower()
-                            if target.provider_type == "openrouter" and "reasoning" in active_payload:
+                            if target.provider_type in ("openrouter", "nanogpt") and "reasoning" in active_payload:
                                 if "reasoning" in err_text:
                                     if attempt == 0:
                                         active_payload["reasoning"] = {"exclude": True}
@@ -820,7 +823,7 @@ class LLMClient:
                     if stream_ok:
                         break
                 except Exception:
-                    if attempt == 2 or target.provider_type not in ("openrouter", "aihorde"):
+                    if attempt == 2 or target.provider_type not in _CLOUD_OPENAI_PROVIDER_TYPES:
                         raise
 
 

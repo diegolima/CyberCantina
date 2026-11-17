@@ -11,7 +11,12 @@ from datetime import datetime, timezone
 import httpx
 
 from app.db.provider_store import ProviderStore
-from app.providers.models import parse_aihorde_models, parse_ollama_tags, parse_openai_models
+from app.providers.models import (
+    parse_aihorde_models,
+    parse_nanogpt_models,
+    parse_ollama_tags,
+    parse_openai_models,
+)
 from app.providers.openrouter_catalog import openrouter_catalog_service
 from app.schemas.provider import (
     ProbeErrorCode,
@@ -134,6 +139,40 @@ async def _probe_once(
                 return _Outcome(False, error_code="forbidden", error="AI Horde access forbidden.")
             if resp.status_code == 502:
                 return _Outcome(False, error_code="connect_refused", error="AI Horde gateway unavailable (502).")
+            return _Outcome(False, error_code="unknown", error=f"HTTP {resp.status_code}")
+        except Exception as exc:  # noqa: BLE001
+            code, text = _classify_exception(exc)
+            return _Outcome(False, error_code=code, error=text)
+
+    if provider_type == "nanogpt":
+        root = url.root.rstrip("/")
+        models_url = f"{root}/models"
+        embed_url = f"{root}/embedding-models"
+        try:
+            resp = await client.get(models_url, headers=headers, timeout=5.0)
+            if resp.status_code == 200:
+                try:
+                    chat_payload = resp.json()
+                except ValueError:
+                    return _Outcome(False, error_code="bad_payload", error="NanoGPT returned a non-JSON model list.")
+                if not isinstance(chat_payload, dict) or not isinstance(chat_payload.get("data"), list):
+                    return _Outcome(False, error_code="bad_payload", error="NanoGPT returned an unexpected model list.")
+                embed_payload: dict | None = None
+                try:
+                    embed_resp = await client.get(embed_url, headers=headers, timeout=3.0)
+                    if embed_resp.status_code == 200:
+                        candidate = embed_resp.json()
+                        if isinstance(candidate, dict) and isinstance(candidate.get("data"), list):
+                            embed_payload = candidate
+                except Exception:  # noqa: BLE001 - embedding catalog is supplemental to chat models
+                    embed_payload = None
+                return _Outcome(True, "openai_compat", parse_nanogpt_models(chat_payload, embed_payload))
+            if resp.status_code == 401:
+                return _Outcome(False, error_code="unauthorized", error="Invalid NanoGPT API key.")
+            if resp.status_code == 403:
+                return _Outcome(False, error_code="forbidden", error="NanoGPT access forbidden.")
+            if resp.status_code == 404:
+                return _Outcome(False, error_code="not_found", error="NanoGPT /models endpoint was not found.")
             return _Outcome(False, error_code="unknown", error=f"HTTP {resp.status_code}")
         except Exception as exc:  # noqa: BLE001
             code, text = _classify_exception(exc)

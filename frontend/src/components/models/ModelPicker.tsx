@@ -66,12 +66,13 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
 
   const isAihorde = selected?.type === "aihorde";
   const isOpenrouter = selected?.type === "openrouter";
+  const isNanoGpt = selected?.type === "nanogpt";
   const isWebGpu = selected?.type === "webgpu";
-  const isCombobox = isOpenrouter || isAihorde;
+  const isCombobox = isOpenrouter || isAihorde || isNanoGpt;
   const webgpuSpec = isWebGpu ? getWebGpuModelSpec(value.model) : undefined;
 
-  const openrouterSuggestions = useMemo(() => {
-    if (!isOpenrouter) return [];
+  const catalogSuggestions = useMemo(() => {
+    if (!isOpenrouter && !isNanoGpt) return [];
     const query = (value.model || "").trim().toLowerCase();
     if (query.length < 2) {
       return visibleModels.slice(0, 15);
@@ -79,14 +80,14 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
     return visibleModels
       .filter((m) => m.name.toLowerCase().includes(query) || m.family.toLowerCase().includes(query))
       .slice(0, 15);
-  }, [isOpenrouter, value.model, visibleModels]);
+  }, [isOpenrouter, isNanoGpt, value.model, visibleModels]);
 
   const aihordeSuggestions = useMemo(() => {
     if (!isAihorde) return [];
     return filterHordeSuggestions(visibleModels, value.model || "", 5);
   }, [isAihorde, value.model, visibleModels]);
 
-  const suggestions = isAihorde ? aihordeSuggestions : openrouterSuggestions;
+  const suggestions = isAihorde ? aihordeSuggestions : catalogSuggestions;
 
   const selectable = (p: LLMProvider) =>
     (!systemOnly || p.scope === "system") && ((p.is_enabled && p.usable) || p.id === value.providerId);
@@ -170,7 +171,9 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
                 placeholder={
                   isAihorde
                     ? "Search active Horde models (e.g. Stheno, L3, Gemma)..."
-                    : "Type 2+ chars to filter (e.g. anthropic/claude-3.5-sonnet)..."
+                    : isNanoGpt
+                      ? "Type 2+ chars to filter (e.g. openai/gpt-5, deepseek/deepseek-r1)..."
+                      : "Type 2+ chars to filter (e.g. anthropic/claude-3.5-sonnet)..."
                 }
                 autoComplete="off"
                 onChange={(e) => {

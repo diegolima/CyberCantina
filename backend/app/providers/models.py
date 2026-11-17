@@ -82,3 +82,43 @@ def parse_aihorde_models(payload: dict[str, Any]) -> list[ProviderModelInfo]:
     # Option A: workers descending, queued ascending
     models.sort(key=lambda m: (m.workers * 1000 - m.queued), reverse=True)
     return models
+
+
+def parse_nanogpt_models(
+    chat_payload: dict[str, Any],
+    embedding_payload: dict[str, Any] | None = None,
+) -> list[ProviderModelInfo]:
+    """Parse NanoGPT ``/api/v1/models`` and optional ``/api/v1/embedding-models`` payloads."""
+    models: list[ProviderModelInfo] = []
+    seen_names: set[str] = set()
+
+    for item in chat_payload.get("data", []) or []:
+        name = str(item.get("id") or "").strip()
+        if not name or name in seen_names:
+            continue
+        seen_names.add(name)
+        family = name.split("/", 1)[0] if "/" in name else ""
+        models.append(
+            ProviderModelInfo(
+                name=name,
+                family=family,
+                is_embedding=any(k in name.lower() for k in EMBED_MODEL_KEYWORDS),
+            )
+        )
+
+    if embedding_payload:
+        for item in embedding_payload.get("data", []) or []:
+            name = str(item.get("id") or "").strip()
+            if not name or name in seen_names:
+                continue
+            seen_names.add(name)
+            family = name.split("/", 1)[0] if "/" in name else ""
+            models.append(
+                ProviderModelInfo(
+                    name=name,
+                    family=family,
+                    is_embedding=True,
+                )
+            )
+
+    return models

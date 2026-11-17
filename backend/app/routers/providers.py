@@ -34,7 +34,28 @@ from app.schemas.provider import (
     ProviderResponse,
     ProviderUpdatePayload,
 )
-from app.security.url_policy import UrlBlockedError, assert_url_allowed, normalize_base_url
+from app.security.url_policy import (
+    AIHORDE_DEFAULT_BASE_URL,
+    BROWSER_OLLAMA_DEFAULT_BASE_URL,
+    NANOGPT_DEFAULT_BASE_URL,
+    OPENROUTER_DEFAULT_BASE_URL,
+    WEBGPU_SENTINEL_URL,
+    UrlBlockedError,
+    assert_url_allowed,
+    normalize_base_url,
+)
+
+_DEFAULT_URLS_BY_TYPE: dict[str, str] = {
+    "openrouter": OPENROUTER_DEFAULT_BASE_URL,
+    "aihorde": AIHORDE_DEFAULT_BASE_URL,
+    "nanogpt": NANOGPT_DEFAULT_BASE_URL,
+    "browser_ollama": BROWSER_OLLAMA_DEFAULT_BASE_URL,
+    "webgpu": WEBGPU_SENTINEL_URL,
+}
+_REQUIRED_SERVER_KEY_LABELS: dict[str, str] = {
+    "openrouter": "OpenRouter",
+    "nanogpt": "NanoGPT",
+}
 
 logger = logging.getLogger("cybercantina.routers.providers")
 router = APIRouter(prefix="/api/providers", tags=["providers"])
@@ -164,17 +185,20 @@ async def create_provider(
                 detail="Browser-stored credentials cannot be sent to the server.",
             )
 
-    if payload.type == "openrouter":
+    if payload.type in _REQUIRED_SERVER_KEY_LABELS:
         if storage == "server" and not raw_token:
-            raise HTTPException(status_code=422, detail="OpenRouter requires an API key (Bearer token).")
-        raw_url = (payload.settings.base_url or "").strip() or "https://openrouter.ai/api/v1"
+            raise HTTPException(
+                status_code=422,
+                detail=f"{_REQUIRED_SERVER_KEY_LABELS[payload.type]} requires an API key (Bearer token).",
+            )
+        raw_url = (payload.settings.base_url or "").strip() or _DEFAULT_URLS_BY_TYPE[payload.type]
     elif payload.type == "aihorde":
-        raw_url = (payload.settings.base_url or "").strip() or "https://oai.stablehorde.net/v1"
+        raw_url = (payload.settings.base_url or "").strip() or AIHORDE_DEFAULT_BASE_URL
     elif payload.type == "webgpu":
-        raw_url = "webgpu://browser"
+        raw_url = WEBGPU_SENTINEL_URL
         raw_token = ""
     elif payload.type == "browser_ollama":
-        raw_url = (payload.settings.base_url or "").strip() or "http://localhost:11434"
+        raw_url = (payload.settings.base_url or "").strip() or BROWSER_OLLAMA_DEFAULT_BASE_URL
         raw_token = ""
     else:
         raw_url = (payload.settings.base_url or "").strip()
@@ -288,10 +312,10 @@ async def update_provider(
                 if raw_token:
                     next_storage = "server"
                 elif next_storage == "server":
-                    if record.type == "openrouter":
+                    if record.type in _REQUIRED_SERVER_KEY_LABELS:
                         raise HTTPException(
                             status_code=422,
-                            detail="OpenRouter requires an API key (Bearer token).",
+                            detail=f"{_REQUIRED_SERVER_KEY_LABELS[record.type]} requires an API key (Bearer token).",
                         )
                     next_storage = "server"
         else:
@@ -304,10 +328,10 @@ async def update_provider(
                     )
                 clear_token = True
             elif record.credential_storage == "browser" and effective_storage == "server":
-                if record.type == "openrouter" and not raw_token:
+                if record.type in _REQUIRED_SERVER_KEY_LABELS and not raw_token:
                     raise HTTPException(
                         status_code=422,
-                        detail="OpenRouter requires an API key (Bearer token).",
+                        detail=f"{_REQUIRED_SERVER_KEY_LABELS[record.type]} requires an API key (Bearer token).",
                     )
 
     try:
@@ -480,19 +504,7 @@ async def probe_draft(draft: ProviderDraft, user: UserProfile = Depends(get_curr
             detail="Personal provider credentials must be stored and tested in your browser.",
         )
     restricted = not _is_admin(user)
-    default_draft_url = (
-        "https://openrouter.ai/api/v1"
-        if draft.type == "openrouter"
-        else (
-            "https://oai.stablehorde.net/v1"
-            if draft.type == "aihorde"
-            else (
-                "http://localhost:11434"
-                if draft.type == "browser_ollama"
-                else ("webgpu://browser" if draft.type == "webgpu" else "")
-            )
-        )
-    )
+    default_draft_url = _DEFAULT_URLS_BY_TYPE.get(draft.type, "")
     draft_url = draft.base_url or default_draft_url
     try:
         url = normalize_base_url(draft_url, provider_type=draft.type)
