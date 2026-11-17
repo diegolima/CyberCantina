@@ -198,13 +198,17 @@ class CharacterVersionsMixin:
         copied_media_for: str | None = None
         try:
             c_owner_row = conn.execute(
-                "SELECT owner_id FROM characters WHERE id = ?", (character_id,)
+                "SELECT owner_id, seed_key, seed_version, seed_modified FROM characters WHERE id = ?",
+                (character_id,),
             ).fetchone()
             effective_owner_id = (
                 c_owner_row["owner_id"]
                 if c_owner_row and "owner_id" in c_owner_row.keys()
                 else owner_id
             )
+            seed_key = c_owner_row["seed_key"] if c_owner_row else None
+            seed_version = c_owner_row["seed_version"] if c_owner_row else None
+            next_seed_modified = 1 if seed_key else (int(c_owner_row["seed_modified"] or 0) if c_owner_row else 0)
 
             usage_row = conn.execute(
                 """
@@ -270,8 +274,16 @@ class CharacterVersionsMixin:
             tags_json = json.dumps(clean_tags)
             creator_str = payload.creator.strip()
             creator_notes_str = payload.creator_notes.strip()
-            portraits_dict = payload.portraits if payload.portraits else orig.portraits
-            gallery_list = payload.gallery if payload.gallery else orig.gallery
+            portraits_dict = (
+                payload.portraits
+                if "portraits" in payload.model_fields_set
+                else orig.portraits
+            )
+            gallery_list = (
+                payload.gallery
+                if "gallery" in payload.model_fields_set
+                else orig.gallery
+            )
             clean_p, clean_g = _sanitize_character_media(portraits_dict, gallery_list)
 
             max_ver_row = conn.execute(
@@ -314,7 +326,8 @@ class CharacterVersionsMixin:
                         communication_style_json = ?, initial_message = ?, equipped_json = ?, inventory_json = ?,
                         voice_anchors_json = ?, baseline_psyche_json = ?, memory_shards_json = ?,
                         tags_json = ?, creator = ?, creator_notes = ?,
-                        portraits_json = ?, gallery_json = ?, unsupported_fields_json = ?, version = ?
+                        portraits_json = ?, gallery_json = ?, unsupported_fields_json = ?,
+                        seed_modified = ?, version = ?
                     WHERE id = ?
                     """,
                     (
@@ -350,6 +363,7 @@ class CharacterVersionsMixin:
                         portraits_json,
                         gallery_json,
                         unsupported_fields_json,
+                        next_seed_modified,
                         new_version,
                         target_char_id,
                     ),
@@ -426,7 +440,8 @@ class CharacterVersionsMixin:
                         communication_style_json, initial_message, equipped_json, inventory_json,
                         voice_anchors_json, baseline_psyche_json, memory_shards_json,
                         tags_json, creator, creator_notes,
-                        portraits_json, gallery_json, unsupported_fields_json, version,
+                        portraits_json, gallery_json, unsupported_fields_json,
+                        seed_key, seed_version, seed_modified, version,
                         pending_deletion, created_at
                     )
                     VALUES (
@@ -435,6 +450,7 @@ class CharacterVersionsMixin:
                         ?, ?, ?, ?,
                         ?, ?, ?, ?,
                         ?, ?, ?, ?,
+                        ?, ?, ?,
                         ?, ?, ?,
                         ?, ?, ?,
                         ?, ?, ?, ?,
@@ -476,6 +492,9 @@ class CharacterVersionsMixin:
                         portraits_json,
                         gallery_json,
                         unsupported_fields_json,
+                        seed_key,
+                        seed_version,
+                        next_seed_modified,
                         new_version,
                         now,
                     ),
@@ -677,13 +696,17 @@ class CharacterVersionsMixin:
         copied_media_for: str | None = None
         try:
             c_owner_row = conn.execute(
-                "SELECT owner_id FROM characters WHERE id = ?", (character_id,)
+                "SELECT owner_id, seed_key, seed_version, seed_modified FROM characters WHERE id = ?",
+                (character_id,),
             ).fetchone()
             effective_owner_id = (
                 c_owner_row["owner_id"]
                 if c_owner_row and "owner_id" in c_owner_row.keys()
                 else owner_id
             )
+            seed_key = c_owner_row["seed_key"] if c_owner_row else None
+            seed_version = c_owner_row["seed_version"] if c_owner_row else None
+            next_seed_modified = 1 if seed_key else (int(c_owner_row["seed_modified"] or 0) if c_owner_row else 0)
 
             usage_row = conn.execute(
                 """
@@ -735,7 +758,8 @@ class CharacterVersionsMixin:
                         communication_style_json = ?, initial_message = ?, equipped_json = ?, inventory_json = ?,
                         voice_anchors_json = ?, baseline_psyche_json = ?, memory_shards_json = ?,
                         tags_json = ?, creator = ?, creator_notes = ?,
-                        portraits_json = ?, gallery_json = ?, unsupported_fields_json = ?, version = ?
+                        portraits_json = ?, gallery_json = ?, unsupported_fields_json = ?,
+                        seed_modified = ?, version = ?
                     WHERE id = ?
                     """,
                     (
@@ -771,6 +795,7 @@ class CharacterVersionsMixin:
                         portraits_json,
                         gallery_json,
                         unsupported_fields_json,
+                        next_seed_modified,
                         snap.version,
                         target_char_id,
                     ),
@@ -803,7 +828,8 @@ class CharacterVersionsMixin:
                         communication_style_json, initial_message, equipped_json, inventory_json,
                         voice_anchors_json, baseline_psyche_json, memory_shards_json,
                         tags_json, creator, creator_notes,
-                        portraits_json, gallery_json, unsupported_fields_json, version,
+                        portraits_json, gallery_json, unsupported_fields_json,
+                        seed_key, seed_version, seed_modified, version,
                         pending_deletion, created_at
                     )
                     VALUES (
@@ -812,6 +838,7 @@ class CharacterVersionsMixin:
                         ?, ?, ?, ?,
                         ?, ?, ?, ?,
                         ?, ?, ?, ?,
+                        ?, ?, ?,
                         ?, ?, ?,
                         ?, ?, ?,
                         ?, ?, ?, ?,
@@ -853,6 +880,9 @@ class CharacterVersionsMixin:
                         portraits_json,
                         gallery_json,
                         unsupported_fields_json,
+                        seed_key,
+                        seed_version,
+                        next_seed_modified,
                         snap.version,
                         now,
                     ),

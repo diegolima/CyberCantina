@@ -154,19 +154,29 @@ export const WorldMediaTab: React.FC<WorldMediaTabProps> = ({
     try {
       const impact = await api.getWorldMediaImpact(worldId, item.id);
       const activeCamps = impact.campaigns_using || 0;
+      const isPublic = Boolean(item.is_public ?? impact.is_public);
       const linkedCount = linkCountsByMediaId[item.id] ?? 0;
-      const warnLines = [
-        `Delete "${item.label || "World Image"}" permanently?`,
-        "This immediately deletes the file from disk to free storage quota.",
-      ];
+      const warnLines = isPublic
+        ? [
+            `Remove shared default image "${item.label || "World Image"}" from this world?`,
+            "This detaches the image from your copy of the world without affecting storage quota or other users.",
+          ]
+        : [
+            `Delete "${item.label || "World Image"}" permanently?`,
+            "This immediately deletes the file from disk to free storage quota.",
+          ];
       if (linkedCount > 0) {
         warnLines.push(
           `It is currently linked to ${linkedCount} location/container(s) in this world.`
         );
       }
-      if (activeCamps > 0) {
+      if (activeCamps > 0 && !isPublic) {
         warnLines.push(
           `WARNING: ${activeCamps} active campaign(s) reference this image and will no longer display it.`
+        );
+      } else if (activeCamps > 0 && isPublic) {
+        warnLines.push(
+          `${activeCamps} active campaign(s) will keep using this image in their existing timelines.`
         );
       }
       if (!window.confirm(warnLines.join("\n\n"))) {

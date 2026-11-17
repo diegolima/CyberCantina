@@ -84,6 +84,9 @@ CREATE TABLE IF NOT EXISTS worlds (
     name TEXT NOT NULL,
     global_rules_json TEXT NOT NULL,
     unsupported_fields_json TEXT NOT NULL DEFAULT '{}',
+    seed_key TEXT NULL,
+    seed_version INTEGER NULL,
+    seed_modified INTEGER NOT NULL DEFAULT 0,
     pending_deletion INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
@@ -96,6 +99,8 @@ CREATE TABLE IF NOT EXISTS world_media (
     label TEXT NOT NULL DEFAULT '',
     mime_type TEXT NOT NULL DEFAULT 'image/webp',
     byte_size INTEGER NOT NULL DEFAULT 0,
+    is_public INTEGER NOT NULL DEFAULT 0,
+    seed_key TEXT NULL,
     created_at TEXT NOT NULL
 );
 
@@ -105,6 +110,7 @@ CREATE TABLE IF NOT EXISTS world_media_links (
     world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
     media_id TEXT NOT NULL REFERENCES world_media(id) ON DELETE CASCADE,
     sort_order INTEGER NOT NULL DEFAULT 0,
+    label_override TEXT NULL,
     created_at TEXT NOT NULL,
     PRIMARY KEY (world_id, media_id)
 );
@@ -204,6 +210,9 @@ CREATE TABLE IF NOT EXISTS characters (
     portraits_json TEXT NOT NULL DEFAULT '{}',
     gallery_json TEXT NOT NULL DEFAULT '[]',
     unsupported_fields_json TEXT NOT NULL DEFAULT '{}',
+    seed_key TEXT NULL,
+    seed_version INTEGER NULL,
+    seed_modified INTEGER NOT NULL DEFAULT 0,
     version INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL
 );

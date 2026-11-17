@@ -359,6 +359,14 @@ WEBAUTHN_CHALLENGE_TTL_SECONDS = 300  # 5 minutes
 _CHARACTER_MEDIA_URL_RE = re.compile(
     r"/api/media/characters/([^/]+)/(portraits|gallery)/([^/?#]+)"
 )
+_PUBLIC_CHARACTER_MEDIA_URL_RE = re.compile(
+    r"/api/media/public/(v\d+)/characters/([^/]+)/(portraits|gallery)/([^/?#]+)"
+)
+
+
+def is_public_character_media_url(url: str | None) -> bool:
+    """Return True when url points to a shared read-only public character media asset."""
+    return bool(_PUBLIC_CHARACTER_MEDIA_URL_RE.search(url or ""))
 
 
 class RepositoryBase:

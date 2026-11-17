@@ -10,7 +10,7 @@ import pytest
 
 from app.config import ModelProfile, settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_default_seed
+from app.db.seed import ensure_test_seed
 from app.engine.clerk_placement import (
     build_fallback_placement_prose,
     generate_clerk_starting_placement,
@@ -36,7 +36,7 @@ def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CantinaReposit
     monkeypatch.setattr(settings.embedding_profile, "mode", "local_hash")
     repo = CantinaRepository(db_file)
     repo.init_db()
-    ensure_default_seed(repo)
+    ensure_test_seed(repo)
     return repo
 
 

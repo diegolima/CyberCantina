@@ -342,9 +342,40 @@ class SchemaInitMixin:
                 conn.execute(
                     "ALTER TABLE worlds ADD COLUMN unsupported_fields_json TEXT NOT NULL DEFAULT '{}'"
                 )
+            if "seed_key" not in world_cols:
+                conn.execute("ALTER TABLE worlds ADD COLUMN seed_key TEXT NULL")
+            if "seed_version" not in world_cols:
+                conn.execute("ALTER TABLE worlds ADD COLUMN seed_version INTEGER NULL")
+            if "seed_modified" not in world_cols:
+                conn.execute(
+                    "ALTER TABLE worlds ADD COLUMN seed_modified INTEGER NOT NULL DEFAULT 0"
+                )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_worlds_owner ON worlds(owner_id)"
             )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_worlds_owner_seed ON worlds(owner_id, seed_key, pending_deletion)"
+            )
+
+            wm_cols = {
+                r["name"]
+                for r in conn.execute("PRAGMA table_info(world_media)").fetchall()
+            }
+            if "is_public" not in wm_cols:
+                conn.execute(
+                    "ALTER TABLE world_media ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0"
+                )
+            if "seed_key" not in wm_cols:
+                conn.execute("ALTER TABLE world_media ADD COLUMN seed_key TEXT NULL")
+
+            wml_cols = {
+                r["name"]
+                for r in conn.execute("PRAGMA table_info(world_media_links)").fetchall()
+            }
+            if "label_override" not in wml_cols:
+                conn.execute(
+                    "ALTER TABLE world_media_links ADD COLUMN label_override TEXT NULL"
+                )
 
             char_cols = {
                 r["name"]
@@ -378,12 +409,23 @@ class SchemaInitMixin:
                 conn.execute(
                     "ALTER TABLE characters ADD COLUMN gallery_json TEXT NOT NULL DEFAULT '[]'"
                 )
+            if "seed_key" not in char_cols:
+                conn.execute("ALTER TABLE characters ADD COLUMN seed_key TEXT NULL")
+            if "seed_version" not in char_cols:
+                conn.execute("ALTER TABLE characters ADD COLUMN seed_version INTEGER NULL")
+            if "seed_modified" not in char_cols:
+                conn.execute(
+                    "ALTER TABLE characters ADD COLUMN seed_modified INTEGER NOT NULL DEFAULT 0"
+                )
             if "version" not in char_cols:
                 conn.execute(
                     "ALTER TABLE characters ADD COLUMN version INTEGER NOT NULL DEFAULT 1"
                 )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_characters_owner ON characters(owner_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_characters_owner_seed ON characters(owner_id, seed_key, pending_deletion)"
             )
             conn.execute(
                 """

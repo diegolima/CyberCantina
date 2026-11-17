@@ -658,6 +658,7 @@ class WorldMediaItem(BaseModel):
     mime_type: str = "image/webp"
     byte_size: int = 0
     sort_order: int = 0
+    is_public: bool = False
     created_at: str = ""
 
 

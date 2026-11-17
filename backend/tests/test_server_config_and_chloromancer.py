@@ -18,7 +18,7 @@ from PIL import Image
 from app import main as main_module
 from app.config import settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_default_seed
+from app.db.seed import ensure_public_showcase_media
 from app.schemas.character import BaselinePsyche, CharacterWizardDraft
 
 
@@ -99,7 +99,7 @@ def server_cfg_env(
 
     repo = CantinaRepository(db_file, media_dir=str(media_dir))
     repo.init_db()
-    ensure_default_seed(repo)
+    ensure_public_showcase_media(repo)
 
     client = TestClient(main_module.app)
     setup_res = client.post(
@@ -323,8 +323,8 @@ def test_chloromancer_purge_preview_execution_orphan_grace_and_vacuum(
     preview_data = preview.json()
     assert preview_data["total_users"] == 1
     assert preview_data["candidates"][0]["username"] == "StalePlayer"
-    assert preview_data["candidates"][0]["character_count"] == 1
-    assert preview_data["candidates"][0]["world_count"] == 1
+    assert preview_data["candidates"][0]["character_count"] == 2
+    assert preview_data["candidates"][0]["world_count"] == 2
     assert preview_data["candidates"][0]["media_bytes"] > 0
 
     # StalePlayer still exists after dry-run preview
@@ -541,4 +541,4 @@ def test_sillytavern_text_only_warning_and_zcc_atomic_quota_rollback(
     after_dirs = set((media_dir / "characters").iterdir()) if (media_dir / "characters").exists() else set()
     assert after_dirs == existing_dirs
     player_uid = player_client.get("/api/profile").json()["id"]
-    assert repo.list_characters(owner_id=player_uid) == []
+    assert [c.name for c in repo.list_characters(owner_id=player_uid)] == ["Kira Vance"]

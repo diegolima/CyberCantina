@@ -20,6 +20,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.auth import get_current_user
+from app.config import settings
+from app.db.repos.base import is_public_character_media_url
 from app.db.repository import utc_now_iso
 from app.dependencies import (
     enforce_quota_and_write_webp,
@@ -32,6 +34,10 @@ from app.dependencies import (
     render_webp_bytes,
     run_entity_pruner,
     safe_resolve_media_path,
+)
+from app.security.media_path import (
+    PathTraversalError,
+    safe_resolve_public_character_media_file_path,
 )
 from app.schemas.auth import UserProfile
 from app.schemas.character import (
@@ -441,6 +447,34 @@ def delete_character(
 # ------------------------------------------------------------------
 
 
+@router.get("/api/media/public/{version_tag}/characters/{seed_slug}/{category}/{filename}")
+def get_public_character_media(
+    version_tag: str,
+    seed_slug: str,
+    category: str,
+    filename: str,
+    _current_user: UserProfile = Depends(get_current_user),
+) -> FileResponse:
+    """Serve an immutable shared public character portrait or gallery image."""
+    try:
+        target = safe_resolve_public_character_media_file_path(
+            settings.media_dir, version_tag, seed_slug, category, filename
+        )
+    except PathTraversalError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Media asset not found.")
+
+    return FileResponse(
+        target,
+        media_type="image/webp",
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
 @router.get("/api/media/characters/{character_id}/{category}/{filename}")
 def get_character_media(
     character_id: str,
@@ -471,7 +505,7 @@ async def upload_character_portrait(
     file: UploadFile = File(...),
     current_user: UserProfile = Depends(get_current_user),
 ) -> CharacterRecord:
-    """Upload and square-crop a character portrait for a specific emotional expression."""
+    """Upload and square-crop a character portrait (CoW-forking if campaigns exist)."""
     clean_emotion = emotion.strip().lower()
     if clean_emotion not in VALID_EMOTIONS:
         raise HTTPException(
@@ -489,20 +523,30 @@ async def upload_character_portrait(
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty upload payload.")
 
-    file_suffix = uuid.uuid4().hex[:8]
-    filename = f"{clean_emotion}_{file_suffix}.webp"
-    target_path = safe_resolve_media_path(character_id, "portraits", filename)
-
     webp_bytes = await asyncio.to_thread(
         render_webp_bytes, file_bytes, square_crop=True, max_size=512
     )
 
+    target_char_id = repo._ensure_writable_character_id(
+        character_id, owner_id=current_user.id
+    )
+    char = repo.get_character(target_char_id, owner_id=current_user.id)
+
+    file_suffix = uuid.uuid4().hex[:8]
+    filename = f"{clean_emotion}_{file_suffix}.webp"
+    target_path = safe_resolve_media_path(target_char_id, "portraits", filename)
+
     old_path: Path | None = None
     old_url = char.portraits.get(clean_emotion)
-    if old_url:
+    if (
+        old_url
+        and target_char_id == character_id
+        and not is_public_character_media_url(old_url)
+        and f"/api/media/characters/{target_char_id}/" in old_url
+    ):
         old_name = Path(old_url).name
         try:
-            old_path = safe_resolve_media_path(character_id, "portraits", old_name)
+            old_path = safe_resolve_media_path(target_char_id, "portraits", old_name)
         except Exception:
             old_path = None
 
@@ -522,8 +566,8 @@ async def upload_character_portrait(
             pass
 
     new_portraits = dict(char.portraits)
-    new_portraits[clean_emotion] = f"/api/media/characters/{character_id}/portraits/{filename}"
-    return repo.update_character_portraits(character_id, new_portraits, owner_id=current_user.id)
+    new_portraits[clean_emotion] = f"/api/media/characters/{target_char_id}/portraits/{filename}"
+    return repo.update_character_portraits(target_char_id, new_portraits, owner_id=current_user.id)
 
 
 @router.delete("/api/characters/{character_id}/portraits/{emotion}", response_model=CharacterRecord)
@@ -532,7 +576,7 @@ def delete_character_portrait(
     emotion: str,
     current_user: UserProfile = Depends(get_current_user),
 ) -> CharacterRecord:
-    """Delete a character portrait slot and clean up the image on disk."""
+    """Delete a character portrait slot (CoW-forking if campaigns exist; never unlinking shared public media)."""
     clean_emotion = emotion.strip().lower()
     if clean_emotion not in VALID_EMOTIONS:
         raise HTTPException(
@@ -547,17 +591,26 @@ def delete_character_portrait(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     if clean_emotion in char.portraits:
-        old_url = char.portraits[clean_emotion]
-        if old_url:
+        target_char_id = repo._ensure_writable_character_id(
+            character_id, owner_id=current_user.id
+        )
+        char = repo.get_character(target_char_id, owner_id=current_user.id)
+        old_url = char.portraits.get(clean_emotion)
+        if (
+            old_url
+            and target_char_id == character_id
+            and not is_public_character_media_url(old_url)
+            and f"/api/media/characters/{target_char_id}/" in old_url
+        ):
             old_name = Path(old_url).name
             try:
-                old_path = safe_resolve_media_path(character_id, "portraits", old_name)
+                old_path = safe_resolve_media_path(target_char_id, "portraits", old_name)
                 if old_path.is_file():
                     old_path.unlink(missing_ok=True)
             except Exception:
                 pass
         new_portraits = {k: v for k, v in char.portraits.items() if k != clean_emotion}
-        return repo.update_character_portraits(character_id, new_portraits, owner_id=current_user.id)
+        return repo.update_character_portraits(target_char_id, new_portraits, owner_id=current_user.id)
 
     return char
 
@@ -569,7 +622,7 @@ async def upload_character_gallery_image(
     caption: str = Form(""),
     current_user: UserProfile = Depends(get_current_user),
 ) -> CharacterRecord:
-    """Upload an image to the character's photo album."""
+    """Upload an image to the character's photo album (CoW-forking if campaigns exist)."""
     repo = get_repo()
     try:
         char = repo.get_character(character_id, owner_id=current_user.id)
@@ -580,13 +633,19 @@ async def upload_character_gallery_image(
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty upload payload.")
 
-    img_id = f"img_{uuid.uuid4().hex[:10]}"
-    filename = f"{img_id}.webp"
-    target_path = safe_resolve_media_path(character_id, "gallery", filename)
-
     webp_bytes = await asyncio.to_thread(
         render_webp_bytes, file_bytes, square_crop=False, max_size=1920
     )
+
+    target_char_id = repo._ensure_writable_character_id(
+        character_id, owner_id=current_user.id
+    )
+    char = repo.get_character(target_char_id, owner_id=current_user.id)
+
+    img_id = f"img_{uuid.uuid4().hex[:10]}"
+    filename = f"{img_id}.webp"
+    target_path = safe_resolve_media_path(target_char_id, "gallery", filename)
+
     await asyncio.to_thread(
         enforce_quota_and_write_webp,
         repo,
@@ -597,12 +656,12 @@ async def upload_character_gallery_image(
 
     item = GalleryImage(
         id=img_id,
-        url=f"/api/media/characters/{character_id}/gallery/{filename}",
+        url=f"/api/media/characters/{target_char_id}/gallery/{filename}",
         caption=caption.strip(),
         created_at=utc_now_iso(),
     )
     new_gallery = list(char.gallery) + [item]
-    return repo.update_character_gallery(character_id, new_gallery, owner_id=current_user.id)
+    return repo.update_character_gallery(target_char_id, new_gallery, owner_id=current_user.id)
 
 
 @router.delete("/api/characters/{character_id}/gallery/{image_id}", response_model=CharacterRecord)
@@ -611,7 +670,7 @@ def delete_character_gallery_image(
     image_id: str,
     current_user: UserProfile = Depends(get_current_user),
 ) -> CharacterRecord:
-    """Remove a photo from the character's photo album and delete the file on disk."""
+    """Remove a photo from the character's album (CoW-forking if campaigns exist; never unlinking public media)."""
     repo = get_repo()
     try:
         char = repo.get_character(character_id, owner_id=current_user.id)
@@ -622,13 +681,23 @@ def delete_character_gallery_image(
     if not matching_item:
         raise HTTPException(status_code=404, detail=f"Gallery image '{image_id}' not found.")
 
-    old_name = Path(matching_item.url).name
-    try:
-        old_path = safe_resolve_media_path(character_id, "gallery", old_name)
-        if old_path.is_file():
-            old_path.unlink(missing_ok=True)
-    except Exception:
-        pass
+    target_char_id = repo._ensure_writable_character_id(
+        character_id, owner_id=current_user.id
+    )
+    char = repo.get_character(target_char_id, owner_id=current_user.id)
+
+    if (
+        target_char_id == character_id
+        and not is_public_character_media_url(matching_item.url)
+        and f"/api/media/characters/{target_char_id}/" in matching_item.url
+    ):
+        old_name = Path(matching_item.url).name
+        try:
+            old_path = safe_resolve_media_path(target_char_id, "gallery", old_name)
+            if old_path.is_file():
+                old_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     new_gallery = [it for it in char.gallery if it.id != image_id]
-    return repo.update_character_gallery(character_id, new_gallery, owner_id=current_user.id)
+    return repo.update_character_gallery(target_char_id, new_gallery, owner_id=current_user.id)

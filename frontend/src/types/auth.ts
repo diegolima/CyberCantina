@@ -107,6 +107,14 @@ export interface AdminResetPasswordResponse {
   generated_password: string;
 }
 
+export interface RestoreDefaultsResponse {
+  restored_world: boolean;
+  restored_character: boolean;
+  skipped_world: boolean;
+  skipped_character: boolean;
+  message: string;
+}
+
 export interface UserModelSettingsPayload {
   actor_profile?: ModelProfile | null;
   clerk_profile?: ModelProfile | null;

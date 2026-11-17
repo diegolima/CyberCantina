@@ -58,6 +58,7 @@ export interface WorldMediaItem {
   mime_type: string;
   byte_size: number;
   sort_order: number;
+  is_public?: boolean;
   created_at: string;
 }
 

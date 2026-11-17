@@ -31,6 +31,7 @@ from app.security.media_path import (
     PathTraversalError,
     safe_resolve_character_media_dir,
     safe_resolve_media_file_path,
+    safe_resolve_public_character_media_file_path,
     safe_resolve_world_media_file_path,
 )
 
@@ -352,6 +353,26 @@ def safe_resolve_world_media_path(
     base_dir = media_dir if media_dir is not None else settings.media_dir
     try:
         return safe_resolve_world_media_file_path(base_dir, category, filename)
+    except PathTraversalError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def safe_resolve_public_character_media_path(
+    version_tag: str,
+    seed_slug: str,
+    category: str,
+    filename: str,
+    *,
+    media_dir: str | Path | None = None,
+) -> Path:
+    """Safely validate and resolve a shared public character media file path."""
+    base_dir = media_dir if media_dir is not None else settings.media_dir
+    try:
+        return safe_resolve_public_character_media_file_path(
+            base_dir, version_tag, seed_slug, category, filename
+        )
     except PathTraversalError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:

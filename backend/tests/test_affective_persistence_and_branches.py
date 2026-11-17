@@ -10,7 +10,7 @@ import pytest
 
 from app.config import settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_default_seed
+from app.db.seed import ensure_test_seed
 from app.engine.affective_engine import materialize_snapshot_with_care, seed_initial_care_state
 from app.routers.campaigns import campaign_turn_gate
 from app.schemas.affective import (
@@ -38,7 +38,7 @@ def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CantinaReposit
     monkeypatch.setattr(settings.embedding_profile, "mode", "local_hash")
     repo = CantinaRepository(db_file)
     repo.init_db()
-    ensure_default_seed(repo)
+    ensure_test_seed(repo)
     return repo
 
 

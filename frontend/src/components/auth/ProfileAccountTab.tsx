@@ -42,6 +42,7 @@ export interface ProfileAccountTabProps {
   onUserUpdated: (updated: UserProfile, singleUserMode?: boolean) => void;
   onAccountReset: () => Promise<void>;
   onAccountDeleted: () => Promise<void>;
+  onDefaultsRestored?: () => Promise<void>;
   onClose: () => void;
 }
 
@@ -55,6 +56,7 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
   onUserUpdated,
   onAccountReset,
   onAccountDeleted,
+  onDefaultsRestored,
   onClose,
 }) => {
   // Password change state
@@ -80,6 +82,12 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmPwd, setDeleteConfirmPwd] = useState("");
   const [deleteBusy, setDeleteBusy] = useState(false);
+
+  // Starter Assets: Restore Default World & Character
+  const [restoreDefaultsBusy, setRestoreDefaultsBusy] = useState(false);
+  const [restoreDefaultsInfo, setRestoreDefaultsInfo] = useState<string | null>(
+    null
+  );
 
   const handleChangePassword = async (
     e: React.FormEvent,
@@ -296,6 +304,27 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
       });
     } finally {
       setDeleteBusy(false);
+    }
+  };
+
+  const handleRestoreDefaults = async () => {
+    setErrorMsg(null);
+    setStatusMsg(null);
+    setRestoreDefaultsInfo(null);
+    setRestoreDefaultsBusy(true);
+    try {
+      const res = await api.restoreDefaults();
+      setRestoreDefaultsInfo(res.message);
+      setStatusMsg(res.message);
+      if ((res.restored_world || res.restored_character) && onDefaultsRestored) {
+        await onDefaultsRestored();
+      }
+    } catch (err: any) {
+      setErrorMsg(
+        err?.message || "Failed to restore default world and character."
+      );
+    } finally {
+      setRestoreDefaultsBusy(false);
     }
   };
 
@@ -846,6 +875,87 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
                   </div>
                 </form>
               </>
+            )}
+          </div>
+
+          {/* 3.5. Starter Assets: Restore Default Showcase World & Character */}
+          <div
+            style={{
+              background: "var(--bg-card)",
+              border: "1px solid var(--border-subtle)",
+              borderRadius: 8,
+              padding: 14,
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+              }}
+            >
+              <div>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    fontWeight: 600,
+                    fontSize: "0.86rem",
+                  }}
+                >
+                  <RefreshCw size={15} color="var(--accent-cyan)" />
+                  Starter Assets
+                </div>
+                <div
+                  style={{
+                    fontSize: "0.72rem",
+                    color: "var(--text-secondary)",
+                    marginTop: 3,
+                    lineHeight: 1.45,
+                  }}
+                >
+                  Restore deleted default showcase assets (&ldquo;The Green
+                  Lie&rdquo; world and &ldquo;Kira Vance&rdquo; character).
+                  Existing or edited copies will not be overwritten.
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-cyan"
+                style={{
+                  padding: "6px 12px",
+                  fontSize: "0.76rem",
+                  whiteSpace: "nowrap",
+                }}
+                onClick={handleRestoreDefaults}
+                disabled={restoreDefaultsBusy}
+              >
+                <RefreshCw size={13} />
+                <span>
+                  {restoreDefaultsBusy
+                    ? "Restoring..."
+                    : "Restore Default World & Character"}
+                </span>
+              </button>
+            </div>
+            {restoreDefaultsInfo && (
+              <div
+                style={{
+                  fontSize: "0.75rem",
+                  padding: "8px 10px",
+                  borderRadius: 6,
+                  background: "rgba(6, 182, 212, 0.08)",
+                  border: "1px solid rgba(6, 182, 212, 0.3)",
+                  color: "#a5f3fc",
+                }}
+              >
+                {restoreDefaultsInfo}
+              </div>
             )}
           </div>
 

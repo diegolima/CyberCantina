@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from app import main as main_module
 from app.config import settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_default_seed
+from app.db.seed import ensure_public_showcase_media
 from app.housekeeping import chloromancer_scheduler, run_admin_messages_purge
 
 
@@ -36,7 +36,7 @@ def msg_env(
 
     repo = CantinaRepository(db_file, media_dir=str(media_dir))
     repo.init_db()
-    ensure_default_seed(repo)
+    ensure_public_showcase_media(repo)
 
     admin_client = TestClient(main_module.app)
     setup_res = admin_client.post(
@@ -367,7 +367,7 @@ def test_single_user_mode_suppresses_messages_and_setup_gate(
 
     repo = CantinaRepository(db_file, media_dir=str(media_dir))
     repo.init_db()
-    ensure_default_seed(repo)
+    ensure_public_showcase_media(repo)
 
     # Seed a message row directly in DB to confirm single-user mode still hides it
     repo.create_admin_message(

@@ -14,22 +14,25 @@ from app import auth as auth_module
 from app import main as main_module
 from app.config import settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_default_seed
+from app.db.seed import ensure_public_showcase_media
 
 
 @pytest.fixture()
 def auth_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, CantinaRepository]:
     """Provide an isolated FastAPI TestClient and CantinaRepository with an empty users table."""
     db_file = str(tmp_path / "test_auth_cantina.db")
+    media_dir = tmp_path / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(settings, "db_path", db_file)
+    monkeypatch.setattr(settings, "media_dir", str(media_dir))
     monkeypatch.setattr(settings, "allow_offline_fallback", True)
     monkeypatch.setattr(settings.actor_profile, "base_url", "http://127.0.0.1:9/v1")
     monkeypatch.setattr(settings.clerk_profile, "base_url", "http://127.0.0.1:9/v1")
     monkeypatch.setattr(settings.embedding_profile, "mode", "local_hash")
 
-    repo = CantinaRepository(db_file)
+    repo = CantinaRepository(db_file, media_dir=str(media_dir))
     repo.init_db()
-    ensure_default_seed(repo)
+    ensure_public_showcase_media(repo)
 
     client = TestClient(main_module.app)
     return client, repo
@@ -430,22 +433,40 @@ def test_tenant_isolation_for_worlds_characters_and_campaigns(
     u2_headers = {"Authorization": f"Bearer {res_u2.json()['token']}"}
     client.cookies.clear()
 
-    # User 1 sees the seeded world, character, and campaign
+    # User 1 sees the seeded showcase world and character, with 0 default campaigns
     u1_worlds = client.get("/api/worlds", headers=u1_headers).json()
     u1_chars = client.get("/api/characters", headers=u1_headers).json()
     u1_camps = client.get("/api/campaigns", headers=u1_headers).json()
     assert len(u1_worlds) == 1
+    assert u1_worlds[0]["name"] == "The Green Lie"
     assert len(u1_chars) == 1
-    assert len(u1_camps) == 1
+    assert u1_chars[0]["name"] == "Kira Vance"
+    assert len(u1_camps) == 0
 
     u1_world_id = u1_worlds[0]["id"]
     u1_char_id = u1_chars[0]["id"]
-    u1_camp_id = u1_camps[0]["id"]
+    u1_camp_res = client.post(
+        "/api/campaigns",
+        headers=u1_headers,
+        json={
+            "name": "User One Private Campaign",
+            "world_id": u1_world_id,
+            "character_id": u1_char_id,
+        },
+    )
+    assert u1_camp_res.status_code == 200
+    u1_camp_id = u1_camp_res.json()["campaign"]["id"]
 
-    # User 2 sees 0 worlds, 0 characters, and 0 campaigns
-    assert client.get("/api/worlds", headers=u2_headers).json() == []
-    assert client.get("/api/characters", headers=u2_headers).json() == []
+    # User 2 also receives their own private clones of The Green Lie and Kira Vance (0 campaigns), with distinct IDs
+    u2_worlds = client.get("/api/worlds", headers=u2_headers).json()
+    u2_chars = client.get("/api/characters", headers=u2_headers).json()
+    assert len(u2_worlds) == 1
+    assert u2_worlds[0]["id"] != u1_world_id
+    assert len(u2_chars) == 1
+    assert u2_chars[0]["id"] != u1_char_id
     assert client.get("/api/campaigns", headers=u2_headers).json() == []
+    u2_seed_world_id = u2_worlds[0]["id"]
+    u2_seed_char_id = u2_chars[0]["id"]
 
     # User 2 cannot fetch, update, or delete User 1's private entities by ID (returns 404)
     assert client.get(f"/api/worlds/{u1_world_id}", headers=u2_headers).status_code == 404
@@ -534,9 +555,9 @@ def test_tenant_isolation_for_worlds_characters_and_campaigns(
     assert save_camp.status_code == 200
     u2_camp_id = save_camp.json()["campaign"]["id"]
 
-    # User 2 sees only their own entities
-    assert [w["id"] for w in client.get("/api/worlds", headers=u2_headers).json()] == [u2_world_id]
-    assert [c["id"] for c in client.get("/api/characters", headers=u2_headers).json()] == [u2_char_id]
+    # User 2 sees only their own entities (seeded + newly created; never User 1's)
+    assert {w["id"] for w in client.get("/api/worlds", headers=u2_headers).json()} == {u2_seed_world_id, u2_world_id}
+    assert {c["id"] for c in client.get("/api/characters", headers=u2_headers).json()} == {u2_seed_char_id, u2_char_id}
     assert [cp["id"] for cp in client.get("/api/campaigns", headers=u2_headers).json()] == [u2_camp_id]
 
     # User 1 cannot access User 2's world, character, or campaign
@@ -685,9 +706,9 @@ def test_user_reset_account_data(
     )
     assert camp_res.status_code == 200
 
-    # User 2 has entities
-    assert len(client.get("/api/worlds", headers=u2_headers).json()) == 1
-    assert len(client.get("/api/characters", headers=u2_headers).json()) == 1
+    # User 2 has entities (1 seeded + 1 custom world/char, 1 custom campaign)
+    assert len(client.get("/api/worlds", headers=u2_headers).json()) == 2
+    assert len(client.get("/api/characters", headers=u2_headers).json()) == 2
     assert len(client.get("/api/campaigns", headers=u2_headers).json()) == 1
 
     # Resetting without valid password fails
@@ -719,7 +740,7 @@ def test_user_reset_account_data(
     # Admin's seeded entities were untouched
     assert len(client.get("/api/worlds", headers=admin_headers).json()) == 1
     assert len(client.get("/api/characters", headers=admin_headers).json()) == 1
-    assert len(client.get("/api/campaigns", headers=admin_headers).json()) == 1
+    assert len(client.get("/api/campaigns", headers=admin_headers).json()) == 0
 
 
 def test_user_delete_account_and_admin_delete_rules(
@@ -762,7 +783,7 @@ def test_user_delete_account_and_admin_delete_rules(
         json={"name": "Charlie Haven", "genre_and_tone": "Post-Cyberpunk", "core_premise": "A calm alley cafe."},
     ).json()
     client.post("/api/wizards/world/commit", headers=user_headers, json=w_draft)
-    assert len(client.get("/api/worlds", headers=user_headers).json()) == 1
+    assert len(client.get("/api/worlds", headers=user_headers).json()) == 2
 
     # 4. Charlie deletes their own account
     # Wrong password fails

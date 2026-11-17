@@ -26,6 +26,7 @@ from app.dependencies import (
     remove_character_media_dir,
     render_webp_bytes,
     safe_resolve_media_path,
+    safe_resolve_public_character_media_path,
     safe_resolve_world_media_path,
 )
 from app.schemas.character import (
@@ -320,7 +321,25 @@ def _stage_character_media_for_export(
     category: str,
     media_entries: dict[str, bytes],
 ) -> str:
-    """Resolve a character media asset on disk, stage it into the ZIP bundle, and return its relative path."""
+    """Resolve a character media asset on disk (private or shared public), stage it into the ZIP, and return relative path."""
+    pub_m = re.search(
+        rf"/api/media/public/(v\d+)/characters/([^/]+)/{category}/([^/?#]+)",
+        url or "",
+    )
+    if pub_m:
+        ver_tag, seed_slug, filename = pub_m.group(1), pub_m.group(2), pub_m.group(3)
+        try:
+            fpath = safe_resolve_public_character_media_path(
+                ver_tag, seed_slug, category, filename, media_dir=repo.media_dir
+            )
+            if fpath.is_file():
+                rel_zip_path = f"media/characters/{char_id}/{category}/{filename}"
+                media_entries[rel_zip_path] = fpath.read_bytes()
+                return rel_zip_path
+        except Exception as exc:
+            logger.warning("Failed staging public %s asset for export: %s", category, exc)
+        return url
+
     m = re.search(rf"/api/media/characters/([^/]+)/{category}/([^/?#]+)", url or "")
     if not m:
         return url
@@ -1304,7 +1323,13 @@ async def commit_staged_import(
             id_remap[old_c_id] = new_c_id
             final_name = c_name
             if strategy == "copy":
-                existing = [ec for ec in repo.list_characters(include_pending_deletion=False) if ec.name.strip().lower() == c_name.lower()]
+                existing = [
+                    ec
+                    for ec in repo.list_characters(
+                        include_pending_deletion=False, owner_id=user_id
+                    )
+                    if ec.name.strip().lower() == c_name.lower()
+                ]
                 if existing:
                     final_name = f"{c_name} (Imported)"
 

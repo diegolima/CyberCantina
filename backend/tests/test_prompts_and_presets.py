@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from app import main as main_module
 from app.config import settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_default_seed
+from app.db.seed import ensure_test_seed
 from app.prompts import (
     FACTORY_DEFAULT_PROMPTS,
     PROMPT_KEY_ACTOR_ZONE1,
@@ -138,7 +138,7 @@ def test_custom_preset_crud_and_reset(test_repo: CantinaRepository) -> None:
 def test_resolve_effective_prompts_hierarchy(test_repo: CantinaRepository) -> None:
     """Test resolution hierarchy: Campaign preset > User active preset > Factory default."""
     test_user = test_repo.create_user(username="hieruser", user_id="user_abc")
-    ensure_default_seed(test_repo, owner_id=test_user.id)
+    ensure_test_seed(test_repo, owner_id=test_user.id)
     world = test_repo.list_worlds(owner_id=test_user.id)[0]
     char = test_repo.list_characters(owner_id=test_user.id)[0]
 

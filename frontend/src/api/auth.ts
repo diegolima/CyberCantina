@@ -5,6 +5,7 @@ import type {
   ChloromancerRunRecord,
   ChloromancerStatusResponse,
   PurgePreviewResponse,
+  RestoreDefaultsResponse,
   UserProfile,
   UserRole,
 } from "../types";
@@ -241,6 +242,11 @@ export const authApi = {
         body: JSON.stringify(payload ?? {}),
       }
     ),
+
+  restoreDefaults: () =>
+    fetchJson<RestoreDefaultsResponse>(`${API_BASE}/profile/restore-defaults`, {
+      method: "POST",
+    }),
 
   deleteProfileAccount: async (payload?: { current_password?: string }) => {
     try {

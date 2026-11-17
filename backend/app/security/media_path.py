@@ -8,6 +8,7 @@ from pathlib import Path
 
 _SAFE_ID_RE = re.compile(r"[a-zA-Z0-9_-]+")
 _SAFE_FILENAME_RE = re.compile(r"[a-zA-Z0-9_.-]+")
+_SAFE_PUBLIC_VERSION_RE = re.compile(r"v[0-9]+")
 _VALID_MEDIA_CATEGORIES = ("portraits", "gallery")
 _VALID_WORLD_MEDIA_CATEGORIES = ("images", "audio")
 
@@ -103,3 +104,29 @@ def safe_resolve_world_media_file_path(
         raise ValueError("Invalid filename.")
     cat_dir = safe_resolve_world_media_root(media_dir, category)
     return _resolve_within_base(cat_dir, filename)
+
+
+def safe_resolve_public_character_media_file_path(
+    media_dir: str | Path,
+    version_tag: str,
+    seed_slug: str,
+    category: str,
+    filename: str,
+) -> Path:
+    """Validate public character media segments and resolve safely within media_dir/public/{version_tag}/characters/{seed_slug}/{category}."""
+    if not isinstance(version_tag, str) or not _SAFE_PUBLIC_VERSION_RE.fullmatch(version_tag):
+        raise ValueError("Invalid public media version.")
+    clean_slug = validate_safe_character_id(seed_slug)
+    if category not in _VALID_MEDIA_CATEGORIES:
+        raise ValueError("Invalid media category.")
+    if (
+        not isinstance(filename, str)
+        or filename.startswith(".")
+        or not _SAFE_FILENAME_RE.fullmatch(filename)
+    ):
+        raise ValueError("Invalid filename.")
+    public_root = _resolve_within_base(media_dir, "public")
+    ver_dir = _resolve_within_base(public_root, version_tag)
+    chars_dir = _resolve_within_base(ver_dir, "characters")
+    slug_dir = _resolve_within_base(chars_dir, clean_slug)
+    return _resolve_within_base(slug_dir, os.path.join(category, filename))

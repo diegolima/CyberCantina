@@ -23,8 +23,13 @@ from app.auth import (
 )
 from app.config import settings
 from app.db.repos.base import utc_now_iso
-from app.db.seed import ensure_default_seed
-from app.dependencies import attach_user_media_stats, get_repo, issue_session_response
+from app.db.seed import seed_showcase_for_user
+from app.dependencies import (
+    attach_user_media_stats,
+    get_repo,
+    get_user_media_lock,
+    issue_session_response,
+)
 from app.providers.seeder import auto_provision_webgpu_for_user
 from app.schemas.admin_messages import PublicAdminMessage
 from app.schemas.auth import (
@@ -47,6 +52,7 @@ from app.schemas.auth import (
     ProfileResetDataRequest,
     ProfileUpdateRequest,
     RegisterRequest,
+    RestoreDefaultsResponse,
     UserProfile,
 )
 from app.security.log_sanitize import sanitize_log_value
@@ -117,8 +123,8 @@ def initial_setup(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    ensure_default_seed(repo, owner_id=admin_user.id)
     repo.claim_unowned_entities(admin_user.id)
+    seed_showcase_for_user(repo, admin_user.id, restore_missing_only=True)
     logger.info("Initial setup completed for admin user '%s'", admin_user.username)
     return issue_session_response(repo, admin_user, request, response)
 
@@ -192,6 +198,7 @@ def register_user(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     auto_provision_webgpu_for_user(repo, user.id, settings)
+    seed_showcase_for_user(repo, user.id)
     logger.info("Registered new user '%s'", user.username)
     return issue_session_response(repo, user, request, response)
 
@@ -470,6 +477,44 @@ def reset_my_data(
     }
 
 
+@router.post("/api/profile/restore-defaults", response_model=RestoreDefaultsResponse)
+def restore_default_assets(
+    current_user: UserProfile = Depends(get_current_user),
+) -> RestoreDefaultsResponse:
+    """Restore deleted default showcase assets ('The Green Lie' / 'Kira Vance') without overwriting existing copies."""
+    repo = get_repo()
+    with get_user_media_lock(current_user.id):
+        res = seed_showcase_for_user(
+            repo, current_user.id, restore_missing_only=True
+        )
+    rw = res["restored_world"]
+    rc = res["restored_character"]
+    if rw and rc:
+        msg = "Restored default world 'The Green Lie' and character 'Kira Vance'."
+    elif rw:
+        msg = (
+            "Restored default world 'The Green Lie'. "
+            "Skipped 'Kira Vance' because an active copy (or edited version) already exists."
+        )
+    elif rc:
+        msg = (
+            "Restored default character 'Kira Vance'. "
+            "Skipped 'The Green Lie' because an active copy (or edited version) already exists."
+        )
+    else:
+        msg = (
+            "Nothing restored — 'The Green Lie' and 'Kira Vance' "
+            "(or edited versions) already exist in your library."
+        )
+    return RestoreDefaultsResponse(
+        restored_world=rw,
+        restored_character=rc,
+        skipped_world=res["skipped_world"],
+        skipped_character=res["skipped_character"],
+        message=msg,
+    )
+
+
 @router.delete("/api/profile")
 @router.post("/api/profile/delete")
 def delete_my_account(
@@ -538,6 +583,7 @@ def admin_create_user(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if created.role == "user":
         auto_provision_webgpu_for_user(repo, created.id, settings)
+    seed_showcase_for_user(repo, created.id)
     return created
 
 

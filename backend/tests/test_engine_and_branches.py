@@ -9,7 +9,7 @@ import pytest
 from app.config import settings
 from app.db import vector_store as vs_module
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_default_seed
+from app.db.seed import ensure_test_seed
 from app.engine import phase4_clerk as p4_module
 from app.engine.phase1_pre import run_phase1_pre_analysis
 from app.engine.phase2_context import assemble_four_zone_messages
@@ -42,7 +42,7 @@ def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CantinaReposit
     monkeypatch.setattr(settings.embedding_profile, "mode", "local_hash")
     repo = CantinaRepository(db_file)
     repo.init_db()
-    ensure_default_seed(repo)
+    ensure_test_seed(repo)
     return repo
 
 

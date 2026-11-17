@@ -24,6 +24,7 @@ export interface ProfileModalProps {
   onUserUpdated: (updated: UserProfile, singleUserMode?: boolean) => void;
   onAccountReset: () => Promise<void>;
   onAccountDeleted: () => Promise<void>;
+  onDefaultsRestored?: () => Promise<void>;
 }
 
 const ProfileModalInner: React.FC<ProfileModalProps> = ({
@@ -36,6 +37,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
   onUserUpdated,
   onAccountReset,
   onAccountDeleted,
+  onDefaultsRestored,
 }) => {
   const getInitialTab = (): "identity" | "account" | "preferences" => {
     if (initialTab === "account") return "account";
@@ -272,6 +274,7 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
               onUserUpdated={onUserUpdated}
               onAccountReset={onAccountReset}
               onAccountDeleted={onAccountDeleted}
+              onDefaultsRestored={onDefaultsRestored}
               onClose={onClose}
             />
           )}

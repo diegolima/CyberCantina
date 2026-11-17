@@ -443,15 +443,81 @@ class CharactersMixin(CharacterVersionsMixin):
             created_at=row["created_at"],
         )
 
+    def _ensure_writable_character_id(
+        self, character_id: str, owner_id: str | None = None
+    ) -> str:
+        """Return character_id if unused by campaigns, or CoW-fork first so running campaigns stay isolated."""
+        orig = self.get_character(character_id, owner_id=owner_id)
+        conn = self._connect()
+        try:
+            usage_row = conn.execute(
+                """
+                SELECT COUNT(DISTINCT campaign_id) AS cnt
+                FROM (
+                    SELECT campaign_id FROM campaign_characters WHERE character_id = ?
+                    UNION
+                    SELECT id AS campaign_id FROM campaigns WHERE character_id = ?
+                )
+                """,
+                (character_id, character_id),
+            ).fetchone()
+            campaigns_using = int(usage_row["cnt"]) if usage_row else 0
+        finally:
+            conn.close()
+        if campaigns_using == 0:
+            return character_id
+
+        from app.schemas.character import CharacterUpdatePayload
+
+        forked = self.update_character(
+            character_id,
+            CharacterUpdatePayload(
+                world_id=orig.world_id,
+                name=orig.name,
+                tagline=orig.tagline,
+                species=orig.species,
+                sex=orig.sex,
+                pronouns=orig.pronouns,
+                age=orig.age,
+                character_bio=orig.character_bio,
+                physical_appearance=orig.physical_appearance,
+                build_and_height=orig.build_and_height,
+                distinctive_features=orig.distinctive_features,
+                posture=orig.posture,
+                mannerisms=orig.mannerisms,
+                modifications=orig.modifications,
+                visual_aesthetic=orig.visual_aesthetic,
+                personality_traits=orig.personality_traits,
+                core_persona=orig.core_persona,
+                moral_code=orig.moral_code,
+                quirks_flaws=orig.quirks_flaws,
+                communication_style=orig.communication_style,
+                initial_message=orig.initial_message,
+                equipped=orig.equipped,
+                inventory=orig.inventory,
+                voice_anchors=orig.voice_anchors,
+                baseline_psyche=orig.baseline_psyche,
+                memory_shards=orig.memory_shards,
+                tags=orig.tags,
+                creator=orig.creator,
+                creator_notes=orig.creator_notes,
+                portraits=orig.portraits,
+                gallery=orig.gallery,
+                unsupported_fields=orig.unsupported_fields,
+            ),
+            owner_id=owner_id,
+        )
+        return forked.id
+
     def update_character_portraits(
         self, character_id: str, portraits: dict[str, str], owner_id: str | None = None
     ) -> CharacterRecord:
-        """Update character portraits without bumping version."""
+        """Update character portraits without bumping version (marking seeded characters modified)."""
         self.get_character(character_id, owner_id=owner_id)
         conn = self._connect()
         try:
             conn.execute(
-                "UPDATE characters SET portraits_json = ? WHERE id = ?",
+                "UPDATE characters SET portraits_json = ?, seed_modified = CASE WHEN seed_key IS NOT NULL THEN 1 ELSE seed_modified END WHERE id = ?",
                 (json.dumps(portraits), character_id),
             )
             conn.commit()
@@ -462,12 +528,12 @@ class CharactersMixin(CharacterVersionsMixin):
     def update_character_gallery(
         self, character_id: str, gallery: list[GalleryImage], owner_id: str | None = None
     ) -> CharacterRecord:
-        """Update character gallery list without bumping version."""
+        """Update character gallery list without bumping version (marking seeded characters modified)."""
         self.get_character(character_id, owner_id=owner_id)
         conn = self._connect()
         try:
             conn.execute(
-                "UPDATE characters SET gallery_json = ? WHERE id = ?",
+                "UPDATE characters SET gallery_json = ?, seed_modified = CASE WHEN seed_key IS NOT NULL THEN 1 ELSE seed_modified END WHERE id = ?",
                 (json.dumps([img.model_dump() for img in gallery]), character_id),
             )
             conn.commit()

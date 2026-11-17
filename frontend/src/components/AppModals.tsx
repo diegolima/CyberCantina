@@ -338,6 +338,9 @@ export const AppModals: React.FC<AppModalsProps> = ({
           onAccountReset={async () => {
             await loadWorkspaceData();
           }}
+          onDefaultsRestored={async () => {
+            await loadWorkspaceData();
+          }}
           onAccountDeleted={handleAccountDeleted}
         />
       )}

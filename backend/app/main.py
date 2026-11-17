@@ -21,7 +21,7 @@ from app.providers.seeder import (
     reconcile_settings_references,
     seed_providers,
 )
-from app.db.seed import ensure_default_seed
+from app.db.seed import ensure_public_showcase_media
 from app.dependencies import (
     get_effective_user_model_settings,
     get_repo,
@@ -110,7 +110,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     repo = get_repo()
     repo.init_db()
     run_entity_pruner()
-    ensure_default_seed(repo)
+    ensure_public_showcase_media(repo)
     users = repo.list_users()
     if users:
         admin = next((u for u in users if u.role == "admin"), users[0])

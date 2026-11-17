@@ -330,7 +330,7 @@ def get_world_media_delete_impact(
     world_id: str,
     media_id: str,
     current_user: UserProfile = Depends(get_current_user),
-) -> dict[str, str | int]:
+) -> dict[str, str | int | bool]:
     """Return active campaign count (including sibling CoW forks) referencing media_id."""
     try:
         return get_repo().get_world_media_usage_summary(

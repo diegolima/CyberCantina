@@ -224,6 +224,9 @@ describe("Server Configuration, Self-Registration Toggle, Quotas & Activity UI",
     expect(playerHtml).toContain("inactive for 14 days");
     expect(playerHtml).toContain(".zcc");
     expect(playerHtml).toContain("1.50 MB / 5.00 MB");
+    expect(playerHtml).toContain("Starter Assets");
+    expect(playerHtml).toContain("Restore Default World &amp; Character");
+    expect(playerHtml).toContain("Existing or edited copies will not be overwritten.");
 
     const adminHtml = renderToStaticMarkup(
       React.createElement(ProfileAccountTab, {

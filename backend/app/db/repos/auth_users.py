@@ -356,10 +356,10 @@ class AuthUsersMixin:
                 conn.execute("DELETE FROM worlds WHERE id = ?", (w_id,))
 
             world_media_rows = conn.execute(
-                "SELECT id, media_type, filename FROM world_media WHERE owner_id = ?",
+                "SELECT id, media_type, filename FROM world_media WHERE owner_id = ? AND is_public = 0",
                 (user_id,),
             ).fetchall()
-            conn.execute("DELETE FROM world_media WHERE owner_id = ?", (user_id,))
+            conn.execute("DELETE FROM world_media WHERE owner_id = ? AND is_public = 0", (user_id,))
 
             # 4. Delete user private notes and personas
             conn.execute("DELETE FROM user_notes WHERE owner_id = ?", (user_id,))

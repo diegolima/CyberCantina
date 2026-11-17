@@ -12,7 +12,7 @@ from app import main as main_module
 from app.auth import generate_session_token
 from app.config import ModelProfile, settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_default_seed
+from app.db.seed import ensure_test_seed
 from app.engine.llm_client import llm_client
 from app.routers.enrich import LocationTagsEnrichOutput
 from app.schemas.character import CognitionBlock
@@ -48,7 +48,7 @@ def authed_client(
 
     repo = CantinaRepository(db_file)
     repo.init_db()
-    ensure_default_seed(repo)
+    ensure_test_seed(repo)
 
     user = repo.create_user(
         username="map_admin", display_name="Map Admin", role="admin"

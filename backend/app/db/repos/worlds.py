@@ -684,13 +684,17 @@ class WorldsMixin:
         conn = self._connect()
         try:
             w_owner_row = conn.execute(
-                "SELECT owner_id FROM worlds WHERE id = ?", (world_id,)
+                "SELECT owner_id, seed_key, seed_version, seed_modified FROM worlds WHERE id = ?",
+                (world_id,),
             ).fetchone()
             effective_owner_id = (
                 w_owner_row["owner_id"]
                 if w_owner_row and "owner_id" in w_owner_row.keys()
                 else owner_id
             )
+            seed_key = w_owner_row["seed_key"] if w_owner_row else None
+            seed_version = w_owner_row["seed_version"] if w_owner_row else None
+            next_seed_modified = 1 if seed_key else (int(w_owner_row["seed_modified"] or 0) if w_owner_row else 0)
 
             usage_row = conn.execute(
                 "SELECT COUNT(*) AS cnt FROM campaigns WHERE world_id = ?",
@@ -736,8 +740,8 @@ class WorldsMixin:
                 # In-place update (zero active campaigns reference this world)
                 target_world_id = world_id
                 conn.execute(
-                    "UPDATE worlds SET name = ?, global_rules_json = ?, unsupported_fields_json = ? WHERE id = ?",
-                    (payload.name, payload.global_rules.model_dump_json(), unsupported_json, target_world_id),
+                    "UPDATE worlds SET name = ?, global_rules_json = ?, unsupported_fields_json = ?, seed_modified = ? WHERE id = ?",
+                    (payload.name, payload.global_rules.model_dump_json(), unsupported_json, next_seed_modified, target_world_id),
                 )
                 conn.execute(
                     "DELETE FROM location_edges WHERE world_id = ? AND created_at_turn_id IS NULL",
@@ -773,8 +777,11 @@ class WorldsMixin:
                 target_world_id = f"world_{uuid.uuid4().hex[:10]}"
                 conn.execute(
                     """
-                    INSERT INTO worlds (id, owner_id, name, global_rules_json, unsupported_fields_json, pending_deletion, created_at)
-                    VALUES (?, ?, ?, ?, ?, 0, ?)
+                    INSERT INTO worlds (
+                        id, owner_id, name, global_rules_json, unsupported_fields_json,
+                        seed_key, seed_version, seed_modified, pending_deletion, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
                     """,
                     (
                         target_world_id,
@@ -782,6 +789,9 @@ class WorldsMixin:
                         payload.name,
                         payload.global_rules.model_dump_json(),
                         unsupported_json,
+                        seed_key,
+                        seed_version,
+                        next_seed_modified,
                         now,
                     ),
                 )
@@ -804,8 +814,8 @@ class WorldsMixin:
             if not reuse_ids:
                 conn.execute(
                     """
-                    INSERT OR IGNORE INTO world_media_links (world_id, media_id, sort_order, created_at)
-                    SELECT ?, media_id, sort_order, created_at
+                    INSERT OR IGNORE INTO world_media_links (world_id, media_id, sort_order, label_override, created_at)
+                    SELECT ?, media_id, sort_order, label_override, created_at
                     FROM world_media_links
                     WHERE world_id = ?
                     """,
@@ -1378,9 +1388,10 @@ class WorldsMixin:
                     """
                     SELECT wm.id, wm.media_type, wm.filename
                     FROM world_media wm
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM world_media_links wml WHERE wml.media_id = wm.id
-                    )
+                    WHERE wm.is_public = 0
+                      AND NOT EXISTS (
+                          SELECT 1 FROM world_media_links wml WHERE wml.media_id = wm.id
+                      )
                     """
                 ).fetchall()
                 for mr in orphan_media_rows:
@@ -1400,8 +1411,9 @@ class WorldsMixin:
         """Return ordered WorldMediaItems linked to world_id whose files exist on disk."""
         rows = conn.execute(
             """
-            SELECT wm.id, wm.media_type, wm.filename, wm.label, wm.mime_type,
-                   wm.byte_size, wm.created_at, wml.sort_order
+            SELECT wm.id, wm.media_type, wm.filename,
+                   COALESCE(NULLIF(wml.label_override, ''), wm.label) AS effective_label,
+                   wm.mime_type, wm.byte_size, wm.is_public, wm.created_at, wml.sort_order
             FROM world_media_links wml
             JOIN world_media wm ON wm.id = wml.media_id
             WHERE wml.world_id = ?
@@ -1420,10 +1432,11 @@ class WorldsMixin:
                     id=r["id"],
                     media_type=m_type,
                     url=build_world_media_url(m_type, fname),
-                    label=r["label"] or "",
+                    label=r["effective_label"] or "",
                     mime_type=r["mime_type"] or "image/webp",
                     byte_size=int(r["byte_size"] or 0),
                     sort_order=int(r["sort_order"] or 0),
+                    is_public=bool(r["is_public"]) if "is_public" in r.keys() else False,
                     created_at=r["created_at"] or "",
                 )
             )
@@ -1482,11 +1495,11 @@ class WorldsMixin:
         return forked.id
 
     def list_user_world_media_files(self, user_id: str) -> list[tuple[str, str]]:
-        """Return deduplicated (category_dir, filename) pairs for world media owned by user_id."""
+        """Return deduplicated (category_dir, filename) pairs for private world media owned by user_id."""
         conn = self._connect()
         try:
             rows = conn.execute(
-                "SELECT media_type, filename FROM world_media WHERE owner_id = ?",
+                "SELECT media_type, filename FROM world_media WHERE owner_id = ? AND is_public = 0",
                 (user_id,),
             ).fetchall()
             return [
@@ -1512,12 +1525,16 @@ class WorldsMixin:
     def user_can_access_world_media(
         self, user_id: str, category: str, filename: str
     ) -> bool:
-        """Return True if user_id owns the world media asset or has a world/campaign referencing it."""
+        """Return True if the world media asset is public, owned by user_id, or linked to user_id's world/campaign."""
         m_type = "audio" if category == "audio" else "image"
         conn = self._connect()
         try:
             row = conn.execute(
                 """
+                SELECT 1
+                FROM world_media wm
+                WHERE wm.media_type = ? AND wm.filename = ? AND wm.is_public = 1
+                UNION
                 SELECT 1
                 FROM world_media wm
                 WHERE wm.media_type = ? AND wm.filename = ? AND wm.owner_id = ?
@@ -1536,6 +1553,7 @@ class WorldsMixin:
                 LIMIT 1
                 """,
                 (
+                    m_type, filename,
                     m_type, filename, user_id,
                     m_type, filename, user_id,
                     m_type, filename, user_id,
@@ -1596,6 +1614,10 @@ class WorldsMixin:
                 """,
                 (target_world_id, media_id, next_sort, now),
             )
+            conn.execute(
+                "UPDATE worlds SET seed_modified = 1 WHERE id = ? AND seed_key IS NOT NULL",
+                (target_world_id,),
+            )
             conn.commit()
         finally:
             conn.close()
@@ -1613,14 +1635,30 @@ class WorldsMixin:
         conn = self._connect()
         try:
             link = conn.execute(
-                "SELECT 1 FROM world_media_links WHERE world_id = ? AND media_id = ?",
+                """
+                SELECT wm.is_public
+                FROM world_media_links wml
+                JOIN world_media wm ON wm.id = wml.media_id
+                WHERE wml.world_id = ? AND wml.media_id = ?
+                """,
                 (target_world_id, media_id),
             ).fetchone()
             if not link:
                 raise KeyError(f"Media '{media_id}' not found on world '{target_world_id}'")
+            clean_label = label.strip()
+            if link["is_public"]:
+                conn.execute(
+                    "UPDATE world_media_links SET label_override = ? WHERE world_id = ? AND media_id = ?",
+                    (clean_label, target_world_id, media_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE world_media SET label = ? WHERE id = ?",
+                    (clean_label, media_id),
+                )
             conn.execute(
-                "UPDATE world_media SET label = ? WHERE id = ?",
-                (label.strip(), media_id),
+                "UPDATE worlds SET seed_modified = 1 WHERE id = ? AND seed_key IS NOT NULL",
+                (target_world_id,),
             )
             conn.commit()
         finally:
@@ -1663,6 +1701,10 @@ class WorldsMixin:
                     "UPDATE world_media_links SET sort_order = ? WHERE world_id = ? AND media_id = ?",
                     (idx, target_world_id, mid),
                 )
+            conn.execute(
+                "UPDATE worlds SET seed_modified = 1 WHERE id = ? AND seed_key IS NOT NULL",
+                (target_world_id,),
+            )
             conn.commit()
         finally:
             conn.close()
@@ -1674,30 +1716,64 @@ class WorldsMixin:
         media_id: str,
         owner_id: str | None = None,
     ) -> dict[str, Any]:
-        """Count all active campaigns (including sibling CoW forks) referencing media_id."""
+        """Count owner-scoped active campaigns referencing media_id (plus public-asset status)."""
         self.get_world(world_id, base_only=True, owner_id=owner_id)
         conn = self._connect()
         try:
+            w_row = conn.execute(
+                "SELECT owner_id FROM worlds WHERE id = ?",
+                (world_id,),
+            ).fetchone()
+            effective_owner = w_row["owner_id"] if w_row else owner_id
             link = conn.execute(
-                "SELECT 1 FROM world_media_links WHERE world_id = ? AND media_id = ?",
+                """
+                SELECT wm.is_public
+                FROM world_media_links wml
+                JOIN world_media wm ON wm.id = wml.media_id
+                WHERE wml.world_id = ? AND wml.media_id = ?
+                """,
                 (world_id, media_id),
             ).fetchone()
             if not link:
                 raise KeyError(f"Media '{media_id}' not found on world '{world_id}'")
-            row = conn.execute(
-                """
-                SELECT COUNT(DISTINCT camp.id) AS cnt
-                FROM campaigns camp
-                JOIN world_media_links wml ON wml.world_id = camp.world_id
-                WHERE wml.media_id = ?
-                """,
-                (media_id,),
-            ).fetchone()
+            is_public = bool(link["is_public"])
+            if is_public:
+                if effective_owner is not None:
+                    row = conn.execute(
+                        "SELECT COUNT(*) AS cnt FROM campaigns WHERE world_id = ? AND owner_id = ?",
+                        (world_id, effective_owner),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        "SELECT COUNT(*) AS cnt FROM campaigns WHERE world_id = ?",
+                        (world_id,),
+                    ).fetchone()
+            elif effective_owner is not None:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(DISTINCT camp.id) AS cnt
+                    FROM campaigns camp
+                    JOIN world_media_links wml ON wml.world_id = camp.world_id
+                    WHERE wml.media_id = ? AND camp.owner_id = ?
+                    """,
+                    (media_id, effective_owner),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(DISTINCT camp.id) AS cnt
+                    FROM campaigns camp
+                    JOIN world_media_links wml ON wml.world_id = camp.world_id
+                    WHERE wml.media_id = ?
+                    """,
+                    (media_id,),
+                ).fetchone()
             campaigns_using = int(row["cnt"]) if row else 0
             return {
                 "world_id": world_id,
                 "media_id": media_id,
                 "campaigns_using": campaigns_using,
+                "is_public": is_public,
             }
         finally:
             conn.close()
@@ -1705,26 +1781,55 @@ class WorldsMixin:
     def get_world_delete_impact(
         self, world_id: str, owner_id: str | None = None
     ) -> dict[str, Any]:
-        """Return direct campaign count and sibling CoW-fork campaigns sharing this world's media."""
+        """Return direct campaign count and owner-scoped sibling CoW-fork campaigns sharing private media."""
         self.get_world(world_id, base_only=True, owner_id=owner_id)
         conn = self._connect()
         try:
+            w_row = conn.execute(
+                "SELECT owner_id FROM worlds WHERE id = ?",
+                (world_id,),
+            ).fetchone()
+            effective_owner = w_row["owner_id"] if w_row else owner_id
             direct_row = conn.execute(
                 "SELECT COUNT(*) AS cnt FROM campaigns WHERE world_id = ?",
                 (world_id,),
             ).fetchone()
-            sibling_row = conn.execute(
-                """
-                SELECT COUNT(DISTINCT camp.id) AS cnt
-                FROM campaigns camp
-                JOIN world_media_links wml_other ON wml_other.world_id = camp.world_id
-                JOIN world_media_links wml_self ON wml_self.media_id = wml_other.media_id
-                WHERE wml_self.world_id = ? AND camp.world_id != ?
-                """,
-                (world_id, world_id),
-            ).fetchone()
+            if effective_owner is not None:
+                sibling_row = conn.execute(
+                    """
+                    SELECT COUNT(DISTINCT camp.id) AS cnt
+                    FROM campaigns camp
+                    JOIN world_media_links wml_other ON wml_other.world_id = camp.world_id
+                    JOIN world_media_links wml_self ON wml_self.media_id = wml_other.media_id
+                    JOIN world_media wm ON wm.id = wml_self.media_id
+                    WHERE wml_self.world_id = ?
+                      AND camp.world_id != ?
+                      AND camp.owner_id = ?
+                      AND wm.is_public = 0
+                    """,
+                    (world_id, world_id, effective_owner),
+                ).fetchone()
+            else:
+                sibling_row = conn.execute(
+                    """
+                    SELECT COUNT(DISTINCT camp.id) AS cnt
+                    FROM campaigns camp
+                    JOIN world_media_links wml_other ON wml_other.world_id = camp.world_id
+                    JOIN world_media_links wml_self ON wml_self.media_id = wml_other.media_id
+                    JOIN world_media wm ON wm.id = wml_self.media_id
+                    WHERE wml_self.world_id = ?
+                      AND camp.world_id != ?
+                      AND wm.is_public = 0
+                    """,
+                    (world_id, world_id),
+                ).fetchone()
             media_row = conn.execute(
-                "SELECT COUNT(*) AS cnt FROM world_media_links WHERE world_id = ?",
+                """
+                SELECT COUNT(*) AS cnt
+                FROM world_media_links wml
+                JOIN world_media wm ON wm.id = wml.media_id
+                WHERE wml.world_id = ? AND wm.is_public = 0
+                """,
                 (world_id,),
             ).fetchone()
             return {
@@ -1742,15 +1847,13 @@ class WorldsMixin:
         media_id: str,
         owner_id: str | None = None,
     ) -> WorldRecord:
-        """Hard-delete a world media asset (DB row + disk file) to reclaim quota immediately."""
+        """Detach public media (CoW-forking if campaigns exist) or hard-delete private world media to reclaim quota."""
         self.get_world(world_id, base_only=True, owner_id=owner_id)
         conn = self._connect()
-        media_type = "image"
-        filename = ""
         try:
             row = conn.execute(
                 """
-                SELECT wm.media_type, wm.filename
+                SELECT wm.media_type, wm.filename, wm.is_public
                 FROM world_media wm
                 JOIN world_media_links wml ON wml.media_id = wm.id
                 WHERE wml.world_id = ? AND wm.id = ?
@@ -1761,7 +1864,38 @@ class WorldsMixin:
                 raise KeyError(f"Media '{media_id}' not found on world '{world_id}'")
             media_type = row["media_type"]
             filename = row["filename"]
-            # Clear explicit references on location_nodes / location_containers, then remove world_media row
+            is_public = bool(row["is_public"])
+        finally:
+            conn.close()
+
+        if is_public:
+            target_world_id = self._ensure_writable_world_id(world_id, owner_id=owner_id)
+            conn = self._connect()
+            try:
+                conn.execute(
+                    "UPDATE location_nodes SET image_media_id = NULL WHERE world_id = ? AND image_media_id = ?",
+                    (target_world_id, media_id),
+                )
+                conn.execute(
+                    "UPDATE location_containers SET image_media_id = NULL WHERE world_id = ? AND image_media_id = ?",
+                    (target_world_id, media_id),
+                )
+                conn.execute(
+                    "DELETE FROM world_media_links WHERE world_id = ? AND media_id = ?",
+                    (target_world_id, media_id),
+                )
+                conn.execute(
+                    "UPDATE worlds SET seed_modified = 1 WHERE id = ? AND seed_key IS NOT NULL",
+                    (target_world_id,),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            return self.get_world(target_world_id, base_only=True, owner_id=owner_id)
+
+        conn = self._connect()
+        try:
+            # Clear explicit references on location_nodes / location_containers, then remove private world_media row
             conn.execute(
                 "UPDATE location_nodes SET image_media_id = NULL WHERE image_media_id = ?",
                 (media_id,),
@@ -1770,7 +1904,11 @@ class WorldsMixin:
                 "UPDATE location_containers SET image_media_id = NULL WHERE image_media_id = ?",
                 (media_id,),
             )
-            conn.execute("DELETE FROM world_media WHERE id = ?", (media_id,))
+            conn.execute("DELETE FROM world_media WHERE id = ? AND is_public = 0", (media_id,))
+            conn.execute(
+                "UPDATE worlds SET seed_modified = 1 WHERE id = ? AND seed_key IS NOT NULL",
+                (world_id,),
+            )
             conn.commit()
         finally:
             conn.close()

@@ -15,7 +15,7 @@ import pytest
 
 from app.config import settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_default_seed
+from app.db.seed import ensure_test_seed
 from app.db.vector_store import (
     build_short_memory_content,
     compute_corpus_idf,
@@ -60,7 +60,7 @@ def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CantinaReposit
     monkeypatch.setattr(settings.embedding_profile, "mode", "local_hash")
     repo = CantinaRepository(db_file)
     repo.init_db()
-    ensure_default_seed(repo)
+    ensure_test_seed(repo)
     return repo
 
 

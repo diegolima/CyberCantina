@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from app.auth import get_current_user
 from app.config import settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_default_seed
+from app.db.seed import ensure_test_seed
 from app.engine.phase1_pre import (
     detect_persona_disclosures,
     detect_persona_disclosures_token_matching,
@@ -72,7 +72,7 @@ def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CantinaReposit
     monkeypatch.setattr(settings.embedding_profile, "mode", "local_hash")
     repo = CantinaRepository(db_file)
     repo.init_db()
-    ensure_default_seed(repo)
+    ensure_test_seed(repo)
     return repo
 
 

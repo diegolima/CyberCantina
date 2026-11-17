@@ -71,6 +71,7 @@
 | `WS` | `/api/local-relay/ws` | `app.routers.local_relay.local_relay_ws` | — | *(backend-only / test / SSE)* |
 | `POST` | `/api/mechanics/choice-preview` | `app.routers.mechanics.preview_choices` | `ChoicePreviewResponse` | `frontend/src/api/campaigns.ts` |
 | `GET` | `/api/media/characters/{character_id}/{category}/{filename}` | `app.routers.characters.get_character_media` | — | *(backend-only / test / SSE)* |
+| `GET` | `/api/media/public/{version_tag}/characters/{seed_slug}/{category}/{filename}` | `app.routers.characters.get_public_character_media` | — | *(backend-only / test / SSE)* |
 | `GET` | `/api/media/worlds/{category}/{filename}` | `app.routers.worlds.get_world_media` | — | *(backend-only / test / SSE)* |
 | `GET` | `/api/messages/home` | `app.routers.admin_messages.list_home_messages` | `list` | `frontend/src/api/adminMessages.ts` |
 | `GET` | `/api/notes` | `app.routers.notes.list_my_notes` | `list` | `frontend/src/api/notes.ts` |
@@ -96,6 +97,7 @@
 | `POST` | `/api/profile/passkeys/{credential_id}/delete` | `app.routers.auth.delete_my_passkey` | `UserProfile` | `frontend/src/api/auth.ts` |
 | `POST` | `/api/profile/password` | `app.routers.auth.change_my_password` | `AuthStatusResponse` | `frontend/src/api/auth.ts` |
 | `POST` | `/api/profile/reset-data` | `app.routers.auth.reset_my_data` | `dict` | `frontend/src/api/auth.ts` |
+| `POST` | `/api/profile/restore-defaults` | `app.routers.auth.restore_default_assets` | `RestoreDefaultsResponse` | `frontend/src/api/auth.ts` |
 | `GET` | `/api/prompts/active` | `app.routers.prompts.get_active_prompt_preset` | `dict` | `frontend/src/api/prompts.ts` |
 | `PUT` | `/api/prompts/active` | `app.routers.prompts.set_active_prompt_preset` | `dict` | `frontend/src/api/prompts.ts` |
 | `GET` | `/api/prompts/defaults` | `app.routers.prompts.get_prompt_defaults` | `PromptDefaultsResponse` | `frontend/src/api/prompts.ts` |
@@ -262,7 +264,7 @@ erDiagram
 | `backend/app/db/__init__.py` | Database, graph repository, and vector store layer. |
 | `backend/app/db/provider_store.py` | SQLite persistence for LLM providers (tenant-scoped, optimistic concurrency, sealed secrets). |
 | `backend/app/db/repository.py` | Branch-aware SQLite repository for Worlds, Characters, Spatial Graph, and Turn Trees. |
-| `backend/app/db/seed.py` | Default showcase scenario seeder ('Midnight at the Neon Rust'). |
+| `backend/app/db/seed.py` | Default showcase scenario seeder ('The Green Lie' & 'Kira Vance') and legacy test-only seed. |
 | `backend/app/db/vector_math.py` | Embedding helpers, lexical TF-IDF activations, MMR, and RRF math. |
 | `backend/app/db/vector_store.py` | Hybrid semantic vector store and branch-aware memory retrieval. |
 

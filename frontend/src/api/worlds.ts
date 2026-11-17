@@ -157,6 +157,7 @@ export const worldsApi = {
       world_id: string;
       media_id: string;
       campaigns_using: number;
+      is_public?: boolean;
     }>(
       `${API_BASE}/worlds/${worldId}/media/${encodeURIComponent(mediaId)}/impact`
     ),

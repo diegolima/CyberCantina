@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from app import main as main_module
 from app.config import settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_default_seed
+from app.db.seed import ensure_test_seed
 from app.engine.llm_client import llm_client
 
 
@@ -23,7 +23,7 @@ def enrich_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Test
 
     repo = CantinaRepository(db_file)
     repo.init_db()
-    ensure_default_seed(repo)
+    ensure_test_seed(repo)
 
     client = TestClient(main_module.app)
     return client, repo

@@ -139,6 +139,14 @@ class ProfileResetDataRequest(BaseModel):
     current_password: str = ""
 
 
+class RestoreDefaultsResponse(BaseModel):
+    restored_world: bool = False
+    restored_character: bool = False
+    skipped_world: bool = False
+    skipped_character: bool = False
+    message: str
+
+
 class ProfileDeleteAccountRequest(BaseModel):
     current_password: str = ""
 
