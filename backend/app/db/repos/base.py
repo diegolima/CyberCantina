@@ -28,7 +28,18 @@ from app.security.media_path import (
     PathTraversalError,
     safe_resolve_character_media_dir,
     safe_resolve_media_file_path,
+    safe_resolve_world_media_file_path,
 )
+
+
+def world_media_category_dir(media_type: str) -> str:
+    """Map logical world media_type ('image' | 'audio') to its disk/URL category folder."""
+    return "audio" if media_type == "audio" else "images"
+
+
+def build_world_media_url(media_type: str, filename: str) -> str:
+    """Return canonical API URL for a world media asset."""
+    return f"/api/media/worlds/{world_media_category_dir(media_type)}/{filename}"
 
 
 logger = logging.getLogger("cybercantina.db.repository")
@@ -383,6 +394,31 @@ class RepositoryBase:
             logger.warning(
                 "Skipped deleting character media for '%s': %s",
                 sanitize_log_value(character_id),
+                sanitize_log_value(exc),
+            )
+
+    def _world_media_file_exists(self, media_type: str, filename: str) -> bool:
+        """Return True when a world media asset file exists within the confined media directory."""
+        try:
+            fpath = safe_resolve_world_media_file_path(
+                self.media_dir, world_media_category_dir(media_type), filename
+            )
+            return fpath.is_file()
+        except (PathTraversalError, ValueError):
+            return False
+
+    def _delete_world_media_file(self, media_type: str, filename: str) -> None:
+        """Safely unlink a single world media asset file from disk."""
+        try:
+            fpath = safe_resolve_world_media_file_path(
+                self.media_dir, world_media_category_dir(media_type), filename
+            )
+            if fpath.is_file():
+                fpath.unlink(missing_ok=True)
+        except Exception as exc:
+            logger.warning(
+                "Skipped deleting world media '%s': %s",
+                sanitize_log_value(filename),
                 sanitize_log_value(exc),
             )
 

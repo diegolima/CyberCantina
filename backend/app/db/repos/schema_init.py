@@ -876,6 +876,10 @@ class SchemaInitMixin:
                 conn.execute(
                     "ALTER TABLE location_containers ADD COLUMN icon TEXT NULL"
                 )
+            if "image_media_id" not in cont_cols:
+                conn.execute(
+                    "ALTER TABLE location_containers ADD COLUMN image_media_id TEXT NULL REFERENCES world_media(id) ON DELETE SET NULL"
+                )
 
             cs_cols = {
                 r["name"]
@@ -929,6 +933,10 @@ class SchemaInitMixin:
             if "icon" not in loc_cols:
                 conn.execute(
                     "ALTER TABLE location_nodes ADD COLUMN icon TEXT NULL"
+                )
+            if "image_media_id" not in loc_cols:
+                conn.execute(
+                    "ALTER TABLE location_nodes ADD COLUMN image_media_id TEXT NULL REFERENCES world_media(id) ON DELETE SET NULL"
                 )
 
             edge_cols = {

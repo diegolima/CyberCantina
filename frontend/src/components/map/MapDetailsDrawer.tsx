@@ -6,10 +6,12 @@ import {
   DoorOpen,
   Expand,
   GitBranch,
+  Image as ImageIcon,
   Layers,
   Lock,
   LogIn,
   MapPin,
+  Maximize2,
   Pencil,
   RotateCcw,
   Search,
@@ -21,7 +23,9 @@ import {
   LocationLoreNodeDraft,
   LocationNode,
   MagicContextRef,
+  WorldMediaItem,
 } from "../../types";
+import { ImageLightboxModal } from "../shared/ImageLightboxModal";
 import { useMagicWand } from "../../hooks/useMagicWand";
 import { MagicWandButton } from "../MagicWandButton";
 import { TagChipsInput, normalizeTagList } from "../TagChipsInput";
@@ -107,6 +111,8 @@ export interface MapDetailsDrawerProps {
     drafts: LocationLoreNodeDraft[]
   ) => Promise<void> | void;
   usedIconKeys?: string[];
+  worldMedia?: WorldMediaItem[];
+  visitedContainerIds?: string[];
   onOpenIconBrowser?: (req: {
     targetKind: "location" | "container";
     targetId: string;
@@ -557,6 +563,276 @@ const MapIconPicker: React.FC<{
   );
 };
 
+const MapEntityImageSection: React.FC<{
+  mode: "editor" | "campaign";
+  entityName: string;
+  imageMediaId?: string | null;
+  imageUrl?: string | null;
+  imageLabel?: string | null;
+  isVisited: boolean;
+  isDisabled: boolean;
+  worldMedia: WorldMediaItem[];
+  onSelectMedia: (item: WorldMediaItem | null) => void;
+  onEnlarge: (url: string, label: string) => void;
+}> = ({
+  mode,
+  entityName,
+  imageMediaId,
+  imageUrl,
+  imageLabel,
+  isVisited,
+  isDisabled,
+  worldMedia,
+  onSelectMedia,
+  onEnlarge,
+}) => {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [brokenUrls, setBrokenUrls] = useState<Record<string, boolean>>({});
+  const imageChoices = useMemo(
+    () => worldMedia.filter((m) => m.media_type === "image"),
+    [worldMedia]
+  );
+
+  const selectedItem =
+    imageChoices.find((m) => m.id === imageMediaId) ?? null;
+  const resolvedUrl = selectedItem?.url ?? imageUrl ?? null;
+  const resolvedLabel =
+    (selectedItem?.label || imageLabel || "").trim() || entityName;
+
+  if (mode === "campaign") {
+    if (!isVisited || !resolvedUrl || brokenUrls[resolvedUrl]) {
+      return null;
+    }
+    return (
+      <div className="field-group" style={{ gap: 6 }}>
+        <label style={{ fontSize: "0.71rem" }}>Location Visual</label>
+        <div
+          style={{
+            position: "relative",
+            borderRadius: 6,
+            overflow: "hidden",
+            border: "1px solid var(--border-subtle)",
+            background: "var(--bg-panel)",
+            cursor: "pointer",
+          }}
+          onClick={() => onEnlarge(resolvedUrl, resolvedLabel)}
+          title="Click to enlarge"
+        >
+          <img
+            src={resolvedUrl}
+            alt={resolvedLabel}
+            onError={() =>
+              setBrokenUrls((prev) => ({ ...prev, [resolvedUrl]: true }))
+            }
+            style={{
+              width: "100%",
+              maxHeight: 150,
+              objectFit: "cover",
+              display: "block",
+            }}
+          />
+          <span
+            style={{
+              position: "absolute",
+              bottom: 6,
+              right: 6,
+              background: "rgba(15, 23, 42, 0.8)",
+              color: "#e2e8f0",
+              borderRadius: 4,
+              padding: "2px 6px",
+              fontSize: "0.66rem",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+          >
+            <Maximize2 size={10} /> Enlarge
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  const visiblePreviewUrl =
+    resolvedUrl && !brokenUrls[resolvedUrl] ? resolvedUrl : null;
+
+  return (
+    <div className="field-group" style={{ gap: 6 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 6,
+        }}
+      >
+        <label style={{ fontSize: "0.71rem", margin: 0 }}>
+          Scene Image (Optional)
+        </label>
+        {!isDisabled && imageChoices.length > 0 && (
+          <button
+            type="button"
+            className="btn"
+            style={{ padding: "2px 7px", fontSize: "0.67rem" }}
+            onClick={() => setPickerOpen((prev) => !prev)}
+          >
+            <ImageIcon size={10} />
+            {pickerOpen
+              ? "Hide Picker"
+              : visiblePreviewUrl
+              ? "Change Image"
+              : "Link Image"}
+          </button>
+        )}
+      </div>
+
+      {visiblePreviewUrl ? (
+        <div
+          style={{
+            position: "relative",
+            borderRadius: 6,
+            overflow: "hidden",
+            border: "1px solid var(--border-subtle)",
+            background: "var(--bg-panel)",
+          }}
+        >
+          <img
+            src={visiblePreviewUrl}
+            alt={resolvedLabel}
+            onError={() =>
+              setBrokenUrls((prev) => ({ ...prev, [visiblePreviewUrl]: true }))
+            }
+            onClick={() => onEnlarge(visiblePreviewUrl, resolvedLabel)}
+            style={{
+              width: "100%",
+              maxHeight: 130,
+              objectFit: "cover",
+              display: "block",
+              cursor: "pointer",
+            }}
+          />
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 6,
+              padding: "4px 8px",
+              fontSize: "0.69rem",
+              color: "var(--text-secondary)",
+              borderTop: "1px solid var(--border-subtle)",
+            }}
+          >
+            <span
+              style={{
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {resolvedLabel}
+            </span>
+            <div style={{ display: "inline-flex", gap: 4, flexShrink: 0 }}>
+              <button
+                type="button"
+                className="btn"
+                style={{ padding: "1px 6px", fontSize: "0.65rem" }}
+                onClick={() => onEnlarge(visiblePreviewUrl, resolvedLabel)}
+              >
+                <Maximize2 size={10} />
+              </button>
+              {!isDisabled && (
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ padding: "1px 6px", fontSize: "0.65rem", color: "#fb7185" }}
+                  onClick={() => onSelectMedia(null)}
+                >
+                  Unlink
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div style={{ fontSize: "0.69rem", color: "var(--text-muted)" }}>
+          {imageChoices.length === 0
+            ? "Upload images in the World Sheet Media tab to link visuals here."
+            : "No image linked."}
+        </div>
+      )}
+
+      {pickerOpen && !isDisabled && imageChoices.length > 0 && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(78px, 1fr))",
+            gap: 6,
+            padding: 6,
+            borderRadius: 6,
+            background: "var(--bg-panel)",
+            border: "1px solid var(--border-subtle)",
+            maxHeight: 190,
+            overflowY: "auto",
+          }}
+        >
+          {imageChoices.map((item) => {
+            const active = item.id === imageMediaId;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => {
+                  onSelectMedia(item);
+                  setPickerOpen(false);
+                }}
+                style={{
+                  padding: 0,
+                  borderRadius: 5,
+                  overflow: "hidden",
+                  border: active
+                    ? "2px solid var(--accent-cyan)"
+                    : "1px solid var(--border-subtle)",
+                  background: "var(--bg-card)",
+                  cursor: "pointer",
+                  display: "flex",
+                  flexDirection: "column",
+                  textAlign: "left",
+                }}
+                title={item.label || "World Image"}
+              >
+                <img
+                  src={item.url}
+                  alt={item.label || "World Image"}
+                  style={{
+                    width: "100%",
+                    height: 52,
+                    objectFit: "cover",
+                    display: "block",
+                  }}
+                />
+                <span
+                  style={{
+                    fontSize: "0.62rem",
+                    padding: "2px 4px",
+                    color: "var(--text-secondary)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    width: "100%",
+                  }}
+                >
+                  {item.label || "Untitled"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
   mode,
   selectedLocation,
@@ -589,8 +865,11 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
   onSaveCampaignLocationLore,
   onSaveCampaignContainerLore,
   usedIconKeys = [],
+  worldMedia = [],
+  visitedContainerIds = [],
   onOpenIconBrowser,
 }) => {
+  const [lightboxImage, setLightboxImage] = useState<{ url: string; label: string } | null>(null);
   const selectedLocIdRef = useRef<string | null>(selectedLocation?.id ?? null);
   selectedLocIdRef.current = selectedLocation?.id ?? null;
   const selectedContIdRef = useRef<string | null>(selectedContainer?.id ?? null);
@@ -607,17 +886,19 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
     isMutatingLocked ||
     (mode === "campaign" && Boolean(selectedLocation?.is_visited));
 
+  const isContVisited =
+    visitedContainerIds.includes(selectedContainer?.id ?? "") ||
+    Boolean(
+      selectedContainer &&
+        containerHasVisitedDescendants(
+          selectedContainer.id,
+          containers,
+          allLocations
+        )
+    );
   const isContNarrativeLocked =
     isMutatingLocked ||
-    (mode === "campaign" &&
-      Boolean(
-        selectedContainer &&
-          containerHasVisitedDescendants(
-            selectedContainer.id,
-            containers,
-            allLocations
-          )
-      ));
+    (mode === "campaign" && isContVisited);
 
   const isLevel1ContainerSelected = Boolean(selectedContainer && selectedContainer.depth === 1);
   const selectedContainerChildNames = useMemo(() => {
@@ -1170,6 +1451,25 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
           />
         </div>
 
+        <MapEntityImageSection
+          mode={mode}
+          entityName={selectedContainer.name}
+          imageMediaId={selectedContainer.image_media_id}
+          imageUrl={selectedContainer.image_url}
+          imageLabel={selectedContainer.image_label}
+          isVisited={isContVisited}
+          isDisabled={Boolean(isMutatingLocked)}
+          worldMedia={worldMedia}
+          onSelectMedia={(item) =>
+            onPatchContainer(selectedContainer.id, {
+              image_media_id: item ? item.id : null,
+              image_url: item ? item.url : null,
+              image_label: item ? item.label : null,
+            })
+          }
+          onEnlarge={(url, label) => setLightboxImage({ url, label })}
+        />
+
         <div className="field-group" style={{ gap: 4 }}>
           <div
             style={{
@@ -1261,6 +1561,13 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
           <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", fontStyle: "italic" }}>
             Only Level 1 landmarks hold scoped container lore.
           </div>
+        )}
+        {lightboxImage && (
+          <ImageLightboxModal
+            url={lightboxImage.url}
+            label={lightboxImage.label}
+            onClose={() => setLightboxImage(null)}
+          />
         )}
       </div>
     );
@@ -1440,6 +1747,25 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
           }
         />
       </div>
+
+      <MapEntityImageSection
+        mode={mode}
+        entityName={selectedLocation.name}
+        imageMediaId={selectedLocation.image_media_id}
+        imageUrl={selectedLocation.image_url}
+        imageLabel={selectedLocation.image_label}
+        isVisited={Boolean(selectedLocation.is_visited)}
+        isDisabled={Boolean(isMutatingLocked)}
+        worldMedia={worldMedia}
+        onSelectMedia={(item) =>
+          onPatchLocation(selectedLocation.id, {
+            image_media_id: item ? item.id : null,
+            image_url: item ? item.url : null,
+            image_label: item ? item.label : null,
+          })
+        }
+        onEnlarge={(url, label) => setLightboxImage({ url, label })}
+      />
 
       <div
         style={{
@@ -1767,6 +2093,13 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
         }
         onCampaignSave={onSaveCampaignLocationLore}
       />
+      {lightboxImage && (
+        <ImageLightboxModal
+          url={lightboxImage.url}
+          label={lightboxImage.label}
+          onClose={() => setLightboxImage(null)}
+        />
+      )}
     </div>
   );
 };

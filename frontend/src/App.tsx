@@ -382,17 +382,28 @@ export const App: React.FC = () => {
     });
   };
 
-  const handleRequestDeleteWorld = (
+  const handleRequestDeleteWorld = async (
     e: React.MouseEvent | undefined,
     world: WorldRecord
   ) => {
     e?.stopPropagation();
     if (isStreaming) return;
     const using = campaigns.filter((c) => c.world_id === world.id);
+    let siblingMediaCampaignsCount = 0;
+    let mediaCount = (world.media ?? []).length;
+    try {
+      const impact = await api.getWorldDeleteImpact(world.id);
+      siblingMediaCampaignsCount = impact.sibling_campaigns_sharing_media || 0;
+      mediaCount = impact.media_count ?? mediaCount;
+    } catch {
+      // Fallback to local metadata if impact check fails
+    }
     setDeleteTarget({
       kind: "world",
       world,
       campaignsUsing: using,
+      siblingMediaCampaignsCount,
+      mediaCount,
     });
   };
 

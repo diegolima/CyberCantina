@@ -31,6 +31,7 @@ from app.security.media_path import (
     PathTraversalError,
     safe_resolve_character_media_dir,
     safe_resolve_media_file_path,
+    safe_resolve_world_media_file_path,
 )
 
 logger = logging.getLogger("cybercantina.dependencies")
@@ -341,6 +342,22 @@ def safe_resolve_media_path(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def safe_resolve_world_media_path(
+    category: str,
+    filename: str,
+    *,
+    media_dir: str | Path | None = None,
+) -> Path:
+    """Safely validate and resolve a world media file path to prevent directory traversal."""
+    base_dir = media_dir if media_dir is not None else settings.media_dir
+    try:
+        return safe_resolve_world_media_file_path(base_dir, category, filename)
+    except PathTraversalError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 _USER_MEDIA_LOCKS: dict[str, threading.Lock] = {}
 _USER_MEDIA_LOCKS_GUARD = threading.Lock()
 
@@ -373,11 +390,25 @@ def get_character_media_bytes(media_dir: str, character_id: str) -> int:
     return total
 
 
+def get_world_media_bytes(repo: CantinaRepository, user_id: str) -> int:
+    """Sum persisted world media file bytes owned by ``user_id`` without double-counting CoW forks."""
+    total = 0
+    for category, filename in repo.list_user_world_media_files(user_id):
+        try:
+            fpath = safe_resolve_world_media_file_path(repo.media_dir, category, filename)
+            if fpath.is_file():
+                total += fpath.stat().st_size
+        except (PathTraversalError, ValueError, OSError):
+            continue
+    return total
+
+
 def get_user_media_usage_bytes(repo: CantinaRepository, user_id: str) -> int:
-    """Compute total persisted media bytes across all characters owned or staged by ``user_id``."""
+    """Compute total persisted media bytes across all characters and world media owned by ``user_id``."""
     total = 0
     for cid in repo.list_user_media_character_ids(user_id):
         total += get_character_media_bytes(repo.media_dir, cid)
+    total += get_world_media_bytes(repo, user_id)
     return total
 
 
@@ -473,7 +504,7 @@ def enforce_quota_and_write_webp(
                     status_code=413,
                     detail=(
                         f"Media storage quota exceeded ({format_mb(used)} / {format_mb(quota)} used). "
-                        "Delete existing portraits or gallery images to free space."
+                        "Delete existing character or world media files to free space."
                     ),
                 )
         target_path.parent.mkdir(parents=True, exist_ok=True)

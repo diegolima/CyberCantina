@@ -18,6 +18,8 @@ export type DeleteTarget =
       kind: "world";
       world: WorldRecord;
       campaignsUsing: CampaignRecord[];
+      siblingMediaCampaignsCount?: number;
+      mediaCount?: number;
     }
   | {
       kind: "persona";
@@ -117,6 +119,23 @@ export const DeleteConfirmationModal: React.FC<DeleteConfirmationModalProps> = (
                     <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>
                       This world is not referenced by any running campaigns and
                       will be permanently pruned.
+                    </div>
+                  )}
+                  {(deleteTarget.mediaCount ?? 0) > 0 && (
+                    <div
+                      className="cog-step"
+                      style={{
+                        marginTop: 8,
+                        borderColor: "rgba(245, 158, 11, 0.35)",
+                        fontSize: "0.78rem",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      {(deleteTarget.siblingMediaCampaignsCount ?? 0) > 0
+                        ? `Media safety: ${deleteTarget.siblingMediaCampaignsCount} active campaign(s) on an earlier version of this world share its media files; shared files will remain available until those campaigns are removed.`
+                        : deleteTarget.campaignsUsing.length > 0
+                        ? `This world has ${deleteTarget.mediaCount} media file(s) that remain in your storage quota until active campaigns using this world are removed.`
+                        : `This world's ${deleteTarget.mediaCount} unreferenced media file(s) will be removed from disk to free storage quota.`}
                     </div>
                   )}
                 </>

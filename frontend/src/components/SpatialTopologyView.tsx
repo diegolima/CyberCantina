@@ -6,6 +6,7 @@ import {
   LocationEdge,
   LocationLoreNodeDraft,
   LocationNode,
+  WorldMediaItem,
 } from "../types";
 import {
   MapDetailsDrawer,
@@ -135,6 +136,8 @@ export interface SpatialTopologyViewProps {
   ) => Promise<void> | void;
   isMutatingLocked?: boolean;
   initialContainerFocus?: "active" | "root";
+  worldMedia?: WorldMediaItem[];
+  visitedContainerIds?: string[];
 }
 
 export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
@@ -159,6 +162,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   onSaveCampaignContainerLore,
   isMutatingLocked = false,
   initialContainerFocus = "active",
+  worldMedia = [],
+  visitedContainerIds = [],
 }) => {
   // Staged draft state for async editing in campaign (or standalone editor without onChangeGraph)
   const isControlledExternally = mode === "editor" && Boolean(onChangeGraph);
@@ -1360,6 +1365,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             onSaveCampaignContainerLore={onSaveCampaignContainerLore}
             usedIconKeys={usedMapIconKeys}
             onOpenIconBrowser={setIconBrowserTarget}
+            worldMedia={worldMedia}
+            visitedContainerIds={visitedContainerIds}
           />
         ) : (
           <div

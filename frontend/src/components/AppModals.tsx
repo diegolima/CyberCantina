@@ -298,8 +298,12 @@ export const AppModals: React.FC<AppModalsProps> = ({
         <WorldInspectorModal
           world={inspectingWorld}
           onClose={() => setInspectingWorld(null)}
-          onSaved={async (updatedWorld) => {
-            setInspectingWorld(null);
+          onSaved={async (updatedWorld, closeModal = true) => {
+            if (closeModal) {
+              setInspectingWorld(null);
+            } else {
+              setInspectingWorld(updatedWorld);
+            }
             const [wList, cList] = await Promise.all([
               api.listWorlds(),
               api.listCharacters(),

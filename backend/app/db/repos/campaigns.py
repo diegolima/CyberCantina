@@ -15,7 +15,7 @@ from app.schemas.turn import (
     PreTurnAnalysis,
     WorldStateSnapshot,
 )
-from app.db.repos.arrival_descriptions import build_first_visit_arrival
+from app.db.repos.arrival_descriptions import build_first_visit_arrival_bundle
 from app.db.repos.base import _delete_campaign_rows, _dump_care_state_json, utc_now_iso
 
 
@@ -175,18 +175,21 @@ class CampaignsMixin:
         skip_turn_0_location_card = (not has_custom_opening) and (
             "{location_description}" in char_init_msg or not char_init_msg
         )
-        root_cards, root_visited_ids, root_visited_container_ids = build_first_visit_arrival(
-            target_location=primary_loc,
-            containers=world.containers,
-            locations=world.locations,
-            prev_visited_locations=[],
-            prev_visited_containers=[],
-            describe_on_first_visit=camp_world_settings.describe_on_first_visit,
-            skip_location_card=skip_turn_0_location_card,
-            suppress_cards=(effective_start_focus == "world"),
-            extra_visited_location_ids=[
-                loc_map.get(ec.id, start_loc.id) for ec in extra_characters
-            ],
+        root_cards, root_media, root_visited_ids, root_visited_container_ids = (
+            build_first_visit_arrival_bundle(
+                target_location=primary_loc,
+                containers=world.containers,
+                locations=world.locations,
+                prev_visited_locations=[],
+                prev_visited_containers=[],
+                describe_on_first_visit=camp_world_settings.describe_on_first_visit,
+                skip_location_card=skip_turn_0_location_card,
+                suppress_cards=(effective_start_focus == "world"),
+                emit_media=True,
+                extra_visited_location_ids=[
+                    loc_map.get(ec.id, start_loc.id) for ec in extra_characters
+                ],
+            )
         )
 
         root_turn_id = f"turn_{uuid.uuid4().hex[:10]}"
@@ -288,8 +291,12 @@ class CampaignsMixin:
             extra_character_states=extra_states,
             recalled_items=[],
             post_turn=(
-                PostTurnStateDelta(elapsed_minutes=0, first_visit_cards=root_cards)
-                if root_cards
+                PostTurnStateDelta(
+                    elapsed_minutes=0,
+                    first_visit_cards=root_cards,
+                    first_visit_media=root_media,
+                )
+                if (root_cards or root_media)
                 else None
             ),
         )

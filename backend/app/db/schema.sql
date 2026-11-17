@@ -88,6 +88,29 @@ CREATE TABLE IF NOT EXISTS worlds (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS world_media (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NULL REFERENCES users(id) ON DELETE CASCADE,
+    media_type TEXT NOT NULL DEFAULT 'image' CHECK (media_type IN ('image', 'audio')),
+    filename TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    mime_type TEXT NOT NULL DEFAULT 'image/webp',
+    byte_size INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_world_media_owner ON world_media(owner_id);
+
+CREATE TABLE IF NOT EXISTS world_media_links (
+    world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+    media_id TEXT NOT NULL REFERENCES world_media(id) ON DELETE CASCADE,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (world_id, media_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_world_media_links_media ON world_media_links(media_id);
+
 CREATE TABLE IF NOT EXISTS location_containers (
     id TEXT PRIMARY KEY,
     world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
@@ -100,6 +123,7 @@ CREATE TABLE IF NOT EXISTS location_containers (
     ui_x REAL NULL,
     ui_y REAL NULL,
     icon TEXT NULL,
+    image_media_id TEXT NULL REFERENCES world_media(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL
 );
 
@@ -122,7 +146,8 @@ CREATE TABLE IF NOT EXISTS location_nodes (
     starting_message TEXT NOT NULL DEFAULT '',
     ui_x REAL NULL,
     ui_y REAL NULL,
-    icon TEXT NULL
+    icon TEXT NULL,
+    image_media_id TEXT NULL REFERENCES world_media(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_location_nodes_world ON location_nodes(world_id);

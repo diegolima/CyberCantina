@@ -355,6 +355,12 @@ class AuthUsersMixin:
                 conn.execute("DELETE FROM lore_nodes WHERE world_id = ?", (w_id,))
                 conn.execute("DELETE FROM worlds WHERE id = ?", (w_id,))
 
+            world_media_rows = conn.execute(
+                "SELECT id, media_type, filename FROM world_media WHERE owner_id = ?",
+                (user_id,),
+            ).fetchall()
+            conn.execute("DELETE FROM world_media WHERE owner_id = ?", (user_id,))
+
             # 4. Delete user private notes and personas
             conn.execute("DELETE FROM user_notes WHERE owner_id = ?", (user_id,))
             conn.execute("DELETE FROM personas WHERE owner_id = ?", (user_id,))
@@ -362,6 +368,9 @@ class AuthUsersMixin:
             conn.commit()
         finally:
             conn.close()
+
+        for wmr in world_media_rows:
+            self._delete_world_media_file(wmr["media_type"], wmr["filename"])
 
     def delete_user(self, user_id: str) -> None:
         """Permanently delete a user account, credentials, passkeys, sessions, and all their user data."""

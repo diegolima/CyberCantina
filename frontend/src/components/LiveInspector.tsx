@@ -437,6 +437,7 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
               onSaveCampaignLocationLore={onSaveCampaignLocationLore}
               onSaveCampaignContainerLore={onSaveCampaignContainerLore}
               isMutatingLocked={isMutatingLocked}
+              visitedContainerIds={bundle.current_world_snapshot.visited_container_ids ?? []}
             />
           </div>
         </div>

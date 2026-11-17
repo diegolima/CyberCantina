@@ -206,6 +206,20 @@ class WorldLocationsMixin:
             loc.lore_nodes = self._resolve_location_lore_map(
                 conn, [location_id], campaign_id=campaign_id
             ).get(location_id, [])
+            if loc.image_media_id:
+                m_row = conn.execute(
+                    "SELECT id, media_type, filename, label FROM world_media WHERE id = ?",
+                    (loc.image_media_id,),
+                ).fetchone()
+                if m_row and m_row["media_type"] == "image" and self._world_media_file_exists(
+                    m_row["media_type"], m_row["filename"]
+                ):
+                    from app.db.repos.base import build_world_media_url
+
+                    loc.image_url = build_world_media_url(m_row["media_type"], m_row["filename"])
+                    loc.image_label = m_row["label"] or ""
+                else:
+                    loc.image_media_id = None
             return loc
         finally:
             conn.close()

@@ -2,13 +2,33 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import uuid
+from pathlib import Path
 from typing import Literal
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+)
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.auth import get_current_user
-from app.dependencies import get_effective_user_model_settings, get_repo, run_entity_pruner
+from app.dependencies import (
+    enforce_quota_and_write_webp,
+    get_effective_user_model_settings,
+    get_repo,
+    render_webp_bytes,
+    run_entity_pruner,
+    safe_resolve_world_media_path,
+)
 from app.schemas.auth import UserProfile
 from app.schemas.world import (
     WorldMapDraft,
@@ -181,3 +201,167 @@ def delete_world(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ------------------------------------------------------------------
+# World Media (Images; extensible to Audio)
+# ------------------------------------------------------------------
+
+
+class WorldMediaLabelUpdateRequest(BaseModel):
+    label: str = ""
+
+
+class WorldMediaReorderRequest(BaseModel):
+    ordered_media_ids: list[str]
+
+
+@router.get("/api/media/worlds/{category}/{filename}")
+def get_world_media(
+    category: str,
+    filename: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> FileResponse:
+    """Serve a static world media asset when the user has access."""
+    target = safe_resolve_world_media_path(category, filename)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Media asset not found.")
+
+    repo = get_repo()
+    if not repo.user_can_access_world_media(current_user.id, category, filename):
+        raise HTTPException(status_code=404, detail="Media asset not found.")
+
+    media_type = "image/webp" if category == "images" else "application/octet-stream"
+    return FileResponse(
+        target,
+        media_type=media_type,
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
+@router.post("/api/worlds/{world_id}/media", response_model=WorldRecord)
+async def upload_world_media(
+    world_id: str,
+    file: UploadFile = File(...),
+    label: str = Form(""),
+    current_user: UserProfile = Depends(get_current_user),
+) -> WorldRecord:
+    """Upload a landscape/scene image to a saved world (CoW-forking if campaigns exist)."""
+    repo = get_repo()
+    try:
+        repo.get_world(world_id, base_only=True, owner_id=current_user.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Empty upload payload.")
+
+    media_id = f"wmed_{uuid.uuid4().hex[:10]}"
+    filename = f"{media_id}.webp"
+    target_path = safe_resolve_world_media_path("images", filename)
+
+    webp_bytes = await asyncio.to_thread(
+        render_webp_bytes, file_bytes, square_crop=False, max_size=1920
+    )
+    await asyncio.to_thread(
+        enforce_quota_and_write_webp,
+        repo,
+        current_user,
+        webp_bytes,
+        target_path,
+    )
+
+    stem = Path(file.filename or "").stem.strip()
+    effective_label = label.strip() or stem or "World Image"
+    try:
+        return repo.add_world_media(
+            world_id,
+            media_id=media_id,
+            filename=filename,
+            label=effective_label,
+            mime_type="image/webp",
+            byte_size=len(webp_bytes),
+            media_type="image",
+            owner_id=current_user.id,
+        )
+    except Exception:
+        target_path.unlink(missing_ok=True)
+        raise
+
+
+@router.patch("/api/worlds/{world_id}/media/{media_id}", response_model=WorldRecord)
+def update_world_media_label(
+    world_id: str,
+    media_id: str,
+    req: WorldMediaLabelUpdateRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> WorldRecord:
+    """Update a world media item's label (CoW-forking if campaigns reference the world)."""
+    try:
+        return get_repo().update_world_media_label(
+            world_id, media_id, req.label, owner_id=current_user.id
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/api/worlds/{world_id}/media/reorder", response_model=WorldRecord)
+def reorder_world_media(
+    world_id: str,
+    req: WorldMediaReorderRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> WorldRecord:
+    """Reorder media items on a world (first image becomes the Home card primary visual)."""
+    try:
+        return get_repo().reorder_world_media(
+            world_id, req.ordered_media_ids, owner_id=current_user.id
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/api/worlds/{world_id}/media/{media_id}/impact")
+def get_world_media_delete_impact(
+    world_id: str,
+    media_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> dict[str, str | int]:
+    """Return active campaign count (including sibling CoW forks) referencing media_id."""
+    try:
+        return get_repo().get_world_media_usage_summary(
+            world_id, media_id, owner_id=current_user.id
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/api/worlds/{world_id}/delete-impact")
+def get_world_delete_impact(
+    world_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> dict[str, str | int]:
+    """Return direct and sibling-fork campaign impact for deleting world_id."""
+    try:
+        return get_repo().get_world_delete_impact(world_id, owner_id=current_user.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete("/api/worlds/{world_id}/media/{media_id}", response_model=WorldRecord)
+def delete_world_media(
+    world_id: str,
+    media_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> WorldRecord:
+    """Hard-delete a world media item (DB row + physical file) to reclaim quota immediately."""
+    try:
+        return get_repo().delete_world_media(
+            world_id, media_id, owner_id=current_user.id
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

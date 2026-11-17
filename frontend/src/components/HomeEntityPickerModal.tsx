@@ -56,6 +56,7 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
   onDeletePersona,
 }) => {
   const [searchQuery, setSearchQuery] = useState("");
+  const [failedThumbUrls, setFailedThumbUrls] = useState<Record<string, boolean>>({});
 
   const categoryMeta = useMemo(() => {
     switch (category) {
@@ -401,8 +402,14 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
                     }}
                   >
                     <div className="home-picker-thumb">
-                      {img ? (
-                        <img src={img} alt={world.name} />
+                      {img && !failedThumbUrls[img] ? (
+                        <img
+                          src={img}
+                          alt={world.name}
+                          onError={() =>
+                            setFailedThumbUrls((prev) => ({ ...prev, [img]: true }))
+                          }
+                        />
                       ) : (
                         <Globe size={20} color="var(--accent-cyan)" />
                       )}

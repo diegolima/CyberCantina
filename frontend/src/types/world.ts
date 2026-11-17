@@ -50,6 +50,17 @@ export interface LoreNode {
   entity_tags: string[];
 }
 
+export interface WorldMediaItem {
+  id: string;
+  media_type: "image" | "audio";
+  url: string;
+  label: string;
+  mime_type: string;
+  byte_size: number;
+  sort_order: number;
+  created_at: string;
+}
+
 export interface LocationContainer {
   id: string;
   world_id: string;
@@ -62,6 +73,9 @@ export interface LocationContainer {
   ui_x?: number | null;
   ui_y?: number | null;
   icon?: string | null;
+  image_media_id?: string | null;
+  image_url?: string | null;
+  image_label?: string | null;
   lore_nodes?: LoreNode[];
 }
 
@@ -82,6 +96,9 @@ export interface LocationNode {
   ui_x?: number | null;
   ui_y?: number | null;
   icon?: string | null;
+  image_media_id?: string | null;
+  image_url?: string | null;
+  image_label?: string | null;
   is_visited?: boolean;
   lore_nodes?: LoreNode[];
 }
@@ -118,6 +135,7 @@ export interface WorldRecord {
   locations: LocationNode[];
   edges: LocationEdge[];
   lore_nodes: LoreNode[];
+  media?: WorldMediaItem[];
   unsupported_fields?: Record<string, unknown>;
 }
 

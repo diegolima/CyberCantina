@@ -11,7 +11,7 @@ from app.config import (
     ModelProfile,
     settings,
 )
-from app.db.repos.arrival_descriptions import build_first_visit_arrival
+from app.db.repos.arrival_descriptions import build_first_visit_arrival_bundle
 from app.db.repository import CantinaRepository
 from app.engine.affective_engine import (
     MechanicalTurnSignals,
@@ -542,6 +542,7 @@ async def run_phase5_post_turn_clerk(
         completed_turn.world_snapshot.visited_container_ids or []
     )
     first_visit_cards = []
+    first_visit_media = []
     merged_visited_containers = list(prev_visited_containers)
     try:
         camp_rec = repo.get_campaign(campaign_id)
@@ -552,14 +553,15 @@ async def run_phase5_post_turn_clerk(
         )
         if target_loc_obj is None:
             target_loc_obj = repo.get_location(new_location_id)
-        first_visit_cards, merged_visited, merged_visited_containers = (
-            build_first_visit_arrival(
+        first_visit_cards, first_visit_media, merged_visited, merged_visited_containers = (
+            build_first_visit_arrival_bundle(
                 target_location=target_loc_obj,
                 containers=world_rec.containers,
                 locations=world_rec.locations,
                 prev_visited_locations=prev_visited,
                 prev_visited_containers=prev_visited_containers,
                 describe_on_first_visit=camp_rec.world_settings.describe_on_first_visit,
+                emit_media=camp_rec.world_settings.describe_on_first_visit,
                 extra_visited_location_ids=(
                     [completed_turn.world_snapshot.active_location_id]
                     if completed_turn.world_snapshot.active_location_id
@@ -994,6 +996,7 @@ async def run_phase5_post_turn_clerk(
         arbitration_rulings=arbitration_rulings,
         compacted_character_ids=[ch.id for ch, _idxs, _aged in compaction_jobs],
         first_visit_cards=first_visit_cards,
+        first_visit_media=first_visit_media,
     )
 
     primary_char_state = updated_states_by_char.get(

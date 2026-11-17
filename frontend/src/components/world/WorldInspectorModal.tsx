@@ -7,6 +7,7 @@ import {
   Check,
   Compass,
   Globe,
+  Image as ImageIcon,
   Plus,
   SlidersHorizontal,
   Sparkles,
@@ -28,6 +29,7 @@ import type {
   LoreNode,
   WorldGlobalRules,
   WorldLoreCategory,
+  WorldMediaItem,
   WorldRecord,
 } from "../../types";
 import {
@@ -45,11 +47,12 @@ import {
 import { ClickToEditField } from "../shared/ClickToEditField";
 import { UnsupportedFieldsTab } from "../shared/UnsupportedFieldsTab";
 import { mapDraftToNodesAndEdges } from "./worldDraftMappers";
+import { WorldMediaTab } from "./WorldMediaTab";
 
 interface WorldInspectorModalProps {
   world: WorldRecord;
   onClose: () => void;
-  onSaved: (updated: WorldRecord) => void;
+  onSaved: (updated: WorldRecord, closeModal?: boolean) => void;
   mode?: "inspector" | "wizard" | "campaign";
   initialTab?: WorldTab;
   campaignWorldSettings?: CampaignWorldSettings;
@@ -68,7 +71,7 @@ interface WorldInspectorModalProps {
   }) => Promise<WorldRecord>;
 }
 
-export type WorldTab = "base" | "map" | "lore" | "settings" | "unsupported";
+export type WorldTab = "base" | "media" | "map" | "lore" | "settings" | "unsupported";
 
 export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   world,
@@ -136,9 +139,14 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
     Record<string, string>
   >({});
 
+  const [activeWorldId, setActiveWorldId] = useState(world.id);
+  const [media, setMedia] = useState<WorldMediaItem[]>(() => [...(world.media ?? [])]);
   const [isDirty, setIsDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [exportingWorld, setExportingWorld] = useState(false);
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [exportIncludeChars, setExportIncludeChars] = useState(true);
+  const [exportIncludeMedia, setExportIncludeMedia] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const loreListBottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -220,13 +228,50 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   const handleExportWorld = async () => {
     setExportingWorld(true);
     try {
-      const includeChars = window.confirm("Include resident characters belonging to this world in the export package?");
-      await api.exportWorld(world.id, includeChars);
+      await api.exportWorld(activeWorldId, exportIncludeChars, exportIncludeMedia);
+      setShowExportDialog(false);
     } catch (err: any) {
       setError(err?.message || String(err));
     } finally {
       setExportingWorld(false);
     }
+  };
+
+  const handleWorldMediaMutated = (
+    updated: WorldRecord,
+    deletedMediaId?: string
+  ) => {
+    setActiveWorldId(updated.id);
+    setMedia([...(updated.media ?? [])]);
+    if (deletedMediaId || updated.id !== activeWorldId) {
+      setContainers((prev) =>
+        prev.map((c) => {
+          const cleared = deletedMediaId && c.image_media_id === deletedMediaId;
+          return {
+            ...c,
+            world_id: updated.id,
+            image_media_id: cleared ? null : c.image_media_id,
+            image_url: cleared ? null : c.image_url,
+            image_label: cleared ? null : c.image_label,
+          };
+        })
+      );
+      setLocations((prev) =>
+        prev.map((l) => {
+          const cleared = deletedMediaId && l.image_media_id === deletedMediaId;
+          return {
+            ...l,
+            world_id: updated.id,
+            image_media_id: cleared ? null : l.image_media_id,
+            image_url: cleared ? null : l.image_url,
+            image_label: cleared ? null : l.image_label,
+          };
+        })
+      );
+      setEdges((prev) => prev.map((e) => ({ ...e, world_id: updated.id })));
+      setLoreNodes((prev) => prev.map((ln) => ({ ...ln, world_id: updated.id })));
+    }
+    onSaved(updated, false);
   };
 
   // Re-imagine Map Modal state
@@ -466,7 +511,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
       const updated =
         mode === "wizard" && onCommitDraft
           ? await onCommitDraft(payload)
-          : await api.updateWorld(world.id, {
+          : await api.updateWorld(activeWorldId, {
               ...payload,
               unsupported_fields: remainingUnsupported,
             });
@@ -533,6 +578,19 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
           >
             <Globe size={14} />
             <span>Base</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "media"}
+            className={`modal-tab-btn ${activeTab === "media" ? "active" : ""}`}
+            onClick={() => setActiveTab("media")}
+          >
+            <ImageIcon size={14} />
+            <span>Media</span>
+            <span className="modal-tab-badge">
+              {media.filter((m) => m.media_type === "image").length}
+            </span>
           </button>
           <button
             type="button"
@@ -706,6 +764,18 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             />
           </div>
 
+          {/* Media Tab */}
+          <WorldMediaTab
+            isActive={activeTab === "media"}
+            mode={mode}
+            worldId={activeWorldId}
+            media={media}
+            containers={containers}
+            locations={locations}
+            isDirty={isDirty}
+            onWorldMutated={handleWorldMediaMutated}
+          />
+
           {/* Map Tab */}
           <div
             style={{
@@ -775,8 +845,9 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 }
                 mode={isCampaignMode ? "campaign" : "editor"}
                 isMutatingLocked={isCampaignMode || isMutatingLocked}
+                worldMedia={media}
                 worldContext={{
-                  worldId: world.id,
+                  worldId: activeWorldId,
                   worldName: name,
                   genre: globalRules.genre,
                   tone: globalRules.tone,
@@ -1255,7 +1326,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                     type="button"
                     className="btn"
                     disabled={exportingWorld}
-                    onClick={handleExportWorld}
+                    onClick={() => setShowExportDialog(true)}
                     title="Export this world as a .zcc package"
                     style={{ display: "flex", alignItems: "center", gap: 6 }}
                   >
@@ -1286,6 +1357,73 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
           )}
         </div>
       </div>
+
+      {/* Export World Options Modal */}
+      {showExportDialog && (
+        <div
+          className="modal-backdrop"
+          style={{ zIndex: 1200 }}
+          onClick={() => !exportingWorld && setShowExportDialog(false)}
+        >
+          <div
+            className="modal-panel"
+            style={{ width: "min(420px, 92vw)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <span style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--accent-cyan)" }}>
+                <Upload size={16} />
+                Export World (.zcc)
+              </span>
+              <button
+                type="button"
+                className="btn"
+                disabled={exportingWorld}
+                onClick={() => setShowExportDialog(false)}
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.84rem", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={exportIncludeChars}
+                  onChange={(e) => setExportIncludeChars(e.target.checked)}
+                />
+                <span>Include resident characters belonging to this world</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.84rem", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={exportIncludeMedia}
+                  onChange={(e) => setExportIncludeMedia(e.target.checked)}
+                />
+                <span>Include world media files</span>
+              </label>
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn"
+                disabled={exportingWorld}
+                onClick={() => setShowExportDialog(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-cyan"
+                disabled={exportingWorld}
+                onClick={handleExportWorld}
+              >
+                <Upload size={14} />
+                {exportingWorld ? "Exporting..." : "Download .zcc"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Re-imagine Spatial Map Modal */}
       {showReimagineModal && (

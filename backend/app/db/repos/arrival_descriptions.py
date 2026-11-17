@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from app.schemas.turn import FirstVisitDescriptionCard
+from app.schemas.turn import FirstVisitDescriptionCard, FirstVisitMediaItem
 from app.schemas.world import LocationContainer, LocationNode
 
 BOILERPLATE_DESCRIPTIONS: frozenset[str] = frozenset(
@@ -78,7 +78,36 @@ def build_first_visit_arrival(
     suppress_cards: bool = False,
     extra_visited_location_ids: Sequence[str] = (),
 ) -> tuple[list[FirstVisitDescriptionCard], list[str], list[str]]:
-    """Compute first-visit cards (outer -> inner -> location) and updated branch visit lists."""
+    """Compute first-visit description cards (outer -> inner -> location) and updated branch visit lists."""
+    cards, _media, merged_locations, merged_containers = build_first_visit_arrival_bundle(
+        target_location=target_location,
+        containers=containers,
+        locations=locations,
+        prev_visited_locations=prev_visited_locations,
+        prev_visited_containers=prev_visited_containers,
+        describe_on_first_visit=describe_on_first_visit,
+        skip_location_card=skip_location_card,
+        suppress_cards=suppress_cards,
+        emit_media=False,
+        extra_visited_location_ids=extra_visited_location_ids,
+    )
+    return cards, merged_locations, merged_containers
+
+
+def build_first_visit_arrival_bundle(
+    *,
+    target_location: LocationNode,
+    containers: Sequence[LocationContainer],
+    locations: Sequence[LocationNode],
+    prev_visited_locations: Sequence[str],
+    prev_visited_containers: Sequence[str],
+    describe_on_first_visit: bool,
+    skip_location_card: bool = False,
+    suppress_cards: bool = False,
+    emit_media: bool | None = None,
+    extra_visited_location_ids: Sequence[str] = (),
+) -> tuple[list[FirstVisitDescriptionCard], list[FirstVisitMediaItem], list[str], list[str]]:
+    """Compute first-visit description cards, deduplicated arrival media items, and updated visit lists."""
     container_by_id = {c.id: c for c in containers}
     location_by_id = {l.id: l for l in locations}
     location_by_id.setdefault(target_location.id, target_location)
@@ -97,7 +126,10 @@ def build_first_visit_arrival(
         container_by_id,
     )
 
+    should_emit_media = describe_on_first_visit if emit_media is None else emit_media
     cards: list[FirstVisitDescriptionCard] = []
+    raw_media_items: list[FirstVisitMediaItem] = []
+
     if describe_on_first_visit and not suppress_cards:
         for cont in target_chain:
             if cont.id not in prior_cont_set and is_meaningful_description(cont.description):
@@ -125,6 +157,51 @@ def build_first_visit_arrival(
                 )
             )
 
+    if should_emit_media:
+        for cont in target_chain:
+            if (
+                cont.id not in prior_cont_set
+                and cont.image_media_id
+                and cont.image_url
+            ):
+                raw_media_items.append(
+                    FirstVisitMediaItem(
+                        entity_type="container",
+                        entity_id=cont.id,
+                        depth=cont.depth,
+                        entity_name=cont.name,
+                        media_id=cont.image_media_id,
+                        image_url=cont.image_url,
+                        label=(cont.image_label or "").strip() or cont.name,
+                    )
+                )
+        if (
+            target_location.id not in prior_loc_set
+            and target_location.image_media_id
+            and target_location.image_url
+        ):
+            raw_media_items.append(
+                FirstVisitMediaItem(
+                    entity_type="location",
+                    entity_id=target_location.id,
+                    depth=0,
+                    entity_name=target_location.name,
+                    media_id=target_location.image_media_id,
+                    image_url=target_location.image_url,
+                    label=(target_location.image_label or "").strip() or target_location.name,
+                )
+            )
+
+    # Deduplicate repeated media_ids within a single arrival event, keeping the innermost occurrence.
+    dedup_rev: list[FirstVisitMediaItem] = []
+    seen_media_ids: set[str] = set()
+    for item in reversed(raw_media_items):
+        if item.media_id in seen_media_ids:
+            continue
+        seen_media_ids.add(item.media_id)
+        dedup_rev.append(item)
+    dedup_rev.reverse()
+
     merged_locations = list(
         dict.fromkeys([*prev_visited_locations, *extra_visited_location_ids, target_location.id])
     )
@@ -134,4 +211,4 @@ def build_first_visit_arrival(
         location_by_id,
         container_by_id,
     )
-    return cards, merged_locations, merged_containers
+    return cards, dedup_rev, merged_locations, merged_containers

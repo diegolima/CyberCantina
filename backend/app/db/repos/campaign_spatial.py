@@ -14,7 +14,7 @@ from app.schemas.turn import (
     PreTurnAnalysis,
     WorldStateSnapshot,
 )
-from app.db.repos.arrival_descriptions import build_first_visit_arrival
+from app.db.repos.arrival_descriptions import build_first_visit_arrival_bundle
 from app.schemas.world import (
     OPPOSITE_COMPASS,
     LocationContainer,
@@ -56,16 +56,19 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
         world_target = next((loc for loc in world.locations if loc.id == location_id), target_loc)
 
         new_flags: list[str] = [f"At {world_target.name}"]
-        arrival_cards, merged_visited, merged_visited_containers = build_first_visit_arrival(
-            target_location=world_target,
-            containers=world.containers,
-            locations=world.locations,
-            prev_visited_locations=leaf_turn.world_snapshot.visited_location_ids or [],
-            prev_visited_containers=leaf_turn.world_snapshot.visited_container_ids or [],
-            describe_on_first_visit=campaign.world_settings.describe_on_first_visit,
+        arrival_cards, arrival_media, merged_visited, merged_visited_containers = (
+            build_first_visit_arrival_bundle(
+                target_location=world_target,
+                containers=world.containers,
+                locations=world.locations,
+                prev_visited_locations=leaf_turn.world_snapshot.visited_location_ids or [],
+                prev_visited_containers=leaf_turn.world_snapshot.visited_container_ids or [],
+                describe_on_first_visit=campaign.world_settings.describe_on_first_visit,
+                emit_media=campaign.world_settings.describe_on_first_visit,
+            )
         )
 
-        if arrival_cards:
+        if arrival_cards or arrival_media:
             arrival_turn_id = f"turn_{uuid.uuid4().hex[:10]}"
             all_prev_states = dict(leaf_turn.character_states or {})
             if leaf_turn.character_state.character_id not in all_prev_states:
@@ -121,6 +124,7 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                     transition_type="move_existing",
                     target_location_id=world_target.id,
                     first_visit_cards=arrival_cards,
+                    first_visit_media=arrival_media,
                 ),
             )
             return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
@@ -609,6 +613,7 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
             ui_x=r["ui_x"] if "ui_x" in keys else None,
             ui_y=r["ui_y"] if "ui_y" in keys else None,
             icon=r["icon"] if "icon" in keys else None,
+            image_media_id=r["image_media_id"] if "image_media_id" in keys else None,
         )
 
     @staticmethod
@@ -631,6 +636,7 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
             ui_x=r["ui_x"] if "ui_x" in keys else None,
             ui_y=r["ui_y"] if "ui_y" in keys else None,
             icon=r["icon"] if "icon" in keys else None,
+            image_media_id=r["image_media_id"] if "image_media_id" in keys else None,
         )
 
     @staticmethod

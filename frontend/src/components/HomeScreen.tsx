@@ -106,16 +106,27 @@ const HomeCard: React.FC<HomeCardProps> = ({
   onNewClick,
 }) => {
   const [activeIdx, setActiveIdx] = useState(0);
+  const [failedUrls, setFailedUrls] = useState<Record<string, boolean>>({});
+  const visibleImages = useMemo(
+    () => images.filter((u) => !failedUrls[u]),
+    [images, failedUrls]
+  );
 
   // Rotate images every 12 seconds when more than 1 image is present
   useEffect(() => {
-    if (images.length <= 1) return;
+    if (visibleImages.length <= 1) return;
     const interval = setInterval(() => {
       if (document.hidden) return;
-      setActiveIdx((prev) => (prev + 1) % images.length);
+      setActiveIdx((prev) => (prev + 1) % visibleImages.length);
     }, 12000);
     return () => clearInterval(interval);
-  }, [images.length]);
+  }, [visibleImages.length]);
+
+  useEffect(() => {
+    if (activeIdx >= visibleImages.length && visibleImages.length > 0) {
+      setActiveIdx(0);
+    }
+  }, [activeIdx, visibleImages.length]);
 
   return (
     <div
@@ -128,14 +139,17 @@ const HomeCard: React.FC<HomeCardProps> = ({
     >
       {/* Background Carousel Images */}
       <div className="home-card-bg-container">
-        {images.map((imgUrl, idx) => (
+        {visibleImages.map((imgUrl, idx) => (
           <img
             key={imgUrl}
             src={imgUrl}
             alt=""
             loading="lazy"
+            onError={() =>
+              setFailedUrls((prev) => ({ ...prev, [imgUrl]: true }))
+            }
             className={`home-card-bg-image align-${imagePosition} ${
-              images.length === 1 || idx === activeIdx ? "active" : ""
+              visibleImages.length === 1 || idx === activeIdx ? "active" : ""
             }`}
           />
         ))}
@@ -145,7 +159,7 @@ const HomeCard: React.FC<HomeCardProps> = ({
       <div className="home-card-scrim" />
 
       {/* Large Centered Watermark Icon - Fallback ONLY when no images are available */}
-      {images.length === 0 && (
+      {visibleImages.length === 0 && (
         <div className="home-card-watermark">{watermarkIcon}</div>
       )}
 
@@ -156,12 +170,12 @@ const HomeCard: React.FC<HomeCardProps> = ({
         title={`Browse & select ${title.toLowerCase()}`}
       >
         {/* Subtle Carousel Progress Dots in Top Right */}
-        {images.length > 1 && (
+        {visibleImages.length > 1 && (
           <div
             className="home-card-carousel-dots"
-            title={`Cycling ${images.length} images (12s)`}
+            title={`Cycling ${visibleImages.length} images (12s)`}
           >
-            {images.map((_, dotIdx) => (
+            {visibleImages.map((_, dotIdx) => (
               <span
                 key={dotIdx}
                 className={`home-carousel-dot ${

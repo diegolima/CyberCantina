@@ -15,6 +15,7 @@ from app.schemas.world import (
     LocationNode,
     LoreNode,
     WorldGlobalRules,
+    WorldMediaItem,
     WorldRecord,
     WorldUpdatePayload,
     WorldWizardCommitPayload,
@@ -28,6 +29,7 @@ from app.db.repos.base import (
     _remap_character_items_for_world_update,
     _compute_missing_embeddings,
     _location_lore_vector_fields,
+    build_world_media_url,
     utc_now_iso,
 )
 
@@ -613,6 +615,11 @@ class WorldsMixin:
             )
             for loc in locations:
                 loc.lore_nodes = loc_lore_map.get(loc.id, [])
+
+            media_items = self._resolve_world_media_items(conn, world_id)
+            media_by_id = {m.id: m for m in media_items}
+            self._hydrate_entities_media(containers, media_by_id)
+            self._hydrate_entities_media(locations, media_by_id)
         finally:
             conn.close()
 
@@ -659,6 +666,7 @@ class WorldsMixin:
             locations=locations,
             edges=edges,
             lore_nodes=lore_nodes,
+            media=media_items,
             unsupported_fields=unsupported_fields,
         )
 
@@ -781,6 +789,29 @@ class WorldsMixin:
             existing_taken_cont_ids = {
                 r["id"] for r in conn.execute("SELECT id FROM location_containers").fetchall()
             }
+            valid_image_media_ids = {
+                r["media_id"]
+                for r in conn.execute(
+                    """
+                    SELECT wml.media_id
+                    FROM world_media_links wml
+                    JOIN world_media wm ON wm.id = wml.media_id
+                    WHERE wml.world_id = ? AND wm.media_type = 'image'
+                    """,
+                    (world_id,),
+                ).fetchall()
+            }
+            if not reuse_ids:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO world_media_links (world_id, media_id, sort_order, created_at)
+                    SELECT ?, media_id, sort_order, created_at
+                    FROM world_media_links
+                    WHERE world_id = ?
+                    """,
+                    (target_world_id, world_id),
+                )
+
             cont_id_map: dict[str, str] = {}
             for cont in sorted_containers:
                 can_reuse_cont = (
@@ -797,13 +828,18 @@ class WorldsMixin:
                     if cont.parent_container_id
                     else None
                 )
+                cont_media_id = (
+                    cont.image_media_id
+                    if cont.image_media_id and cont.image_media_id in valid_image_media_ids
+                    else None
+                )
                 conn.execute(
                     """
                     INSERT INTO location_containers (
                         id, world_id, created_at_turn_id, parent_container_id, depth, name,
-                        description, environmental_tags_json, ui_x, ui_y, icon, created_at
+                        description, environmental_tags_json, ui_x, ui_y, icon, image_media_id, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         new_cont_id,
@@ -817,6 +853,7 @@ class WorldsMixin:
                         cont.ui_x,
                         cont.ui_y,
                         cont.icon,
+                        cont_media_id,
                         now,
                     ),
                 )
@@ -842,14 +879,19 @@ class WorldsMixin:
                 mapped_loc_cont = (
                     cont_id_map.get(loc.container_id) if loc.container_id else None
                 )
+                loc_media_id = (
+                    loc.image_media_id
+                    if loc.image_media_id and loc.image_media_id in valid_image_media_ids
+                    else None
+                )
                 conn.execute(
                     """
                     INSERT INTO location_nodes (
                         id, world_id, created_at_turn_id, superseded_at_turn_id, container_id, name, summary,
                         description, environmental_tags_json, is_starting_location, is_hub,
-                        is_entry_exit, starting_message, ui_x, ui_y, icon
+                        is_entry_exit, starting_message, ui_x, ui_y, icon, image_media_id
                     )
-                    VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         new_loc_id,
@@ -866,6 +908,7 @@ class WorldsMixin:
                         loc.ui_x,
                         loc.ui_y,
                         loc.icon,
+                        loc_media_id,
                     ),
                 )
 
@@ -1329,9 +1372,410 @@ class WorldsMixin:
                 conn.execute("DELETE FROM worlds WHERE id = ?", (w_id,))
                 pruned_ids.append(w_id)
 
+            orphan_media_rows = []
             if pruned_ids:
+                orphan_media_rows = conn.execute(
+                    """
+                    SELECT wm.id, wm.media_type, wm.filename
+                    FROM world_media wm
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM world_media_links wml WHERE wml.media_id = wm.id
+                    )
+                    """
+                ).fetchall()
+                for mr in orphan_media_rows:
+                    conn.execute("DELETE FROM world_media WHERE id = ?", (mr["id"],))
                 conn.commit()
         finally:
             conn.close()
 
+        for mr in orphan_media_rows:
+            self._delete_world_media_file(mr["media_type"], mr["filename"])
+
         return pruned_ids
+
+    def _resolve_world_media_items(
+        self, conn: sqlite3.Connection, world_id: str
+    ) -> list[WorldMediaItem]:
+        """Return ordered WorldMediaItems linked to world_id whose files exist on disk."""
+        rows = conn.execute(
+            """
+            SELECT wm.id, wm.media_type, wm.filename, wm.label, wm.mime_type,
+                   wm.byte_size, wm.created_at, wml.sort_order
+            FROM world_media_links wml
+            JOIN world_media wm ON wm.id = wml.media_id
+            WHERE wml.world_id = ?
+            ORDER BY wml.sort_order ASC, wm.created_at ASC
+            """,
+            (world_id,),
+        ).fetchall()
+        items: list[WorldMediaItem] = []
+        for r in rows:
+            m_type = r["media_type"]
+            fname = r["filename"]
+            if not self._world_media_file_exists(m_type, fname):
+                continue
+            items.append(
+                WorldMediaItem(
+                    id=r["id"],
+                    media_type=m_type,
+                    url=build_world_media_url(m_type, fname),
+                    label=r["label"] or "",
+                    mime_type=r["mime_type"] or "image/webp",
+                    byte_size=int(r["byte_size"] or 0),
+                    sort_order=int(r["sort_order"] or 0),
+                    created_at=r["created_at"] or "",
+                )
+            )
+        return items
+
+    @staticmethod
+    def _hydrate_entities_media(
+        entities: list[Any],
+        media_by_id: dict[str, WorldMediaItem],
+    ) -> None:
+        """Populate image_url/image_label on containers or locations, clearing missing media refs."""
+        for ent in entities:
+            mid = getattr(ent, "image_media_id", None)
+            if not mid:
+                ent.image_url = None
+                ent.image_label = None
+                continue
+            item = media_by_id.get(mid)
+            if item is None or item.media_type != "image":
+                ent.image_media_id = None
+                ent.image_url = None
+                ent.image_label = None
+                continue
+            ent.image_url = item.url
+            ent.image_label = item.label
+
+    def _ensure_writable_world_id(
+        self, world_id: str, owner_id: str | None = None
+    ) -> str:
+        """Return world_id if unused by campaigns, or CoW-fork first so running campaigns stay isolated."""
+        orig = self.get_world(world_id, base_only=True, owner_id=owner_id)
+        conn = self._connect()
+        try:
+            usage_row = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM campaigns WHERE world_id = ?",
+                (world_id,),
+            ).fetchone()
+            campaigns_using = int(usage_row["cnt"]) if usage_row else 0
+        finally:
+            conn.close()
+        if campaigns_using == 0:
+            return world_id
+        forked = self.update_world(
+            world_id,
+            WorldUpdatePayload(
+                name=orig.name,
+                global_rules=orig.global_rules,
+                containers=orig.containers,
+                locations=orig.locations,
+                edges=orig.edges,
+                lore_nodes=orig.lore_nodes,
+                unsupported_fields=orig.unsupported_fields,
+            ),
+            owner_id=owner_id,
+        )
+        return forked.id
+
+    def list_user_world_media_files(self, user_id: str) -> list[tuple[str, str]]:
+        """Return deduplicated (category_dir, filename) pairs for world media owned by user_id."""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT media_type, filename FROM world_media WHERE owner_id = ?",
+                (user_id,),
+            ).fetchall()
+            return [
+                ("audio" if r["media_type"] == "audio" else "images", r["filename"])
+                for r in rows
+            ]
+        finally:
+            conn.close()
+
+    def list_active_world_media_filenames(self, category: str = "images") -> set[str]:
+        """Return all persisted world media filenames for the given category directory."""
+        m_type = "audio" if category == "audio" else "image"
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT filename FROM world_media WHERE media_type = ?",
+                (m_type,),
+            ).fetchall()
+            return {r["filename"] for r in rows}
+        finally:
+            conn.close()
+
+    def user_can_access_world_media(
+        self, user_id: str, category: str, filename: str
+    ) -> bool:
+        """Return True if user_id owns the world media asset or has a world/campaign referencing it."""
+        m_type = "audio" if category == "audio" else "image"
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM world_media wm
+                WHERE wm.media_type = ? AND wm.filename = ? AND wm.owner_id = ?
+                UNION
+                SELECT 1
+                FROM world_media wm
+                JOIN world_media_links wml ON wml.media_id = wm.id
+                JOIN worlds w ON w.id = wml.world_id
+                WHERE wm.media_type = ? AND wm.filename = ? AND w.owner_id = ?
+                UNION
+                SELECT 1
+                FROM world_media wm
+                JOIN world_media_links wml ON wml.media_id = wm.id
+                JOIN campaigns c ON c.world_id = wml.world_id
+                WHERE wm.media_type = ? AND wm.filename = ? AND c.owner_id = ?
+                LIMIT 1
+                """,
+                (
+                    m_type, filename, user_id,
+                    m_type, filename, user_id,
+                    m_type, filename, user_id,
+                ),
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+
+    def add_world_media(
+        self,
+        world_id: str,
+        *,
+        media_id: str,
+        filename: str,
+        label: str,
+        mime_type: str,
+        byte_size: int,
+        media_type: str = "image",
+        owner_id: str | None = None,
+    ) -> WorldRecord:
+        """Attach a newly uploaded world media asset to world_id (CoW-forking if campaigns exist)."""
+        target_world_id = self._ensure_writable_world_id(world_id, owner_id=owner_id)
+        now = utc_now_iso()
+        clean_label = label.strip()
+        conn = self._connect()
+        try:
+            w_row = conn.execute(
+                "SELECT owner_id FROM worlds WHERE id = ?",
+                (target_world_id,),
+            ).fetchone()
+            eff_owner_id = w_row["owner_id"] if w_row else owner_id
+            max_sort_row = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), -1) AS max_s FROM world_media_links WHERE world_id = ?",
+                (target_world_id,),
+            ).fetchone()
+            next_sort = int(max_sort_row["max_s"]) + 1 if max_sort_row else 0
+            conn.execute(
+                """
+                INSERT INTO world_media (id, owner_id, media_type, filename, label, mime_type, byte_size, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    media_id,
+                    eff_owner_id,
+                    media_type,
+                    filename,
+                    clean_label,
+                    mime_type,
+                    int(byte_size),
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO world_media_links (world_id, media_id, sort_order, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (target_world_id, media_id, next_sort, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return self.get_world(target_world_id, base_only=True, owner_id=owner_id)
+
+    def update_world_media_label(
+        self,
+        world_id: str,
+        media_id: str,
+        label: str,
+        owner_id: str | None = None,
+    ) -> WorldRecord:
+        """Update a world media item's display label (CoW-forking if campaigns reference world_id)."""
+        target_world_id = self._ensure_writable_world_id(world_id, owner_id=owner_id)
+        conn = self._connect()
+        try:
+            link = conn.execute(
+                "SELECT 1 FROM world_media_links WHERE world_id = ? AND media_id = ?",
+                (target_world_id, media_id),
+            ).fetchone()
+            if not link:
+                raise KeyError(f"Media '{media_id}' not found on world '{target_world_id}'")
+            conn.execute(
+                "UPDATE world_media SET label = ? WHERE id = ?",
+                (label.strip(), media_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return self.get_world(target_world_id, base_only=True, owner_id=owner_id)
+
+    def reorder_world_media(
+        self,
+        world_id: str,
+        ordered_media_ids: list[str],
+        owner_id: str | None = None,
+    ) -> WorldRecord:
+        """Update sort_order of media items on world_id (CoW-forking if campaigns reference world_id)."""
+        target_world_id = self._ensure_writable_world_id(world_id, owner_id=owner_id)
+        conn = self._connect()
+        try:
+            existing_rows = conn.execute(
+                """
+                SELECT media_id
+                FROM world_media_links
+                WHERE world_id = ?
+                ORDER BY sort_order ASC, created_at ASC
+                """,
+                (target_world_id,),
+            ).fetchall()
+            existing_ids = [r["media_id"] for r in existing_rows]
+            existing_set = set(existing_ids)
+            ordered_clean: list[str] = []
+            seen: set[str] = set()
+            for mid in ordered_media_ids:
+                if mid in existing_set and mid not in seen:
+                    seen.add(mid)
+                    ordered_clean.append(mid)
+            for mid in existing_ids:
+                if mid not in seen:
+                    seen.add(mid)
+                    ordered_clean.append(mid)
+            for idx, mid in enumerate(ordered_clean):
+                conn.execute(
+                    "UPDATE world_media_links SET sort_order = ? WHERE world_id = ? AND media_id = ?",
+                    (idx, target_world_id, mid),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+        return self.get_world(target_world_id, base_only=True, owner_id=owner_id)
+
+    def get_world_media_usage_summary(
+        self,
+        world_id: str,
+        media_id: str,
+        owner_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Count all active campaigns (including sibling CoW forks) referencing media_id."""
+        self.get_world(world_id, base_only=True, owner_id=owner_id)
+        conn = self._connect()
+        try:
+            link = conn.execute(
+                "SELECT 1 FROM world_media_links WHERE world_id = ? AND media_id = ?",
+                (world_id, media_id),
+            ).fetchone()
+            if not link:
+                raise KeyError(f"Media '{media_id}' not found on world '{world_id}'")
+            row = conn.execute(
+                """
+                SELECT COUNT(DISTINCT camp.id) AS cnt
+                FROM campaigns camp
+                JOIN world_media_links wml ON wml.world_id = camp.world_id
+                WHERE wml.media_id = ?
+                """,
+                (media_id,),
+            ).fetchone()
+            campaigns_using = int(row["cnt"]) if row else 0
+            return {
+                "world_id": world_id,
+                "media_id": media_id,
+                "campaigns_using": campaigns_using,
+            }
+        finally:
+            conn.close()
+
+    def get_world_delete_impact(
+        self, world_id: str, owner_id: str | None = None
+    ) -> dict[str, Any]:
+        """Return direct campaign count and sibling CoW-fork campaigns sharing this world's media."""
+        self.get_world(world_id, base_only=True, owner_id=owner_id)
+        conn = self._connect()
+        try:
+            direct_row = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM campaigns WHERE world_id = ?",
+                (world_id,),
+            ).fetchone()
+            sibling_row = conn.execute(
+                """
+                SELECT COUNT(DISTINCT camp.id) AS cnt
+                FROM campaigns camp
+                JOIN world_media_links wml_other ON wml_other.world_id = camp.world_id
+                JOIN world_media_links wml_self ON wml_self.media_id = wml_other.media_id
+                WHERE wml_self.world_id = ? AND camp.world_id != ?
+                """,
+                (world_id, world_id),
+            ).fetchone()
+            media_row = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM world_media_links WHERE world_id = ?",
+                (world_id,),
+            ).fetchone()
+            return {
+                "world_id": world_id,
+                "campaigns_using": int(direct_row["cnt"]) if direct_row else 0,
+                "sibling_campaigns_sharing_media": int(sibling_row["cnt"]) if sibling_row else 0,
+                "media_count": int(media_row["cnt"]) if media_row else 0,
+            }
+        finally:
+            conn.close()
+
+    def delete_world_media(
+        self,
+        world_id: str,
+        media_id: str,
+        owner_id: str | None = None,
+    ) -> WorldRecord:
+        """Hard-delete a world media asset (DB row + disk file) to reclaim quota immediately."""
+        self.get_world(world_id, base_only=True, owner_id=owner_id)
+        conn = self._connect()
+        media_type = "image"
+        filename = ""
+        try:
+            row = conn.execute(
+                """
+                SELECT wm.media_type, wm.filename
+                FROM world_media wm
+                JOIN world_media_links wml ON wml.media_id = wm.id
+                WHERE wml.world_id = ? AND wm.id = ?
+                """,
+                (world_id, media_id),
+            ).fetchone()
+            if not row:
+                raise KeyError(f"Media '{media_id}' not found on world '{world_id}'")
+            media_type = row["media_type"]
+            filename = row["filename"]
+            # Clear explicit references on location_nodes / location_containers, then remove world_media row
+            conn.execute(
+                "UPDATE location_nodes SET image_media_id = NULL WHERE image_media_id = ?",
+                (media_id,),
+            )
+            conn.execute(
+                "UPDATE location_containers SET image_media_id = NULL WHERE image_media_id = ?",
+                (media_id,),
+            )
+            conn.execute("DELETE FROM world_media WHERE id = ?", (media_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+        if filename:
+            self._delete_world_media_file(media_type, filename)
+
+        return self.get_world(world_id, base_only=True, owner_id=owner_id)

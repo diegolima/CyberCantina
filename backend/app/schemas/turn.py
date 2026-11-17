@@ -388,6 +388,18 @@ class FirstVisitDescriptionCard(BaseModel):
     description: str
 
 
+class FirstVisitMediaItem(BaseModel):
+    """Cosmetic arrival image attached when entering an unvisited container or location."""
+
+    entity_type: Literal["container", "location"]
+    entity_id: str
+    depth: int = 0
+    entity_name: str
+    media_id: str
+    image_url: str
+    label: str = ""
+
+
 class ImprovisedLocationSpec(BaseModel):
     """New location node dynamically created when characters explore an unmapped room/area."""
 
@@ -827,6 +839,10 @@ class PostTurnStateDelta(BaseModel):
     first_visit_cards: list[FirstVisitDescriptionCard] = Field(
         default_factory=list,
         description="Cosmetic first-visit location and container description cards attached to this turn.",
+    )
+    first_visit_media: list[FirstVisitMediaItem] = Field(
+        default_factory=list,
+        description="Cosmetic first-visit location and container images grouped into a single arrival carousel.",
     )
 
 

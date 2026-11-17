@@ -9,6 +9,7 @@ from pathlib import Path
 _SAFE_ID_RE = re.compile(r"[a-zA-Z0-9_-]+")
 _SAFE_FILENAME_RE = re.compile(r"[a-zA-Z0-9_.-]+")
 _VALID_MEDIA_CATEGORIES = ("portraits", "gallery")
+_VALID_WORLD_MEDIA_CATEGORIES = ("images", "audio")
 
 
 class PathTraversalError(ValueError):
@@ -20,6 +21,13 @@ def validate_safe_character_id(character_id: str) -> str:
     if not isinstance(character_id, str) or not _SAFE_ID_RE.fullmatch(character_id):
         raise ValueError("Invalid character ID.")
     return character_id
+
+
+def validate_safe_media_id(media_id: str) -> str:
+    """Validate that a media asset ID uses only safe identifier characters."""
+    if not isinstance(media_id, str) or not _SAFE_ID_RE.fullmatch(media_id):
+        raise ValueError("Invalid media ID.")
+    return media_id
 
 
 def _resolve_within_base(base_dir: str | Path, relative_subpath: str) -> Path:
@@ -68,3 +76,30 @@ def safe_resolve_media_file_path(
 
     char_dir = safe_resolve_character_media_dir(media_dir, clean_id)
     return _resolve_within_base(char_dir, os.path.join(category, filename))
+
+
+def safe_resolve_world_media_root(
+    media_dir: str | Path,
+    category: str = "images",
+) -> Path:
+    """Resolve and verify the world media directory for a category within media_dir/worlds."""
+    if category not in _VALID_WORLD_MEDIA_CATEGORIES:
+        raise ValueError("Invalid world media category.")
+    worlds_root = _resolve_within_base(media_dir, "worlds")
+    return _resolve_within_base(worlds_root, category)
+
+
+def safe_resolve_world_media_file_path(
+    media_dir: str | Path,
+    category: str,
+    filename: str,
+) -> Path:
+    """Validate category and filename, and resolve safely within media_dir/worlds/{category}."""
+    if (
+        not isinstance(filename, str)
+        or filename.startswith(".")
+        or not _SAFE_FILENAME_RE.fullmatch(filename)
+    ):
+        raise ValueError("Invalid filename.")
+    cat_dir = safe_resolve_world_media_root(media_dir, category)
+    return _resolve_within_base(cat_dir, filename)

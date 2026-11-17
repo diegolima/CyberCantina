@@ -59,6 +59,16 @@ export interface FirstVisitDescriptionCard {
   description: string;
 }
 
+export interface FirstVisitMediaItem {
+  entity_type: "container" | "location";
+  entity_id: string;
+  depth: number;
+  entity_name: string;
+  media_id: string;
+  image_url: string;
+  label: string;
+}
+
 export interface ExtractedCharacterMemory {
   character_id: string;
   title: string;
@@ -143,6 +153,7 @@ export interface PostTurnStateDelta {
   arbitration_rulings?: ArbitrationRulingRecord[];
   compacted_character_ids?: string[];
   first_visit_cards?: FirstVisitDescriptionCard[];
+  first_visit_media?: FirstVisitMediaItem[];
 }
 
 export type Phase5AgentKind = "world_clerk" | "character";

@@ -48,7 +48,11 @@ export function getEntityPrimaryImage(
       return null;
     }
     case "worlds": {
-      const w = entity as any;
+      const w = entity as WorldRecord & Record<string, any>;
+      const firstWorldImage = (w.media || []).find(
+        (m) => m.media_type === "image" && Boolean(m.url)
+      );
+      if (firstWorldImage?.url) return firstWorldImage.url;
       return (
         w.cover_url ||
         w.banner_url ||

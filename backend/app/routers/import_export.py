@@ -47,6 +47,7 @@ async def export_bundle(
         persona_ids=req.persona_ids,
         owner_id=current_user.id,
         description=f"Export bundle: {req.bundle_name}",
+        include_world_media=req.include_world_media,
     )
 
     safe_name = _slugify_filename(req.bundle_name)
@@ -101,9 +102,10 @@ async def export_single_character(
 async def export_single_world(
     world_id: str,
     include_characters: bool = Query(default=True),
+    include_media: bool = Query(default=True),
     current_user: UserProfile = Depends(get_current_user),
 ) -> Response:
-    """Export a single world as a .zcc archive, optionally bundling all resident characters."""
+    """Export a single world as a .zcc archive, optionally bundling resident characters and media."""
     repo = get_repo()
     try:
         world = repo.get_world(world_id, owner_id=current_user.id)
@@ -122,6 +124,7 @@ async def export_single_world(
         persona_ids=[],
         owner_id=current_user.id,
         description=f"World export: {world.name}",
+        include_world_media=include_media,
     )
 
     safe_name = _slugify_filename(f"world_{world.name}")

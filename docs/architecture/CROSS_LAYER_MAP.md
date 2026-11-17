@@ -71,6 +71,7 @@
 | `WS` | `/api/local-relay/ws` | `app.routers.local_relay.local_relay_ws` | — | *(backend-only / test / SSE)* |
 | `POST` | `/api/mechanics/choice-preview` | `app.routers.mechanics.preview_choices` | `ChoicePreviewResponse` | `frontend/src/api/campaigns.ts` |
 | `GET` | `/api/media/characters/{character_id}/{category}/{filename}` | `app.routers.characters.get_character_media` | — | *(backend-only / test / SSE)* |
+| `GET` | `/api/media/worlds/{category}/{filename}` | `app.routers.worlds.get_world_media` | — | *(backend-only / test / SSE)* |
 | `GET` | `/api/messages/home` | `app.routers.admin_messages.list_home_messages` | `list` | `frontend/src/api/adminMessages.ts` |
 | `GET` | `/api/notes` | `app.routers.notes.list_my_notes` | `list` | `frontend/src/api/notes.ts` |
 | `POST` | `/api/notes` | `app.routers.notes.create_my_note` | `UserNoteRecord` | `frontend/src/api/notes.ts` |
@@ -127,7 +128,13 @@
 | `GET` | `/api/worlds/{world_id}` | `app.routers.worlds.get_world` | `WorldRecord` | `frontend/src/api/worlds.ts` |
 | `PUT` | `/api/worlds/{world_id}` | `app.routers.worlds.update_world` | `WorldRecord` | `frontend/src/api/worlds.ts` |
 | `DELETE` | `/api/worlds/{world_id}/containers/{container_id}` | `app.routers.worlds.delete_world_container` | `WorldRecord` | *(backend-only / test / SSE)* |
+| `GET` | `/api/worlds/{world_id}/delete-impact` | `app.routers.worlds.get_world_delete_impact` | `dict` | `frontend/src/api/worlds.ts` |
 | `POST` | `/api/worlds/{world_id}/locations/{location_id}/convert-to-container` | `app.routers.worlds.convert_location_to_container` | `WorldRecord` | `frontend/src/api/worlds.ts` |
+| `POST` | `/api/worlds/{world_id}/media` | `app.routers.worlds.upload_world_media` | `WorldRecord` | `frontend/src/api/worlds.ts` |
+| `PUT` | `/api/worlds/{world_id}/media/reorder` | `app.routers.worlds.reorder_world_media` | `WorldRecord` | `frontend/src/api/worlds.ts` |
+| `DELETE` | `/api/worlds/{world_id}/media/{media_id}` | `app.routers.worlds.delete_world_media` | `WorldRecord` | `frontend/src/api/worlds.ts` |
+| `PATCH` | `/api/worlds/{world_id}/media/{media_id}` | `app.routers.worlds.update_world_media_label` | `WorldRecord` | `frontend/src/api/worlds.ts` |
+| `GET` | `/api/worlds/{world_id}/media/{media_id}/impact` | `app.routers.worlds.get_world_media_delete_impact` | `dict` | `frontend/src/api/worlds.ts` |
 
 ## 2. SQLite Schema (`backend/app/db/schema.sql`)
 
@@ -157,10 +164,12 @@ erDiagram
     campaigns ||--o{ episodic_chunks : references
     turn_nodes ||--o{ episodic_chunks : references
     location_containers ||--o{ location_containers : references
+    world_media ||--o{ location_containers : references
     worlds ||--o{ location_containers : references
     location_nodes ||--o{ location_edges : references
     worlds ||--o{ location_edges : references
     location_containers ||--o{ location_nodes : references
+    world_media ||--o{ location_nodes : references
     worlds ||--o{ location_nodes : references
     campaigns ||--o{ lore_nodes : references
     location_containers ||--o{ lore_nodes : references
@@ -179,6 +188,9 @@ erDiagram
     users ||--o{ user_passkeys : references
     users ||--o{ user_sessions : references
     users ||--o{ webauthn_challenges : references
+    users ||--o{ world_media : references
+    world_media ||--o{ world_media_links : references
+    worlds ||--o{ world_media_links : references
     location_nodes ||--o{ world_state_snapshots : references
     turn_nodes ||--o{ world_state_snapshots : references
     users ||--o{ worlds : references
@@ -192,8 +204,10 @@ erDiagram
 | `prompt_presets` | `users` |
 | `user_model_settings` | `prompt_presets`, `users` |
 | `worlds` | `users` |
-| `location_containers` | `location_containers`, `worlds` |
-| `location_nodes` | `location_containers`, `worlds` |
+| `world_media` | `users` |
+| `world_media_links` | `world_media`, `worlds` |
+| `location_containers` | `location_containers`, `world_media`, `worlds` |
+| `location_nodes` | `location_containers`, `world_media`, `worlds` |
 | `location_edges` | `location_nodes`, `worlds` |
 | `characters` | `users`, `worlds` |
 | `character_versions` | `characters` |
@@ -651,6 +665,7 @@ erDiagram
 | `frontend/src/components/chat/LiveStreamingTurnCard.tsx` |
 | `frontend/src/components/chat/TurnCard.tsx` |
 | `frontend/src/components/chat/arrivalHelpers.ts` |
+| `frontend/src/components/chat/arrivalMediaHelpers.ts` |
 | `frontend/src/components/chat/chatHelpers.tsx` |
 
 #### `components/inspector`
@@ -729,6 +744,7 @@ erDiagram
 | :--- |
 | `frontend/src/components/shared/AdminMessageBannerList.tsx` |
 | `frontend/src/components/shared/ClickToEditField.tsx` |
+| `frontend/src/components/shared/ImageLightboxModal.tsx` |
 | `frontend/src/components/shared/UnsupportedFieldsTab.tsx` |
 
 #### `components/wizard`
@@ -743,6 +759,7 @@ erDiagram
 | File |
 | :--- |
 | `frontend/src/components/world/WorldInspectorModal.tsx` |
+| `frontend/src/components/world/WorldMediaTab.tsx` |
 | `frontend/src/components/world/worldDraftMappers.ts` |
 
 #### `hooks`

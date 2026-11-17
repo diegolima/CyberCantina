@@ -29,9 +29,13 @@ export const importExportApi = {
     return blob;
   },
 
-  exportWorld: async (worldId: string, includeCharacters: boolean = true) => {
+  exportWorld: async (
+    worldId: string,
+    includeCharacters: boolean = true,
+    includeMedia: boolean = true
+  ) => {
     const { blob, filename } = await fetchBlob(
-      `${API_BASE}/export/world/${encodeURIComponent(worldId)}?include_characters=${includeCharacters}`
+      `${API_BASE}/export/world/${encodeURIComponent(worldId)}?include_characters=${includeCharacters}&include_media=${includeMedia}`
     );
     triggerDownload(blob, filename || `world_${worldId}.zcc`);
     return blob;

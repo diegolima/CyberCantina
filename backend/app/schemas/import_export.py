@@ -36,6 +36,7 @@ class ExportBundleRequest(BaseModel):
     world_ids: list[str] = Field(default_factory=list)
     persona_ids: list[str] = Field(default_factory=list)
     bundle_name: str = Field(default="cybercantina_export", max_length=100)
+    include_world_media: bool = True
 
 
 class ExportCharacterOptions(BaseModel):
@@ -48,6 +49,7 @@ class ExportWorldOptions(BaseModel):
     """Options when exporting an individual world."""
 
     include_characters: bool = True
+    include_media: bool = True
 
 
 class ImportEntityConflict(BaseModel):

@@ -14,7 +14,12 @@ from app.db.repos.base import utc_now_iso
 from app.db.repository import CantinaRepository
 from app.schemas.housekeeping import PurgeCandidatePreview, PurgePreviewResponse
 from app.security.log_sanitize import sanitize_log_value
-from app.security.media_path import PathTraversalError, safe_resolve_character_media_dir
+from app.security.media_path import (
+    PathTraversalError,
+    safe_resolve_character_media_dir,
+    safe_resolve_world_media_file_path,
+    safe_resolve_world_media_root,
+)
 
 logger = logging.getLogger("cybercantina.housekeeping.purge_inactive")
 
@@ -71,6 +76,13 @@ def compute_purge_preview(
 
     for cand in raw_candidates:
         media_bytes = sum(_dir_bytes(repo.media_dir, cid) for cid in cand["character_ids"])
+        for w_cat, w_fname in repo.list_user_world_media_files(cand["user_id"]):
+            try:
+                wf = safe_resolve_world_media_file_path(repo.media_dir, w_cat, w_fname)
+                if wf.is_file():
+                    media_bytes += wf.stat().st_size
+            except (PathTraversalError, ValueError, OSError):
+                continue
         try:
             active_dt = _parse_utc_iso(cand["effective_last_active_at"])
             days_inactive = max(0, int((now_dt - active_dt).total_seconds() // 86400))
@@ -111,31 +123,58 @@ def compute_purge_preview(
 
 
 def _sweep_orphan_media_dirs(repo: CantinaRepository) -> int:
-    """Remove unreferenced character media directories older than ORPHAN_MEDIA_GRACE_SECONDS."""
-    characters_root = Path(repo.media_dir) / "characters"
-    if not characters_root.is_dir():
-        return 0
-    active_ids = repo.list_active_media_character_ids()
+    """Remove unreferenced character media dirs and world media files older than ORPHAN_MEDIA_GRACE_SECONDS."""
     now_epoch = time.time()
     removed = 0
-    for entry in characters_root.iterdir():
-        if not entry.is_dir():
-            continue
-        char_id = entry.name
-        if char_id in active_ids:
-            continue
+
+    characters_root = Path(repo.media_dir) / "characters"
+    if characters_root.is_dir():
+        active_ids = repo.list_active_media_character_ids()
+        for entry in characters_root.iterdir():
+            if not entry.is_dir():
+                continue
+            char_id = entry.name
+            if char_id in active_ids:
+                continue
+            try:
+                age_seconds = now_epoch - entry.stat().st_mtime
+            except OSError:
+                continue
+            if age_seconds < ORPHAN_MEDIA_GRACE_SECONDS:
+                continue
+            try:
+                safe_dir = safe_resolve_character_media_dir(repo.media_dir, char_id)
+            except (PathTraversalError, ValueError):
+                continue
+            shutil.rmtree(safe_dir, ignore_errors=True)
+            removed += 1
+
+    for category in ("images", "audio"):
         try:
-            age_seconds = now_epoch - entry.stat().st_mtime
-        except OSError:
-            continue
-        if age_seconds < ORPHAN_MEDIA_GRACE_SECONDS:
-            continue
-        try:
-            safe_dir = safe_resolve_character_media_dir(repo.media_dir, char_id)
+            world_cat_dir = safe_resolve_world_media_root(repo.media_dir, category)
         except (PathTraversalError, ValueError):
             continue
-        shutil.rmtree(safe_dir, ignore_errors=True)
-        removed += 1
+        if not world_cat_dir.is_dir():
+            continue
+        active_world_files = repo.list_active_world_media_filenames(category)
+        for entry in world_cat_dir.iterdir():
+            if not entry.is_file() or entry.name in active_world_files:
+                continue
+            try:
+                age_seconds = now_epoch - entry.stat().st_mtime
+            except OSError:
+                continue
+            if age_seconds < ORPHAN_MEDIA_GRACE_SECONDS:
+                continue
+            try:
+                safe_file = safe_resolve_world_media_file_path(
+                    repo.media_dir, category, entry.name
+                )
+            except (PathTraversalError, ValueError):
+                continue
+            safe_file.unlink(missing_ok=True)
+            removed += 1
+
     return removed
 
 

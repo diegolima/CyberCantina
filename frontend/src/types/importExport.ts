@@ -22,6 +22,7 @@ export interface ExportBundleRequest {
   world_ids: string[];
   persona_ids: string[];
   bundle_name?: string;
+  include_world_media?: boolean;
 }
 
 export interface ImportEntityConflict {

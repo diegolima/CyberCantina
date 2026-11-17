@@ -26,6 +26,7 @@ from app.dependencies import (
     remove_character_media_dir,
     render_webp_bytes,
     safe_resolve_media_path,
+    safe_resolve_world_media_path,
 )
 from app.schemas.character import (
     CANONICAL_CHARACTER_RECORD_KEYS,
@@ -211,10 +212,57 @@ def _serialize_persona_for_zcc(persona: PersonaRecord) -> dict[str, Any]:
     return persona_data
 
 
-def _serialize_world_for_zcc(world: WorldRecord) -> dict[str, Any]:
-    """Serialize a WorldRecord for .zcc export, restoring top-level and global_rules.* extension keys."""
+def _stage_world_media_for_export(
+    repo: CantinaRepository,
+    world_id: str,
+    media_item: dict[str, Any],
+    media_entries: dict[str, bytes],
+) -> dict[str, Any]:
+    """Resolve a world media asset on disk, stage it into the ZIP bundle, and rewrite url."""
+    item_copy = dict(media_item)
+    url = str(item_copy.get("url") or "")
+    m = re.search(r"/api/media/worlds/(images|audio)/([^/?#]+)", url)
+    if not m:
+        return item_copy
+    cat_dir, filename = m.group(1), m.group(2)
+    try:
+        fpath = safe_resolve_world_media_path(cat_dir, filename, media_dir=repo.media_dir)
+        if fpath.is_file():
+            rel_zip_path = f"media/worlds/{world_id}/{cat_dir}/{filename}"
+            media_entries[rel_zip_path] = fpath.read_bytes()
+            item_copy["url"] = rel_zip_path
+    except Exception as exc:
+        logger.warning("Failed staging world media '%s' for export: %s", filename, exc)
+    return item_copy
+
+
+def _serialize_world_for_zcc(
+    world: WorldRecord,
+    *,
+    repo: CantinaRepository | None = None,
+    media_entries: dict[str, bytes] | None = None,
+    include_media: bool = True,
+) -> dict[str, Any]:
+    """Serialize a WorldRecord for .zcc export, restoring extension keys and optionally staging media."""
     world_data = world.model_dump()
     world_data.pop("unsupported_fields", None)
+    if include_media and repo is not None and media_entries is not None:
+        world_data["media"] = [
+            _stage_world_media_for_export(repo, world.id, m_item, media_entries)
+            for m_item in (world_data.get("media") or [])
+        ]
+    elif not include_media:
+        world_data["media"] = []
+        for cont in world_data.get("containers") or []:
+            if isinstance(cont, dict):
+                cont["image_media_id"] = None
+                cont["image_url"] = None
+                cont["image_label"] = None
+        for loc in world_data.get("locations") or []:
+            if isinstance(loc, dict):
+                loc["image_media_id"] = None
+                loc["image_url"] = None
+                loc["image_label"] = None
     rules_dict = world_data.get("global_rules")
     if not isinstance(rules_dict, dict):
         rules_dict = {}
@@ -302,6 +350,7 @@ def build_zcc_export(
     persona_ids: list[str],
     owner_id: str,
     description: str = "",
+    include_world_media: bool = True,
 ) -> bytes:
     """Bundle selected characters, worlds, personas, and media into a .zcc ZIP archive."""
     worlds: list[WorldRecord] = []
@@ -385,7 +434,15 @@ def build_zcc_export(
 
         exported_characters_json.append(char_data)
 
-    exported_worlds_json = [_serialize_world_for_zcc(w) for w in worlds]
+    exported_worlds_json = [
+        _serialize_world_for_zcc(
+            w,
+            repo=repo,
+            media_entries=media_entries,
+            include_media=include_world_media,
+        )
+        for w in worlds
+    ]
     exported_personas_json = [_serialize_persona_for_zcc(p) for p in personas]
 
     # 4. Build Manifest
@@ -726,10 +783,32 @@ async def commit_staged_import(
         actor_user = None
     quota_bytes = get_user_quota_bytes(actor_user) if actor_user is not None else None
     pre_rendered_media: dict[tuple[int, str, str], bytes] = {}
+    pre_rendered_world_media: dict[tuple[int, int], bytes] = {}
     zip_names = set(zf.namelist())
 
     if quota_bytes is not None and actor_user is not None:
         total_media_bytes = 0
+        for w_idx, w in enumerate(worlds_data):
+            old_world_id = str(w.get("id") or "")
+            w_name = str(w.get("name") or "Unnamed World").strip()
+            w_strategy = (
+                req.conflict_strategies.get(old_world_id)
+                or req.conflict_strategies.get(w_name)
+                or req.default_conflict_strategy
+            )
+            if w_strategy == "skip":
+                continue
+            for m_idx, m_item in enumerate(w.get("media") or []):
+                if not isinstance(m_item, dict):
+                    continue
+                if str(m_item.get("media_type") or "image") != "image":
+                    continue
+                zip_member = _resolve_zip_member(m_item.get("url", ""), zip_names)
+                if zip_member:
+                    webp_bytes = render_webp_bytes(zf.read(zip_member), square_crop=False, max_size=1920)
+                    pre_rendered_world_media[(w_idx, m_idx)] = webp_bytes
+                    total_media_bytes += len(webp_bytes)
+
         for c_idx, c in enumerate(characters_data):
             old_c_id = str(c.get("id") or "")
             c_name = str(c.get("name") or "Unnamed Character").strip()
@@ -779,7 +858,7 @@ async def commit_staged_import(
     id_remap: dict[str, str] = {}
 
     # 1. Ingest Worlds
-    for w in worlds_data:
+    for w_idx, w in enumerate(worlds_data):
         old_world_id = str(w.get("id") or "")
         w_name = str(w.get("name") or "Unnamed World").strip()
         strategy = (
@@ -792,6 +871,7 @@ async def commit_staged_import(
             skipped_entities.append(f"World: {w_name}")
             continue
 
+        written_world_files: list[Path] = []
         try:
             new_world_id = f"world_{uuid.uuid4().hex[:10]}"
             id_remap[old_world_id] = new_world_id
@@ -809,7 +889,56 @@ async def commit_staged_import(
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             canonical_rules = WorldGlobalRules.model_validate(w.get("global_rules") or {})
 
+            # Prepare world media files & id_remap before inserting containers/locations
+            imported_world_media_rows: list[tuple[str, str, str, str, str, int, int, str]] = []
             now = utc_now_iso()
+            for m_idx, m_item in enumerate(w.get("media") or []):
+                if not isinstance(m_item, dict):
+                    continue
+                if str(m_item.get("media_type") or "image") != "image":
+                    continue
+                zip_member = _resolve_zip_member(m_item.get("url", ""), zip_names)
+                if not zip_member:
+                    continue
+                old_media_id = str(m_item.get("id") or "")
+                new_media_id = f"wmed_{uuid.uuid4().hex[:10]}"
+                if old_media_id:
+                    id_remap[old_media_id] = new_media_id
+                filename = f"{new_media_id}.webp"
+                target_path = safe_resolve_world_media_path(
+                    "images", filename, media_dir=repo.media_dir
+                )
+                pre = pre_rendered_world_media.get((w_idx, m_idx))
+                if actor_user is not None:
+                    webp_bytes = (
+                        pre
+                        if pre is not None
+                        else render_webp_bytes(zf.read(zip_member), square_crop=False, max_size=1920)
+                    )
+                    enforce_quota_and_write_webp(repo, actor_user, webp_bytes, target_path)
+                    written_world_files.append(target_path)
+                    byte_sz = len(webp_bytes)
+                else:
+                    process_and_save_image(
+                        zf.read(zip_member), target_path, square_crop=False, max_size=1920
+                    )
+                    written_world_files.append(target_path)
+                    byte_sz = target_path.stat().st_size if target_path.is_file() else 0
+
+                sort_ord = int(m_item.get("sort_order") if m_item.get("sort_order") is not None else len(imported_world_media_rows))
+                imported_world_media_rows.append(
+                    (
+                        new_media_id,
+                        "image",
+                        filename,
+                        str(m_item.get("label") or "").strip(),
+                        "image/webp",
+                        byte_sz,
+                        sort_ord,
+                        str(m_item.get("created_at") or now),
+                    )
+                )
+
             conn = repo._connect()
             try:
                 conn.execute(
@@ -823,6 +952,33 @@ async def commit_staged_import(
                         now,
                     ),
                 )
+
+                valid_imported_media_ids: set[str] = set()
+                for (
+                    m_id,
+                    m_type,
+                    m_fname,
+                    m_label,
+                    m_mime,
+                    m_bytes,
+                    m_sort,
+                    m_created,
+                ) in imported_world_media_rows:
+                    valid_imported_media_ids.add(m_id)
+                    conn.execute(
+                        """
+                        INSERT INTO world_media (id, owner_id, media_type, filename, label, mime_type, byte_size, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (m_id, user_id, m_type, m_fname, m_label, m_mime, m_bytes, m_created),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO world_media_links (world_id, media_id, sort_order, created_at)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (new_world_id, m_id, m_sort, now),
+                    )
 
                 # Containers (topological order: depth 4 down to 1 so parent_container_id FK always exists)
                 raw_containers = sorted(
@@ -839,14 +995,20 @@ async def commit_staged_import(
                     mapped_parent_id = (
                         id_remap.get(old_parent_id) if old_parent_id else None
                     )
+                    old_cont_media = cont.get("image_media_id")
+                    mapped_cont_media = (
+                        id_remap.get(old_cont_media)
+                        if old_cont_media and id_remap.get(old_cont_media) in valid_imported_media_ids
+                        else None
+                    )
                     c_depth = int(cont.get("depth", 1))
                     conn.execute(
                         """
                         INSERT INTO location_containers (
                             id, world_id, created_at_turn_id, parent_container_id, depth, name,
-                            description, environmental_tags_json, ui_x, ui_y, icon, created_at
+                            description, environmental_tags_json, ui_x, ui_y, icon, image_media_id, created_at
                         )
-                        VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             new_cont_id,
@@ -859,6 +1021,7 @@ async def commit_staged_import(
                             cont.get("ui_x"),
                             cont.get("ui_y"),
                             cont.get("icon"),
+                            mapped_cont_media,
                             cont.get("created_at") or now,
                         ),
                     )
@@ -915,15 +1078,21 @@ async def commit_staged_import(
                         id_remap.get(old_loc_cont_id) if old_loc_cont_id else None
                     )
 
+                    old_loc_media = loc.get("image_media_id")
+                    mapped_loc_media = (
+                        id_remap.get(old_loc_media)
+                        if old_loc_media and id_remap.get(old_loc_media) in valid_imported_media_ids
+                        else None
+                    )
                     conn.execute(
                         """
                         INSERT INTO location_nodes (
                             id, world_id, created_at_turn_id, superseded_at_turn_id, container_id,
                             name, summary, description, environmental_tags_json,
                             is_starting_location, is_hub, is_entry_exit, starting_message,
-                            ui_x, ui_y, icon
+                            ui_x, ui_y, icon, image_media_id
                         )
-                        VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             new_loc_id,
@@ -940,6 +1109,7 @@ async def commit_staged_import(
                             loc.get("ui_x"),
                             loc.get("ui_y"),
                             loc.get("icon"),
+                            mapped_loc_media,
                         ),
                     )
 
@@ -1052,8 +1222,12 @@ async def commit_staged_import(
                 conn.close()
 
         except HTTPException:
+            for wf in written_world_files:
+                wf.unlink(missing_ok=True)
             raise
         except Exception as exc:
+            for wf in written_world_files:
+                wf.unlink(missing_ok=True)
             logger.exception("Failed importing world '%s': %s", w_name, exc)
             errors.append(f"World '{w_name}': {exc}")
 

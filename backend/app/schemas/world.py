@@ -648,6 +648,19 @@ class LoreNode(BaseModel):
         return self
 
 
+class WorldMediaItem(BaseModel):
+    """Deduplicated media asset attached to a world (images in v0.15.0; extensible to audio)."""
+
+    id: str
+    media_type: Literal["image", "audio"] = "image"
+    url: str
+    label: str = ""
+    mime_type: str = "image/webp"
+    byte_size: int = 0
+    sort_order: int = 0
+    created_at: str = ""
+
+
 class LocationContainer(BaseModel):
     """Hierarchical spatial container node (Level 1=Building/Dungeon w/ Lore; Levels 2-4=Macro Org)."""
 
@@ -667,6 +680,9 @@ class LocationContainer(BaseModel):
     ui_x: float | None = None
     ui_y: float | None = None
     icon: str | None = None
+    image_media_id: str | None = None
+    image_url: str | None = None
+    image_label: str | None = None
     lore_nodes: list[LoreNode] = Field(
         default_factory=list,
         description="Scoped lore entries (strictly allowed only on depth=1 containers).",
@@ -736,6 +752,9 @@ class LocationNode(BaseModel):
     ui_x: float | None = None
     ui_y: float | None = None
     icon: str | None = None
+    image_media_id: str | None = None
+    image_url: str | None = None
+    image_label: str | None = None
     is_visited: bool = False
     lore_nodes: list[LoreNode] = Field(default_factory=list)
 
@@ -910,6 +929,7 @@ class WorldRecord(BaseModel):
     locations: list[LocationNode] = Field(default_factory=list)
     edges: list[LocationEdge] = Field(default_factory=list)
     lore_nodes: list[LoreNode] = Field(default_factory=list)
+    media: list[WorldMediaItem] = Field(default_factory=list)
     unsupported_fields: dict[str, Any] = Field(
         default_factory=dict,
         description="Read-only deprecated or unrecognized future .zcc attributes excluded from LLM prompts.",
@@ -964,6 +984,7 @@ CANONICAL_WORLD_RECORD_KEYS: frozenset[str] = frozenset(
         "locations",
         "edges",
         "lore_nodes",
+        "media",
         "unsupported_fields",
     }
 )
@@ -980,6 +1001,9 @@ CANONICAL_CONTAINER_KEYS: frozenset[str] = frozenset(
         "ui_x",
         "ui_y",
         "icon",
+        "image_media_id",
+        "image_url",
+        "image_label",
         "lore_nodes",
         "created_at",
     }
@@ -1002,6 +1026,9 @@ CANONICAL_LOCATION_KEYS: frozenset[str] = frozenset(
         "ui_x",
         "ui_y",
         "icon",
+        "image_media_id",
+        "image_url",
+        "image_label",
         "is_visited",
         "lore_nodes",
     }

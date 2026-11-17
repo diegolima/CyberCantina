@@ -116,4 +116,56 @@ export const worldsApi = {
     }>(`${API_BASE}/worlds/${worldId}`, {
       method: "DELETE",
     }),
+
+  getWorldDeleteImpact: (worldId: string) =>
+    fetchJson<{
+      world_id: string;
+      campaigns_using: number;
+      sibling_campaigns_sharing_media: number;
+      media_count: number;
+    }>(`${API_BASE}/worlds/${worldId}/delete-impact`),
+
+  uploadWorldMedia: (worldId: string, file: File | Blob, label?: string) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    if (label && label.trim()) {
+      formData.append("label", label.trim());
+    }
+    return fetchJson<WorldRecord>(`${API_BASE}/worlds/${worldId}/media`, {
+      method: "POST",
+      body: formData,
+    });
+  },
+
+  updateWorldMediaLabel: (worldId: string, mediaId: string, label: string) =>
+    fetchJson<WorldRecord>(
+      `${API_BASE}/worlds/${worldId}/media/${encodeURIComponent(mediaId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ label }),
+      }
+    ),
+
+  reorderWorldMedia: (worldId: string, orderedMediaIds: string[]) =>
+    fetchJson<WorldRecord>(`${API_BASE}/worlds/${worldId}/media/reorder`, {
+      method: "PUT",
+      body: JSON.stringify({ ordered_media_ids: orderedMediaIds }),
+    }),
+
+  getWorldMediaImpact: (worldId: string, mediaId: string) =>
+    fetchJson<{
+      world_id: string;
+      media_id: string;
+      campaigns_using: number;
+    }>(
+      `${API_BASE}/worlds/${worldId}/media/${encodeURIComponent(mediaId)}/impact`
+    ),
+
+  deleteWorldMedia: (worldId: string, mediaId: string) =>
+    fetchJson<WorldRecord>(
+      `${API_BASE}/worlds/${worldId}/media/${encodeURIComponent(mediaId)}`,
+      {
+        method: "DELETE",
+      }
+    ),
 };

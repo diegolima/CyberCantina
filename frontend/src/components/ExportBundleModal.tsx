@@ -53,6 +53,7 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
 
   // Track user-typed bundle name (null means auto-naming is active)
   const [customName, setCustomName] = useState<string | null>(null);
+  const [includeWorldMedia, setIncludeWorldMedia] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
 
@@ -216,6 +217,7 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
         world_ids: Array.from(selectedWorldIds),
         persona_ids: Array.from(selectedPersonaIds),
         bundle_name: finalBundleName,
+        include_world_media: includeWorldMedia,
       });
       onClose();
     } catch (err: any) {
@@ -658,8 +660,18 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
               borderTop: "1px solid var(--border-color)",
             }}
           >
-            <div style={{ fontSize: "0.82rem", color: "var(--text-muted)" }}>
-              {totalSelected} item(s) selected
+            <div style={{ fontSize: "0.82rem", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <span>{totalSelected} item(s) selected</span>
+              {selectedWorldIds.size > 0 && (
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", color: "var(--text-secondary)" }}>
+                  <input
+                    type="checkbox"
+                    checked={includeWorldMedia}
+                    onChange={(e) => setIncludeWorldMedia(e.target.checked)}
+                  />
+                  <span>Include world media</span>
+                </label>
+              )}
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button

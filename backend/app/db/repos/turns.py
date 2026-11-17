@@ -960,6 +960,7 @@ class TurnsBranchesMixin:
         branch_turns = self.get_branch_turn_chain(campaign.active_leaf_turn_id)
         valid_turn_ids = {t.id for t in branch_turns}
         all_turns = self.list_campaign_turn_nodes(campaign_id)
+        self._filter_deleted_turn_media([*branch_turns, *all_turns])
         leaf_turn = branch_turns[-1]
 
         world_filtered = self.get_world(
@@ -1043,6 +1044,44 @@ class TurnsBranchesMixin:
             visible_edges=world_filtered.edges,
             episodic_chunks=episodic_chunks,
         )
+
+    def _filter_deleted_turn_media(self, turns: list[TurnNodeRecord]) -> None:
+        """Strip first_visit_media items whose world_media row or disk file no longer exists."""
+        referenced_ids: set[str] = set()
+        for t in turns:
+            if t.post_turn and t.post_turn.first_visit_media:
+                for item in t.post_turn.first_visit_media:
+                    if item.media_id:
+                        referenced_ids.add(item.media_id)
+        if not referenced_ids:
+            return
+
+        placeholders = ",".join("?" for _ in referenced_ids)
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                f"SELECT id, media_type, filename FROM world_media WHERE id IN ({placeholders})",
+                list(referenced_ids),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        valid_media_ids = {
+            r["id"]
+            for r in rows
+            if self._world_media_file_exists(r["media_type"], r["filename"])
+        }
+        seen_turns: set[int] = set()
+        for t in turns:
+            if id(t) in seen_turns:
+                continue
+            seen_turns.add(id(t))
+            if t.post_turn and t.post_turn.first_visit_media:
+                t.post_turn.first_visit_media = [
+                    item
+                    for item in t.post_turn.first_visit_media
+                    if item.media_id in valid_media_ids
+                ]
 
     @staticmethod
     def _row_to_turn_node(r: sqlite3.Row) -> TurnNodeRecord:

@@ -100,6 +100,7 @@ export const TurnCard: React.FC<TurnCardProps> = ({
   const isArrivalTurn = turn.actor_id === "__arrival__";
   const isNarratorTurn = turn.actor_id === "__narrator__";
   const firstVisitCards = turn.post_turn?.first_visit_cards ?? [];
+  const firstVisitMedia = turn.post_turn?.first_visit_media ?? [];
   const effectiveLastTurnId =
     lastTurnId ??
     bundle.active_branch_turns[bundle.active_branch_turns.length - 1]?.id;
@@ -127,7 +128,7 @@ export const TurnCard: React.FC<TurnCardProps> = ({
             }}
           >
             <Compass size={13} color="#34d399" />
-            Arrival Description
+            {firstVisitCards.length > 0 ? "Arrival Description" : "Arrival Visuals"}
           </span>
           <div style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: "0.7rem", color: "var(--text-muted)" }}>
             <span>• {turn.world_snapshot.world_timestamp}</span>
@@ -150,6 +151,7 @@ export const TurnCard: React.FC<TurnCardProps> = ({
           turnId={turn.id}
           lastTurnId={effectiveLastTurnId}
           cards={firstVisitCards}
+          mediaItems={firstVisitMedia}
           manualOverrides={arrivalManualOverrides}
           onToggleCard={onToggleArrivalCard}
         />
@@ -1021,7 +1023,7 @@ export const TurnCard: React.FC<TurnCardProps> = ({
                 })()}
               <div className="prose-body">{renderFormattedProse(turn.raw_prose)}</div>
 
-              {firstVisitCards.length > 0 && (
+              {(firstVisitCards.length > 0 || firstVisitMedia.length > 0) && (
                 <div className="arrival-cards-panel">
                   <div className="arrival-cards-panel-label">
                     <Compass size={12} color="#34d399" />
@@ -1031,6 +1033,7 @@ export const TurnCard: React.FC<TurnCardProps> = ({
                     turnId={turn.id}
                     lastTurnId={effectiveLastTurnId}
                     cards={firstVisitCards}
+                    mediaItems={firstVisitMedia}
                     manualOverrides={arrivalManualOverrides}
                     onToggleCard={onToggleArrivalCard}
                   />
