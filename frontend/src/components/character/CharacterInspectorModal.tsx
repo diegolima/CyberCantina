@@ -163,7 +163,7 @@ export const CharacterInspectorModal: React.FC<
   const handleExportCharacter = async () => {
     setExportingChar(true);
     try {
-      const includeWorld = character.world_id ? window.confirm("Include associated world in this export package?") : false;
+      const includeWorld = latestCharacter.world_id ? window.confirm("Include associated world in this export package?") : false;
       await api.exportCharacter(characterId, includeWorld);
     } catch (err: any) {
       setError(err?.message || String(err));
@@ -436,6 +436,8 @@ export const CharacterInspectorModal: React.FC<
       });
       setLatestCharacter(updated);
       setCharacterId(updated.id);
+      setPortraits(updated.portraits ?? {});
+      setGallery(updated.gallery ?? []);
       setEquipped(normalizeItemList(updated.equipped));
       setInventory(normalizeItemList(updated.inventory));
       const nextUnsupported = buildUnsupportedFieldsState(updated);

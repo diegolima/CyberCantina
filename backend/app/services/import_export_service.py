@@ -30,6 +30,7 @@ from app.dependencies import (
 from app.schemas.character import (
     CANONICAL_CHARACTER_RECORD_KEYS,
     LEGACY_DEPRECATED_CHARACTER_KEYS,
+    VALID_EMOTIONS,
     CharacterWizardDraft,
     GalleryImage,
     sanitize_unsupported_fields,
@@ -249,6 +250,51 @@ def _format_unsupported_fields_warning(
 # EXPORT IMPLEMENTATION
 # ---------------------------------------------------------------------------
 
+
+def _resolve_zip_member(rel_path: Any, zip_names: set[str]) -> str | None:
+    """Resolve a JSON media reference against ZIP archive entry names."""
+    if not isinstance(rel_path, str) or not rel_path:
+        return None
+    if rel_path in zip_names:
+        return rel_path
+    normalized = rel_path.replace("\\", "/").lstrip("/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    if normalized in zip_names:
+        return normalized
+    return None
+
+
+def _stage_character_media_for_export(
+    repo: CantinaRepository,
+    char_id: str,
+    url: str,
+    category: str,
+    media_entries: dict[str, bytes],
+) -> str:
+    """Resolve a character media asset on disk, stage it into the ZIP bundle, and return its relative path."""
+    m = re.search(rf"/api/media/characters/([^/]+)/{category}/([^/?#]+)", url or "")
+    if not m:
+        return url
+    c_id, filename = m.group(1), m.group(2)
+    try:
+        fpath = safe_resolve_media_path(
+            c_id, category, filename, media_dir=repo.media_dir
+        )
+        if not fpath.is_file() and c_id != char_id:
+            fallback_path = safe_resolve_media_path(
+                char_id, category, filename, media_dir=repo.media_dir
+            )
+            if fallback_path.is_file():
+                fpath = fallback_path
+        if fpath.is_file():
+            rel_zip_path = f"media/characters/{char_id}/{category}/{filename}"
+            media_entries[rel_zip_path] = fpath.read_bytes()
+            return rel_zip_path
+    except Exception as exc:
+        logger.warning("Failed staging %s asset for export: %s", category, exc)
+    return url
+
 def build_zcc_export(
     repo: CantinaRepository,
     character_ids: list[str],
@@ -320,42 +366,21 @@ def build_zcc_export(
                     it["lore_id"] = None
 
         # Relativize portrait media
-        rewritten_portraits: dict[str, str] = {}
-        for emotion, url in char.portraits.items():
-            m = re.search(r"/api/media/characters/([^/]+)/portraits/([^/?#]+)", url)
-            if m:
-                c_id, filename = m.group(1), m.group(2)
-                try:
-                    fpath = safe_resolve_media_path(c_id, "portraits", filename)
-                    if fpath.exists():
-                        rel_zip_path = f"media/characters/{char.id}/portraits/{filename}"
-                        media_entries[rel_zip_path] = fpath.read_bytes()
-                        rewritten_portraits[emotion] = rel_zip_path
-                        continue
-                except Exception as exc:
-                    logger.warning("Failed staging portrait for export: %s", exc)
-            rewritten_portraits[emotion] = url
-        char_data["portraits"] = rewritten_portraits
+        char_data["portraits"] = {
+            emotion: _stage_character_media_for_export(
+                repo, char.id, url, "portraits", media_entries
+            )
+            for emotion, url in char.portraits.items()
+        }
 
         # Relativize gallery media
         rewritten_gallery: list[dict[str, Any]] = []
         for g_item in char_data.get("gallery", []):
-            url = g_item.get("url", "")
-            m = re.search(r"/api/media/characters/([^/]+)/gallery/([^/?#]+)", url)
-            if m:
-                c_id, filename = m.group(1), m.group(2)
-                try:
-                    fpath = safe_resolve_media_path(c_id, "gallery", filename)
-                    if fpath.exists():
-                        rel_zip_path = f"media/characters/{char.id}/gallery/{filename}"
-                        media_entries[rel_zip_path] = fpath.read_bytes()
-                        item_copy = dict(g_item)
-                        item_copy["url"] = rel_zip_path
-                        rewritten_gallery.append(item_copy)
-                        continue
-                except Exception as exc:
-                    logger.warning("Failed staging gallery item for export: %s", exc)
-            rewritten_gallery.append(g_item)
+            item_copy = dict(g_item)
+            item_copy["url"] = _stage_character_media_for_export(
+                repo, char.id, g_item.get("url", ""), "gallery", media_entries
+            )
+            rewritten_gallery.append(item_copy)
         char_data["gallery"] = rewritten_gallery
 
         exported_characters_json.append(char_data)
@@ -715,15 +740,20 @@ async def commit_staged_import(
             )
             if strategy == "skip":
                 continue
-            for emotion, rel_path in c.get("portraits", {}).items():
-                if rel_path in zip_names:
-                    webp_bytes = render_webp_bytes(zf.read(rel_path), square_crop=True, max_size=512)
-                    pre_rendered_media[(c_idx, "portrait", str(emotion))] = webp_bytes
+            for emotion, rel_path in (c.get("portraits") or {}).items():
+                clean_emotion = str(emotion).strip().lower()
+                zip_member = _resolve_zip_member(rel_path, zip_names)
+                if zip_member and clean_emotion in VALID_EMOTIONS:
+                    webp_bytes = render_webp_bytes(zf.read(zip_member), square_crop=True, max_size=512)
+                    pre_rendered_media[(c_idx, "portrait", clean_emotion)] = webp_bytes
                     total_media_bytes += len(webp_bytes)
-            for g_idx, g_item in enumerate(c.get("gallery", [])):
-                rel_path = g_item.get("url", "")
-                if rel_path in zip_names:
-                    webp_bytes = render_webp_bytes(zf.read(rel_path), square_crop=False, max_size=1920)
+            for g_idx, g_item in enumerate(c.get("gallery") or []):
+                zip_member = _resolve_zip_member(
+                    g_item.get("url", "") if isinstance(g_item, dict) else "",
+                    zip_names,
+                )
+                if zip_member:
+                    webp_bytes = render_webp_bytes(zf.read(zip_member), square_crop=False, max_size=1920)
                     pre_rendered_media[(c_idx, "gallery", str(g_idx))] = webp_bytes
                     total_media_bytes += len(webp_bytes)
 
@@ -1110,43 +1140,50 @@ async def commit_staged_import(
 
             # Unpack media and rewrite URLs
             new_portraits: dict[str, str] = {}
-            for emotion, rel_path in c.get("portraits", {}).items():
-                if rel_path in zip_names:
-                    filename = f"{emotion}_{uuid.uuid4().hex[:8]}.webp"
-                    target_path = safe_resolve_media_path(new_c_id, "portraits", filename)
-                    pre = pre_rendered_media.get((c_idx, "portrait", str(emotion)))
+            for emotion, rel_path in (c.get("portraits") or {}).items():
+                clean_emotion = str(emotion).strip().lower()
+                zip_member = _resolve_zip_member(rel_path, zip_names)
+                if zip_member and clean_emotion in VALID_EMOTIONS:
+                    filename = f"{clean_emotion}_{uuid.uuid4().hex[:8]}.webp"
+                    target_path = safe_resolve_media_path(
+                        new_c_id, "portraits", filename, media_dir=repo.media_dir
+                    )
+                    pre = pre_rendered_media.get((c_idx, "portrait", clean_emotion))
                     if actor_user is not None:
                         webp_bytes = pre if pre is not None else render_webp_bytes(
-                            zf.read(rel_path), square_crop=True, max_size=512
+                            zf.read(zip_member), square_crop=True, max_size=512
                         )
                         enforce_quota_and_write_webp(repo, actor_user, webp_bytes, target_path)
                     else:
-                        process_and_save_image(zf.read(rel_path), target_path, square_crop=True, max_size=512)
-                    new_portraits[emotion] = f"/api/media/characters/{new_c_id}/portraits/{filename}"
-                else:
-                    new_portraits[emotion] = rel_path
+                        process_and_save_image(zf.read(zip_member), target_path, square_crop=True, max_size=512)
+                    new_portraits[clean_emotion] = f"/api/media/characters/{new_c_id}/portraits/{filename}"
+                elif isinstance(rel_path, str):
+                    new_portraits[clean_emotion] = rel_path
 
             new_gallery: list[GalleryImage] = []
-            for g_idx, g_item in enumerate(c.get("gallery", [])):
-                rel_path = g_item.get("url", "")
-                if rel_path in zip_names:
+            for g_idx, g_item in enumerate(c.get("gallery") or []):
+                rel_path = g_item.get("url", "") if isinstance(g_item, dict) else ""
+                zip_member = _resolve_zip_member(rel_path, zip_names)
+                if zip_member:
                     g_id = f"img_{uuid.uuid4().hex[:10]}"
                     filename = f"{g_id}.webp"
-                    target_path = safe_resolve_media_path(new_c_id, "gallery", filename)
+                    target_path = safe_resolve_media_path(
+                        new_c_id, "gallery", filename, media_dir=repo.media_dir
+                    )
                     pre = pre_rendered_media.get((c_idx, "gallery", str(g_idx)))
                     if actor_user is not None:
                         webp_bytes = pre if pre is not None else render_webp_bytes(
-                            zf.read(rel_path), square_crop=False, max_size=1920
+                            zf.read(zip_member), square_crop=False, max_size=1920
                         )
                         enforce_quota_and_write_webp(repo, actor_user, webp_bytes, target_path)
                     else:
-                        process_and_save_image(zf.read(rel_path), target_path, square_crop=False, max_size=1920)
+                        process_and_save_image(zf.read(zip_member), target_path, square_crop=False, max_size=1920)
                     new_gallery.append(
                         GalleryImage(
                             id=g_id,
                             url=f"/api/media/characters/{new_c_id}/gallery/{filename}",
-                            caption=g_item.get("caption", ""),
-                            created_at=g_item.get("created_at", utc_now_iso()),
+                            caption=g_item.get("caption") or "",
+                            created_at=g_item.get("created_at") or utc_now_iso(),
                         )
                     )
                 else:

@@ -324,10 +324,17 @@ def issue_session_response(
     )
 
 
-def safe_resolve_media_path(character_id: str, category: str, filename: str) -> Path:
+def safe_resolve_media_path(
+    character_id: str,
+    category: str,
+    filename: str,
+    *,
+    media_dir: str | Path | None = None,
+) -> Path:
     """Safely validate and resolve a media file path to prevent directory traversal."""
+    base_dir = media_dir if media_dir is not None else settings.media_dir
     try:
-        return safe_resolve_media_file_path(settings.media_dir, character_id, category, filename)
+        return safe_resolve_media_file_path(base_dir, character_id, category, filename)
     except PathTraversalError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:

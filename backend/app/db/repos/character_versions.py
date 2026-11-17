@@ -195,6 +195,7 @@ class CharacterVersionsMixin:
         target_world_id = payload.world_id if payload.world_id is not None else orig.world_id
 
         conn = self._connect()
+        copied_media_for: str | None = None
         try:
             c_owner_row = conn.execute(
                 "SELECT owner_id FROM characters WHERE id = ?", (character_id,)
@@ -272,8 +273,6 @@ class CharacterVersionsMixin:
             portraits_dict = payload.portraits if payload.portraits else orig.portraits
             gallery_list = payload.gallery if payload.gallery else orig.gallery
             clean_p, clean_g = _sanitize_character_media(portraits_dict, gallery_list)
-            portraits_json = json.dumps(clean_p)
-            gallery_json = json.dumps([img.model_dump() for img in clean_g])
 
             max_ver_row = conn.execute(
                 "SELECT COALESCE(MAX(version), 0) AS max_v FROM character_versions WHERE character_id = ?",
@@ -300,6 +299,11 @@ class CharacterVersionsMixin:
             if campaigns_using == 0:
                 # In-place update (zero active campaigns reference this character)
                 target_char_id = character_id
+                reconciled_p, reconciled_g = self._reconcile_character_media_for_id(
+                    character_id, target_char_id, clean_p, clean_g
+                )
+                portraits_json = json.dumps(reconciled_p)
+                gallery_json = json.dumps([img.model_dump() for img in reconciled_g])
                 conn.execute(
                     """
                     UPDATE characters
@@ -405,6 +409,13 @@ class CharacterVersionsMixin:
                     (character_id,),
                 )
                 target_char_id = f"char_{uuid.uuid4().hex[:10]}"
+                copied_media_for = target_char_id
+                self._copy_character_media(character_id, target_char_id)
+                reconciled_p, reconciled_g = self._reconcile_character_media_for_id(
+                    character_id, target_char_id, clean_p, clean_g
+                )
+                portraits_json = json.dumps(reconciled_p)
+                gallery_json = json.dumps([img.model_dump() for img in reconciled_g])
                 conn.execute(
                     """
                     INSERT INTO characters (
@@ -469,9 +480,6 @@ class CharacterVersionsMixin:
                         now,
                     ),
                 )
-
-                # Copy media assets on disk if present
-                self._copy_character_media(character_id, target_char_id)
 
                 # Copy previous version snapshots into target_char_id so historical versions are accessible
                 old_vers = conn.execute(
@@ -569,6 +577,11 @@ class CharacterVersionsMixin:
                     )
 
             conn.commit()
+            copied_media_for = None
+        except Exception:
+            if copied_media_for:
+                self._delete_character_media(copied_media_for)
+            raise
         finally:
             conn.close()
 
@@ -661,6 +674,7 @@ class CharacterVersionsMixin:
         now = utc_now_iso()
 
         conn = self._connect()
+        copied_media_for: str | None = None
         try:
             c_owner_row = conn.execute(
                 "SELECT owner_id FROM characters WHERE id = ?", (character_id,)
@@ -699,12 +713,18 @@ class CharacterVersionsMixin:
             moral_code_json = json.dumps(snap.moral_code)
             quirks_flaws_json = json.dumps(snap.quirks_flaws)
             communication_style_json = json.dumps(snap.communication_style)
-            portraits_json = json.dumps(current_char.portraits)
-            gallery_json = json.dumps([img.model_dump() for img in current_char.gallery])
+            clean_p, clean_g = _sanitize_character_media(
+                current_char.portraits, current_char.gallery
+            )
             unsupported_fields_json = json.dumps(snap.unsupported_fields or {})
 
             if campaigns_using == 0:
                 target_char_id = character_id
+                reconciled_p, reconciled_g = self._reconcile_character_media_for_id(
+                    character_id, target_char_id, clean_p, clean_g
+                )
+                portraits_json = json.dumps(reconciled_p)
+                gallery_json = json.dumps([img.model_dump() for img in reconciled_g])
                 conn.execute(
                     """
                     UPDATE characters
@@ -766,6 +786,13 @@ class CharacterVersionsMixin:
                     (character_id,),
                 )
                 target_char_id = f"char_{uuid.uuid4().hex[:10]}"
+                copied_media_for = target_char_id
+                self._copy_character_media(character_id, target_char_id)
+                reconciled_p, reconciled_g = self._reconcile_character_media_for_id(
+                    character_id, target_char_id, clean_p, clean_g
+                )
+                portraits_json = json.dumps(reconciled_p)
+                gallery_json = json.dumps([img.model_dump() for img in reconciled_g])
                 conn.execute(
                     """
                     INSERT INTO characters (
@@ -830,7 +857,6 @@ class CharacterVersionsMixin:
                         now,
                     ),
                 )
-                self._copy_character_media(character_id, target_char_id)
 
                 # Copy all historical versions (including v3) to the new entity
                 old_vers = conn.execute(
@@ -868,6 +894,11 @@ class CharacterVersionsMixin:
                     ),
                 )
             conn.commit()
+            copied_media_for = None
+        except Exception:
+            if copied_media_for:
+                self._delete_character_media(copied_media_for)
+            raise
         finally:
             conn.close()
 

@@ -24,7 +24,11 @@ from app.schemas.character import (
     normalize_item_key,
 )
 from app.security.log_sanitize import sanitize_log_value
-from app.security.media_path import safe_resolve_character_media_dir
+from app.security.media_path import (
+    PathTraversalError,
+    safe_resolve_character_media_dir,
+    safe_resolve_media_file_path,
+)
 
 
 logger = logging.getLogger("cybercantina.db.repository")
@@ -341,6 +345,11 @@ STAGED_CHARACTER_OWNERSHIP_TTL_SECONDS = 3600  # 1 hour for uncommitted characte
 WEBAUTHN_CHALLENGE_TTL_SECONDS = 300  # 5 minutes
 
 
+_CHARACTER_MEDIA_URL_RE = re.compile(
+    r"/api/media/characters/([^/]+)/(portraits|gallery)/([^/?#]+)"
+)
+
+
 class RepositoryBase:
     """Core SQLite connection, media helpers, and vector/provider bindings."""
 
@@ -376,6 +385,83 @@ class RepositoryBase:
                 sanitize_log_value(character_id),
                 sanitize_log_value(exc),
             )
+
+    def _reconcile_media_url(
+        self,
+        url: str,
+        *,
+        expected_category: str,
+        source_char_id: str,
+        target_char_id: str,
+    ) -> str:
+        """Ensure a local character media URL points to target_char_id and exists in its folder when possible."""
+        match = _CHARACTER_MEDIA_URL_RE.search(url or "")
+        if not match:
+            return url
+        url_char_id, category, filename = match.group(1), match.group(2), match.group(3)
+        if category != expected_category or url_char_id == target_char_id:
+            return url
+        try:
+            dst_path = safe_resolve_media_file_path(
+                self.media_dir, target_char_id, category, filename
+            )
+            if not dst_path.is_file():
+                src_path = safe_resolve_media_file_path(
+                    self.media_dir, url_char_id, category, filename
+                )
+                if src_path.is_file():
+                    dst_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src_path, dst_path)
+            if dst_path.is_file() or url_char_id == source_char_id:
+                return f"/api/media/characters/{target_char_id}/{category}/{filename}"
+        except (PathTraversalError, ValueError) as exc:
+            logger.warning(
+                "Skipped invalid character media URL '%s': %s",
+                sanitize_log_value(url),
+                sanitize_log_value(exc),
+            )
+        except OSError as exc:
+            logger.warning(
+                "Failed reconciling character media '%s' to '%s': %s",
+                sanitize_log_value(url),
+                sanitize_log_value(target_char_id),
+                sanitize_log_value(exc),
+            )
+            if url_char_id == source_char_id:
+                return f"/api/media/characters/{target_char_id}/{category}/{filename}"
+        return url
+
+    def _reconcile_character_media_for_id(
+        self,
+        source_char_id: str,
+        target_char_id: str,
+        portraits: dict[str, str],
+        gallery: list[GalleryImage],
+    ) -> tuple[dict[str, str], list[GalleryImage]]:
+        """Rewrite forked or inherited local character media URLs to target_char_id."""
+        reconciled_portraits = {
+            emotion: self._reconcile_media_url(
+                url,
+                expected_category="portraits",
+                source_char_id=source_char_id,
+                target_char_id=target_char_id,
+            )
+            for emotion, url in portraits.items()
+        }
+        reconciled_gallery = [
+            img.model_copy(
+                update={
+                    "url": self._reconcile_media_url(
+                        img.url,
+                        expected_category="gallery",
+                        source_char_id=source_char_id,
+                        target_char_id=target_char_id,
+                    )
+                }
+            )
+            for img in gallery
+        ]
+        return reconciled_portraits, reconciled_gallery
 
     @property
     def providers(self) -> "ProviderStore":

@@ -924,3 +924,303 @@ def test_zcc_world_and_persona_unsupported_fields_roundtrip_and_bounds(client_an
     )
     assert bad_p_commit.status_code == 400
 
+
+def test_zcc_import_edit_save_and_reexport_preserves_media(client_and_repo):
+    """Importing a .zcc with world + character (2 media files), editing/saving the character, and re-exporting preserves all media."""
+    client, repo, user = client_and_repo
+
+    # 1. Create world + character with 2 media files (1 portrait + 1 gallery)
+    world_draft = WorldWizardDraft(
+        name="Media Harbor",
+        global_rules=WorldGlobalRules(
+            genre="noir",
+            tone="moody",
+            setting_overview="Rain-slicked docks.",
+            narrative_style="second person",
+            sensory_profile="salt and diesel",
+            taboos_and_limits="",
+        ),
+        locations=[
+            LocationNodeDraft(
+                key="loc_pier",
+                name="Pier 9",
+                summary="Foggy pier",
+                description="Crates and lanterns.",
+                environmental_tags=["fog"],
+                is_starting_location=True,
+                lore_nodes=[],
+            )
+        ],
+        edges=[],
+        lore_nodes=[],
+    )
+    world = repo.create_world_from_draft(world_draft, owner_id=user.id)
+    char = repo.create_character_from_draft(
+        CharacterWizardDraft(
+            name="Mara Voss",
+            tagline="Harbor investigator",
+            core_persona="Patient and observant.",
+            baseline_psyche=BaselinePsyche(
+                core_drive="Uncover the smuggling ring",
+                core_fear="Drowning",
+                default_want="Check the manifest",
+                default_plan="Question the dockmaster",
+            ),
+        ),
+        world_id=world.id,
+        owner_id=user.id,
+    )
+
+    p_path = safe_resolve_media_path(char.id, "portraits", "default_orig.webp")
+    process_and_save_image(_create_test_image(256, 256, "red"), p_path, square_crop=True)
+    repo.update_character_portraits(
+        char.id,
+        {"default": f"/api/media/characters/{char.id}/portraits/default_orig.webp"},
+        owner_id=user.id,
+    )
+
+    g_path = safe_resolve_media_path(char.id, "gallery", "img_orig.webp")
+    process_and_save_image(_create_test_image(320, 240, "green"), g_path, square_crop=False)
+    from app.schemas.character import GalleryImage
+
+    repo.update_character_gallery(
+        char.id,
+        [
+            GalleryImage(
+                id="img_orig",
+                url=f"/api/media/characters/{char.id}/gallery/img_orig.webp",
+                caption="On the pier",
+                created_at="2026-11-16T12:00:00Z",
+            )
+        ],
+        owner_id=user.id,
+    )
+
+    # Export original .zcc
+    exp1 = client.post(
+        "/api/export/bundle",
+        json={
+            "character_ids": [char.id],
+            "world_ids": [world.id],
+            "persona_ids": [],
+            "bundle_name": "mara_bundle",
+        },
+    )
+    assert exp1.status_code == 200
+
+    # 2. Import the .zcc file
+    insp = client.post(
+        "/api/import/inspect",
+        files={"file": ("mara_bundle.zcc", exp1.content, "application/octet-stream")},
+    )
+    assert insp.status_code == 200
+    commit = client.post(
+        "/api/import/commit",
+        json={"staged_token": insp.json()["staged_token"], "default_conflict_strategy": "copy"},
+    )
+    assert commit.status_code == 200
+    assert commit.json()["success"] is True
+
+    imported_char = next(c for c in repo.list_characters() if c.name == "Mara Voss (Imported)")
+    imported_world = next(w for w in repo.list_worlds(owner_id=user.id) if w.name == "Media Harbor (Imported)")
+    assert "default" in imported_char.portraits
+    assert len(imported_char.gallery) == 1
+
+    # 3. Edit and save character via PUT without modifying media
+    update_payload = imported_char.model_dump(
+        exclude={"id", "pending_deletion", "version", "created_at"}
+    )
+    update_payload["tagline"] = "Senior harbor investigator"
+    update_payload["world_id"] = imported_world.id
+    put_resp = client.put(f"/api/characters/{imported_char.id}", json=update_payload)
+    assert put_resp.status_code == 200
+    saved_char = put_resp.json()
+    assert saved_char["portraits"] == imported_char.portraits
+    assert len(saved_char["gallery"]) == 1
+
+    # 4. Re-export both character and world and confirm both media files are packed
+    exp2 = client.post(
+        "/api/export/bundle",
+        json={
+            "character_ids": [saved_char["id"]],
+            "world_ids": [imported_world.id],
+            "persona_ids": [],
+            "bundle_name": "mara_reexport",
+        },
+    )
+    assert exp2.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(exp2.content)) as zf:
+        media_entries = [n for n in zf.namelist() if n.startswith("media/")]
+        assert len(media_entries) == 2
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        assert manifest["contents"]["media_files_count"] == 2
+        re_chars = json.loads(zf.read("characters.json").decode("utf-8"))
+        assert re_chars[0]["portraits"]["default"] in media_entries
+        assert re_chars[0]["gallery"][0]["url"] in media_entries
+
+
+def test_cow_fork_and_restore_rewrite_media_urls_and_recover_legacy_export(client_and_repo):
+    """CoW-forking or restoring a character rewrites media URLs to the new ID so pruning the old character never breaks media or exports."""
+    client, repo, user = client_and_repo
+
+    world = repo.create_world_from_draft(
+        WorldWizardDraft(
+            name="Neon Quay",
+            global_rules=WorldGlobalRules(
+                genre="cyberpunk",
+                tone="gritty",
+                setting_overview="Flooded piers.",
+                narrative_style="second person",
+                sensory_profile="ozone",
+                taboos_and_limits="",
+            ),
+            locations=[
+                LocationNodeDraft(
+                    key="loc_dock",
+                    name="Dock A",
+                    summary="Wet concrete",
+                    description="Flickering sodium lamps.",
+                    environmental_tags=["wet"],
+                    is_starting_location=True,
+                    lore_nodes=[],
+                )
+            ],
+            edges=[],
+            lore_nodes=[],
+        ),
+        owner_id=user.id,
+    )
+    char_v1 = repo.create_character_from_draft(
+        CharacterWizardDraft(
+            name="Vesper Lin",
+            tagline="Courier",
+            core_persona="Keeps moving.",
+            baseline_psyche=BaselinePsyche(
+                core_drive="Deliver the package",
+                core_fear="Lockdown",
+                default_want="Reach Dock A",
+                default_plan="Stay out of sight",
+            ),
+        ),
+        world_id=world.id,
+        owner_id=user.id,
+    )
+    p_path = safe_resolve_media_path(char_v1.id, "portraits", "default_v1.webp")
+    process_and_save_image(_create_test_image(200, 200, "purple"), p_path, square_crop=True)
+    repo.update_character_portraits(
+        char_v1.id,
+        {"default": f"/api/media/characters/{char_v1.id}/portraits/default_v1.webp"},
+        owner_id=user.id,
+    )
+    g_path = safe_resolve_media_path(char_v1.id, "gallery", "img_v1.webp")
+    process_and_save_image(_create_test_image(300, 200, "teal"), g_path, square_crop=False)
+    from app.schemas.character import GalleryImage
+
+    repo.update_character_gallery(
+        char_v1.id,
+        [
+            GalleryImage(
+                id="img_v1",
+                url=f"/api/media/characters/{char_v1.id}/gallery/img_v1.webp",
+                caption="Alleyway",
+                created_at="2026-11-16T12:00:00Z",
+            )
+        ],
+        owner_id=user.id,
+    )
+    char_v1 = repo.get_character(char_v1.id, owner_id=user.id)
+
+    # Start a campaign referencing char_v1 so editing triggers Copy-on-Write fork
+    camp = repo.create_campaign(
+        name="Quay Run",
+        world_id=world.id,
+        character_id=char_v1.id,
+        owner_id=user.id,
+    )
+
+    update_payload = char_v1.model_dump(
+        exclude={"id", "pending_deletion", "version", "created_at"}
+    )
+    update_payload["tagline"] = "Veteran courier"
+    put_resp = client.put(f"/api/characters/{char_v1.id}", json=update_payload)
+    assert put_resp.status_code == 200
+    forked_v2 = put_resp.json()
+    assert forked_v2["id"] != char_v1.id
+    assert forked_v2["portraits"]["default"] == f"/api/media/characters/{forked_v2['id']}/portraits/default_v1.webp"
+    assert forked_v2["gallery"][0]["url"] == f"/api/media/characters/{forked_v2['id']}/gallery/img_v1.webp"
+
+    # Delete campaign and prune char_v1 -> deletes char_v1's media folder
+    repo.delete_campaign(camp.id, owner_id=user.id)
+    pruned = repo.prune_pending_deletion_characters()
+    assert char_v1.id in pruned
+
+    # Export forked_v2 + world: both media files must still be served and exported
+    media_get = client.get(forked_v2["portraits"]["default"])
+    assert media_get.status_code == 200
+
+    exp_resp = client.post(
+        "/api/export/bundle",
+        json={
+            "character_ids": [forked_v2["id"]],
+            "world_ids": [world.id],
+            "persona_ids": [],
+            "bundle_name": "vesper_after_prune",
+        },
+    )
+    assert exp_resp.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(exp_resp.content)) as zf:
+        media_entries = [n for n in zf.namelist() if n.startswith("media/")]
+        assert len(media_entries) == 2
+
+    # Also verify CoW restore_character_version rewrites URLs to the new forked ID
+    camp2 = repo.create_campaign(
+        name="Quay Run 2",
+        world_id=world.id,
+        character_id=forked_v2["id"],
+        owner_id=user.id,
+    )
+    restored = repo.restore_character_version(forked_v2["id"], 1, owner_id=user.id)
+    assert restored.id != forked_v2["id"]
+    assert restored.portraits["default"] == f"/api/media/characters/{restored.id}/portraits/default_v1.webp"
+    assert restored.gallery[0].url == f"/api/media/characters/{restored.id}/gallery/img_v1.webp"
+    repo.delete_campaign(camp2.id, owner_id=user.id)
+    repo.prune_pending_deletion_characters()
+
+    # Legacy recovery: simulate a character forked before the fix whose DB URLs still cite a pruned ID
+    # while its copied files exist under restored.id
+    conn = repo._connect()
+    try:
+        conn.execute(
+            "UPDATE characters SET portraits_json = ?, gallery_json = ? WHERE id = ?",
+            (
+                json.dumps({"default": "/api/media/characters/char_pruned_legacy/portraits/default_v1.webp"}),
+                json.dumps([
+                    {
+                        "id": "img_v1",
+                        "url": "/api/media/characters/char_pruned_legacy/gallery/img_v1.webp",
+                        "caption": "Alleyway",
+                        "created_at": "2026-11-16T12:00:00Z",
+                    }
+                ]),
+                restored.id,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    legacy_exp = client.post(
+        "/api/export/bundle",
+        json={
+            "character_ids": [restored.id],
+            "world_ids": [world.id],
+            "persona_ids": [],
+            "bundle_name": "vesper_legacy_recovery",
+        },
+    )
+    assert legacy_exp.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(legacy_exp.content)) as zf:
+        media_entries = [n for n in zf.namelist() if n.startswith("media/")]
+        assert len(media_entries) == 2
+
+
