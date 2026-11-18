@@ -264,7 +264,7 @@ erDiagram
 | `backend/app/db/__init__.py` | Database, graph repository, and vector store layer. |
 | `backend/app/db/provider_store.py` | SQLite persistence for LLM providers (tenant-scoped, optimistic concurrency, sealed secrets). |
 | `backend/app/db/repository.py` | Branch-aware SQLite repository for Worlds, Characters, Spatial Graph, and Turn Trees. |
-| `backend/app/db/seed.py` | Default showcase scenario seeder ('The Green Lie' & 'Kira Vance') and legacy test-only seed. |
+| `backend/app/db/seed.py` | Default showcase scenario seeder ('The Green Lie' & 'Kira Vance'). |
 | `backend/app/db/vector_math.py` | Embedding helpers, lexical TF-IDF activations, MMR, and RRF math. |
 | `backend/app/db/vector_store.py` | Hybrid semantic vector store and branch-aware memory retrieval. |
 

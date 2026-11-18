@@ -34,7 +34,7 @@ jobs:
           python ../scripts/generate_arch_docs.py --check
       - name: Run pytest
         working-directory: backend
-        run: pytest tests
+        run: pytest -n auto tests
 
   frontend:
     name: Frontend Build & Tests

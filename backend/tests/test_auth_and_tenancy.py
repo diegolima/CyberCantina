@@ -14,27 +14,14 @@ from app import auth as auth_module
 from app import main as main_module
 from app.config import settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_public_showcase_media
 
 
 @pytest.fixture()
-def auth_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, CantinaRepository]:
+def auth_client(
+    showcase_api_env: tuple[TestClient, CantinaRepository, Path],
+) -> tuple[TestClient, CantinaRepository]:
     """Provide an isolated FastAPI TestClient and CantinaRepository with an empty users table."""
-    db_file = str(tmp_path / "test_auth_cantina.db")
-    media_dir = tmp_path / "media"
-    media_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "media_dir", str(media_dir))
-    monkeypatch.setattr(settings, "allow_offline_fallback", True)
-    monkeypatch.setattr(settings.actor_profile, "base_url", "http://127.0.0.1:9/v1")
-    monkeypatch.setattr(settings.clerk_profile, "base_url", "http://127.0.0.1:9/v1")
-    monkeypatch.setattr(settings.embedding_profile, "mode", "local_hash")
-
-    repo = CantinaRepository(db_file, media_dir=str(media_dir))
-    repo.init_db()
-    ensure_public_showcase_media(repo)
-
-    client = TestClient(main_module.app)
+    client, repo, _media_dir = showcase_api_env
     return client, repo
 
 

@@ -8,29 +8,26 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main as main_module
-from app.config import settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_test_seed
 from app.engine.llm_client import llm_client
+from tests.factories import seed_minimal_scenario
 
 
 @pytest.fixture()
-def enrich_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, CantinaRepository]:
-    db_file = str(tmp_path / "test_enrich_cantina.db")
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "allow_offline_fallback", True)
-
-    repo = CantinaRepository(db_file)
-    repo.init_db()
-    ensure_test_seed(repo)
-
-    client = TestClient(main_module.app)
-    return client, repo
+def enrich_client(
+    api_env: tuple[TestClient, CantinaRepository, Path],
+    api_user_factory,
+) -> tuple[TestClient, CantinaRepository, dict[str, str], str]:
+    client, repo, _media_dir = api_env
+    headers, uid, _tok = api_user_factory("admin_enrich", role="admin")
+    bundle = seed_minimal_scenario(repo, owner_id=uid)
+    return client, repo, headers, bundle.campaign.id
 
 
-def test_enrich_endpoint_requires_auth(enrich_client: tuple[TestClient, CantinaRepository]) -> None:
-    client, _repo = enrich_client
+def test_enrich_endpoint_requires_auth(
+    enrich_client: tuple[TestClient, CantinaRepository, dict[str, str], str],
+) -> None:
+    client, _repo, _headers, camp_id = enrich_client
     res = client.post(
         "/api/enrich",
         json={
@@ -38,7 +35,7 @@ def test_enrich_endpoint_requires_auth(enrich_client: tuple[TestClient, CantinaR
             "current_text": "I enter the room",
             "context_ref": {
                 "scope": "campaign_turn",
-                "campaign_id": "camp_neon_rust_default",
+                "campaign_id": camp_id,
             },
         },
     )
@@ -47,33 +44,25 @@ def test_enrich_endpoint_requires_auth(enrich_client: tuple[TestClient, CantinaR
 
 
 def test_enrich_endpoint_success(
-    enrich_client: tuple[TestClient, CantinaRepository],
+    enrich_client: tuple[TestClient, CantinaRepository, dict[str, str], str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client, repo = enrich_client
+    client, _repo, headers, camp_id = enrich_client
 
-    # 1. Login as default user or create token
-    from app.auth import generate_session_token
-    admin_user = repo.create_user(username="admin_enrich", display_name="Admin Enrich", role="admin")
-    repo.claim_unowned_entities(admin_user.id)
-    raw_token, token_hash = generate_session_token()
-    repo.create_session(session_id_hash=token_hash, user_id=admin_user.id)
-    token = raw_token
-
-    # 2. Mock llm_client.complete_text
+    # Mock llm_client.complete_text
     mock_complete = AsyncMock(return_value="*I step quietly into the room, scanning the neon shadows.*")
     monkeypatch.setattr(llm_client, "complete_text", mock_complete)
 
     res = client.post(
         "/api/enrich",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
         json={
             "field_role": "player_turn_prompt",
             "current_text": "I enter the room",
             "instruction": "polish",
             "context_ref": {
                 "scope": "campaign_turn",
-                "campaign_id": "camp_neon_rust_default",
+                "campaign_id": camp_id,
             },
         },
     )

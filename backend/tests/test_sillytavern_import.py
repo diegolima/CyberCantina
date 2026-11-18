@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import io
 import json
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -13,7 +12,6 @@ from fastapi.testclient import TestClient
 from PIL import Image, PngImagePlugin
 
 from app import main as main_module
-from app.config import settings
 from app.db.repository import CantinaRepository
 from app.schemas.character import BaselinePsyche, CharacterWizardDraft, CharacterWizardLLMOutput
 from app.wizards.sillytavern_distiller import (
@@ -90,20 +88,15 @@ def _create_synthetic_png_card(
 
 
 @pytest.fixture
-def import_client(temp_repo: CantinaRepository, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    media_dir = str(tmp_path / "media")
-    settings.media_dir = media_dir
-    temp_repo.media_dir = media_dir
-
-    user = temp_repo.create_user(username="importer_user", display_name="Importer User")
-    temp_repo.claim_unowned_entities(user.id)
-    user_profile = temp_repo.get_user_by_id(user.id)
+def import_client(empty_repo: CantinaRepository):
+    user = empty_repo.create_user(username="importer_user", display_name="Importer User")
+    user_profile = empty_repo.get_user_by_id(user.id)
 
     # Fresh repository instances created per-request in production now correctly resolve staged ownership via SQLite
     main_module.app.dependency_overrides[main_module.get_current_user] = lambda: user_profile
 
     client = TestClient(main_module.app)
-    yield temp_repo, user_profile, client
+    yield empty_repo, user_profile, client
 
     main_module.app.dependency_overrides.clear()
 
@@ -290,9 +283,9 @@ def test_import_json_card_never_hallucinates_media(import_client):
     assert draft["gallery"] == []
 
 
-def test_media_sanitization_removes_invalid_entries(temp_repo: CantinaRepository):
+def test_media_sanitization_removes_invalid_entries(empty_repo: CantinaRepository):
     """Verify that _sanitize_character_media strips out non-emotion keys and broken URLs."""
-    user = temp_repo.create_user(username="sanitizer_user", display_name="Sanitizer")
+    user = empty_repo.create_user(username="sanitizer_user", display_name="Sanitizer")
     draft = CharacterWizardDraft(
         name="Test Sanitization",
         tagline="Testing media sanitization",
@@ -319,7 +312,7 @@ def test_media_sanitization_removes_invalid_entries(temp_repo: CantinaRepository
         ],
     )
 
-    char = temp_repo.create_character_from_draft(draft, owner_id=user.id)
+    char = empty_repo.create_character_from_draft(draft, owner_id=user.id)
     # The hallucinated keys must be stripped, only valid emotion & media URL remains
     assert "location" not in char.portraits
     assert "initial_dialogue" not in char.portraits

@@ -46,19 +46,18 @@ from app.schemas.world import (
 
 
 @pytest.fixture
-def authed_client(temp_repo: CantinaRepository) -> tuple[TestClient, CantinaRepository]:
-    """Authenticated FastAPI TestClient bound to temp_repo."""
-    user = temp_repo.create_user(
+def authed_client(empty_repo: CantinaRepository) -> tuple[TestClient, CantinaRepository]:
+    """Authenticated FastAPI TestClient bound to empty_repo."""
+    user = empty_repo.create_user(
         username="item_tester",
         display_name="Item Tester",
         role="admin",
         user_id="user_item_tester",
     )
-    temp_repo.claim_unowned_entities(user.id)
     main_module.app.dependency_overrides[get_current_user] = lambda: user
     client = TestClient(main_module.app)
     try:
-        yield client, temp_repo
+        yield client, empty_repo
     finally:
         main_module.app.dependency_overrides.pop(get_current_user, None)
 
@@ -139,11 +138,13 @@ def _add_world_artifact(
 
 
 def test_artifact_lore_allowed_on_world_and_rejected_on_location(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify 'artifact' is strictly allowed on world lore and disallowed on location lore at all layers."""
+    from tests.factories import seed_world
+
     # Pydantic validation
     w_draft = WorldLoreNodeDraft(
         title="Relic Core",
@@ -164,7 +165,7 @@ def test_artifact_lore_allowed_on_world_and_rejected_on_location(
     with pytest.raises(ValidationError):
         LoreNode(
             id="lore_bad_loc_art",
-            world_id="world_neon_rust",
+            world_id="world_test",
             location_id="loc_some_room",
             title="Scoped Artifact",
             category="artifact",
@@ -173,9 +174,9 @@ def test_artifact_lore_allowed_on_world_and_rejected_on_location(
         )
 
     # SQLite raw CHECK constraint enforcement
-    world = temp_repo.get_world("world_neon_rust")
+    world = seed_world(empty_repo, owner_id=None)
     loc_id = world.locations[0].id
-    conn = temp_repo._connect()
+    conn = empty_repo._connect()
     try:
         conn.execute(
             """
@@ -325,8 +326,21 @@ def test_consolidated_item_endpoint_security_and_swipe_backfill(
     """Verify add/update/equip/unequip metadata preservation, cross-world/location lore rejection, and parent backfill."""
     client, repo = authed_client
     owner_id = "user_item_tester"
+    from tests.factories import seed_world
 
-    world_id, art_lore_id = _add_world_artifact(repo, "world_neon_rust", owner_id=owner_id)
+    base_world = seed_world(
+        repo,
+        owner_id=owner_id,
+        lore_nodes=[
+            WorldLoreNodeDraft(
+                title="Sector Syndicate",
+                category="faction",
+                content="Local syndicate ruling the lower docks.",
+                entity_tags=["syndicate", "docks"],
+            )
+        ],
+    )
+    world_id, art_lore_id = _add_world_artifact(repo, base_world.id, owner_id=owner_id)
     world = repo.get_world(world_id, owner_id=owner_id)
     non_artifact_lore = next(ln for ln in world.lore_nodes if ln.category != "artifact")
 
@@ -532,16 +546,19 @@ def test_consolidated_item_endpoint_security_and_swipe_backfill(
 
 
 def test_cow_world_fork_remaps_character_artifact_lore_id(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify Copy-on-Write world fork remaps ItemInstance.lore_id on active character templates."""
-    world_id, orig_art_id = _add_world_artifact(temp_repo, "world_neon_rust")
-    world = temp_repo.get_world(world_id)
+    from tests.factories import seed_world
+
+    base_world = seed_world(empty_repo, owner_id=None)
+    world_id, orig_art_id = _add_world_artifact(empty_repo, base_world.id)
+    world = empty_repo.get_world(world_id)
 
     # Create a character in this world holding an item linked to orig_art_id, plus an unused template character
-    runner_npc = _make_npc(temp_repo, "Runner NPC", world.id)
+    runner_npc = _make_npc(empty_repo, "Runner NPC", world.id)
     template_npc = _make_npc(
-        temp_repo,
+        empty_repo,
         "Template Relic Bearer",
         world.id,
         inventory=[
@@ -555,7 +572,7 @@ def test_cow_world_fork_remaps_character_artifact_lore_id(
     )
 
     # Launch a campaign so world_id has campaigns_using > 0 (triggers CoW fork on next update_world!)
-    camp = temp_repo.create_campaign(
+    camp = empty_repo.create_campaign(
         name="World Fork Anchor Campaign",
         world_id=world.id,
         character_id=runner_npc.id,
@@ -563,7 +580,7 @@ def test_cow_world_fork_remaps_character_artifact_lore_id(
     assert camp.world_id == world.id
 
     # Edit the world ( triggers Copy-on-Write fork generating a brand-new world_id and brand-new lore_ids )
-    forked_world = temp_repo.update_world(
+    forked_world = empty_repo.update_world(
         world.id,
         WorldUpdatePayload(
             name=f"{world.name} v2",
@@ -578,14 +595,14 @@ def test_cow_world_fork_remaps_character_artifact_lore_id(
     assert forked_art.id != orig_art_id
 
     # Active template_npc was repointed to forked_world AND its ItemInstance.lore_id was remapped!
-    repointed_char = temp_repo.get_character(template_npc.id)
+    repointed_char = empty_repo.get_character(template_npc.id)
     assert repointed_char.world_id == forked_world.id
     assert repointed_char.inventory[0].lore_id == forked_art.id
     assert "artifact" in repointed_char.inventory[0].flags
     assert repointed_char.inventory[0].note == "Found in sector 9."
 
     # Deleting the artifact lore node on forked_world (0 campaigns using forked_world) cleanly unlinks it
-    no_art_world = temp_repo.update_world(
+    no_art_world = empty_repo.update_world(
         forked_world.id,
         WorldUpdatePayload(
             name=forked_world.name,
@@ -595,7 +612,7 @@ def test_cow_world_fork_remaps_character_artifact_lore_id(
             lore_nodes=[ln for ln in forked_world.lore_nodes if ln.category != "artifact"],
         ),
     )
-    cleaned_char = temp_repo.get_character(template_npc.id)
+    cleaned_char = empty_repo.get_character(template_npc.id)
     assert cleaned_char.world_id == no_art_world.id
     assert cleaned_char.inventory[0].lore_id is None
     assert "artifact" not in cleaned_char.inventory[0].flags
@@ -607,10 +624,12 @@ def test_cow_world_fork_remaps_character_artifact_lore_id(
 
 
 async def test_clerk_permanent_protection_anti_cloning_and_artifact_transfer(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify permanent lock vetoes removal & cloning, substring 'ring' spares 'Syringe', and transfers conserve metadata."""
+    from tests.factories import seed_world
+
     # Substring safety unit check: removing 'ring' removes 'Silver Ring' and NEVER deletes 'Medkit Syringe'
     eq_out, inv_out = apply_character_inventory_delta(
         existing_equipped=["Silver Ring"],
@@ -620,8 +639,9 @@ async def test_clerk_permanent_protection_anti_cloning_and_artifact_transfer(
     assert "Silver Ring" not in eq_out
     assert "Medkit Syringe" in inv_out
 
-    world_id, art_id = _add_world_artifact(temp_repo, "world_neon_rust")
-    world = temp_repo.get_world(world_id)
+    base_world = seed_world(empty_repo, owner_id=None)
+    world_id, art_id = _add_world_artifact(empty_repo, base_world.id)
+    world = empty_repo.get_world(world_id)
     start_loc = next(loc for loc in world.locations if loc.is_starting_location)
 
     perm_locket = ItemInstance(
@@ -637,31 +657,31 @@ async def test_clerk_permanent_protection_anti_cloning_and_artifact_transfer(
     )
 
     kira = _make_npc(
-        temp_repo,
+        empty_repo,
         "Kira Test",
         world.id,
         equipped=[perm_locket],
         inventory=[transfer_key, ItemInstance(name="Medkit Syringe")],
     )
     viktor = _make_npc(
-        temp_repo,
+        empty_repo,
         "Viktor Test",
         world.id,
         equipped=["Heavy Coat"],
         inventory=[],
     )
 
-    camp = temp_repo.create_campaign(
+    camp = empty_repo.create_campaign(
         name="Clerk Conservation Test",
         world_id=world.id,
         character_id=kira.id,
         character_ids=[kira.id, viktor.id],
         character_locations={kira.id: start_loc.id, viktor.id: start_loc.id},
     )
-    b0 = temp_repo.get_campaign_state_bundle(camp.id)
+    b0 = empty_repo.get_campaign_state_bundle(camp.id)
     t0 = b0.active_branch_turns[-1]
 
-    t1 = temp_repo.save_turn_node(
+    t1 = empty_repo.save_turn_node(
         turn_id="turn_clerk_1",
         campaign_id=camp.id,
         parent_turn_id=t0.id,
@@ -692,7 +712,7 @@ async def test_clerk_permanent_protection_anti_cloning_and_artifact_transfer(
         if ch.id == kira.id:
             if not edited_mid_flight:
                 edited_mid_flight = True
-                temp_repo.toggle_campaign_item_equip(
+                empty_repo.toggle_campaign_item_equip(
                     camp.id,
                     character_id=kira.id,
                     item="Medkit Syringe",
@@ -712,7 +732,7 @@ async def test_clerk_permanent_protection_anti_cloning_and_artifact_transfer(
     monkeypatch.setattr("app.engine.phase5_clerk.run_character_post_turn_agent", _fake_char_agent)
 
     await run_phase5_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world_id=world.id,
         character=kira,
@@ -723,7 +743,7 @@ async def test_clerk_permanent_protection_anti_cloning_and_artifact_transfer(
         all_participants=[kira, viktor],
     )
 
-    b_after = temp_repo.get_campaign_state_bundle(camp.id)
+    b_after = empty_repo.get_campaign_state_bundle(camp.id)
     kira_st = b_after.character_states[kira.id]
     viktor_st = b_after.character_states[viktor.id]
     post_turn = b_after.active_branch_turns[-1].post_turn
@@ -755,21 +775,24 @@ async def test_clerk_permanent_protection_anti_cloning_and_artifact_transfer(
 
 
 async def test_phase2_item_lore_hygiene_dedup_and_epistemic_isolation(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify relevance triggering, Zone 3 window suppression, RAG artifact deduplication, and pocket note privacy."""
+    from tests.factories import seed_world
+
+    base_world = seed_world(empty_repo, owner_id=None)
     world_id, art_id = _add_world_artifact(
-        temp_repo,
-        "world_neon_rust",
+        empty_repo,
+        base_world.id,
         title="The Astral Chrono-Key",
         content="Pre-collapse quantum skeleton key capable of unlocking orbital vault bulkheads.",
         tags=["Chrono-Key", "Orbital Vault"],
     )
-    world = temp_repo.get_world(world_id)
+    world = empty_repo.get_world(world_id)
     start_loc = next(loc for loc in world.locations if loc.is_starting_location)
 
     kira = _make_npc(
-        temp_repo,
+        empty_repo,
         "Kira Hygiene",
         world.id,
         equipped=[
@@ -793,21 +816,21 @@ async def test_phase2_item_lore_hygiene_dedup_and_epistemic_isolation(
             ),
         ],
     )
-    viktor = _make_npc(temp_repo, "Viktor Witness", world.id)
+    viktor = _make_npc(empty_repo, "Viktor Witness", world.id)
 
-    camp = temp_repo.create_campaign(
+    camp = empty_repo.create_campaign(
         name="Context Hygiene Test",
         world_id=world.id,
         character_id=kira.id,
         character_ids=[kira.id, viktor.id],
         character_locations={kira.id: start_loc.id, viktor.id: start_loc.id},
     )
-    b0 = temp_repo.get_campaign_state_bundle(camp.id)
+    b0 = empty_repo.get_campaign_state_bundle(camp.id)
     t0 = b0.active_branch_turns[-1]
 
     # Case A: Unrelated turn ("Pour me a synth-whiskey") -> ZERO item_lore injected even though Jacket is equipped!
     ctx_unrelated = await resolve_phase2_turn_context(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world=world,
         branch_turns=[t0],
@@ -829,7 +852,7 @@ async def test_phase2_item_lore_hygiene_dedup_and_epistemic_isolation(
 
     # Case B: Mentioning "locket" triggers Kira's private note ONLY for Kira (NOT Viktor!)
     ctx_locket = await resolve_phase2_turn_context(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world=world,
         branch_turns=[t0],
@@ -854,7 +877,7 @@ async def test_phase2_item_lore_hygiene_dedup_and_epistemic_isolation(
 
     # Case C: Mentioning "Chrono-Key" (or "Brass Cylinder") triggers World Artifact in shared_scene_items WITHOUT duplicate RAG entry!
     ctx_art = await resolve_phase2_turn_context(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world=world,
         branch_turns=[t0],
@@ -876,7 +899,7 @@ async def test_phase2_item_lore_hygiene_dedup_and_epistemic_isolation(
     assert "Brass Cylinder" in art_matches[0].title
 
     # Case D: Zone 3 suppression — once Kira's Turn 1 prose reveals the locket's secret, Turn 2 does NOT re-inject it!
-    t1 = temp_repo.save_turn_node(
+    t1 = empty_repo.save_turn_node(
         turn_id="turn_hyg_1",
         campaign_id=camp.id,
         parent_turn_id=t0.id,
@@ -895,7 +918,7 @@ async def test_phase2_item_lore_hygiene_dedup_and_epistemic_isolation(
         recalled_items=[],
     )
     ctx_suppressed = await resolve_phase2_turn_context(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world=world,
         branch_turns=[t0, t1],
@@ -917,7 +940,7 @@ async def test_phase2_item_lore_hygiene_dedup_and_epistemic_isolation(
     ] == []
 
     # Case E: Once Turn 1 scrolls out of Zone 3 (working_memory_turns=1 after Turn 2), mentioning "locket" re-injects!
-    t2 = temp_repo.save_turn_node(
+    t2 = empty_repo.save_turn_node(
         turn_id="turn_hyg_2",
         campaign_id=camp.id,
         parent_turn_id=t1.id,
@@ -933,7 +956,7 @@ async def test_phase2_item_lore_hygiene_dedup_and_epistemic_isolation(
         recalled_items=[],
     )
     ctx_reinjected = await resolve_phase2_turn_context(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world=world,
         branch_turns=[t0, t1, t2],

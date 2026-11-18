@@ -18,9 +18,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.auth import get_current_user
-from app.config import settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_test_seed
+from tests.factories import seed_character, seed_minimal_scenario, seed_world
 from app.engine.phase1_pre import (
     detect_persona_disclosures,
     detect_persona_disclosures_token_matching,
@@ -62,34 +61,19 @@ from app.schemas.turn import (
 )
 
 
-@pytest.fixture()
-def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CantinaRepository:
-    db_file = str(tmp_path / "test_cantina.db")
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "allow_offline_fallback", True)
-    monkeypatch.setattr(settings.actor_profile, "base_url", "http://127.0.0.1:9/v1")
-    monkeypatch.setattr(settings.clerk_profile, "base_url", "http://127.0.0.1:9/v1")
-    monkeypatch.setattr(settings.embedding_profile, "mode", "local_hash")
-    repo = CantinaRepository(db_file)
-    repo.init_db()
-    ensure_test_seed(repo)
-    return repo
-
-
 @pytest.fixture
-def authed_client(temp_repo: CantinaRepository) -> tuple[TestClient, CantinaRepository]:
-    """Authenticated FastAPI TestClient bound to temp_repo."""
-    user = temp_repo.create_user(
+def authed_client(empty_repo: CantinaRepository) -> tuple[TestClient, CantinaRepository]:
+    """Authenticated FastAPI TestClient bound to empty_repo."""
+    user = empty_repo.create_user(
         username="persona_tester",
         display_name="Persona Tester",
         role="admin",
         user_id="user_persona_tester",
     )
-    temp_repo.claim_unowned_entities(user.id)
     app.dependency_overrides[get_current_user] = lambda: user
     client = TestClient(app)
     try:
-        yield client, temp_repo
+        yield client, empty_repo
     finally:
         app.dependency_overrides.pop(get_current_user, None)
 
@@ -104,7 +88,6 @@ def _get_or_create_test_user(repo: CantinaRepository) -> str:
         role="admin",
         user_id="user_test_default",
     )
-    repo.claim_unowned_entities(u.id)
     return u.id
 
 
@@ -198,13 +181,13 @@ def _make_dummy_character_state(
     )
 
 
-def test_persona_crud_and_snapshot_isolation(temp_repo: CantinaRepository) -> None:
+def test_persona_crud_and_snapshot_isolation(empty_repo: CantinaRepository) -> None:
     """Milestone 1 & 2: Test Persona CRUD, campaign binding, and snapshot immutability."""
-    owner_id = _get_or_create_test_user(temp_repo)
+    owner_id = _get_or_create_test_user(empty_repo)
 
     # 1. Create Persona template
     payload = _sample_persona_payload()
-    created = temp_repo.create_persona(payload, owner_id=owner_id)
+    created = empty_repo.create_persona(payload, owner_id=owner_id)
     assert created.id.startswith("persona_")
     assert created.name == "Deckard Shaw"
     assert created.age_is_secret is True
@@ -212,16 +195,18 @@ def test_persona_crud_and_snapshot_isolation(temp_repo: CantinaRepository) -> No
     assert len(created.lore_entries) == 1
 
     # 2. Read back
-    fetched = temp_repo.get_persona(created.id)
+    fetched = empty_repo.get_persona(created.id)
     assert fetched is not None
     assert fetched.name == "Deckard Shaw"
     assert fetched.inventory[0].name == "Militech Cyberdeck"
 
     # 3. Create Campaign using this Persona
-    camp = temp_repo.create_campaign(
+    w = seed_world(empty_repo, owner_id=owner_id)
+    c = seed_character(empty_repo, owner_id=owner_id, world_id=w.id)
+    camp = empty_repo.create_campaign(
         name="Deckard's Run",
-        world_id="world_neon_rust",
-        character_id="char_kira_vance",
+        world_id=w.id,
+        character_id=c.id,
         persona_id=created.id,
         owner_id=owner_id,
     )
@@ -232,15 +217,15 @@ def test_persona_crud_and_snapshot_isolation(temp_repo: CantinaRepository) -> No
     assert camp.persona_snapshot.inventory[0].name == "Militech Cyberdeck"
 
     # Verify initial persona turn state for turn 0 was seeded
-    t0 = temp_repo.get_turn_node(camp.active_leaf_turn_id)
+    t0 = empty_repo.get_turn_node(camp.active_leaf_turn_id)
     assert t0 is not None
-    pts = temp_repo.get_campaign_persona_turn_state(t0.id)
+    pts = empty_repo.get_campaign_persona_turn_state(t0.id)
     assert pts is not None
     assert len(pts.inventory) == 2
     assert len(pts.equipped) == 1
 
     # 4. MUTATE master Persona template (Snapshot Isolation check)
-    temp_repo.update_persona(
+    empty_repo.update_persona(
         created.id,
         PersonaUpdatePayload(
             name="Deckard Shaw (Modified)",
@@ -251,13 +236,13 @@ def test_persona_crud_and_snapshot_isolation(temp_repo: CantinaRepository) -> No
     )
 
     # Master template was updated
-    master_updated = temp_repo.get_persona(created.id)
+    master_updated = empty_repo.get_persona(created.id)
     assert master_updated is not None
     assert master_updated.name == "Deckard Shaw (Modified)"
     assert len(master_updated.inventory) == 0
 
     # Campaign's frozen snapshot MUST REMAIN UNTOUCHED
-    camp_reloaded = temp_repo.get_campaign(camp.id)
+    camp_reloaded = empty_repo.get_campaign(camp.id)
     assert camp_reloaded is not None
     assert camp_reloaded.persona_snapshot is not None
     assert camp_reloaded.persona_snapshot.name == "Deckard Shaw"  # Pristine!
@@ -270,21 +255,21 @@ def test_persona_crud_and_snapshot_isolation(temp_repo: CantinaRepository) -> No
     assert len(camp_reloaded.persona_snapshot.inventory) == 2  # Pristine!
 
     # 5. DELETE master Persona template
-    temp_repo.delete_persona(created.id)
-    assert temp_repo.get_persona(created.id) is None
+    empty_repo.delete_persona(created.id)
+    assert empty_repo.get_persona(created.id) is None
 
     # Campaign still has its snapshot and continues to operate smoothly
-    camp_after_delete = temp_repo.get_campaign(camp.id)
+    camp_after_delete = empty_repo.get_campaign(camp.id)
     assert camp_after_delete is not None
     assert camp_after_delete.persona_snapshot is not None
     assert camp_after_delete.persona_snapshot.name == "Deckard Shaw"
 
 
-def test_zone1_kv_cache_byte_stability(temp_repo: CantinaRepository) -> None:
+def test_zone1_kv_cache_byte_stability(empty_repo: CantinaRepository) -> None:
     """Zone 1 KV-cache Invariant: static system prompts are byte-identical across turns."""
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
-    world = temp_repo.get_world(bundle.campaign.world_id)
-    char = temp_repo.get_character(bundle.campaign.character_id)
+    bundle = empty_repo.get_campaign_state_bundle(seed_minimal_scenario(empty_repo).campaign.id)
+    world = empty_repo.get_world(bundle.campaign.world_id)
+    char = empty_repo.get_character(bundle.campaign.character_id)
     assert world is not None and char is not None
 
     persona = _sample_persona_record("persona_zone1_test")
@@ -620,41 +605,43 @@ def test_prose_verified_gossip_protocol() -> None:
     assert len(no_gossip_events) == 0
 
 
-def test_timeline_branching_and_rollback(temp_repo: CantinaRepository) -> None:
+def test_timeline_branching_and_rollback(empty_repo: CantinaRepository) -> None:
     """Milestone 3 & 5: Branch swiping and rollback preserves pristine turn persona states."""
-    owner_id = _get_or_create_test_user(temp_repo)
+    owner_id = _get_or_create_test_user(empty_repo)
 
     # Create persona & campaign
-    p = temp_repo.create_persona(_sample_persona_payload(), owner_id=owner_id)
-    camp = temp_repo.create_campaign(
+    p = empty_repo.create_persona(_sample_persona_payload(), owner_id=owner_id)
+    w = seed_world(empty_repo, owner_id=owner_id)
+    c = seed_character(empty_repo, owner_id=owner_id, world_id=w.id)
+    camp = empty_repo.create_campaign(
         name="Branch Test Campaign",
-        world_id="world_neon_rust",
-        character_id="char_kira_vance",
+        world_id=w.id,
+        character_id=c.id,
         persona_id=p.id,
         owner_id=owner_id,
     )
 
     t0_id = camp.active_leaf_turn_id
-    t0 = temp_repo.get_turn_node(t0_id)
+    t0 = empty_repo.get_turn_node(t0_id)
     assert t0 is not None
-    t0_pts = temp_repo.get_campaign_persona_turn_state(t0_id)
+    t0_pts = empty_repo.get_campaign_persona_turn_state(t0_id)
     assert t0_pts is not None
     loc_id = t0.character_state.current_location_id
 
     # Turn 1 on Branch A: Player reveals age
     st_nyx_t1 = _make_dummy_character_state(
-        cid="char_kira_vance",
+        cid=c.id,
         loc_id=loc_id,
         turn_id="turn_branch_a_1",
         unlocked=["age"],
     )
-    temp_repo.save_turn_node(
+    empty_repo.save_turn_node(
         turn_id="turn_branch_a_1",
         campaign_id=camp.id,
         parent_turn_id=t0_id,
         depth_index=1,
         user_message="I am thirty-eight years old.",
-        actor_id="char_kira_vance",
+        actor_id=c.id,
         raw_prose="Kira nodded.",
         cognition=CognitionBlock(),
         pre_turn=PreTurnAnalysis(intent_summary="test"),
@@ -662,40 +649,40 @@ def test_timeline_branching_and_rollback(temp_repo: CantinaRepository) -> None:
         character_state=st_nyx_t1,
         recalled_items=[],
     )
-    temp_repo.save_campaign_persona_turn_state(
+    empty_repo.save_campaign_persona_turn_state(
         turn_id="turn_branch_a_1",
         equipped=p.equipped,
         inventory=p.inventory,
     )
 
     # Check Turn 1 has 2 items in inventory and character unlocked 'age'
-    pts_read_t1 = temp_repo.get_campaign_persona_turn_state("turn_branch_a_1")
+    pts_read_t1 = empty_repo.get_campaign_persona_turn_state("turn_branch_a_1")
     assert pts_read_t1 is not None
     assert len(pts_read_t1.inventory) == 2
-    turn_a1_node = temp_repo.get_turn_node("turn_branch_a_1")
+    turn_a1_node = empty_repo.get_turn_node("turn_branch_a_1")
     assert turn_a1_node.character_state.unlocked_persona_keys == ["age"]
 
     # Fork/Rewind to Turn 0 (Branch B)
     # Turn 0's state must remain 100% pristine!
-    pts_t0_reloaded = temp_repo.get_campaign_persona_turn_state(t0_id)
+    pts_t0_reloaded = empty_repo.get_campaign_persona_turn_state(t0_id)
     assert pts_t0_reloaded is not None
     assert t0.character_state.unlocked_persona_keys == []
 
     # Advance Turn 1 on Branch B: Player drops cyberdeck, only keeps medkit
     branch_b_inv = [it for it in p.inventory if it.id == "item_medkit"]
     st_nyx_t1b = _make_dummy_character_state(
-        cid="char_kira_vance",
+        cid=c.id,
         loc_id=loc_id,
         turn_id="turn_branch_b_1",
         unlocked=["item_medkit"],
     )
-    temp_repo.save_turn_node(
+    empty_repo.save_turn_node(
         turn_id="turn_branch_b_1",
         campaign_id=camp.id,
         parent_turn_id=t0_id,
         depth_index=1,
         user_message="I have a medkit here.",
-        actor_id="char_kira_vance",
+        actor_id=c.id,
         raw_prose="Kira observed the medkit.",
         cognition=CognitionBlock(),
         pre_turn=PreTurnAnalysis(intent_summary="test"),
@@ -703,23 +690,23 @@ def test_timeline_branching_and_rollback(temp_repo: CantinaRepository) -> None:
         character_state=st_nyx_t1b,
         recalled_items=[],
     )
-    temp_repo.save_campaign_persona_turn_state(
+    empty_repo.save_campaign_persona_turn_state(
         turn_id="turn_branch_b_1",
         equipped=p.equipped,
         inventory=branch_b_inv,
     )
 
     # Branch A Turn 1 still has 2 items and 'age'
-    pts_a1_check = temp_repo.get_campaign_persona_turn_state("turn_branch_a_1")
+    pts_a1_check = empty_repo.get_campaign_persona_turn_state("turn_branch_a_1")
     assert pts_a1_check is not None
     assert len(pts_a1_check.inventory) == 2
-    assert temp_repo.get_turn_node("turn_branch_a_1").character_state.unlocked_persona_keys == ["age"]
+    assert empty_repo.get_turn_node("turn_branch_a_1").character_state.unlocked_persona_keys == ["age"]
 
     # Branch B Turn 1 has 1 item and 'item_medkit' (NOT 'age')
-    pts_b1_check = temp_repo.get_campaign_persona_turn_state("turn_branch_b_1")
+    pts_b1_check = empty_repo.get_campaign_persona_turn_state("turn_branch_b_1")
     assert pts_b1_check is not None
     assert len(pts_b1_check.inventory) == 1
-    assert temp_repo.get_turn_node("turn_branch_b_1").character_state.unlocked_persona_keys == ["item_medkit"]
+    assert empty_repo.get_turn_node("turn_branch_b_1").character_state.unlocked_persona_keys == ["item_medkit"]
 
 
 def test_personas_api_endpoints(authed_client: tuple[TestClient, CantinaRepository]) -> None:
@@ -779,12 +766,14 @@ def test_personas_api_endpoints(authed_client: tuple[TestClient, CantinaReposito
     assert res_update.json()["name"] == "Valerie Wells (Upgraded)"
 
     # 5. Create campaign with this persona
+    w_api = seed_world(repo, owner_id="user_persona_tester")
+    c_api = seed_character(repo, owner_id="user_persona_tester", world_id=w_api.id)
     res_camp = client.post(
         "/api/campaigns",
         json={
             "name": "Valerie's Neon Night",
-            "world_id": "world_neon_rust",
-            "character_id": "char_kira_vance",
+            "world_id": w_api.id,
+            "character_id": c_api.id,
             "persona_id": pid,
         },
     )
@@ -802,7 +791,7 @@ def test_personas_api_endpoints(authed_client: tuple[TestClient, CantinaReposito
     assert res_get_del.status_code == 404
 
 
-def test_default_hardcoded_user_persona(temp_repo: CantinaRepository, authed_client: tuple[TestClient, CantinaRepository]) -> None:
+def test_default_hardcoded_user_persona(empty_repo: CantinaRepository, authed_client: tuple[TestClient, CantinaRepository]) -> None:
     """Test that default 'User' persona always exists per-user with blank attributes and cannot be altered or deleted."""
     client, repo = authed_client
 
@@ -978,13 +967,13 @@ def test_legacy_campaign_persona_backfill(tmp_path: Path) -> None:
     assert new_camp.persona_snapshot.owner_id == "u_legacy"
 
 
-def test_per_user_default_persona_isolation(temp_repo: CantinaRepository) -> None:
+def test_per_user_default_persona_isolation(empty_repo: CantinaRepository) -> None:
     """Verify that default personas are strictly per-user and enforce ownership requirements without relaxation."""
-    u_a = temp_repo.create_user(username="user_alice", display_name="Alice", role="user", user_id="user_alice")
-    u_b = temp_repo.create_user(username="user_bob", display_name="Bob", role="user", user_id="user_bob")
+    u_a = empty_repo.create_user(username="user_alice", display_name="Alice", role="user", user_id="user_alice")
+    u_b = empty_repo.create_user(username="user_bob", display_name="Bob", role="user", user_id="user_bob")
 
-    p_a = temp_repo.get_persona("persona_default_user_alice", owner_id=u_a.id)
-    p_b = temp_repo.get_persona("persona_default_user_bob", owner_id=u_b.id)
+    p_a = empty_repo.get_persona("persona_default_user_alice", owner_id=u_a.id)
+    p_b = empty_repo.get_persona("persona_default_user_bob", owner_id=u_b.id)
 
     assert p_a is not None
     assert p_a.id == "persona_default_user_alice"
@@ -997,23 +986,23 @@ def test_per_user_default_persona_isolation(temp_repo: CantinaRepository) -> Non
     assert p_b.name == "User"
 
     # Alice cannot access Bob's default persona
-    assert temp_repo.get_persona(p_b.id, owner_id=u_a.id) is None
+    assert empty_repo.get_persona(p_b.id, owner_id=u_a.id) is None
 
     # Bob cannot access Alice's default persona
-    assert temp_repo.get_persona(p_a.id, owner_id=u_b.id) is None
+    assert empty_repo.get_persona(p_a.id, owner_id=u_b.id) is None
 
     # Alice's persona list only contains Alice's personas
-    alice_list = temp_repo.list_personas(owner_id=u_a.id)
+    alice_list = empty_repo.list_personas(owner_id=u_a.id)
     assert any(p.id == p_a.id for p in alice_list)
     assert not any(p.id == p_b.id for p in alice_list)
 
     # Bob's persona list only contains Bob's personas
-    bob_list = temp_repo.list_personas(owner_id=u_b.id)
+    bob_list = empty_repo.list_personas(owner_id=u_b.id)
     assert any(p.id == p_b.id for p in bob_list)
     assert not any(p.id == p_a.id for p in bob_list)
 
 
-def test_persona_knowledge_provenance_sqlite_serialization(temp_repo: CantinaRepository) -> None:
+def test_persona_knowledge_provenance_sqlite_serialization(empty_repo: CantinaRepository) -> None:
     """Verify that PersonaKnowledgeProvenance objects serialize cleanly to SQLite without JSON error."""
     import json
     from app.schemas.persona import PersonaKnowledgeProvenance
@@ -1051,12 +1040,12 @@ def test_persona_knowledge_provenance_sqlite_serialization(temp_repo: CantinaRep
     assert loaded_from_st["item_deck"]["learned_from"] == "player"
 
 
-def test_persona_legacy_canonicalization_dedup_and_zone1_exclusion(temp_repo: CantinaRepository) -> None:
+def test_persona_legacy_canonicalization_dedup_and_zone1_exclusion(empty_repo: CantinaRepository) -> None:
     """Personas deduplicate identical bio/appearance, keep distinct legacy data under unsupported_fields, and exclude it from Zone 1."""
-    owner_id = _get_or_create_test_user(temp_repo)
+    owner_id = _get_or_create_test_user(empty_repo)
 
     # 1. Exact duplicate physical_appearance == persona_bio is discarded cleanly
-    dup = temp_repo.create_persona(
+    dup = empty_repo.create_persona(
         PersonaCreatePayload(
             name="Mirror Duplicate",
             persona_bio="Crisp charcoal blazer and brass goggles.",
@@ -1068,7 +1057,7 @@ def test_persona_legacy_canonicalization_dedup_and_zone1_exclusion(temp_repo: Ca
     assert dup.unsupported_fields == {}
 
     # 2. Distinct legacy physical_appearance is moved to unsupported_fields and preserved across partial updates
-    distinct = temp_repo.create_persona(
+    distinct = empty_repo.create_persona(
         PersonaCreatePayload(
             name="Legacy Traveler",
             persona_bio="Former courier from the inner ring.",
@@ -1084,7 +1073,7 @@ def test_persona_legacy_canonicalization_dedup_and_zone1_exclusion(temp_repo: Ca
     }
 
     # Partial update preserving unsupported_fields
-    partial = temp_repo.update_persona(
+    partial = empty_repo.update_persona(
         distinct.id,
         PersonaUpdatePayload(name="Legacy Traveler II"),
         owner_id=owner_id,
@@ -1092,7 +1081,7 @@ def test_persona_legacy_canonicalization_dedup_and_zone1_exclusion(temp_repo: Ca
     assert partial.unsupported_fields == distinct.unsupported_fields
 
     # Explicit removal clears legacy key
-    cleaned = temp_repo.update_persona(
+    cleaned = empty_repo.update_persona(
         distinct.id,
         PersonaUpdatePayload(unsupported_fields={"future_reputation": 42}),
         owner_id=owner_id,
@@ -1101,7 +1090,7 @@ def test_persona_legacy_canonicalization_dedup_and_zone1_exclusion(temp_repo: Ca
     assert cleaned.physical_appearance == ""
 
     # 3. Pre-v0.14.0 raw DB row surfaces legacy physical_appearance on read without mutating DB
-    conn = temp_repo._connect()
+    conn = empty_repo._connect()
     try:
         conn.execute(
             """
@@ -1119,7 +1108,7 @@ def test_persona_legacy_canonicalization_dedup_and_zone1_exclusion(temp_repo: Ca
     finally:
         conn.close()
 
-    premig = temp_repo.get_persona("persona_premig_01", owner_id=owner_id)
+    premig = empty_repo.get_persona("persona_premig_01", owner_id=owner_id)
     assert premig is not None
     assert premig.physical_appearance == "Legacy cape."
     assert premig.unsupported_fields == {"physical_appearance": "Legacy cape."}

@@ -5,25 +5,81 @@ from app.db.repository import CantinaRepository
 from app.main import app, _execute_turn_stream_events
 from app.schemas.turn import TurnSubmitRequest
 from app.auth import get_current_user
+from tests.factories import seed_campaign, seed_character, seed_user, seed_world
+from app.schemas.world import LocationEdgeDraft, LocationNodeDraft
 
 
 @pytest.fixture
-def mock_current_user(temp_repo: CantinaRepository):
-    user = temp_repo.create_user(
-        username="admin",
-        display_name="Admin",
-        role="admin",
-        user_id="user_admin",
+def spatial_scenario(empty_repo: CantinaRepository):
+    user = seed_user(empty_repo, username="admin", display_name="Admin", role="admin", user_id="user_admin")
+    world = seed_world(
+        empty_repo,
+        owner_id=user.id,
+        name="Spatial Test Sector",
+        locations=[
+            LocationNodeDraft(
+                key="main_bar",
+                name="The Neon Rust Main Floor",
+                summary="Main bar",
+                description="Main bar room.",
+                environmental_tags=["bar"],
+                is_starting_location=True,
+                is_hub=True,
+            ),
+            LocationNodeDraft(
+                key="clinic",
+                name="Backroom Ripperdoc Bay",
+                summary="Clinic",
+                description="Backroom surgical bay.",
+                environmental_tags=["clinic"],
+            ),
+            LocationNodeDraft(
+                key="tunnels",
+                name="Sub-Basement Cooling Tunnels",
+                summary="Tunnels",
+                description="Flooded conduits.",
+                environmental_tags=["tunnels"],
+            ),
+        ],
+        edges=[
+            LocationEdgeDraft(
+                from_key="main_bar",
+                to_key="clinic",
+                direction_label="Curtain to clinic",
+                reverse_direction_label="Curtain to bar",
+                compass_direction="N",
+                reverse_compass_direction="S",
+                travel_minutes=1,
+            ),
+            LocationEdgeDraft(
+                from_key="clinic",
+                to_key="tunnels",
+                direction_label="Floor hatch",
+                reverse_direction_label="Ladder up",
+                compass_direction="N",
+                reverse_compass_direction="S",
+                travel_minutes=3,
+            ),
+        ],
     )
+    char = seed_character(empty_repo, owner_id=user.id, world_id=world.id)
+    camp = seed_campaign(empty_repo, owner_id=user.id, world_id=world.id, character_id=char.id)
+    return empty_repo, user, world, camp
+
+
+@pytest.fixture
+def mock_current_user(spatial_scenario):
+    _repo, user, _world, _camp = spatial_scenario
     app.dependency_overrides[get_current_user] = lambda: user
     yield user
     app.dependency_overrides.pop(get_current_user, None)
 
 
-def test_spatial_edges_connect_edit_distance_and_remove(temp_repo: CantinaRepository) -> None:
+def test_spatial_edges_connect_edit_distance_and_remove(spatial_scenario) -> None:
     """Test connecting C to A on A <-> B <-> C, editing distance, and removing links as long as at least one remains."""
-    camp_id = "camp_neon_rust_default"
-    bundle_0 = temp_repo.get_campaign_state_bundle(camp_id)
+    empty_repo, _user, _world, camp = spatial_scenario
+    camp_id = camp.id
+    bundle_0 = empty_repo.get_campaign_state_bundle(camp_id)
 
     # In default seed:
     # A = main_bar ("The Neon Rust Main Floor")
@@ -47,14 +103,14 @@ def test_spatial_edges_connect_edit_distance_and_remove(temp_repo: CantinaReposi
 
     # Removing C <-> B before connecting C to A MUST fail because C has only 1 connection (severing its path to hub)!
     with pytest.raises(ValueError, match="valid path to the starting hub"):
-        temp_repo.remove_campaign_edge(
+        empty_repo.remove_campaign_edge(
             camp_id,
             edge_id=c_b_init.id,
             remove_reciprocal=True,
         )
 
     # 1. Connect C to A (Cooling Tunnels to Main Floor)
-    bundle_connected = temp_repo.connect_campaign_locations(
+    bundle_connected = empty_repo.connect_campaign_locations(
         camp_id,
         from_location_id=loc_c.id,
         to_location_id=loc_a.id,
@@ -90,7 +146,7 @@ def test_spatial_edges_connect_edit_distance_and_remove(temp_repo: CantinaReposi
     assert a_to_c.travel_minutes == 5
 
     # 2. Edit existing distances
-    bundle_dist = temp_repo.update_campaign_edge_distance(
+    bundle_dist = empty_repo.update_campaign_edge_distance(
         camp_id,
         edge_id=c_to_a.id,
         travel_minutes=14,
@@ -111,7 +167,7 @@ def test_spatial_edges_connect_edit_distance_and_remove(temp_repo: CantinaReposi
     c_to_b_current = next(
         e for e in bundle_dist.visible_edges if e.from_location_id == loc_c.id and e.to_location_id == loc_b.id
     )
-    bundle_after_removal = temp_repo.remove_campaign_edge(
+    bundle_after_removal = empty_repo.remove_campaign_edge(
         camp_id,
         edge_id=c_to_b_current.id,
         remove_reciprocal=True,
@@ -133,17 +189,18 @@ def test_spatial_edges_connect_edit_distance_and_remove(temp_repo: CantinaReposi
         e for e in bundle_after_removal.visible_edges if e.from_location_id == loc_c.id and e.to_location_id == loc_a.id
     )
     with pytest.raises(ValueError, match="valid path to the starting hub"):
-        temp_repo.remove_campaign_edge(
+        empty_repo.remove_campaign_edge(
             camp_id,
             edge_id=c_to_a_remaining.id,
             remove_reciprocal=True,
         )
 
 
-def test_island_creation_prevention(temp_repo: CantinaRepository) -> None:
+def test_island_creation_prevention(spatial_scenario) -> None:
     """Ensure removing an edge that would create an isolated multi-node island is rejected."""
-    camp_id = "camp_neon_rust_default"
-    bundle_0 = temp_repo.get_campaign_state_bundle(camp_id)
+    empty_repo, _user, _world, camp = spatial_scenario
+    camp_id = camp.id
+    bundle_0 = empty_repo.get_campaign_state_bundle(camp_id)
 
     # Initial chain: Hub (Main Floor) <-> Clinic <-> Cooling Tunnels
     hub = next(l for l in bundle_0.visible_locations if "Main Floor" in l.name)
@@ -151,7 +208,7 @@ def test_island_creation_prevention(temp_repo: CantinaRepository) -> None:
     cooling = next(l for l in bundle_0.visible_locations if "Cooling Tunnels" in l.name)
 
     # Add a 4th room linked to Cooling Tunnels: Deep Vault
-    bundle_1 = temp_repo.create_linked_location(
+    bundle_1 = empty_repo.create_linked_location(
         camp_id,
         from_location_id=cooling.id,
         name="Deep Vault",
@@ -174,7 +231,7 @@ def test_island_creation_prevention(temp_repo: CantinaRepository) -> None:
     )
 
     with pytest.raises(ValueError, match="valid path to the starting hub"):
-        temp_repo.remove_campaign_edge(
+        empty_repo.remove_campaign_edge(
             camp_id,
             edge_id=clinic_to_cooling.id,
             remove_reciprocal=True,
@@ -182,7 +239,7 @@ def test_island_creation_prevention(temp_repo: CantinaRepository) -> None:
 
     # Now connect Deep Vault back to the Hub (or Clinic):
     # Hub <-> Clinic <-> Cooling Tunnels <-> Deep Vault <-> Hub
-    bundle_2 = temp_repo.connect_campaign_locations(
+    bundle_2 = empty_repo.connect_campaign_locations(
         camp_id,
         from_location_id=vault.id,
         to_location_id=hub.id,
@@ -196,7 +253,7 @@ def test_island_creation_prevention(temp_repo: CantinaRepository) -> None:
         e for e in bundle_2.visible_edges
         if e.from_location_id == clinic.id and e.to_location_id == cooling.id
     )
-    bundle_3 = temp_repo.remove_campaign_edge(
+    bundle_3 = empty_repo.remove_campaign_edge(
         camp_id,
         edge_id=clinic_to_cooling_current.id,
         remove_reciprocal=True,
@@ -218,19 +275,13 @@ def test_island_creation_prevention(temp_repo: CantinaRepository) -> None:
     )
 
 
-def test_spatial_edges_api_endpoints(temp_repo: CantinaRepository, mock_current_user) -> None:
+def test_spatial_edges_api_endpoints(spatial_scenario, mock_current_user) -> None:
     """Test the FastAPI endpoints for connecting, editing distances, and deleting edges."""
+    empty_repo, _user, _world, camp = spatial_scenario
     client = TestClient(app)
-    camp_id = "camp_neon_rust_default"
-    # Claim campaign for user_admin
-    conn = temp_repo._connect()
-    try:
-        conn.execute("UPDATE campaigns SET owner_id = ? WHERE id = ?", ("user_admin", camp_id))
-        conn.commit()
-    finally:
-        conn.close()
+    camp_id = camp.id
 
-    bundle = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle = empty_repo.get_campaign_state_bundle(camp_id)
     loc_a = next(l for l in bundle.visible_locations if "Main Floor" in l.name)
     loc_c = next(l for l in bundle.visible_locations if "Cooling Tunnels" in l.name)
 
@@ -281,31 +332,19 @@ def test_spatial_edges_api_endpoints(temp_repo: CantinaRepository, mock_current_
 
 
 async def test_map_edits_do_not_affect_base_world_or_previous_turns(
-    temp_repo: CantinaRepository, mock_current_user
+    spatial_scenario, mock_current_user
 ) -> None:
     """Verify that campaign map edits do NOT touch the base world and do NOT cascade to previous turns."""
+    empty_repo, _user, _world, camp = spatial_scenario
     client = TestClient(app)
-    camp_id = "camp_neon_rust_default"
-    conn = temp_repo._connect()
-    try:
-        conn.execute("UPDATE campaigns SET owner_id = ? WHERE id = ?", ("user_admin", camp_id))
-        conn.commit()
-    finally:
-        conn.close()
+    camp_id = camp.id
 
-    bundle_0 = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle_0 = empty_repo.get_campaign_state_bundle(camp_id)
     world_id = bundle_0.campaign.world_id
     turn_0_id = bundle_0.campaign.active_leaf_turn_id
 
-    conn = temp_repo._connect()
-    try:
-        conn.execute("UPDATE worlds SET owner_id = ? WHERE id = ?", ("user_admin", world_id))
-        conn.commit()
-    finally:
-        conn.close()
-
     # 1. Capture original base world state
-    base_world_initial = temp_repo.get_world(world_id, base_only=True)
+    base_world_initial = empty_repo.get_world(world_id, base_only=True)
     initial_edge_count = len(base_world_initial.edges)
     initial_loc_count = len(base_world_initial.locations)
 
@@ -314,7 +353,7 @@ async def test_map_edits_do_not_affect_base_world_or_previous_turns(
     async for _ev in _execute_turn_stream_events(camp_id, req):
         pass
 
-    bundle_turn_1 = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle_turn_1 = empty_repo.get_campaign_state_bundle(camp_id)
     turn_1_id = bundle_turn_1.campaign.active_leaf_turn_id
     assert turn_1_id != turn_0_id, "Should be on Turn 1 now"
 
@@ -325,7 +364,7 @@ async def test_map_edits_do_not_affect_base_world_or_previous_turns(
 
     # In Turn 1:
     # A) Connect C to A (Cooling Tunnels to Main Floor) with distance 8
-    temp_repo.connect_campaign_locations(
+    empty_repo.connect_campaign_locations(
         camp_id,
         from_location_id=loc_c.id,
         to_location_id=loc_a.id,
@@ -339,7 +378,7 @@ async def test_map_edits_do_not_affect_base_world_or_previous_turns(
         e for e in bundle_turn_1.visible_edges
         if e.from_location_id == loc_a.id and e.to_location_id == loc_b.id
     )
-    temp_repo.update_campaign_edge_distance(
+    empty_repo.update_campaign_edge_distance(
         camp_id,
         edge_id=edge_a_b.id,
         travel_minutes=25,
@@ -351,14 +390,14 @@ async def test_map_edits_do_not_affect_base_world_or_previous_turns(
         e for e in bundle_turn_1.visible_edges
         if e.from_location_id == loc_c.id and e.to_location_id == loc_b.id
     )
-    temp_repo.remove_campaign_edge(
+    empty_repo.remove_campaign_edge(
         camp_id,
         edge_id=edge_c_b.id,
         remove_reciprocal=True,
     )
 
     # Verify Turn 1 has the edits
-    bundle_turn_1_edited = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle_turn_1_edited = empty_repo.get_campaign_state_bundle(camp_id)
     # C <-> A is present
     assert any(
         e.from_location_id == loc_c.id and e.to_location_id == loc_a.id
@@ -377,7 +416,7 @@ async def test_map_edits_do_not_affect_base_world_or_previous_turns(
     )
 
     # 3. VERIFY ORIGINAL WORLD MAP IS COMPLETELY UNTOUCHED:
-    base_world_after = temp_repo.get_world(world_id, base_only=True)
+    base_world_after = empty_repo.get_world(world_id, base_only=True)
     assert len(base_world_after.locations) == initial_loc_count
     assert len(base_world_after.edges) == initial_edge_count
 
@@ -413,7 +452,7 @@ async def test_map_edits_do_not_affect_base_world_or_previous_turns(
     )
 
     # 4. VERIFY PREVIOUS TURN (Turn 0) DOES NOT HAVE THE EDITS (NO CASCADE):
-    bundle_turn_0_checkout = temp_repo.checkout_turn_branch(camp_id, turn_0_id)
+    bundle_turn_0_checkout = empty_repo.checkout_turn_branch(camp_id, turn_0_id)
     # C <-> A does NOT exist on Turn 0
     assert not any(
         (e.from_location_id == loc_c.id and e.to_location_id == loc_a.id)
@@ -432,8 +471,8 @@ async def test_map_edits_do_not_affect_base_world_or_previous_turns(
     assert turn_0_edge_ab.travel_minutes == 1
 
     # 5. Check out Turn 1 again and delete it to verify rollback restoration
-    temp_repo.checkout_turn_branch(camp_id, turn_1_id)
-    bundle_after_delete = temp_repo.delete_last_turn(camp_id)
+    empty_repo.checkout_turn_branch(camp_id, turn_1_id)
+    bundle_after_delete = empty_repo.delete_last_turn(camp_id)
     assert bundle_after_delete.campaign.active_leaf_turn_id == turn_0_id
     # After deleting Turn 1, the edits on Turn 1 are purged and Turn 0 is restored
     assert not any(

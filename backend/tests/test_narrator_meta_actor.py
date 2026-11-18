@@ -2,33 +2,16 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-import pytest
 
-from app.config import settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_test_seed
+from tests.factories import seed_minimal_scenario
 from app.main import _execute_turn_stream_events
 from app.schemas.turn import TurnSubmitRequest
 
 
-@pytest.fixture()
-def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CantinaRepository:
-    db_file = str(tmp_path / "test_cantina_narrator.db")
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "allow_offline_fallback", True)
-    monkeypatch.setattr(settings.actor_profile, "base_url", "http://127.0.0.1:9/v1")
-    monkeypatch.setattr(settings.clerk_profile, "base_url", "http://127.0.0.1:9/v1")
-    monkeypatch.setattr(settings.embedding_profile, "mode", "local_hash")
-    repo = CantinaRepository(db_file)
-    repo.init_db()
-    ensure_test_seed(repo)
-    return repo
-
-
-async def test_narrator_describe_scene_execution(temp_repo: CantinaRepository) -> None:
+async def test_narrator_describe_scene_execution(empty_repo: CantinaRepository) -> None:
     """Verify that invoking the narrator in 'describe' mode produces an objective scene turn with actor_id='__narrator__'."""
-    camp_id = "camp_neon_rust_default"
+    camp_id = seed_minimal_scenario(empty_repo).campaign.id
 
     events = []
     async for packet in _execute_turn_stream_events(
@@ -51,9 +34,9 @@ async def test_narrator_describe_scene_execution(temp_repo: CantinaRepository) -
     assert len(saved_turn["raw_prose"]) > 10
 
 
-async def test_narrator_advance_story_execution(temp_repo: CantinaRepository) -> None:
+async def test_narrator_advance_story_execution(empty_repo: CantinaRepository) -> None:
     """Verify that invoking the narrator in 'advance' mode advances narrative time and world state."""
-    camp_id = "camp_neon_rust_default"
+    camp_id = seed_minimal_scenario(empty_repo).campaign.id
 
     events = []
     async for packet in _execute_turn_stream_events(
@@ -74,9 +57,9 @@ async def test_narrator_advance_story_execution(temp_repo: CantinaRepository) ->
     assert len(saved_turn["raw_prose"]) > 10
 
 
-async def test_narrator_custom_directive_execution(temp_repo: CantinaRepository) -> None:
+async def test_narrator_custom_directive_execution(empty_repo: CantinaRepository) -> None:
     """Verify that a custom director directive instructs the narrator properly."""
-    camp_id = "camp_neon_rust_default"
+    camp_id = seed_minimal_scenario(empty_repo).campaign.id
 
     custom_text = "Heavy rain begins pounding against the corrugated aluminum roof."
     events = []
@@ -98,9 +81,9 @@ async def test_narrator_custom_directive_execution(temp_repo: CantinaRepository)
     assert "aluminum roof" in saved_turn["raw_prose"] or len(saved_turn["raw_prose"]) > 10
 
 
-async def test_interleaved_npc_and_narrator_turns(temp_repo: CantinaRepository) -> None:
+async def test_interleaved_npc_and_narrator_turns(empty_repo: CantinaRepository) -> None:
     """Verify that turns can alternate seamlessly between player/NPC and Narrator."""
-    camp_id = "camp_neon_rust_default"
+    camp_id = seed_minimal_scenario(empty_repo).campaign.id
 
     # Turn 1: Player speaks to NPC
     t1_events = []
@@ -142,7 +125,7 @@ async def test_interleaved_npc_and_narrator_turns(temp_repo: CantinaRepository) 
     assert t3_turn["actor_id"] != "__narrator__"
 
     # Verify branch history depth
-    bundle = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle = empty_repo.get_campaign_state_bundle(camp_id)
     assert len(bundle.active_branch_turns) == 4  # Root (turn 0) + 3 turns
     assert [t.actor_id for t in bundle.active_branch_turns[-3:]] == [
         t1_turn["actor_id"],
@@ -151,9 +134,9 @@ async def test_interleaved_npc_and_narrator_turns(temp_repo: CantinaRepository) 
     ]
 
 
-async def test_narrator_complication_mode(temp_repo: CantinaRepository) -> None:
+async def test_narrator_complication_mode(empty_repo: CantinaRepository) -> None:
     """Verify that 'complication' mode introduces an external inciting incident without player puppeteering."""
-    camp_id = "camp_neon_rust_default"
+    camp_id = seed_minimal_scenario(empty_repo).campaign.id
 
     events = []
     async for packet in _execute_turn_stream_events(
@@ -176,9 +159,9 @@ async def test_narrator_complication_mode(temp_repo: CantinaRepository) -> None:
     assert len(saved_turn["raw_prose"]) > 10
 
 
-async def test_narrator_legacy_perception_coerced_to_custom(temp_repo: CantinaRepository) -> None:
+async def test_narrator_legacy_perception_coerced_to_custom(empty_repo: CantinaRepository) -> None:
     """Verify that legacy 'perception' input or cues are cleanly coerced to custom narrator mode."""
-    camp_id = "camp_neon_rust_default"
+    camp_id = seed_minimal_scenario(empty_repo).campaign.id
 
     events = []
     async for packet in _execute_turn_stream_events(
@@ -198,11 +181,11 @@ async def test_narrator_legacy_perception_coerced_to_custom(temp_repo: CantinaRe
     assert len(saved_turn["raw_prose"]) > 10
 
 
-async def test_narrator_advance_with_explicit_duration(temp_repo: CantinaRepository) -> None:
+async def test_narrator_advance_with_explicit_duration(empty_repo: CantinaRepository) -> None:
     """Verify that 'advance' mode with duration_minutes advances the world clock properly."""
-    camp_id = "camp_neon_rust_default"
+    camp_id = seed_minimal_scenario(empty_repo).campaign.id
 
-    init_bundle = temp_repo.get_campaign_state_bundle(camp_id)
+    init_bundle = empty_repo.get_campaign_state_bundle(camp_id)
     init_time = init_bundle.current_world_snapshot.world_timestamp
 
     events = []
@@ -224,9 +207,9 @@ async def test_narrator_advance_with_explicit_duration(temp_repo: CantinaReposit
     assert new_time != init_time
 
 
-async def test_narrator_swipe_regeneration_preserves_narrator_actor(temp_repo: CantinaRepository) -> None:
+async def test_narrator_swipe_regeneration_preserves_narrator_actor(empty_repo: CantinaRepository) -> None:
     """Verify that swiping / regenerating a narrator turn executes as narrator (not standard character)."""
-    camp_id = "camp_neon_rust_default"
+    camp_id = seed_minimal_scenario(empty_repo).campaign.id
 
     # Step 1: Initial narrator turn
     events = []
@@ -260,9 +243,9 @@ async def test_narrator_swipe_regeneration_preserves_narrator_actor(temp_repo: C
     assert t2["id"] != t1["id"]
 
 
-async def test_narrator_swipe_auto_detection_when_standard_mode_sent(temp_repo: CantinaRepository) -> None:
+async def test_narrator_swipe_auto_detection_when_standard_mode_sent(empty_repo: CantinaRepository) -> None:
     """Verify that backend auto-detects bracketed narrator cues during swipe even if narrative_mode='standard'."""
-    camp_id = "camp_neon_rust_default"
+    camp_id = seed_minimal_scenario(empty_repo).campaign.id
 
     # Step 1: Initial narrator turn
     events = []
@@ -298,14 +281,14 @@ async def test_narrator_swipe_auto_detection_when_standard_mode_sent(temp_repo: 
 
 
 async def test_narrator_turn_preserves_character_emotional_anchor(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify that narrator turns do NOT overwrite NPC emotional state and that following turns anchor to the last non-narrator turn."""
     from app.engine.phase2_context import resolve_character_previous_state
 
-    camp_id = "camp_neon_rust_default"
-    bundle_init = temp_repo.get_campaign_state_bundle(camp_id)
-    char = temp_repo.get_character(bundle_init.campaign.character_id)
+    camp_id = seed_minimal_scenario(empty_repo).campaign.id
+    bundle_init = empty_repo.get_campaign_state_bundle(camp_id)
+    char = empty_repo.get_character(bundle_init.campaign.character_id)
 
     # 1. Player speaks to character -> Turn 1
     t1_events = []
@@ -318,7 +301,7 @@ async def test_narrator_turn_preserves_character_emotional_anchor(
     ):
         t1_events.append(packet)
 
-    bundle_t1 = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle_t1 = empty_repo.get_campaign_state_bundle(camp_id)
     t1_turn = bundle_t1.active_branch_turns[-1]
     t1_char_state = t1_turn.character_states[char.id]
     assert t1_turn.actor_id != "__narrator__"
@@ -335,7 +318,7 @@ async def test_narrator_turn_preserves_character_emotional_anchor(
     ):
         t2_events.append(packet)
 
-    bundle_t2 = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle_t2 = empty_repo.get_campaign_state_bundle(camp_id)
     t2_turn = bundle_t2.active_branch_turns[-1]
     assert t2_turn.actor_id == "__narrator__"
     # Ensure Phase 4 Clerk preserved character's emotional state on the narrator turn
@@ -357,7 +340,7 @@ async def test_narrator_turn_preserves_character_emotional_anchor(
     ):
         t3_events.append(packet)
 
-    bundle_t3 = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle_t3 = empty_repo.get_campaign_state_bundle(camp_id)
     t3_turn = bundle_t3.active_branch_turns[-1]
     assert t3_turn.actor_id == "__narrator__"
     t3_char_state = t3_turn.character_states[char.id]
@@ -390,7 +373,7 @@ async def test_narrator_turn_preserves_character_emotional_anchor(
     ):
         t4_events.append(packet)
 
-    bundle_t4 = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle_t4 = empty_repo.get_campaign_state_bundle(camp_id)
     t4_turn = bundle_t4.active_branch_turns[-1]
     assert t4_turn.actor_id == char.id
     assert t4_turn.character_state.mood_label != "Objective / Detached"

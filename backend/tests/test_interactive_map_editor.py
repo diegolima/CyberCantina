@@ -8,12 +8,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main as main_module
-from app.auth import generate_session_token
-from app.config import ModelProfile, settings
+from app.config import ModelProfile
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_test_seed
 from app.engine.llm_client import llm_client
+from tests.factories import seed_character, seed_world
 from app.routers.enrich import LocationTagsEnrichOutput
 from app.schemas.character import CognitionBlock
 from app.schemas.turn import (
@@ -39,26 +37,16 @@ from app.services.import_export_service import (
 
 @pytest.fixture()
 def authed_client(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    api_env: tuple[TestClient, CantinaRepository, Path],
+    api_user_factory,
 ) -> tuple[TestClient, CantinaRepository, str, str]:
     """Create isolated repo, seeded admin user with Bearer token, and TestClient."""
-    db_file = str(tmp_path / "test_interactive_map.db")
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "allow_offline_fallback", True)
-
-    repo = CantinaRepository(db_file)
-    repo.init_db()
-    ensure_test_seed(repo)
-
-    user = repo.create_user(
-        username="map_admin", display_name="Map Admin", role="admin"
-    )
-    repo.claim_unowned_entities(user.id)
-    raw_token, token_hash = generate_session_token()
-    repo.create_session(session_id_hash=token_hash, user_id=user.id)
-
-    client = TestClient(main_module.app)
-    return client, repo, user.id, raw_token
+    client, repo, _media_dir = api_env
+    headers, user_id, raw_token = api_user_factory("map_admin", role="admin", display_name="Map Admin")
+    _ = headers
+    world = seed_world(repo, owner_id=user_id)
+    seed_character(repo, owner_id=user_id, world_id=world.id)
+    return client, repo, user_id, raw_token
 
 
 def test_llm_schemas_exclude_ui_coords_and_icons() -> None:
@@ -251,7 +239,7 @@ async def test_world_update_reachability_and_zcc_coords_roundtrip(
     client, repo, user_id, token = authed_client
     headers = {"Authorization": f"Bearer {token}"}
 
-    w_base = repo.get_world("world_neon_rust", base_only=True, owner_id=user_id)
+    w_base = repo.list_worlds(owner_id=user_id)[0]
 
     l1 = w_base.locations[0]
     cont = LocationContainer(
@@ -375,7 +363,7 @@ def test_campaign_map_editing_invariants_and_branch_safety(
     headers = {"Authorization": f"Bearer {token}"}
 
     # Build a clean 2-room world (Starter L0 inside no container -> Unvisited L0)
-    w_src = repo.get_world("world_neon_rust", base_only=True, owner_id=user_id)
+    w_src = repo.list_worlds(owner_id=user_id)[0]
     w_edited = repo.update_world(
         w_src.id,
         WorldUpdatePayload(
@@ -425,7 +413,7 @@ def test_campaign_map_editing_invariants_and_branch_safety(
         ),
         owner_id=user_id,
     )
-    char = repo.get_character("char_kira_vance", owner_id=user_id)
+    char = repo.list_characters(owner_id=user_id)[0]
     camp = repo.create_campaign(
         name="Map Branch Camp",
         world_id=w_edited.id,

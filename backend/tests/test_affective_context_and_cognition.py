@@ -209,7 +209,7 @@ def test_narrator_advance_care_state_not_overwritten_by_rewind() -> None:
 
 
 @pytest.mark.asyncio()
-async def test_phase2_lazy_off_screen_idle_catchup_is_idempotent(temp_repo=None) -> None:
+async def test_phase2_lazy_off_screen_idle_catchup_is_idempotent() -> None:
     """Verify resolve_phase2_turn_context catches up off-screen NPC idle time idempotently."""
     world, vesper, jax, loc = _make_world_and_cast()
     pre = PreTurnAnalysis(

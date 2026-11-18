@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
 from typing import Any
 
 import pytest
 
-from app.config import settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_test_seed
+from tests.factories import seed_minimal_scenario
 from app.engine.affective_engine import (
     ensure_snapshot_care_state,
     materialize_snapshot_with_care,
@@ -44,23 +42,8 @@ from app.schemas.turn import (
 _FLOAT_RE = re.compile(r"(?<![a-zA-Z0-9_])[+-]?\d+\.\d+")
 
 
-@pytest.fixture()
-def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CantinaRepository:
-    db_file = str(tmp_path / "test_care_phase5.db")
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "allow_offline_fallback", True)
-    monkeypatch.setattr(settings, "agent_dispatch_mode", "sequential")
-    monkeypatch.setattr(settings.actor_profile, "base_url", "http://127.0.0.1:9/v1")
-    monkeypatch.setattr(settings.clerk_profile, "base_url", "http://127.0.0.1:9/v1")
-    monkeypatch.setattr(settings.embedding_profile, "mode", "local_hash")
-    repo = CantinaRepository(db_file)
-    repo.init_db()
-    ensure_test_seed(repo)
-    return repo
-
-
 def _create_bouncer_and_medic(
-    repo: CantinaRepository, world_id: str = "world_neon_rust"
+    repo: CantinaRepository, world_id: str
 ) -> tuple[CharacterRecord, CharacterRecord]:
     viktor = repo.create_character_from_draft(
         CharacterWizardDraft(
@@ -156,13 +139,14 @@ async def test_gbnf_inlined_schema_and_structured_retry_never_serializes_null(
 
 @pytest.mark.asyncio
 async def test_phase5_character_agent_prompt_zero_floats_and_whisper_scoping(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify Phase 5 Character Agent prompt contains zero raw floats and strips other NPCs' whispers."""
-    kira = temp_repo.get_character("char_kira_vance")
-    viktor, _ = _create_bouncer_and_medic(temp_repo)
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
+    scenario = seed_minimal_scenario(empty_repo, with_shards=True)
+    kira = scenario.character
+    viktor, _ = _create_bouncer_and_medic(empty_repo, scenario.world.id)
+    bundle = empty_repo.get_campaign_state_bundle(scenario.campaign.id)
     root_turn = bundle.active_branch_turns[-1]
 
     completed = root_turn.model_copy(
@@ -227,11 +211,12 @@ async def test_phase5_character_agent_prompt_zero_floats_and_whisper_scoping(
 
 @pytest.mark.asyncio
 async def test_gottman_negative_sentiment_override_across_live_turns(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify betrayal triggers Negative Sentiment Override: cheap flattery fails, costly restitution succeeds."""
-    camp_id = "camp_neon_rust_default"
-    char = temp_repo.get_character("char_kira_vance")
+    scenario = seed_minimal_scenario(empty_repo, with_shards=True)
+    camp_id = scenario.campaign.id
+    char = scenario.character
 
     # Turn 1: Severe betrayal
     async for _ in _execute_turn_stream_events(
@@ -242,7 +227,7 @@ async def test_gottman_negative_sentiment_override_across_live_turns(
     ):
         pass
 
-    b1 = temp_repo.get_campaign_state_bundle(camp_id)
+    b1 = empty_repo.get_campaign_state_bundle(camp_id)
     care1 = b1.character_states[char.id].care_state
     assert care1 is not None
     assert care1.is_provisional is False
@@ -260,7 +245,7 @@ async def test_gottman_negative_sentiment_override_across_live_turns(
     ):
         pass
 
-    b2 = temp_repo.get_campaign_state_bundle(camp_id)
+    b2 = empty_repo.get_campaign_state_bundle(camp_id)
     care2 = b2.character_states[char.id].care_state
     assert care2 is not None
     edge2 = care2.relations["user"]
@@ -279,7 +264,7 @@ async def test_gottman_negative_sentiment_override_across_live_turns(
     ):
         pass
 
-    b3 = temp_repo.get_campaign_state_bundle(camp_id)
+    b3 = empty_repo.get_campaign_state_bundle(camp_id)
     care3 = b3.character_states[char.id].care_state
     assert care3 is not None
     edge3 = care3.relations["user"]
@@ -291,17 +276,18 @@ async def test_gottman_negative_sentiment_override_across_live_turns(
 
 @pytest.mark.asyncio
 async def test_epistemic_visibility_ceiling_passive_fast_path_and_remote_whispers(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify public_room witness coupling vs local_whisper/remote_comm isolation and passive bystander fast-path."""
-    kira = temp_repo.get_character("char_kira_vance")
-    viktor, nyx = _create_bouncer_and_medic(temp_repo)
-    world = temp_repo.get_world("world_neon_rust")
+    scenario = seed_minimal_scenario(empty_repo, character_name="Kira Vance", with_shards=True)
+    kira = scenario.character
+    world = scenario.world
+    viktor, nyx = _create_bouncer_and_medic(empty_repo, world.id)
     main_bar = next(loc for loc in world.locations if loc.is_starting_location)
     ripper_bay = next(loc for loc in world.locations if loc.id != main_bar.id)
 
-    camp = temp_repo.create_campaign(
+    camp = empty_repo.create_campaign(
         name="Epistemic Ceiling Test",
         world_id=world.id,
         character_id=kira.id,
@@ -312,7 +298,7 @@ async def test_epistemic_visibility_ceiling_passive_fast_path_and_remote_whisper
             nyx.id: ripper_bay.id,
         },
     )
-    bundle0 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle0 = empty_repo.get_campaign_state_bundle(camp.id)
     root_turn = bundle0.active_branch_turns[-1]
 
     # Seed Viktor with strong ally warmth (+0.80) toward Kira so public attacks on Kira shift Viktor's view of 'user'
@@ -331,14 +317,14 @@ async def test_epistemic_visibility_ceiling_passive_fast_path_and_remote_whisper
         bundle0.character_states[viktor.id],
         viktor_care0.model_copy(update={"relations": ally_rels}),
     )
-    temp_repo.update_turn_post_clerk(
+    empty_repo.update_turn_post_clerk(
         turn_id=root_turn.id,
         post_turn=PostTurnStateDelta(elapsed_minutes=0, transition_type="stay"),
         updated_world_snapshot=root_turn.world_snapshot,
         updated_character_state=bundle0.character_states[kira.id],
         extra_character_states=[viktor_seeded, bundle0.character_states[nyx.id]],
     )
-    bundle0 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle0 = empty_repo.get_campaign_state_bundle(camp.id)
     viktor_user_w0 = bundle0.character_states[viktor.id].care_state.relations["user"].warmth  # type: ignore[union-attr]
 
     # Case 1: Pure LOCAL whisper to Kira + unmentioned passive bystander Viktor
@@ -369,7 +355,7 @@ async def test_epistemic_visibility_ceiling_passive_fast_path_and_remote_whisper
 
     monkeypatch.setattr(llm_client, "complete_structured", spy_llm)
 
-    turn_whisper = temp_repo.save_turn_node(
+    turn_whisper = empty_repo.save_turn_node(
         turn_id="turn_vis_whisper",
         campaign_id=camp.id,
         parent_turn_id=root_turn.id,
@@ -388,7 +374,7 @@ async def test_epistemic_visibility_ceiling_passive_fast_path_and_remote_whisper
         recalled_items=[],
     )
     await run_phase5_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world_id=world.id,
         character=kira,
@@ -402,14 +388,14 @@ async def test_epistemic_visibility_ceiling_passive_fast_path_and_remote_whisper
     assert len(llm_char_calls) == 1
     assert f"id='{kira.id}'" in llm_char_calls[0]
 
-    b_whisper = temp_repo.get_campaign_state_bundle(camp.id)
+    b_whisper = empty_repo.get_campaign_state_bundle(camp.id)
     assert b_whisper.character_states[kira.id].care_state.relations["user"].trust < -0.18  # type: ignore[union-attr]
     # Because interaction was local_whisper, co-present ally Viktor did NOT overhear!
     assert b_whisper.character_states[viktor.id].care_state.relations["user"].warmth == viktor_user_w0  # type: ignore[union-attr]
 
     # Case 2: Public betrayal in main_bar + REMOTE comm whisper to off-screen Nyx (branching from root_turn)
     llm_char_calls.clear()
-    turn_pub_and_remote = temp_repo.save_turn_node(
+    turn_pub_and_remote = empty_repo.save_turn_node(
         turn_id="turn_vis_pub_rem",
         campaign_id=camp.id,
         parent_turn_id=root_turn.id,
@@ -431,7 +417,7 @@ async def test_epistemic_visibility_ceiling_passive_fast_path_and_remote_whisper
         recalled_items=[],
     )
     await run_phase5_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world_id=world.id,
         character=kira,
@@ -441,7 +427,7 @@ async def test_epistemic_visibility_ceiling_passive_fast_path_and_remote_whisper
         present_characters=[kira, viktor],
         all_participants=[kira, viktor, nyx],
     )
-    b_pub = temp_repo.get_campaign_state_bundle(camp.id)
+    b_pub = empty_repo.get_campaign_state_bundle(camp.id)
     # Public attack on Kira caused silent witness Viktor's warmth toward 'user' to drop via witness coupling!
     assert b_pub.character_states[viktor.id].care_state.relations["user"].warmth < viktor_user_w0 - 0.05  # type: ignore[union-attr]
     # Off-screen Nyx received the REMOTE comm whisper -> Nyx's trust/warmth toward 'user' rose while staying in ripper_bay!
@@ -453,13 +439,14 @@ async def test_epistemic_visibility_ceiling_passive_fast_path_and_remote_whisper
 
 @pytest.mark.asyncio
 async def test_unrelinquished_seizure_grievance_and_persona_name_canonicalization(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify unrelinquished item seizure auto-injects victim grievance/distrust and persona_name maps to 'user'."""
-    kira = temp_repo.get_character("char_kira_vance")
-    viktor, _ = _create_bouncer_and_medic(temp_repo)
-    world = temp_repo.get_world("world_neon_rust")
+    scenario = seed_minimal_scenario(empty_repo, with_shards=True)
+    kira = scenario.character
+    world = scenario.world
+    viktor, _ = _create_bouncer_and_medic(empty_repo, world.id)
     main_bar = next(loc for loc in world.locations if loc.is_starting_location)
 
     persona = PersonaRecord(
@@ -471,14 +458,14 @@ async def test_unrelinquished_seizure_grievance_and_persona_name_canonicalizatio
         created_at="2026-11-07T00:00:00Z",
         updated_at="2026-11-07T00:00:00Z",
     )
-    camp = temp_repo.create_campaign(
+    camp = empty_repo.create_campaign(
         name="Seizure & Persona Test",
         world_id=world.id,
         character_id=kira.id,
         character_ids=[kira.id, viktor.id],
         character_locations={kira.id: main_bar.id, viktor.id: main_bar.id},
     )
-    bundle0 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle0 = empty_repo.get_campaign_state_bundle(camp.id)
     root_turn = bundle0.active_branch_turns[-1]
 
     async def mock_seizure_llm(messages: list[dict[str, str]], response_model: type[Any], **_: Any) -> Any:
@@ -523,7 +510,7 @@ async def test_unrelinquished_seizure_grievance_and_persona_name_canonicalizatio
 
     monkeypatch.setattr(llm_client, "complete_structured", mock_seizure_llm)
 
-    turn1 = temp_repo.save_turn_node(
+    turn1 = empty_repo.save_turn_node(
         turn_id="turn_seize_1",
         campaign_id=camp.id,
         parent_turn_id=root_turn.id,
@@ -542,7 +529,7 @@ async def test_unrelinquished_seizure_grievance_and_persona_name_canonicalizatio
     )
 
     await run_phase5_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world_id=world.id,
         character=kira,
@@ -554,7 +541,7 @@ async def test_unrelinquished_seizure_grievance_and_persona_name_canonicalizatio
         persona_snapshot=persona,
     )
 
-    bundle1 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle1 = empty_repo.get_campaign_state_bundle(camp.id)
     kira_care = bundle1.character_states[kira.id].care_state
     viktor_care = bundle1.character_states[viktor.id].care_state
     assert kira_care is not None and viktor_care is not None
@@ -574,7 +561,7 @@ async def test_unrelinquished_seizure_grievance_and_persona_name_canonicalizatio
 
 @pytest.mark.asyncio
 async def test_clock_typo_rejection_and_narrator_sleep_composure_recovery(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify multi-year Clerk timestamp typos are rejected and an 8-hour Narrator advance recovers composure & decays arousal."""
     now = "2094-11-14 23:15"
@@ -590,8 +577,9 @@ async def test_clock_typo_rejection_and_narrator_sleep_composure_recovery(
     assert dt == 3
 
     # Live campaign: trigger high-threat / drained-composure turn, then sleep 480 minutes via Narrator advance
-    camp_id = "camp_neon_rust_default"
-    char_before_play = temp_repo.get_character("char_kira_vance")
+    scenario = seed_minimal_scenario(empty_repo, with_shards=True)
+    camp_id = scenario.campaign.id
+    char_before_play = scenario.character
     psyche_seed_before = char_before_play.baseline_psyche.model_dump()
 
     async for _ in _execute_turn_stream_events(
@@ -604,7 +592,7 @@ async def test_clock_typo_rejection_and_narrator_sleep_composure_recovery(
     ):
         pass
 
-    b_crisis = temp_repo.get_campaign_state_bundle(camp_id)
+    b_crisis = empty_repo.get_campaign_state_bundle(camp_id)
     care_crisis = b_crisis.character_states[char_before_play.id].care_state
     assert care_crisis is not None
     assert care_crisis.arousal > 0.50
@@ -621,7 +609,7 @@ async def test_clock_typo_rejection_and_narrator_sleep_composure_recovery(
     ):
         pass
 
-    b_rested = temp_repo.get_campaign_state_bundle(camp_id)
+    b_rested = empty_repo.get_campaign_state_bundle(camp_id)
     care_rested = b_rested.character_states[char_before_play.id].care_state
     assert care_rested is not None
     assert b_rested.current_world_snapshot.campaign_elapsed_minutes >= 480
@@ -631,5 +619,5 @@ async def test_clock_typo_rejection_and_narrator_sleep_composure_recovery(
     assert abs(care_rested.arousal - char_before_play.baseline_psyche.arousal) < 0.05
 
     # Immutable CharacterRecord seed in SQLite was NEVER mutated during campaign play
-    char_after_play = temp_repo.get_character("char_kira_vance")
+    char_after_play = empty_repo.get_character(char_before_play.id)
     assert char_after_play.baseline_psyche.model_dump() == psyche_seed_before

@@ -47,19 +47,18 @@ from app.wizards.world_wizard import (
 
 
 @pytest.fixture
-def authed_client(temp_repo: CantinaRepository) -> tuple[TestClient, CantinaRepository]:
-    """Provide an authenticated FastAPI TestClient bound to temp_repo."""
-    user = temp_repo.create_user(
+def authed_client(empty_repo: CantinaRepository) -> tuple[TestClient, CantinaRepository]:
+    """Provide an authenticated FastAPI TestClient bound to empty_repo."""
+    user = empty_repo.create_user(
         username="lore_admin",
         display_name="Lore Admin",
         role="admin",
         user_id="user_lore_admin",
     )
-    temp_repo.claim_unowned_entities(user.id)
     main_module.app.dependency_overrides[get_current_user] = lambda: user
     client = TestClient(main_module.app)
     try:
-        yield client, temp_repo
+        yield client, empty_repo
     finally:
         main_module.app.dependency_overrides.pop(get_current_user, None)
 
@@ -200,12 +199,14 @@ def test_legacy_sqlite_migration_salvages_invalid_categories_and_empty_tags(
     assert by_id["lore_leg_3"].entity_tags == ["Bay 9", "Freighter"]
 
 
-def test_sqlite_check_constraints_enforced_at_db_layer(temp_repo: CantinaRepository) -> None:
+def test_sqlite_check_constraints_enforced_at_db_layer(empty_repo: CantinaRepository) -> None:
     """Verify raw SQLite CHECK constraints block invalid categories, world secrets, and empty tags."""
-    world = temp_repo.list_worlds()[0]
+    from tests.factories import seed_world
+
+    world = seed_world(empty_repo, owner_id=None)
     loc_id = world.locations[0].id
 
-    conn = temp_repo._connect()
+    conn = empty_repo._connect()
     try:
         # 1. Banned category ('item')
         with pytest.raises(sqlite3.IntegrityError):
@@ -316,9 +317,11 @@ def test_pydantic_and_api_validation_world_and_location_lore(
         )
 
     # HTTP API checks
-    camp_id = "camp_neon_rust_default"
-    default_bundle = repo.get_campaign_state_bundle(camp_id)
-    world = repo.get_world(default_bundle.campaign.world_id)
+    from tests.factories import seed_minimal_scenario
+
+    scenario = seed_minimal_scenario(repo, owner_id="user_lore_admin")
+    camp_id = scenario.campaign.id
+    world = scenario.world
     loc_id = world.locations[0].id
 
     # PUT /api/worlds/{id} rejects empty entity_tags on world lore (422)
@@ -444,7 +447,6 @@ def test_pydantic_and_api_validation_world_and_location_lore(
 
 
 def test_world_wizard_salvages_llm_output_and_never_autogenerates_location_lore(
-    temp_repo: CantinaRepository,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify World Wizard omits location lore from LLM schemas and never autogenerates room lore."""
@@ -543,9 +545,11 @@ def test_world_wizard_salvages_llm_output_and_never_autogenerates_location_lore(
 
 
 def test_campaign_cow_isolation_world_fork_remapping_and_vector_cleanup(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify campaign CoW location lore isolation, empty-override masking, world fork remapping, and vector cleanup."""
+    from tests.factories import seed_character
+
     draft = WorldWizardDraft(
         name="Twin Spire Station",
         global_rules=WorldGlobalRules(
@@ -618,12 +622,12 @@ def test_campaign_cow_isolation_world_fork_remapping_and_vector_cleanup(
         ],
     )
 
-    world = asyncio.run(temp_repo.acreate_world_from_draft(draft))
+    world = asyncio.run(empty_repo.acreate_world_from_draft(draft))
     dock_loc = next(l for l in world.locations if l.name == "Docking Ring Alpha")
     base_lore_id = dock_loc.lore_nodes[0].id
 
     # Verify secrets are NEVER indexed in vector_entries
-    conn = temp_repo._connect()
+    conn = empty_repo._connect()
     try:
         vec_rows = conn.execute(
             "SELECT id, source_type, location_id, title FROM vector_entries WHERE world_id = ?",
@@ -637,17 +641,17 @@ def test_campaign_cow_isolation_world_fork_remapping_and_vector_cleanup(
     assert not any("Smuggler Hatch 4B" in t for t in vec_titles)
 
     # Create two independent campaigns on the same world
-    char_id = temp_repo.list_characters()[0].id
-    camp_a = temp_repo.create_campaign(
+    char_id = seed_character(empty_repo, owner_id=None, world_id=world.id).id
+    camp_a = empty_repo.create_campaign(
         name="Campaign Alpha", world_id=world.id, character_id=char_id
     )
-    camp_b = temp_repo.create_campaign(
+    camp_b = empty_repo.create_campaign(
         name="Campaign Beta", world_id=world.id, character_id=char_id
     )
 
     # Override dock_loc lore in Campaign A while passing base_lore_id (tests PK collision avoidance!)
     bundle_a = asyncio.run(
-        temp_repo.aupdate_campaign_location_lore(
+        empty_repo.aupdate_campaign_location_lore(
             camp_a.id,
             dock_loc.id,
             [
@@ -675,7 +679,7 @@ def test_campaign_cow_isolation_world_fork_remapping_and_vector_cleanup(
     assert dock_in_a.lore_nodes[0].id != base_lore_id
 
     # Campaign B and base world remain untouched
-    bundle_b = temp_repo.get_campaign_state_bundle(camp_b.id)
+    bundle_b = empty_repo.get_campaign_state_bundle(camp_b.id)
     dock_in_b = next(l for l in bundle_b.visible_locations if l.id == dock_loc.id)
     assert [ln.title for ln in dock_in_b.lore_nodes] == [
         "Berth 4 Decompression",
@@ -684,7 +688,7 @@ def test_campaign_cow_isolation_world_fork_remapping_and_vector_cleanup(
 
     # Clearing dock_loc lore to [] in Campaign A masks base template lore via override sentinel
     bundle_a_cleared = asyncio.run(
-        temp_repo.aupdate_campaign_location_lore(camp_a.id, dock_loc.id, [])
+        empty_repo.aupdate_campaign_location_lore(camp_a.id, dock_loc.id, [])
     )
     dock_in_a_cleared = next(
         l for l in bundle_a_cleared.visible_locations if l.id == dock_loc.id
@@ -695,7 +699,7 @@ def test_campaign_cow_isolation_world_fork_remapping_and_vector_cleanup(
         len(
             next(
                 l
-                for l in temp_repo.get_campaign_state_bundle(camp_b.id).visible_locations
+                for l in empty_repo.get_campaign_state_bundle(camp_b.id).visible_locations
                 if l.id == dock_loc.id
             ).lore_nodes
         )
@@ -704,7 +708,7 @@ def test_campaign_cow_isolation_world_fork_remapping_and_vector_cleanup(
 
     # Trigger Copy-on-Write World Fork by updating `world` while Campaigns A & B reference it
     forked_world = asyncio.run(
-        temp_repo.aupdate_world(
+        empty_repo.aupdate_world(
             world.id,
             WorldUpdatePayload(
                 name="Twin Spire Station v2",
@@ -726,7 +730,7 @@ def test_campaign_cow_isolation_world_fork_remapping_and_vector_cleanup(
     ]
 
     # Verify forked world vector_entries point to forked location IDs and still exclude secrets
-    conn = temp_repo._connect()
+    conn = empty_repo._connect()
     try:
         fork_vecs = conn.execute(
             "SELECT location_id, title FROM vector_entries WHERE world_id = ? AND source_type = 'location_lore'",
@@ -741,12 +745,12 @@ def test_campaign_cow_isolation_world_fork_remapping_and_vector_cleanup(
     assert not any("Smuggler Hatch 4B" in r["title"] for r in fork_vecs)
 
     # Delete campaigns and old world -> verify zero orphaned vector_entries or lore_nodes
-    temp_repo.mark_world_pending_deletion(world.id)  # Marked pending_deletion while campaigns exist
-    temp_repo.delete_campaign(camp_a.id)
-    temp_repo.delete_campaign(camp_b.id)
-    temp_repo.prune_pending_deletion_worlds()
+    empty_repo.mark_world_pending_deletion(world.id)  # Marked pending_deletion while campaigns exist
+    empty_repo.delete_campaign(camp_a.id)
+    empty_repo.delete_campaign(camp_b.id)
+    empty_repo.prune_pending_deletion_worlds()
 
-    conn = temp_repo._connect()
+    conn = empty_repo._connect()
     try:
         rem_lore = conn.execute(
             "SELECT COUNT(*) AS cnt FROM lore_nodes WHERE world_id = ?", (world.id,)
@@ -767,17 +771,20 @@ def test_campaign_cow_isolation_world_fork_remapping_and_vector_cleanup(
 
 
 def test_branch_timeline_visibility_for_improvised_location_lore(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify lore attached to an improvised room respects timeline branch visibility."""
-    camp_id = "camp_neon_rust_default"
-    bundle_0 = temp_repo.get_campaign_state_bundle(camp_id)
+    from tests.factories import seed_minimal_scenario
+
+    scenario = seed_minimal_scenario(empty_repo)
+    camp_id = scenario.campaign.id
+    bundle_0 = empty_repo.get_campaign_state_bundle(camp_id)
     root_turn_id = bundle_0.active_branch_turns[0].id
     hub_id = bundle_0.active_location.id
 
     # Create a child turn on branch 1 so we can anchor an improvised room to Turn 1
     parent_turn = bundle_0.active_branch_turns[-1]
-    turn_1 = temp_repo.save_turn_node(
+    turn_1 = empty_repo.save_turn_node(
         turn_id="turn_branch_1_leaf",
         campaign_id=camp_id,
         parent_turn_id=parent_turn.id,
@@ -791,10 +798,10 @@ def test_branch_timeline_visibility_for_improvised_location_lore(
         character_state=parent_turn.character_state,
         recalled_items=[],
     )
-    temp_repo.checkout_turn_branch(camp_id, turn_1.id)
+    empty_repo.checkout_turn_branch(camp_id, turn_1.id)
 
     # Create a linked room anchored at turn_1
-    bundle_with_room = temp_repo.create_linked_location(
+    bundle_with_room = empty_repo.create_linked_location(
         camp_id,
         from_location_id=hub_id,
         name="Rusted Relay Vault",
@@ -810,7 +817,7 @@ def test_branch_timeline_visibility_for_improvised_location_lore(
 
     # Attach non-secret location lore to the improvised room while on turn_1
     asyncio.run(
-        temp_repo.aupdate_campaign_location_lore(
+        empty_repo.aupdate_campaign_location_lore(
             camp_id,
             improv_loc.id,
             [
@@ -826,7 +833,7 @@ def test_branch_timeline_visibility_for_improvised_location_lore(
 
     # On branch {root, turn_1}, remote RAG search finds the improvised room's lore
     recalled_on_branch = asyncio.run(
-        temp_repo.vector_store.search_memories(
+        empty_repo.vector_store.search_memories(
             queries=["Rusted Relay Vault Copper Siphon"],
             mentioned_entities=["Rusted Relay Vault"],
             world_id=bundle_0.campaign.world_id,
@@ -842,11 +849,11 @@ def test_branch_timeline_visibility_for_improvised_location_lore(
     )
 
     # Rewind campaign back to root_turn_id (before improv_loc existed!)
-    temp_repo.checkout_turn_branch(camp_id, root_turn_id)
+    empty_repo.checkout_turn_branch(camp_id, root_turn_id)
 
     # 1) Remote RAG at root_turn_id MUST NOT leak future-branch location lore
     recalled_at_root = asyncio.run(
-        temp_repo.vector_store.search_memories(
+        empty_repo.vector_store.search_memories(
             queries=["Rusted Relay Vault Copper Siphon"],
             mentioned_entities=["Rusted Relay Vault"],
             world_id=bundle_0.campaign.world_id,
@@ -861,7 +868,7 @@ def test_branch_timeline_visibility_for_improvised_location_lore(
     # 2) Editing location lore of an invisible future-branch room raises KeyError
     with pytest.raises(KeyError, match="not visible on the active timeline"):
         asyncio.run(
-            temp_repo.aupdate_campaign_location_lore(
+            empty_repo.aupdate_campaign_location_lore(
                 camp_id,
                 improv_loc.id,
                 [],
@@ -875,7 +882,7 @@ def test_branch_timeline_visibility_for_improvised_location_lore(
 
 
 def test_phase2_and_phase3_context_hygiene_remote_rag_and_hard_secret_gating(
-    temp_repo: CantinaRepository, monkeypatch: pytest.MonkeyPatch
+    empty_repo: CantinaRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Verify:
     1) Active room non-secret lore is injected into Zone 4 <local_lore> & Phase 3 cognition,
@@ -885,8 +892,11 @@ def test_phase2_and_phase3_context_hygiene_remote_rag_and_hard_secret_gating(
        withheld in active_location on idle turns AND failed rolls, and unlocked ONLY on
        uncontested keyword mention or Clean/Critical Success checks.
     """
-    camp_id = "camp_neon_rust_default"
-    bundle0 = temp_repo.get_campaign_state_bundle(camp_id)
+    from tests.factories import seed_minimal_scenario
+
+    scenario = seed_minimal_scenario(empty_repo)
+    camp_id = scenario.campaign.id
+    bundle0 = empty_repo.get_campaign_state_bundle(camp_id)
     loc_bar = next(l for l in bundle0.visible_locations if "Main Floor" in l.name)
     loc_tunnels = next(
         l for l in bundle0.visible_locations if "Cooling Tunnels" in l.name
@@ -894,7 +904,7 @@ def test_phase2_and_phase3_context_hygiene_remote_rag_and_hard_secret_gating(
 
     # Populate Main Floor (active room) with 1 ambient history + 1 secret
     asyncio.run(
-        temp_repo.aupdate_campaign_location_lore(
+        empty_repo.aupdate_campaign_location_lore(
             camp_id,
             loc_bar.id,
             [
@@ -916,7 +926,7 @@ def test_phase2_and_phase3_context_hygiene_remote_rag_and_hard_secret_gating(
 
     # Populate Cooling Tunnels (remote room) with 1 rumor + 1 secret
     asyncio.run(
-        temp_repo.aupdate_campaign_location_lore(
+        empty_repo.aupdate_campaign_location_lore(
             camp_id,
             loc_tunnels.id,
             [
@@ -936,14 +946,14 @@ def test_phase2_and_phase3_context_hygiene_remote_rag_and_hard_secret_gating(
         )
     )
 
-    bundle = temp_repo.get_campaign_state_bundle(camp_id)
-    world = temp_repo.get_world(bundle.campaign.world_id, campaign_id=camp_id)
+    bundle = empty_repo.get_campaign_state_bundle(camp_id)
+    world = empty_repo.get_world(bundle.campaign.world_id, campaign_id=camp_id)
     active_loc = bundle.active_location
     assert active_loc.id == loc_bar.id
-    neighbors = temp_repo.get_neighbor_locations(
+    neighbors = empty_repo.get_neighbor_locations(
         world.id, active_loc.id, campaign_id=camp_id
     )
-    primary_char = temp_repo.get_character(bundle.campaign.character_id)
+    primary_char = empty_repo.get_character(bundle.campaign.character_id)
 
     # --- CASE A: Idle turn in Main Floor ---
     idle_msg = "I order a glass of cheap synth-rye and watch the rain."
@@ -953,7 +963,7 @@ def test_phase2_and_phase3_context_hygiene_remote_rag_and_hard_secret_gating(
     )
     ctx_idle = asyncio.run(
         resolve_phase2_turn_context(
-            repo=temp_repo,
+            repo=empty_repo,
             campaign_id=camp_id,
             world=world,
             branch_turns=bundle.active_branch_turns,
@@ -997,7 +1007,7 @@ def test_phase2_and_phase3_context_hygiene_remote_rag_and_hard_secret_gating(
     )
     ctx_remote = asyncio.run(
         resolve_phase2_turn_context(
-            repo=temp_repo,
+            repo=empty_repo,
             campaign_id=camp_id,
             world=world,
             branch_turns=bundle.active_branch_turns,

@@ -51,11 +51,11 @@ def _make_sample_draft(name: str = "Talon Frost") -> CharacterWizardDraft:
     )
 
 
-def test_character_creation_and_attributes(temp_repo: CantinaRepository) -> None:
+def test_character_creation_and_attributes(empty_repo: CantinaRepository) -> None:
     """Verify character creation initializes version=1 and stores tags, creator, and creator_notes."""
-    user = temp_repo.create_user(username="user_test_1", display_name="Test User 1")
+    user = empty_repo.create_user(username="user_test_1", display_name="Test User 1")
     draft = _make_sample_draft()
-    char = temp_repo.create_character_from_draft(draft, owner_id=user.id)
+    char = empty_repo.create_character_from_draft(draft, owner_id=user.id)
 
     assert char.version == 1
     assert char.name == "Talon Frost"
@@ -65,26 +65,26 @@ def test_character_creation_and_attributes(temp_repo: CantinaRepository) -> None
     assert char.creator_notes == "Prefers stealth routes over combat. Never betrays a client without proof."
 
     # Verify version 1 snapshot exists in character_versions
-    versions = temp_repo.list_character_versions(char.id, owner_id=user.id)
+    versions = empty_repo.list_character_versions(char.id, owner_id=user.id)
     assert len(versions) == 1
     assert versions[0].version == 1
     assert versions[0].character_id == char.id
 
-    v1_char = temp_repo.get_character_version(char.id, 1, owner_id=user.id)
+    v1_char = empty_repo.get_character_version(char.id, 1, owner_id=user.id)
     assert v1_char.version == 1
     assert v1_char.name == "Talon Frost"
     assert v1_char.creator == "Nightfall"
 
 
-def test_character_edits_increment_version(temp_repo: CantinaRepository) -> None:
+def test_character_edits_increment_version(empty_repo: CantinaRepository) -> None:
     """Verify editing a character increments version and maintains read-only historical snapshots."""
-    user = temp_repo.create_user(username="user_test_2", display_name="Test User 2")
+    user = empty_repo.create_user(username="user_test_2", display_name="Test User 2")
     draft = _make_sample_draft("Renna Kane")
-    char_v1 = temp_repo.create_character_from_draft(draft, owner_id=user.id)
+    char_v1 = empty_repo.create_character_from_draft(draft, owner_id=user.id)
     assert char_v1.version == 1
 
     # Update 1: Rename and add new tags
-    char_v2 = temp_repo.update_character(
+    char_v2 = empty_repo.update_character(
         char_v1.id,
         CharacterUpdatePayload(
             name="Renna Kane (Armored)",
@@ -111,7 +111,7 @@ def test_character_edits_increment_version(temp_repo: CantinaRepository) -> None
     assert "Ceramic reinforced chestplate" in char_v2.equipped
 
     # Update 2: Another edit
-    char_v3 = temp_repo.update_character(
+    char_v3 = empty_repo.update_character(
         char_v1.id,
         CharacterUpdatePayload(
             name="Renna Kane (Master)",
@@ -134,38 +134,38 @@ def test_character_edits_increment_version(temp_repo: CantinaRepository) -> None
     assert char_v3.version == 3
 
     # Check version history
-    versions = temp_repo.list_character_versions(char_v1.id, owner_id=user.id)
+    versions = empty_repo.list_character_versions(char_v1.id, owner_id=user.id)
     assert len(versions) == 3
     assert [v.version for v in versions] == [3, 2, 1]
 
     # Verify past versions are immutable and read-only
-    hist_v1 = temp_repo.get_character_version(char_v1.id, 1, owner_id=user.id)
+    hist_v1 = empty_repo.get_character_version(char_v1.id, 1, owner_id=user.id)
     assert hist_v1.version == 1
     assert hist_v1.name == "Renna Kane"
     assert hist_v1.equipped == ["Stealth combat suit"]
 
-    hist_v2 = temp_repo.get_character_version(char_v1.id, 2, owner_id=user.id)
+    hist_v2 = empty_repo.get_character_version(char_v1.id, 2, owner_id=user.id)
     assert hist_v2.version == 2
     assert hist_v2.name == "Renna Kane (Armored)"
     assert hist_v2.equipped == ["Ceramic reinforced chestplate"]
 
-    hist_v3 = temp_repo.get_character_version(char_v1.id, 3, owner_id=user.id)
+    hist_v3 = empty_repo.get_character_version(char_v1.id, 3, owner_id=user.id)
     assert hist_v3.version == 3
     assert hist_v3.name == "Renna Kane (Master)"
 
     # Revert to version 2 -> keeps version 2 active, retains version 3 in history
-    reverted_v2 = temp_repo.restore_character_version(char_v1.id, 2, owner_id=user.id)
+    reverted_v2 = empty_repo.restore_character_version(char_v1.id, 2, owner_id=user.id)
     assert reverted_v2.version == 2
     assert reverted_v2.name == "Renna Kane (Armored)"
     assert reverted_v2.equipped == ["Ceramic reinforced chestplate"]
 
     # Version history still has all 3 versions [3, 2, 1] (v3 inactive but preserved)
-    versions_after = temp_repo.list_character_versions(char_v1.id, owner_id=user.id)
+    versions_after = empty_repo.list_character_versions(char_v1.id, owner_id=user.id)
     assert len(versions_after) == 3
     assert [v.version for v in versions_after] == [3, 2, 1]
 
     # Now make an edit from active v2 -> should branch to v4 (max+1)
-    branched_v4 = temp_repo.update_character(
+    branched_v4 = empty_repo.update_character(
         char_v1.id,
         CharacterUpdatePayload(
             name="Renna Kane (Apex)",
@@ -189,24 +189,24 @@ def test_character_edits_increment_version(temp_repo: CantinaRepository) -> None
     assert branched_v4.name == "Renna Kane (Apex)"
 
     # History now has [4, 3, 2, 1]
-    versions_v4 = temp_repo.list_character_versions(char_v1.id, owner_id=user.id)
+    versions_v4 = empty_repo.list_character_versions(char_v1.id, owner_id=user.id)
     assert len(versions_v4) == 4
     assert [v.version for v in versions_v4] == [4, 3, 2, 1]
 
     # Historical v3 is still completely intact in history
-    hist_v3_again = temp_repo.get_character_version(char_v1.id, 3, owner_id=user.id)
+    hist_v3_again = empty_repo.get_character_version(char_v1.id, 3, owner_id=user.id)
     assert hist_v3_again.name == "Renna Kane (Master)"
 
 
-def test_creator_notes_model_a_federation(temp_repo: CantinaRepository) -> None:
+def test_creator_notes_model_a_federation(empty_repo: CantinaRepository) -> None:
     """Verify Model A federates character.creator_notes into user_notes listing and supports note operations."""
-    user = temp_repo.create_user(username="user_notes_owner", display_name="Notes Owner")
+    user = empty_repo.create_user(username="user_notes_owner", display_name="Notes Owner")
     draft = _make_sample_draft("Dr. Kaelen")
     draft.creator_notes = "Special notes on Kaelen's medical history."
-    char = temp_repo.create_character_from_draft(draft, owner_id=user.id)
+    char = empty_repo.create_character_from_draft(draft, owner_id=user.id)
 
     # 1. list_user_notes should include the virtual note
-    notes = temp_repo.list_user_notes(user.id)
+    notes = empty_repo.list_user_notes(user.id)
     virtual_note = next((n for n in notes if n.id == f"char_note_{char.id}"), None)
     assert virtual_note is not None
     assert virtual_note.is_character_note is True
@@ -218,12 +218,12 @@ def test_creator_notes_model_a_federation(temp_repo: CantinaRepository) -> None:
     assert "creator-notes" in virtual_note.tags
 
     # 2. get_user_note should retrieve the virtual note
-    fetched = temp_repo.get_user_note(f"char_note_{char.id}", user.id)
+    fetched = empty_repo.get_user_note(f"char_note_{char.id}", user.id)
     assert fetched is not None
     assert fetched.content == "Special notes on Kaelen's medical history."
 
     # 3. update_user_note on virtual note should update character.creator_notes
-    updated_note = temp_repo.update_user_note(
+    updated_note = empty_repo.update_user_note(
         f"char_note_{char.id}",
         user.id,
         content="Amended notes regarding neurological surgery.",
@@ -231,31 +231,31 @@ def test_creator_notes_model_a_federation(temp_repo: CantinaRepository) -> None:
     assert updated_note is not None
     assert updated_note.content == "Amended notes regarding neurological surgery."
 
-    refreshed_char = temp_repo.get_character(char.id, owner_id=user.id)
+    refreshed_char = empty_repo.get_character(char.id, owner_id=user.id)
     assert refreshed_char.creator_notes == "Amended notes regarding neurological surgery."
 
     # 4. delete_user_note on virtual note should clear creator_notes on character
-    deleted = temp_repo.delete_user_note(f"char_note_{char.id}", user.id)
+    deleted = empty_repo.delete_user_note(f"char_note_{char.id}", user.id)
     assert deleted is True
 
-    cleared_char = temp_repo.get_character(char.id, owner_id=user.id)
+    cleared_char = empty_repo.get_character(char.id, owner_id=user.id)
     assert cleared_char.creator_notes == ""
 
     # Should no longer appear in list_user_notes
-    notes_after_del = temp_repo.list_user_notes(user.id)
+    notes_after_del = empty_repo.list_user_notes(user.id)
     assert not any(n.id == f"char_note_{char.id}" for n in notes_after_del)
 
 
-def test_versioning_with_active_campaign(temp_repo: CantinaRepository) -> None:
+def test_versioning_with_active_campaign(empty_repo: CantinaRepository) -> None:
     """Verify that editing a character referenced by an active campaign copies version history to the forked entity."""
-    user = temp_repo.create_user(username="user_camp", display_name="Camp User")
-    temp_repo.claim_unowned_entities(user.id)
-    world = temp_repo.get_world("world_neon_rust", owner_id=user.id)
+    user = empty_repo.create_user(username="user_camp", display_name="Camp User")
+    from tests.factories import seed_world
+    world = seed_world(empty_repo, owner_id=user.id)
     draft = _make_sample_draft("Soren Runner")
-    char_v1 = temp_repo.create_character_from_draft(draft, world_id=world.id, owner_id=user.id)
+    char_v1 = empty_repo.create_character_from_draft(draft, world_id=world.id, owner_id=user.id)
 
     # Start a campaign referencing char_v1
-    camp = temp_repo.create_campaign(
+    camp = empty_repo.create_campaign(
         name="Soren Campaign",
         world_id=world.id,
         character_id=char_v1.id,
@@ -264,7 +264,7 @@ def test_versioning_with_active_campaign(temp_repo: CantinaRepository) -> None:
     assert camp.character_id == char_v1.id
 
     # Edit Soren Runner while in an active campaign -> triggers Copy-on-Write fork
-    forked_v2 = temp_repo.update_character(
+    forked_v2 = empty_repo.update_character(
         char_v1.id,
         CharacterUpdatePayload(
             name="Soren Runner (Cybernetic)",
@@ -288,41 +288,40 @@ def test_versioning_with_active_campaign(temp_repo: CantinaRepository) -> None:
     assert forked_v2.version == 2
 
     # The new forked character has access to both v1 and v2 in history!
-    forked_versions = temp_repo.list_character_versions(forked_v2.id, owner_id=user.id)
+    forked_versions = empty_repo.list_character_versions(forked_v2.id, owner_id=user.id)
     assert len(forked_versions) == 2
     assert [v.version for v in forked_versions] == [2, 1]
 
-    hist_v1 = temp_repo.get_character_version(forked_v2.id, 1, owner_id=user.id)
+    hist_v1 = empty_repo.get_character_version(forked_v2.id, 1, owner_id=user.id)
     assert hist_v1.name == "Soren Runner"
     assert hist_v1.version == 1
 
-    hist_v2 = temp_repo.get_character_version(forked_v2.id, 2, owner_id=user.id)
+    hist_v2 = empty_repo.get_character_version(forked_v2.id, 2, owner_id=user.id)
     assert hist_v2.name == "Soren Runner (Cybernetic)"
     assert hist_v2.version == 2
 
 
 def test_character_versions_and_notes_api(
-    temp_repo: CantinaRepository, monkeypatch: pytest.MonkeyPatch
+    empty_repo: CantinaRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Verify REST API routes for character versions and federated creator notes."""
     from fastapi.testclient import TestClient
     from app import main as main_module
 
-    user = temp_repo.create_user(username="api_user", display_name="API Tester")
-    temp_repo.claim_unowned_entities(user.id)
-    user_profile = temp_repo.get_user_by_id(user.id)
+    user = empty_repo.create_user(username="api_user", display_name="API Tester")
+    user_profile = empty_repo.get_user_by_id(user.id)
 
-    monkeypatch.setattr(main_module, "get_repo", lambda: temp_repo)
+    monkeypatch.setattr(main_module, "get_repo", lambda: empty_repo)
     main_module.app.dependency_overrides[main_module.get_current_user] = lambda: user_profile
 
     client = TestClient(main_module.app)
     try:
         draft = _make_sample_draft("Vespera Scout")
         draft.creator_notes = "Scout notes for API test."
-        char = temp_repo.create_character_from_draft(draft, owner_id=user.id)
+        char = empty_repo.create_character_from_draft(draft, owner_id=user.id)
 
         # Update character to get v2
-        temp_repo.update_character(
+        empty_repo.update_character(
             char.id,
             CharacterUpdatePayload(
                 name="Vespera Scout (Veteran)",
@@ -422,9 +421,9 @@ def test_character_versions_and_notes_api(
         main_module.app.dependency_overrides.clear()
 
 
-def test_character_structured_appearance_and_personality_fields(temp_repo: CantinaRepository) -> None:
+def test_character_structured_appearance_and_personality_fields(empty_repo: CantinaRepository) -> None:
     """Verify newly introduced fields (species, sex, age, posture, mannerisms, communication style) persist and render."""
-    user = temp_repo.create_user(username="user_structured", display_name="Structured User")
+    user = empty_repo.create_user(username="user_structured", display_name="Structured User")
     draft = CharacterWizardDraft(
         name="Nova Lin",
         tagline="Disgraced synthetic neuro-surgeon.",
@@ -467,7 +466,7 @@ def test_character_structured_appearance_and_personality_fields(temp_repo: Canti
         ),
     )
 
-    char = temp_repo.create_character_from_draft(draft, owner_id=user.id)
+    char = empty_repo.create_character_from_draft(draft, owner_id=user.id)
     assert char.species == "Cyborg"
     assert char.sex == "Female"
     assert char.pronouns == "she/her"
@@ -488,7 +487,7 @@ def test_character_structured_appearance_and_personality_fields(temp_repo: Canti
     assert char.physical_appearance == ""
 
     # Update character with new distinctive feature
-    updated = temp_repo.update_character(
+    updated = empty_repo.update_character(
         char.id,
         CharacterUpdatePayload(
             name="Nova Lin (Specialist)",
@@ -533,7 +532,7 @@ def test_character_structured_appearance_and_personality_fields(temp_repo: Canti
     ]
 
     # Verify version 1 snapshot retained original values
-    v1_snap = temp_repo.get_character_version(char.id, 1, owner_id=user.id)
+    v1_snap = empty_repo.get_character_version(char.id, 1, owner_id=user.id)
     assert v1_snap.version == 1
     assert v1_snap.species == "Cyborg"
     assert v1_snap.age == "32"
@@ -563,7 +562,7 @@ def test_character_structured_appearance_and_personality_fields(temp_repo: Canti
 
 
 def test_character_modifications_auto_merge_and_extraction_endpoints(
-    temp_repo: CantinaRepository, monkeypatch: pytest.MonkeyPatch
+    empty_repo: CantinaRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Verify modifications auto-merge into distinctive_features and extraction endpoints operate correctly."""
     from fastapi.testclient import TestClient
@@ -596,18 +595,17 @@ def test_character_modifications_auto_merge_and_extraction_endpoints(
         ),
     )
     draft = llm_out.to_draft()
-    char = temp_repo.create_character_from_draft(draft)
+    char = empty_repo.create_character_from_draft(draft)
     assert "scar across nose" in char.distinctive_features
     assert "cybernetic right arm" in char.distinctive_features
     assert "subdermal armor" in char.distinctive_features
     assert char.modifications == []
 
     # 2. Test extraction endpoints with mocked LLM output
-    user = temp_repo.create_user(username="extract_user", display_name="Extract Tester")
-    temp_repo.claim_unowned_entities(user.id)
-    user_profile = temp_repo.get_user_by_id(user.id)
+    user = empty_repo.create_user(username="extract_user", display_name="Extract Tester")
+    user_profile = empty_repo.get_user_by_id(user.id)
 
-    monkeypatch.setattr(main_module, "get_repo", lambda: temp_repo)
+    monkeypatch.setattr(main_module, "get_repo", lambda: empty_repo)
     main_module.app.dependency_overrides[main_module.get_current_user] = lambda: user_profile
 
     async def mock_complete_structured(messages, output_schema, **kwargs):
@@ -1105,13 +1103,13 @@ async def test_character_html_xml_markup_sanitization(monkeypatch):
 
 
 def test_zone1_bio_always_rendered_and_unsupported_excluded_and_cow_campaign_safety(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify Zone 1 emits Bio unconditionally, excludes unsupported_fields, and CoW-forks keep legacy rows safe."""
     from app.engine.phase2_context import build_zone1_static_system_prompt
     from app.schemas.world import LocationNodeDraft, WorldGlobalRules, WorldWizardDraft
 
-    world = temp_repo.create_world_from_draft(
+    world = empty_repo.create_world_from_draft(
         WorldWizardDraft(
             name="Neo-Veridia",
             global_rules=WorldGlobalRules(
@@ -1142,7 +1140,7 @@ def test_zone1_bio_always_rendered_and_unsupported_excluded_and_cow_campaign_saf
         "future_alignment": "SECRET_DO_NOT_INJECT_IN_PROMPT",
         "physical_appearance": "LEGACY_APPEARANCE_DO_NOT_INJECT",
     }
-    char = temp_repo.create_character_from_draft(draft, world_id=world.id)
+    char = empty_repo.create_character_from_draft(draft, world_id=world.id)
 
     prompt = build_zone1_static_system_prompt(world=world, character=char)
     assert "Bio: Disgraced neurosurgeon running a back-alley clinic." in prompt
@@ -1150,12 +1148,12 @@ def test_zone1_bio_always_rendered_and_unsupported_excluded_and_cow_campaign_saf
     assert "LEGACY_APPEARANCE_DO_NOT_INJECT" not in prompt
 
     # 2. Re-running init_db() must NOT backfill physical_appearance onto canonical characters
-    temp_repo.init_db()
-    reloaded = temp_repo.get_character(char.id)
+    empty_repo.init_db()
+    reloaded = empty_repo.get_character(char.id)
     assert reloaded.physical_appearance == ""
 
     # 3. Untouched legacy character in running campaign keeps its pinned row via CoW fork on edit
-    legacy_char = temp_repo.create_character_from_draft(
+    legacy_char = empty_repo.create_character_from_draft(
         CharacterWizardDraft(
             name="Legacy Runner",
             tagline="Old school courier",
@@ -1172,12 +1170,12 @@ def test_zone1_bio_always_rendered_and_unsupported_excluded_and_cow_campaign_saf
         ),
         world_id=world.id,
     )
-    camp = temp_repo.create_campaign(
+    camp = empty_repo.create_campaign(
         name="Legacy Run",
         world_id=world.id,
         character_id=legacy_char.id,
     )
-    forked = temp_repo.update_character(
+    forked = empty_repo.update_character(
         legacy_char.id,
         CharacterUpdatePayload(
             name="Legacy Runner Updated",
@@ -1192,9 +1190,9 @@ def test_zone1_bio_always_rendered_and_unsupported_excluded_and_cow_campaign_saf
         ),
     )
     assert forked.id != legacy_char.id
-    pinned_camp = temp_repo.get_campaign(camp.id)
+    pinned_camp = empty_repo.get_campaign(camp.id)
     assert pinned_camp.character_id == legacy_char.id
-    pinned_char = temp_repo.get_character(pinned_camp.character_id)
+    pinned_char = empty_repo.get_character(pinned_camp.character_id)
     assert pinned_char.physical_appearance == "Tall courier with silver ocular implant."
     pinned_prompt = build_zone1_static_system_prompt(world=world, character=pinned_char)
     assert "Tall courier with silver ocular implant." in pinned_prompt

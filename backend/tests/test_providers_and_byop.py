@@ -10,9 +10,8 @@ from pathlib import Path
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
 
-from app import config, main as main_module
+from app import config
 from app.config import AppSettings, ModelProfile, persist_settings, settings
 from app.db.provider_store import ProviderStore
 from app.db.repository import CantinaRepository
@@ -32,22 +31,13 @@ PUBLIC_URL = "http://93.184.216.34:11434"  # public IP literal: no DNS needed, p
 
 
 @pytest.fixture()
-def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    db_file = str(tmp_path / "providers.db")
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "media_dir", str(tmp_path / "media"))
-    monkeypatch.setattr(settings, "allow_offline_fallback", True)
-    repo = CantinaRepository(db_file, media_dir=str(tmp_path / "media"))
-    repo.init_db()
-    client = TestClient(main_module.app)
-    admin = client.post("/api/auth/setup", json={"username": "admin_p", "password": "AdminPassword123!"})
-    assert admin.status_code == 200
-    admin_h = {"Authorization": f"Bearer {admin.json()['token']}"}
+def env(api_env, api_user_factory):
+    client, repo, _media_dir = api_env
+    admin_h, _admin_id, _admin_tok = api_user_factory("admin_p", role="admin")
 
     def make_user(name: str) -> tuple[dict[str, str], str]:
-        res = client.post("/api/auth/register", json={"username": name, "password": "UserPassword123!"})
-        assert res.status_code == 200
-        return {"Authorization": f"Bearer {res.json()['token']}"}, res.json()["user"]["id"]
+        headers, uid, _tok = api_user_factory(name)
+        return headers, uid
 
     return client, repo, admin_h, make_user
 

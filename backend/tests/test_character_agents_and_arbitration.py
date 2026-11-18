@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
 import pytest
 
 from app import main as main_module
-from app.config import settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_test_seed
+from tests.factories import seed_minimal_scenario
 from app.dependencies import (
     get_effective_agent_dispatch_mode,
     get_effective_user_model_settings,
@@ -46,23 +44,8 @@ from app.schemas.turn import (
 )
 
 
-@pytest.fixture()
-def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CantinaRepository:
-    db_file = str(tmp_path / "test_char_agents.db")
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "allow_offline_fallback", True)
-    monkeypatch.setattr(settings, "agent_dispatch_mode", "sequential")
-    monkeypatch.setattr(settings.actor_profile, "base_url", "http://127.0.0.1:9/v1")
-    monkeypatch.setattr(settings.clerk_profile, "base_url", "http://127.0.0.1:9/v1")
-    monkeypatch.setattr(settings.embedding_profile, "mode", "local_hash")
-    repo = CantinaRepository(db_file)
-    repo.init_db()
-    ensure_test_seed(repo)
-    return repo
-
-
 def _create_extra_characters(
-    repo: CantinaRepository, world_id: str = "world_neon_rust"
+    repo: CantinaRepository, world_id: str
 ) -> tuple[CharacterRecord, CharacterRecord]:
     """Create Viktor Kroll (co-present bouncer) and Nyx Holloway (backroom ripperdoc)."""
     viktor = repo.create_character_from_draft(
@@ -125,7 +108,7 @@ def _create_extra_characters(
 
 
 async def test_mood_and_stance_normalization_and_zone4_rendering(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify 2-4 word mood normalization, canonical stance keys, and human-readable Zone 4 rendering."""
     # 1. Mood normalization enforces crisp 2-4 word evocative descriptions
@@ -143,8 +126,9 @@ async def test_mood_and_stance_normalization_and_zone4_rendering(
     assert m3 == "Wary nocturnal focus"
 
     # 2. Stance normalization maps aliases/names to canonical IDs and strips self-references
-    kira = temp_repo.get_character("char_kira_vance")
-    viktor, nyx = _create_extra_characters(temp_repo)
+    scenario = seed_minimal_scenario(empty_repo, character_name="Kira Vance", with_shards=True)
+    kira = scenario.character
+    viktor, nyx = _create_extra_characters(empty_repo, scenario.world.id)
     participants = [kira, viktor, nyx]
 
     norm_stances = normalize_stance_updates(
@@ -165,8 +149,8 @@ async def test_mood_and_stance_normalization_and_zone4_rendering(
     assert kira.id not in norm_stances
 
     # 3. Zone 4 renders human-readable names instead of opaque char_* IDs
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
-    world = temp_repo.get_world(bundle.campaign.world_id)
+    bundle = empty_repo.get_campaign_state_bundle(scenario.campaign.id)
+    world = empty_repo.get_world(bundle.campaign.world_id)
     last_turn = bundle.active_branch_turns[-1]
     enriched_state = last_turn.character_state.model_copy(
         update={"relationship_notes": norm_stances}
@@ -232,20 +216,21 @@ def test_four_bucket_inventory_state_machine() -> None:
 
 
 async def test_multi_character_copresent_evolution_anchor_safety_and_spatial_isolation(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
     Verify co-present characters (speaker Kira + silent witness Viktor) both evolve mood, anchored
     valence/arousal, mutual stances, and character-specific memories, while absent Nyx stays untouched.
     """
-    kira = temp_repo.get_character("char_kira_vance")
-    viktor, nyx = _create_extra_characters(temp_repo)
-    world = temp_repo.get_world("world_neon_rust")
+    scenario = seed_minimal_scenario(empty_repo, character_name="Kira Vance", with_shards=True)
+    kira = scenario.character
+    viktor, nyx = _create_extra_characters(empty_repo, scenario.world.id)
+    world = scenario.world
     main_bar = next(loc for loc in world.locations if loc.is_starting_location)
     ripper_bay = next(loc for loc in world.locations if loc.id != main_bar.id)
 
-    camp = temp_repo.create_campaign(
+    camp = empty_repo.create_campaign(
         name="Three-Character Cantina Test",
         world_id=world.id,
         character_id=kira.id,
@@ -256,7 +241,7 @@ async def test_multi_character_copresent_evolution_anchor_safety_and_spatial_iso
             nyx.id: ripper_bay.id,
         },
     )
-    bundle0 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle0 = empty_repo.get_campaign_state_bundle(camp.id)
     root_turn = bundle0.active_branch_turns[-1]
 
     kira_pre = bundle0.character_states[kira.id]
@@ -266,7 +251,7 @@ async def test_multi_character_copresent_evolution_anchor_safety_and_spatial_iso
 
     # Note: save_turn_node writes Phase 3 cognition valence (-0.50) onto turn1.character_state BEFORE Phase 4 runs.
     # Phase 4 must anchor Kira's valence_delta (-0.30) to kira_pre.valence (Turn 0), NOT to -0.50!
-    turn1 = temp_repo.save_turn_node(
+    turn1 = empty_repo.save_turn_node(
         turn_id="turn_multi_1",
         campaign_id=camp.id,
         parent_turn_id=root_turn.id,
@@ -375,7 +360,7 @@ async def test_multi_character_copresent_evolution_anchor_safety_and_spatial_iso
     monkeypatch.setattr(llm_client, "complete_structured", mock_complete_structured)
 
     await run_phase4_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world_id=world.id,
         character=kira,
@@ -391,7 +376,7 @@ async def test_multi_character_copresent_evolution_anchor_safety_and_spatial_iso
     assert len(called_char_prompts) == 2
     assert not any(f"id='{nyx.id}'" in p for p in called_char_prompts)
 
-    bundle1 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle1 = empty_repo.get_campaign_state_bundle(camp.id)
     kira_after = bundle1.character_states[kira.id]
     viktor_after = bundle1.character_states[viktor.id]
     nyx_after = bundle1.character_states[nyx.id]
@@ -432,23 +417,25 @@ async def test_multi_character_copresent_evolution_anchor_safety_and_spatial_iso
 
 
 async def test_sequential_vs_parallel_agent_dispatch_and_settings_endpoints(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
+    api_user_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify sequential concurrency == 1, parallel concurrency >= 3, and API settings persistence."""
-    kira = temp_repo.get_character("char_kira_vance")
-    viktor, _ = _create_extra_characters(temp_repo)
-    world = temp_repo.get_world("world_neon_rust")
+    scenario = seed_minimal_scenario(empty_repo, character_name="Kira Vance", with_shards=True)
+    kira = scenario.character
+    world = scenario.world
+    viktor, _ = _create_extra_characters(empty_repo, world.id)
     main_bar = next(loc for loc in world.locations if loc.is_starting_location)
 
-    camp = temp_repo.create_campaign(
+    camp = empty_repo.create_campaign(
         name="Dispatch Concurrency Test",
         world_id=world.id,
         character_id=kira.id,
         character_ids=[kira.id, viktor.id],
         character_locations={kira.id: main_bar.id, viktor.id: main_bar.id},
     )
-    bundle0 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle0 = empty_repo.get_campaign_state_bundle(camp.id)
     root_turn = bundle0.active_branch_turns[-1]
 
     in_flight = 0
@@ -481,7 +468,7 @@ async def test_sequential_vs_parallel_agent_dispatch_and_settings_endpoints(
     monkeypatch.setattr(llm_client, "complete_structured", instrumented_complete_structured)
 
     # 1. Sequential mode: strictly 1 LLM call in-flight at a time
-    t_seq = temp_repo.save_turn_node(
+    t_seq = empty_repo.save_turn_node(
         turn_id="turn_seq_1",
         campaign_id=camp.id,
         parent_turn_id=root_turn.id,
@@ -499,7 +486,7 @@ async def test_sequential_vs_parallel_agent_dispatch_and_settings_endpoints(
         recalled_items=[],
     )
     await run_phase4_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world_id=world.id,
         character=kira,
@@ -511,11 +498,11 @@ async def test_sequential_vs_parallel_agent_dispatch_and_settings_endpoints(
         dispatch_mode="sequential",
     )
     assert max_observed_concurrency == 1
-    seq_states = temp_repo.get_campaign_state_bundle(camp.id).character_states
+    seq_states = empty_repo.get_campaign_state_bundle(camp.id).character_states
 
     # 2. Parallel mode (sibling branch from root_turn): World Clerk + 2 Character Agents run concurrently (>= 3)
     max_observed_concurrency = 0
-    t_par = temp_repo.save_turn_node(
+    t_par = empty_repo.save_turn_node(
         turn_id="turn_par_1",
         campaign_id=camp.id,
         parent_turn_id=root_turn.id,
@@ -533,7 +520,7 @@ async def test_sequential_vs_parallel_agent_dispatch_and_settings_endpoints(
         recalled_items=[],
     )
     await run_phase4_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world_id=world.id,
         character=kira,
@@ -545,7 +532,7 @@ async def test_sequential_vs_parallel_agent_dispatch_and_settings_endpoints(
         dispatch_mode="parallel",
     )
     assert max_observed_concurrency >= 3
-    par_states = temp_repo.get_campaign_state_bundle(camp.id).character_states
+    par_states = empty_repo.get_campaign_state_bundle(camp.id).character_states
 
     for cid in (kira.id, viktor.id):
         assert par_states[cid].mood_label == seq_states[cid].mood_label
@@ -559,23 +546,8 @@ async def test_sequential_vs_parallel_agent_dispatch_and_settings_endpoints(
     monkeypatch.setattr(settings_router, "persist_settings", lambda *a, **kw: None)
 
     client = TestClient(main_module.app)
-    boot_admin = client.post(
-        "/api/auth/setup",
-        json={"username": "admin_disp", "display_name": "Admin", "password": "password123"},
-    )
-    assert boot_admin.status_code == 200
-    admin_token = boot_admin.json()["token"]
-    admin_id = boot_admin.json()["user"]["id"]
-    admin_headers = {"Authorization": f"Bearer {admin_token}"}
-
-    reg_user = client.post(
-        "/api/auth/register",
-        json={"username": "player_disp", "display_name": "Player", "password": "password123"},
-    )
-    assert reg_user.status_code == 200
-    user_token = reg_user.json()["token"]
-    user_id = reg_user.json()["user"]["id"]
-    user_headers = {"Authorization": f"Bearer {user_token}"}
+    admin_headers, admin_id, _ = api_user_factory("admin_disp", role="admin", display_name="Admin")
+    user_headers, user_id, _ = api_user_factory("player_disp", role="user", display_name="Player")
 
     # Default global dispatch mode is sequential
     curr_settings = client.get("/api/settings", headers=admin_headers).json()
@@ -614,7 +586,7 @@ async def test_sequential_vs_parallel_agent_dispatch_and_settings_endpoints(
 
 
 async def test_two_tier_item_dispute_arbitration(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
@@ -623,19 +595,20 @@ async def test_two_tier_item_dispute_arbitration(
     - Tier 2 multi-claim dispute invokes Arbitrator LLM (and offline fallback) without duplicating items.
     - Tier 2 unrelinquished transfer removes from prior holder on transfer OR blocks thief on retention.
     """
-    kira = temp_repo.get_character("char_kira_vance")
-    viktor, _ = _create_extra_characters(temp_repo)
-    world = temp_repo.get_world("world_neon_rust")
+    scenario = seed_minimal_scenario(empty_repo, character_name="Kira Vance", with_shards=True)
+    kira = scenario.character
+    world = scenario.world
+    viktor, _ = _create_extra_characters(empty_repo, world.id)
     main_bar = next(loc for loc in world.locations if loc.is_starting_location)
 
-    camp = temp_repo.create_campaign(
+    camp = empty_repo.create_campaign(
         name="Item Arbitration Test",
         world_id=world.id,
         character_id=kira.id,
         character_ids=[kira.id, viktor.id],
         character_locations={kira.id: main_bar.id, viktor.id: main_bar.id},
     )
-    bundle0 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle0 = empty_repo.get_campaign_state_bundle(camp.id)
     root_turn = bundle0.active_branch_turns[-1]
 
     # Seed Kira with a Trauma Medkit in inventory and a Plasma Torch in equipped
@@ -646,7 +619,7 @@ async def test_two_tier_item_dispute_arbitration(
         }
     )
     viktor_seed_state = bundle0.character_states[viktor.id]
-    temp_repo.update_turn_post_clerk(
+    empty_repo.update_turn_post_clerk(
         turn_id=root_turn.id,
         post_turn=root_turn.post_turn
         or WorldPostTurnDelta(elapsed_minutes=0, transition_type="stay"),  # type: ignore[arg-type]
@@ -656,7 +629,7 @@ async def test_two_tier_item_dispute_arbitration(
     ) if root_turn.post_turn else None
 
     # Save Turn 1 for Scenario A: Uncontested handoff (Kira removes Trauma Medkit, Viktor obtains Trauma Medkit)
-    turn_a = temp_repo.save_turn_node(
+    turn_a = empty_repo.save_turn_node(
         turn_id="turn_arb_a",
         campaign_id=camp.id,
         parent_turn_id=root_turn.id,
@@ -674,7 +647,7 @@ async def test_two_tier_item_dispute_arbitration(
     # Also persist kira_seed_state onto root_turn so prior_branch_turns has Trauma Medkit & Plasma Torch!
     from app.schemas.turn import PostTurnStateDelta
 
-    temp_repo.update_turn_post_clerk(
+    empty_repo.update_turn_post_clerk(
         turn_id=root_turn.id,
         post_turn=PostTurnStateDelta(elapsed_minutes=0, transition_type="stay"),
         updated_world_snapshot=root_turn.world_snapshot,
@@ -712,7 +685,7 @@ async def test_two_tier_item_dispute_arbitration(
     monkeypatch.setattr(llm_client, "complete_structured", mock_handoff_llm)
 
     updated_a, _ = await run_phase4_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world_id=world.id,
         character=kira,
@@ -725,12 +698,12 @@ async def test_two_tier_item_dispute_arbitration(
     assert arbitrator_calls == 0
     assert updated_a.post_turn is not None
     assert updated_a.post_turn.arbitration_notes == []
-    bundle_a = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle_a = empty_repo.get_campaign_state_bundle(camp.id)
     assert "Trauma Medkit" not in bundle_a.character_states[kira.id].inventory
     assert "Trauma Medkit" in bundle_a.character_states[viktor.id].inventory
 
     # Scenario B: Multi-claim dispute (both Kira and Viktor claim 'Encrypted Datashard' from the table)
-    turn_b = temp_repo.save_turn_node(
+    turn_b = empty_repo.save_turn_node(
         turn_id="turn_arb_b",
         campaign_id=camp.id,
         parent_turn_id="turn_arb_a",
@@ -781,7 +754,7 @@ async def test_two_tier_item_dispute_arbitration(
     monkeypatch.setattr(llm_client, "complete_structured", mock_multiclaim_llm)
 
     updated_b, _ = await run_phase4_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world_id=world.id,
         character=kira,
@@ -796,14 +769,14 @@ async def test_two_tier_item_dispute_arbitration(
     assert len(updated_b.post_turn.arbitration_notes) == 1
     assert "Viktor Kroll" in updated_b.post_turn.arbitration_notes[0]
 
-    bundle_b = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle_b = empty_repo.get_campaign_state_bundle(camp.id)
     assert "Encrypted Datashard" in bundle_b.character_states[viktor.id].inventory
     assert "Encrypted Datashard" not in bundle_b.character_states[kira.id].inventory
     assert "Encrypted Datashard" not in bundle_b.character_states[kira.id].equipped
 
     # Scenario C1: Unrelinquished transfer where Arbitrator awards Kira's 'Plasma Torch' to Viktor
     # (Kira forgot to list Plasma Torch in items_removed; Arbitrator must auto-remove it from Kira!)
-    turn_c1 = temp_repo.save_turn_node(
+    turn_c1 = empty_repo.save_turn_node(
         turn_id="turn_arb_c1",
         campaign_id=camp.id,
         parent_turn_id="turn_arb_b",
@@ -848,7 +821,7 @@ async def test_two_tier_item_dispute_arbitration(
     monkeypatch.setattr(llm_client, "complete_structured", mock_unrelinquished_offline_arb)
 
     updated_c1, _ = await run_phase4_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world_id=world.id,
         character=kira,
@@ -859,7 +832,7 @@ async def test_two_tier_item_dispute_arbitration(
         all_participants=[kira, viktor],
     )
     assert arbitrator_calls == 2
-    bundle_c1 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle_c1 = empty_repo.get_campaign_state_bundle(camp.id)
     assert "Plasma Torch" in bundle_c1.character_states[viktor.id].equipped
     assert "Plasma Torch" not in bundle_c1.character_states[kira.id].equipped
     assert "Plasma Torch" not in bundle_c1.character_states[kira.id].inventory
@@ -915,7 +888,7 @@ async def test_two_tier_item_dispute_arbitration(
 
 
 async def test_independent_character_spatial_transitions(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
@@ -924,12 +897,13 @@ async def test_independent_character_spatial_transitions(
     2. 'follow_player' when Global Clerk improvises a brand-new location.
     3. 'move_to_neighbor' when an NPC storms out into an adjacent room while the player stays put.
     """
-    kira = temp_repo.get_character("char_kira_vance")
-    viktor, nyx = _create_extra_characters(temp_repo)
-    world = temp_repo.get_world("world_neon_rust")
+    scenario = seed_minimal_scenario(empty_repo, character_name="Kira Vance", with_shards=True)
+    kira = scenario.character
+    viktor, nyx = _create_extra_characters(empty_repo, scenario.world.id)
+    world = scenario.world
     main_bar = next(loc for loc in world.locations if loc.is_starting_location)
 
-    camp = temp_repo.create_campaign(
+    camp = empty_repo.create_campaign(
         name="Spatial Independence Test",
         world_id=world.id,
         character_id=kira.id,
@@ -940,12 +914,12 @@ async def test_independent_character_spatial_transitions(
             nyx.id: main_bar.id,
         },
     )
-    bundle0 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle0 = empty_repo.get_campaign_state_bundle(camp.id)
     root_turn = bundle0.active_branch_turns[-1]
     ripper_neighbor = bundle0.neighbor_locations[0].destination
 
     # Step 1: Player moves into ripper_neighbor; Kira & Nyx follow, Viktor stays behind in main_bar
-    turn1 = temp_repo.save_turn_node(
+    turn1 = empty_repo.save_turn_node(
         turn_id="turn_move_1",
         campaign_id=camp.id,
         parent_turn_id=root_turn.id,
@@ -990,7 +964,7 @@ async def test_independent_character_spatial_transitions(
     monkeypatch.setattr(llm_client, "complete_structured", mock_step1_llm)
 
     await run_phase4_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world_id=world.id,
         character=kira,
@@ -1001,7 +975,7 @@ async def test_independent_character_spatial_transitions(
         all_participants=[kira, viktor, nyx],
     )
 
-    bundle1 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle1 = empty_repo.get_campaign_state_bundle(camp.id)
     assert bundle1.active_location.id == ripper_neighbor.id
     assert bundle1.character_states[kira.id].current_location_id == ripper_neighbor.id
     assert bundle1.character_states[nyx.id].current_location_id == ripper_neighbor.id
@@ -1009,7 +983,7 @@ async def test_independent_character_spatial_transitions(
     assert set(bundle1.present_character_ids) == {kira.id, nyx.id}
 
     # Step 2: Player stays in ripper_neighbor while Nyx independently moves back to neighbor main_bar!
-    turn2 = temp_repo.save_turn_node(
+    turn2 = empty_repo.save_turn_node(
         turn_id="turn_move_2",
         campaign_id=camp.id,
         parent_turn_id="turn_move_1",
@@ -1048,7 +1022,7 @@ async def test_independent_character_spatial_transitions(
     monkeypatch.setattr(llm_client, "complete_structured", mock_step2_llm)
 
     await run_phase4_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world_id=world.id,
         character=kira,
@@ -1059,14 +1033,14 @@ async def test_independent_character_spatial_transitions(
         all_participants=[kira, viktor, nyx],
     )
 
-    bundle2 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle2 = empty_repo.get_campaign_state_bundle(camp.id)
     assert bundle2.active_location.id == ripper_neighbor.id
     assert bundle2.character_states[kira.id].current_location_id == ripper_neighbor.id
     assert bundle2.character_states[nyx.id].current_location_id == main_bar.id
     assert bundle2.present_character_ids == [kira.id]
 
     # Step 3: Player & Kira climb into an improvised Sub-Basement Conduit ('follow_player' resolves new ID)
-    turn3 = temp_repo.save_turn_node(
+    turn3 = empty_repo.save_turn_node(
         turn_id="turn_move_3",
         campaign_id=camp.id,
         parent_turn_id="turn_move_2",
@@ -1110,7 +1084,7 @@ async def test_independent_character_spatial_transitions(
     monkeypatch.setattr(llm_client, "complete_structured", mock_step3_llm)
 
     await run_phase4_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world_id=world.id,
         character=kira,
@@ -1121,7 +1095,7 @@ async def test_independent_character_spatial_transitions(
         all_participants=[kira, viktor, nyx],
     )
 
-    bundle3 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle3 = empty_repo.get_campaign_state_bundle(camp.id)
     assert bundle3.active_location.name == "Sub-Basement Cooling Conduit"
     assert bundle3.character_states[kira.id].current_location_id == bundle3.active_location.id
     assert bundle3.character_states[viktor.id].current_location_id == main_bar.id
@@ -1129,7 +1103,7 @@ async def test_independent_character_spatial_transitions(
 
 
 async def test_narrator_turn_emotional_anchor_and_branch_rewind_safety(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
@@ -1137,19 +1111,20 @@ async def test_narrator_turn_emotional_anchor_and_branch_rewind_safety(
     1. '__narrator__' turns skip Character Agent LLM calls and preserve all co-present emotional anchors.
     2. Branch rewind restores every character's prior mood, valence, stances, inventory, and location.
     """
-    kira = temp_repo.get_character("char_kira_vance")
-    viktor, _ = _create_extra_characters(temp_repo)
-    world = temp_repo.get_world("world_neon_rust")
+    scenario = seed_minimal_scenario(empty_repo, character_name="Kira Vance", with_shards=True)
+    kira = scenario.character
+    world = scenario.world
+    viktor, _ = _create_extra_characters(empty_repo, world.id)
     main_bar = next(loc for loc in world.locations if loc.is_starting_location)
 
-    camp = temp_repo.create_campaign(
+    camp = empty_repo.create_campaign(
         name="Narrator & Branch Rollback Test",
         world_id=world.id,
         character_id=kira.id,
         character_ids=[kira.id, viktor.id],
         character_locations={kira.id: main_bar.id, viktor.id: main_bar.id},
     )
-    bundle0 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle0 = empty_repo.get_campaign_state_bundle(camp.id)
     root_turn = bundle0.active_branch_turns[-1]
 
     char_agent_calls = 0
@@ -1168,7 +1143,7 @@ async def test_narrator_turn_emotional_anchor_and_branch_rewind_safety(
 
     monkeypatch.setattr(llm_client, "complete_structured", mock_narrator_llm)
 
-    narrator_turn = temp_repo.save_turn_node(
+    narrator_turn = empty_repo.save_turn_node(
         turn_id="turn_narrator_1",
         campaign_id=camp.id,
         parent_turn_id=root_turn.id,
@@ -1187,7 +1162,7 @@ async def test_narrator_turn_emotional_anchor_and_branch_rewind_safety(
     )
 
     await run_phase4_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world_id=world.id,
         character=kira,
@@ -1199,7 +1174,7 @@ async def test_narrator_turn_emotional_anchor_and_branch_rewind_safety(
     )
 
     assert char_agent_calls == 0
-    bundle_nar = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle_nar = empty_repo.get_campaign_state_bundle(camp.id)
     assert "Acid rain drumming on roof" in bundle_nar.current_world_snapshot.scene_flags
     for cid in (kira.id, viktor.id):
         assert bundle_nar.character_states[cid].mood_label == bundle0.character_states[cid].mood_label
@@ -1235,7 +1210,7 @@ async def test_narrator_turn_emotional_anchor_and_branch_rewind_safety(
 
     monkeypatch.setattr(llm_client, "complete_structured", mock_drama_llm)
 
-    drama_turn = temp_repo.save_turn_node(
+    drama_turn = empty_repo.save_turn_node(
         turn_id="turn_drama_2",
         campaign_id=camp.id,
         parent_turn_id="turn_narrator_1",
@@ -1254,7 +1229,7 @@ async def test_narrator_turn_emotional_anchor_and_branch_rewind_safety(
     )
 
     await run_phase4_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world_id=world.id,
         character=kira,
@@ -1265,12 +1240,12 @@ async def test_narrator_turn_emotional_anchor_and_branch_rewind_safety(
         all_participants=[kira, viktor],
     )
 
-    bundle_drama = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle_drama = empty_repo.get_campaign_state_bundle(camp.id)
     assert "Recovered Credstick" in bundle_drama.character_states[kira.id].inventory
     assert bundle_drama.character_states[viktor.id].current_location_id == neighbor_dest.id
 
     # Rewind back to turn_narrator_1 -> both characters' states, stances, inventories & locations roll back cleanly!
-    rewound = temp_repo.checkout_turn_branch(camp.id, "turn_narrator_1")
+    rewound = empty_repo.checkout_turn_branch(camp.id, "turn_narrator_1")
     assert "Recovered Credstick" not in rewound.character_states[kira.id].inventory
     assert rewound.character_states[kira.id].mood_label == bundle0.character_states[kira.id].mood_label
     assert rewound.character_states[kira.id].relationship_notes == bundle0.character_states[kira.id].relationship_notes
@@ -1281,15 +1256,16 @@ async def test_narrator_turn_emotional_anchor_and_branch_rewind_safety(
 
 @pytest.mark.asyncio
 async def test_phase4_agent_progress_events_and_audit_ruling_metadata(
-    temp_repo, monkeypatch
+    empty_repo, monkeypatch
 ):
     """Verify that Phase 4 emits visual progress events (roster, agent start/complete, arbitration) and persists character_names and arbitration_rulings."""
-    kira = temp_repo.get_character("char_kira_vance")
-    viktor, _ = _create_extra_characters(temp_repo)
-    world = temp_repo.get_world("world_neon_rust")
+    scenario = seed_minimal_scenario(empty_repo, character_name="Kira Vance", with_shards=True)
+    kira = scenario.character
+    world = scenario.world
+    viktor, _ = _create_extra_characters(empty_repo, world.id)
     main_bar = next(loc for loc in world.locations if loc.is_starting_location)
 
-    camp = temp_repo.create_campaign(
+    camp = empty_repo.create_campaign(
         name="Audit Ops",
         world_id=world.id,
         character_id=kira.id,
@@ -1297,7 +1273,7 @@ async def test_phase4_agent_progress_events_and_audit_ruling_metadata(
         character_locations={kira.id: main_bar.id, viktor.id: main_bar.id},
     )
 
-    bundle0 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle0 = empty_repo.get_campaign_state_bundle(camp.id)
 
     # Mock LLM to return world delta, character deltas with a dispute, and arbitration decision
     async def mock_llm(messages, response_model, **kwargs):
@@ -1344,7 +1320,7 @@ async def test_phase4_agent_progress_events_and_audit_ruling_metadata(
     async def progress_listener(ev: Phase4ProgressEvent):
         events.append(ev)
 
-    turn1 = temp_repo.save_turn_node(
+    turn1 = empty_repo.save_turn_node(
         turn_id="turn_progress_1",
         campaign_id=camp.id,
         parent_turn_id=bundle0.active_branch_turns[-1].id,
@@ -1363,7 +1339,7 @@ async def test_phase4_agent_progress_events_and_audit_ruling_metadata(
     )
 
     updated_turn, _ = await run_phase4_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world_id=world.id,
         character=kira,
@@ -1401,6 +1377,6 @@ async def test_phase4_agent_progress_events_and_audit_ruling_metadata(
     assert set(ruling.claimant_ids) == {kira.id, viktor.id}
 
     # 3. Verify winner holds item in state, loser does not
-    bundle1 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle1 = empty_repo.get_campaign_state_bundle(camp.id)
     assert "Cipher Drive" in bundle1.character_states[kira.id].inventory
     assert "Cipher Drive" not in bundle1.character_states[viktor.id].inventory

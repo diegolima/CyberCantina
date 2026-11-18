@@ -6,10 +6,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main as main_module
 from app.config import settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_test_seed
 from app.prompts import (
     FACTORY_DEFAULT_PROMPTS,
     PROMPT_KEY_ACTOR_ZONE1,
@@ -18,6 +16,7 @@ from app.prompts import (
     validate_prompt_template,
 )
 from app.schemas.auth import UserModelSettingsPayload
+from tests.factories import seed_character, seed_world
 
 
 def test_render_template_variable_substitution() -> None:
@@ -138,9 +137,8 @@ def test_custom_preset_crud_and_reset(test_repo: CantinaRepository) -> None:
 def test_resolve_effective_prompts_hierarchy(test_repo: CantinaRepository) -> None:
     """Test resolution hierarchy: Campaign preset > User active preset > Factory default."""
     test_user = test_repo.create_user(username="hieruser", user_id="user_abc")
-    ensure_test_seed(test_repo, owner_id=test_user.id)
-    world = test_repo.list_worlds(owner_id=test_user.id)[0]
-    char = test_repo.list_characters(owner_id=test_user.id)[0]
+    world = seed_world(test_repo, owner_id=test_user.id)
+    char = seed_character(test_repo, owner_id=test_user.id, world_id=world.id)
 
     # 1. Base resolution with no user/campaign gives default
     eff = test_repo.resolve_effective_prompts()
@@ -186,23 +184,16 @@ def test_resolve_effective_prompts_hierarchy(test_repo: CantinaRepository) -> No
 
 
 @pytest.fixture()
-def client_with_auth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, CantinaRepository]:
+def client_with_auth(
+    api_env: tuple[TestClient, CantinaRepository, Path],
+    api_user_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TestClient, CantinaRepository]:
     """Provide an authenticated TestClient with an admin user."""
-    db_file = str(tmp_path / "test_api_prompts.db")
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "allow_offline_fallback", True)
+    client, repo, _media_dir = api_env
     monkeypatch.setattr(settings, "allow_user_model_overrides", True)
-
-    repo = CantinaRepository(db_file)
-    repo.init_db()
-
-    client = TestClient(main_module.app)
-    # Perform initial admin setup
-    setup_res = client.post(
-        "/api/auth/setup",
-        json={"username": "adminuser", "password": "AdminPassword123!"},
-    )
-    assert setup_res.status_code == 200
+    admin_h, _admin_id, _tok = api_user_factory("adminuser", role="admin")
+    client.headers.update(admin_h)
     return client, repo
 
 

@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from app import main as main_module
 from app.auth import get_current_user
 from app.db.repository import CantinaRepository
+from tests.factories import seed_character
 from app.engine.llm_client import llm_client
 from app.engine.phase2_context import (
     build_zone1_static_system_prompt,
@@ -48,20 +49,19 @@ from app.schemas.world import (
 
 @pytest.fixture
 def authed_client(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> tuple[TestClient, CantinaRepository]:
-    """Provide an authenticated FastAPI TestClient bound to temp_repo."""
-    user = temp_repo.create_user(
+    """Provide an authenticated FastAPI TestClient bound to empty_repo."""
+    user = empty_repo.create_user(
         username="container_admin",
         display_name="Container Admin",
         role="admin",
         user_id="user_container_admin",
     )
-    temp_repo.claim_unowned_entities(user.id)
     main_module.app.dependency_overrides[get_current_user] = lambda: user
     client = TestClient(main_module.app)
     try:
-        yield client, temp_repo
+        yield client, empty_repo
     finally:
         main_module.app.dependency_overrides.pop(get_current_user, None)
 
@@ -554,20 +554,20 @@ def test_schema_cycle_and_depth_validation() -> None:
     assert len(valid_rec.containers) == 2
 
 
-def test_container_deletion_restriction(temp_repo: CantinaRepository) -> None:
+def test_container_deletion_restriction(empty_repo: CantinaRepository) -> None:
     """Repository blocks non-empty container deletion unless children are reassigned/unparented, and handles lore disposal."""
-    world = _create_hierarchical_world(temp_repo)
+    world = _create_hierarchical_world(empty_repo)
     club = next(c for c in world.containers if c.name == "Afterlife Club")
     lizzies = next(c for c in world.containers if c.name == "Lizzies Bar")
     district = next(c for c in world.containers if c.name == "Watson District")
 
     # 1. Deleting populated container without options raises ValueError
     with pytest.raises(ValueError, match="still contains|contains child"):
-        temp_repo.delete_location_container(world.id, club.id)
+        empty_repo.delete_location_container(world.id, club.id)
 
     # 2. Reassigning L1 lore to Level 2 District raises ValueError
     with pytest.raises(ValueError, match="depth 1"):
-        temp_repo.delete_location_container(
+        empty_repo.delete_location_container(
             world.id,
             club.id,
             reassign_to_container_id=district.id,
@@ -575,7 +575,7 @@ def test_container_deletion_restriction(temp_repo: CantinaRepository) -> None:
         )
 
     # 3. Reassigning to another Level 1 container (Lizzies) works & preserves lore cleanly
-    updated = temp_repo.delete_location_container(
+    updated = empty_repo.delete_location_container(
         world.id,
         club.id,
         reassign_to_container_id=lizzies.id,
@@ -587,7 +587,7 @@ def test_container_deletion_restriction(temp_repo: CantinaRepository) -> None:
     assert all(loc.container_id != club.id for loc in updated.locations)
 
     # 4. Promote L1 lore to world lore (pruning secrets) & unparent children to root
-    promoted = temp_repo.delete_location_container(
+    promoted = empty_repo.delete_location_container(
         updated.id,
         new_lizzies.id,
         unparent_children=True,
@@ -670,25 +670,25 @@ def test_location_container_wrapper(authed_client: tuple[TestClient, CantinaRepo
     assert highway.id
 
 
-def test_improvised_exploration_inheritance_and_dynamic_portals(temp_repo: CantinaRepository) -> None:
+def test_improvised_exploration_inheritance_and_dynamic_portals(empty_repo: CantinaRepository) -> None:
     """Exploration inherits container_id, climbs only on portal+is_exterior, handles 9th overflow hubs, and computes dynamic campaign portals."""
-    world = _create_hierarchical_world(temp_repo)
+    world = _create_hierarchical_world(empty_repo)
     foyer = next(loc for loc in world.locations if loc.name == "Main Floor")
     vip = next(loc for loc in world.locations if loc.name == "VIP Booth")
     lounge = next(loc for loc in world.locations if loc.name == "Velvet Lounge")
     club = next(c for c in world.containers if c.name == "Afterlife Club")
     district = next(c for c in world.containers if c.name == "Watson District")
 
-    kira = temp_repo.get_character("char_kira_vance")
-    camp = temp_repo.create_campaign(
+    kira = seed_character(empty_repo, owner_id=None, world_id=world.id)
+    camp = empty_repo.create_campaign(
         name="Container Exploration",
         world_id=world.id,
         character_id=kira.id,
     )
-    root_turn = temp_repo.get_campaign_state_bundle(camp.id).active_branch_turns[-1]
+    root_turn = empty_repo.get_campaign_state_bundle(camp.id).active_branch_turns[-1]
 
     # 1. From VIP (non-portal) even if is_exterior=True -> stays inside Afterlife Club!
-    stayed = temp_repo.add_improvised_location(
+    stayed = empty_repo.add_improvised_location(
         world_id=world.id,
         from_location_id=vip.id,
         created_at_turn_id=root_turn.id,
@@ -704,7 +704,7 @@ def test_improvised_exploration_inheritance_and_dynamic_portals(temp_repo: Canti
     assert stayed.container_id == club.id
 
     # 2. From Main Floor (portal) with is_exterior=True -> climbs to Watson District (parent_container_id)!
-    climbed = temp_repo.add_improvised_location(
+    climbed = empty_repo.add_improvised_location(
         world_id=world.id,
         from_location_id=foyer.id,
         created_at_turn_id=root_turn.id,
@@ -722,7 +722,7 @@ def test_improvised_exploration_inheritance_and_dynamic_portals(temp_repo: Canti
     # 3. Fill to 8 neighbors from Main Floor (2 base + Docks Alley + 5 Alcoves = 8),
     # then 9th neighbor overflow creates a Passage Hub inheriting Afterlife Club
     for i in range(5):
-        temp_repo.add_improvised_location(
+        empty_repo.add_improvised_location(
             world_id=world.id,
             from_location_id=foyer.id,
             created_at_turn_id=root_turn.id,
@@ -734,7 +734,7 @@ def test_improvised_exploration_inheritance_and_dynamic_portals(temp_repo: Canti
                 is_exterior=False,
             ),
         )
-    overflow_loc = temp_repo.add_improvised_location(
+    overflow_loc = empty_repo.add_improvised_location(
         world_id=world.id,
         from_location_id=foyer.id,
         created_at_turn_id=root_turn.id,
@@ -747,20 +747,20 @@ def test_improvised_exploration_inheritance_and_dynamic_portals(temp_repo: Canti
         ),
     )
     assert overflow_loc.container_id == district.id
-    bundle_after = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle_after = empty_repo.get_campaign_state_bundle(camp.id)
     hub_nodes = [loc for loc in bundle_after.visible_locations if loc.is_hub]
     assert len(hub_nodes) >= 1
     assert hub_nodes[0].container_id == club.id
     assert hub_nodes[0].is_entry_exit is True
 
     # 4. Campaign connections and base cross-container edges must NOT dynamically synthesize portal flags
-    temp_repo.connect_campaign_locations(
+    empty_repo.connect_campaign_locations(
         camp.id,
         from_location_id=vip.id,  # raw is_entry_exit == False
         to_location_id=lounge.id,
         compass_direction="E",
     )
-    conn = temp_repo._connect()
+    conn = empty_repo._connect()
     try:
         raw_vip_portal = conn.execute(
             "SELECT is_entry_exit FROM location_nodes WHERE id = ?", (vip.id,)
@@ -769,16 +769,16 @@ def test_improvised_exploration_inheritance_and_dynamic_portals(temp_repo: Canti
         conn.close()
     assert raw_vip_portal == 0  # Base DB row untouched!
 
-    bundle_conn = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle_conn = empty_repo.get_campaign_state_bundle(camp.id)
     vis_by_name = {loc.name: loc for loc in bundle_conn.visible_locations}
     assert vis_by_name["VIP Booth"].is_entry_exit is False
     assert vis_by_name["Watson Overpass"].is_entry_exit is False
     assert vis_by_name["Main Floor"].is_entry_exit is True
 
 
-def test_zone4_hierarchy_prompt_lca_cues_and_zone1_stability(temp_repo: CantinaRepository) -> None:
+def test_zone4_hierarchy_prompt_lca_cues_and_zone1_stability(empty_repo: CantinaRepository) -> None:
     """Zone 1 remains byte-identical across container transitions; Zone 4 renders breadcrumbs, capped L1 lore, secrets & LCA Entry Precedence."""
-    world = _create_hierarchical_world(temp_repo)
+    world = _create_hierarchical_world(empty_repo)
     foyer = next(loc for loc in world.locations if loc.name == "Main Floor")
     vip = next(loc for loc in world.locations if loc.name == "VIP Booth")
     highway = next(loc for loc in world.locations if loc.name == "Watson Overpass")
@@ -786,7 +786,7 @@ def test_zone4_hierarchy_prompt_lca_cues_and_zone1_stability(temp_repo: CantinaR
     badlands = next(loc for loc in world.locations if loc.name == "Salt Flats Outpost")
     club = next(c for c in world.containers if c.name == "Afterlife Club")
 
-    kira = temp_repo.get_character("char_kira_vance")
+    kira = seed_character(empty_repo, owner_id=None, world_id=world.id)
     z1_foyer = build_zone1_static_system_prompt(world, kira)
     # Zone 1 must not change when scene location changes or containers exist
     assert "Afterlife Club" not in z1_foyer
@@ -799,9 +799,9 @@ def test_zone4_hierarchy_prompt_lca_cues_and_zone1_stability(temp_repo: CantinaR
         mentioned_entities=[],
         memory_search_queries=["music"],
     )
-    camp = temp_repo.create_campaign(name="LCA Test", world_id=world.id, character_id=kira.id)
-    snap = temp_repo.get_campaign_state_bundle(camp.id).current_world_snapshot
-    char_st = temp_repo.get_campaign_state_bundle(camp.id).current_character_state
+    camp = empty_repo.create_campaign(name="LCA Test", world_id=world.id, character_id=kira.id)
+    snap = empty_repo.get_campaign_state_bundle(camp.id).current_world_snapshot
+    char_st = empty_repo.get_campaign_state_bundle(camp.id).current_character_state
 
     z4_inside = build_zone4_ephemeral_tail_frame(
         user_message="I scan the main bar.",
@@ -895,28 +895,28 @@ def test_zone4_hierarchy_prompt_lca_cues_and_zone1_stability(temp_repo: CantinaR
 
 @pytest.mark.asyncio
 async def test_phase3_cognition_container_ambiance_and_phase2_exclude(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Phase 2 excludes active Level 1 container from distant RAG; Phase 3 injects container ambiance in dynamic user_prompt."""
-    world = _create_hierarchical_world(temp_repo)
+    world = _create_hierarchical_world(empty_repo)
     foyer = next(loc for loc in world.locations if loc.name == "Main Floor")
     club = next(c for c in world.containers if c.name == "Afterlife Club")
-    kira = temp_repo.get_character("char_kira_vance")
-    camp = temp_repo.create_campaign(name="RAG Exclude", world_id=world.id, character_id=kira.id)
-    bundle0 = temp_repo.get_campaign_state_bundle(camp.id)
+    kira = seed_character(empty_repo, owner_id=None, world_id=world.id)
+    camp = empty_repo.create_campaign(name="RAG Exclude", world_id=world.id, character_id=kira.id)
+    bundle0 = empty_repo.get_campaign_state_bundle(camp.id)
 
     monkeypatch.setattr("app.engine.phase2_context.settings.memory_config.working_memory_turns", 4)
     monkeypatch.setattr("app.engine.phase2_context.settings.memory_config.rag_top_k", 5)
 
     spy_calls: list[dict[str, object]] = []
-    orig_search = temp_repo.vector_store.search_memories_for_characters
+    orig_search = empty_repo.vector_store.search_memories_for_characters
 
     async def spy_search(*args, **kwargs):
         spy_calls.append(kwargs)
         return await orig_search(*args, **kwargs)
 
-    monkeypatch.setattr(temp_repo.vector_store, "search_memories_for_characters", spy_search)
+    monkeypatch.setattr(empty_repo.vector_store, "search_memories_for_characters", spy_search)
 
     pre = PreTurnAnalysis(
         user_sentiment="focused",
@@ -925,7 +925,7 @@ async def test_phase3_cognition_container_ambiance_and_phase2_exclude(
         memory_search_queries=["Fixer Rogue booths"],
     )
     await resolve_phase2_turn_context(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world=world,
         branch_turns=bundle0.active_branch_turns,
@@ -978,7 +978,7 @@ def test_campaign_container_lore_cow_and_secrets_excluded(
     world = _create_hierarchical_world(repo, owner_id="user_container_admin")
     club = next(c for c in world.containers if c.name == "Afterlife Club")
     district = next(c for c in world.containers if c.name == "Watson District")
-    kira = repo.get_character("char_kira_vance")
+    kira = seed_character(repo, owner_id="user_container_admin", world_id=world.id)
 
     camp_a = repo.create_campaign(name="Camp A", world_id=world.id, character_id=kira.id, owner_id="user_container_admin")
     camp_b = repo.create_campaign(name="Camp B", world_id=world.id, character_id=kira.id, owner_id="user_container_admin")
@@ -1056,7 +1056,7 @@ async def test_phase1_container_known_entities_and_lca_override_timing(
     world = _create_hierarchical_world(repo, owner_id="user_container_admin")
     highway = next(loc for loc in world.locations if loc.name == "Watson Overpass")
     foyer = next(loc for loc in world.locations if loc.name == "Main Floor")
-    kira = repo.get_character("char_kira_vance")
+    kira = seed_character(repo, owner_id="user_container_admin", world_id=world.id)
     camp = repo.create_campaign(name="P1 Entity Test", world_id=world.id, character_id=kira.id, owner_id="user_container_admin")
 
     captured_known: list[list[str]] = []
@@ -1118,7 +1118,7 @@ def test_world_forking_and_zcc_import_export_containers(
     """In-place updates, CoW world forking, embedding cache reuse, and .zcc ZIP round-trip preserve container hierarchy & FK order."""
     client, repo = authed_client
     world = _create_hierarchical_world(repo, owner_id="user_container_admin")
-    kira = repo.get_character("char_kira_vance")
+    kira = seed_character(repo, owner_id="user_container_admin", world_id=world.id)
 
     # 1. Re-verify in-place embedding reuse when container lore unchanged
     embed_calls: list[str] = []
@@ -1405,16 +1405,16 @@ def test_world_wizard_commit_preserves_contained_starting_hub_and_containers(
     assert flat_world.locations[0].is_entry_exit is False
 
 
-def test_location_container_ops_preserve_world_unsupported_fields(temp_repo: CantinaRepository) -> None:
+def test_location_container_ops_preserve_world_unsupported_fields(empty_repo: CantinaRepository) -> None:
     """Deleting a container or wrapping a location into a container must preserve world unsupported_fields."""
-    temp_repo.create_user(
+    empty_repo.create_user(
         username="container_ext",
         display_name="Container Ext",
         role="user",
         user_id="user_container_ext",
     )
-    world = _create_hierarchical_world(temp_repo, owner_id="user_container_ext")
-    conn = temp_repo._connect()
+    world = _create_hierarchical_world(empty_repo, owner_id="user_container_ext")
+    conn = empty_repo._connect()
     try:
         ext_payload = {
             "calendar_system": "Lunar Decans",
@@ -1428,13 +1428,13 @@ def test_location_container_ops_preserve_world_unsupported_fields(temp_repo: Can
     finally:
         conn.close()
 
-    with_ext = temp_repo.get_world(world.id)
+    with_ext = empty_repo.get_world(world.id)
     assert with_ext is not None
     assert with_ext.unsupported_fields == ext_payload
 
     club = next(c for c in with_ext.containers if c.name == "Afterlife Club")
     lizzies = next(c for c in with_ext.containers if c.name == "Lizzies Bar")
-    after_delete = temp_repo.delete_location_container(
+    after_delete = empty_repo.delete_location_container(
         with_ext.id,
         club.id,
         reassign_to_container_id=lizzies.id,
@@ -1444,7 +1444,7 @@ def test_location_container_ops_preserve_world_unsupported_fields(temp_repo: Can
     assert after_delete.unsupported_fields == ext_payload
 
     badlands = next(loc for loc in after_delete.locations if loc.name == "Salt Flats Outpost")
-    after_convert = temp_repo.convert_location_to_container(
+    after_convert = empty_repo.convert_location_to_container(
         after_delete.id,
         badlands.id,
         owner_id="user_container_ext",

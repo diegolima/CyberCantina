@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.config import ModelProfile, settings
+from app.config import ModelProfile
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_test_seed
 from app.engine.clerk_placement import (
     build_fallback_placement_prose,
     generate_clerk_starting_placement,
@@ -27,32 +25,17 @@ from app.schemas.world import (
 
 
 @pytest.fixture()
-def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CantinaRepository:
-    db_file = str(tmp_path / "test_cantina_world_start.db")
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "allow_offline_fallback", True)
-    monkeypatch.setattr(settings.actor_profile, "base_url", "http://127.0.0.1:9/v1")
-    monkeypatch.setattr(settings.clerk_profile, "base_url", "http://127.0.0.1:9/v1")
-    monkeypatch.setattr(settings.embedding_profile, "mode", "local_hash")
-    repo = CantinaRepository(db_file)
-    repo.init_db()
-    ensure_test_seed(repo)
-    return repo
-
-
-@pytest.fixture()
-def test_user(temp_repo: CantinaRepository) -> UserProfile:
-    user = temp_repo.create_user(
+def test_user(empty_repo: CantinaRepository) -> UserProfile:
+    user = empty_repo.create_user(
         user_id="usr_test_world_start",
         username="adventurer",
         display_name="Adventurer",
         role="user",
     )
-    temp_repo.claim_unowned_entities(user.id)
     return user
 
 
-def test_location_node_starting_message_db_persistence(temp_repo: CantinaRepository, test_user: UserProfile) -> None:
+def test_location_node_starting_message_db_persistence(empty_repo: CantinaRepository, test_user: UserProfile) -> None:
     """Verify that starting_message is persisted and read back from location_nodes SQLite table."""
     draft = WorldWizardDraft(
         name="Sunken Citadel",
@@ -78,8 +61,8 @@ def test_location_node_starting_message_db_persistence(temp_repo: CantinaReposit
         edges=[],
         lore_nodes=[],
     )
-    saved_world = temp_repo.create_world_from_draft(draft, owner_id=test_user.id)
-    reloaded_world = temp_repo.get_world(saved_world.id, owner_id=test_user.id)
+    saved_world = empty_repo.create_world_from_draft(draft, owner_id=test_user.id)
+    reloaded_world = empty_repo.get_world(saved_world.id, owner_id=test_user.id)
 
     assert len(reloaded_world.locations) == 1
     loc = reloaded_world.locations[0]
@@ -101,11 +84,13 @@ def test_build_fallback_placement_prose() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_clerk_starting_placement_success(temp_repo: CantinaRepository, test_user: UserProfile) -> None:
+async def test_generate_clerk_starting_placement_success(empty_repo: CantinaRepository, test_user: UserProfile) -> None:
     """Verify that successful Clerk LLM output is stripped and prefixed with double newline."""
-    world = temp_repo.get_world("world_neon_rust", owner_id=None)
+    from tests.factories import seed_character, seed_world
+
+    world = seed_world(empty_repo, owner_id=test_user.id)
     loc = world.locations[0]
-    char_1 = temp_repo.get_character("char_kira_vance", owner_id=None)
+    char_1 = seed_character(empty_repo, owner_id=test_user.id, world_id=world.id, name="Kira Vance")
 
     mock_llm_client = AsyncMock()
     mock_llm_client.complete_text.return_value = (
@@ -133,11 +118,13 @@ async def test_generate_clerk_starting_placement_success(temp_repo: CantinaRepos
 
 
 @pytest.mark.asyncio
-async def test_generate_clerk_starting_placement_timeout_fallback(temp_repo: CantinaRepository) -> None:
+async def test_generate_clerk_starting_placement_timeout_fallback(empty_repo: CantinaRepository, test_user: UserProfile) -> None:
     """Verify that timeout triggers deterministic fallback without raising an unhandled exception."""
-    world = temp_repo.get_world("world_neon_rust", owner_id=None)
+    from tests.factories import seed_character, seed_world
+
+    world = seed_world(empty_repo, owner_id=test_user.id)
     loc = world.locations[0]
-    char_1 = temp_repo.get_character("char_kira_vance", owner_id=None)
+    char_1 = seed_character(empty_repo, owner_id=test_user.id, world_id=world.id, name="Kira Vance")
 
     async def slow_complete(*args, **kwargs):
         await asyncio.sleep(2.0)
@@ -181,15 +168,17 @@ async def test_generate_clerk_starting_placement_zero_npcs() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_campaign_world_focus_flow(temp_repo: CantinaRepository, test_user: UserProfile, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_create_campaign_world_focus_flow(empty_repo: CantinaRepository, test_user: UserProfile, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test full create_campaign route with start_focus='world'."""
-    monkeypatch.setattr("app.routers.campaigns.get_repo", lambda: temp_repo)
+    from tests.factories import seed_character, seed_world
+
+    monkeypatch.setattr("app.routers.campaigns.get_repo", lambda: empty_repo)
 
     # Attach starting_message to starting location
-    world = temp_repo.get_world("world_neon_rust", owner_id=None)
+    world = seed_world(empty_repo, owner_id=test_user.id)
     start_loc = next(loc for loc in world.locations if loc.is_starting_location)
     start_loc.starting_message = "*Rain drumrolls against the reinforced plexiglass skylight of the dive bar.*"
-    updated_world = temp_repo.update_world(
+    updated_world = empty_repo.update_world(
         world.id,
         payload=WorldUpdatePayload(
             name=world.name,
@@ -198,9 +187,10 @@ async def test_create_campaign_world_focus_flow(temp_repo: CantinaRepository, te
             edges=world.edges,
             lore_nodes=world.lore_nodes,
         ),
+        owner_id=test_user.id,
     )
 
-    char = temp_repo.get_character("char_kira_vance", owner_id=None)
+    char = seed_character(empty_repo, owner_id=test_user.id, world_id=updated_world.id, name="Kira Vance")
 
     # Mock the clerk staging call
     with patch("app.routers.campaigns.generate_clerk_starting_placement", new_callable=AsyncMock) as mock_clerk:
@@ -232,11 +222,13 @@ async def test_create_campaign_world_focus_flow(temp_repo: CantinaRepository, te
 
 
 @pytest.mark.asyncio
-async def test_create_campaign_character_focus_flow(temp_repo: CantinaRepository, test_user: UserProfile, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_create_campaign_character_focus_flow(empty_repo: CantinaRepository, test_user: UserProfile, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test create_campaign route with start_focus='character' (preserves character greeting)."""
-    monkeypatch.setattr("app.routers.campaigns.get_repo", lambda: temp_repo)
-    world = temp_repo.get_world("world_neon_rust", owner_id=None)
-    char = temp_repo.get_character("char_kira_vance", owner_id=None)
+    from tests.factories import seed_character, seed_world
+
+    monkeypatch.setattr("app.routers.campaigns.get_repo", lambda: empty_repo)
+    world = seed_world(empty_repo, owner_id=test_user.id)
+    char = seed_character(empty_repo, owner_id=test_user.id, world_id=world.id, name="Kira Vance")
 
     bundle = await create_campaign(
         req=CampaignCreateRequest(
@@ -257,7 +249,7 @@ async def test_create_campaign_character_focus_flow(temp_repo: CantinaRepository
 
 
 def test_create_world_from_draft_resolves_location_names_for_blank_edge_labels(
-    temp_repo: CantinaRepository, test_user: UserProfile
+    empty_repo: CantinaRepository, test_user: UserProfile
 ) -> None:
     """Verify omitted/blank edge labels resolve to display names rather than internal keys."""
     draft = WorldWizardDraft(
@@ -300,7 +292,7 @@ def test_create_world_from_draft_resolves_location_names_for_blank_edge_labels(
         ],
         lore_nodes=[],
     )
-    saved = temp_repo.create_world_from_draft(draft, owner_id=test_user.id)
+    saved = empty_repo.create_world_from_draft(draft, owner_id=test_user.id)
     fwd = next(e for e in saved.edges if e.from_location_id != e.to_location_id and e.compass_direction == "S")
     rev = next(e for e in saved.edges if e.id != fwd.id)
     assert fwd.direction_label == "Passage to Sump Beta"

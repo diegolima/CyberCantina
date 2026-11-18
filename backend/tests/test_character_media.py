@@ -1,10 +1,8 @@
 import io
-from pathlib import Path
 import pytest
 from PIL import Image
 from fastapi.testclient import TestClient
 
-from app.config import settings
 from app.db.repository import CantinaRepository
 from app import main as main_module
 from app.schemas.character import CharacterWizardDraft, BaselinePsyche, VoiceAnchor, MemoryShard
@@ -18,16 +16,11 @@ def _create_test_image(width: int = 400, height: int = 300, color: str = "red") 
 
 
 @pytest.fixture
-def test_setup(temp_repo: CantinaRepository, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    media_dir = str(tmp_path / "media")
-    settings.media_dir = media_dir
-    temp_repo.media_dir = media_dir
+def test_setup(empty_repo: CantinaRepository, monkeypatch: pytest.MonkeyPatch):
+    user = empty_repo.create_user(username="media_tester", display_name="Media Tester")
+    user_profile = empty_repo.get_user_by_id(user.id)
 
-    user = temp_repo.create_user(username="media_tester", display_name="Media Tester")
-    temp_repo.claim_unowned_entities(user.id)
-    user_profile = temp_repo.get_user_by_id(user.id)
-
-    monkeypatch.setattr(main_module, "get_repo", lambda: temp_repo)
+    monkeypatch.setattr(main_module, "get_repo", lambda: empty_repo)
     main_module.app.dependency_overrides[main_module.get_current_user] = lambda: user_profile
 
     draft = CharacterWizardDraft(
@@ -50,10 +43,10 @@ def test_setup(temp_repo: CantinaRepository, monkeypatch: pytest.MonkeyPatch, tm
         creator="Unit Tester",
         creator_notes="Handle with care.",
     )
-    char = temp_repo.create_character_from_draft(draft, owner_id=user.id)
+    char = empty_repo.create_character_from_draft(draft, owner_id=user.id)
 
     client = TestClient(main_module.app)
-    yield temp_repo, user, char, client
+    yield empty_repo, user, char, client
 
     main_module.app.dependency_overrides.clear()
 

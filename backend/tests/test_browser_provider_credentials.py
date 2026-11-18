@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main as main_module
 from app.config import ModelProfile, settings
 from app.db.repository import CantinaRepository
 from app.dependencies import resolve_effective_models
@@ -20,33 +19,15 @@ from app.providers.resolver import ProviderUnavailableError, resolve_endpoint
 
 
 @pytest.fixture()
-def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    db_file = str(tmp_path / "browser_creds.db")
-    settings_file = tmp_path / "cantina_settings.json"
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "media_dir", str(tmp_path / "media"))
-    monkeypatch.setattr("app.config.SETTINGS_FILE_PATH", settings_file)
+def env(api_env, api_user_factory, monkeypatch: pytest.MonkeyPatch):
+    client, repo, _media_dir = api_env
     monkeypatch.setattr(settings, "allow_user_providers", True)
     monkeypatch.setattr(settings, "allow_user_model_overrides", True)
     monkeypatch.setattr(settings, "provider_credential_store", "prefer_server")
-    repo = CantinaRepository(db_file, media_dir=str(tmp_path / "media"))
-    repo.init_db()
-    client = TestClient(main_module.app)
-    admin = client.post(
-        "/api/auth/setup",
-        json={"username": "admin_c", "password": "AdminPassword123!"},
-    )
-    assert admin.status_code == 200
-    admin_h = {"Authorization": f"Bearer {admin.json()['token']}"}
+    admin_h, _admin_id, _admin_tok = api_user_factory("admin_c", role="admin")
 
     def make_user(name: str) -> tuple[dict[str, str], str, str]:
-        res = client.post(
-            "/api/auth/register",
-            json={"username": name, "password": "UserPassword123!"},
-        )
-        assert res.status_code == 200
-        tok = res.json()["token"]
-        return {"Authorization": f"Bearer {tok}"}, res.json()["user"]["id"], tok
+        return api_user_factory(name)
 
     return client, repo, admin_h, make_user
 

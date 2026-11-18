@@ -32,18 +32,11 @@ def _create_test_image(width: int = 200, height: int = 200, color: str = "blue")
 
 
 @pytest.fixture()
-def sec_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, CantinaRepository]:
+def sec_client(
+    api_env: tuple[TestClient, CantinaRepository, Path],
+) -> tuple[TestClient, CantinaRepository]:
     """Provide an isolated TestClient and CantinaRepository for security tests."""
-    db_file = str(tmp_path / "test_sec_audit.db")
-    media_dir = str(tmp_path / "test_sec_media")
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "media_dir", media_dir)
-    monkeypatch.setattr(settings, "allow_offline_fallback", True)
-
-    repo = CantinaRepository(db_file, media_dir=media_dir)
-    repo.init_db()
-
-    client = TestClient(main_module.app)
+    client, repo, _media_dir = api_env
     return client, repo
 
 

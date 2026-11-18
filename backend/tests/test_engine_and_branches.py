@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 
 from app.config import settings
 from app.db import vector_store as vs_module
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_test_seed
 from app.engine import phase4_clerk as p4_module
 from app.engine.phase1_pre import run_phase1_pre_analysis
 from app.engine.phase2_context import assemble_four_zone_messages
@@ -30,31 +28,152 @@ from app.schemas.turn import ImprovisedLocationSpec, PreTurnAnalysis, TurnSubmit
 from app.schemas.world import COMPASS_DIRECTIONS, WorldUpdatePayload, WorldWizardSeed
 from app.wizards.character_wizard import generate_character_draft
 from app.wizards.world_wizard import generate_world_draft
+from tests.factories import seed_campaign, seed_character, seed_user, seed_world
+from app.schemas.world import LocationEdgeDraft, LocationNodeDraft, WorldLoreNodeDraft
 
 
-@pytest.fixture()
-def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CantinaRepository:
-    db_file = str(tmp_path / "test_cantina.db")
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "allow_offline_fallback", True)
-    monkeypatch.setattr(settings.actor_profile, "base_url", "http://127.0.0.1:9/v1")
-    monkeypatch.setattr(settings.clerk_profile, "base_url", "http://127.0.0.1:9/v1")
-    monkeypatch.setattr(settings.embedding_profile, "mode", "local_hash")
-    repo = CantinaRepository(db_file)
-    repo.init_db()
-    ensure_test_seed(repo)
-    return repo
+def _seed_engine_scenario(repo: CantinaRepository) -> tuple[str, str, str]:
+    user = seed_user(repo)
+    world = seed_world(
+        repo,
+        owner_id=user.id,
+        name="Sector 9: Test Cantina",
+        locations=[
+            LocationNodeDraft(
+                key="main_bar",
+                name="The Neon Rust Main Floor",
+                summary="Smoky low-ceilinged dive bar.",
+                description="Amber neon illuminates the scarred zinc bar counter.",
+                environmental_tags=["scarred zinc bar", "holo-jukebox"],
+                is_starting_location=True,
+                is_hub=True,
+            ),
+            LocationNodeDraft(
+                key="backroom_clinic",
+                name="Backroom Ripperdoc Bay",
+                summary="Hidden surgical bay.",
+                description="Compact trauma bay with surgical chair and cryo-drawers.",
+                environmental_tags=["surgical chair", "cryo-drawers"],
+            ),
+            LocationNodeDraft(
+                key="cargo_alley",
+                name="Rain-Slicked Cargo Alley",
+                summary="Service alley behind the bar.",
+                description="Cold acid rain sheets off corrugated overheads.",
+                environmental_tags=["acid rain", "keypad rear door"],
+            ),
+            LocationNodeDraft(
+                key="vip_mezzanine",
+                name="Shadowed VIP Mezzanine",
+                summary="Elevated steel catwalk.",
+                description="Three private booths overlooking the main floor.",
+                environmental_tags=["acoustic privacy field", "overlook railing"],
+            ),
+            LocationNodeDraft(
+                key="cooling_tunnels",
+                name="Sub-Basement Cooling Tunnels",
+                summary="Flooded maintenance conduits.",
+                description="Concrete tunnels carrying massive coolant pipes.",
+                environmental_tags=["coolant pipes", "ankle-deep water"],
+            ),
+        ],
+        edges=[
+            LocationEdgeDraft(
+                from_key="main_bar",
+                to_key="backroom_clinic",
+                direction_label="Lead-lined curtain behind the bar",
+                reverse_direction_label="Curtain back to the main bar",
+                compass_direction="N",
+                reverse_compass_direction="S",
+                travel_minutes=1,
+            ),
+            LocationEdgeDraft(
+                from_key="main_bar",
+                to_key="vip_mezzanine",
+                direction_label="Iron spiral stairs to the mezzanine",
+                reverse_direction_label="Spiral stairs down to the main floor",
+                compass_direction="E",
+                reverse_compass_direction="W",
+                travel_minutes=1,
+            ),
+            LocationEdgeDraft(
+                from_key="main_bar",
+                to_key="cargo_alley",
+                direction_label="Heavy rear fire exit door",
+                reverse_direction_label="Reinforced cantina rear door",
+                compass_direction="W",
+                reverse_compass_direction="E",
+                travel_minutes=2,
+            ),
+            LocationEdgeDraft(
+                from_key="backroom_clinic",
+                to_key="cooling_tunnels",
+                direction_label="Concealed floor hatch under the surgical tray",
+                reverse_direction_label="Ladder up to the Ripperdoc bay",
+                compass_direction="N",
+                reverse_compass_direction="S",
+                travel_minutes=3,
+                is_locked_or_hidden=True,
+            ),
+        ],
+        lore_nodes=[
+            WorldLoreNodeDraft(
+                title="The Meridian Data Heist",
+                category="history",
+                content="Six months ago a botched run on Meridian Lab left three crew members dead.",
+                entity_tags=["meridian", "heist", "lab"],
+            ),
+            WorldLoreNodeDraft(
+                title="Project Chimera Rumors",
+                category="rumor",
+                content="An experimental Chimera neural program vanished during the Meridian Heist.",
+                entity_tags=["chimera", "chip", "cortex"],
+            ),
+        ],
+    )
+    kira = seed_character(
+        repo,
+        owner_id=user.id,
+        world_id=world.id,
+        name="Kira Vance",
+        inventory=["Diagnostic medical penlight", "Concealed Vespera trauma med-injector"],
+        memory_shards=[
+            MemoryShard(
+                title="Why Kira Left Vespera Biotech",
+                content="Kira sabotaged Vespera Tower lab records and fled to Sector 9.",
+                keywords=["vespera", "past", "surgeon"],
+                emotional_weight=0.9,
+            ),
+            MemoryShard(
+                title="The Night of the Meridian Heist",
+                content="Kira stabilized the survivor and their Chimera chip after the Meridian Heist.",
+                keywords=["meridian", "heist", "chimera"],
+                emotional_weight=0.95,
+            ),
+        ],
+    )
+    camp = seed_campaign(
+        repo,
+        owner_id=user.id,
+        world_id=world.id,
+        character_id=kira.id,
+        name="Midnight at the Neon Rust",
+        opening_prose=kira.initial_message,
+    )
+    return world.id, kira.id, camp.id
 
 
-async def test_default_seed_and_hybrid_rag(temp_repo: CantinaRepository) -> None:
+
+async def test_default_seed_and_hybrid_rag(empty_repo: CantinaRepository) -> None:
     """Verify default seeded campaign, spatial graph neighbors, and hybrid GraphRAG memory search."""
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
+    bundle = empty_repo.get_campaign_state_bundle(_seed_camp_id)
     assert bundle.campaign.name == "Midnight at the Neon Rust"
     assert bundle.active_location.name == "The Neon Rust Main Floor"
     assert len(bundle.neighbor_locations) == 3  # Clinic, Mezzanine, Cargo Alley
 
     valid_turns = {t.id for t in bundle.active_branch_turns}
-    recalled = await temp_repo.vector_store.search_memories(
+    recalled = await empty_repo.vector_store.search_memories(
         queries=["What happened during the Meridian Heist with the Chimera chip?"],
         mentioned_entities=["meridian", "chimera"],
         world_id=bundle.campaign.world_id,
@@ -68,10 +187,11 @@ async def test_default_seed_and_hybrid_rag(temp_repo: CantinaRepository) -> None
     assert "Meridian" in titles or "Chimera" in titles
 
 
-async def test_phase1_rng_and_phase3_cognition_parser(temp_repo: CantinaRepository) -> None:
+async def test_phase1_rng_and_phase3_cognition_parser(empty_repo: CantinaRepository) -> None:
     """Verify Phase 1 triggers RNG checks on risky actions and Phase 3 parses <cognition> XML."""
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
-    char = temp_repo.get_character(bundle.campaign.character_id)
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
+    bundle = empty_repo.get_campaign_state_bundle(_seed_camp_id)
+    char = empty_repo.get_character(bundle.campaign.character_id)
 
     pre = await run_phase1_pre_analysis(
         user_message="I try to hack the encrypted Vespera terminal before the patrol spots us.",
@@ -166,15 +286,16 @@ async def test_phase1_rng_and_phase3_cognition_parser(temp_repo: CantinaReposito
         assert cog_ev["data"]["feeling"] == bundle.current_character_state.mood_label
 
 
-async def test_clerk_delegated_cognition_hybrid_flow(temp_repo: CantinaRepository) -> None:
+async def test_clerk_delegated_cognition_hybrid_flow(empty_repo: CantinaRepository) -> None:
     """Verify hybrid flow: Clerk generates cognition block, injected into Actor Zone 4 & streamed directly."""
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
     from app.engine.phase3_actor import generate_clerk_cognition, stream_phase3_actor
     from app.schemas.character import CognitionBlock
     from unittest.mock import patch, AsyncMock
 
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
-    char = temp_repo.get_character(bundle.campaign.character_id)
-    world = temp_repo.get_world(bundle.campaign.world_id)
+    bundle = empty_repo.get_campaign_state_bundle(_seed_camp_id)
+    char = empty_repo.get_character(bundle.campaign.character_id)
+    world = empty_repo.get_world(bundle.campaign.world_id)
 
     mock_clerk_cog = CognitionBlock(
         recall="- Recalling the smuggling routes beneath the rusted sector.",
@@ -250,14 +371,15 @@ async def test_clerk_delegated_cognition_hybrid_flow(temp_repo: CantinaRepositor
         assert final_ev["event"] == "actor_finished"
 
 
-async def test_clerk_cognition_sanitization_and_recovery(temp_repo: CantinaRepository) -> None:
+async def test_clerk_cognition_sanitization_and_recovery(empty_repo: CantinaRepository) -> None:
     """Verify generate_clerk_cognition strips commas/[EPISODIC_CHUNK], extracts valence/arousal, and backfills empty fields."""
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
     from app.engine.phase3_actor import generate_clerk_cognition
     from app.schemas.character import CognitionBlock
     from unittest.mock import patch, AsyncMock
 
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
-    char = temp_repo.get_character(bundle.campaign.character_id)
+    bundle = empty_repo.get_campaign_state_bundle(_seed_camp_id)
+    char = empty_repo.get_character(bundle.campaign.character_id)
 
     # Model returned raw metadata in recall, embedded valence in feeling, and inline numbered plan
     sloppy_llm_cog = CognitionBlock(
@@ -310,11 +432,12 @@ async def test_clerk_cognition_sanitization_and_recovery(temp_repo: CantinaRepos
         assert cleaned_cog.skipped is False
 
 
-async def test_four_zone_prompt_layout_stability(temp_repo: CantinaRepository) -> None:
+async def test_four_zone_prompt_layout_stability(empty_repo: CantinaRepository) -> None:
     """Verify Zone 1 static prefix stays identical across turns while Zone 4 holds dynamic context."""
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
-    world = temp_repo.get_world(bundle.campaign.world_id)
-    char = temp_repo.get_character(bundle.campaign.character_id)
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
+    bundle = empty_repo.get_campaign_state_bundle(_seed_camp_id)
+    world = empty_repo.get_world(bundle.campaign.world_id)
+    char = empty_repo.get_character(bundle.campaign.character_id)
 
     msgs_1 = assemble_four_zone_messages(
         world=world,
@@ -345,10 +468,11 @@ async def test_four_zone_prompt_layout_stability(temp_repo: CantinaRepository) -
 
 
 async def test_turn_pipeline_spatial_move_and_branch_rollback(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify full 4-phase turn execution, spatial movement, and git-like branch state rollback."""
-    initial_bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
+    initial_bundle = empty_repo.get_campaign_state_bundle(_seed_camp_id)
     root_turn_id = initial_bundle.active_branch_turns[-1].id
     initial_clock = initial_bundle.current_world_snapshot.world_timestamp
     initial_loc_id = initial_bundle.active_location.id
@@ -358,10 +482,10 @@ async def test_turn_pipeline_spatial_move_and_branch_rollback(
         user_message="Let's head into the Backroom Ripperdoc Bay behind the curtain right now.",
         parent_turn_id=root_turn_id,
     )
-    async for _ev in _execute_turn_stream_events("camp_neon_rust_default", req_branch_a):
+    async for _ev in _execute_turn_stream_events(_seed_camp_id, req_branch_a):
         pass
 
-    bundle_after_a = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
+    bundle_after_a = empty_repo.get_campaign_state_bundle(_seed_camp_id)
     turn_1a_id = bundle_after_a.active_branch_turns[-1].id
     assert bundle_after_a.current_world_snapshot.world_timestamp != initial_clock
     assert bundle_after_a.active_location.name == "Backroom Ripperdoc Bay"
@@ -371,20 +495,20 @@ async def test_turn_pipeline_spatial_move_and_branch_rollback(
         user_message="I stay right here at the main bar and ask about Vespera Biotech.",
         parent_turn_id=root_turn_id,
     )
-    async for _ev in _execute_turn_stream_events("camp_neon_rust_default", req_branch_b):
+    async for _ev in _execute_turn_stream_events(_seed_camp_id, req_branch_b):
         pass
 
-    bundle_after_b = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
+    bundle_after_b = empty_repo.get_campaign_state_bundle(_seed_camp_id)
     assert len(bundle_after_b.active_branch_turns) == 2
     assert bundle_after_b.active_location.id == initial_loc_id
     assert bundle_after_b.active_location.name == "The Neon Rust Main Floor"
 
     # Checkout Branch A again and verify state restores to Backroom Ripperdoc Bay
-    restored_a = temp_repo.checkout_turn_branch("camp_neon_rust_default", turn_1a_id)
+    restored_a = empty_repo.checkout_turn_branch(_seed_camp_id, turn_1a_id)
     assert restored_a.active_location.name == "Backroom Ripperdoc Bay"
 
 
-async def test_character_and_world_wizards(temp_repo: CantinaRepository) -> None:
+async def test_character_and_world_wizards(empty_repo: CantinaRepository) -> None:
     """Verify 1.1 Character Wizard and 1.2 World Graph Wizard draft + commit flows."""
     w_seed = WorldWizardSeed(
         name="Aethelgard Clockwork Citadel",
@@ -399,7 +523,7 @@ async def test_character_and_world_wizards(temp_repo: CantinaRepository) -> None
     # Simulate editing the draft in the World Sheet before committing (e.g. changing starting location)
     w_draft.locations[0].is_starting_location = False
     w_draft.locations[1].is_starting_location = True
-    created_world = temp_repo.create_world_from_draft(w_draft)
+    created_world = empty_repo.create_world_from_draft(w_draft)
     assert len(created_world.locations) >= 3
     assert len(created_world.edges) >= 3
     starting_locs = [loc for loc in created_world.locations if loc.is_starting_location]
@@ -416,7 +540,7 @@ async def test_character_and_world_wizards(temp_repo: CantinaRepository) -> None
         world_id=created_world.id,
     )
     c_draft = await generate_character_draft(c_seed, world=created_world)
-    created_char = temp_repo.create_character_from_draft(c_draft, world_id=created_world.id)
+    created_char = empty_repo.create_character_from_draft(c_draft, world_id=created_world.id)
     assert created_char.name == "Master Artificer Thorne"
     assert len(created_char.memory_shards) >= 3
 
@@ -499,66 +623,68 @@ async def test_world_wizard_reimagine_map(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 async def test_character_pending_deletion_and_campaign_pruning(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify soft-deleting an in-use character hides it from UI list, keeps campaign alive, and prunes after campaign deletion."""
-    # Kira Vance is used by 'camp_neon_rust_default'
-    camp = temp_repo.get_campaign("camp_neon_rust_default")
-    assert "char_kira_vance" in camp.participant_character_ids
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
+    # Kira Vance is used by 'seeded campaign'
+    camp = empty_repo.get_campaign(_seed_camp_id)
+    assert _seed_char_id in camp.participant_character_ids
 
-    res = temp_repo.mark_character_pending_deletion("char_kira_vance")
+    res = empty_repo.mark_character_pending_deletion(_seed_char_id)
     assert res["pending_deletion"] is True
     assert res["campaigns_using"] == 1
 
-    w_res = temp_repo.mark_world_pending_deletion("world_neon_rust")
+    w_res = empty_repo.mark_world_pending_deletion(_seed_world_id)
     assert w_res["pending_deletion"] is True
     assert w_res["campaigns_using"] == 1
 
     # Hidden from standard UI character & world lists
-    visible_chars = temp_repo.list_characters()
-    assert all(c.id != "char_kira_vance" for c in visible_chars)
-    visible_worlds = temp_repo.list_worlds()
-    assert all(w.id != "world_neon_rust" for w in visible_worlds)
+    visible_chars = empty_repo.list_characters()
+    assert all(c.id != _seed_char_id for c in visible_chars)
+    visible_worlds = empty_repo.list_worlds()
+    assert all(w.id != _seed_world_id for w in visible_worlds)
 
     # Pruner must NOT delete Kira or Neon Rust while the campaign still exists
-    pruned_while_in_use = temp_repo.prune_pending_deletion_characters()
-    assert "char_kira_vance" not in pruned_while_in_use
-    pruned_worlds_while_in_use = temp_repo.prune_pending_deletion_worlds()
-    assert "world_neon_rust" not in pruned_worlds_while_in_use
+    pruned_while_in_use = empty_repo.prune_pending_deletion_characters()
+    assert _seed_char_id not in pruned_while_in_use
+    pruned_worlds_while_in_use = empty_repo.prune_pending_deletion_worlds()
+    assert _seed_world_id not in pruned_worlds_while_in_use
 
     # Campaign & direct lookup still have full access to Kira's & World's data
-    still_alive = temp_repo.get_character("char_kira_vance")
+    still_alive = empty_repo.get_character(_seed_char_id)
     assert still_alive.pending_deletion is True
-    still_alive_world = temp_repo.get_world("world_neon_rust")
+    still_alive_world = empty_repo.get_world(_seed_world_id)
     assert still_alive_world.pending_deletion is True
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
-    assert bundle.campaign.character_id == "char_kira_vance"
+    bundle = empty_repo.get_campaign_state_bundle(_seed_camp_id)
+    assert bundle.campaign.character_id == _seed_char_id
 
     # Now delete the campaign and run the pruners
-    temp_repo.delete_campaign("camp_neon_rust_default")
-    assert temp_repo.list_campaigns() == []
+    empty_repo.delete_campaign(_seed_camp_id)
+    assert empty_repo.list_campaigns() == []
 
-    pruned_after = temp_repo.prune_pending_deletion_characters()
-    assert "char_kira_vance" in pruned_after
-    pruned_worlds_after = temp_repo.prune_pending_deletion_worlds()
-    assert "world_neon_rust" in pruned_worlds_after
+    pruned_after = empty_repo.prune_pending_deletion_characters()
+    assert _seed_char_id in pruned_after
+    pruned_worlds_after = empty_repo.prune_pending_deletion_worlds()
+    assert _seed_world_id in pruned_worlds_after
 
     with pytest.raises(KeyError):
-        temp_repo.get_character("char_kira_vance")
+        empty_repo.get_character(_seed_char_id)
     with pytest.raises(KeyError):
-        temp_repo.get_world("world_neon_rust")
+        empty_repo.get_world(_seed_world_id)
 
 
 async def test_character_and_world_silent_versioning(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify editing a referenced character/world forks a new version while freezing the campaign's snapshot."""
-    orig_char = temp_repo.get_character("char_kira_vance")
-    orig_world = temp_repo.get_world("world_neon_rust")
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
+    orig_char = empty_repo.get_character(_seed_char_id)
+    orig_world = empty_repo.get_world(_seed_world_id)
 
-    # 1. Edit Kira Vance while referenced by 'camp_neon_rust_default' -> should fork a new character ID
-    forked_char = temp_repo.update_character(
-        "char_kira_vance",
+    # 1. Edit Kira Vance while referenced by 'seeded campaign' -> should fork a new character ID
+    forked_char = empty_repo.update_character(
+        _seed_char_id,
         CharacterUpdatePayload(
             name="Kira Vance (Rebuilt)",
             tagline="Upgraded Street Doc",
@@ -569,20 +695,20 @@ async def test_character_and_world_silent_versioning(
             world_id=orig_char.world_id,
         ),
     )
-    assert forked_char.id != "char_kira_vance"
+    assert forked_char.id != _seed_char_id
     assert forked_char.name == "Kira Vance (Rebuilt)"
 
     # Old character remains untouched for the running campaign, but hidden from list_characters()
-    frozen_char = temp_repo.get_character("char_kira_vance")
+    frozen_char = empty_repo.get_character(_seed_char_id)
     assert frozen_char.name == "Kira Vance"
     assert frozen_char.pending_deletion is True
-    visible_char_ids = [c.id for c in temp_repo.list_characters()]
+    visible_char_ids = [c.id for c in empty_repo.list_characters()]
     assert forked_char.id in visible_char_ids
-    assert "char_kira_vance" not in visible_char_ids
+    assert _seed_char_id not in visible_char_ids
 
-    # 2. Edit Neon Rust while referenced by 'camp_neon_rust_default' -> should fork a new world ID
-    forked_world = temp_repo.update_world(
-        "world_neon_rust",
+    # 2. Edit Neon Rust while referenced by 'seeded campaign' -> should fork a new world ID
+    forked_world = empty_repo.update_world(
+        _seed_world_id,
         WorldUpdatePayload(
             name="Sector 9: Neon Rust (v2)",
             global_rules=orig_world.global_rules,
@@ -591,17 +717,17 @@ async def test_character_and_world_silent_versioning(
             lore_nodes=orig_world.lore_nodes,
         ),
     )
-    assert forked_world.id != "world_neon_rust"
+    assert forked_world.id != _seed_world_id
     assert forked_world.name == "Sector 9: Neon Rust (v2)"
 
     # Old world remains untouched for the running campaign, while active characters repoint to forked_world
-    frozen_world = temp_repo.get_world("world_neon_rust")
+    frozen_world = empty_repo.get_world(_seed_world_id)
     assert frozen_world.name == orig_world.name
     assert frozen_world.pending_deletion is True
-    assert temp_repo.get_character(forked_char.id).world_id == forked_world.id
+    assert empty_repo.get_character(forked_char.id).world_id == forked_world.id
 
     # 3. Editing the newly forked (unreferenced) character/world updates in-place without spawning another version
-    inplace_char = temp_repo.update_character(
+    inplace_char = empty_repo.update_character(
         forked_char.id,
         CharacterUpdatePayload(
             name="Kira Vance (Final)",
@@ -618,10 +744,11 @@ async def test_character_and_world_silent_versioning(
 
 
 async def test_scene_flags_merge_and_zone4_rendering(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify scene_flags maintain only the new location marker on location transition,
     apply sliding FIFO cap, and render in Zone 4 with relationship_notes."""
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
     assert merge_scene_flags(
         ["Scene Opening", "Door Locked"],
         ["Alarm Armed", "-Door Locked", "Scene Opening"],
@@ -652,16 +779,16 @@ async def test_scene_flags_merge_and_zone4_rendering(
     req = TurnSubmitRequest(
         user_message="Let's head into the Backroom Ripperdoc Bay right now.",
     )
-    async for _ev in _execute_turn_stream_events("camp_neon_rust_default", req):
+    async for _ev in _execute_turn_stream_events(_seed_camp_id, req):
         pass
 
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
+    bundle = empty_repo.get_campaign_state_bundle(_seed_camp_id)
     flags = bundle.current_world_snapshot.scene_flags
     assert flags == ["At Backroom Ripperdoc Bay"]
     assert "Scene Opening" not in flags
 
-    world = temp_repo.get_world(bundle.campaign.world_id)
-    char = temp_repo.get_character(bundle.campaign.character_id)
+    world = empty_repo.get_world(bundle.campaign.world_id)
+    char = empty_repo.get_character(bundle.campaign.character_id)
     msgs = assemble_four_zone_messages(
         world=world,
         character=char,
@@ -682,10 +809,11 @@ async def test_scene_flags_merge_and_zone4_rendering(
 
 
 async def test_async_embedding_upsert_shares_active_profile(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify Fix B: async upserts use embed_text so stored and queried vectors share the same embedding space."""
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
     import numpy as np
 
     embed_calls: list[str] = []
@@ -701,12 +829,12 @@ async def test_async_embedding_upsert_shares_active_profile(
     monkeypatch.setattr(vs_module, "embed_text", fake_neural_embed)
     monkeypatch.setattr("app.db.repository.embed_text", fake_neural_embed)
 
-    await temp_repo.vector_store.aupsert_entry(
+    await empty_repo.vector_store.aupsert_entry(
         entry_id="event_custom_768",
         source_type="episodic_chunk",
-        world_id="world_neon_rust",
-        character_id="char_kira_vance",
-        campaign_id="camp_neon_rust_default",
+        world_id=_seed_world_id,
+        character_id=_seed_char_id,
+        campaign_id=_seed_camp_id,
         anchor_turn_id=None,
         title="Custom Neural Event",
         content="Calibrated the Chimera neural link in the trauma bay.",
@@ -715,7 +843,7 @@ async def test_async_embedding_upsert_shares_active_profile(
     assert len(embed_calls) >= 1
 
     # Verify stored blob has 768 float32 dimensions (3072 bytes), matching fake_neural_embed
-    conn = temp_repo.vector_store._connect()
+    conn = empty_repo.vector_store._connect()
     try:
         row = conn.execute(
             "SELECT embedding_blob FROM vector_entries WHERE id = 'event_custom_768'"
@@ -726,12 +854,12 @@ async def test_async_embedding_upsert_shares_active_profile(
     stored_vec = np.frombuffer(row["embedding_blob"], dtype=np.float32)
     assert stored_vec.shape == (768,)
 
-    recalled = await temp_repo.vector_store.search_memories(
+    recalled = await empty_repo.vector_store.search_memories(
         queries=["Chimera neural link calibration"],
         mentioned_entities=["chimera"],
-        world_id="world_neon_rust",
-        character_id="char_kira_vance",
-        campaign_id="camp_neon_rust_default",
+        world_id=_seed_world_id,
+        character_id=_seed_char_id,
+        campaign_id=_seed_camp_id,
         valid_branch_turn_ids=set(),
         top_k=3,
     )
@@ -739,10 +867,11 @@ async def test_async_embedding_upsert_shares_active_profile(
 
 
 async def test_phase4_concurrent_episodic_compression(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify Fix A: Phase 4 runs state delta extraction and chunk summarization concurrently when threshold is exceeded."""
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
     monkeypatch.setattr(settings.memory_config, "working_memory_turns", 2)
     monkeypatch.setattr(settings.memory_config, "episodic_chunk_size", 2)
 
@@ -758,19 +887,20 @@ async def test_phase4_concurrent_episodic_compression(
 
     for i in range(3):
         req = TurnSubmitRequest(user_message=f"Turn exchange {i + 1} at the bar.")
-        async for _ev in _execute_turn_stream_events("camp_neon_rust_default", req):
+        async for _ev in _execute_turn_stream_events(_seed_camp_id, req):
             pass
 
     assert summarize_called is True
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
+    bundle = empty_repo.get_campaign_state_bundle(_seed_camp_id)
     assert len(bundle.episodic_chunks) >= 1
 
 
 async def test_multi_character_turn_orchestration_and_spatial_room_isolation(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify Fix C: Multiple NPCs in the same room take turns/respond by name, while NPCs in another room don't eavesdrop."""
-    world = temp_repo.get_world("world_neon_rust")
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
+    world = empty_repo.get_world(_seed_world_id)
     main_bar = next(loc for loc in world.locations if loc.is_starting_location)
     clinic = next(loc for loc in world.locations if "Ripperdoc" in loc.name)
 
@@ -785,7 +915,7 @@ async def test_multi_character_turn_orchestration_and_spatial_room_isolation(
         ),
         world=world,
     )
-    viktor = await temp_repo.acreate_character_from_draft(
+    viktor = await empty_repo.acreate_character_from_draft(
         viktor_draft, world_id=world.id, character_id="char_viktor"
     )
 
@@ -800,28 +930,28 @@ async def test_multi_character_turn_orchestration_and_spatial_room_isolation(
         ),
         world=world,
     )
-    nyx = await temp_repo.acreate_character_from_draft(
+    nyx = await empty_repo.acreate_character_from_draft(
         nyx_draft, world_id=world.id, character_id="char_nyx"
     )
 
     # Add Viktor to the Main Bar and Nyx to the Backroom Clinic
-    temp_repo.add_character_to_campaign(
-        "camp_neon_rust_default", viktor.id, location_id=main_bar.id
+    empty_repo.add_character_to_campaign(
+        _seed_camp_id, viktor.id, location_id=main_bar.id
     )
-    bundle = temp_repo.add_character_to_campaign(
-        "camp_neon_rust_default", nyx.id, location_id=clinic.id
+    bundle = empty_repo.add_character_to_campaign(
+        _seed_camp_id, nyx.id, location_id=clinic.id
     )
-    assert set(bundle.present_character_ids) == {"char_kira_vance", "char_viktor"}
+    assert set(bundle.present_character_ids) == {_seed_char_id, "char_viktor"}
     assert "char_nyx" not in bundle.present_character_ids
 
     # Turn 1 in Main Bar: Explicitly address Viktor -> Viktor should be selected as active_speaker_id, NOT Nyx
     req1 = TurnSubmitRequest(
         user_message="Viktor, can you inspect the servo wiring on this cyber-arm? Secret code word: ALPHA_BAR_ONLY."
     )
-    async for _ev in _execute_turn_stream_events("camp_neon_rust_default", req1):
+    async for _ev in _execute_turn_stream_events(_seed_camp_id, req1):
         pass
 
-    bundle_after_1 = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
+    bundle_after_1 = empty_repo.get_campaign_state_bundle(_seed_camp_id)
     turn_1 = bundle_after_1.active_branch_turns[-1]
     assert turn_1.actor_id == "char_viktor"
     assert turn_1.pre_turn.active_speaker_id == "char_viktor"
@@ -844,7 +974,7 @@ async def test_multi_character_turn_orchestration_and_spatial_room_isolation(
     assert "ALPHA_BAR_ONLY" not in combined_nyx_prompt
 
     # Meanwhile, Kira (who WAS in the Main Bar during Turn 1) DOES see Turn 1 in her Zone 3 Working Memory!
-    kira = temp_repo.get_character("char_kira_vance")
+    kira = empty_repo.get_character(_seed_char_id)
     kira_messages = assemble_four_zone_messages(
         world=world,
         character=kira,
@@ -862,9 +992,10 @@ async def test_multi_character_turn_orchestration_and_spatial_room_isolation(
 
 
 async def test_character_appearance_initial_message_and_dynamic_inventory(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify physical_appearance in Zone 1, editable initial_message seeding Turn 0, and Clerk dynamic inventory with branch rollback."""
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
     # 1. Verify merge_inventory handles exact, tag-stripped, and substring removals cleanly
     initial_inv = [
         "[Worn] Dark charcoal utility tank top",
@@ -883,7 +1014,7 @@ async def test_character_appearance_initial_message_and_dynamic_inventory(
     assert all("penlight" not in item.lower() for item in merged)
 
     # 2. Verify Wizard generates physical_appearance, initial_message, equipped, and inventory, and editing updates them
-    world = temp_repo.get_world("world_neon_rust")
+    world = empty_repo.get_world(_seed_world_id)
     draft = await generate_character_draft(
         CharacterWizardSeed(
             name="kael_test",
@@ -900,8 +1031,8 @@ async def test_character_appearance_initial_message_and_dynamic_inventory(
     assert draft.initial_message.strip() != ""
     assert len(draft.equipped) >= 1 or len(draft.inventory) >= 1
 
-    created = temp_repo.create_character_from_draft(draft, world_id=world.id)
-    updated = temp_repo.update_character(
+    created = empty_repo.create_character_from_draft(draft, world_id=world.id)
+    updated = empty_repo.update_character(
         created.id,
         CharacterUpdatePayload(
             name="Kaelen Vex",
@@ -925,12 +1056,12 @@ async def test_character_appearance_initial_message_and_dynamic_inventory(
     assert "Silver neural key" in updated.inventory
 
     # 3. Launching a campaign uses character.initial_message (with {location_name} resolved) and seeds Turn 0 equipped & inventory
-    camp = temp_repo.create_campaign(
+    camp = empty_repo.create_campaign(
         name="Kaelen Courier Run",
         world_id=world.id,
         character_id=updated.id,
     )
-    bundle_0 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle_0 = empty_repo.get_campaign_state_bundle(camp.id)
     turn_0 = bundle_0.active_branch_turns[0]
     assert "The Neon Rust Main Floor" in turn_0.raw_prose
     assert "You brought the package?" in turn_0.raw_prose
@@ -943,7 +1074,7 @@ async def test_character_appearance_initial_message_and_dynamic_inventory(
     ]
 
     # Test interactive equipping & unequipping via toggle_campaign_item_equip
-    toggled = temp_repo.toggle_campaign_item_equip(
+    toggled = empty_repo.toggle_campaign_item_equip(
         camp.id,
         item="Silver neural key",
         action="equip",
@@ -951,7 +1082,7 @@ async def test_character_appearance_initial_message_and_dynamic_inventory(
     assert "Silver neural key" in toggled.current_character_state.equipped
     assert "Silver neural key" not in toggled.current_character_state.inventory
 
-    toggled_back = temp_repo.toggle_campaign_item_equip(
+    toggled_back = empty_repo.toggle_campaign_item_equip(
         camp.id,
         item="Silver neural key",
         action="unequip",
@@ -966,7 +1097,7 @@ async def test_character_appearance_initial_message_and_dynamic_inventory(
     async for _ev in _execute_turn_stream_events(camp.id, req_turn_1):
         pass
 
-    bundle_1 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle_1 = empty_repo.get_campaign_state_bundle(camp.id)
     inv_1 = bundle_1.current_character_state.inventory
     eq_1 = bundle_1.current_character_state.equipped
     assert any("datapad" in item.lower() for item in inv_1)
@@ -1002,22 +1133,23 @@ async def test_character_appearance_initial_message_and_dynamic_inventory(
     assert "Armored synth-leather jacket" not in msgs_t1[-1]["content"]
 
     # 6. Checkout Turn 0 branch -> inventory rolls back to Turn 0 snapshot (jacket restored, datapad gone)
-    rolled_back = temp_repo.checkout_turn_branch(camp.id, turn_0.id)
+    rolled_back = empty_repo.checkout_turn_branch(camp.id, turn_0.id)
     assert "Armored synth-leather jacket" in rolled_back.current_character_state.equipped
     assert all("datapad" not in item.lower() for item in rolled_back.current_character_state.inventory)
 
 
 async def test_edit_last_message_swipe_and_delete_last_turn_with_swipes(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify editing the last message creates a new swipe preserving original swipes, and deleting removes the last message and all its swipes."""
-    camp_id = "camp_neon_rust_default"
-    bundle_0 = temp_repo.get_campaign_state_bundle(camp_id)
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
+    camp_id = _seed_camp_id
+    bundle_0 = empty_repo.get_campaign_state_bundle(camp_id)
     root_turn_id = bundle_0.active_branch_turns[-1].id
 
     # Root turn cannot be deleted
     with pytest.raises(ValueError, match="Cannot delete the root opening scene turn"):
-        temp_repo.delete_last_turn(camp_id)
+        empty_repo.delete_last_turn(camp_id)
 
     # 1. Submit initial Turn 1 (Swipe v1)
     orig_msg = "I order a glass of cheap synth-rye and ask about the rain."
@@ -1025,7 +1157,7 @@ async def test_edit_last_message_swipe_and_delete_last_turn_with_swipes(
     async for _ev in _execute_turn_stream_events(camp_id, req_v1):
         pass
 
-    bundle_v1 = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle_v1 = empty_repo.get_campaign_state_bundle(camp_id)
     turn_v1 = bundle_v1.active_branch_turns[-1]
     assert turn_v1.depth_index == 1
     assert turn_v1.parent_turn_id == root_turn_id
@@ -1040,7 +1172,7 @@ async def test_edit_last_message_swipe_and_delete_last_turn_with_swipes(
     async for _ev in _execute_turn_stream_events(camp_id, req_v2):
         pass
 
-    bundle_v2 = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle_v2 = empty_repo.get_campaign_state_bundle(camp_id)
     turn_v2 = bundle_v2.active_branch_turns[-1]
     assert turn_v2.id != turn_v1.id
     assert turn_v2.depth_index == 1
@@ -1054,11 +1186,11 @@ async def test_edit_last_message_swipe_and_delete_last_turn_with_swipes(
     assert siblings[1].user_message == edited_msg
 
     # Checking out v1 restores the original user message on the active branch
-    checked_v1 = temp_repo.checkout_turn_branch(camp_id, turn_v1.id)
+    checked_v1 = empty_repo.checkout_turn_branch(camp_id, turn_v1.id)
     assert checked_v1.active_branch_turns[-1].user_message == orig_msg
 
     # Checking out v2 restores the edited user message on the active branch
-    checked_v2 = temp_repo.checkout_turn_branch(camp_id, turn_v2.id)
+    checked_v2 = empty_repo.checkout_turn_branch(camp_id, turn_v2.id)
     assert checked_v2.active_branch_turns[-1].user_message == edited_msg
 
     # 3. Advance to Turn 2 from v2, generate a swipe on Turn 2, then delete Turn 2 (and its swipes)
@@ -1068,7 +1200,7 @@ async def test_edit_last_message_swipe_and_delete_last_turn_with_swipes(
     )
     async for _ev in _execute_turn_stream_events(camp_id, req_t2_a):
         pass
-    bundle_t2_a = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle_t2_a = empty_repo.get_campaign_state_bundle(camp_id)
     turn_2a = bundle_t2_a.active_branch_turns[-1]
 
     req_t2_b = TurnSubmitRequest(
@@ -1077,12 +1209,12 @@ async def test_edit_last_message_swipe_and_delete_last_turn_with_swipes(
     )
     async for _ev in _execute_turn_stream_events(camp_id, req_t2_b):
         pass
-    bundle_t2_b = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle_t2_b = empty_repo.get_campaign_state_bundle(camp_id)
     turn_2b = bundle_t2_b.active_branch_turns[-1]
     assert len([t for t in bundle_t2_b.all_turn_nodes if t.parent_turn_id == turn_v2.id]) == 2
 
     # Delete last message (Turn 2): removes both turn_2a and turn_2b, rolling active leaf back to turn_v2
-    after_del_t2 = temp_repo.delete_last_turn(camp_id)
+    after_del_t2 = empty_repo.delete_last_turn(camp_id)
     assert after_del_t2.campaign.active_leaf_turn_id == turn_v2.id
     assert len(after_del_t2.active_branch_turns) == 2
     assert all(t.id not in {turn_2a.id, turn_2b.id} for t in after_del_t2.all_turn_nodes)
@@ -1093,24 +1225,25 @@ async def test_edit_last_message_swipe_and_delete_last_turn_with_swipes(
     ]
 
     # 4. Now delete last message again (at Turn 1): removes both turn_v1 and turn_v2, rolling back to Turn 0
-    after_del_t1 = temp_repo.delete_last_turn(camp_id)
+    after_del_t1 = empty_repo.delete_last_turn(camp_id)
     assert after_del_t1.campaign.active_leaf_turn_id == root_turn_id
     assert [t.id for t in after_del_t1.active_branch_turns] == [root_turn_id]
     assert [t.id for t in after_del_t1.all_turn_nodes] == [root_turn_id]
 
 
 async def test_max_eight_neighbors_and_passage_hub_reconnection(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify a node is capped at 8 neighbors (N..NW) and a 9th spawns a directional Passage Hub that reconnects nodes in that direction safely across branches."""
-    camp_id = "camp_neon_rust_default"
-    bundle_0 = temp_repo.get_campaign_state_bundle(camp_id)
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
+    camp_id = _seed_camp_id
+    bundle_0 = empty_repo.get_campaign_state_bundle(camp_id)
     world_id = bundle_0.campaign.world_id
     main_bar_id = bundle_0.active_location.id
     root_turn_id = bundle_0.active_branch_turns[-1].id
 
     # Initially Main Floor has 3 neighbors: Backroom Ripperdoc Bay (N), VIP Mezzanine (E), Cargo Alley (W)
-    initial_nbs = temp_repo.get_neighbor_locations(
+    initial_nbs = empty_repo.get_neighbor_locations(
         world_id, main_bar_id, valid_turn_ids={root_turn_id}
     )
     assert len(initial_nbs) == 3
@@ -1118,7 +1251,7 @@ async def test_max_eight_neighbors_and_passage_hub_reconnection(
     # Add 5 more improvised locations on root_turn_id so Main Floor reaches the maximum of 8 adjacent nodes
     extra_dirs = ["NE", "SE", "S", "SW", "NW"]
     for idx, cdir in enumerate(extra_dirs):
-        temp_repo.add_improvised_location(
+        empty_repo.add_improvised_location(
             world_id=world_id,
             from_location_id=main_bar_id,
             created_at_turn_id=root_turn_id,
@@ -1134,7 +1267,7 @@ async def test_max_eight_neighbors_and_passage_hub_reconnection(
             valid_turn_ids={root_turn_id},
         )
 
-    nbs_at_8 = temp_repo.get_neighbor_locations(
+    nbs_at_8 = empty_repo.get_neighbor_locations(
         world_id, main_bar_id, valid_turn_ids={root_turn_id}
     )
     assert len(nbs_at_8) == 8
@@ -1148,12 +1281,12 @@ async def test_max_eight_neighbors_and_passage_hub_reconnection(
     )
     async for _ev in _execute_turn_stream_events(camp_id, req_t1):
         pass
-    bundle_t1 = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle_t1 = empty_repo.get_campaign_state_bundle(camp_id)
     turn_1_id = bundle_t1.active_branch_turns[-1].id
     branch_turn_ids = {root_turn_id, turn_1_id}
 
     # Now create a 9th neighbor from Main Floor in the North ('N') direction on Turn 1
-    ninth_loc = temp_repo.add_improvised_location(
+    ninth_loc = empty_repo.add_improvised_location(
         world_id=world_id,
         from_location_id=main_bar_id,
         created_at_turn_id=turn_1_id,
@@ -1172,7 +1305,7 @@ async def test_max_eight_neighbors_and_passage_hub_reconnection(
     assert ninth_loc.is_hub is False
 
     # Main Floor must still have exactly 8 neighbors, and its 'N' neighbor is now 'North Passage' (is_hub=True)
-    nbs_after_9 = temp_repo.get_neighbor_locations(
+    nbs_after_9 = empty_repo.get_neighbor_locations(
         world_id, main_bar_id, valid_turn_ids=branch_turn_ids
     )
     assert len(nbs_after_9) == 8
@@ -1182,7 +1315,7 @@ async def test_max_eight_neighbors_and_passage_hub_reconnection(
 
     # Both the original North neighbor ('Backroom Ripperdoc Bay') and the 9th node ('Northern Smuggler Vault')
     # are now connected to the North Passage hub!
-    hub_nbs = temp_repo.get_neighbor_locations(
+    hub_nbs = empty_repo.get_neighbor_locations(
         world_id, north_nb.destination.id, valid_turn_ids=branch_turn_ids
     )
     hub_dest_names = {nb.destination.name for nb in hub_nbs}
@@ -1191,7 +1324,7 @@ async def test_max_eight_neighbors_and_passage_hub_reconnection(
     assert "Northern Smuggler Vault" in hub_dest_names
 
     # Adding a 10th node in 'N' from Main Floor attaches to the existing North Passage hub without exceeding 8 on Main Floor
-    tenth_loc = temp_repo.add_improvised_location(
+    tenth_loc = empty_repo.add_improvised_location(
         world_id=world_id,
         from_location_id=main_bar_id,
         created_at_turn_id=turn_1_id,
@@ -1207,17 +1340,17 @@ async def test_max_eight_neighbors_and_passage_hub_reconnection(
         valid_turn_ids=branch_turn_ids,
     )
     assert tenth_loc.name == "North Generator Alcove"
-    nbs_after_10 = temp_repo.get_neighbor_locations(
+    nbs_after_10 = empty_repo.get_neighbor_locations(
         world_id, main_bar_id, valid_turn_ids=branch_turn_ids
     )
     assert len(nbs_after_10) == 8
-    hub_nbs_after_10 = temp_repo.get_neighbor_locations(
+    hub_nbs_after_10 = empty_repo.get_neighbor_locations(
         world_id, north_nb.destination.id, valid_turn_ids=branch_turn_ids
     )
     assert "North Generator Alcove" in {nb.destination.name for nb in hub_nbs_after_10}
 
     # Checking out Turn 0 (before the 9th node was created) sees the original direct connection to Backroom Ripperdoc Bay!
-    nbs_on_root_branch = temp_repo.get_neighbor_locations(
+    nbs_on_root_branch = empty_repo.get_neighbor_locations(
         world_id, main_bar_id, valid_turn_ids={root_turn_id}
     )
     assert len(nbs_on_root_branch) == 8
@@ -1227,12 +1360,13 @@ async def test_max_eight_neighbors_and_passage_hub_reconnection(
 
 
 async def test_location_override_affects_next_turn_and_swipe(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify overriding the current location updates the active turn state and injects the overridden location on the next turn or swipe."""
-    camp_id = "camp_neon_rust_default"
-    bundle_0 = temp_repo.get_campaign_state_bundle(camp_id)
-    world = temp_repo.get_world(bundle_0.campaign.world_id)
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
+    camp_id = _seed_camp_id
+    bundle_0 = empty_repo.get_campaign_state_bundle(camp_id)
+    world = empty_repo.get_world(bundle_0.campaign.world_id)
     mezzanine = next(loc for loc in world.locations if "Mezzanine" in loc.name)
     cooling_tunnels = next(loc for loc in world.locations if "Cooling Tunnels" in loc.name)
 
@@ -1240,26 +1374,26 @@ async def test_location_override_affects_next_turn_and_swipe(
     req_t1 = TurnSubmitRequest(user_message="I look around the room.")
     async for _ev in _execute_turn_stream_events(camp_id, req_t1):
         pass
-    bundle_t1 = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle_t1 = empty_repo.get_campaign_state_bundle(camp_id)
     turn_1 = bundle_t1.active_branch_turns[-1]
     assert bundle_t1.active_location.name == "The Neon Rust Main Floor"
 
     # 2. Player overrides current location to 'Shadowed VIP Mezzanine'
-    overridden_bundle = temp_repo.override_campaign_location(camp_id, mezzanine.id)
+    overridden_bundle = empty_repo.override_campaign_location(camp_id, mezzanine.id)
     assert overridden_bundle.active_location.id == mezzanine.id
     assert overridden_bundle.active_location.name == "Shadowed VIP Mezzanine"
     assert overridden_bundle.current_character_state.current_location_id == mezzanine.id
-    assert "char_kira_vance" in overridden_bundle.present_character_ids
+    assert _seed_char_id in overridden_bundle.present_character_ids
 
     # 3. Next Turn (Turn 2) automatically starts in 'Shadowed VIP Mezzanine'
     req_t2 = TurnSubmitRequest(user_message="I lean over the railing and watch the entrance.")
     async for _ev in _execute_turn_stream_events(camp_id, req_t2):
         pass
-    bundle_t2 = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle_t2 = empty_repo.get_campaign_state_bundle(camp_id)
     assert bundle_t2.active_location.id == mezzanine.id
 
     # 4. Now override location to 'Sub-Basement Cooling Tunnels' and SWIPE Turn 2 (branching from Turn 1 with override_location_id)
-    temp_repo.override_campaign_location(camp_id, cooling_tunnels.id)
+    empty_repo.override_campaign_location(camp_id, cooling_tunnels.id)
     turn_2 = bundle_t2.active_branch_turns[-1]
     req_swipe_t2 = TurnSubmitRequest(
         user_message=turn_2.user_message,
@@ -1268,24 +1402,25 @@ async def test_location_override_affects_next_turn_and_swipe(
     )
     async for _ev in _execute_turn_stream_events(camp_id, req_swipe_t2):
         pass
-    bundle_swipe = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle_swipe = empty_repo.get_campaign_state_bundle(camp_id)
     assert bundle_swipe.active_location.id == cooling_tunnels.id
     assert bundle_swipe.active_location.name == "Sub-Basement Cooling Tunnels"
     assert bundle_swipe.current_character_state.current_location_id == cooling_tunnels.id
 
 
 async def test_item_equip_toggle_applies_from_next_turn(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify equipping or unequipping an item via toggle_campaign_item_equip updates leaf turn and persists across subsequent turns."""
-    camp_id = "camp_neon_rust_default"
-    bundle_0 = temp_repo.get_campaign_state_bundle(camp_id)
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
+    camp_id = _seed_camp_id
+    bundle_0 = empty_repo.get_campaign_state_bundle(camp_id)
     # Kira Vance starts with equipped clothes and carried items
     assert "Diagnostic medical penlight" in bundle_0.current_character_state.inventory
     assert "Diagnostic medical penlight" not in bundle_0.current_character_state.equipped
 
     # 1. Player equips the penlight
-    eq_bundle = temp_repo.toggle_campaign_item_equip(
+    eq_bundle = empty_repo.toggle_campaign_item_equip(
         camp_id,
         item="Diagnostic medical penlight",
         action="equip",
@@ -1298,12 +1433,12 @@ async def test_item_equip_toggle_applies_from_next_turn(
     async for _ev in _execute_turn_stream_events(camp_id, req_t1):
         pass
 
-    bundle_t1 = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle_t1 = empty_repo.get_campaign_state_bundle(camp_id)
     assert "Diagnostic medical penlight" in bundle_t1.current_character_state.equipped
     assert "Diagnostic medical penlight" not in bundle_t1.current_character_state.inventory
 
     # 3. Unequip the penlight on Turn 1
-    uneq_bundle = temp_repo.toggle_campaign_item_equip(
+    uneq_bundle = empty_repo.toggle_campaign_item_equip(
         camp_id,
         item="Diagnostic medical penlight",
         action="unequip",
@@ -1316,25 +1451,26 @@ async def test_item_equip_toggle_applies_from_next_turn(
     async for _ev in _execute_turn_stream_events(camp_id, req_t2):
         pass
 
-    bundle_t2 = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle_t2 = empty_repo.get_campaign_state_bundle(camp_id)
     assert "Diagnostic medical penlight" in bundle_t2.current_character_state.inventory
     assert "Diagnostic medical penlight" not in bundle_t2.current_character_state.equipped
 
 
 
 async def test_manual_linked_location_creation_is_branch_bound(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify manually created linked rooms appear with the chosen direction/distance and roll back with their turn."""
-    camp_id = "camp_neon_rust_default"
-    bundle_0 = temp_repo.get_campaign_state_bundle(camp_id)
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
+    camp_id = _seed_camp_id
+    bundle_0 = empty_repo.get_campaign_state_bundle(camp_id)
     clinic = next(l for l in bundle_0.visible_locations if "Ripperdoc" in l.name)
 
     req = TurnSubmitRequest(user_message="I look around the room.")
     async for _ev in _execute_turn_stream_events(camp_id, req):
         pass
 
-    bundle = temp_repo.create_linked_location(
+    bundle = empty_repo.create_linked_location(
         camp_id,
         from_location_id=clinic.id,
         name="Hidden Pharmacy",
@@ -1357,17 +1493,18 @@ async def test_manual_linked_location_creation_is_branch_bound(
     )
 
     # Deleting the turn the room was bound to removes it
-    after = temp_repo.delete_last_turn(camp_id)
+    after = empty_repo.delete_last_turn(camp_id)
     assert all(l.name != "Hidden Pharmacy" for l in after.visible_locations)
 
 
-async def test_campaign_item_equip_actions_add_and_remove(temp_repo: CantinaRepository) -> None:
+async def test_campaign_item_equip_actions_add_and_remove(empty_repo: CantinaRepository) -> None:
     """Verify item management on active leaf turn supports add, equip, unequip, and remove."""
-    camp_id = "camp_neon_rust_default"
-    char_id = "char_kira_vance"
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
+    camp_id = _seed_camp_id
+    char_id = _seed_char_id
 
     # Add a new carried item
-    bundle = temp_repo.toggle_campaign_item_equip(
+    bundle = empty_repo.toggle_campaign_item_equip(
         camp_id,
         item="Sub-dermal Lockpick",
         action="add",
@@ -1378,7 +1515,7 @@ async def test_campaign_item_equip_actions_add_and_remove(temp_repo: CantinaRepo
     assert "Sub-dermal Lockpick" in st.inventory
 
     # Equip the item
-    bundle = temp_repo.toggle_campaign_item_equip(
+    bundle = empty_repo.toggle_campaign_item_equip(
         camp_id,
         item="Sub-dermal Lockpick",
         action="equip",
@@ -1389,7 +1526,7 @@ async def test_campaign_item_equip_actions_add_and_remove(temp_repo: CantinaRepo
     assert "Sub-dermal Lockpick" not in st.inventory
 
     # Unequip back to inventory
-    bundle = temp_repo.toggle_campaign_item_equip(
+    bundle = empty_repo.toggle_campaign_item_equip(
         camp_id,
         item="Sub-dermal Lockpick",
         action="unequip",
@@ -1400,7 +1537,7 @@ async def test_campaign_item_equip_actions_add_and_remove(temp_repo: CantinaRepo
     assert "Sub-dermal Lockpick" not in st.equipped
 
     # Remove the item
-    bundle = temp_repo.toggle_campaign_item_equip(
+    bundle = empty_repo.toggle_campaign_item_equip(
         camp_id,
         item="Sub-dermal Lockpick",
         action="remove",
@@ -1411,13 +1548,14 @@ async def test_campaign_item_equip_actions_add_and_remove(temp_repo: CantinaRepo
     assert "Sub-dermal Lockpick" not in st.equipped
 
 
-async def test_campaign_scoped_character_memories(temp_repo: CantinaRepository) -> None:
+async def test_campaign_scoped_character_memories(empty_repo: CantinaRepository) -> None:
     """Verify memory shards edited in a campaign are strictly campaign-scoped and indexed."""
-    camp_id = "camp_neon_rust_default"
-    char_id = "char_kira_vance"
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
+    camp_id = _seed_camp_id
+    char_id = _seed_char_id
 
     # Get original shards
-    orig_char = temp_repo.get_character(char_id)
+    orig_char = empty_repo.get_character(char_id)
     orig_titles = [m.title for m in orig_char.memory_shards]
     assert len(orig_titles) > 0
 
@@ -1430,7 +1568,7 @@ async def test_campaign_scoped_character_memories(temp_repo: CantinaRepository) 
         )
     ]
 
-    bundle = await temp_repo.aupdate_campaign_character_memories(
+    bundle = await empty_repo.aupdate_campaign_character_memories(
         campaign_id=camp_id,
         character_id=char_id,
         memory_shards=new_shards,
@@ -1441,18 +1579,18 @@ async def test_campaign_scoped_character_memories(temp_repo: CantinaRepository) 
     assert [m.title for m in bundle.character_records[char_id].memory_shards] == ["A Secret Promise in Neon Rust"]
 
     # 2. get_character with campaign_id returns campaign-scoped shards
-    camp_char = temp_repo.get_character(char_id, campaign_id=camp_id)
+    camp_char = empty_repo.get_character(char_id, campaign_id=camp_id)
     assert [m.title for m in camp_char.memory_shards] == ["A Secret Promise in Neon Rust"]
 
     # 3. Base character remains unchanged!
-    base_char = temp_repo.get_character(char_id)
+    base_char = empty_repo.get_character(char_id)
     assert [m.title for m in base_char.memory_shards] == orig_titles
 
     # 4. Search in this campaign retrieves campaign shard
-    recalled = await temp_repo.vector_store.search_memories(
+    recalled = await empty_repo.vector_store.search_memories(
         queries=["secret promise"],
         mentioned_entities=["sub-levels"],
-        world_id="world_neon_rust",
+        world_id=_seed_world_id,
         character_id=char_id,
         campaign_id=camp_id,
         valid_branch_turn_ids=set(),
@@ -1461,17 +1599,18 @@ async def test_campaign_scoped_character_memories(temp_repo: CantinaRepository) 
 
 
 async def test_clerk_character_memories_extraction_dedup_and_room_isolation(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """
     Verify Phase 4 Clerk extracts personal memories (traumas, bondings, betrayals, revelations, vows),
     enforces room presence isolation, suppresses permanent memory redundancy, and deduplicates multi-turn scenes.
     """
-    camp_id = "camp_neon_rust_default"
-    kira_id = "char_kira_vance"
-    world_id = "world_neon_rust"
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
+    camp_id = _seed_camp_id
+    kira_id = _seed_char_id
+    world_id = _seed_world_id
 
-    kira = temp_repo.get_character(kira_id, campaign_id=camp_id)
+    kira = empty_repo.get_character(kira_id, campaign_id=camp_id)
     orig_count = len(kira.memory_shards)
 
     # Create a second character who is in a DIFFERENT room (not in present_characters)
@@ -1481,18 +1620,18 @@ async def test_clerk_character_memories_extraction_dedup_and_room_isolation(
             archetype="Ex-corp courier",
             personality_keywords=["cynical", "observant"],
         ),
-        world=temp_repo.get_world(world_id),
+        world=empty_repo.get_world(world_id),
     )
-    jax = temp_repo.create_character_from_draft(absent_draft, world_id=world_id)
+    jax = empty_repo.create_character_from_draft(absent_draft, world_id=world_id)
     jax_orig_count = len(jax.memory_shards)
 
-    bundle0 = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle0 = empty_repo.get_campaign_state_bundle(camp_id)
     root_turn = bundle0.active_branch_turns[-1]
     active_loc = bundle0.active_location
     neighbors = bundle0.neighbor_locations
 
     # Turn 1: User confesses a bitter betrayal to Kira in the cantina (Jax is NOT present)
-    turn1 = temp_repo.save_turn_node(
+    turn1 = empty_repo.save_turn_node(
         turn_id="turn_mem_1",
         campaign_id=camp_id,
         parent_turn_id=root_turn.id,
@@ -1521,7 +1660,7 @@ async def test_clerk_character_memories_extraction_dedup_and_room_isolation(
     )
 
     await run_phase4_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp_id,
         world_id=world_id,
         character=kira,
@@ -1531,7 +1670,7 @@ async def test_clerk_character_memories_extraction_dedup_and_room_isolation(
         present_characters=[kira],  # Jax is in another room
     )
 
-    bundle1 = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle1 = empty_repo.get_campaign_state_bundle(camp_id)
     kira_shards_t1 = bundle1.character_records[kira_id].memory_shards
     assert len(kira_shards_t1) == orig_count + 1
     ephemeral_t1 = [s for s in kira_shards_t1 if s.origin == "clerk_ephemeral"]
@@ -1541,12 +1680,12 @@ async def test_clerk_character_memories_extraction_dedup_and_room_isolation(
     assert ephemeral_t1[0].created_at_depth == 1
 
     # Jax (absent) must NOT have received any memory from this scene
-    jax_after_t1 = temp_repo.get_character(jax.id, campaign_id=camp_id)
+    jax_after_t1 = empty_repo.get_character(jax.id, campaign_id=camp_id)
     assert len(jax_after_t1.memory_shards) == jax_orig_count
 
     # Turn 2: Multi-turn continuation of the exact same betrayal argument -> should supersede Turn 1's ephemeral shard, NOT add a 2nd duplicate!
     kira_t1_rec = bundle1.character_records[kira_id]
-    turn2 = temp_repo.save_turn_node(
+    turn2 = empty_repo.save_turn_node(
         turn_id="turn_mem_2",
         campaign_id=camp_id,
         parent_turn_id="turn_mem_1",
@@ -1575,7 +1714,7 @@ async def test_clerk_character_memories_extraction_dedup_and_room_isolation(
     )
 
     await run_phase4_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp_id,
         world_id=world_id,
         character=kira_t1_rec,
@@ -1585,7 +1724,7 @@ async def test_clerk_character_memories_extraction_dedup_and_room_isolation(
         present_characters=[kira_t1_rec],
     )
 
-    bundle2 = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle2 = empty_repo.get_campaign_state_bundle(camp_id)
     kira_shards_t2 = bundle2.character_records[kira_id].memory_shards
     ephemeral_t2 = [s for s in kira_shards_t2 if s.origin == "clerk_ephemeral"]
     # Still only 1 active ephemeral memory on the branch (updated in-place), preserving original created_at_depth == 1
@@ -1595,7 +1734,7 @@ async def test_clerk_character_memories_extraction_dedup_and_room_isolation(
 
 
 async def test_clerk_ephemeral_memory_branch_isolation_promotion_and_40_turn_compaction(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """
     Verify:
@@ -1604,18 +1743,19 @@ async def test_clerk_ephemeral_memory_branch_isolation_promotion_and_40_turn_com
     3. Unpromoted ephemeral memories aged >= 40 turns are automatically compacted into a single 'compacted' permanent memory.
     4. Rewinding before the compaction turn restores the original ephemeral memories.
     """
-    camp_id = "camp_neon_rust_default"
-    kira_id = "char_kira_vance"
-    world_id = "world_neon_rust"
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
+    camp_id = _seed_camp_id
+    kira_id = _seed_char_id
+    world_id = _seed_world_id
 
-    bundle0 = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle0 = empty_repo.get_campaign_state_bundle(camp_id)
     root_turn = bundle0.active_branch_turns[-1]
     active_loc = bundle0.active_location
     neighbors = bundle0.neighbor_locations
     kira = bundle0.character_records[kira_id]
 
     # Branch A, Turn 1: A solemn vow is made (creates ephemeral memory 1 at depth 1)
-    turn_a1 = temp_repo.save_turn_node(
+    turn_a1 = empty_repo.save_turn_node(
         turn_id="turn_branch_a1",
         campaign_id=camp_id,
         parent_turn_id=root_turn.id,
@@ -1643,7 +1783,7 @@ async def test_clerk_ephemeral_memory_branch_isolation_promotion_and_40_turn_com
         recalled_items=[],
     )
     await run_phase4_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp_id,
         world_id=world_id,
         character=kira,
@@ -1654,7 +1794,7 @@ async def test_clerk_ephemeral_memory_branch_isolation_promotion_and_40_turn_com
     )
 
     # Branch B, Turn 1 (sibling swipe from root_turn): Ordinary banter, no vow
-    turn_b1 = temp_repo.save_turn_node(
+    turn_b1 = empty_repo.save_turn_node(
         turn_id="turn_branch_b1",
         campaign_id=camp_id,
         parent_turn_id=root_turn.id,
@@ -1682,13 +1822,13 @@ async def test_clerk_ephemeral_memory_branch_isolation_promotion_and_40_turn_com
         recalled_items=[],
     )
     # On Branch B, the vow memory from Branch A must NOT be visible!
-    bundle_b = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle_b = empty_repo.get_campaign_state_bundle(camp_id)
     shards_on_b = bundle_b.character_records[kira_id].memory_shards
     assert not any(s.origin == "clerk_ephemeral" for s in shards_on_b)
 
     # Switch back to Branch A
-    temp_repo.checkout_turn_branch(camp_id, "turn_branch_a1")
-    bundle_a = temp_repo.get_campaign_state_bundle(camp_id)
+    empty_repo.checkout_turn_branch(camp_id, "turn_branch_a1")
+    bundle_a = empty_repo.get_campaign_state_bundle(camp_id)
     shards_on_a = bundle_a.character_records[kira_id].memory_shards
     ephemeral_on_a = [s for s in shards_on_a if s.origin == "clerk_ephemeral"]
     assert len(ephemeral_on_a) == 1
@@ -1722,15 +1862,15 @@ async def test_clerk_ephemeral_memory_branch_isolation_promotion_and_40_turn_com
         anchor_turn_id="turn_branch_a1",
         created_at_depth=3,
     )
-    await temp_repo.aupdate_campaign_character_memories(
+    await empty_repo.aupdate_campaign_character_memories(
         campaign_id=camp_id,
         character_id=kira_id,
         memory_shards=[*promoted_shards, ephem_shard_1, ephem_shard_2],
     )
 
     # Now simulate Turn at depth 45 (age of ephem_shard_1 is 43 >= 40, age of ephem_shard_2 is 42 >= 40)
-    kira_before_compact = temp_repo.get_campaign_state_bundle(camp_id).character_records[kira_id]
-    turn_a45 = temp_repo.save_turn_node(
+    kira_before_compact = empty_repo.get_campaign_state_bundle(camp_id).character_records[kira_id]
+    turn_a45 = empty_repo.save_turn_node(
         turn_id="turn_branch_a45",
         campaign_id=camp_id,
         parent_turn_id="turn_branch_a1",
@@ -1759,7 +1899,7 @@ async def test_clerk_ephemeral_memory_branch_isolation_promotion_and_40_turn_com
     )
 
     await run_phase4_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp_id,
         world_id=world_id,
         character=kira_before_compact,
@@ -1770,7 +1910,7 @@ async def test_clerk_ephemeral_memory_branch_isolation_promotion_and_40_turn_com
         ephemeral_lifespan_turns=40,
     )
 
-    bundle_a45 = temp_repo.get_campaign_state_bundle(camp_id)
+    bundle_a45 = empty_repo.get_campaign_state_bundle(camp_id)
     shards_a45 = bundle_a45.character_records[kira_id].memory_shards
 
     # 1. The manually promoted memory is untouched!
@@ -1782,24 +1922,25 @@ async def test_clerk_ephemeral_memory_branch_isolation_promotion_and_40_turn_com
     assert compacted_list[0].significance == "consolidated"
 
     # 3. If user rewinds back to turn_branch_a1 (before compaction turn_branch_a45), the 2 ephemeral memories are restored!
-    temp_repo.checkout_turn_branch(camp_id, "turn_branch_a1")
-    bundle_rewound = temp_repo.get_campaign_state_bundle(camp_id)
+    empty_repo.checkout_turn_branch(camp_id, "turn_branch_a1")
+    bundle_rewound = empty_repo.get_campaign_state_bundle(camp_id)
     shards_rewound = bundle_rewound.character_records[kira_id].memory_shards
     assert len([s for s in shards_rewound if s.origin == "clerk_ephemeral"]) == 2
     assert not any(s.origin == "compacted" for s in shards_rewound)
 
 
 async def test_scene_flags_fifo_cap_and_teleport_reset(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify max_scene_flags configuration affects FIFO cap and admin location change maintains only new location marker."""
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
     import json
     from app.config import settings
 
-    camp = temp_repo.get_campaign("camp_neon_rust_default")
-    leaf = temp_repo.get_turn_node(camp.active_leaf_turn_id)
+    camp = empty_repo.get_campaign(_seed_camp_id)
+    leaf = empty_repo.get_turn_node(camp.active_leaf_turn_id)
     # Give leaf 15 flags
-    conn = temp_repo._connect()
+    conn = empty_repo._connect()
     try:
         conn.execute(
             "UPDATE world_state_snapshots SET scene_flags_json = ? WHERE turn_id = ?",
@@ -1810,11 +1951,11 @@ async def test_scene_flags_fifo_cap_and_teleport_reset(
         conn.close()
 
     # Teleport to another location -> must maintain only the new location marker
-    world = temp_repo.get_world(camp.world_id)
+    world = empty_repo.get_world(camp.world_id)
     other_loc = next(loc for loc in world.locations if loc.id != leaf.world_snapshot.active_location_id)
-    temp_repo.override_campaign_location(camp.id, other_loc.id)
+    empty_repo.override_campaign_location(camp.id, other_loc.id)
 
-    updated_bundle = temp_repo.get_campaign_state_bundle(camp.id)
+    updated_bundle = empty_repo.get_campaign_state_bundle(camp.id)
     assert updated_bundle.current_world_snapshot.scene_flags == [f"At {other_loc.name}"]
 
     # Test settings configuration
@@ -1833,18 +1974,19 @@ async def test_scene_flags_fifo_cap_and_teleport_reset(
 
 
 def test_assemble_four_zone_trims_oldest_zone3_turns_to_protect_zone1(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """When context budget is tight, oldest Zone 3 turns drop first while Zone 1, Zone 2, and Zone 4 stay intact."""
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
     from app.engine.phase2_context import (
         estimate_messages_tokens,
         resolve_actor_context_ceiling,
     )
     from app.schemas.turn import EpisodicChunkRecord
 
-    camp = temp_repo.get_campaign("camp_neon_rust_default")
-    bundle = temp_repo.get_campaign_state_bundle(camp.id)
-    world = temp_repo.get_world(camp.world_id)
+    camp = empty_repo.get_campaign(_seed_camp_id)
+    bundle = empty_repo.get_campaign_state_bundle(camp.id)
+    world = empty_repo.get_world(camp.world_id)
     char = bundle.character_records[camp.character_id]
     turn0 = bundle.active_branch_turns[0]
 
@@ -2102,19 +2244,20 @@ def _seed_improvised_location_active_in_campaign(
 
 
 def test_delete_campaign_with_active_improvised_location_and_superseded_rows(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Deleting a campaign whose snapshots reference improvised locations must not hit FK failures."""
-    camp_id = "camp_neon_rust_default"
+    _seed_world_id, _seed_char_id, _seed_camp_id = _seed_engine_scenario(empty_repo)
+    camp_id = _seed_camp_id
     world_id, improv_loc_id, container_id, turn_2_id = _seed_improvised_location_active_in_campaign(
-        temp_repo, camp_id, "del"
+        empty_repo, camp_id, "del"
     )
 
     # Simulate a base-world location/edge superseded by this campaign
-    base_world = temp_repo.get_world(world_id, base_only=True)
+    base_world = empty_repo.get_world(world_id, base_only=True)
     superseded_loc_id = base_world.locations[0].id
     superseded_edge_id = base_world.edges[0].id
-    conn = temp_repo._connect()
+    conn = empty_repo._connect()
     try:
         conn.execute(
             "UPDATE location_nodes SET superseded_at_turn_id = ? WHERE id = ?",
@@ -2129,10 +2272,10 @@ def test_delete_campaign_with_active_improvised_location_and_superseded_rows(
         conn.close()
 
     # Must succeed without sqlite3.IntegrityError: FOREIGN KEY constraint failed
-    temp_repo.delete_campaign(camp_id)
+    empty_repo.delete_campaign(camp_id)
 
-    assert temp_repo.list_campaigns() == []
-    conn = temp_repo._connect()
+    assert empty_repo.list_campaigns() == []
+    conn = empty_repo._connect()
     try:
         assert (
             conn.execute("SELECT COUNT(*) FROM location_nodes WHERE id = ?", (improv_loc_id,)).fetchone()[0]
@@ -2170,10 +2313,10 @@ def test_delete_campaign_with_active_improvised_location_and_superseded_rows(
 
 
 async def test_reset_user_data_with_active_improvised_location(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """reset_user_data must cleanly delete campaigns whose turns reference improvised locations."""
-    user = temp_repo.create_user(username="improv_reset_user", display_name="Reset User")
+    user = empty_repo.create_user(username="improv_reset_user", display_name="Reset User")
     w_draft = await generate_world_draft(
         WorldWizardSeed(
             name="Reset Test Archipelago",
@@ -2183,7 +2326,7 @@ async def test_reset_user_data_with_active_improvised_location(
             location_count=3,
         )
     )
-    world = temp_repo.create_world_from_draft(w_draft, owner_id=user.id)
+    world = empty_repo.create_world_from_draft(w_draft, owner_id=user.id)
     c_draft = await generate_character_draft(
         CharacterWizardSeed(
             name="Mara Lin",
@@ -2192,20 +2335,20 @@ async def test_reset_user_data_with_active_improvised_location(
         ),
         world=world,
     )
-    char = temp_repo.create_character_from_draft(c_draft, world_id=world.id, owner_id=user.id)
-    camp = temp_repo.create_campaign(
+    char = empty_repo.create_character_from_draft(c_draft, world_id=world.id, owner_id=user.id)
+    camp = empty_repo.create_campaign(
         name="User Improv Campaign",
         world_id=world.id,
         character_id=char.id,
         owner_id=user.id,
     )
     _, improv_loc_id, container_id, _ = _seed_improvised_location_active_in_campaign(
-        temp_repo, camp.id, "reset"
+        empty_repo, camp.id, "reset"
     )
 
-    temp_repo.reset_user_data(user.id)
+    empty_repo.reset_user_data(user.id)
 
-    conn = temp_repo._connect()
+    conn = empty_repo._connect()
     try:
         assert conn.execute("SELECT COUNT(*) FROM campaigns WHERE id = ?", (camp.id,)).fetchone()[0] == 0
         assert (

@@ -18,7 +18,6 @@ from PIL import Image
 from app import main as main_module
 from app.config import settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_public_showcase_media
 from app.schemas.character import BaselinePsyche, CharacterWizardDraft
 
 
@@ -81,27 +80,15 @@ def _embed_sillytavern_chara_png(png_bytes: bytes, char_name: str = "Nova") -> b
 
 @pytest.fixture()
 def server_cfg_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    showcase_api_env: tuple[TestClient, CantinaRepository, Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[TestClient, CantinaRepository, Path]:
-    db_file = str(tmp_path / "server_cfg.db")
-    media_dir = tmp_path / "media"
-    media_dir.mkdir(parents=True, exist_ok=True)
-    settings_file = tmp_path / "runtime_settings.json"
-
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "media_dir", str(media_dir))
-    monkeypatch.setattr(settings, "allow_offline_fallback", True)
+    client, repo, media_dir = showcase_api_env
     monkeypatch.setattr(settings, "allow_self_registration", True)
     monkeypatch.setattr(settings, "inactive_user_purge_days", None)
     monkeypatch.setattr(settings, "user_media_quota_mb", None)
     monkeypatch.setattr(settings, "chloromancer_interval_minutes", 60)
-    monkeypatch.setattr("app.config.SETTINGS_FILE_PATH", settings_file)
 
-    repo = CantinaRepository(db_file, media_dir=str(media_dir))
-    repo.init_db()
-    ensure_public_showcase_media(repo)
-
-    client = TestClient(main_module.app)
     setup_res = client.post(
         "/api/auth/setup",
         json={

@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
 
-from app import main as main_module
 from app.config import EmbeddingProfile, ModelProfile, settings
 from app.db.provider_store import ProviderStore
-from app.db.repository import CantinaRepository
 from app.db.vector_math import embed_text
 from app.engine.context.lore_scope import resolve_actor_context_ceiling
 from app.engine.llm_client import (
@@ -48,24 +44,15 @@ def _mock_client(handler) -> httpx.AsyncClient:
 
 
 @pytest.fixture()
-def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    db_file = str(tmp_path / "nanogpt.db")
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "media_dir", str(tmp_path / "media"))
-    monkeypatch.setattr(settings, "allow_offline_fallback", True)
+def env(api_env, api_user_factory, monkeypatch: pytest.MonkeyPatch):
+    client, repo, _media_dir = api_env
     monkeypatch.setattr(settings, "allow_user_providers", True)
     monkeypatch.setattr(settings, "provider_credential_store", "prefer_server")
-    repo = CantinaRepository(db_file, media_dir=str(tmp_path / "media"))
-    repo.init_db()
-    client = TestClient(main_module.app)
-    admin = client.post("/api/auth/setup", json={"username": "admin_ng", "password": "AdminPassword123!"})
-    assert admin.status_code == 200
-    admin_h = {"Authorization": f"Bearer {admin.json()['token']}"}
+    admin_h, _admin_id, _admin_tok = api_user_factory("admin_ng", role="admin")
 
     def make_user(name: str) -> tuple[dict[str, str], str]:
-        res = client.post("/api/auth/register", json={"username": name, "password": "UserPassword123!"})
-        assert res.status_code == 200
-        return {"Authorization": f"Bearer {res.json()['token']}"}, res.json()["user"]["id"]
+        headers, uid, _tok = api_user_factory(name)
+        return headers, uid
 
     return client, repo, admin_h, make_user
 

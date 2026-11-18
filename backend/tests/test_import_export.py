@@ -3,12 +3,10 @@
 import io
 import json
 import zipfile
-from pathlib import Path
 import pytest
 from PIL import Image
 from fastapi.testclient import TestClient
 
-from app.config import settings
 from app.db.repository import CantinaRepository
 from app import main as main_module
 from app.dependencies import process_and_save_image, safe_resolve_media_path
@@ -38,20 +36,15 @@ def _create_test_image(width: int = 200, height: int = 200, color: str = "blue")
 
 
 @pytest.fixture
-def client_and_repo(temp_repo: CantinaRepository, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    media_dir = str(tmp_path / "media")
-    settings.media_dir = media_dir
-    temp_repo.media_dir = media_dir
+def client_and_repo(empty_repo: CantinaRepository, monkeypatch: pytest.MonkeyPatch):
+    user = empty_repo.create_user(username="export_user", display_name="Export Tester")
+    user_profile = empty_repo.get_user_by_id(user.id)
 
-    user = temp_repo.create_user(username="export_user", display_name="Export Tester")
-    temp_repo.claim_unowned_entities(user.id)
-    user_profile = temp_repo.get_user_by_id(user.id)
-
-    monkeypatch.setattr(main_module, "get_repo", lambda: temp_repo)
+    monkeypatch.setattr(main_module, "get_repo", lambda: empty_repo)
     main_module.app.dependency_overrides[main_module.get_current_user] = lambda: user_profile
 
     client = TestClient(main_module.app)
-    yield client, temp_repo, user_profile
+    yield client, empty_repo, user_profile
 
     main_module.app.dependency_overrides.clear()
 

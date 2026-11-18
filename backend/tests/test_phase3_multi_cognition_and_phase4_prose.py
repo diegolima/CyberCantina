@@ -514,10 +514,13 @@ async def test_phase4_leading_tag_guard(
 
 @pytest.mark.asyncio()
 async def test_full_turn_node_persists_multi_cognitions(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify that save_turn_node persists cognitions_json and exposes it on TurnNodeRecord."""
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
+    from tests.factories import seed_minimal_scenario
+
+    scenario = seed_minimal_scenario(empty_repo)
+    bundle = empty_repo.get_campaign_state_bundle(scenario.campaign.id, owner_id=scenario.user.id)
     parent_turn = bundle.active_branch_turns[-1]
     kira_id = bundle.campaign.character_id
 
@@ -533,7 +536,7 @@ async def test_full_turn_node_persists_multi_cognitions(
         )
     }
 
-    turn = temp_repo.save_turn_node(
+    turn = empty_repo.save_turn_node(
         turn_id="turn_test_multi_cogs",
         campaign_id=bundle.campaign.id,
         parent_turn_id=parent_turn.id,
@@ -556,7 +559,7 @@ async def test_full_turn_node_persists_multi_cognitions(
     assert turn.cognition_character_names.get(kira_id) == "Kira Vance"
 
     # Reload directly from SQLite to test deserialization
-    reloaded = temp_repo.get_turn_node("turn_test_multi_cogs")
+    reloaded = empty_repo.get_turn_node("turn_test_multi_cogs")
     assert reloaded.cognitions is not None
     assert kira_id in reloaded.cognitions
     assert reloaded.cognitions[kira_id].want == "Secure the perimeter"

@@ -8,14 +8,13 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
 import numpy as np
 import pytest
 
 from app.config import settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_test_seed
+from tests.factories import seed_minimal_scenario
 from app.db.vector_store import (
     build_short_memory_content,
     compute_corpus_idf,
@@ -50,33 +49,19 @@ from app.schemas.turn import (
 )
 
 
-@pytest.fixture()
-def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CantinaRepository:
-    db_file = str(tmp_path / "test_ltm_lod_rrf.db")
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "allow_offline_fallback", True)
-    monkeypatch.setattr(settings.actor_profile, "base_url", "http://127.0.0.1:9/v1")
-    monkeypatch.setattr(settings.clerk_profile, "base_url", "http://127.0.0.1:9/v1")
-    monkeypatch.setattr(settings.embedding_profile, "mode", "local_hash")
-    repo = CantinaRepository(db_file)
-    repo.init_db()
-    ensure_test_seed(repo)
-    return repo
-
-
 # ============================================================================
 # Phase A: Structured Episodic Compaction
 # ============================================================================
 
 
 async def test_phase_a_structured_episodic_compaction_and_persistence(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify witness extraction, mechanical salience scoring, structured compaction, and DB round-trip."""
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
+    bundle = empty_repo.get_campaign_state_bundle(seed_minimal_scenario(empty_repo, with_lore=True, with_shards=True).campaign.id)
     base_turn = bundle.active_branch_turns[0]
     char_id = bundle.campaign.character_id
-    char = temp_repo.get_character(char_id)
+    char = empty_repo.get_character(char_id)
 
     # Create a turn with a Critical Success roll and transformative memory to test salience boost
     crit_roll = DiceRollResult(
@@ -155,7 +140,7 @@ async def test_phase_a_structured_episodic_compaction_and_persistence(
     assert len(structured.keywords) >= 1
 
     # Persist via save_episodic_chunk and verify SQLite + VectorStore round-trip
-    created_chunk = temp_repo.save_episodic_chunk(
+    created_chunk = empty_repo.save_episodic_chunk(
         campaign_id=bundle.campaign.id,
         world_id=bundle.campaign.world_id,
         character_id=char_id,
@@ -175,7 +160,7 @@ async def test_phase_a_structured_episodic_compaction_and_persistence(
     assert char_id in created_chunk.witness_character_ids
     assert created_chunk.salience_score >= 8
 
-    db_chunks = temp_repo.get_branch_episodic_chunks(
+    db_chunks = empty_repo.get_branch_episodic_chunks(
         bundle.campaign.id, {base_turn.id}
     )
     assert len(db_chunks) == 1
@@ -245,12 +230,12 @@ def test_phase_b_zone2_lod_cascade_and_salience_bonus() -> None:
 
 
 def test_phase_b_zone2_share_cap_protects_zone3_working_memory(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify 15 episodic chunks cannot starve Zone 3 below min_working_memory_turns."""
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
-    world = temp_repo.get_world(bundle.campaign.world_id)
-    char = temp_repo.get_character(bundle.campaign.character_id)
+    bundle = empty_repo.get_campaign_state_bundle(seed_minimal_scenario(empty_repo, with_lore=True, with_shards=True).campaign.id)
+    world = empty_repo.get_world(bundle.campaign.world_id)
+    char = empty_repo.get_character(bundle.campaign.character_id)
     turn0 = bundle.active_branch_turns[0]
 
     # Create 15 large episodic chunks covering depths 0..89
@@ -395,7 +380,7 @@ def test_phase_c_idf_mmr_rrf_and_dynamic_max() -> None:
 
 
 def test_phase_d_two_form_budget_packing_and_zone4_rendering(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify Rank 0 is always full, subsequent items pack as short, and upgrade when budget allows."""
     items = [
@@ -422,8 +407,8 @@ def test_phase_d_two_form_budget_packing_and_zone4_rendering(
     assert all(it.render_form == "full" for it in packed_generous)
 
     # Verify Zone 4 renders 'short' items using short_content and 'full' items using content
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
-    char = temp_repo.get_character(bundle.campaign.character_id)
+    bundle = empty_repo.get_campaign_state_bundle(seed_minimal_scenario(empty_repo, with_lore=True, with_shards=True).campaign.id)
+    char = empty_repo.get_character(bundle.campaign.character_id)
     turn0 = bundle.active_branch_turns[0]
     zone4_txt = build_zone4_ephemeral_tail_frame(
         user_message="Tell me about the archives.",
@@ -440,11 +425,11 @@ def test_phase_d_two_form_budget_packing_and_zone4_rendering(
 
 
 def test_phase_d_epistemic_turn_elevation_respects_character_presence(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify compacted episode turn elevation attaches verbatim quotes ONLY when character witnessed the turn."""
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
-    char = temp_repo.get_character(bundle.campaign.character_id)
+    bundle = empty_repo.get_campaign_state_bundle(seed_minimal_scenario(empty_repo, with_lore=True, with_shards=True).campaign.id)
+    char = empty_repo.get_character(bundle.campaign.character_id)
     turn0 = bundle.active_branch_turns[0]
 
     # Turn 1: Kira is present in active_location and hears the secret passcode 'SOLARIS-9'
@@ -584,14 +569,14 @@ def test_phase_d_cognition_personal_shard_quota() -> None:
 
 
 def test_admin_and_user_preferences_memory_settings_override(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify all 6 memory/LOD/recall parameters save per user and respect allow_user_model_overrides."""
     import app.dependencies as deps_module
 
-    monkeypatch.setattr(deps_module, "get_repo", lambda: temp_repo)
-    user = temp_repo.create_user(
+    monkeypatch.setattr(deps_module, "get_repo", lambda: empty_repo)
+    user = empty_repo.create_user(
         username="memtester",
         display_name="Mem Tester",
         password_hash="hash",
@@ -607,7 +592,7 @@ def test_admin_and_user_preferences_memory_settings_override(
         recall_budget_prose_tokens=600,
         recall_budget_cognition_tokens=300,
     )
-    saved = temp_repo.save_user_model_settings(user.id, payload)
+    saved = empty_repo.save_user_model_settings(user.id, payload)
     assert saved.min_working_memory_turns == 5
     assert saved.lod_summary_chunks == 9
     assert saved.lod_importance_bonus == 3

@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient
 from app import main as main_module
 from app.config import settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_public_showcase_media
 from app.housekeeping import chloromancer_scheduler, run_admin_messages_purge
 
 
@@ -21,24 +20,13 @@ def _iso_offset(**kwargs: int) -> str:
 
 @pytest.fixture()
 def msg_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    api_env: tuple[TestClient, CantinaRepository, Path],
+    no_showcase_seeding: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[TestClient, CantinaRepository]:
-    db_file = str(tmp_path / "admin_messages.db")
-    media_dir = tmp_path / "media"
-    media_dir.mkdir(parents=True, exist_ok=True)
-    settings_file = tmp_path / "runtime_settings.json"
-
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "media_dir", str(media_dir))
-    monkeypatch.setattr(settings, "allow_offline_fallback", True)
+    admin_client, repo, _media_dir = api_env
     monkeypatch.setattr(settings, "allow_self_registration", True)
-    monkeypatch.setattr("app.config.SETTINGS_FILE_PATH", settings_file)
 
-    repo = CantinaRepository(db_file, media_dir=str(media_dir))
-    repo.init_db()
-    ensure_public_showcase_media(repo)
-
-    admin_client = TestClient(main_module.app)
     setup_res = admin_client.post(
         "/api/auth/setup",
         json={
@@ -356,18 +344,10 @@ def test_effective_dates_validation_and_archive_restore_flow(
 
 
 def test_single_user_mode_suppresses_messages_and_setup_gate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    api_env: tuple[TestClient, CantinaRepository, Path],
+    no_showcase_seeding: None,
 ) -> None:
-    db_file = str(tmp_path / "single_user.db")
-    media_dir = tmp_path / "media"
-    media_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "media_dir", str(media_dir))
-    monkeypatch.setattr("app.config.SETTINGS_FILE_PATH", tmp_path / "settings.json")
-
-    repo = CantinaRepository(db_file, media_dir=str(media_dir))
-    repo.init_db()
-    ensure_public_showcase_media(repo)
+    client, repo, _media_dir = api_env
 
     # Seed a message row directly in DB to confirm single-user mode still hides it
     repo.create_admin_message(
@@ -378,7 +358,6 @@ def test_single_user_mode_suppresses_messages_and_setup_gate(
         dismissable=False,
     )
 
-    client = TestClient(main_module.app)
     # Before setup completes, login_messages must be empty
     pre_status = client.get("/api/auth/status").json()
     assert pre_status["setup_required"] is True

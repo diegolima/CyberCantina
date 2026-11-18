@@ -270,22 +270,22 @@ def _seed_nested_world_and_character(
 
 
 def test_turn_0_start_focus_and_location_description_rules(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Turn 0 respects world vs character start focus and {location_description} template suppression."""
     world, char_custom = _seed_nested_world_and_character(
-        temp_repo, char_initial_message="Welcome to our corner table."
+        empty_repo, char_initial_message="Welcome to our corner table."
     )
     char_tpl_world, char_with_tpl = _seed_nested_world_and_character(
-        temp_repo,
+        empty_repo,
         char_initial_message="Rain drums overhead. {location_description} Ready?",
     )
     blank_world, char_blank = _seed_nested_world_and_character(
-        temp_repo, char_initial_message=""
+        empty_repo, char_initial_message=""
     )
 
     # 1. World-focused start -> zero Turn 0 arrival cards, starter containers still marked visited
-    camp_world_focus = temp_repo.create_campaign(
+    camp_world_focus = empty_repo.create_campaign(
         name="World Focus",
         world_id=world.id,
         character_id=char_custom.id,
@@ -293,7 +293,7 @@ def test_turn_0_start_focus_and_location_description_rules(
         start_focus="world",
         opening_prose="The gas lamps hum as fog curls under the threshold.",
     )
-    b_world = temp_repo.get_campaign_state_bundle(camp_world_focus.id)
+    b_world = empty_repo.get_campaign_state_bundle(camp_world_focus.id)
     assert b_world.active_branch_turns[0].post_turn is None
     assert set(b_world.current_world_snapshot.visited_container_ids) == {
         "cont_old_ward",
@@ -301,13 +301,13 @@ def test_turn_0_start_focus_and_location_description_rules(
     }
 
     # 2. Character-focused start (no {location_description}) -> L2 + L1 + L0 cards in outer -> inner order
-    camp_char_focus = temp_repo.create_campaign(
+    camp_char_focus = empty_repo.create_campaign(
         name="Char Focus",
         world_id=world.id,
         character_id=char_custom.id,
         start_focus="character",
     )
-    b_char = temp_repo.get_campaign_state_bundle(camp_char_focus.id)
+    b_char = empty_repo.get_campaign_state_bundle(camp_char_focus.id)
     cards = b_char.active_branch_turns[0].post_turn.first_visit_cards
     assert [(c.entity_type, c.title, c.depth) for c in cards] == [
         ("container", "Old Ward", 2),
@@ -316,37 +316,37 @@ def test_turn_0_start_focus_and_location_description_rules(
     ]
 
     # 3. Character greeting with {location_description} -> skips Turn 0 location card, keeps containers
-    camp_tpl = temp_repo.create_campaign(
+    camp_tpl = empty_repo.create_campaign(
         name="Tpl Focus",
         world_id=char_tpl_world.id,
         character_id=char_with_tpl.id,
         start_focus="character",
     )
-    b_tpl = temp_repo.get_campaign_state_bundle(camp_tpl.id)
+    b_tpl = empty_repo.get_campaign_state_bundle(camp_tpl.id)
     tpl_cards = b_tpl.active_branch_turns[0].post_turn.first_visit_cards
     assert [c.title for c in tpl_cards] == ["Old Ward", "Anchor Tavern"]
 
     # 4. Blank initial_message fallback embeds location.description -> skips location card, keeps containers
-    camp_blank = temp_repo.create_campaign(
+    camp_blank = empty_repo.create_campaign(
         name="Blank Greeting",
         world_id=blank_world.id,
         character_id=char_blank.id,
         start_focus="character",
     )
-    b_blank = temp_repo.get_campaign_state_bundle(camp_blank.id)
+    b_blank = empty_repo.get_campaign_state_bundle(camp_blank.id)
     blank_cards = b_blank.active_branch_turns[0].post_turn.first_visit_cards
     assert [c.title for c in blank_cards] == ["Old Ward", "Anchor Tavern"]
 
 
 def test_map_moves_nested_containers_boilerplate_rewind_and_settings_isolation(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Map travel creates standalone __arrival__ rows, filters boilerplate, rewinds cleanly, and isolates settings."""
-    user = temp_repo.create_user(username="fv_admin", display_name="FV", role="admin")
+    user = empty_repo.create_user(username="fv_admin", display_name="FV", role="admin")
     world, char = _seed_nested_world_and_character(
-        temp_repo, owner_id=user.id, char_initial_message="Pull up a stool."
+        empty_repo, owner_id=user.id, char_initial_message="Pull up a stool."
     )
-    camp = temp_repo.create_campaign(
+    camp = empty_repo.create_campaign(
         name="Mist Run",
         world_id=world.id,
         character_id=char.id,
@@ -358,14 +358,14 @@ def test_map_moves_nested_containers_boilerplate_rewind_and_settings_isolation(
     assert turn_0_id is not None
 
     # Moving to sibling Cellar Room inside already-visited Tavern emits ONLY Cellar Room (no Tavern/Old Ward repeat)
-    b_cellar = temp_repo.override_campaign_location(camp.id, f"loc_cellar_{world.id}", owner_id=user.id)
+    b_cellar = empty_repo.override_campaign_location(camp.id, f"loc_cellar_{world.id}", owner_id=user.id)
     assert len(b_cellar.active_branch_turns) == 2
     arrival_turn = b_cellar.active_branch_turns[-1]
     assert arrival_turn.actor_id == "__arrival__"
     assert [c.title for c in arrival_turn.post_turn.first_visit_cards] == ["Cellar Room"]
 
     # Moving across unvisited L2 -> L1 -> L0 emits 3 ordered cards in a single standalone turn
-    b_vault = temp_repo.override_campaign_location(camp.id, f"loc_vault_hall_{world.id}", owner_id=user.id)
+    b_vault = empty_repo.override_campaign_location(camp.id, f"loc_vault_hall_{world.id}", owner_id=user.id)
     assert len(b_vault.active_branch_turns) == 3
     vault_cards = b_vault.active_branch_turns[-1].post_turn.first_visit_cards
     assert [c.title for c in vault_cards] == [
@@ -376,12 +376,12 @@ def test_map_moves_nested_containers_boilerplate_rewind_and_settings_isolation(
     vault_turn_id = b_vault.campaign.active_leaf_turn_id
 
     # Returning to Start Foyer (revisit) emits zero cards and does NOT append another arrival row
-    b_back = temp_repo.override_campaign_location(camp.id, f"loc_start_{world.id}", owner_id=user.id)
+    b_back = empty_repo.override_campaign_location(camp.id, f"loc_start_{world.id}", owner_id=user.id)
     assert len(b_back.active_branch_turns) == 3
 
     # Moving to boilerplate stub shed & room emits zero cards (filtered)
     assert is_meaningful_description("A newly connected location awaiting description.") is False
-    b_stub = temp_repo.override_campaign_location(camp.id, f"loc_stub_room_{world.id}", owner_id=user.id)
+    b_stub = empty_repo.override_campaign_location(camp.id, f"loc_stub_room_{world.id}", owner_id=user.id)
     assert len(b_stub.active_branch_turns) == 3
 
     # Zone 3 LLM prompt & Zone 1 static prompt completely exclude __arrival__ rows & arrival card text
@@ -404,8 +404,8 @@ def test_map_moves_nested_containers_boilerplate_rewind_and_settings_isolation(
     assert "describe_on_first_visit" not in zone1
 
     # Branch rewind back to Turn 0 restores unvisited state so Ledger Chamber triggers fresh again
-    temp_repo.checkout_turn_branch(camp.id, turn_0_id, owner_id=user.id)
-    b_rewound_vault = temp_repo.override_campaign_location(
+    empty_repo.checkout_turn_branch(camp.id, turn_0_id, owner_id=user.id)
+    b_rewound_vault = empty_repo.override_campaign_location(
         camp.id, f"loc_vault_hall_{world.id}", owner_id=user.id
     )
     assert b_rewound_vault.campaign.active_leaf_turn_id != vault_turn_id
@@ -431,35 +431,35 @@ def test_map_moves_nested_containers_boilerplate_rewind_and_settings_isolation(
         main_module.app.dependency_overrides.pop(get_current_user, None)
 
     # Base world untouched (still True), and past branch arrival card stays intact while future visits emit nothing
-    assert temp_repo.get_world(world.id, owner_id=user.id).global_rules.describe_on_first_visit is True
-    b_no_cards = temp_repo.override_campaign_location(camp.id, f"loc_cellar_{world.id}", owner_id=user.id)
+    assert empty_repo.get_world(world.id, owner_id=user.id).global_rules.describe_on_first_visit is True
+    b_no_cards = empty_repo.override_campaign_location(camp.id, f"loc_cellar_{world.id}", owner_id=user.id)
     assert len(b_no_cards.active_branch_turns) == 2
     assert b_no_cards.active_branch_turns[-1].post_turn.first_visit_cards[0].title == "Drowned Undercroft"
 
 
 @pytest.mark.asyncio
 async def test_clerk_move_attaches_first_visit_cards_to_triggering_turn(
-    temp_repo: CantinaRepository, monkeypatch: pytest.MonkeyPatch
+    empty_repo: CantinaRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Clerk movement attaches first_visit_cards to completed_turn post_turn_json without adding a separate turn row."""
     from app.engine.llm_client import llm_client
 
     world, char = _seed_nested_world_and_character(
-        temp_repo, char_initial_message="Pull up a stool."
+        empty_repo, char_initial_message="Pull up a stool."
     )
-    camp = temp_repo.create_campaign(
+    camp = empty_repo.create_campaign(
         name="Clerk Run",
         world_id=world.id,
         character_id=char.id,
         start_focus="world",
         opening_prose="Opening prose.",
     )
-    bundle0 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle0 = empty_repo.get_campaign_state_bundle(camp.id)
     t0 = bundle0.active_branch_turns[0]
     vault_id = f"loc_vault_hall_{world.id}"
 
     # Seed Turn 1 user/prose turn before running Clerk
-    saved_t1 = temp_repo.save_turn_node(
+    saved_t1 = empty_repo.save_turn_node(
         turn_id="turn_clerk_1",
         campaign_id=camp.id,
         parent_turn_id=t0.id,
@@ -492,7 +492,7 @@ async def test_clerk_move_attaches_first_visit_cards_to_triggering_turn(
 
     monkeypatch.setattr(llm_client, "complete_structured", _fake_structured)
     updated_turn, _chunks = await run_phase5_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world_id=world.id,
         character=char,
@@ -509,7 +509,7 @@ async def test_clerk_move_attaches_first_visit_cards_to_triggering_turn(
         "Tide Vault",
         "Ledger Chamber",
     ]
-    bundle_after = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle_after = empty_repo.get_campaign_state_bundle(camp.id)
     assert len(bundle_after.active_branch_turns) == 2
     assert bundle_after.active_branch_turns[-1].id == saved_t1.id
     assert "cont_vault" in bundle_after.current_world_snapshot.visited_container_ids

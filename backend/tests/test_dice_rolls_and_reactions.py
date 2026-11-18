@@ -428,13 +428,16 @@ def test_inventory_arbitration_resolves_roll_for_specific_character():
 # =========================================================================
 
 @pytest.mark.asyncio
-async def test_phase5_persists_plans_for_all_co_present_characters(temp_repo):
+async def test_phase5_persists_plans_for_all_co_present_characters(empty_repo):
     """Phase 5 post-turn clerk must update active_want and active_plan for ALL characters in turn.cognitions."""
-    world = temp_repo.get_world("world_neon_rust")
-    main_bar = next(loc for loc in world.locations if loc.is_starting_location)
-    kira = temp_repo.get_character("char_kira_vance")
+    from tests.factories import seed_character, seed_user, seed_world
 
-    bob = temp_repo.create_character_from_draft(
+    user = seed_user(empty_repo)
+    world = seed_world(empty_repo, owner_id=user.id)
+    main_bar = world.locations[0]
+    kira = seed_character(empty_repo, owner_id=user.id, world_id=world.id, name="Kira Vance")
+
+    bob = empty_repo.create_character_from_draft(
         CharacterWizardDraft(
             name="Bob",
             tagline="Bodyguard",
@@ -451,9 +454,10 @@ async def test_phase5_persists_plans_for_all_co_present_characters(temp_repo):
             ),
         ),
         world_id=world.id,
+        owner_id=user.id,
     )
 
-    camp = temp_repo.create_campaign(
+    camp = empty_repo.create_campaign(
         name="Co-present Plan Test",
         world_id=world.id,
         character_id=kira.id,
@@ -462,8 +466,9 @@ async def test_phase5_persists_plans_for_all_co_present_characters(temp_repo):
             kira.id: main_bar.id,
             bob.id: main_bar.id,
         },
+        owner_id=user.id,
     )
-    bundle0 = temp_repo.get_campaign_state_bundle(camp.id)
+    bundle0 = empty_repo.get_campaign_state_bundle(camp.id)
     root_turn = bundle0.active_branch_turns[-1]
 
     cog_kira = CognitionBlock(
@@ -483,7 +488,7 @@ async def test_phase5_persists_plans_for_all_co_present_characters(temp_repo):
         arousal=0.9,
     )
 
-    turn1 = temp_repo.save_turn_node(
+    turn1 = empty_repo.save_turn_node(
         turn_id="turn_cog_plans_1",
         campaign_id=camp.id,
         parent_turn_id=root_turn.id,
@@ -509,7 +514,7 @@ async def test_phase5_persists_plans_for_all_co_present_characters(temp_repo):
     )
 
     await run_phase5_post_turn_clerk(
-        repo=temp_repo,
+        repo=empty_repo,
         campaign_id=camp.id,
         world_id=world.id,
         character=kira,
@@ -519,7 +524,7 @@ async def test_phase5_persists_plans_for_all_co_present_characters(temp_repo):
         present_characters=[kira, bob],
     )
 
-    updated_bundle = temp_repo.get_campaign_state_bundle(camp.id)
+    updated_bundle = empty_repo.get_campaign_state_bundle(camp.id)
     kira_state = updated_bundle.character_states[kira.id]
     bob_state = updated_bundle.character_states[bob.id]
 
@@ -780,9 +785,12 @@ def test_pre_turn_analysis_legacy_deserialization_and_dice_mode_invariants():
     assert analysis_disabled.mechanics_check.requires_roll is False
 
 
-async def test_narrator_mode_never_rolls_dice_under_any_circumstance(temp_repo):
+async def test_narrator_mode_never_rolls_dice_under_any_circumstance(empty_repo):
     """In narrator mode, dice should NEVER be rolled under any circumstance."""
-    camp_id = "camp_neon_rust_default"
+    from tests.factories import seed_minimal_scenario
+
+    scenario = seed_minimal_scenario(empty_repo)
+    camp_id = scenario.campaign.id
 
     # 1. Narrator describe
     events = []

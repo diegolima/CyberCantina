@@ -12,14 +12,12 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from app import main as main_module
 from app.config import settings
 from app.db.repository import CantinaRepository
 from app.db.seed import (
     SHOWCASE_CHARACTER_SEED_KEY,
     SHOWCASE_SEED_VERSION,
     SHOWCASE_WORLD_SEED_KEY,
-    ensure_public_showcase_media,
 )
 from app.engine.phase2_context import build_zone1_static_system_prompt
 from app.housekeeping.purge_inactive import ORPHAN_MEDIA_GRACE_SECONDS, _sweep_orphan_media_dirs
@@ -42,28 +40,11 @@ def _make_png_bytes(width: int = 64, height: int = 64, color: tuple[int, int, in
 
 @pytest.fixture()
 def showcase_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    showcase_api_env: tuple[TestClient, CantinaRepository, Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[TestClient, CantinaRepository, Path]:
-    db_file = str(tmp_path / "showcase.db")
-    media_dir = tmp_path / "media"
-    media_dir.mkdir(parents=True, exist_ok=True)
-    settings_file = tmp_path / "runtime_settings.json"
-
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "media_dir", str(media_dir))
-    monkeypatch.setattr(settings, "allow_offline_fallback", True)
     monkeypatch.setattr(settings, "allow_self_registration", True)
-    monkeypatch.setattr(settings.actor_profile, "base_url", "http://127.0.0.1:9/v1")
-    monkeypatch.setattr(settings.clerk_profile, "base_url", "http://127.0.0.1:9/v1")
-    monkeypatch.setattr(settings.embedding_profile, "mode", "local_hash")
-    monkeypatch.setattr("app.config.SETTINGS_FILE_PATH", settings_file)
-
-    repo = CantinaRepository(db_file, media_dir=str(media_dir))
-    repo.init_db()
-    ensure_public_showcase_media(repo)
-
-    client = TestClient(main_module.app)
-    return client, repo, media_dir
+    return showcase_api_env
 
 
 def test_per_user_showcase_seeding_and_full_field_validation(
@@ -119,8 +100,8 @@ def test_per_user_showcase_seeding_and_full_field_validation(
         c = chars[0]
         assert w["name"] == "The Green Lie"
         assert c["name"] == "Kira Vance"
-        assert w["id"] != "world_neon_rust"
-        assert c["id"] != "char_kira_vance"
+        assert w["id"].startswith("world_")
+        assert c["id"].startswith("char_")
         seen_world_ids.add(w["id"])
         seen_char_ids.add(c["id"])
 

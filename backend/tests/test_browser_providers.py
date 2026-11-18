@@ -30,22 +30,12 @@ class _StructuredChoice(BaseModel):
 
 
 @pytest.fixture()
-def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    db_file = str(tmp_path / "browser_providers.db")
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "media_dir", str(tmp_path / "media"))
-    repo = CantinaRepository(db_file, media_dir=str(tmp_path / "media"))
-    repo.init_db()
-    client = TestClient(main_module.app)
-    admin = client.post("/api/auth/setup", json={"username": "admin_b", "password": "AdminPassword123!"})
-    assert admin.status_code == 200
-    admin_h = {"Authorization": f"Bearer {admin.json()['token']}"}
+def env(api_env, api_user_factory):
+    client, repo, _media_dir = api_env
+    admin_h, _admin_id, _admin_tok = api_user_factory("admin_b", role="admin")
 
     def make_user(name: str) -> tuple[dict[str, str], str, str]:
-        res = client.post("/api/auth/register", json={"username": name, "password": "UserPassword123!"})
-        assert res.status_code == 200
-        tok = res.json()["token"]
-        return {"Authorization": f"Bearer {tok}"}, res.json()["user"]["id"], tok
+        return api_user_factory(name)
 
     return client, repo, admin_h, make_user
 
@@ -144,13 +134,21 @@ def test_browser_providers_crud_scope_and_client_probe(env) -> None:
     )
 
 
-def test_auto_provision_webgpu_for_new_users_when_no_global_providers(env) -> None:
-    client, repo, admin_h, make_user = env
+def test_auto_provision_webgpu_for_new_users_when_no_global_providers(
+    env,
+    no_showcase_seeding: None,
+) -> None:
+    client, repo, admin_h, _make_user = env
     settings.allow_user_providers = True
     repo.providers.set_meta(SEED_META_KEY, "1")
 
+    def _register_user(name: str) -> tuple[dict[str, str], str]:
+        res = client.post("/api/auth/register", json={"username": name, "password": "UserPassword123!"})
+        assert res.status_code == 200
+        return {"Authorization": f"Bearer {res.json()['token']}"}, res.json()["user"]["id"]
+
     # 0 system providers -> new user gets Browser WebGPU + mirrored model settings
-    alice_h, alice_id, _ = make_user("alice_auto")
+    alice_h, alice_id = _register_user("alice_auto")
     alice_providers = client.get("/api/providers", headers=alice_h).json()
     assert len(alice_providers) == 1
     assert alice_providers[0]["type"] == "webgpu"
@@ -168,7 +166,7 @@ def test_auto_provision_webgpu_for_new_users_when_no_global_providers(env) -> No
         json={"name": "Global Ollama", "type": "ollama", "scope": "system", "settings": {"base_url": "http://127.0.0.1:11434"}},
     )
     assert sys_res.status_code == 201
-    bob_h, bob_id, _ = make_user("bob_no_auto")
+    bob_h, bob_id = _register_user("bob_no_auto")
     bob_providers = client.get("/api/providers", headers=bob_h).json()
     assert [p["name"] for p in bob_providers] == ["Global Ollama"]
     assert repo.get_user_model_settings(bob_id) is None

@@ -8,9 +8,8 @@ import sqlite3
 
 import pytest
 
-from app.config import settings
 from app.db.repository import CantinaRepository
-from app.db.seed import ensure_test_seed
+from tests.factories import seed_minimal_scenario
 from app.engine.affective_engine import materialize_snapshot_with_care, seed_initial_care_state
 from app.routers.campaigns import campaign_turn_gate
 from app.schemas.affective import (
@@ -30,22 +29,11 @@ from app.schemas.turn import (
 )
 
 
-@pytest.fixture()
-def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CantinaRepository:
-    db_file = str(tmp_path / "test_care_persistence.db")
-    monkeypatch.setattr(settings, "db_path", db_file)
-    monkeypatch.setattr(settings, "allow_offline_fallback", True)
-    monkeypatch.setattr(settings.embedding_profile, "mode", "local_hash")
-    repo = CantinaRepository(db_file)
-    repo.init_db()
-    ensure_test_seed(repo)
-    return repo
-
-
-def test_seed_turn0_care_state_and_campaign_elapsed_minutes(temp_repo: CantinaRepository) -> None:
+def test_seed_turn0_care_state_and_campaign_elapsed_minutes(empty_repo: CantinaRepository) -> None:
     """Turn 0 seeded campaign persists Kira's stoic CARE state & campaign_elapsed_minutes == 0."""
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
-    kira = bundle.character_records["char_kira_vance"]
+    scenario = seed_minimal_scenario(empty_repo, location_names=("Main Floor", "Backroom Ripperdoc Bay"), temperament="stoic")
+    bundle = empty_repo.get_campaign_state_bundle(scenario.campaign.id)
+    kira = bundle.character_records[scenario.character.id]
     assert kira.baseline_psyche.temperament.archetype == "stoic"
     assert kira.baseline_psyche.temperament.relational_inertia == pytest.approx(0.92)
 
@@ -58,11 +46,12 @@ def test_seed_turn0_care_state_and_campaign_elapsed_minutes(temp_repo: CantinaRe
 
 
 def test_absent_character_carry_forward_preserves_care_state_and_idle_clock(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """save_turn_node carries forward off-screen NPC's care_state & state_elapsed_minutes untouched."""
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
-    world = temp_repo.get_world(bundle.campaign.world_id)
+    scenario = seed_minimal_scenario(empty_repo, location_names=("Main Floor", "Backroom Ripperdoc Bay"), temperament="stoic")
+    bundle = empty_repo.get_campaign_state_bundle(scenario.campaign.id)
+    world = empty_repo.get_world(bundle.campaign.world_id)
     backroom = next(loc for loc in world.locations if "Ripperdoc" in loc.name)
 
     offscreen_draft = CharacterWizardDraft(
@@ -81,11 +70,11 @@ def test_absent_character_carry_forward_preserves_care_state_and_idle_clock(
             temperament=temperament_config_for_archetype("paranoiac"),
         ),
     )
-    marcus = temp_repo.create_character_from_draft(
+    marcus = empty_repo.create_character_from_draft(
         offscreen_draft, world_id=world.id, character_id="char_marcus_holt"
     )
-    updated_bundle = temp_repo.add_character_to_campaign(
-        "camp_neon_rust_default", marcus.id, location_id=backroom.id
+    updated_bundle = empty_repo.add_character_to_campaign(
+        bundle.campaign.id, marcus.id, location_id=backroom.id
     )
     turn_0 = updated_bundle.active_branch_turns[-1]
 
@@ -109,7 +98,7 @@ def test_absent_character_carry_forward_preserves_care_state_and_idle_clock(
     marcus_t0 = materialize_snapshot_with_care(
         turn_0.character_states[marcus.id], custom_care
     )
-    temp_repo.update_turn_post_clerk(
+    empty_repo.update_turn_post_clerk(
         turn_id=turn_0.id,
         post_turn=PostTurnStateDelta(elapsed_minutes=15),
         updated_world_snapshot=turn_0.world_snapshot.model_copy(
@@ -120,16 +109,16 @@ def test_absent_character_carry_forward_preserves_care_state_and_idle_clock(
     )
 
     # Now save Turn 1 in Main Bar WITHOUT passing Marcus in extra_character_states!
-    t1 = temp_repo.save_turn_node(
+    t1 = empty_repo.save_turn_node(
         turn_id="turn_main_bar_1",
-        campaign_id="camp_neon_rust_default",
+        campaign_id=bundle.campaign.id,
         parent_turn_id=turn_0.id,
         depth_index=1,
         user_message="Pour me a drink, Kira.",
-        actor_id="char_kira_vance",
+        actor_id=bundle.campaign.character_id,
         raw_prose="*Kira pours a drink.*",
         cognition=CognitionBlock(feeling="Measured", want="Talk", plan="- Pour drink"),
-        pre_turn=PreTurnAnalysis(active_speaker_id="char_kira_vance"),
+        pre_turn=PreTurnAnalysis(active_speaker_id=bundle.campaign.character_id),
         world_snapshot=WorldStateSnapshot(
             turn_id="turn_main_bar_1",
             world_timestamp="2094-11-14 23:35",
@@ -151,12 +140,13 @@ def test_absent_character_carry_forward_preserves_care_state_and_idle_clock(
 
 
 def test_branch_isolation_preserves_divergent_worldviews_and_relations(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Tenet V: Trauma/betrayal on Branch A never leaks into sibling swipe Branch B."""
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
+    scenario = seed_minimal_scenario(empty_repo, location_names=("Main Floor", "Backroom Ripperdoc Bay"), temperament="stoic")
+    bundle = empty_repo.get_campaign_state_bundle(scenario.campaign.id)
     root_turn = bundle.active_branch_turns[0]
-    kira = bundle.character_records["char_kira_vance"]
+    kira = bundle.character_records[bundle.campaign.character_id]
 
     # Branch A: Betrayal shatters trust & lowers worldview benevolence
     care_a = seed_initial_care_state(kira.baseline_psyche, initial_elapsed_minutes=10).model_copy(
@@ -175,9 +165,9 @@ def test_branch_isolation_preserves_divergent_worldviews_and_relations(
         root_turn.character_state.model_copy(update={"turn_id": "turn_branch_a"}),
         care_a,
     )
-    temp_repo.save_turn_node(
+    empty_repo.save_turn_node(
         turn_id="turn_branch_a",
-        campaign_id="camp_neon_rust_default",
+        campaign_id=bundle.campaign.id,
         parent_turn_id=root_turn.id,
         depth_index=1,
         user_message="I sold your clinic coordinates to Vespera.",
@@ -209,9 +199,9 @@ def test_branch_isolation_preserves_divergent_worldviews_and_relations(
         root_turn.character_state.model_copy(update={"turn_id": "turn_branch_b"}),
         care_b,
     )
-    temp_repo.save_turn_node(
+    empty_repo.save_turn_node(
         turn_id="turn_branch_b",
-        campaign_id="camp_neon_rust_default",
+        campaign_id=bundle.campaign.id,
         parent_turn_id=root_turn.id,
         depth_index=1,
         user_message="I wiped Vespera's trace logs on your clinic.",
@@ -226,31 +216,32 @@ def test_branch_isolation_preserves_divergent_worldviews_and_relations(
         recalled_items=[],
     )
 
-    checked_a = temp_repo.checkout_turn_branch("camp_neon_rust_default", "turn_branch_a")
+    checked_a = empty_repo.checkout_turn_branch(bundle.campaign.id, "turn_branch_a")
     assert checked_a.current_character_state.care_state is not None
     assert checked_a.current_character_state.care_state.relations["user"].grievance == pytest.approx(0.92)
     assert checked_a.current_character_state.care_state.active_worldview.benevolence == pytest.approx(-0.75)
 
-    checked_b = temp_repo.checkout_turn_branch("camp_neon_rust_default", "turn_branch_b")
+    checked_b = empty_repo.checkout_turn_branch(bundle.campaign.id, "turn_branch_b")
     assert checked_b.current_character_state.care_state is not None
     assert checked_b.current_character_state.care_state.relations["user"].grievance == pytest.approx(0.0)
     assert checked_b.current_character_state.care_state.relations["user"].trust == pytest.approx(0.72)
 
     # Static character definition in `characters` table remains untouched!
-    kira_static = temp_repo.get_character(kira.id)
+    kira_static = empty_repo.get_character(kira.id)
     assert kira_static.baseline_psyche.initial_worldview.benevolence == pytest.approx(-0.15)
 
 
 @pytest.mark.asyncio
 async def test_deleted_turn_clerk_guard_and_campaign_turn_gate(
-    temp_repo: CantinaRepository,
+    empty_repo: CantinaRepository,
 ) -> None:
     """Verify update_turn_post_clerk rejects deleted turn cleanly (no IntegrityError) & lock serializes."""
-    bundle = temp_repo.get_campaign_state_bundle("camp_neon_rust_default")
+    scenario = seed_minimal_scenario(empty_repo, location_names=("Main Floor", "Backroom Ripperdoc Bay"), temperament="stoic")
+    bundle = empty_repo.get_campaign_state_bundle(scenario.campaign.id)
     root_turn = bundle.active_branch_turns[0]
 
     with pytest.raises(KeyError, match="deleted before Phase 5"):
-        temp_repo.update_turn_post_clerk(
+        empty_repo.update_turn_post_clerk(
             turn_id="turn_nonexistent_deleted",
             post_turn=PostTurnStateDelta(elapsed_minutes=2),
             updated_world_snapshot=root_turn.world_snapshot,
