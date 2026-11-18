@@ -80,7 +80,7 @@ Extract a shared `StandaloneArrivalCard` component (e.g., `frontend/src/componen
 2. **Header Source Attribution & Controls:**
    - **Turn 0:** Display `"Scene Opening"` + `world_timestamp` (no Delete button).
    - **Clerk Move (`depth_index > 0`, non-`__arrival__`):** Display `"Arrived via Turn #<depth_index>"` + `world_timestamp` (no Delete button on the arrival card itself; undoing/swiping/editing belongs to Turn N directly above it, and `.turn-card--editing` continues highlighting only Turn N's `.turn-card`).
-   - **Manual Map Move (`actor_id === "__arrival__"`):** Display `"Map Move"` + `world_timestamp`, retaining the `Delete` button when `isLastTurn && hasDeleteLastHandler` to undo the map move.
+   - **Manual Map Move (`actor_id === "__arrival__"`):** Display `"Map Move"` + `world_timestamp`, retaining the `Undo` button (`Undo2` icon) when `isLastTurn && hasDeleteLastHandler` to revert the map move.
 
 ---
 
@@ -104,7 +104,7 @@ Support collapsing at both the **whole-card** level and the **individual-element
      - Apply `min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap` to the summary title and allow metadata/actions on the right to wrap cleanly on narrow viewports (`< 640px`).
      - When `cards.length > 0` and the card is collapsed (or multi-item), surface a compact count/visuals indicator (e.g., `2 cards` / `+ Visuals`) in the header badges.
    - **Valid Interactive Header Layout:**
-     - Place the outer collapse toggle `<button type="button" aria-expanded={groupExpanded}>` and the manual map-move `Delete` `<button type="button">` as **siblings** inside the `.arrival-turn-card` header row (never nesting `<button>` inside `<button>`).
+     - Place the outer collapse toggle `<button type="button" aria-expanded={groupExpanded}>` and the manual map-move `Undo` `<button type="button">` as **siblings** inside the `.arrival-turn-card` header row (never nesting `<button>` inside `<button>`).
 
 2. **Inner Element Collapse (`isArrivalInnerItemExpanded` & `failedUrls` Lifting):**
    - **Lift `failedUrls` State into `StandaloneArrivalCard`:**
@@ -158,7 +158,7 @@ Support collapsing at both the **whole-card** level and the **individual-element
 | :--- | :--- | :--- |
 | **AC-1** | Turn 0 arrivals (`first_visit_cards` / `first_visit_media`) render as a standalone `.arrival-turn-card` **before** Turn 0's `.turn-card`, with no `.arrival-cards-panel` inside Turn 0's card. | Vitest (`TurnCard` SSR order test in `firstVisitDescriptions.test.tsx` & `worldMedia.test.tsx`) |
 | **AC-2** | Clerk-triggered arrivals on Turn N (`depth_index > 0`, Character or Narrator) render as a standalone `.arrival-turn-card` **after** Turn N's `.turn-card` (below Turn N's Edit/Swipe/Delete footer) without creating extra DB `turn_node` rows; Turn N retains `Edit`, `Swipe`, `Delete`, `.turn-card--editing` isolation, and stable React reconciliation. | Vitest SSR test + existing backend pytest suite |
-| **AC-3** | Manual map moves (`actor_id === "__arrival__"`) render with the same `StandaloneArrivalCard` component and retain the `Delete` button on the active leaf turn (as a sibling `<button>`, never nested inside the header toggle `<button>`). | Vitest SSR test |
+| **AC-3** | Manual map moves (`actor_id === "__arrival__"`) render with the same `StandaloneArrivalCard` component and retain the `Undo` button on the active leaf turn (as a sibling `<button>`, never nested inside the header toggle `<button>`). | Vitest SSR test |
 | **AC-4** | The outer standalone arrival card is collapsible (`aria-expanded` toggle + truncated destination summary in header); it defaults to expanded **only** when `turn.id === lastTurnId` (including Turn 0 when it is the sole turn) and auto-collapses to a single compact bar when `lastTurnId` advances. | Vitest pure-helper (`arrivalHelpers`) + SSR tests |
 | **AC-5** | When an outer card is expanded with 2+ renderable items, inner items (`Arrival Visuals` and each container/location card) default to expanded via `isArrivalInnerItemExpanded` and can each be toggled independently; when `renderableItemCount === 1`, no redundant nested header is rendered; when all media fails and `cards` is empty, nothing renders. | Vitest pure-helper + `StandaloneArrivalCard` / `ArrivalDescriptionCards` SSR tests |
 | **AC-6** | Async Clerk arrival insertion performs zero `.focus()` / `.scrollIntoView()` calls, preserves `overflow-anchor: none`, and keeps Turn N's `.turn-card` key/slot and DOM layout unchanged. | Code inspection + Vitest SSR / structural tests |

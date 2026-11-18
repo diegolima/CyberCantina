@@ -6,7 +6,7 @@ import {
   Image as ImageIcon,
   Layers,
   MapPin,
-  Trash2,
+  Undo2,
 } from "lucide-react";
 import type { FirstVisitDescriptionCard, FirstVisitMediaItem } from "../../types";
 import { ArrivalDescriptionCards } from "./ArrivalDescriptionCards";
@@ -142,14 +142,14 @@ export const StandaloneArrivalCard: React.FC<StandaloneArrivalCardProps> = ({
           {source === "map" && showDelete && onDelete && (
             <button
               type="button"
-              className="btn btn-danger"
+              className="btn"
               style={{ padding: "2px 7px", fontSize: "0.69rem" }}
               disabled={deleteDisabled}
               onClick={onDelete}
               title="Undo map move & remove arrival description"
             >
-              <Trash2 size={11} />
-              Delete
+              <Undo2 size={11} />
+              Undo
             </button>
           )}
         </div>

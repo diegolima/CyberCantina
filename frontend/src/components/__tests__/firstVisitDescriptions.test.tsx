@@ -442,7 +442,7 @@ describe("First-Visit Arrival Descriptions & World Settings (v0.11.6 + v0.19.1)"
       clerkTurnHtml.indexOf("Delete")
     );
 
-    // Standalone map-move arrival turn (1 item) omits redundant inner toggle header, keeps sibling Delete, omits Swipe
+    // Standalone map-move arrival turn (1 item) omits redundant inner toggle header, keeps sibling Undo, omits Swipe
     const arrivalBundle: CampaignStateBundle = {
       ...bundle,
       active_branch_turns: [turn1, arrivalTurn],
@@ -481,7 +481,8 @@ describe("First-Visit Arrival Descriptions & World Settings (v0.11.6 + v0.19.1)"
     expect(standaloneHtml).toContain("Anchor Tavern");
     expect(standaloneHtml).toContain("arrival-card-body--bare");
     expect(standaloneHtml).not.toContain("arrival-card-header");
-    expect(standaloneHtml).toContain("Delete");
+    expect(standaloneHtml).toContain("Undo");
+    expect(standaloneHtml).not.toContain("Delete");
     expect(standaloneHtml).not.toContain("Swipe");
   });
 

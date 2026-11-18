@@ -63,11 +63,7 @@ export const ArrivalDescriptionCards: React.FC<ArrivalDescriptionCardsProps> = (
 }) => {
   const [localFailedUrls, setLocalFailedUrls] = useState<Record<string, boolean>>({});
   const [localSlideIdx, setLocalSlideIdx] = useState(0);
-  const [lightboxSlide, setLightboxSlide] = useState<{
-    url: string;
-    label: string;
-    subtitle: string;
-  } | null>(null);
+  const [isLightboxOpen, setIsLightboxOpen] = useState(false);
 
   const visibleMedia = useMemo(
     () =>
@@ -87,13 +83,16 @@ export const ArrivalDescriptionCards: React.FC<ArrivalDescriptionCardsProps> = (
   };
 
   useEffect(() => {
+    setIsLightboxOpen(false);
     if (slideIdxOverride === undefined) {
       setLocalSlideIdx(0);
     }
   }, [turnId, slideIdxOverride]);
 
   useEffect(() => {
-    if (slideIdx >= visibleMedia.length && visibleMedia.length > 0) {
+    if (visibleMedia.length === 0) {
+      setIsLightboxOpen(false);
+    } else if (slideIdx >= visibleMedia.length) {
       if (onSlideIdxChange) {
         onSlideIdxChange(0);
       } else {
@@ -144,25 +143,13 @@ export const ArrivalDescriptionCards: React.FC<ArrivalDescriptionCardsProps> = (
             src={slide.image_url}
             alt={getArrivalMediaDisplayLabel(slide)}
             className="arrival-media-img"
-            onClick={() =>
-              setLightboxSlide({
-                url: slide.image_url,
-                label: getArrivalMediaDisplayLabel(slide),
-                subtitle: slideSubtitle,
-              })
-            }
+            onClick={() => setIsLightboxOpen(true)}
             onError={() => handleImageError(slide.image_url)}
           />
           <button
             type="button"
             className="arrival-media-enlarge-btn"
-            onClick={() =>
-              setLightboxSlide({
-                url: slide.image_url,
-                label: getArrivalMediaDisplayLabel(slide),
-                subtitle: slideSubtitle,
-              })
-            }
+            onClick={() => setIsLightboxOpen(true)}
             title="Enlarge image"
             aria-label="Enlarge arrival image"
           >
@@ -318,12 +305,39 @@ export const ArrivalDescriptionCards: React.FC<ArrivalDescriptionCardsProps> = (
         })}
       </div>
 
-      {lightboxSlide && (
+      {isLightboxOpen && activeSlide && (
         <ImageLightboxModal
-          url={lightboxSlide.url}
-          label={lightboxSlide.label}
-          subtitle={lightboxSlide.subtitle || undefined}
-          onClose={() => setLightboxSlide(null)}
+          url={activeSlide.image_url}
+          label={getArrivalMediaDisplayLabel(activeSlide)}
+          subtitle={
+            activeSlide.label.trim() &&
+            activeSlide.label.trim() !== activeSlide.entity_name
+              ? activeSlide.entity_name
+              : undefined
+          }
+          counterText={
+            visibleMedia.length > 1
+              ? `${Math.min(slideIdx, visibleMedia.length - 1) + 1} / ${visibleMedia.length}`
+              : undefined
+          }
+          onPrev={
+            visibleMedia.length > 1
+              ? () =>
+                  setSlideIdx((prev) =>
+                    stepCarouselIndex(prev, -1, visibleMedia.length)
+                  )
+              : undefined
+          }
+          onNext={
+            visibleMedia.length > 1
+              ? () =>
+                  setSlideIdx((prev) =>
+                    stepCarouselIndex(prev, 1, visibleMedia.length)
+                  )
+              : undefined
+          }
+          onImageError={() => handleImageError(activeSlide.image_url)}
+          onClose={() => setIsLightboxOpen(false)}
         />
       )}
     </>

@@ -20,6 +20,7 @@ import {
   stepCarouselIndex,
 } from "../chat/arrivalMediaHelpers";
 import { MapDetailsDrawer } from "../map/MapDetailsDrawer";
+import { ImageLightboxModal } from "../shared/ImageLightboxModal";
 import { WorldInspectorModal } from "../world/WorldInspectorModal";
 
 function makeWorldMedia(): WorldMediaItem[] {
@@ -235,6 +236,33 @@ describe("World Media UI & Helpers", () => {
       />
     );
     expect(emptyHtml).toBe("");
+
+    // ImageLightboxModal renders prev/next navigation and counter only when handlers are passed
+    const singleLightboxHtml = renderToStaticMarkup(
+      <ImageLightboxModal
+        url="/api/media/worlds/images/wmed_1.webp"
+        label="Neon Waterfront"
+        onClose={() => {}}
+      />
+    );
+    expect(singleLightboxHtml).not.toContain("Previous image");
+    expect(singleLightboxHtml).not.toContain("Next image");
+
+    const multiLightboxHtml = renderToStaticMarkup(
+      <ImageLightboxModal
+        url="/api/media/worlds/images/wmed_1.webp"
+        label="Neon Waterfront"
+        subtitle="Old Ward"
+        counterText="1 / 2"
+        onPrev={() => {}}
+        onNext={() => {}}
+        onClose={() => {}}
+      />
+    );
+    expect(multiLightboxHtml).toContain("Previous image");
+    expect(multiLightboxHtml).toContain("Next image");
+    expect(multiLightboxHtml).toContain("1 / 2");
+    expect(multiLightboxHtml).toContain("Old Ward");
   });
 
   it("renders TurnCard arrival media even when description cards are empty", () => {
