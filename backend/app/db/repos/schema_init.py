@@ -34,6 +34,8 @@ class SchemaInitMixin:
             and "container_id" in ddl_sql
             and "json_array_length(entity_tags_json)" in ddl_sql
             and "'artifact'" in ddl_sql
+            and "'figure'" in ddl_sql
+            and "'threat'" in ddl_sql
         ):
             return
 
@@ -92,11 +94,12 @@ class SchemaInitMixin:
                     campaign_id TEXT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
                     title TEXT NOT NULL CHECK(length(trim(title)) >= 1),
                     category TEXT NOT NULL CHECK(
-                        category IN ('history', 'culture', 'faction', 'rumor', 'artifact', 'secret')
-                        AND ((location_id IS NULL AND container_id IS NULL) OR category != 'artifact')
+                        category IN ('history', 'culture', 'faction', 'figure', 'rumor', 'threat', 'artifact', 'secret')
                         AND ((location_id IS NOT NULL OR container_id IS NOT NULL) OR category != 'secret')
-                        AND (location_id IS NULL OR container_id IS NULL)
+                        AND (location_id IS NULL OR category NOT IN ('artifact', 'figure', 'threat'))
+                        AND (container_id IS NULL OR category NOT IN ('artifact', 'figure', 'threat'))
                         AND (campaign_id IS NULL OR location_id IS NOT NULL OR container_id IS NOT NULL)
+                        AND (location_id IS NULL OR container_id IS NULL)
                     ),
                     content TEXT NOT NULL CHECK(length(trim(content)) >= 1),
                     entity_tags_json TEXT NOT NULL CHECK(

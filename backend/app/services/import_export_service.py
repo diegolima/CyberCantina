@@ -60,6 +60,7 @@ from app.schemas.world import (
     WorldRecord,
     extract_world_unsupported_fields,
     find_nested_world_unsupported_keys,
+    normalize_lore_category,
 )
 from app.wizards.sillytavern_parser import extract_card_from_bytes
 
@@ -1050,6 +1051,12 @@ async def commit_staged_import(
                             new_cl_id = f"lore_{uuid.uuid4().hex[:10]}"
                             if old_cl_id:
                                 id_remap[old_cl_id] = new_cl_id
+                            clean_c_cat = normalize_lore_category(
+                                c_lore.get("category", "history"),
+                                allow_secret=True,
+                                allow_artifact=False,
+                                strict=False,
+                            )
                             conn.execute(
                                 """
                                 INSERT INTO lore_nodes (
@@ -1063,12 +1070,12 @@ async def commit_staged_import(
                                     new_world_id,
                                     new_cont_id,
                                     c_lore.get("title", "Container Lore"),
-                                    c_lore.get("category", "history"),
+                                    clean_c_cat,
                                     c_lore.get("content", ""),
                                     json.dumps(c_lore.get("entity_tags", [])),
                                 ),
                             )
-                            if c_lore.get("category") != "secret":
+                            if clean_c_cat != "secret":
                                 vec_title, vec_kws = _location_lore_vector_fields(
                                     cont.get("name", ""),
                                     c_lore.get("title", ""),
@@ -1138,6 +1145,12 @@ async def commit_staged_import(
                         new_ll_id = f"lore_{uuid.uuid4().hex[:10]}"
                         if old_ll_id:
                             id_remap[old_ll_id] = new_ll_id
+                        clean_ll_cat = normalize_lore_category(
+                            loc_lore.get("category", "history"),
+                            allow_secret=True,
+                            allow_artifact=False,
+                            strict=False,
+                        )
 
                         conn.execute(
                             """
@@ -1151,13 +1164,13 @@ async def commit_staged_import(
                                 new_world_id,
                                 new_loc_id,
                                 loc_lore.get("title", "Lore"),
-                                loc_lore.get("category", "history"),
+                                clean_ll_cat,
                                 loc_lore.get("content", ""),
                                 json.dumps(loc_lore.get("entity_tags", [])),
                             ),
                         )
                         # Index in VectorStore
-                        if loc_lore.get("category") != "secret":
+                        if clean_ll_cat != "secret":
                             vec_title, vec_kws = _location_lore_vector_fields(
                                 loc.get("name", ""),
                                 loc_lore.get("title", ""),
@@ -1181,6 +1194,12 @@ async def commit_staged_import(
                     new_wl_id = f"lore_{uuid.uuid4().hex[:10]}"
                     if old_wl_id:
                         id_remap[old_wl_id] = new_wl_id
+                    clean_wl_cat = normalize_lore_category(
+                        w_lore.get("category", "history"),
+                        allow_secret=False,
+                        allow_artifact=True,
+                        strict=False,
+                    )
 
                     conn.execute(
                         """
@@ -1193,7 +1212,7 @@ async def commit_staged_import(
                             new_wl_id,
                             new_world_id,
                             w_lore.get("title", "World Lore"),
-                            w_lore.get("category", "history"),
+                            clean_wl_cat,
                             w_lore.get("content", ""),
                             json.dumps(w_lore.get("entity_tags", [])),
                         ),

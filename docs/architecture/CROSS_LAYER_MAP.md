@@ -762,8 +762,13 @@ erDiagram
 
 | File |
 | :--- |
+| `frontend/src/components/world/CodexCharacterDetail.tsx` |
+| `frontend/src/components/world/CodexLocationDetail.tsx` |
+| `frontend/src/components/world/CodexLoreEditor.tsx` |
+| `frontend/src/components/world/WorldCodexTab.tsx` |
 | `frontend/src/components/world/WorldInspectorModal.tsx` |
 | `frontend/src/components/world/WorldMediaTab.tsx` |
+| `frontend/src/components/world/codexHelpers.ts` |
 | `frontend/src/components/world/worldDraftMappers.ts` |
 
 #### `hooks`

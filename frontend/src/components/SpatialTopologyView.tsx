@@ -136,6 +136,11 @@ export interface SpatialTopologyViewProps {
   ) => Promise<void> | void;
   isMutatingLocked?: boolean;
   initialContainerFocus?: "active" | "root";
+  externalFocusRequest?: {
+    kind: "location" | "container";
+    id: string;
+    nonce: number;
+  } | null;
   worldMedia?: WorldMediaItem[];
   visitedContainerIds?: string[];
 }
@@ -162,6 +167,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   onSaveCampaignContainerLore,
   isMutatingLocked = false,
   initialContainerFocus = "active",
+  externalFocusRequest = null,
   worldMedia = [],
   visitedContainerIds = [],
 }) => {
@@ -660,6 +666,43 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     setSelectedContainerId(null);
     setSelectedLocId(loc.id);
   }, [reachabilityReport.unreachableIds, locationMap, currentContainerId]);
+
+  const lastExternalFocusNonceRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!externalFocusRequest) return;
+    if (lastExternalFocusNonceRef.current === externalFocusRequest.nonce) return;
+    lastExternalFocusNonceRef.current = externalFocusRequest.nonce;
+
+    if (externalFocusRequest.kind === "location") {
+      const targetLoc = locationMap.get(externalFocusRequest.id);
+      if (!targetLoc) return;
+      handleJumpToContainer(targetLoc.container_id ?? null, targetLoc.id);
+      return;
+    }
+
+    const targetCont = containerMap.get(externalFocusRequest.id);
+    if (!targetCont) return;
+    setCurrentContainerId(targetCont.parent_container_id ?? null);
+    setSelectedLocId(null);
+    setSelectedGhostLocId(null);
+    setSelectedContainerId(targetCont.id);
+    setContextMenu(null);
+    setInlineEdgeEdit(null);
+    setZoom(1);
+    if (
+      typeof targetCont.ui_x === "number" &&
+      Number.isFinite(targetCont.ui_x) &&
+      typeof targetCont.ui_y === "number" &&
+      Number.isFinite(targetCont.ui_y)
+    ) {
+      setPan({
+        x: targetCont.ui_x === 0 ? 0 : -targetCont.ui_x,
+        y: targetCont.ui_y === 0 ? 0 : -targetCont.ui_y,
+      });
+    } else {
+      setPan({ x: 0, y: 0 });
+    }
+  }, [externalFocusRequest, locationMap, containerMap, handleJumpToContainer]);
 
   const {
     patchLocation,

@@ -126,7 +126,7 @@ flowchart TD
 | `components/providers` | 5 | `api`, `local`, `providers`, `types` |
 | `components/shared` | 4 | `types`, `utils` |
 | `components/wizard` | 2 | `api`, `components (root)`, `types` |
-| `components/world` | 3 | `api`, `components (root)`, `components/map`, `components/shared`, `types`, `utils` |
+| `components/world` | 8 | `api`, `components (root)`, `components/map`, `components/shared`, `types`, `utils` |
 | `hooks` | 3 | `api`, `types`, `utils` |
 | `local` | 7 | `types` |
 | `main` | 1 | `App`, `styles.css` |

@@ -10,7 +10,7 @@ export interface WorldGlobalRules {
 export type CompassDirection = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
 
 export type SharedLoreCategory = "history" | "culture" | "faction" | "rumor";
-export type WorldLoreCategory = SharedLoreCategory | "artifact";
+export type WorldLoreCategory = SharedLoreCategory | "figure" | "threat" | "artifact";
 export type LocationLoreCategory = SharedLoreCategory | "secret";
 export type AnyLoreCategory = WorldLoreCategory | LocationLoreCategory;
 
@@ -18,7 +18,9 @@ export const WORLD_LORE_CATEGORIES: WorldLoreCategory[] = [
   "history",
   "culture",
   "faction",
+  "figure",
   "rumor",
+  "threat",
   "artifact",
 ];
 

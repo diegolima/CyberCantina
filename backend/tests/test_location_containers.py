@@ -448,6 +448,129 @@ def test_lore_nodes_check_constraint_migration(tmp_path: Path) -> None:
         conn2.close()
 
 
+def test_lore_nodes_codex_category_migration_from_v019(tmp_path: Path) -> None:
+    """Pre-v0.20 lore_nodes CHECK constraints upgrade to allow world-only 'figure' & 'threat'."""
+    db_file = tmp_path / "v019.db"
+    conn = sqlite3.connect(db_file)
+    conn.executescript(
+        """
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE worlds (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            global_rules_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE location_containers (
+            id TEXT PRIMARY KEY,
+            world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+            created_at_turn_id TEXT NULL,
+            parent_container_id TEXT NULL REFERENCES location_containers(id) ON DELETE CASCADE,
+            depth INTEGER NOT NULL CHECK(depth BETWEEN 1 AND 4),
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            environmental_tags_json TEXT NOT NULL DEFAULT '[]',
+            ui_x REAL NULL,
+            ui_y REAL NULL,
+            icon TEXT NULL,
+            created_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE location_nodes (
+            id TEXT PRIMARY KEY,
+            world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+            created_at_turn_id TEXT NULL,
+            container_id TEXT NULL REFERENCES location_containers(id) ON DELETE SET NULL,
+            name TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            description TEXT NOT NULL,
+            environmental_tags_json TEXT NOT NULL,
+            is_starting_location INTEGER NOT NULL DEFAULT 0,
+            is_hub INTEGER NOT NULL DEFAULT 0,
+            is_entry_exit INTEGER NOT NULL DEFAULT 0,
+            starting_message TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE lore_nodes (
+            id TEXT PRIMARY KEY,
+            world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+            location_id TEXT NULL REFERENCES location_nodes(id) ON DELETE CASCADE,
+            container_id TEXT NULL REFERENCES location_containers(id) ON DELETE CASCADE,
+            campaign_id TEXT NULL,
+            title TEXT NOT NULL CHECK(length(trim(title)) >= 1),
+            category TEXT NOT NULL CHECK(
+                category IN ('history', 'culture', 'faction', 'rumor', 'artifact', 'secret')
+                AND ((location_id IS NOT NULL OR container_id IS NOT NULL) OR category != 'secret')
+                AND (location_id IS NULL OR category != 'artifact')
+                AND (container_id IS NULL OR category != 'artifact')
+                AND (campaign_id IS NULL OR location_id IS NOT NULL OR container_id IS NOT NULL)
+                AND (location_id IS NULL OR container_id IS NULL)
+            ),
+            content TEXT NOT NULL CHECK(length(trim(content)) >= 1),
+            entity_tags_json TEXT NOT NULL CHECK(
+                json_valid(entity_tags_json)
+                AND json_type(entity_tags_json) = 'array'
+                AND json_array_length(entity_tags_json) >= 1
+                AND entity_tags_json NOT LIKE '%""%'
+            )
+        );
+        CREATE TABLE vector_entries (
+            id TEXT PRIMARY KEY,
+            source_type TEXT NOT NULL,
+            world_id TEXT NULL,
+            character_id TEXT NULL,
+            campaign_id TEXT NULL,
+            anchor_turn_id TEXT NULL,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            keywords_json TEXT NOT NULL DEFAULT '[]',
+            embedding_blob BLOB NOT NULL
+        );
+        INSERT INTO worlds VALUES ('w1', 'V019 World', '{"genre":"noir","setting_overview":"city"}', '2026-01-01T00:00:00Z');
+        INSERT INTO location_containers VALUES ('c1', 'w1', NULL, NULL, 1, 'Docks', '', '[]', NULL, NULL, NULL, '2026-01-01T00:00:00Z');
+        INSERT INTO location_nodes VALUES ('l1', 'w1', NULL, 'c1', 'Pier', 'Pier', 'Foggy pier', '["fog"]', 1, 0, 1, '');
+        INSERT INTO lore_nodes VALUES ('lr_existing', 'w1', NULL, NULL, NULL, 'Old Charter', 'history', 'Founded long ago.', '["charter"]');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    repo = CantinaRepository(str(db_file))
+    repo.init_db()
+    repo.init_db()
+
+    conn2 = repo._connect()
+    try:
+        ddl = conn2.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='lore_nodes'"
+        ).fetchone()["sql"]
+        assert "'figure'" in ddl
+        assert "'threat'" in ddl
+
+        preserved = conn2.execute(
+            "SELECT title, category FROM lore_nodes WHERE id = 'lr_existing'"
+        ).fetchone()
+        assert preserved["title"] == "Old Charter"
+        assert preserved["category"] == "history"
+
+        # World-level figure and threat inserts succeed
+        conn2.execute(
+            "INSERT INTO lore_nodes VALUES ('lr_fig', 'w1', NULL, NULL, NULL, 'Marshal Kael', 'figure', 'Dock marshal.', '[\"kael\"]')"
+        )
+        conn2.execute(
+            "INSERT INTO lore_nodes VALUES ('lr_thr', 'w1', NULL, NULL, NULL, 'Kraken Fog', 'threat', 'Deadly mist.', '[\"fog\"]')"
+        )
+
+        # Location/container figure/threat/artifact must be rejected by CHECK
+        for scope_args in [("'l1', NULL", "loc"), ("NULL, 'c1'", "cont")]:
+            cols_sql, tag = scope_args
+            for bad_cat in ("figure", "threat", "artifact"):
+                with pytest.raises(sqlite3.IntegrityError):
+                    conn2.execute(
+                        f"INSERT INTO lore_nodes VALUES ('lr_bad_{tag}_{bad_cat}', 'w1', {cols_sql}, NULL, 'Bad', '{bad_cat}', 'Invalid', '[\"bad\"]')"
+                    )
+    finally:
+        conn2.close()
+
+
 def test_schema_cycle_and_depth_validation() -> None:
     """WorldRecord rejects cycles, depth inversions, dangling references, and Level 2+ lore."""
     base_kwargs = dict(

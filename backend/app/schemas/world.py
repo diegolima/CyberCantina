@@ -12,15 +12,21 @@ from app.schemas.unsupported import sanitize_unsupported_fields_dict
 
 CompassDirection = Literal["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 SharedLoreCategory = Literal["history", "culture", "faction", "rumor"]
-WorldLoreCategory = Literal["history", "culture", "faction", "rumor", "artifact"]
+WorldLoreCategory = Literal[
+    "history", "culture", "faction", "figure", "rumor", "threat", "artifact"
+]
 LocationLoreCategory = Literal["history", "culture", "faction", "rumor", "secret"]
-AnyLoreCategory = Literal["history", "culture", "faction", "rumor", "artifact", "secret"]
+AnyLoreCategory = Literal[
+    "history", "culture", "faction", "figure", "rumor", "threat", "artifact", "secret"
+]
 
 WORLD_LORE_CATEGORIES: tuple[WorldLoreCategory, ...] = (
     "history",
     "culture",
     "faction",
+    "figure",
     "rumor",
+    "threat",
     "artifact",
 )
 LOCATION_LORE_CATEGORIES: tuple[LocationLoreCategory, ...] = (
@@ -70,7 +76,7 @@ def normalize_lore_category(
     if allow_secret:
         allowed.add("secret")
     if allow_artifact:
-        allowed.add("artifact")
+        allowed.update({"artifact", "figure", "threat"})
 
     if cat in allowed:
         return cat
@@ -85,8 +91,24 @@ def normalize_lore_category(
             "rules": "culture",
             "law": "culture",
             "factions": "faction",
+            "figure": "figure" if allow_artifact else "culture",
+            "figures": "figure" if allow_artifact else "culture",
+            "person": "figure" if allow_artifact else "culture",
+            "people": "figure" if allow_artifact else "culture",
+            "npc": "figure" if allow_artifact else "culture",
+            "npcs": "figure" if allow_artifact else "culture",
+            "notable": "figure" if allow_artifact else "culture",
             "rumors": "rumor",
             "rumours": "rumor",
+            "threat": "threat" if allow_artifact else "rumor",
+            "threats": "threat" if allow_artifact else "rumor",
+            "enemy": "threat" if allow_artifact else "rumor",
+            "enemies": "threat" if allow_artifact else "rumor",
+            "monster": "threat" if allow_artifact else "rumor",
+            "monsters": "threat" if allow_artifact else "rumor",
+            "hazard": "threat" if allow_artifact else "rumor",
+            "hazards": "threat" if allow_artifact else "rumor",
+            "danger": "threat" if allow_artifact else "rumor",
             "secret": "secret" if allow_secret else "rumor",
             "secrets": "secret" if allow_secret else "rumor",
         }
@@ -320,7 +342,7 @@ class BaseLoreNodeInput(BaseModel):
 
 
 class WorldLoreNodeDraft(BaseLoreNodeInput):
-    """Strict world-level macro lore entry (history, culture, faction, rumor, artifact)."""
+    """Strict world-level macro lore entry (history, culture, faction, figure, rumor, threat, artifact)."""
 
     category: WorldLoreCategory
 
@@ -350,7 +372,7 @@ class WizardLoreNodeLLMOutput(BaseModel):
     title: str = Field(default="")
     category: str = Field(
         default="faction",
-        description="One of: history, culture, faction, rumor, artifact.",
+        description="One of: history, culture, faction, figure, rumor, threat, artifact.",
     )
     content: str = Field(default="", description="Concise 2-4 sentence macro world lore entry.")
     entity_tags: list[str] = Field(
@@ -635,9 +657,13 @@ class LoreNode(BaseModel):
             raise ValueError(
                 "Category 'secret' is only allowed on location or container lore entries, not world lore."
             )
-        if (self.location_id is not None or self.container_id is not None) and self.category == "artifact":
+        if (self.location_id is not None or self.container_id is not None) and self.category in (
+            "artifact",
+            "figure",
+            "threat",
+        ):
             raise ValueError(
-                "Category 'artifact' is only allowed on world lore entries, not location or container lore."
+                f"Category '{self.category}' is only allowed on world lore entries, not location or container lore."
             )
         if self.campaign_id is not None and self.location_id is None and self.container_id is None:
             raise ValueError(

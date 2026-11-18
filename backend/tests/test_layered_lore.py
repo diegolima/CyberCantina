@@ -30,6 +30,7 @@ from app.schemas.world import (
     LocationEdgeDraft,
     LocationLoreNodeDraft,
     LocationNodeDraft,
+    LoreNode,
     WizardLocationNodeLLMOutput,
     WizardLoreNodeLLMOutput,
     WorldGlobalRules,
@@ -38,6 +39,7 @@ from app.schemas.world import (
     WorldUpdatePayload,
     WorldWizardDraft,
     WorldWizardSeed,
+    normalize_lore_category,
 )
 from app.wizards.world_wizard import (
     _WizardWorldLLMOutput,
@@ -1116,3 +1118,112 @@ def test_phase2_and_phase3_context_hygiene_remote_rag_and_hard_secret_gating(
     assert "Local Facts & Rumors:" in phase3_user_prompt
     assert "[HISTORY] Shrapnel-Scarred Bar" in phase3_user_prompt
     assert "[SECRET — DISCOVERED] Floorboard Contraband Cache" in phase3_user_prompt
+
+
+def test_codex_figure_and_threat_scope_and_alias_normalization(
+    empty_repo: CantinaRepository,
+) -> None:
+    """Verify 'figure' and 'threat' world scope invariants, aliases, and artifact validation."""
+    from app.db.repos.base import _validate_world_artifact_lore_id
+
+    fig_draft = WorldLoreNodeDraft(
+        title="Director Vance",
+        category="figure",
+        content="Architect of the upper-tier lockdown.",
+        entity_tags=["vance", "director"],
+    )
+    thr_draft = WorldLoreNodeDraft(
+        title="Rustlung Blight",
+        category="threat",
+        content="Airborne spore swarm thriving in flooded shafts.",
+        entity_tags=["rustlung", "spores"],
+    )
+    assert fig_draft.category == "figure"
+    assert thr_draft.category == "threat"
+
+    # Location/container scopes must reject 'artifact', 'figure', and 'threat'
+    for bad_cat in ("artifact", "figure", "threat"):
+        with pytest.raises(ValidationError):
+            LocationLoreNodeDraft(
+                title="Invalid Scoped",
+                category=bad_cat,  # type: ignore[arg-type]
+                content="Should fail validation.",
+                entity_tags=["bad"],
+            )
+        with pytest.raises(ValidationError):
+            LoreNode(
+                id="lore_bad_loc",
+                world_id="w1",
+                location_id="loc1",
+                title="Invalid Scoped",
+                category=bad_cat,  # type: ignore[arg-type]
+                content="Should fail validation.",
+                entity_tags=["bad"],
+            )
+        with pytest.raises(ValidationError):
+            LoreNode(
+                id="lore_bad_cont",
+                world_id="w1",
+                container_id="cont1",
+                title="Invalid Scoped",
+                category=bad_cat,  # type: ignore[arg-type]
+                content="Should fail validation.",
+                entity_tags=["bad"],
+            )
+
+    # Lenient alias mapping differs cleanly by world vs location scope
+    assert normalize_lore_category("person", allow_secret=False, allow_artifact=True, strict=False) == "figure"
+    assert normalize_lore_category("people", allow_secret=False, allow_artifact=True, strict=False) == "figure"
+    assert normalize_lore_category("npc", allow_secret=False, allow_artifact=True, strict=False) == "figure"
+    assert normalize_lore_category("enemy", allow_secret=False, allow_artifact=True, strict=False) == "threat"
+    assert normalize_lore_category("monsters", allow_secret=False, allow_artifact=True, strict=False) == "threat"
+    assert normalize_lore_category("hazard", allow_secret=False, allow_artifact=True, strict=False) == "threat"
+    assert normalize_lore_category("person", allow_secret=True, allow_artifact=False, strict=False) == "culture"
+    assert normalize_lore_category("enemy", allow_secret=True, allow_artifact=False, strict=False) == "rumor"
+
+    # Persist world with figure + threat + artifact and verify artifact linking still rejects figure/threat
+    user = empty_repo.create_user(username="codex_u", display_name="Codex User")
+    world = empty_repo.create_world_from_draft(
+        WorldWizardDraft(
+            name="Codex Test World",
+            global_rules=WorldGlobalRules(
+                genre="Sci-Fi",
+                tone="Tense",
+                setting_overview="Orbital station.",
+            ),
+            locations=[
+                LocationNodeDraft(
+                    key="dock",
+                    name="Docking Ring",
+                    summary="Entry bay.",
+                    description="Cold steel bay.",
+                    is_starting_location=True,
+                )
+            ],
+            edges=[],
+            lore_nodes=[
+                fig_draft,
+                thr_draft,
+                WorldLoreNodeDraft(
+                    title="Sunfire Key",
+                    category="artifact",
+                    content="Relic reactor key.",
+                    entity_tags=["sunfire", "key"],
+                ),
+            ],
+        ),
+        owner_id=user.id,
+    )
+    by_cat = {ln.category: ln for ln in world.lore_nodes}
+    assert {"figure", "threat", "artifact"} <= set(by_cat.keys())
+
+    conn = empty_repo._connect()
+    try:
+        _validate_world_artifact_lore_id(conn, world.id, by_cat["artifact"].id)
+        with pytest.raises(ValueError):
+            _validate_world_artifact_lore_id(conn, world.id, by_cat["figure"].id)
+        with pytest.raises(ValueError):
+            _validate_world_artifact_lore_id(conn, world.id, by_cat["threat"].id)
+    finally:
+        conn.close()
+

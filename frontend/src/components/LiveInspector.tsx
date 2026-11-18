@@ -34,6 +34,7 @@ import {
 } from "./inspector/miniMapGeometry";
 import { InspectorInternalsSection } from "./inspector/InspectorInternalsSection";
 import { LoreIndexModal } from "./inspector/LoreIndexModal";
+import type { CodexCampaignCharacterEntry } from "./world/codexHelpers";
 import { WorldInspectorModal } from "./world/WorldInspectorModal";
 import {
   COMPASS_ANGLES,
@@ -227,6 +228,17 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
     () => characterRows.map((r) => r.record),
     [characterRows]
   );
+  const codexCampaignCharacters = useMemo<CodexCampaignCharacterEntry[]>(
+    () =>
+      characterRows.map((r) => ({
+        record: r.record,
+        state: r.state,
+        isPresent: r.isPresent,
+        elsewhereLocationName: r.elsewhereLocationName,
+        isPrimary: r.record.id === character.id,
+      })),
+    [characterRows, character.id]
+  );
   const presentCharacterLocations = useMemo(() => {
     const map: Record<string, string> = {};
     for (const row of characterRows) {
@@ -419,7 +431,7 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
         onOpenWorldSheet={() => setShowWorldSheet(true)}
       />
 
-      {/* Campaign World Sheet Modal (Read-only overview/map/lore + Campaign World Settings) */}
+      {/* Campaign World Sheet Modal (Read-only overview/map/codex + Campaign World Settings) */}
       {showWorldSheet && (
         <WorldInspectorModal
           world={{
@@ -429,6 +441,11 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
             edges: activeEdges,
           }}
           mode="campaign"
+          campaignId={bundle.campaign.id}
+          activePersona={bundle.campaign.persona_snapshot ?? null}
+          campaignCharacters={codexCampaignCharacters}
+          activeLocationId={activeLoc.id}
+          visitedContainerIds={bundle.current_world_snapshot.visited_container_ids ?? []}
           campaignWorldSettings={bundle.campaign.world_settings}
           isMutatingLocked={isMutatingLocked}
           onSaveCampaignWorldSettings={onUpdateCampaignWorldSettings}

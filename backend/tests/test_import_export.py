@@ -1217,3 +1217,124 @@ def test_cow_fork_and_restore_rewrite_media_urls_and_recover_legacy_export(clien
         assert len(media_entries) == 2
 
 
+def test_zcc_import_normalizes_codex_and_legacy_lore_categories(client_and_repo):
+    client, repo, user = client_and_repo
+
+    manifest = {
+        "format_version": "1.0",
+        "generator": "CyberCantina",
+        "exporter_version": "0.20.0",
+        "exported_at": "2026-11-18T12:00:00Z",
+        "bundle_name": "codex_alias_bundle",
+        "contents": {"characters_count": 0, "worlds_count": 1, "personas_count": 0},
+    }
+    world_payload = {
+        "id": "w_codex",
+        "name": "Codex Realm",
+        "global_rules": {
+            "genre": "Dark Fantasy",
+            "tone": "Bleak",
+            "setting_overview": "A ruined citadel.",
+            "tech_or_magic_rules": "Blood alchemy.",
+            "starting_timestamp": "1204-04-10 08:00",
+        },
+        "containers": [
+            {
+                "id": "c_citadel",
+                "world_id": "w_codex",
+                "depth": 1,
+                "name": "Obsidian Keep",
+                "description": "Cracked keep.",
+                "environmental_tags": ["stone"],
+                "lore_nodes": [
+                    {
+                        "id": "cl_1",
+                        "title": "Keep Guard",
+                        "category": "person",
+                        "content": "Watches the gate.",
+                        "entity_tags": ["guard"],
+                    }
+                ],
+            }
+        ],
+        "locations": [
+            {
+                "id": "loc_gate",
+                "world_id": "w_codex",
+                "container_id": "c_citadel",
+                "name": "Iron Gate",
+                "summary": "Entry gate.",
+                "description": "Rusted portcullis.",
+                "environmental_tags": ["iron"],
+                "is_starting_location": True,
+                "lore_nodes": [
+                    {
+                        "id": "ll_1",
+                        "title": "Gate Miasma",
+                        "category": "hazard",
+                        "content": "Toxic mist seeps from below.",
+                        "entity_tags": ["miasma"],
+                    }
+                ],
+            }
+        ],
+        "edges": [],
+        "lore_nodes": [
+            {
+                "id": "wl_fig",
+                "title": "Lord Ash",
+                "category": "figure",
+                "content": "Exiled regent.",
+                "entity_tags": ["ash"],
+            },
+            {
+                "id": "wl_thr",
+                "title": "Ashen Rot",
+                "category": "threat",
+                "content": "Creeping blight.",
+                "entity_tags": ["rot"],
+            },
+            {
+                "id": "wl_alias",
+                "title": "Wandering Scribe",
+                "category": "people",
+                "content": "Chronicler of ruins.",
+                "entity_tags": ["scribe"],
+            },
+        ],
+    }
+
+    zcc_buf = io.BytesIO()
+    with zipfile.ZipFile(zcc_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest))
+        zf.writestr("characters.json", "[]")
+        zf.writestr("personas.json", "[]")
+        zf.writestr("worlds.json", json.dumps([world_payload]))
+
+    insp = client.post(
+        "/api/import/inspect",
+        files={"file": ("codex.zcc", zcc_buf.getvalue(), "application/octet-stream")},
+    )
+    assert insp.status_code == 200
+    token = insp.json()["staged_token"]
+
+    commit = client.post(
+        "/api/import/commit",
+        json={
+            "staged_token": token,
+            "default_conflict_strategy": "copy",
+        },
+    )
+    assert commit.status_code == 200
+    assert commit.json()["success"] is True
+    worlds = repo.list_worlds(owner_id=user.id)
+    imported = next(w for w in worlds if w.name == "Codex Realm")
+    world_cats = {ln.title: ln.category for ln in imported.lore_nodes}
+    assert world_cats["Lord Ash"] == "figure"
+    assert world_cats["Ashen Rot"] == "threat"
+    assert world_cats["Wandering Scribe"] == "figure"
+    assert imported.containers[0].lore_nodes[0].category == "culture"
+    assert imported.locations[0].lore_nodes[0].category == "rumor"
+
+
+

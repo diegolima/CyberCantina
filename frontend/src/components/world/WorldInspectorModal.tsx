@@ -11,7 +11,6 @@ import {
   Plus,
   SlidersHorizontal,
   Sparkles,
-  Trash2,
   Upload,
   X,
 } from "lucide-react";
@@ -27,6 +26,8 @@ import type {
   LocationLoreCategory,
   LocationNode,
   LoreNode,
+  PersonaRecord,
+  PersonaTurnStateSnapshot,
   WorldGlobalRules,
   WorldLoreCategory,
   WorldMediaItem,
@@ -39,13 +40,18 @@ import {
   filterRemainingUnsupportedFields,
 } from "../../utils/unsupportedFields";
 import { SpatialTopologyView } from "../SpatialTopologyView";
-import { TagChipsInput, normalizeTagList } from "../TagChipsInput";
+import { normalizeTagList } from "../TagChipsInput";
 import {
   computeUnreachableLocationIds,
   validateContainersState,
 } from "../map/mapValidation";
 import { ClickToEditField } from "../shared/ClickToEditField";
 import { UnsupportedFieldsTab } from "../shared/UnsupportedFieldsTab";
+import {
+  type CodexCampaignCharacterEntry,
+  isWorldLoreEntryValid,
+} from "./codexHelpers";
+import { type CodexFocusRequest, WorldCodexTab } from "./WorldCodexTab";
 import { mapDraftToNodesAndEdges } from "./worldDraftMappers";
 import { WorldMediaTab } from "./WorldMediaTab";
 
@@ -54,7 +60,7 @@ interface WorldInspectorModalProps {
   onClose: () => void;
   onSaved: (updated: WorldRecord, closeModal?: boolean) => void;
   mode?: "inspector" | "wizard" | "campaign";
-  initialTab?: WorldTab;
+  initialTab?: WorldTab | "lore";
   campaignWorldSettings?: CampaignWorldSettings;
   onSaveCampaignWorldSettings?: (
     settings: CampaignWorldSettings
@@ -69,9 +75,15 @@ interface WorldInspectorModalProps {
     edges: LocationEdge[];
     lore_nodes: LoreNode[];
   }) => Promise<WorldRecord>;
+  activePersona?: PersonaRecord | null;
+  activePersonaTurnState?: PersonaTurnStateSnapshot | null;
+  campaignId?: string;
+  campaignCharacters?: CodexCampaignCharacterEntry[];
+  activeLocationId?: string;
+  visitedContainerIds?: string[];
 }
 
-export type WorldTab = "base" | "media" | "map" | "lore" | "settings" | "unsupported";
+export type WorldTab = "base" | "media" | "map" | "codex" | "settings" | "unsupported";
 
 export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   world,
@@ -84,9 +96,17 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   isMutatingLocked = false,
   onBackToSeed,
   onCommitDraft,
+  activePersona,
+  activePersonaTurnState,
+  campaignId,
+  campaignCharacters = [],
+  activeLocationId,
+  visitedContainerIds = [],
 }) => {
   const isCampaignMode = mode === "campaign";
-  const [activeTab, setActiveTab] = useState<WorldTab>(initialTab);
+  const [activeTab, setActiveTab] = useState<WorldTab>(() =>
+    initialTab === "lore" ? "codex" : initialTab
+  );
   const [name, setName] = useState(world.name);
   const [globalRules, setGlobalRules] = useState<WorldGlobalRules>({
     describe_on_first_visit: true,
@@ -148,7 +168,21 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   const [exportIncludeChars, setExportIncludeChars] = useState(true);
   const [exportIncludeMedia, setExportIncludeMedia] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const loreListBottomRef = useRef<HTMLDivElement | null>(null);
+  const focusNonceRef = useRef(0);
+  const [codexFocusRequest, setCodexFocusRequest] =
+    useState<CodexFocusRequest | null>(null);
+  const [externalMapFocus, setExternalMapFocus] = useState<{
+    kind: "location" | "container";
+    id: string;
+    nonce: number;
+  } | null>(null);
+
+  const effectiveContainers = isCampaignMode
+    ? world.containers ?? []
+    : containers;
+  const effectiveLocations = isCampaignMode ? world.locations : locations;
+  const effectiveEdges = isCampaignMode ? world.edges : edges;
+  const effectiveLoreNodes = isCampaignMode ? world.lore_nodes : loreNodes;
 
   const unsupportedFields = useMemo(
     () => buildWorldUnsupportedFieldsState(world),
@@ -198,31 +232,6 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
       });
     }
     markDirty();
-  };
-
-  const handleAddWorldLoreNode = () => {
-    const newId = `new_lore_${Date.now()}`;
-    setLoreNodes((prev) => [
-      ...prev,
-      {
-        id: newId,
-        world_id: world.id,
-        title: "New Lore Entry",
-        category: "faction",
-        content:
-          "Describe a macro faction, historical event, cultural norm, or world rumor...",
-        entity_tags: [],
-      },
-    ]);
-    markDirty();
-    setTimeout(() => {
-      loreListBottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      const el = document.getElementById(`lore-node-${newId}`);
-      if (el) {
-        const input = el.querySelector("input, textarea") as HTMLElement;
-        if (input) input.focus();
-      }
-    }, 60);
   };
 
   const handleExportWorld = async () => {
@@ -321,22 +330,11 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
     reachabilityReport.unreachableIds.length > 0 ||
     containerValidationErrors.length > 0;
 
-  const invalidWorldLoreCount = loreNodes.filter((lore) => {
-    const pendingRaw = pendingWorldLoreTagDrafts[lore.id] || "";
-    const pendingParts = pendingRaw
-      .split(/[,;\n]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const effectiveTags = normalizeTagList(lore.entity_tags || [], pendingParts);
-    return (
-      !lore.title.trim() ||
-      !lore.content.trim() ||
-      !WORLD_LORE_CATEGORIES.includes(lore.category as WorldLoreCategory) ||
-      effectiveTags.length === 0
-    );
-  }).length;
+  const invalidWorldLoreCount = effectiveLoreNodes.filter(
+    (lore) => !isWorldLoreEntryValid(lore, pendingWorldLoreTagDrafts[lore.id])
+  ).length;
 
-  const invalidLocationLoreCount = locations.reduce((acc, loc) => {
+  const invalidLocationLoreCount = effectiveLocations.reduce((acc, loc) => {
     const locInvalid = (loc.lore_nodes ?? []).filter(
       (ln) =>
         !ln.title.trim() ||
@@ -350,7 +348,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
     return acc + locInvalid;
   }, 0);
 
-  const locationsWithLoreCount = locations.reduce(
+  const locationsWithLoreCount = effectiveLocations.reduce(
     (acc, loc) => acc + (loc.lore_nodes?.length ?? 0),
     0
   );
@@ -407,9 +405,13 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
     for (let i = 0; i < flushedWorldLore.length; i++) {
       const item = flushedWorldLore[i];
       if (!item.title || !item.content || item.entity_tags.length === 0) {
-        setActiveTab("lore");
+        setActiveTab("codex");
+        setCodexFocusRequest({
+          loreId: item.id,
+          nonce: ++focusNonceRef.current,
+        });
         setError(
-          `World Lore entry #${i + 1} ("${
+          `Codex entry #${i + 1} ("${
             item.title || "Untitled"
           }") must have a non-empty title, content, and at least 1 trigger keyword.`
         );
@@ -538,7 +540,12 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
       <div
         className="modal-panel"
         style={{
-          width: activeTab === "map" ? "min(1120px, 96vw)" : "min(860px, 95vw)",
+          width:
+            activeTab === "map"
+              ? "min(1120px, 96vw)"
+              : activeTab === "codex"
+                ? "min(980px, 95vw)"
+                : "min(860px, 95vw)",
           transition: "width 0.2s ease",
         }}
         onClick={(e) => e.stopPropagation()}
@@ -601,7 +608,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
           >
             <Compass size={14} />
             <span>Map</span>
-            <span className="modal-tab-badge">{locations.length}</span>
+            <span className="modal-tab-badge">{effectiveLocations.length}</span>
             {invalidLocationLoreCount > 0 && (
               <span
                 className="modal-tab-badge"
@@ -619,13 +626,13 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
           <button
             type="button"
             role="tab"
-            aria-selected={activeTab === "lore"}
-            className={`modal-tab-btn ${activeTab === "lore" ? "active" : ""}`}
-            onClick={() => setActiveTab("lore")}
+            aria-selected={activeTab === "codex"}
+            className={`modal-tab-btn ${activeTab === "codex" ? "active" : ""}`}
+            onClick={() => setActiveTab("codex")}
           >
             <BookOpen size={14} />
-            <span>Lore</span>
-            <span className="modal-tab-badge">{loreNodes.length}</span>
+            <span>Codex</span>
+            <span className="modal-tab-badge">{effectiveLoreNodes.length}</span>
             {invalidWorldLoreCount > 0 && !isCampaignMode && (
               <span
                 className="modal-tab-badge"
@@ -634,7 +641,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                   color: "#fda4af",
                   border: "1px solid rgba(244, 63, 94, 0.5)",
                 }}
-                title={`${invalidWorldLoreCount} incomplete world lore entry/entries`}
+                title={`${invalidWorldLoreCount} incomplete Codex lore entry/entries`}
               >
                 !{invalidWorldLoreCount}
               </span>
@@ -687,7 +694,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
               }}
             >
               {mode === "wizard"
-                ? "Click on any field below to edit it, or switch to the Map and Lore tabs above to customize locations, passages, and GraphRAG lore before committing your world."
+                ? "Click on any field below to edit it, or switch to the Map and Codex tabs above to customize locations, passages, and GraphRAG lore before committing your world."
                 : isCampaignMode
                 ? "Base world identity and rules are pinned to this campaign's snapshot. Adjust campaign behavior in the World Settings tab."
                 : "Click on any field below to edit it. Active campaigns running in this world remain pinned to their original world snapshot automatically."}
@@ -770,8 +777,8 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             mode={mode}
             worldId={activeWorldId}
             media={media}
-            containers={containers}
-            locations={locations}
+            containers={effectiveContainers}
+            locations={effectiveLocations}
             isDirty={isDirty}
             onWorldMutated={handleWorldMediaMutated}
           />
@@ -786,7 +793,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
               height: "calc(88vh - 220px)",
             }}
           >
-            {locations.length === 0 ? (
+            {effectiveLocations.length === 0 ? (
               <div
                 style={{
                   padding: 30,
@@ -834,18 +841,21 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
               </div>
             ) : (
               <SpatialTopologyView
-                title={`${name} — Spatial Topology (${locations.length} Locations, ${edges.length} Passages)`}
-                containers={containers}
-                locations={locations}
-                edges={edges}
+                title={`${name} — Spatial Topology (${effectiveLocations.length} Locations, ${effectiveEdges.length} Passages)`}
+                containers={effectiveContainers}
+                locations={effectiveLocations}
+                edges={effectiveEdges}
                 activeLocationId={
-                  locations.find((l) => l.is_starting_location)?.id ??
-                  locations[0]?.id ??
-                  ""
+                  activeLocationId ??
+                  (effectiveLocations.find((l) => l.is_starting_location)?.id ??
+                    effectiveLocations[0]?.id ??
+                    "")
                 }
                 mode={isCampaignMode ? "campaign" : "editor"}
                 isMutatingLocked={isCampaignMode || isMutatingLocked}
+                externalFocusRequest={externalMapFocus}
                 worldMedia={media}
+                visitedContainerIds={visitedContainerIds}
                 worldContext={{
                   worldId: activeWorldId,
                   worldName: name,
@@ -877,212 +887,36 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             )}
           </div>
 
-          {/* Lore Tab */}
-          <div
-            style={{
-              display: activeTab === "lore" ? "flex" : "none",
-              flexDirection: "column",
-              gap: 14,
+          {/* Codex Tab */}
+          <WorldCodexTab
+            worldId={activeWorldId}
+            isActive={activeTab === "codex"}
+            isCampaignMode={isCampaignMode}
+            campaignId={campaignId}
+            loreNodes={effectiveLoreNodes}
+            pendingWorldLoreTagDrafts={pendingWorldLoreTagDrafts}
+            containers={effectiveContainers}
+            locations={effectiveLocations}
+            visitedContainerIds={visitedContainerIds}
+            activeLocationId={activeLocationId}
+            activePersona={activePersona}
+            activePersonaTurnState={activePersonaTurnState}
+            campaignCharacters={campaignCharacters}
+            externalFocusRequest={codexFocusRequest}
+            onUpdateLoreNodes={(updater) => setLoreNodes(updater)}
+            onUpdatePendingTagDrafts={(updater) =>
+              setPendingWorldLoreTagDrafts(updater)
+            }
+            onMarkDirty={markDirty}
+            onOpenOnMap={(kind, id) => {
+              setExternalMapFocus({
+                kind,
+                id,
+                nonce: ++focusNonceRef.current,
+              });
+              setActiveTab("map");
             }}
-          >
-            {/* World Lore Nodes */}
-            <div
-              style={{
-                background: "var(--bg-card)",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: 8,
-                padding: 12,
-                display: "flex",
-                flexDirection: "column",
-                gap: 10,
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  position: "sticky",
-                  top: -18,
-                  zIndex: 10,
-                  background: "var(--bg-card)",
-                  padding: "8px 0",
-                  margin: "-4px 0 0 0",
-                  borderBottom: "1px solid var(--border-subtle)",
-                }}
-              >
-                <span
-                  className="sidebar-label"
-                  style={{ display: "flex", alignItems: "center", gap: 6 }}
-                >
-                  <BookOpen size={13} color="var(--accent-violet)" />
-                  World Macro Lore — Factions, History, Culture &amp; Rumors ({loreNodes.length})
-                </span>
-                {!isCampaignMode && (
-                  <button
-                    type="button"
-                    className="btn"
-                    style={{ padding: "3px 8px", fontSize: "0.72rem" }}
-                    onClick={handleAddWorldLoreNode}
-                  >
-                    <Plus size={12} /> Add Lore Node
-                  </button>
-                )}
-              </div>
-
-              {loreNodes.length === 0 ? (
-                <div
-                  style={{
-                    fontSize: "0.75rem",
-                    color: "var(--text-muted)",
-                    fontStyle: "italic",
-                  }}
-                >
-                  No world lore nodes indexed. Add macro lore for factions, history, culture, and rumors (attach location-specific lore &amp; secrets on the Map tab).
-                </div>
-              ) : (
-                loreNodes.map((lore, idx) => {
-                  const pendingRaw = pendingWorldLoreTagDrafts[lore.id] || "";
-                  const hasTags =
-                    lore.entity_tags.length > 0 || Boolean(pendingRaw.trim());
-                  const isEntryInvalid =
-                    !lore.title.trim() || !lore.content.trim() || !hasTags;
-
-                  return (
-                    <div
-                      key={lore.id}
-                      id={`lore-node-${lore.id}`}
-                      style={{
-                        background: "var(--bg-panel)",
-                        border: isEntryInvalid
-                          ? "1px solid rgba(244, 63, 94, 0.55)"
-                          : "1px solid var(--border-subtle)",
-                        borderRadius: 6,
-                        padding: 10,
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 8,
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "1.1fr 130px 1.4fr auto",
-                          gap: 8,
-                          alignItems: "start",
-                        }}
-                      >
-                        <ClickToEditField
-                          label="Lore Title"
-                          value={lore.title}
-                          readOnly={isCampaignMode}
-                          onChange={(val) => {
-                            const next = [...loreNodes];
-                            next[idx] = { ...next[idx], title: val };
-                            setLoreNodes(next);
-                            markDirty();
-                          }}
-                        />
-                        <div className="field-group">
-                          <label>Category</label>
-                          <select
-                            className="field-select"
-                            disabled={isCampaignMode}
-                            value={lore.category}
-                            onChange={(e) => {
-                              const next = [...loreNodes];
-                              next[idx] = {
-                                ...next[idx],
-                                category: e.target.value as WorldLoreCategory,
-                              };
-                              setLoreNodes(next);
-                              markDirty();
-                            }}
-                          >
-                            {WORLD_LORE_CATEGORIES.map((cat) => (
-                              <option key={cat} value={cat}>
-                                {cat}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="field-group">
-                          <label>Trigger Keywords (min 1)</label>
-                          <TagChipsInput
-                            value={lore.entity_tags}
-                            accentVariant="violet"
-                            disabled={isCampaignMode}
-                            placeholder="Add keyword & press Enter..."
-                            onDraftChange={(draftStr) => {
-                              setPendingWorldLoreTagDrafts((prev) => ({
-                                ...prev,
-                                [lore.id]: draftStr,
-                              }));
-                            }}
-                            onChange={(nextTags) => {
-                              const next = [...loreNodes];
-                              next[idx] = {
-                                ...next[idx],
-                                entity_tags: nextTags,
-                              };
-                              setLoreNodes(next);
-                              markDirty();
-                            }}
-                          />
-                        </div>
-                        {!isCampaignMode && (
-                          <button
-                            type="button"
-                            className="item-remove-btn"
-                            style={{ marginTop: 22 }}
-                            onClick={() => {
-                              setLoreNodes(loreNodes.filter((_, i) => i !== idx));
-                              setPendingWorldLoreTagDrafts((prev) => {
-                                const copy = { ...prev };
-                                delete copy[lore.id];
-                                return copy;
-                              });
-                              markDirty();
-                            }}
-                            title="Remove lore node"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        )}
-                      </div>
-
-                      <ClickToEditField
-                        label="Lore Content"
-                        value={lore.content}
-                        readOnly={isCampaignMode}
-                        multiline
-                        rows={2}
-                        onChange={(val) => {
-                          const next = [...loreNodes];
-                          next[idx] = { ...next[idx], content: val };
-                          setLoreNodes(next);
-                          markDirty();
-                        }}
-                      />
-                    </div>
-                  );
-                })
-              )}
-              <div ref={loreListBottomRef} />
-              {loreNodes.length > 0 && !isCampaignMode && (
-                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.74rem" }}
-                    onClick={handleAddWorldLoreNode}
-                  >
-                    <Plus size={13} /> Add Another Lore Node
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
+          />
 
           {/* World Settings Tab */}
           <div

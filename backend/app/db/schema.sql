@@ -294,10 +294,10 @@ CREATE TABLE IF NOT EXISTS lore_nodes (
     campaign_id TEXT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
     title TEXT NOT NULL CHECK(length(trim(title)) >= 1),
     category TEXT NOT NULL CHECK(
-        category IN ('history', 'culture', 'faction', 'rumor', 'artifact', 'secret')
+        category IN ('history', 'culture', 'faction', 'figure', 'rumor', 'threat', 'artifact', 'secret')
         AND ((location_id IS NOT NULL OR container_id IS NOT NULL) OR category != 'secret')
-        AND (location_id IS NULL OR category != 'artifact')
-        AND (container_id IS NULL OR category != 'artifact')
+        AND (location_id IS NULL OR category NOT IN ('artifact', 'figure', 'threat'))
+        AND (container_id IS NULL OR category NOT IN ('artifact', 'figure', 'threat'))
         AND (campaign_id IS NULL OR location_id IS NOT NULL OR container_id IS NOT NULL)
         AND (location_id IS NULL OR container_id IS NULL)
     ),

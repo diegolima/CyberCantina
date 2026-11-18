@@ -309,7 +309,7 @@ DEFAULT_WIZARD_WORLD_SYSTEM = (
     "`reverse_direction_label`, `compass_direction` in N/NE/E/SE/S/SW/W/NW, `travel_minutes`, `is_locked_or_hidden`, `bidirectional: true`). Every location must be reachable.\n"
     "4. lore_nodes: Create 4 macro world-level LoreNodeDraft entries. For EACH entry you MUST provide:\n"
     "   - `title`: An evocative, distinct title (e.g. 'The Iron Concordat', 'The Great Cataclysm of 2088', 'Rite of the Ash Veil'). NEVER use generic titles like 'World Lore'.\n"
-    "   - `category`: Strictly one of 'faction', 'history', 'culture', 'rumor', or 'artifact'.\n"
+    "   - `category`: Strictly one of 'faction', 'figure', 'history', 'culture', 'rumor', 'threat', or 'artifact'.\n"
     "   - `content`: A vivid, concrete 2-4 sentence narrative detailing origins, core significance, and ongoing impact on the realm. Do NOT leave content empty or generic.\n"
     "   - `entity_tags`: 1-5 trigger keywords linking this lore entry to in-character mentions.\n"
     "   Keep world lore strictly global—use 'artifact' ONLY for major plot-driving relics, legendary tech, or unique items of global significance; never include trivia about specific rooms, mundane gear, or private characters, and NEVER generate per-location lore entries.\n"
