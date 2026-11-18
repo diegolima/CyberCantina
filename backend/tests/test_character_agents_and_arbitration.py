@@ -1380,3 +1380,211 @@ async def test_phase4_agent_progress_events_and_audit_ruling_metadata(
     bundle1 = empty_repo.get_campaign_state_bundle(camp.id)
     assert "Cipher Drive" in bundle1.character_states[kira.id].inventory
     assert "Cipher Drive" not in bundle1.character_states[viktor.id].inventory
+
+
+@pytest.mark.parametrize(
+    ("outcome_tier", "expected_tone", "expected_valence", "expected_mood"),
+    [
+        ("Critical Failure", "anguished", -0.35, "Shaken, critical setback"),
+        ("Failure with Consequences", "uneasy", -0.15, "Guarded, tense strain"),
+        ("Simple Failure", "guarded", -0.05, "Wary, thwarted attempt"),
+        ("Clean Success", "content", 0.15, "Confident, steady relief"),
+        ("Critical Success", "elated", 0.30, "Triumphant, sharp breakthrough"),
+    ],
+)
+def test_heuristic_character_agent_delta_roll_tiers(
+    empty_repo: CantinaRepository,
+    outcome_tier: str,
+    expected_tone: str,
+    expected_valence: float,
+    expected_mood: str,
+) -> None:
+    """Exercise all 5 dice-roll outcome tiers in heuristic_character_agent_delta when cognition is absent."""
+    from app.engine.char_agent.agent import heuristic_character_agent_delta
+
+    scenario = seed_minimal_scenario(empty_repo, character_name="Kira Vance")
+    camp = scenario.campaign
+    bundle = empty_repo.get_campaign_state_bundle(camp.id)
+    kira = scenario.character
+    start_loc = scenario.locations[0]
+    neighbors = empty_repo.get_neighbor_locations(scenario.world.id, start_loc.id)
+    prev_state = bundle.current_character_state
+
+    roll = DiceRollResult(
+        character_id=kira.id,
+        character_name=kira.name,
+        action_description="pick the lock",
+        skill_or_approach="Infiltration",
+        d20_raw=10,
+        modifier=2,
+        total=12,
+        difficulty_class=14,
+        outcome_tier=outcome_tier,  # type: ignore[arg-type]
+        narrative_directive="Respond cleanly.",
+    )
+    turn = empty_repo.save_turn_node(
+        turn_id=f"turn_roll_{outcome_tier.replace(' ', '_')}",
+        campaign_id=camp.id,
+        parent_turn_id=bundle.active_branch_turns[-1].id,
+        depth_index=1,
+        user_message="Try the lock.",
+        actor_id=kira.id,
+        raw_prose="*Kira tests the tumbler.*",
+        cognition=CognitionBlock(skipped=True),
+        pre_turn=PreTurnAnalysis(spatial_intent="stay", character_rolls={kira.id: roll}),
+        world_snapshot=bundle.current_world_snapshot,
+        character_state=prev_state,
+        recalled_items=[],
+    )
+
+    delta = heuristic_character_agent_delta(
+        character=kira,
+        prev_state=prev_state,
+        completed_turn=turn,
+        active_location=start_loc,
+        neighbors=neighbors,
+        present_characters=[kira],
+    )
+    assert delta.affect_tone == expected_tone
+    assert delta.valence_delta == expected_valence
+    assert delta.mood_label == expected_mood
+
+
+@pytest.mark.parametrize(
+    ("user_msg", "user_sentiment", "expected_tone", "expected_warmth_shift"),
+    [
+        ("He points a gun and threatens to shoot.", "confrontational", "guarded", "strong_neg"),
+        ("You're pathetic and a coward.", "neutral", None, "mild_neg"),
+        ("Nice jacket, you look sharp tonight.", "vulnerable", "warm", "mild_pos"),
+        ("Let me buy you a drink and trust you.", "neutral", "warm", "mild_pos"),
+        ("Back off right now.", "confrontational", "guarded", "mild_neg"),
+    ],
+)
+def test_heuristic_character_agent_delta_sentiment_and_relational_heuristics(
+    empty_repo: CantinaRepository,
+    user_msg: str,
+    user_sentiment: str,
+    expected_tone: str | None,
+    expected_warmth_shift: str,
+) -> None:
+    """Exercise threat, mockery, flattery, favor, and confrontational relational branches."""
+    from app.engine.char_agent.agent import heuristic_character_agent_delta
+
+    scenario = seed_minimal_scenario(empty_repo, character_name="Kira Vance")
+    viktor, _ = _create_extra_characters(empty_repo, scenario.world.id)
+    bundle = empty_repo.get_campaign_state_bundle(scenario.campaign.id)
+    prev_state = bundle.current_character_state
+
+    turn = empty_repo.save_turn_node(
+        turn_id="turn_rel_heur",
+        campaign_id=scenario.campaign.id,
+        parent_turn_id=bundle.active_branch_turns[-1].id,
+        depth_index=1,
+        user_message=user_msg,
+        actor_id=viktor.id,
+        raw_prose=f"*Viktor glances toward {scenario.character.name} in the booth.*",
+        cognition=CognitionBlock(skipped=True),
+        pre_turn=PreTurnAnalysis(spatial_intent="stay", user_sentiment=user_sentiment),
+        world_snapshot=bundle.current_world_snapshot,
+        character_state=prev_state.model_copy(update={"character_id": viktor.id}),
+        recalled_items=[],
+    )
+
+    delta = heuristic_character_agent_delta(
+        character=scenario.character,
+        prev_state=prev_state,
+        completed_turn=turn,
+        active_location=scenario.locations[0],
+        neighbors=[],
+        present_characters=[scenario.character, viktor],
+    )
+    assert delta.affect_tone == expected_tone
+    user_events = [ev for ev in delta.relational_events if ev.target == "user"]
+    assert user_events
+    assert user_events[0].warmth_shift == expected_warmth_shift
+    assert viktor.id in delta.stance_updates
+
+
+def test_heuristic_character_agent_delta_inventory_verbs_and_spatial_follow(
+    empty_repo: CantinaRepository,
+) -> None:
+    """Verify scoped holstering/permanent-protection/equipping and independent or selective NPC movement."""
+    from app.engine.char_agent.agent import heuristic_character_agent_delta
+    from app.schemas.character import ItemInstance
+
+    scenario = seed_minimal_scenario(empty_repo, character_name="Kira Vance")
+    viktor, _ = _create_extra_characters(empty_repo, scenario.world.id)
+    bundle = empty_repo.get_campaign_state_bundle(scenario.campaign.id)
+    start_loc = scenario.locations[0]
+    neighbors = empty_repo.get_neighbor_locations(scenario.world.id, start_loc.id)
+    nb_name = neighbors[0].destination.name
+    nb_id = neighbors[0].destination.id
+
+    prev_state = bundle.current_character_state.model_copy(
+        update={
+            "equipped": [
+                ItemInstance(name="Silver Blaster", flags=[]),
+                ItemInstance(name="Neural Implant", flags=["permanent"]),
+            ],
+            "inventory": [ItemInstance(name="Burner Comm", flags=[])],
+        }
+    )
+
+    # 1. Holstering, wearing/drawing, named handoff, permanent protection, and independent NPC departure
+    turn1 = empty_repo.save_turn_node(
+        turn_id="turn_inv_move",
+        campaign_id=scenario.campaign.id,
+        parent_turn_id=bundle.active_branch_turns[-1].id,
+        depth_index=1,
+        user_message="I hand Kira the forged pass.",
+        actor_id=scenario.character.id,
+        raw_prose=(
+            f"*Kira holsters the blaster, draws a tactical knife, drops the neural implant on the table, "
+            f"and then Kira walks into {nb_name}.*"
+        ),
+        cognition=CognitionBlock(skipped=True),
+        pre_turn=PreTurnAnalysis(spatial_intent="stay"),
+        world_snapshot=bundle.current_world_snapshot,
+        character_state=prev_state,
+        recalled_items=[],
+    )
+    delta1 = heuristic_character_agent_delta(
+        character=scenario.character,
+        prev_state=prev_state,
+        completed_turn=turn1,
+        active_location=start_loc,
+        neighbors=neighbors,
+        present_characters=[scenario.character, viktor],
+    )
+    assert "Silver Blaster" in delta1.items_unequipped
+    assert "Tactical knife" in delta1.items_equipped
+    assert "Forged pass" in delta1.items_obtained
+    assert "Neural Implant" not in delta1.items_removed
+    assert delta1.location_transition == "move_to_neighbor"
+    assert delta1.target_location_id == nb_id
+
+    # 2. Player moves with exclusive invite to another companion -> Kira stays behind
+    turn2 = empty_repo.save_turn_node(
+        turn_id="turn_excl_invite",
+        campaign_id=scenario.campaign.id,
+        parent_turn_id=turn1.id,
+        depth_index=2,
+        user_message="Viktor, come with me to the back alley.",
+        actor_id=viktor.id,
+        raw_prose="*Viktor nods and heads out behind you.*",
+        cognition=CognitionBlock(skipped=True),
+        pre_turn=PreTurnAnalysis(spatial_intent="move_known", target_location_hint=nb_name),
+        world_snapshot=bundle.current_world_snapshot,
+        character_state=prev_state.model_copy(update={"character_id": viktor.id}),
+        recalled_items=[],
+    )
+    delta2 = heuristic_character_agent_delta(
+        character=scenario.character,
+        prev_state=prev_state,
+        completed_turn=turn2,
+        active_location=start_loc,
+        neighbors=neighbors,
+        present_characters=[scenario.character, viktor],
+    )
+    assert delta2.location_transition == "stay_here"
+

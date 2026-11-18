@@ -8,6 +8,7 @@ import pytest
 import httpx
 
 from app.config import ModelProfile, settings
+from app.db.repository import CantinaRepository
 from app.dependencies import (
     is_separate_clerk_model,
     normalize_model_tag,
@@ -384,3 +385,78 @@ async def test_llm_client_omits_num_ctx_for_openrouter() -> None:
         assert len(captured_requests) == 1
         assert "num_ctx" not in captured_requests[0]
         assert "options" not in captured_requests[0]
+
+
+def test_heuristic_post_turn_delta_time_cues_navigation_and_crisis_flags(
+    empty_repo: CantinaRepository,
+) -> None:
+    """Exercise offline clerk time advancement, neighbor-word fallback, explore_new exterior, and resolved_roll crises."""
+    from app.engine.clerk.heuristics import heuristic_post_turn_delta
+    from app.schemas.turn import DiceRollResult, PreTurnAnalysis
+    from tests.factories import seed_minimal_scenario
+
+    scenario = seed_minimal_scenario(empty_repo)
+    start_loc = scenario.locations[0]
+    neighbors = empty_repo.get_neighbor_locations(scenario.world.id, start_loc.id)
+    nb = neighbors[0]
+
+    # 1. Neighbor-word fallback + explicit user time cue
+    delta_move = heuristic_post_turn_delta(
+        user_message="It's 5am now, let's head over to the " + nb.destination.name.split()[-1],
+        raw_prose="You cross the rain-slick walkway.",
+        pre_turn=PreTurnAnalysis(spatial_intent="move_known", target_location_hint="unmatched hint"),
+        active_location=start_loc,
+        neighbors=neighbors,
+        current_timestamp="2094-11-15 02:00",
+    )
+    assert delta_move.transition_type == "move_existing"
+    assert delta_move.target_location_id == nb.destination.id
+    assert delta_move.new_world_timestamp == "2094-11-15 05:00"
+    assert delta_move.elapsed_minutes == 180
+
+    # 2. Explore new exterior space with room extraction
+    delta_explore = heuristic_post_turn_delta(
+        user_message="I step outside into the Neon Alley.",
+        raw_prose="Cold drizzle hits the pavement.",
+        pre_turn=PreTurnAnalysis(spatial_intent="explore_new"),
+        active_location=start_loc,
+        neighbors=neighbors,
+    )
+    assert delta_explore.transition_type == "improvise_new"
+    assert delta_explore.improvised_location is not None
+    assert delta_explore.improvised_location.name == "Neon Alley"
+    assert delta_explore.improvised_location.is_exterior is True
+
+    # 3. character_rolls + legacy resolved_roll Critical Failure triggers crisis flag
+    roll = DiceRollResult(
+        action_description="hack the blast door",
+        skill_or_approach="Tech",
+        d20_raw=1,
+        modifier=0,
+        total=1,
+        difficulty_class=15,
+        outcome_tier="Critical Failure",
+        narrative_directive="Alarm trips.",
+    )
+    delta_char_roll = heuristic_post_turn_delta(
+        user_message="Slice the panel.",
+        raw_prose="*Sparks shower the corridor.*",
+        pre_turn=PreTurnAnalysis(spatial_intent="stay", dice_mode="auto", character_rolls={"char_1": roll}),
+        active_location=start_loc,
+        neighbors=[],
+    )
+    assert delta_char_roll.notable_event_summary is not None
+    assert "Critical Failure" in delta_char_roll.notable_event_summary
+    assert any(flag.startswith("Crisis:") for flag in delta_char_roll.scene_flags_updated)
+
+    delta_crisis = heuristic_post_turn_delta(
+        user_message="Slice the panel.",
+        raw_prose="*Sparks shower the corridor.*",
+        pre_turn=PreTurnAnalysis.model_construct(spatial_intent="stay", resolved_roll=roll, character_rolls={}),
+        active_location=start_loc,
+        neighbors=[],
+    )
+    assert delta_crisis.notable_event_summary is not None
+    assert "Critical Failure" in delta_crisis.notable_event_summary
+    assert any(flag.startswith("Crisis:") for flag in delta_crisis.scene_flags_updated)
+

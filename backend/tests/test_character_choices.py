@@ -1,6 +1,7 @@
 """Unit and integration tests for Director-Guided Character Choices."""
 
 import pytest
+from app.db.repository import CantinaRepository
 from app.engine.choices import (
     build_gate_check_spec,
     check_choice_compliance,
@@ -422,5 +423,97 @@ def test_choice_option_max_length_and_turn_submit_truncation():
         },
     )
     assert len(req.character_choices["char_123"].options[0].label) == 80
+
+
+async def test_phase1_synthetic_choice_prioritizes_speaker_and_resolves_gates(
+    empty_repo: CantinaRepository,
+) -> None:
+    """Synthetic Director Choice prompts prioritize chosen character as speaker and resolve gated choices."""
+    from app.engine.phase1_pre import run_phase1_pre_analysis
+    from app.engine.choices import DIRECTOR_CONTINUE_MESSAGE
+    from tests.factories import seed_character, seed_minimal_scenario
+
+    scenario = seed_minimal_scenario(empty_repo, character_name="Kira Vance")
+    viktor = seed_character(
+        empty_repo,
+        owner_id=scenario.user.id,
+        world_id=scenario.world.id,
+        name="Viktor Kroll",
+    )
+    choice_set = CharacterChoiceSet(
+        options=[
+            CharacterChoiceOption(label="Force the bulkhead", gate="critical_success"),
+            CharacterChoiceOption(label="Hold position", gate="any"),
+        ],
+        gate_difficulty_class=14,
+    )
+
+    analysis = await run_phase1_pre_analysis(
+        user_message=DIRECTOR_CONTINUE_MESSAGE,
+        character=scenario.character,
+        active_location=scenario.locations[0],
+        neighbors=[],
+        known_entities=[],
+        present_characters=[scenario.character, viktor],
+        dice_mode="forced",
+        manual_dice_override=20,
+        character_choices={viktor.id: choice_set},
+        message_is_synthetic=True,
+    )
+    assert analysis.active_speaker_id == viktor.id
+    assert analysis.speaker_order[0] == viktor.id
+    assert viktor.id in analysis.choice_resolutions
+    assert viktor.id in analysis.character_rolls
+    assert analysis.character_rolls[viktor.id].is_choice_gate is True
+
+
+async def test_turn_streaming_choice_validation_and_choices_adjusted(
+    empty_repo: CantinaRepository,
+) -> None:
+    """Narrator modes reject Director choices (422), and departed character choices emit 'choices_adjusted'."""
+    from fastapi import HTTPException
+
+    from app.main import _execute_turn_stream_events
+    from app.schemas.turn import TurnSubmitRequest
+    from tests.factories import seed_minimal_scenario
+
+    scenario = seed_minimal_scenario(empty_repo)
+    choice_set = CharacterChoiceSet(options=[CharacterChoiceOption(label="Observe quietly")])
+
+    # 1. Narrator mode with character_choices raises 422
+    with pytest.raises(HTTPException) as exc_info:
+        async for _ in _execute_turn_stream_events(
+            campaign_id=scenario.campaign.id,
+            req=TurnSubmitRequest(
+                user_message="",
+                narrative_mode="describe",
+                character_choices={scenario.character.id: choice_set},
+            ),
+            owner_id=scenario.user.id,
+        ):
+            pass
+    assert exc_info.value.status_code == 422
+
+    # 2. Choice targeting an absent character drops that ID and yields 'choices_adjusted'
+    events = []
+    async for packet in _execute_turn_stream_events(
+        campaign_id=scenario.campaign.id,
+        req=TurnSubmitRequest(
+            user_message="",
+            narrative_mode="standard",
+            character_choices={
+                scenario.character.id: choice_set,
+                "absent_char_999": choice_set,
+            },
+        ),
+        owner_id=scenario.user.id,
+    ):
+        events.append(packet)
+
+    adj = next(e for e in events if e["event"] == "choices_adjusted")
+    assert adj["data"]["dropped_character_ids"] == ["absent_char_999"]
+    saved = next(e for e in events if e["event"] == "turn_saved")["data"]
+    assert saved["actor_id"] == scenario.character.id
+
 
 

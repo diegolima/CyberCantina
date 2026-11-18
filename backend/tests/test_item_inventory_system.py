@@ -978,3 +978,39 @@ async def test_phase2_item_lore_hygiene_dedup_and_epistemic_isolation(
     ]
     assert len(reinjected) == 1
     assert "mother Elena" in reinjected[0].content
+
+
+def test_clerk_inventory_merge_prefixes_and_heuristic_delta_edges() -> None:
+    """Exercise +/- prefixes, empty entries, permanent protection, and worn/token extraction in clerk.inventory."""
+    from app.engine.clerk.inventory import (
+        _extract_heuristic_inventory_delta,
+        merge_inventory,
+    )
+
+    merged = merge_inventory(
+        existing_inventory=["", "Old Compass", "Old Compass", "[Worn] Trench Coat", "rusty key"],
+        added_items=["", "-rusty key", "+Spare Battery", "[Held] Old Compass", "-Conflicted Item", "Conflicted Item"],
+        removed_items=["trench coat"],
+    )
+    assert "[Held] Old Compass" in merged
+    assert "Spare Battery" in merged
+    assert "rusty key" not in merged
+    assert "[Worn] Trench Coat" not in merged
+    assert "Conflicted Item" not in merged
+    assert merged.count("[Held] Old Compass") == 1
+
+    added, removed = _extract_heuristic_inventory_delta(
+        user_message="I put on a Kevlar vest and pick up the brass keycard.",
+        raw_prose="*Kira drops her encrypted slate and pulls off the silver locket.*",
+        current_inventory=[
+            ItemInstance(name="Permanent Signet", flags=["permanent"]),
+            ItemInstance(name="Encrypted Slate", flags=[]),
+            "Dark Heavy Silver Locket",
+        ],
+    )
+    assert "[Worn] Kevlar vest" in added
+    assert "Brass keycard" in added
+    assert "Encrypted Slate" in removed
+    assert "Dark Heavy Silver Locket" in removed
+    assert "Permanent Signet" not in removed
+

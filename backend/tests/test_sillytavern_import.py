@@ -489,4 +489,44 @@ async def test_distill_sillytavern_card_includes_character_book_and_required_pro
     )
 
 
+def _build_minimal_png_chunk(chunk_type: bytes, data: bytes) -> bytes:
+    import struct
+    import zlib
+
+    crc = zlib.crc32(chunk_type + data) & 0xFFFFFFFF
+    return struct.pack(">I4s", len(data), chunk_type) + data + struct.pack(">I", crc)
+
+
+def test_sillytavern_parser_binary_chunk_scanner_and_error_edges():
+    """Exercise Pillow raw-JSON info, binary tEXt/iTXt ccv3 scanning, and JSON validation errors."""
+    # 1. Raw JSON stored directly in Pillow pnginfo text chunk
+    raw_card = {"name": "RawCard", "description": "Stored unencoded.", "first_mes": "Hello."}
+    info = PngImagePlugin.PngInfo()
+    info.add_text("chara", json.dumps(raw_card))
+    img = Image.new("RGB", (64, 64), color="navy")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", pnginfo=info)
+    pkg_raw = extract_card_from_bytes(buf.getvalue(), filename="raw.png")
+    assert pkg_raw.card.name == "RawCard"
+
+    # 2. Binary fallback scanner with invalid Pillow header but valid tEXt ccv3 base64 chunk
+    b64_ccv3 = base64.b64encode(json.dumps({"data": {"name": "BinaryCCV3", "description": "Chunk"}}).encode()).decode()
+    fake_png_text = b"\x89PNG\r\n\x1a\n" + _build_minimal_png_chunk(b"tEXt", b"ccv3\x00" + b64_ccv3.encode("latin-1"))
+    pkg_text = extract_card_from_bytes(fake_png_text, filename="ccv3.png")
+    assert pkg_text.card.name == "BinaryCCV3"
+
+    # 3. Binary fallback scanner with iTXt chunk containing raw JSON after nul separators
+    itxt_payload = b"chara\x00\x00\x00\x00\x00" + json.dumps({"name": "ITxtCard", "description": "UTF8 chunk"}).encode("utf-8")
+    fake_png_itxt = b"\x89PNG\r\n\x1a\n" + _build_minimal_png_chunk(b"iTXt", itxt_payload)
+    pkg_itxt = extract_card_from_bytes(fake_png_itxt, filename="itxt.png")
+    assert pkg_itxt.card.name == "ITxtCard"
+
+    # 4. Missing metadata / invalid JSON / non-object JSON errors
+    with pytest.raises(ValueError, match="does not contain a SillyTavern"):
+        extract_card_from_bytes(b"\x89PNG\r\n\x1a\n" + _build_minimal_png_chunk(b"tEXt", b"other\x00{}"))
+    with pytest.raises(ValueError, match="Failed to parse"):
+        extract_card_from_bytes(b"{not valid json", filename="bad.json")
+    with pytest.raises(ValueError, match="must be an object"):
+        parse_sillytavern_json("[1, 2, 3]")
+
 

@@ -2,6 +2,7 @@
 
 import pytest
 
+from app.db.repository import CantinaRepository
 from app.schemas.turn import (
     CharacterCheckSpec,
     DiceRollResult,
@@ -835,3 +836,83 @@ async def test_narrator_mode_never_rolls_dice_under_any_circumstance(empty_repo)
     assert pre_turn_perc["resolved_roll"] is None
     assert pre_turn_perc.get("character_rolls") in (None, {})
     assert pre_turn_perc["mechanics_check"]["requires_roll"] is False
+
+
+@pytest.mark.parametrize(
+    "check_role",
+    ["contested_reaction", "scene_hazard", "co_present_bystander", "active_attempt"],
+)
+@pytest.mark.parametrize(
+    "outcome_tier",
+    [
+        "Critical Failure",
+        "Failure with Consequences",
+        "Simple Failure",
+        "Clean Success",
+        "Critical Success",
+    ],
+)
+def test_phase1_directives_for_tier_matrix(check_role: str, outcome_tier: str) -> None:
+    """Exercise all check_role x outcome_tier combinations in build_tier_directives."""
+    from app.engine.phase1_pre import build_tier_directives
+
+    plan, narr = build_tier_directives(
+        outcome_tier=outcome_tier,
+        action_description="leap across the gap",
+        check_role=check_role,
+        character_name="Kira",
+    )
+    assert plan and narr
+    assert "Kira:" in narr
+
+
+async def test_phase1_disabled_mode_clears_checks_and_sanitizes_speaker_order(
+    empty_repo: CantinaRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When LLM proposes checks or invalid speaker IDs while dice_mode='disabled', Phase 1 resets checks and filters speakers."""
+    from unittest.mock import AsyncMock
+
+    from app.engine import phase1_pre as phase1_mod
+    from app.schemas.turn import CharacterCheckSpec, PreTurnLLMOutput
+    from tests.factories import seed_minimal_scenario
+
+    scenario = seed_minimal_scenario(empty_repo)
+    kira = scenario.character
+    loc = scenario.locations[0]
+
+    fake_llm_out = PreTurnLLMOutput(
+        user_sentiment="tense",
+        subtext_interpretation="Confrontation",
+        spatial_intent="stay",
+        active_speaker_id="ghost_missing",
+        speaker_order=["ghost_missing", kira.id],
+        mechanics_check=MechanicsTrigger(requires_roll=True, action_description="Dodge", difficulty_class=14),
+        character_checks=[
+            CharacterCheckSpec(
+                character_id=kira.id,
+                requires_roll=True,
+                action_description="Dodge",
+                skill_or_approach="Reflexes",
+                difficulty_class=14,
+            )
+        ],
+    )
+    monkeypatch.setattr(phase1_mod.llm_client, "complete_structured", AsyncMock(return_value=fake_llm_out))
+
+    analysis = await phase1_mod.run_phase1_pre_analysis(
+        user_message="Watch out!",
+        character=kira,
+        active_location=loc,
+        neighbors=[],
+        known_entities=[],
+        present_characters=[kira],
+        dice_mode="disabled",
+    )
+    assert analysis.speaker_order == [kira.id]
+    assert analysis.active_speaker_id == kira.id
+    assert analysis.character_rolls == {}
+    assert analysis.resolved_roll is None
+    assert analysis.mechanics_check.requires_roll is False
+    assert all(not c.requires_roll for c in analysis.character_checks)
+

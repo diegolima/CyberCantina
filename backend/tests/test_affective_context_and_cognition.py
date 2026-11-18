@@ -717,3 +717,115 @@ def test_zone4_categorical_serialization_and_dynamic_behavioral_anchors() -> Non
 
     assert "Stance toward Player: Cold & Distrustful (Trust: Deep Distrust)" in z4_vesper_view
     assert f"Stance toward {vesper.name}: Warm & Trusting & Respectful" in z4_vesper_view
+
+
+def test_xml_parser_stripping_bullets_and_malformed_attr_edges() -> None:
+    """Exercise strip_xml_tag_blocks, _extract_xml_tag attribute boundaries, invalid floats, and bullet truncation."""
+    from app.engine.cognition.xml_parser import (
+        _extract_xml_tag,
+        _format_cognition_bullets,
+        strip_xml_tag_blocks,
+    )
+
+    world, vesper, _, loc = _make_world_and_cast()
+    fallback = CharacterStateSnapshot(
+        turn_id="t_xml",
+        character_id=vesper.id,
+        current_location_id=loc.id,
+        mood_label="Calm",
+        valence=0.0,
+        arousal=0.3,
+        active_want="Wait",
+        active_plan="- Watch exit",
+    )
+
+    # 1. strip_xml_tag_blocks with trailing ws and unclosed tail
+    stripped = strip_xml_tag_blocks("<think>hidden plan</think>   Visible line<cognition>unclosed", ("think", "cognition"), strip_trailing_ws=True)
+    assert stripped == "Visible line<cognition>unclosed"
+
+    # 2. _extract_xml_tag rejects mismatched attrs when allow_attrs=False & handles unclosed tags
+    assert _extract_xml_tag("<want attr='1'>stay</want><want>leave</want>", "want", allow_attrs=False) == ("", "leave")
+    assert _extract_xml_tag("<cognition", "cognition") is None
+    assert _extract_xml_tag("<cognition>unclosed", "cognition") is None
+
+    # 3. _format_cognition_bullets edge cases
+    assert _format_cognition_bullets("") == ""
+    assert _format_cognition_bullets("   ") == "- "
+    assert _format_cognition_bullets("1. Check exits 2. Hide badge", max_bullets=2) == "- Check exits\n- Hide badge"
+    assert _format_cognition_bullets("Tag [LORE] one two three four", max_words_per_bullet=2) == "- Tag one..."
+
+    # 4. parse_cognition_xml invalid float fallback tolerance
+    bad_floats_xml = '<cognition><feeling valence="nan" arousal="bad">Steady</feeling></cognition>'
+    parsed = parse_cognition_xml(bad_floats_xml, fallback)
+    assert parsed.feeling == "Steady"
+
+
+@pytest.mark.asyncio()
+async def test_phase4_prose_streaming_cognition_and_guard_edge_cases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise inline remainder after </cognition>, >120-char skipped cognition, 2-pass <think> guard, and EOF flush."""
+    from app.engine import phase4_prose as p4_mod
+    from app.engine.phase4_prose import stream_phase4_prose
+
+    world, vesper, _, loc = _make_world_and_cast()
+    prev = CharacterStateSnapshot(
+        turn_id="t0",
+        character_id=vesper.id,
+        current_location_id=loc.id,
+        mood_label="Composed",
+        valence=0.0,
+        arousal=0.3,
+        active_want="Observe",
+        active_plan="- Watch door",
+    )
+    pre = PreTurnAnalysis(spatial_intent="stay")
+
+    async def _collect(chunks: list[str], pregen: CognitionBlock | None = None):
+        async def fake_stream(*args, **kwargs):
+            for ch in chunks:
+                yield ch
+
+        monkeypatch.setattr(p4_mod.llm_client, "stream_chat", fake_stream)
+        out = []
+        async for ev in stream_phase4_prose(
+            messages=[{"role": "user", "content": "hi"}],
+            user_message="hi",
+            character=vesper,
+            previous_state=prev,
+            active_location=loc,
+            neighbors=[],
+            recalled_items=[],
+            pre_turn=pre,
+            pregenerated_cognition=pregen,
+        ):
+            out.append(ev)
+        return out
+
+    # 1. Inline prose right after </cognition>
+    evs1 = await _collect(["<cognition><feeling>Alert</feeling></cognition>She steps closer."])
+    assert any(e["event"] == "cognition_complete" and e["data"]["feeling"] == "Alert" for e in evs1)
+    assert "".join(e["data"]["delta"] for e in evs1 if e["event"] == "prose_delta") == "She steps closer."
+
+    # 2. Model skips <cognition> for >120 chars -> skipped=True + flushes buffer as prose
+    long_plain = "Rain hammers the corrugated roof while footsteps echo steadily across the flooded courtyard outside." + " " * 30
+    evs2 = await _collect([long_plain])
+    cog2 = next(e["data"] for e in evs2 if e["event"] == "cognition_complete")
+    assert cog2["skipped"] is True
+    assert "".join(e["data"]["delta"] for e in evs2 if e["event"] == "prose_delta") == long_plain
+
+    # 3. 2-pass guard strips leaked <think>...</think> and <cognition>...</cognition>, and flushes unclosed EOF guard_buffer
+    pregen = CognitionBlock(feeling="Steady", valence=0.1, arousal=0.3, want="Listen", plan="- Wait")
+    evs3 = await _collect(["   <think>internal</think> Actual reply"], pregen=pregen)
+    assert "".join(e["data"]["delta"] for e in evs3 if e["event"] == "prose_delta") == "Actual reply"
+
+    evs4 = await _collect(["<cognition>leaked</cognition> Guarded prose"], pregen=pregen)
+    assert "".join(e["data"]["delta"] for e in evs4 if e["event"] == "prose_delta") == "Guarded prose"
+
+    # 4. EOF with unclosed <cognition> (legacy) and partial guard_buffer (2-pass)
+    evs5 = await _collect(["<cognition><feeling>Coiled</feeling>Unfinished tag"])
+    assert next(e["data"] for e in evs5 if e["event"] == "cognition_complete")["feeling"] == "Coiled"
+
+    evs6 = await _collect(["<think>closed</think>Tail", " more"], pregen=pregen)
+    assert "Tail more" == "".join(e["data"]["delta"] for e in evs6 if e["event"] == "prose_delta")
+

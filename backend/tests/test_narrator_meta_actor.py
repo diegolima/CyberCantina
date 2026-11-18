@@ -379,4 +379,119 @@ async def test_narrator_turn_preserves_character_emotional_anchor(
     assert t4_turn.character_state.mood_label != "Objective / Detached"
 
 
+async def test_narrator_legacy_swipe_inference_and_empty_message_rejection(
+    empty_repo: CantinaRepository,
+) -> None:
+    """Exercise swipe auto-detection for advance minutes, complication, perception check, custom leaf edit, and empty 400."""
+    from fastapi import HTTPException
+    import pytest
+
+    campaign_id = seed_minimal_scenario(empty_repo).campaign.id
+
+    # 1. Advance minutes parsed from bracketed prompt
+    ev_adv = [
+        p async for p in _execute_turn_stream_events(
+            campaign_id, TurnSubmitRequest(user_message="[Advance the story: wait for 15 minutes]", narrative_mode="standard")
+        )
+    ]
+    t_adv = next(e for e in ev_adv if e["event"] == "turn_saved")["data"]
+    assert t_adv["actor_id"] == "__narrator__"
+    assert t_adv["pre_turn"]["narrative_mode"] == "advance" if "narrative_mode" in t_adv["pre_turn"] else True
+
+    # 2. Complication + legacy perception check + custom leaf edit re-execution
+    ev_comp = [
+        p async for p in _execute_turn_stream_events(
+            campaign_id, TurnSubmitRequest(user_message="[Introduce a complication: Power outage]", narrative_mode="standard")
+        )
+    ]
+    assert next(e for e in ev_comp if e["event"] == "turn_saved")["data"]["actor_id"] == "__narrator__"
+
+    ev_perc = [
+        p async for p in _execute_turn_stream_events(
+            campaign_id, TurnSubmitRequest(user_message="[Perception check: Inspect vents]", narrative_mode="standard")
+        )
+    ]
+    assert next(e for e in ev_perc if e["event"] == "turn_saved")["data"]["actor_id"] == "__narrator__"
+
+    # Edit/swipe custom narrator turn using standard mode matching active leaf user_message
+    ev_custom = [
+        p async for p in _execute_turn_stream_events(
+            campaign_id, TurnSubmitRequest(user_message="Describe the flicker outside.", narrative_mode="custom", narrator_directive="Describe the flicker outside.")
+        )
+    ]
+    t_cust = next(e for e in ev_custom if e["event"] == "turn_saved")["data"]
+    ev_reswipe = [
+        p async for p in _execute_turn_stream_events(
+            campaign_id, TurnSubmitRequest(user_message=t_cust["user_message"], parent_turn_id=t_cust["parent_turn_id"], narrative_mode="standard")
+        )
+    ]
+    assert next(e for e in ev_reswipe if e["event"] == "turn_saved")["data"]["actor_id"] == "__narrator__"
+
+    # 3. Empty standard message with no choices raises 400
+    with pytest.raises(HTTPException) as exc_info:
+        async for _ in _execute_turn_stream_events(
+            campaign_id, TurnSubmitRequest(user_message="   ", narrative_mode="standard")
+        ):
+            pass
+    assert exc_info.value.status_code == 400
+
+
+def test_turn_streaming_sse_error_events_and_sync_turn_endpoint(
+    empty_repo: CantinaRepository,
+    monkeypatch,
+) -> None:
+    """Exercise /turns/stream SSE error payloads and synchronous POST /turns (+ 404)."""
+    from fastapi.testclient import TestClient
+
+    from app import main as main_module
+    from app.auth import get_current_user
+    from app.providers.local_relay import RelayRemoteError, RelayUnavailableError
+    from app.routers.campaign_routes import turn_streaming as ts_mod
+
+    scenario = seed_minimal_scenario(empty_repo)
+    main_module.app.dependency_overrides[get_current_user] = lambda: scenario.user
+    client = TestClient(main_module.app)
+
+    try:
+        # 1. Synchronous POST /api/campaigns/{id}/turns happy path & 404
+        resp_sync = client.post(
+            f"/api/campaigns/{scenario.campaign.id}/turns",
+            json={"user_message": "", "narrative_mode": "describe"},
+        )
+        assert resp_sync.status_code == 200
+        assert resp_sync.json()["campaign"]["id"] == scenario.campaign.id
+
+        resp_404 = client.post(
+            "/api/campaigns/missing_camp_xyz/turns",
+            json={"user_message": "hello", "narrative_mode": "standard"},
+        )
+        assert resp_404.status_code == 404
+
+        # 2. All 5 SSE error wrappers in stream_campaign_turn
+        error_cases = [
+            (RelayUnavailableError("offline"), "Browser inference relay is not connected"),
+            (RelayRemoteError("model_not_found", "Missing"), "not installed in Ollama"),
+            (KeyError("missing_turn"), "Campaign or required entity not found"),
+            (ValueError("bad"), "Invalid turn request"),
+            (RuntimeError("boom"), "An internal error occurred"),
+        ]
+        for exc, expected_substr in error_cases:
+            async def _raise(*args, _exc=exc, **kwargs):
+                if False:
+                    yield {}
+                raise _exc
+
+            monkeypatch.setattr(ts_mod, "_execute_turn_stream_events", _raise)
+            sse_resp = client.post(
+                f"/api/campaigns/{scenario.campaign.id}/turns/stream",
+                json={"user_message": "hi", "narrative_mode": "standard"},
+            )
+            assert sse_resp.status_code == 200
+            assert "event: error" in sse_resp.text
+            assert expected_substr in sse_resp.text
+    finally:
+        main_module.app.dependency_overrides.pop(get_current_user, None)
+
+
+
 
