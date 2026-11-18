@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useId } from "react";
 import {
   CheckCircle2,
   ChevronDown,
@@ -18,6 +18,27 @@ import type {
   NeighborLocationView,
 } from "../../types";
 import { resolveMapIconComponent } from "../map/mapIcons";
+import {
+  computeBoundaryMarkerTicks,
+  doesEdgeCrossContainer,
+  ENVELOPE_ARM_RADIUS,
+  ENVELOPE_BORDER_WIDTH,
+  ENVELOPE_HUB_RADIUS,
+  ENVELOPE_TIP_RADIUS,
+  isSameContainerLocation,
+  MINI_MAP_HEIGHT,
+  MINI_MAP_RX,
+  MINI_MAP_RY,
+  MINI_MAP_WIDTH,
+  resolveExternalContainerLabel,
+} from "./miniMapGeometry";
+
+const HALO_TEXT_STYLE: React.CSSProperties = {
+  paintOrder: "stroke",
+  stroke: "#0b0e14",
+  strokeWidth: 3,
+  strokeLinejoin: "round",
+};
 
 export interface InspectorLocationCardProps {
   bundle: CampaignStateBundle;
@@ -69,6 +90,63 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
   handleOpenFullMap,
   onOpenWorldSheet,
 }) => {
+  const maskUid = useId().replace(/:/g, "");
+  const fillMaskId = `minimap-env-fill-${maskUid}`;
+  const borderMaskId = `minimap-env-border-${maskUid}`;
+
+  const activeCont = activeLoc.container_id
+    ? containerMap.get(activeLoc.container_id) ?? null
+    : null;
+  const activeContIcon = activeCont
+    ? resolveMapIconComponent(activeCont.icon, "container", activeCont.depth)
+    : null;
+
+  const sameContainerPts = activeCont
+    ? immediateNeighbors.flatMap((nb) => {
+        if (
+          !isSameContainerLocation(
+            nb.destination.container_id,
+            activeCont.id,
+            containerMap
+          )
+        ) {
+          return [];
+        }
+        const pt = miniMapCoords[nb.destination.id];
+        return pt ? [{ id: nb.destination.id, ...pt }] : [];
+      })
+    : [];
+
+  const renderUnionShapes = (fillColor: string, pad = 0) => (
+    <>
+      <circle
+        cx={miniMapCenter.x}
+        cy={miniMapCenter.y}
+        r={ENVELOPE_HUB_RADIUS + pad}
+        fill={fillColor}
+      />
+      {sameContainerPts.map((pt) => (
+        <React.Fragment key={pt.id}>
+          <line
+            x1={miniMapCenter.x}
+            y1={miniMapCenter.y}
+            x2={pt.x}
+            y2={pt.y}
+            stroke={fillColor}
+            strokeWidth={(ENVELOPE_ARM_RADIUS + pad) * 2}
+            strokeLinecap="round"
+          />
+          <circle
+            cx={pt.x}
+            cy={pt.y}
+            r={ENVELOPE_TIP_RADIUS + pad}
+            fill={fillColor}
+          />
+        </React.Fragment>
+      ))}
+    </>
+  );
+
   return (
       <div className="inspector-card">
         <div
@@ -112,77 +190,93 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
 
         <svg
           width="100%"
-          height="195"
-          viewBox="0 0 330 195"
+          height={MINI_MAP_HEIGHT}
+          viewBox={`0 0 ${MINI_MAP_WIDTH} ${MINI_MAP_HEIGHT}`}
           style={{
+            display: "block",
+            width: "100%",
+            height: "auto",
+            maxHeight: MINI_MAP_HEIGHT,
             background: "var(--bg-deep)",
             borderRadius: 8,
             border: "1px solid var(--border-subtle)",
             marginBottom: 10,
           }}
         >
-          {/* Active Container Boundary Hint */}
-          {activeLoc.container_id && containerMap.get(activeLoc.container_id) && (() => {
-            const activeCont = containerMap.get(activeLoc.container_id)!;
-            const ContIcon = resolveMapIconComponent(
-              activeCont.icon,
-              "container",
-              activeCont.depth
-            );
-            return (
-              <g>
-                <rect
-                  x={124}
-                  y={62}
-                  width={82}
-                  height={66}
-                  rx={8}
-                  fill="rgba(245, 158, 11, 0.04)"
-                  stroke="rgba(245, 158, 11, 0.3)"
-                  strokeDasharray="3 3"
-                  strokeWidth={1}
-                />
-                <g>
-                  <ContIcon x={128} y={51} width={9} height={9} stroke="#fbbf24" />
-                  <text
-                    x={140}
-                    y={58}
-                    fill="#fbbf24"
-                    fontSize="7"
-                    fontWeight="700"
-                  >
-                    L{activeCont.depth} ·{" "}
-                    {activeCont.name.length > 12
-                      ? `${activeCont.name.slice(0, 11)}…`
-                      : activeCont.name}
-                  </text>
-                </g>
-              </g>
-            );
-          })()}
+          {activeCont && (
+            <defs>
+              <mask
+                id={fillMaskId}
+                maskUnits="userSpaceOnUse"
+                x={0}
+                y={0}
+                width={MINI_MAP_WIDTH}
+                height={MINI_MAP_HEIGHT}
+              >
+                <rect x={0} y={0} width={MINI_MAP_WIDTH} height={MINI_MAP_HEIGHT} fill="black" />
+                {renderUnionShapes("white", 0)}
+              </mask>
+              <mask
+                id={borderMaskId}
+                maskUnits="userSpaceOnUse"
+                x={0}
+                y={0}
+                width={MINI_MAP_WIDTH}
+                height={MINI_MAP_HEIGHT}
+              >
+                <rect x={0} y={0} width={MINI_MAP_WIDTH} height={MINI_MAP_HEIGHT} fill="black" />
+                {renderUnionShapes("white", ENVELOPE_BORDER_WIDTH)}
+                {renderUnionShapes("black", 0)}
+              </mask>
+            </defs>
+          )}
+
+          {/* Hub-and-Spoke Active Container Envelope */}
+          {activeCont && (
+            <g pointerEvents="none">
+              <rect
+                x={0}
+                y={0}
+                width={MINI_MAP_WIDTH}
+                height={MINI_MAP_HEIGHT}
+                fill="rgba(245, 158, 11, 0.06)"
+                mask={`url(#${fillMaskId})`}
+              />
+              <rect
+                x={0}
+                y={0}
+                width={MINI_MAP_WIDTH}
+                height={MINI_MAP_HEIGHT}
+                fill="rgba(245, 158, 11, 0.42)"
+                mask={`url(#${borderMaskId})`}
+              />
+            </g>
+          )}
 
           {/* Subtle Compass Rose Guide Ring */}
-          <ellipse
-            cx={miniMapCenter.x}
-            cy={miniMapCenter.y}
-            rx={102}
-            ry={66}
-            fill="none"
-            stroke="rgba(148, 163, 184, 0.12)"
-            strokeDasharray="3 4"
-          />
-          <text x={miniMapCenter.x} y={14} textAnchor="middle" fill="#475569" fontSize="8" fontWeight="700">
-            N
-          </text>
-          <text x={320} y={miniMapCenter.y + 3} textAnchor="end" fill="#475569" fontSize="8" fontWeight="700">
-            E
-          </text>
-          <text x={miniMapCenter.x} y={189} textAnchor="middle" fill="#475569" fontSize="8" fontWeight="700">
-            S
-          </text>
-          <text x={10} y={miniMapCenter.y + 3} textAnchor="start" fill="#475569" fontSize="8" fontWeight="700">
-            W
-          </text>
+          <g pointerEvents="none">
+            <ellipse
+              cx={miniMapCenter.x}
+              cy={miniMapCenter.y}
+              rx={MINI_MAP_RX}
+              ry={MINI_MAP_RY}
+              fill="none"
+              stroke="rgba(148, 163, 184, 0.12)"
+              strokeDasharray="3 4"
+            />
+            <text x={miniMapCenter.x} y={13} textAnchor="middle" fill="#475569" fontSize="8" fontWeight="700">
+              N
+            </text>
+            <text x={MINI_MAP_WIDTH - 10} y={miniMapCenter.y + 3} textAnchor="end" fill="#475569" fontSize="8" fontWeight="700">
+              E
+            </text>
+            <text x={miniMapCenter.x} y={MINI_MAP_HEIGHT - 5} textAnchor="middle" fill="#475569" fontSize="8" fontWeight="700">
+              S
+            </text>
+            <text x={10} y={miniMapCenter.y + 3} textAnchor="start" fill="#475569" fontSize="8" fontWeight="700">
+              W
+            </text>
+          </g>
 
           {/* 1-Hop Edges from Active Location */}
           {immediateNeighbors.map((nb) => {
@@ -190,11 +284,25 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
             if (!p2) return null;
             const midX = (miniMapCenter.x + p2.x) / 2;
             const midY = (miniMapCenter.y + p2.y) / 2;
-            const crossesContainer =
-              (nb.destination.container_id ?? null) !==
-              (activeLoc.container_id ?? null);
+            const crossesContainer = doesEdgeCrossContainer(
+              nb.destination.container_id,
+              activeLoc.container_id,
+              containerMap
+            );
+            const ticks = crossesContainer
+              ? computeBoundaryMarkerTicks(miniMapCenter, p2, nb.slot)
+              : null;
+            const isVerticalSlot = nb.slot === "N" || nb.slot === "S";
+            const labelX = isVerticalSlot ? midX + 8 : midX;
+            const labelY =
+              nb.slot === "N"
+                ? midY + 7
+                : nb.slot === "S"
+                ? midY - 6
+                : midY - 4;
+            const markerColor = activeCont ? "#fbbf24" : "#22d3ee";
             return (
-              <g key={nb.edge_id}>
+              <g key={nb.edge_id} pointerEvents="none">
                 <line
                   x1={miniMapCenter.x}
                   y1={miniMapCenter.y}
@@ -202,27 +310,88 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
                   y2={p2.y}
                   stroke={crossesContainer ? "#22d3ee" : "#06b6d4"}
                   strokeWidth={2}
-                  strokeDasharray={
-                    nb.is_locked_or_hidden
-                      ? "4 3"
-                      : crossesContainer
-                      ? "2 2"
-                      : undefined
-                  }
+                  strokeDasharray={nb.is_locked_or_hidden ? "4 3" : undefined}
                 />
+                {ticks && (
+                  <g>
+                    <line
+                      x1={ticks.gap.x1}
+                      y1={ticks.gap.y1}
+                      x2={ticks.gap.x2}
+                      y2={ticks.gap.y2}
+                      stroke="#0b0e14"
+                      strokeWidth={4}
+                    />
+                    <line
+                      x1={ticks.bar1.x1}
+                      y1={ticks.bar1.y1}
+                      x2={ticks.bar1.x2}
+                      y2={ticks.bar1.y2}
+                      stroke={markerColor}
+                      strokeWidth={1.75}
+                      strokeLinecap="round"
+                    />
+                    <line
+                      x1={ticks.bar2.x1}
+                      y1={ticks.bar2.y1}
+                      x2={ticks.bar2.x2}
+                      y2={ticks.bar2.y2}
+                      stroke={markerColor}
+                      strokeWidth={1.75}
+                      strokeLinecap="round"
+                    />
+                  </g>
+                )}
                 <text
-                  x={midX}
-                  y={midY - 3}
-                  textAnchor="middle"
+                  x={labelX}
+                  y={labelY}
+                  textAnchor={isVerticalSlot ? "start" : "middle"}
                   fill="#67e8f9"
                   fontSize="7.5"
                   fontWeight="700"
+                  style={HALO_TEXT_STYLE}
                 >
                   {nb.slot} · {nb.travel_minutes}m
                 </text>
               </g>
             );
           })}
+
+          {/* Fixed Top-Left Active Container Pill */}
+          {activeCont && activeContIcon && (() => {
+            const ContIcon = activeContIcon;
+            const shortContName =
+              activeCont.name.length > 12
+                ? `${activeCont.name.slice(0, 11)}…`
+                : activeCont.name;
+            const pillText = `L${activeCont.depth} · ${shortContName}`;
+            const pillWidth = Math.min(130, Math.max(58, Math.round(22 + pillText.length * 4.3)));
+            return (
+              <g pointerEvents="none">
+                <title>{`L${activeCont.depth} · ${activeCont.name}`}</title>
+                <rect
+                  x={6}
+                  y={6}
+                  width={pillWidth}
+                  height={17}
+                  rx={5}
+                  fill="rgba(15, 23, 42, 0.88)"
+                  stroke="rgba(245, 158, 11, 0.35)"
+                  strokeWidth={1}
+                />
+                <ContIcon x={11} y={10} width={9} height={9} stroke="#fbbf24" />
+                <text
+                  x={23}
+                  y={17}
+                  fill="#fbbf24"
+                  fontSize="7"
+                  fontWeight="700"
+                >
+                  {pillText}
+                </text>
+              </g>
+            );
+          })()}
 
           {/* Centered Active Node + Immediate Adjacent Nodes Only */}
           {[activeLoc, ...immediateNeighbors.map((n) => n.destination)].map(
@@ -233,12 +402,21 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
               const isSelected = loc.id === selectedLocId;
               const isPortal = miniDynamicPortalIds.has(loc.id);
               const isUnvisited = loc.is_visited === false;
-              const diffCont =
+              const isSameCont =
                 !isCurrent &&
-                loc.container_id &&
-                loc.container_id !== activeLoc.container_id
-                  ? containerMap.get(loc.container_id) ?? null
-                  : null;
+                Boolean(activeCont) &&
+                isSameContainerLocation(
+                  loc.container_id,
+                  activeCont?.id,
+                  containerMap
+                );
+              const externalLabel = !isCurrent
+                ? resolveExternalContainerLabel(
+                    loc,
+                    activeLoc.container_id,
+                    containerMap
+                  )
+                : null;
               const IconComp = resolveMapIconComponent(
                 loc.icon,
                 loc.is_hub ? "hub" : "location"
@@ -247,6 +425,10 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
                 ? "#f59e0b"
                 : loc.is_hub
                 ? "#a855f7"
+                : isSameCont
+                ? isSelected
+                  ? "#fbbf24"
+                  : "#d97706"
                 : isSelected
                 ? "#22d3ee"
                 : "#0891b2";
@@ -254,12 +436,25 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
                 ? "rgba(245, 158, 11, 0.25)"
                 : loc.is_hub
                 ? "rgba(168, 85, 247, 0.24)"
+                : isSameCont
+                ? "rgba(245, 158, 11, 0.11)"
                 : "#0f172a";
               const iconCol = isCurrent
                 ? "#fbbf24"
                 : loc.is_hub
                 ? "#e9d5ff"
+                : isSameCont
+                ? "#fbbf24"
                 : "#67e8f9";
+              const labelCol = isCurrent
+                ? "#fbbf24"
+                : isSameCont
+                ? isSelected
+                  ? "#fbbf24"
+                  : "#fde68a"
+                : "#cbd5e1";
+              const selectionRingCol =
+                isCurrent || isSameCont ? "#fbbf24" : "#38bdf8";
               const shortName =
                 loc.name.length > 16 ? loc.name.slice(0, 15) + "…" : loc.name;
               const hubRadius = isCurrent ? 13 : 11;
@@ -286,7 +481,7 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
                       cy={pt.y}
                       r={isCurrent ? 16 : 14}
                       fill="none"
-                      stroke={isCurrent ? "#fbbf24" : "#38bdf8"}
+                      stroke={selectionRingCol}
                       strokeWidth={1.6}
                       strokeDasharray="2 2"
                     />
@@ -333,23 +528,23 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
                     x={pt.x}
                     y={pt.y + (isCurrent ? 21 : 18)}
                     textAnchor="middle"
-                    fill={isCurrent ? "#fbbf24" : "#cbd5e1"}
+                    fill={labelCol}
                     fontSize="8.8"
                     fontWeight={isCurrent || isSelected ? "700" : "500"}
+                    style={HALO_TEXT_STYLE}
                   >
                     {shortName}
                   </text>
-                  {diffCont && (
+                  {externalLabel && (
                     <text
                       x={pt.x}
                       y={pt.y + 27}
                       textAnchor="middle"
-                      fill="#fbbf24"
+                      fill={isSameCont ? "#fde68a" : "#67e8f9"}
                       fontSize="7"
+                      style={HALO_TEXT_STYLE}
                     >
-                      [{diffCont.name.length > 13
-                        ? `${diffCont.name.slice(0, 12)}…`
-                        : diffCont.name}]
+                      {externalLabel}
                     </text>
                   )}
                 </g>

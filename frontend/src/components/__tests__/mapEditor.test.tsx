@@ -10,6 +10,16 @@ import {
   WorldRecord,
 } from "../../types";
 import { LiveInspector } from "../LiveInspector";
+import {
+  ENVELOPE_HUB_RADIUS,
+  MINI_MAP_CENTER,
+  MINI_MAP_RX,
+  MINI_MAP_RY,
+  computeBoundaryMarkerTicks,
+  doesEdgeCrossContainer,
+  isSameContainerLocation,
+  resolveExternalContainerLabel,
+} from "../inspector/miniMapGeometry";
 import { MagicWandButton } from "../MagicWandButton";
 import {
   SpatialTopologyView,
@@ -682,6 +692,345 @@ describe("Interactive Map Editor & Mini-Map", () => {
     expect(inspectorHtml).toContain("[Watson Distr");
     expect(inspectorHtml).toContain("<polygon");
     expect(inspectorHtml).toContain("Portal");
+    expect(inspectorHtml).toContain('viewBox="0 0 330 236"');
+    expect(inspectorHtml).toContain('maskUnits="userSpaceOnUse"');
+
+    // Pure mini-map geometry helpers across all 5 container combinations & 8 compass slots
+    expect(isSameContainerLocation("c1", "c1")).toBe(true);
+    expect(isSameContainerLocation("c1", "c2")).toBe(false);
+    expect(isSameContainerLocation(null, null)).toBe(false);
+    expect(doesEdgeCrossContainer(null, null)).toBe(false);
+    expect(doesEdgeCrossContainer("c1", "c1")).toBe(false);
+    expect(doesEdgeCrossContainer("c1", "c2")).toBe(true);
+    expect(doesEdgeCrossContainer(null, "c1")).toBe(true);
+    expect(doesEdgeCrossContainer("c1", null)).toBe(true);
+
+    const contMap = new Map(containers.map((c) => [c.id, c]));
+    // Hierarchical containment: L3 -> L2 -> L1 descendants are inside, while sibling L1s & parents are outside
+    const l3Cont: LocationContainer = {
+      id: "cont_city",
+      world_id: "world_1",
+      parent_container_id: null,
+      depth: 3,
+      name: "Night City",
+      description: "Metropolis.",
+      environmental_tags: [],
+      lore_nodes: [],
+    };
+    const hierContainers: LocationContainer[] = [
+      l3Cont,
+      ...containers.map((c) =>
+        c.id === "cont_district" ? { ...c, parent_container_id: "cont_city" } : c
+      ),
+    ];
+    const hierMap = new Map(hierContainers.map((c) => [c.id, c]));
+    // L3 ancestor contains L2 district and nested L1 club/clinic
+    expect(isSameContainerLocation("cont_club", "cont_city", hierMap)).toBe(true);
+    expect(isSameContainerLocation("cont_district", "cont_city", hierMap)).toBe(true);
+    expect(doesEdgeCrossContainer("cont_club", "cont_city", hierMap)).toBe(false);
+    expect(doesEdgeCrossContainer("cont_district", "cont_city", hierMap)).toBe(false);
+    expect(doesEdgeCrossContainer(null, "cont_city", hierMap)).toBe(true);
+    // L1 does NOT contain sibling L1 (even under same L2/L3) or parent L2/L3
+    expect(isSameContainerLocation("cont_clinic", "cont_club", hierMap)).toBe(false);
+    expect(isSameContainerLocation("cont_district", "cont_club", hierMap)).toBe(false);
+    expect(isSameContainerLocation("cont_city", "cont_club", hierMap)).toBe(false);
+    expect(doesEdgeCrossContainer("cont_clinic", "cont_club", hierMap)).toBe(true);
+    expect(doesEdgeCrossContainer("cont_district", "cont_club", hierMap)).toBe(true);
+    // Cycle-safe parent walk
+    const cyclicMap = new Map<string, LocationContainer>([
+      ["ca", { ...l3Cont, id: "ca", parent_container_id: "cb" }],
+      ["cb", { ...l3Cont, id: "cb", parent_container_id: "ca" }],
+    ]);
+    expect(isSameContainerLocation("ca", "cc", cyclicMap)).toBe(false);
+
+    expect(resolveExternalContainerLabel({ container_id: "cont_club" }, "cont_club", contMap)).toBeNull();
+    expect(resolveExternalContainerLabel({ container_id: null }, "cont_club", contMap)).toBe("[Outside]");
+    expect(resolveExternalContainerLabel({ container_id: "cont_district" }, "cont_club", contMap)).toBe("[Watson Distr…]");
+    expect(resolveExternalContainerLabel({ container_id: "cont_club" }, null, contMap)).toBe("[Afterlife Cl…]");
+    expect(resolveExternalContainerLabel({ container_id: "missing_c" }, "cont_club", contMap)).toBeNull();
+
+    for (const slot of ["N", "NE", "E", "SE", "S", "SW", "W", "NW"] as const) {
+      const ang = COMPASS_ANGLES[slot];
+      const p2 = {
+        x: Math.round(MINI_MAP_CENTER.x + Math.cos(ang) * MINI_MAP_RX),
+        y: Math.round(MINI_MAP_CENTER.y + Math.sin(ang) * MINI_MAP_RY),
+      };
+      const ticks = computeBoundaryMarkerTicks(MINI_MAP_CENTER, p2, slot);
+      expect(ticks).not.toBeNull();
+      const rdx = p2.x - MINI_MAP_CENTER.x;
+      const rdy = p2.y - MINI_MAP_CENTER.y;
+      const bdx = ticks!.bar1.x2 - ticks!.bar1.x1;
+      const bdy = ticks!.bar1.y2 - ticks!.bar1.y1;
+      const rLen = Math.hypot(rdx, rdy);
+      const bLen = Math.hypot(bdx, bdy);
+      // Orthogonal bar relative to ray & clear of hub + destination node
+      expect(Math.abs((rdx * bdx + rdy * bdy) / (rLen * bLen))).toBeLessThan(0.05);
+      const gateDist = Math.hypot(
+        (ticks!.gap.x1 + ticks!.gap.x2) / 2 - MINI_MAP_CENTER.x,
+        (ticks!.gap.y1 + ticks!.gap.y2) / 2 - MINI_MAP_CENTER.y
+      );
+      expect(gateDist).toBeGreaterThan(ENVELOPE_HUB_RADIUS);
+      expect(gateDist).toBeLessThan(rLen - 18);
+    }
+
+    // Mixed/alternating neighbors: inside non-hub, inside hub, other container, and uncontained [Outside]
+    const mixedLocations: LocationNode[] = [
+      ...locations,
+      {
+        id: "loc_backroom",
+        world_id: "world_1",
+        container_id: "cont_club",
+        is_entry_exit: false,
+        name: "VIP Backroom",
+        summary: "Private lounge",
+        description: "Velvet booths.",
+        environmental_tags: [],
+        is_starting_location: false,
+        ui_x: 100,
+        ui_y: 80,
+      },
+      {
+        id: "loc_club_hub",
+        world_id: "world_1",
+        container_id: "cont_club",
+        is_entry_exit: false,
+        is_hub: true,
+        name: "Dance Floor",
+        summary: "Central hub",
+        description: "Pulsing neon.",
+        environmental_tags: [],
+        is_starting_location: false,
+        ui_x: 120,
+        ui_y: 120,
+      },
+      {
+        id: "loc_alley",
+        world_id: "world_1",
+        container_id: null,
+        is_entry_exit: false,
+        name: "Back Alley",
+        summary: "Rainy alley",
+        description: "Uncontained street.",
+        environmental_tags: [],
+        is_starting_location: false,
+        ui_x: 40,
+        ui_y: 180,
+      },
+    ];
+    const mixedBundle: CampaignStateBundle = {
+      ...bundle,
+      visible_locations: mixedLocations,
+      neighbor_locations: [
+        {
+          edge_id: "e_n",
+          direction_label: "VIP stairs",
+          compass_direction: "N",
+          travel_minutes: 1,
+          is_locked_or_hidden: false,
+          destination: mixedLocations[3],
+        },
+        {
+          edge_id: "e_ne",
+          direction_label: "Out onto Canal",
+          compass_direction: "NE",
+          travel_minutes: 2,
+          is_locked_or_hidden: false,
+          destination: mixedLocations[1],
+        },
+        {
+          edge_id: "e_e",
+          direction_label: "Main floor",
+          compass_direction: "E",
+          travel_minutes: 1,
+          is_locked_or_hidden: false,
+          destination: mixedLocations[4],
+        },
+        {
+          edge_id: "e_s",
+          direction_label: "Fire exit",
+          compass_direction: "S",
+          travel_minutes: 2,
+          is_locked_or_hidden: true,
+          destination: mixedLocations[5],
+        },
+      ],
+    };
+    const mixedHtml = renderToStaticMarkup(
+      <LiveInspector bundle={mixedBundle} world={world} character={char} />
+    );
+    expect(mixedHtml).toContain('stroke="#d97706"');
+    expect(mixedHtml).toContain('stroke="#0891b2"');
+    expect(mixedHtml).toContain('stroke="#a855f7"');
+    expect(mixedHtml).toContain("[Outside]");
+    expect(mixedHtml).toContain('stroke="#fbbf24" stroke-width="1.75"');
+    expect(mixedHtml).toContain('stroke-width="28" stroke-linecap="round"');
+
+    // Uncontained active location entering a contained neighbor: no <mask> envelope, cyan threshold gate
+    const uncontainedBundle: CampaignStateBundle = {
+      ...mixedBundle,
+      active_location: mixedLocations[5],
+      current_world_snapshot: {
+        ...worldSnapshot,
+        active_location_id: mixedLocations[5].id,
+      },
+      neighbor_locations: [
+        {
+          edge_id: "e_enter",
+          direction_label: "Through side door",
+          compass_direction: "N",
+          travel_minutes: 1,
+          is_locked_or_hidden: false,
+          destination: mixedLocations[0],
+        },
+      ],
+    };
+    const uncontainedHtml = renderToStaticMarkup(
+      <LiveInspector bundle={uncontainedBundle} world={world} character={char} />
+    );
+    expect(uncontainedHtml).not.toContain("<mask");
+    expect(uncontainedHtml).toContain('stroke="#22d3ee" stroke-width="1.75"');
+    expect(uncontainedHtml).toContain("[Afterlife Cl…]");
+
+    // Dangling missing container ID: gracefully omits envelope & pill
+    const missingContBundle: CampaignStateBundle = {
+      ...bundle,
+      containers: [],
+    };
+    const missingContHtml = renderToStaticMarkup(
+      <LiveInspector
+        bundle={missingContBundle}
+        world={{ ...world, containers: [] }}
+        character={char}
+      />
+    );
+    expect(missingContHtml).not.toContain("<mask");
+
+    // Scenario A: L3 active location envelops nested L1 and L2 descendants, while keeping uncontained outside
+    const cityGateLoc: LocationNode = {
+      id: "loc_city_gate",
+      world_id: "world_1",
+      container_id: "cont_city",
+      is_entry_exit: true,
+      name: "City Plaza",
+      summary: "Main city gate.",
+      description: "Central thoroughfare.",
+      environmental_tags: [],
+      is_starting_location: false,
+      ui_x: 0,
+      ui_y: 0,
+    };
+    const l3Bundle: CampaignStateBundle = {
+      ...mixedBundle,
+      containers: hierContainers,
+      active_location: cityGateLoc,
+      current_world_snapshot: {
+        ...worldSnapshot,
+        active_location_id: cityGateLoc.id,
+      },
+      visible_locations: [...mixedLocations, cityGateLoc],
+      neighbor_locations: [
+        {
+          edge_id: "e_to_l1",
+          direction_label: "Into Afterlife",
+          compass_direction: "N",
+          travel_minutes: 3,
+          is_locked_or_hidden: false,
+          destination: mixedLocations[0], // cont_club (L1 -> L2 -> L3)
+        },
+        {
+          edge_id: "e_to_l2",
+          direction_label: "Along canal",
+          compass_direction: "E",
+          travel_minutes: 4,
+          is_locked_or_hidden: false,
+          destination: mixedLocations[1], // cont_district (L2 -> L3)
+        },
+        {
+          edge_id: "e_to_out",
+          direction_label: "Past city wall",
+          compass_direction: "S",
+          travel_minutes: 6,
+          is_locked_or_hidden: false,
+          destination: mixedLocations[5], // uncontained (null)
+        },
+      ],
+    };
+    const l3Html = renderToStaticMarkup(
+      <LiveInspector
+        bundle={l3Bundle}
+        world={{ ...world, containers: hierContainers }}
+        character={char}
+      />
+    );
+    expect(l3Html).toContain("L3 · Night City");
+    // Both L1 and L2 descendants get envelope spokes (2 spokes * 3 mask passes = 6 spoke lines)
+    expect(l3Html.match(/stroke-linecap="round"/g)?.length).toBeGreaterThanOrEqual(6);
+    // Descendant sub-container labels appear in warm amber (#fde68a) inside the L3 envelope
+    expect(l3Html).toContain('fill="#fde68a" font-size="7"');
+    // Uncontained exit still triggers threshold gate & cyan [Outside]
+    expect(l3Html).toContain('stroke="#fbbf24" stroke-width="1.75"');
+    expect(l3Html).toContain("[Outside]");
+
+    // Scenario B: L1 active location envelops same L1 only, excluding sibling L1 under same L2/L3 and parent L2
+    const clinicLoc: LocationNode = {
+      id: "loc_clinic",
+      world_id: "world_1",
+      container_id: "cont_clinic",
+      is_entry_exit: true,
+      name: "Ripper Clinic",
+      summary: "Backstreet clinic.",
+      description: "Chrome & scalpels.",
+      environmental_tags: [],
+      is_starting_location: false,
+      ui_x: 180,
+      ui_y: 120,
+    };
+    const l1Bundle: CampaignStateBundle = {
+      ...mixedBundle,
+      containers: hierContainers,
+      active_location: mixedLocations[0], // cont_club (L1)
+      visible_locations: [...mixedLocations, clinicLoc],
+      neighbor_locations: [
+        {
+          edge_id: "e_same_l1",
+          direction_label: "VIP stairs",
+          compass_direction: "N",
+          travel_minutes: 1,
+          is_locked_or_hidden: false,
+          destination: mixedLocations[3], // cont_club (same L1)
+        },
+        {
+          edge_id: "e_sib_l1",
+          direction_label: "Cross-alley",
+          compass_direction: "E",
+          travel_minutes: 2,
+          is_locked_or_hidden: false,
+          destination: clinicLoc, // cont_clinic (different L1 under same L2/L3)
+        },
+        {
+          edge_id: "e_par_l2",
+          direction_label: "Street exit",
+          compass_direction: "S",
+          travel_minutes: 2,
+          is_locked_or_hidden: false,
+          destination: mixedLocations[1], // cont_district (parent L2)
+        },
+      ],
+    };
+    const l1Html = renderToStaticMarkup(
+      <LiveInspector
+        bundle={l1Bundle}
+        world={{ ...world, containers: hierContainers }}
+        character={char}
+      />
+    );
+    // Only 1 spoke inside fillMask (1 same-L1 neighbor); sibling L1 and parent L2 stay cyan (#0891b2)
+    const fillMaskMatch = l1Html.match(/<mask id="minimap-env-fill-[^"]+"[\s\S]*?<\/mask>/);
+    expect(fillMaskMatch).not.toBeNull();
+    expect(fillMaskMatch![0].match(/stroke-width="28"/g)?.length).toBe(1);
+    expect(l1Html).toContain('stroke="#d97706"');
+    expect(l1Html).toContain('stroke="#0891b2"');
+    expect(l1Html).toContain("[Watson Distr…]");
   });
 
   it("clips link segments to node perimeters, sizes badges, clamps zoom, and resolves canvas cursors", () => {

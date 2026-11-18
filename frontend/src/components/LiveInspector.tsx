@@ -27,6 +27,11 @@ import { InspectorSection, usePersistentState } from "./inspector/InspectorPrimi
 import { CharacterRow } from "./inspector/CharacterRow";
 import { CampaignCharacterModal } from "./inspector/CampaignCharacterModal";
 import { InspectorLocationCard } from "./inspector/InspectorLocationCard";
+import {
+  MINI_MAP_CENTER,
+  MINI_MAP_RX,
+  MINI_MAP_RY,
+} from "./inspector/miniMapGeometry";
 import { InspectorInternalsSection } from "./inspector/InspectorInternalsSection";
 import { LoreIndexModal } from "./inspector/LoreIndexModal";
 import { WorldInspectorModal } from "./world/WorldInspectorModal";
@@ -292,8 +297,8 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
     return list;
   }, [bundle.neighbor_locations, activeLoc.id]);
 
-  // Mini-map coordinates: activeLoc always centered at (165, 95); only immediate 1-hop neighbors displayed
-  const miniMapCenter = { x: 165, y: 95 };
+  // Mini-map coordinates: activeLoc always centered; only immediate 1-hop neighbors displayed
+  const miniMapCenter = MINI_MAP_CENTER;
   const miniMapCoords = useMemo(() => {
     const map: Record<string, { x: number; y: number; slot?: CompassDirection }> = {
       [activeLoc.id]: { x: miniMapCenter.x, y: miniMapCenter.y },
@@ -301,13 +306,13 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
     for (const nb of immediateNeighbors) {
       const angle = COMPASS_ANGLES[nb.slot];
       map[nb.destination.id] = {
-        x: Math.round(miniMapCenter.x + Math.cos(angle) * 102),
-        y: Math.round(miniMapCenter.y + Math.sin(angle) * 66),
+        x: Math.round(miniMapCenter.x + Math.cos(angle) * MINI_MAP_RX),
+        y: Math.round(miniMapCenter.y + Math.sin(angle) * MINI_MAP_RY),
         slot: nb.slot,
       };
     }
     return map;
-  }, [activeLoc.id, immediateNeighbors]);
+  }, [activeLoc.id, immediateNeighbors, miniMapCenter]);
 
   const activeEdges = bundle.visible_edges ?? world.edges;
 

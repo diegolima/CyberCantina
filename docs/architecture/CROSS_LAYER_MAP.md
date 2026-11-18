@@ -686,6 +686,7 @@ erDiagram
 | `frontend/src/components/inspector/campaignCharacter/CampaignCharacterMediaTab.tsx` |
 | `frontend/src/components/inspector/campaignCharacter/CampaignCharacterMemoriesTab.tsx` |
 | `frontend/src/components/inspector/campaignCharacter/CampaignCharacterStateTab.tsx` |
+| `frontend/src/components/inspector/miniMapGeometry.ts` |
 
 #### `components/map`
 
