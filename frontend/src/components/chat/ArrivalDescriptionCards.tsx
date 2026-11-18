@@ -84,10 +84,8 @@ export const ArrivalDescriptionCards: React.FC<ArrivalDescriptionCardsProps> = (
 
   useEffect(() => {
     setIsLightboxOpen(false);
-    if (slideIdxOverride === undefined) {
-      setLocalSlideIdx(0);
-    }
-  }, [turnId, slideIdxOverride]);
+    setLocalSlideIdx(0);
+  }, [turnId]);
 
   useEffect(() => {
     if (visibleMedia.length === 0) {
