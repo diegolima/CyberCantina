@@ -9,11 +9,16 @@ import type {
   WorldRecord,
 } from "../../types";
 import { ArrivalDescriptionCards } from "../chat/ArrivalDescriptionCards";
+import { StandaloneArrivalCard } from "../chat/StandaloneArrivalCard";
 import { TurnCard } from "../chat/TurnCard";
 import {
+  buildArrivalHeaderSummary,
+  getArrivalScopeLabel,
   getLatestBranchTurnId,
   isArrivalCardExpanded,
+  isArrivalInnerItemExpanded,
   makeArrivalCardKey,
+  makeArrivalGroupKey,
 } from "../chat/arrivalHelpers";
 import { WorldInspectorModal } from "../world/WorldInspectorModal";
 
@@ -228,72 +233,177 @@ function makeFixtureBundle() {
   return { world, char, turn1, arrivalTurn, bundle };
 }
 
-describe("First-Visit Arrival Descriptions & World Settings (v0.11.6)", () => {
-  it("expands only latest turn arrival cards by default and collapses prior cards on subsequent turns", () => {
+describe("First-Visit Arrival Descriptions & World Settings (v0.11.6 + v0.19.1)", () => {
+  it("expands only latest turn outer arrival card by default, keeps inner items open by default, and summarizes headers cleanly", () => {
+    const g1 = makeArrivalGroupKey("turn_1");
     const k1 = makeArrivalCardKey("turn_1", "container", "cont_ward");
     expect(
       isArrivalCardExpanded({
         turnId: "turn_1",
         lastTurnId: "turn_1",
-        cardKey: k1,
+        cardKey: g1,
         manualOverrides: {},
       })
     ).toBe(true);
 
-    // Next turn arrives -> turn_1 cards default collapsed
+    // Next turn arrives -> turn_1 outer group defaults collapsed
     expect(
       isArrivalCardExpanded({
         turnId: "turn_1",
         lastTurnId: "turn_2",
-        cardKey: k1,
+        cardKey: g1,
         manualOverrides: {},
       })
     ).toBe(false);
 
-    // Manual override re-expands older card
+    // Manual override re-expands older outer group
     expect(
       isArrivalCardExpanded({
         turnId: "turn_1",
         lastTurnId: "turn_2",
-        cardKey: k1,
-        manualOverrides: { [k1]: true },
+        cardKey: g1,
+        manualOverrides: { [g1]: true },
       })
     ).toBe(true);
 
+    // Inner items default to expanded when outer card is open, unless explicitly collapsed
+    expect(isArrivalInnerItemExpanded({ cardKey: k1, manualOverrides: {} })).toBe(true);
+    expect(
+      isArrivalInnerItemExpanded({ cardKey: k1, manualOverrides: { [k1]: false } })
+    ).toBe(false);
+
     expect(getLatestBranchTurnId([])).toBeUndefined();
+    expect(getArrivalScopeLabel("location", 0)).toBe("Location");
+    expect(getArrivalScopeLabel("container", 2)).toBe("L2 Area");
+    expect(getArrivalScopeLabel("container", 0)).toBe("Area");
+
+    const { turn1 } = makeFixtureBundle();
+    const multiSummary = buildArrivalHeaderSummary({
+      cards: turn1.post_turn!.first_visit_cards!,
+      visibleMedia: [],
+      slideIdx: 0,
+    });
+    expect(multiSummary).toEqual({
+      title: "Old Ward › Anchor Tavern",
+      badgeText: "2 cards",
+      iconKind: "compass",
+    });
+
+    const singleSummary = buildArrivalHeaderSummary({
+      cards: [turn1.post_turn!.first_visit_cards![1]],
+      visibleMedia: [],
+      slideIdx: 0,
+    });
+    expect(singleSummary).toEqual({
+      title: "Anchor Tavern",
+      badgeText: "Location",
+      iconKind: "location",
+    });
   });
 
-  it("renders attached Clerk arrival cards on TurnCard while keeping Edit/Swipe controls, and renders standalone __arrival__ turns cleanly", () => {
+  it("renders Turn 0 standalone arrival before prose, Clerk standalone arrival after Turn N footer, and deduplicates 1-item headers", () => {
     const { char, turn1, arrivalTurn, bundle } = makeFixtureBundle();
     const attachedCards = turn1.post_turn!.first_visit_cards!;
 
-    const cardsLatestHtml = renderToStaticMarkup(
+    // Outer card expands on latest turn and collapses to 1 summary bar on subsequent turns
+    const standaloneExpandedHtml = renderToStaticMarkup(
+      <StandaloneArrivalCard
+        turnId="turn_1"
+        lastTurnId="turn_1"
+        worldTimestamp="1899-11-16 20:02"
+        source="clerk"
+        turnDepthIndex={1}
+        cards={attachedCards}
+        manualOverrides={{}}
+        onToggleCard={() => {}}
+      />
+    );
+    expect(standaloneExpandedHtml).toContain("Old Ward › Anchor Tavern");
+    expect(standaloneExpandedHtml).toContain("Fog curls along wet flagstones.");
+    expect(standaloneExpandedHtml).toContain("Salt-crusted timbers creak above lantern-lit tables.");
+    expect(standaloneExpandedHtml).toContain('aria-expanded="true"');
+
+    const standaloneCollapsedHtml = renderToStaticMarkup(
+      <StandaloneArrivalCard
+        turnId="turn_1"
+        lastTurnId="turn_99"
+        worldTimestamp="1899-11-16 20:02"
+        source="clerk"
+        turnDepthIndex={1}
+        cards={attachedCards}
+        manualOverrides={{}}
+        onToggleCard={() => {}}
+      />
+    );
+    expect(standaloneCollapsedHtml).toContain('aria-expanded="false"');
+    expect(standaloneCollapsedHtml).toContain("Old Ward › Anchor Tavern");
+    expect(standaloneCollapsedHtml).toContain("2 cards");
+    expect(standaloneCollapsedHtml).not.toContain("Fog curls along wet flagstones.");
+
+    // Individual inner element can still be collapsed while outer card remains open
+    const kCont = makeArrivalCardKey("turn_1", "container", "cont_ward");
+    const innerCollapsedHtml = renderToStaticMarkup(
       <ArrivalDescriptionCards
         turnId="turn_1"
         lastTurnId="turn_1"
         cards={attachedCards}
-        manualOverrides={{}}
+        manualOverrides={{ [kCont]: false }}
         onToggleCard={() => {}}
       />
     );
-    expect(cardsLatestHtml).toContain("Old Ward");
-    expect(cardsLatestHtml).toContain("Fog curls along wet flagstones.");
-    expect(cardsLatestHtml).toContain("Anchor Tavern");
-    expect(cardsLatestHtml).toContain('aria-expanded="true"');
+    expect(innerCollapsedHtml).not.toContain("Fog curls along wet flagstones.");
+    expect(innerCollapsedHtml).toContain("Salt-crusted timbers creak above lantern-lit tables.");
 
-    const cardsCollapsedHtml = renderToStaticMarkup(
-      <ArrivalDescriptionCards
-        turnId="turn_1"
-        lastTurnId="turn_99"
-        cards={attachedCards}
-        manualOverrides={{}}
-        onToggleCard={() => {}}
+    // Turn 0 renders standalone arrival card BEFORE opening prose (and auto-collapses once Turn 1 exists)
+    const turn0: TurnNodeRecord = {
+      ...turn1,
+      id: "turn_0",
+      parent_turn_id: null,
+      depth_index: 0,
+      user_message: "[Scene Start]",
+      raw_prose: "Lanterns sway over the wet cobblestones.",
+    };
+    const turn0Bundle: CampaignStateBundle = {
+      ...bundle,
+      active_branch_turns: [turn0],
+      all_turn_nodes: [turn0],
+    };
+    const turn0Html = renderToStaticMarkup(
+      <TurnCard
+        turn={turn0}
+        turnIdx={0}
+        bundle={turn0Bundle}
+        character={char}
+        allCampaignCharacters={[char]}
+        presentCharacterIds={[char.id]}
+        siblings={[]}
+        isBusy={false}
+        isDeletingTurn={false}
+        isEditingThisTurn={false}
+        hasActiveEditingTurn={false}
+        hasDeleteLastHandler={true}
+        cogOpen={false}
+        memOpen={false}
+        phase4ProgressByTurn={{}}
+        lastTurnId="turn_0"
+        onToggleCognition={() => {}}
+        onToggleMemories={() => {}}
+        onCheckoutTurn={() => {}}
+        onStartEdit={() => {}}
+        onCancelEdit={() => {}}
+        onSwipeRegenerate={() => {}}
+        onDeleteLast={() => {}}
+        onOpenAgentModal={() => {}}
       />
     );
-    expect(cardsCollapsedHtml).toContain('aria-expanded="false"');
-    expect(cardsCollapsedHtml).not.toContain("Fog curls along wet flagstones.");
+    expect(turn0Html).not.toContain("arrival-cards-panel");
+    expect(turn0Html).toContain("arrival-turn-card");
+    expect(turn0Html).toContain("Scene Opening");
+    expect(turn0Html.indexOf("arrival-turn-card")).toBeLessThan(
+      turn0Html.indexOf("Lanterns sway over the wet cobblestones.")
+    );
 
-    // Clerk-attached turn retains Edit, Swipe, and Delete
+    // Clerk-attached Turn N renders standalone arrival AFTER Turn N footer and retains Edit, Swipe, Delete
     const clerkTurnHtml = renderToStaticMarkup(
       <TurnCard
         turn={turn1}
@@ -322,12 +432,17 @@ describe("First-Visit Arrival Descriptions & World Settings (v0.11.6)", () => {
         onOpenAgentModal={() => {}}
       />
     );
-    expect(clerkTurnHtml).toContain("arrival-cards-panel");
+    expect(clerkTurnHtml).not.toContain("arrival-cards-panel");
+    expect(clerkTurnHtml).toContain("arrival-turn-card");
+    expect(clerkTurnHtml).toContain("Arrived via Turn #1");
     expect(clerkTurnHtml).toContain("Old Ward");
     expect(clerkTurnHtml).toContain("Edit");
     expect(clerkTurnHtml).toContain("Swipe");
+    expect(clerkTurnHtml.indexOf("arrival-turn-card")).toBeGreaterThan(
+      clerkTurnHtml.indexOf("Delete")
+    );
 
-    // Standalone map-move arrival turn omits Edit & Swipe, keeps Delete on leaf
+    // Standalone map-move arrival turn (1 item) omits redundant inner toggle header, keeps sibling Delete, omits Swipe
     const arrivalBundle: CampaignStateBundle = {
       ...bundle,
       active_branch_turns: [turn1, arrivalTurn],
@@ -362,7 +477,10 @@ describe("First-Visit Arrival Descriptions & World Settings (v0.11.6)", () => {
       />
     );
     expect(standaloneHtml).toContain("arrival-turn-card");
-    expect(standaloneHtml).toContain("Arrival Description");
+    expect(standaloneHtml).toContain("Map Move");
+    expect(standaloneHtml).toContain("Anchor Tavern");
+    expect(standaloneHtml).toContain("arrival-card-body--bare");
+    expect(standaloneHtml).not.toContain("arrival-card-header");
     expect(standaloneHtml).toContain("Delete");
     expect(standaloneHtml).not.toContain("Swipe");
   });

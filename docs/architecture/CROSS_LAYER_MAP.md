@@ -665,6 +665,7 @@ erDiagram
 | `frontend/src/components/chat/ChatComposer.tsx` |
 | `frontend/src/components/chat/DirectorChoicesDrawer.tsx` |
 | `frontend/src/components/chat/LiveStreamingTurnCard.tsx` |
+| `frontend/src/components/chat/StandaloneArrivalCard.tsx` |
 | `frontend/src/components/chat/TurnCard.tsx` |
 | `frontend/src/components/chat/arrivalHelpers.ts` |
 | `frontend/src/components/chat/arrivalMediaHelpers.ts` |

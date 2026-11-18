@@ -11,6 +11,7 @@ import type {
 } from "../../types";
 import { getCategoryPrimaryImages, getEntityPrimaryImage } from "../../utils/entityImages";
 import { ArrivalDescriptionCards } from "../chat/ArrivalDescriptionCards";
+import { StandaloneArrivalCard } from "../chat/StandaloneArrivalCard";
 import { TurnCard } from "../chat/TurnCard";
 import {
   filterAvailableArrivalMedia,
@@ -199,6 +200,41 @@ describe("World Media UI & Helpers", () => {
     );
     expect(collapsedHtml).toContain("Arrival Visuals (2)");
     expect(collapsedHtml).not.toContain("/api/media/worlds/images/wmed_1.webp");
+
+    // StandaloneArrivalCard with media-only carousel skips redundant inner header and collapses as one bar
+    const standaloneMediaHtml = renderToStaticMarkup(
+      <StandaloneArrivalCard
+        turnId="turn_0"
+        lastTurnId="turn_0"
+        worldTimestamp="2026-01-01 20:00"
+        source="scene_start"
+        turnDepthIndex={0}
+        cards={[]}
+        mediaItems={mediaItems}
+        manualOverrides={{}}
+        onToggleCard={() => {}}
+      />
+    );
+    expect(standaloneMediaHtml).toContain("Arrival Visuals (2)");
+    expect(standaloneMediaHtml).toContain("1/2");
+    expect(standaloneMediaHtml).toContain("arrival-media-body--bare");
+    expect(standaloneMediaHtml).not.toContain("arrival-card-header");
+
+    // Empty media + empty cards renders nothing (no hollow header shell)
+    const emptyHtml = renderToStaticMarkup(
+      <StandaloneArrivalCard
+        turnId="turn_0"
+        lastTurnId="turn_0"
+        worldTimestamp="2026-01-01 20:00"
+        source="scene_start"
+        turnDepthIndex={0}
+        cards={[]}
+        mediaItems={[]}
+        manualOverrides={{}}
+        onToggleCard={() => {}}
+      />
+    );
+    expect(emptyHtml).toBe("");
   });
 
   it("renders TurnCard arrival media even when description cards are empty", () => {
@@ -366,8 +402,12 @@ describe("World Media UI & Helpers", () => {
         onOpenAgentModal={() => {}}
       />
     );
+    expect(html).toContain("arrival-turn-card");
     expect(html).toContain("/api/media/worlds/images/wmed_1.webp");
     expect(html).toContain("Neon Waterfront");
+    expect(html.indexOf("arrival-turn-card")).toBeLessThan(
+      html.indexOf("The rain pours outside.")
+    );
   });
 
   it("renders WorldInspectorModal Media tab across inspector, wizard, and campaign modes", () => {
