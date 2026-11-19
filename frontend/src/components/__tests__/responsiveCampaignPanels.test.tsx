@@ -159,34 +159,24 @@ function makeFixtures() {
 }
 
 describe("Responsive campaign panels", () => {
-  it("renders AppSidebar in collapsed icon-rail mode and expanded overlay mode", () => {
-    const { user, persona, world, character, bundle, notes } = makeFixtures();
+  it("renders campaign-focused AppSidebar in icon-rail and overlay modes without catalog lists", () => {
+    const { user, world, bundle, notes } = makeFixtures();
     const noop = vi.fn();
 
     const railHtml = renderToStaticMarkup(
       <AppSidebar
         mode="rail"
         onToggleCollapse={noop}
-        onExpandToCategory={noop}
         bundle={bundle}
-        personas={[persona]}
-        characters={[character]}
-        worlds={[world]}
-        campaigns={[bundle.campaign]}
-        campaignActiveWorldId={world.id}
-        campaignActivePersonaId={persona.id}
-        campaignActiveCharacterIds={new Set([character.id])}
+        worldName={world.name}
+        codexCount={3}
+        isCodexOpen={true}
+        onOpenCodex={noop}
         notes={notes}
         showNotesFlyout={false}
         setShowNotesFlyout={noop}
         currentUser={user}
         singleUserMode={false}
-        isStreaming={false}
-        setEditingPersona={noop}
-        setShowPersonaModal={noop}
-        setShowCharWizard={noop}
-        setShowWorldWizard={noop}
-        setShowNewCampaignModal={noop}
         setNotesModalInitialId={noop}
         setShowNotesModal={noop}
         setProfileInitialTab={noop}
@@ -194,48 +184,39 @@ describe("Responsive campaign panels", () => {
         setAdminInitialTab={noop}
         setShowAdminModal={noop}
         handleCloseCampaign={noop}
-        handleRequestDeletePersona={noop}
-        handleSelectCharacter={noop}
-        handleRequestDeleteCharacter={noop}
-        handleSelectWorld={noop}
-        handleRequestDeleteWorld={noop}
-        loadCampaignBundle={async () => {}}
-        handleRequestDeleteCampaign={noop}
         handleLogout={async () => {}}
       />
     );
 
     expect(railHtml).toContain("sidebar--rail");
     expect(railHtml).toContain('aria-label="Expand sidebar"');
-    expect(railHtml).toContain('aria-label="Characters (1)"');
+    expect(railHtml).toContain('aria-label="Open Campaign Codex"');
+    expect(railHtml).toContain('aria-pressed="true"');
+    expect(railHtml).toContain('aria-label="Close campaign and return to Home"');
+    expect(railHtml).toContain("lucide-book-open");
+    expect(railHtml).toContain("lucide-arrow-left");
+    expect(railHtml).toContain("lucide-log-out");
     expect(railHtml).toContain("rail-badge-dot");
     expect(railHtml).toContain('aria-label="Open Admin Area"');
+    expect(railHtml).not.toContain('aria-label="Personas');
+    expect(railHtml).not.toContain('aria-label="Characters');
+    expect(railHtml).not.toContain('aria-label="Worlds');
+    expect(railHtml).not.toContain('aria-label="Campaigns');
 
     const overlayHtml = renderToStaticMarkup(
       <AppSidebar
         mode="overlay"
         onCloseOverlay={noop}
-        expandedCategories={{ characters: true }}
-        onToggleCategory={noop}
         bundle={bundle}
-        personas={[persona]}
-        characters={[character]}
-        worlds={[world]}
-        campaigns={[bundle.campaign]}
-        campaignActiveWorldId={world.id}
-        campaignActivePersonaId={persona.id}
-        campaignActiveCharacterIds={new Set([character.id])}
+        worldName={world.name}
+        codexCount={7}
+        isCodexOpen={false}
+        onOpenCodex={noop}
         notes={notes}
         showNotesFlyout={false}
         setShowNotesFlyout={noop}
         currentUser={user}
         singleUserMode={false}
-        isStreaming={false}
-        setEditingPersona={noop}
-        setShowPersonaModal={noop}
-        setShowCharWizard={noop}
-        setShowWorldWizard={noop}
-        setShowNewCampaignModal={noop}
         setNotesModalInitialId={noop}
         setShowNotesModal={noop}
         setProfileInitialTab={noop}
@@ -243,23 +224,29 @@ describe("Responsive campaign panels", () => {
         setAdminInitialTab={noop}
         setShowAdminModal={noop}
         handleCloseCampaign={noop}
-        handleRequestDeletePersona={noop}
-        handleSelectCharacter={noop}
-        handleRequestDeleteCharacter={noop}
-        handleSelectWorld={noop}
-        handleRequestDeleteWorld={noop}
-        loadCampaignBundle={async () => {}}
-        handleRequestDeleteCampaign={noop}
         handleLogout={async () => {}}
       />
     );
 
     expect(overlayHtml).toContain("sidebar--overlay");
     expect(overlayHtml).toContain('aria-label="Close sidebar"');
-    expect(overlayHtml).toContain("Search characters, tags, creators...");
+    expect(overlayHtml).toContain("Operation Glass Horizon");
+    expect(overlayHtml).toContain("Night Sector");
+    expect(overlayHtml).toContain("Close Campaign");
+    expect(overlayHtml).toContain("Codex");
+    expect(overlayHtml).toContain(">7<");
+    expect(overlayHtml).toContain("lucide-arrow-left");
+    expect(overlayHtml).toContain("lucide-log-out");
+    expect(overlayHtml).toContain("Player Notes");
+    expect(overlayHtml).toContain("Admin Area");
+    expect(overlayHtml).not.toContain("Search characters, tags, creators...");
+    expect(overlayHtml).not.toContain(">Personas<");
+    expect(overlayHtml).not.toContain(">Characters<");
+    expect(overlayHtml).not.toContain(">Worlds<");
+    expect(overlayHtml).not.toContain(">Campaigns<");
   });
 
-  it("renders ChatStage mobile menu toggle, inspector toggle, and attention indicator", () => {
+  it("renders ChatStage mobile menu toggle, inspector toggle, and no close campaign button", () => {
     const { character, bundle } = makeFixtures();
     const noop = vi.fn();
 
@@ -271,7 +258,6 @@ describe("Responsive campaign panels", () => {
         liveStream={null}
         onSendTurn={noop}
         onCheckoutTurn={noop}
-        onCloseCampaign={noop}
         showSidebarToggle
         isSidebarOpen={false}
         onToggleSidebar={noop}
@@ -285,7 +271,8 @@ describe("Responsive campaign panels", () => {
     expect(html).toContain('aria-controls="live-inspector-aside"');
     expect(html).toContain("stage-attention-dot");
     expect(html).toContain("stage-header-badges");
-    expect(html).toContain("btn-close-campaign-label");
+    expect(html).not.toContain("btn-close-campaign");
+    expect(html).not.toContain("Close Campaign");
   });
 
   it("renders LiveInspector collapse controls and aria-hidden state cleanly", () => {
@@ -296,6 +283,7 @@ describe("Responsive campaign panels", () => {
       <LiveInspector
         mode="hidden"
         onClose={noop}
+        onOpenWorldSheet={noop}
         bundle={bundle}
         world={world}
         character={character}
@@ -304,6 +292,7 @@ describe("Responsive campaign panels", () => {
     expect(hiddenHtml).toContain("inspector--hidden");
     expect(hiddenHtml).toContain('aria-hidden="true"');
     expect(hiddenHtml).toContain('aria-label="Collapse inspector"');
+    expect(hiddenHtml).toContain("World Sheet");
 
     const overlayHtml = renderToStaticMarkup(
       <LiveInspector

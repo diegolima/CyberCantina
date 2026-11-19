@@ -57,7 +57,6 @@ export interface ChatStageProps {
   }) => void;
   onCheckoutTurn: (turnId: string) => void;
   onDeleteLastTurn?: () => Promise<void> | void;
-  onCloseCampaign?: () => void;
   showSidebarToggle?: boolean;
   isSidebarOpen?: boolean;
   onToggleSidebar?: () => void;

@@ -35,6 +35,7 @@ flowchart TD
     b_19["utils"]
     b_0 --> b_1
     b_0 --> b_2
+    b_0 --> b_13
     b_0 --> b_14
     b_0 --> b_17
     b_0 --> b_18
@@ -113,7 +114,7 @@ flowchart TD
 
 | Bucket | Files | Outgoing Dependencies |
 | :--- | ---: | :--- |
-| `App` | 1 | `api`, `components (root)`, `hooks`, `providers`, `types`, `utils` |
+| `App` | 1 | `api`, `components (root)`, `components/world`, `hooks`, `providers`, `types`, `utils` |
 | `api` | 14 | `types` |
 | `components (root)` | 23 | `api`, `components/auth`, `components/character`, `components/chat`, `components/inspector`, `components/map`, `components/prompts`, `components/shared`, `components/wizard`, `components/world`, `hooks`, `providers`, `types`, `utils` |
 | `components/auth` | 12 | `api`, `components (root)`, `components/models`, `components/providers`, `components/shared`, `types`, `utils` |

@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Clock,
-  LogOut,
   MapPin,
   Menu,
   PanelRightClose,
@@ -56,7 +55,6 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   onSendTurn,
   onCheckoutTurn,
   onDeleteLastTurn,
-  onCloseCampaign,
   showSidebarToggle = false,
   isSidebarOpen = false,
   onToggleSidebar,
@@ -984,18 +982,6 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               <div className="stage-campaign-title" title={bundle.campaign.name}>
                 {bundle.campaign.name}
               </div>
-              {onCloseCampaign && (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-close-campaign"
-                  onClick={onCloseCampaign}
-                  title="Close campaign and return to Home"
-                  aria-label="Close campaign and return to Home"
-                >
-                  <LogOut size={12} />
-                  <span className="btn-close-campaign-label">Close Campaign</span>
-                </button>
-              )}
             </div>
             <div className="stage-actor-line">
               Actor: <strong style={{ color: "var(--accent-amber)" }}>{character.name}</strong>

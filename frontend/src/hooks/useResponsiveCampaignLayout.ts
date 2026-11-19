@@ -4,7 +4,6 @@ import {
   LAYOUT_STORAGE_KEYS,
   MOBILE_MAX_WIDTH,
   PanelLayoutState,
-  SidebarCategoryKey,
   TABLET_MAX_WIDTH,
   ViewportTier,
   getViewportTier,
@@ -46,10 +45,7 @@ export interface UseResponsiveCampaignLayoutOptions {
 
 export interface ResponsiveCampaignLayoutResult extends PanelLayoutState {
   activeOverlayDrawer: ActiveOverlayDrawer;
-  expandedCategories: Record<SidebarCategoryKey, boolean>;
-  setCategoryExpanded: (key: SidebarCategoryKey, next: boolean) => void;
   toggleSidebar: () => void;
-  expandSidebarToCategory: (key: SidebarCategoryKey) => void;
   toggleInspector: () => void;
   closeOverlays: () => void;
 }
@@ -73,14 +69,6 @@ export function useResponsiveCampaignLayout({
   );
   const [activeOverlayDrawer, setActiveOverlayDrawer] =
     useState<ActiveOverlayDrawer>("none");
-  const [expandedCategories, setExpandedCategories] = useState<
-    Record<SidebarCategoryKey, boolean>
-  >({
-    personas: false,
-    characters: false,
-    worlds: false,
-    campaigns: false,
-  });
 
   useEffect(() => {
     writeBooleanFlag(LAYOUT_STORAGE_KEYS.sidebarCollapsed, desktopSidebarCollapsed);
@@ -149,13 +137,6 @@ export function useResponsiveCampaignLayout({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [hasCampaign, activeOverlayDrawer, hasTopPopoverOpen]);
 
-  const setCategoryExpanded = useCallback(
-    (key: SidebarCategoryKey, next: boolean) => {
-      setExpandedCategories((prev) => ({ ...prev, [key]: next }));
-    },
-    []
-  );
-
   const toggleSidebar = useCallback(() => {
     if (tier === "desktop") {
       if (desktopSidebarCollapsed) {
@@ -169,19 +150,6 @@ export function useResponsiveCampaignLayout({
     }
     setActiveOverlayDrawer((prev) => (prev === "left" ? "none" : "left"));
   }, [tier, desktopSidebarCollapsed, activeOverlayDrawer, onPanelOpened]);
-
-  const expandSidebarToCategory = useCallback(
-    (key: SidebarCategoryKey) => {
-      setExpandedCategories((prev) => ({ ...prev, [key]: true }));
-      onPanelOpened?.();
-      if (tier === "desktop") {
-        setDesktopSidebarCollapsed(false);
-      } else {
-        setActiveOverlayDrawer("left");
-      }
-    },
-    [tier, onPanelOpened]
-  );
 
   const toggleInspector = useCallback(() => {
     if (tier === "desktop") {
@@ -211,10 +179,7 @@ export function useResponsiveCampaignLayout({
   return {
     ...resolved,
     activeOverlayDrawer,
-    expandedCategories,
-    setCategoryExpanded,
     toggleSidebar,
-    expandSidebarToCategory,
     toggleInspector,
     closeOverlays,
   };

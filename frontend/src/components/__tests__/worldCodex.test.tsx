@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type {
+  CampaignStateBundle,
   CharacterRecord,
   LocationContainer,
   LocationNode,
@@ -12,9 +13,11 @@ import type {
 import { CodexCharacterDetail } from "../world/CodexCharacterDetail";
 import { CodexLocationDetail } from "../world/CodexLocationDetail";
 import { CodexLoreEditor } from "../world/CodexLoreEditor";
+import { WorldCodexTab } from "../world/WorldCodexTab";
 import { WorldInspectorModal } from "../world/WorldInspectorModal";
 import {
   type CodexCampaignCharacterEntry,
+  buildCampaignCharacterEntries,
   buildCodexLocationTree,
   buildCodexMajorCharacterList,
   countInvalidWorldLoreBySection,
@@ -718,5 +721,239 @@ describe("World Codex Helpers & Components (v0.20.0)", () => {
     expect(editorHtml).toContain("Marshal Sol");
     expect(editorHtml).toContain("Duplicate");
     expect(editorHtml).toContain("Delete");
+  });
+
+  it("computes spoiler-safe localLoreCount and declutters Locations tree without L1-L4 pills (v0.20.1)", () => {
+    const { containers, locations } = makeContainersAndLocations();
+    const secretOnlyLoc: LocationNode = {
+      id: "loc_secret_cache",
+      world_id: "w1",
+      container_id: "cont_keep",
+      name: "Smuggler Hold",
+      summary: "Hidden bilge locker.",
+      description: "Concealed behind loose timbers.",
+      environmental_tags: [],
+      is_starting_location: false,
+      is_visited: true,
+      lore_nodes: [
+        {
+          id: "ll_only_secret",
+          world_id: "w1",
+          location_id: "loc_secret_cache",
+          title: "Contraband Manifest",
+          category: "secret",
+          content: "Lists buyers in the upper district.",
+          entity_tags: [],
+        },
+      ],
+    };
+    const regionWithLore: LocationContainer = {
+      ...containers[0],
+      lore_nodes: [
+        {
+          id: "cl_region_ignored",
+          world_id: "w1",
+          container_id: "cont_region",
+          title: "Region Lore",
+          category: "history",
+          content: "L4 containers do not display local lore cues.",
+          entity_tags: [],
+        },
+      ],
+    };
+
+    const allContainers = [regionWithLore, containers[1]];
+    const allLocations = [...locations, secretOnlyLoc];
+
+    const campaignTree = buildCodexLocationTree(allContainers, allLocations, {
+      isCampaignMode: true,
+    });
+    const regionNode = campaignTree.roots[0];
+    const keepNode = regionNode.children[0];
+    const lanternNode = keepNode.children.find((c) => c.id === "loc_lantern");
+    const vaultNode = keepNode.children.find((c) => c.id === "loc_vault");
+    const secretLocNode = keepNode.children.find((c) => c.id === "loc_secret_cache");
+
+    expect(regionNode.localLoreCount).toBe(0);
+    expect(keepNode.localLoreCount).toBe(1);
+    expect(lanternNode?.localLoreCount).toBe(1);
+    expect(vaultNode?.localLoreCount).toBe(0);
+    expect(secretLocNode?.localLoreCount).toBe(0);
+
+    const editorTree = buildCodexLocationTree(allContainers, allLocations, {
+      isCampaignMode: false,
+    });
+    const editorKeep = editorTree.roots[0].children[0];
+    expect(editorTree.roots[0].localLoreCount).toBe(0);
+    expect(editorKeep.localLoreCount).toBe(2);
+    expect(
+      editorKeep.children.find((c) => c.id === "loc_lantern")?.localLoreCount
+    ).toBe(2);
+    expect(
+      editorKeep.children.find((c) => c.id === "loc_secret_cache")?.localLoreCount
+    ).toBe(1);
+
+    const campaignTreeHtml = renderToStaticMarkup(
+      <WorldCodexTab
+        worldId="w1"
+        isActive={true}
+        isCampaignMode={true}
+        loreNodes={[]}
+        pendingWorldLoreTagDrafts={{}}
+        containers={allContainers}
+        locations={allLocations}
+        visitedContainerIds={["cont_keep"]}
+        activeLocationId="loc_lantern"
+        initialSection="locations"
+        initialExpandedContainerIds={["cont_region", "cont_keep"]}
+        onUpdateLoreNodes={() => {}}
+        onUpdatePendingTagDrafts={() => {}}
+        onMarkDirty={() => {}}
+        onOpenOnMap={() => {}}
+      />
+    );
+    expect(campaignTreeHtml).toContain("lucide-layers");
+    expect(campaignTreeHtml).toContain("lucide-map-pin");
+    expect(campaignTreeHtml).not.toContain(">L1<");
+    expect(campaignTreeHtml).not.toContain(">L2<");
+    expect(campaignTreeHtml).not.toContain(">L3<");
+    expect(campaignTreeHtml).not.toContain(">L4<");
+    expect(campaignTreeHtml.match(/class="codex-lore-indicator"/g)?.length).toBe(2);
+    expect(campaignTreeHtml).toContain('title="1 local lore entry"');
+
+    const editorTreeHtml = renderToStaticMarkup(
+      <WorldCodexTab
+        worldId="w1"
+        isActive={true}
+        isCampaignMode={false}
+        loreNodes={[]}
+        pendingWorldLoreTagDrafts={{}}
+        containers={allContainers}
+        locations={allLocations}
+        visitedContainerIds={["cont_keep"]}
+        activeLocationId="loc_lantern"
+        initialSection="locations"
+        initialExpandedContainerIds={["cont_region", "cont_keep"]}
+        onUpdateLoreNodes={() => {}}
+        onUpdatePendingTagDrafts={() => {}}
+        onMarkDirty={() => {}}
+        onOpenOnMap={() => {}}
+      />
+    );
+    expect(editorTreeHtml.match(/class="codex-lore-indicator"/g)?.length).toBe(3);
+    expect(editorTreeHtml).toContain('title="2 local lore entries"');
+    expect(editorTreeHtml).toContain('title="1 local lore entry"');
+
+    const containerDetailHtml = renderToStaticMarkup(
+      <CodexLocationDetail
+        kind="container"
+        container={containers[1]}
+        containers={allContainers}
+        locations={allLocations}
+        visitedContainerIds={["cont_keep"]}
+        activeLocationId="loc_lantern"
+        isCampaignMode={true}
+        onOpenOnMap={() => {}}
+        onEnlargeImage={() => {}}
+      />
+    );
+    expect(containerDetailHtml).toContain("L1 ·");
+  });
+
+  it("resolves reactive Codex campaign character entries via shared helper (v0.20.1)", () => {
+    const { locations } = makeContainersAndLocations();
+    const { entries } = makeCharacterFixtures();
+    const zara = entries[0].record;
+    const aria = entries[1].record;
+
+    const baseBundle: CampaignStateBundle = {
+      campaign: {
+        id: "camp_codex",
+        name: "Tidewatch",
+        world_id: "w1",
+        character_id: aria.id,
+        participant_character_ids: [aria.id, zara.id],
+        active_leaf_turn_id: "turn_1",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+      active_branch_turns: [],
+      all_turn_nodes: [],
+      current_world_snapshot: {
+        turn_id: "turn_1",
+        world_timestamp: "Day 1",
+        campaign_elapsed_minutes: 0,
+        active_location_id: locations[0].id,
+        scene_flags: [],
+        visited_location_ids: [locations[0].id],
+      },
+      current_character_state: {
+        turn_id: "turn_1",
+        character_id: aria.id,
+        current_location_id: locations[0].id,
+        mood_label: "Alert",
+        valence: 0,
+        arousal: 0.4,
+        active_want: "Watch sea",
+        active_plan: "Hold lantern",
+        relationship_notes: {},
+        inventory: [],
+      },
+      character_states: {
+        [aria.id]: {
+          turn_id: "turn_1",
+          character_id: aria.id,
+          current_location_id: locations[0].id,
+          mood_label: "Alert",
+          valence: 0,
+          arousal: 0.4,
+          active_want: "Watch sea",
+          active_plan: "Hold lantern",
+          relationship_notes: {},
+          inventory: [],
+        },
+        [zara.id]: {
+          turn_id: "turn_1",
+          character_id: zara.id,
+          current_location_id: locations[1].id,
+          mood_label: "Calm",
+          valence: 0.1,
+          arousal: 0.2,
+          active_want: "Search vault",
+          active_plan: "Wait",
+          relationship_notes: {},
+          inventory: [],
+        },
+      },
+      present_character_ids: [aria.id],
+      active_location: locations[0],
+      neighbor_locations: [],
+      containers: [],
+      visible_locations: locations,
+      visible_edges: [],
+      episodic_chunks: [],
+    };
+
+    const resolvedBoth = buildCampaignCharacterEntries(baseBundle, aria, [aria, zara]);
+    expect(resolvedBoth.map((e) => e.record.name)).toEqual([
+      "Aria Kell",
+      "Zara Voss",
+    ]);
+    expect(resolvedBoth[0].isPrimary).toBe(true);
+    expect(resolvedBoth[0].isPresent).toBe(true);
+    expect(resolvedBoth[1].isPresent).toBe(false);
+    expect(resolvedBoth[1].elsewhereLocationName).toBe("Ash Vault");
+
+    const afterRemoval = buildCampaignCharacterEntries(
+      {
+        ...baseBundle,
+        campaign: {
+          ...baseBundle.campaign,
+          participant_character_ids: [aria.id],
+        },
+      },
+      aria,
+      [aria, zara]
+    );
+    expect(afterRemoval.map((e) => e.record.id)).toEqual([aria.id]);
   });
 });

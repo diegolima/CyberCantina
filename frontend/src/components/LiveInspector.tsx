@@ -10,7 +10,6 @@ import {
 import type { RightPanelMode } from "../utils/campaignLayout";
 import {
   CampaignStateBundle,
-  CampaignWorldSettings,
   CharacterRecord,
   CharacterStateSnapshot,
   CompassDirection,
@@ -34,8 +33,7 @@ import {
 } from "./inspector/miniMapGeometry";
 import { InspectorInternalsSection } from "./inspector/InspectorInternalsSection";
 import { LoreIndexModal } from "./inspector/LoreIndexModal";
-import type { CodexCampaignCharacterEntry } from "./world/codexHelpers";
-import { WorldInspectorModal } from "./world/WorldInspectorModal";
+import { buildCampaignCharacterEntries } from "./world/codexHelpers";
 import {
   COMPASS_ANGLES,
   buildContainerBreadcrumbChain,
@@ -89,9 +87,7 @@ interface LiveInspectorProps {
     loreNodes: LocationLoreNodeDraft[]
   ) => Promise<void> | void;
   onCheckoutTurn?: (turnId: string) => Promise<void> | void;
-  onUpdateCampaignWorldSettings?: (
-    settings: CampaignWorldSettings
-  ) => Promise<void> | void;
+  onOpenWorldSheet?: () => void;
   isMutatingLocked?: boolean;
   worlds?: WorldRecord[];
 }
@@ -113,13 +109,12 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   onSaveCampaignLocationLore,
   onSaveCampaignContainerLore,
   onCheckoutTurn,
-  onUpdateCampaignWorldSettings,
+  onOpenWorldSheet,
   isMutatingLocked = false,
   worlds = [],
 }) => {
   const activeLoc = bundle.active_location;
   const [selectedLocId, setSelectedLocId] = useState<string>(activeLoc.id);
-  const [showWorldSheet, setShowWorldSheet] = useState(false);
   const [showFullMap, setShowFullMap] = useState(false);
   const [isOverriding, setIsOverriding] = useState(false);
   const [showExits, setShowExits] = usePersistentState<boolean>("map.exits", false);
@@ -172,44 +167,25 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
 
   // Participant roster: primary character first, then present, then elsewhere
   const characterRows = useMemo(() => {
-    const byId = new Map<string, CharacterRecord>();
-    for (const c of participants ?? []) byId.set(c.id, c);
-    byId.set(character.id, character);
-
-    const ids = bundle.campaign.participant_character_ids?.length
-      ? bundle.campaign.participant_character_ids
-      : [bundle.campaign.character_id];
-    const orderedIds = [character.id, ...ids.filter((id) => id !== character.id)];
-    const presentIds = new Set(bundle.present_character_ids ?? []);
-    const locNames = new Map(bundle.visible_locations.map((l) => [l.id, l.name]));
-
-    const rows = orderedIds.flatMap((id) => {
-      const record = bundle.character_records?.[id] ?? byId.get(id);
-      const state =
-        bundle.character_states?.[id] ??
-        (id === character.id ? bundle.current_character_state : undefined);
-      if (!record || !state) return [];
+    const entries = buildCampaignCharacterEntries(bundle, character, participants);
+    const rows = entries.flatMap((entry) => {
+      if (!entry.state) return [];
       const prevState =
-        prevTurn?.character_states?.[id] ??
-        (id === character.id ? prevTurn?.character_state : undefined);
-      // Older single-character bundles may omit present_character_ids entirely
-      const isPresent =
-        presentIds.size === 0
-          ? state.current_location_id === activeLoc.id || id === character.id
-          : presentIds.has(id);
+        prevTurn?.character_states?.[entry.record.id] ??
+        (entry.record.id === character.id ? prevTurn?.character_state : undefined);
       return [
         {
-          record,
-          state,
-          isPresent,
-          elsewhereLocationName: locNames.get(state.current_location_id),
-          moodChanged: moodShifted(prevState, state),
+          record: entry.record,
+          state: entry.state,
+          isPresent: Boolean(entry.isPresent),
+          elsewhereLocationName: entry.elsewhereLocationName,
+          moodChanged: moodShifted(prevState, entry.state),
         },
       ];
     });
     // Stable partition keeps the primary character on top among present ones
     return [...rows.filter((r) => r.isPresent), ...rows.filter((r) => !r.isPresent)];
-  }, [participants, character, bundle, prevTurn, activeLoc.id]);
+  }, [participants, character, bundle, prevTurn]);
 
   const characterNameMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -227,17 +203,6 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   const indexedCharacters = useMemo(
     () => characterRows.map((r) => r.record),
     [characterRows]
-  );
-  const codexCampaignCharacters = useMemo<CodexCampaignCharacterEntry[]>(
-    () =>
-      characterRows.map((r) => ({
-        record: r.record,
-        state: r.state,
-        isPresent: r.isPresent,
-        elsewhereLocationName: r.elsewhereLocationName,
-        isPrimary: r.record.id === character.id,
-      })),
-    [characterRows, character.id]
   );
   const presentCharacterLocations = useMemo(() => {
     const map: Record<string, string> = {};
@@ -428,31 +393,8 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
         onOverrideLocation={onOverrideLocation}
         handleOverrideClick={handleOverrideClick}
         handleOpenFullMap={handleOpenFullMap}
-        onOpenWorldSheet={() => setShowWorldSheet(true)}
+        onOpenWorldSheet={onOpenWorldSheet}
       />
-
-      {/* Campaign World Sheet Modal (Read-only overview/map/codex + Campaign World Settings) */}
-      {showWorldSheet && (
-        <WorldInspectorModal
-          world={{
-            ...world,
-            containers: effectiveContainers,
-            locations: bundle.visible_locations,
-            edges: activeEdges,
-          }}
-          mode="campaign"
-          campaignId={bundle.campaign.id}
-          activePersona={bundle.campaign.persona_snapshot ?? null}
-          campaignCharacters={codexCampaignCharacters}
-          activeLocationId={activeLoc.id}
-          visitedContainerIds={bundle.current_world_snapshot.visited_container_ids ?? []}
-          campaignWorldSettings={bundle.campaign.world_settings}
-          isMutatingLocked={isMutatingLocked}
-          onSaveCampaignWorldSettings={onUpdateCampaignWorldSettings}
-          onClose={() => setShowWorldSheet(false)}
-          onSaved={() => setShowWorldSheet(false)}
-        />
-      )}
 
       {/* Full Zoomable Map Modal */}
       {showFullMap && (

@@ -1,5 +1,6 @@
 import type {
   AnyLoreCategory,
+  CampaignStateBundle,
   CharacterRecord,
   CharacterStateSnapshot,
   LocationContainer,
@@ -152,6 +153,7 @@ export interface CodexLocationTreeNode {
   id: string;
   name: string;
   depth: number;
+  localLoreCount: number;
   container?: LocationContainer;
   location?: LocationNode;
   children: CodexLocationTreeNode[];
@@ -631,6 +633,7 @@ export function buildCodexLocationTree(
       id: loc.id,
       name: loc.name,
       depth: 0,
+      localLoreCount: localLore.length,
       location: loc,
       children: [],
       matchesDirect: q ? tier !== null : true,
@@ -695,6 +698,7 @@ export function buildCodexLocationTree(
       id: cont.id,
       name: cont.name,
       depth: cont.depth,
+      localLoreCount: localLore.length,
       container: cont,
       children,
       matchesDirect,
@@ -844,4 +848,49 @@ export function buildCodexMajorCharacterList(
   });
 
   return [...items, ...charItems];
+}
+
+/** Resolve active campaign participant entries from CampaignStateBundle + catalog records. */
+export function buildCampaignCharacterEntries(
+  bundle: CampaignStateBundle,
+  primaryCharacter: CharacterRecord,
+  participants?: readonly CharacterRecord[]
+): CodexCampaignCharacterEntry[] {
+  const byId = new Map<string, CharacterRecord>();
+  for (const c of participants ?? []) byId.set(c.id, c);
+  byId.set(primaryCharacter.id, primaryCharacter);
+
+  const ids = bundle.campaign.participant_character_ids?.length
+    ? bundle.campaign.participant_character_ids
+    : [bundle.campaign.character_id];
+  const orderedIds = [
+    primaryCharacter.id,
+    ...ids.filter((id) => id !== primaryCharacter.id),
+  ];
+  const presentIds = new Set(bundle.present_character_ids ?? []);
+  const locNames = new Map(
+    bundle.visible_locations.map((l) => [l.id, l.name])
+  );
+  const activeLocId = bundle.active_location.id;
+
+  return orderedIds.flatMap((id) => {
+    const record = bundle.character_records?.[id] ?? byId.get(id);
+    const state =
+      bundle.character_states?.[id] ??
+      (id === primaryCharacter.id ? bundle.current_character_state : undefined);
+    if (!record || !state) return [];
+    const isPresent =
+      presentIds.size === 0
+        ? state.current_location_id === activeLocId || id === primaryCharacter.id
+        : presentIds.has(id);
+    return [
+      {
+        record,
+        state,
+        isPresent,
+        elsewhereLocationName: locNames.get(state.current_location_id),
+        isPrimary: record.id === primaryCharacter.id,
+      },
+    ];
+  });
 }

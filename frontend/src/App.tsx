@@ -15,6 +15,11 @@ import { HomeScreen } from "./components/HomeScreen";
 import { AppSidebar } from "./components/AppSidebar";
 import { AppModals } from "./components/AppModals";
 import { NotesFlyout } from "./components/NotesDrawer";
+import {
+  WorldInspectorModal,
+  type WorldTab,
+} from "./components/world/WorldInspectorModal";
+import { buildCampaignCharacterEntries } from "./components/world/codexHelpers";
 import { LocalRelayProvider } from "./providers/LocalRelayContext";
 import { useCampaignTurnActions } from "./hooks/useCampaignTurnActions";
 import { useResponsiveCampaignLayout } from "./hooks/useResponsiveCampaignLayout";
@@ -75,6 +80,8 @@ export const App: React.FC = () => {
   const [inspectingWorld, setInspectingWorld] = useState<WorldRecord | null>(
     null
   );
+  const [campaignWorldSheetTab, setCampaignWorldSheetTab] =
+    useState<WorldTab | null>(null);
   const [showPersonaModal, setShowPersonaModal] = useState(false);
   const [editingPersona, setEditingPersona] = useState<PersonaRecord | null>(null);
   const [showNewCampaignModal, setShowNewCampaignModal] = useState(false);
@@ -223,6 +230,7 @@ export const App: React.FC = () => {
 
   const loadCampaignBundle = async (campaignId: string) => {
     setPendingLocationOverrideId(null);
+    setCampaignWorldSheetTab(null);
     layout.closeOverlays();
     const stateBundle = await api.getCampaignState(campaignId);
     setBundle(stateBundle);
@@ -246,6 +254,7 @@ export const App: React.FC = () => {
     setBundle(null);
     setCampaignWorld(null);
     setCampaignCharacter(null);
+    setCampaignWorldSheetTab(null);
   };
 
   const refreshHomeMessages = async () => {
@@ -378,14 +387,6 @@ export const App: React.FC = () => {
     setCurrentUser(null);
   };
 
-  const handleSelectCharacter = (char: CharacterRecord) => {
-    setInspectingCharacter(char);
-  };
-
-  const handleSelectWorld = (world: WorldRecord) => {
-    setInspectingWorld(world);
-  };
-
   const handleRequestDeleteCharacter = (
     e: React.MouseEvent | undefined,
     char: CharacterRecord
@@ -499,6 +500,7 @@ export const App: React.FC = () => {
           setBundle(null);
           setCampaignWorld(null);
           setCampaignCharacter(null);
+          setCampaignWorldSheetTab(null);
         }
       }
       setDeleteTarget(null);
@@ -506,29 +508,6 @@ export const App: React.FC = () => {
       setIsDeleting(false);
     }
   };
-
-  // Highlight entities strictly according to the active campaign.
-  // Edge case: if the campaign was created with an older version of a character/world,
-  // find and highlight the latest version currently in the library.
-  const campaignActiveWorldId = useMemo(() => {
-    if (!bundle?.campaign) return null;
-    const targetWorldId = bundle.campaign.world_id;
-    const worldName = campaignWorld?.name;
-
-    if (worldName) {
-      const matchingByName = worlds.filter(
-        (w) => w.name === worldName && !w.pending_deletion
-      );
-      if (matchingByName.length > 0) {
-        return [...matchingByName].sort(
-          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        )[0].id;
-      }
-    }
-
-    const directMatch = worlds.find((w) => w.id === targetWorldId);
-    return directMatch?.id ?? targetWorldId;
-  }, [bundle?.campaign, worlds, campaignWorld]);
 
   const campaignActiveCharacterIds = useMemo(() => {
     if (!bundle?.campaign) return new Set<string>();
@@ -578,19 +557,22 @@ export const App: React.FC = () => {
     return activeIds;
   }, [bundle?.campaign, bundle?.character_records, characters, campaignCharacter]);
 
-  const campaignActivePersonaId = useMemo(() => {
-    if (!bundle?.campaign) return null;
-    const targetId = bundle.campaign.persona_id;
-    if (!targetId) return null;
-    const directMatch = personas.find((p) => p.id === targetId);
-    if (directMatch) return directMatch.id;
-    const pName = bundle.campaign.persona_snapshot?.name;
-    if (pName) {
-      const match = personas.find((p) => p.name === pName);
-      if (match) return match.id;
-    }
-    return targetId;
-  }, [bundle?.campaign, personas]);
+  const campaignParticipants = useMemo(
+    () => characters.filter((ch) => campaignActiveCharacterIds.has(ch.id)),
+    [characters, campaignActiveCharacterIds]
+  );
+
+  const liftedCodexCharacters = useMemo(
+    () =>
+      bundle && campaignCharacter
+        ? buildCampaignCharacterEntries(
+            bundle,
+            campaignCharacter,
+            campaignParticipants
+          )
+        : [],
+    [bundle, campaignCharacter, campaignParticipants]
+  );
 
   if (authChecking) {
     return (
@@ -627,33 +609,24 @@ export const App: React.FC = () => {
           aria-hidden="true"
         />
       )}
-      {/* Left Sidebar: 4 Collapsible, Searchable, Paged Categories (Active in play mode) */}
+      {/* Left Sidebar: Campaign Context, Close Campaign & Campaign Tools */}
       <AppSidebar
         mode={layout.leftMode}
         onToggleCollapse={layout.toggleSidebar}
         onCloseOverlay={layout.closeOverlays}
-        expandedCategories={layout.expandedCategories}
-        onToggleCategory={layout.setCategoryExpanded}
-        onExpandToCategory={layout.expandSidebarToCategory}
         bundle={bundle}
-        personas={personas}
-        characters={characters}
-        worlds={worlds}
-        campaigns={campaigns}
-        campaignActiveWorldId={campaignActiveWorldId}
-        campaignActivePersonaId={campaignActivePersonaId}
-        campaignActiveCharacterIds={campaignActiveCharacterIds}
+        worldName={campaignWorld?.name}
+        codexCount={campaignWorld?.lore_nodes.length ?? 0}
+        isCodexOpen={campaignWorldSheetTab === "codex"}
+        onOpenCodex={() => {
+          layout.closeOverlays();
+          setCampaignWorldSheetTab("codex");
+        }}
         notes={notes}
         showNotesFlyout={showNotesFlyout}
         setShowNotesFlyout={setShowNotesFlyout}
         currentUser={currentUser}
         singleUserMode={singleUserMode}
-        isStreaming={isStreaming}
-        setEditingPersona={setEditingPersona}
-        setShowPersonaModal={setShowPersonaModal}
-        setShowCharWizard={setShowCharWizard}
-        setShowWorldWizard={setShowWorldWizard}
-        setShowNewCampaignModal={setShowNewCampaignModal}
         setNotesModalInitialId={setNotesModalInitialId}
         setShowNotesModal={setShowNotesModal}
         setProfileInitialTab={setProfileInitialTab}
@@ -661,13 +634,6 @@ export const App: React.FC = () => {
         setAdminInitialTab={setAdminInitialTab}
         setShowAdminModal={setShowAdminModal}
         handleCloseCampaign={handleCloseCampaign}
-        handleRequestDeletePersona={handleRequestDeletePersona}
-        handleSelectCharacter={handleSelectCharacter}
-        handleRequestDeleteCharacter={handleRequestDeleteCharacter}
-        handleSelectWorld={handleSelectWorld}
-        handleRequestDeleteWorld={handleRequestDeleteWorld}
-        loadCampaignBundle={loadCampaignBundle}
-        handleRequestDeleteCampaign={handleRequestDeleteCampaign}
         handleLogout={handleLogout}
       />
 
@@ -707,7 +673,6 @@ export const App: React.FC = () => {
           onSendTurn={handleSendTurn}
           onCheckoutTurn={handleCheckoutTurn}
           onDeleteLastTurn={handleDeleteLastTurn}
-          onCloseCampaign={handleCloseCampaign}
           showSidebarToggle={layout.showMobileMenuButton}
           isSidebarOpen={layout.isSidebarOpen}
           onToggleSidebar={layout.toggleSidebar}
@@ -825,13 +790,11 @@ export const App: React.FC = () => {
           bundle={bundle}
           world={campaignWorld}
           character={campaignCharacter}
-          participants={characters.filter((ch) =>
-            campaignActiveCharacterIds.has(ch.id)
-          )}
+          participants={campaignParticipants}
           memoryConfig={appSettings?.memory_config}
           pendingLocationOverrideId={pendingLocationOverrideId}
           onOverrideLocation={handleOverrideLocation}
-          onUpdateCampaignWorldSettings={handleUpdateCampaignWorldSettings}
+          onOpenWorldSheet={() => setCampaignWorldSheetTab("base")}
           onSaveCampaignMap={handleSaveCampaignMap}
           onToggleItemEquip={handleToggleItemEquip}
           onUpdateCampaignMemories={handleUpdateCampaignMemories}
@@ -840,6 +803,33 @@ export const App: React.FC = () => {
           onCheckoutTurn={handleCheckoutTurn}
           isMutatingLocked={isStreaming || isPhase4Running}
           worlds={worlds}
+        />
+      )}
+
+      {/* Lifted Campaign World Sheet / Codex Modal (rendered outside inspector container) */}
+      {bundle && campaignWorld && campaignCharacter && campaignWorldSheetTab !== null && (
+        <WorldInspectorModal
+          key={`${bundle.campaign.id}:${campaignWorldSheetTab}`}
+          world={{
+            ...campaignWorld,
+            containers: bundle.containers ?? campaignWorld.containers ?? [],
+            locations: bundle.visible_locations,
+            edges: bundle.visible_edges ?? campaignWorld.edges,
+          }}
+          mode="campaign"
+          initialTab={campaignWorldSheetTab}
+          campaignId={bundle.campaign.id}
+          activePersona={bundle.campaign.persona_snapshot ?? null}
+          campaignCharacters={liftedCodexCharacters}
+          activeLocationId={bundle.active_location.id}
+          visitedContainerIds={
+            bundle.current_world_snapshot.visited_container_ids ?? []
+          }
+          campaignWorldSettings={bundle.campaign.world_settings}
+          isMutatingLocked={isStreaming || isPhase4Running}
+          onSaveCampaignWorldSettings={handleUpdateCampaignWorldSettings}
+          onClose={() => setCampaignWorldSheetTab(null)}
+          onSaved={() => setCampaignWorldSheetTab(null)}
         />
       )}
 

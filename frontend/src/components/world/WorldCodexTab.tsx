@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Gem,
   Info,
+  Layers,
   MapPin,
   Plus,
   ScrollText,
@@ -72,6 +73,8 @@ interface WorldCodexTabProps {
   activePersonaTurnState?: PersonaTurnStateSnapshot | null;
   campaignCharacters?: CodexCampaignCharacterEntry[];
   externalFocusRequest?: CodexFocusRequest | null;
+  initialSection?: CodexSectionId | null;
+  initialExpandedContainerIds?: readonly string[];
   onUpdateLoreNodes: (updater: (prev: LoreNode[]) => LoreNode[]) => void;
   onUpdatePendingTagDrafts: (
     updater: (prev: Record<string, string>) => Record<string, string>
@@ -104,17 +107,21 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   activePersonaTurnState,
   campaignCharacters = [],
   externalFocusRequest,
+  initialSection = null,
+  initialExpandedContainerIds,
   onUpdateLoreNodes,
   onUpdatePendingTagDrafts,
   onMarkDirty,
   onOpenOnMap,
 }) => {
-  const [activeSection, setActiveSection] = useState<CodexSectionId | null>(null);
+  const [activeSection, setActiveSection] = useState<CodexSectionId | null>(
+    initialSection
+  );
   const [globalQuery, setGlobalQuery] = useState("");
   const [categoryQuery, setCategoryQuery] = useState("");
   const [selectedEntryKey, setSelectedEntryKey] = useState<string | null>(null);
   const [expandedContainerIds, setExpandedContainerIds] = useState<Set<string>>(
-    () => new Set()
+    () => new Set(initialExpandedContainerIds ?? [])
   );
   const [frozenOrderIds, setFrozenOrderIds] = useState<string[] | null>(null);
   const [reclassifiedNotice, setReclassifiedNotice] = useState<{
@@ -632,22 +639,25 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
           }}
         >
           {node.kind === "container" ? (
-            <button
-              type="button"
-              className="codex-tree-toggle"
-              aria-label={isExpanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                setExpandedContainerIds((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(node.id)) next.delete(node.id);
-                  else next.add(node.id);
-                  return next;
-                });
-              }}
-            >
-              {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-            </button>
+            <>
+              <button
+                type="button"
+                className="codex-tree-toggle"
+                aria-label={isExpanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setExpandedContainerIds((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(node.id)) next.delete(node.id);
+                    else next.add(node.id);
+                    return next;
+                  });
+                }}
+              >
+                {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+              </button>
+              <Layers size={12} color="var(--accent-cyan)" style={{ flexShrink: 0 }} />
+            </>
           ) : (
             <MapPin size={12} color="var(--accent-cyan)" style={{ flexShrink: 0 }} />
           )}
@@ -655,9 +665,20 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
           <span className="codex-list-row-title">{node.name}</span>
 
           <div className="codex-list-row-meta">
-            {node.kind === "container" ? (
-              <span className="badge codex-badge--location">L{node.depth}</span>
-            ) : (
+            {node.localLoreCount > 0 && (
+              <span
+                className="codex-lore-indicator"
+                title={`${node.localLoreCount} local lore ${
+                  node.localLoreCount === 1 ? "entry" : "entries"
+                }`}
+                aria-label={`${node.localLoreCount} local lore ${
+                  node.localLoreCount === 1 ? "entry" : "entries"
+                }`}
+              >
+                <BookOpen size={11} />
+              </span>
+            )}
+            {node.kind === "location" && (
               <>
                 {activeLocationId && node.id === activeLocationId && (
                   <span className="badge codex-badge--amber">Current</span>

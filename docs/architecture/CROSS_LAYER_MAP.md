@@ -617,8 +617,8 @@ erDiagram
 | `frontend/src/components/NotesDrawer.tsx` |
 | `frontend/src/components/PersonaEditorModal.tsx` |
 | `frontend/src/components/PromptPresetsManager.tsx` |
+| `frontend/src/components/RelaySidebarBadge.tsx` |
 | `frontend/src/components/SettingsModal.tsx` |
-| `frontend/src/components/SidebarCategory.tsx` |
 | `frontend/src/components/SpatialTopologyView.tsx` |
 | `frontend/src/components/TagChipsInput.tsx` |
 | `frontend/src/components/WizardModals.tsx` |

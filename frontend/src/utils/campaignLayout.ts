@@ -1,11 +1,5 @@
 export type ViewportTier = "desktop" | "tablet" | "mobile";
 
-export type SidebarCategoryKey =
-  | "personas"
-  | "characters"
-  | "worlds"
-  | "campaigns";
-
 export type LeftPanelMode = "expanded" | "rail" | "overlay" | "hidden";
 export type RightPanelMode = "expanded" | "overlay" | "hidden";
 export type ActiveOverlayDrawer = "none" | "left" | "right";
