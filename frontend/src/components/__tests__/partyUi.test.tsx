@@ -241,6 +241,8 @@ describe("Parties UI components (SSR markup)", () => {
     expect(html).toContain("Disband Party");
     expect(html).toContain("Nyx &amp; Viktor");
     expect(html).toContain("NPC Parties (1)");
+    expect(html).toContain('class="field-input"');
+    expect(html).toContain('class="field-select party-relocate-select"');
   });
 
   it("renders LocationOverrideButton as single button when alone and split button with party", () => {

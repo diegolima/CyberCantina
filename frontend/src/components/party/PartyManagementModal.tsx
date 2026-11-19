@@ -283,11 +283,12 @@ export const PartyManagementModal: React.FC<PartyManagementModalProps> = ({
           <div style={{ marginBottom: 10 }}>
             <input
               type="text"
+              className="field-input"
               value={actionMessage}
               onChange={(e) => setActionMessage(e.target.value)}
               disabled={isLocked}
               placeholder="Optional in-character note (pitch, farewell, dismissal reason)..."
-              style={{ width: "100%", fontSize: "0.8rem" }}
+              style={{ fontSize: "0.8rem", padding: "7px 10px" }}
             />
           </div>
 
@@ -323,6 +324,7 @@ export const PartyManagementModal: React.FC<PartyManagementModalProps> = ({
                       <div className="party-member-actions">
                         <select
                           aria-label={`Relocate ${getCharName(mid)}`}
+                          className="field-select party-relocate-select"
                           value={targetLoc}
                           disabled={isLocked}
                           onChange={(e) =>
@@ -331,7 +333,6 @@ export const PartyManagementModal: React.FC<PartyManagementModalProps> = ({
                               [mid]: e.target.value,
                             }))
                           }
-                          style={{ fontSize: "0.74rem", padding: "3px 6px" }}
                         >
                           {locations.map((loc) => (
                             <option key={loc.id} value={loc.id}>
@@ -628,19 +629,24 @@ export const PartyManagementModal: React.FC<PartyManagementModalProps> = ({
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                     <label
                       htmlFor="npc-party-loc-select"
-                      style={{ fontSize: "0.76rem", color: "var(--text-secondary)" }}
+                      style={{
+                        fontSize: "0.76rem",
+                        color: "var(--text-secondary)",
+                        whiteSpace: "nowrap",
+                      }}
                     >
                       Room:
                     </label>
                     <select
                       id="npc-party-loc-select"
+                      className="field-select"
                       value={npcBuilderLocId}
                       disabled={isLocked}
                       onChange={(e) => {
                         setNpcBuilderLocId(e.target.value);
                         setNpcBuilderMembers([]);
                       }}
-                      style={{ fontSize: "0.78rem" }}
+                      style={{ width: "auto", flex: 1, fontSize: "0.78rem", padding: "5px 8px" }}
                     >
                       {eligibleNpcLocations.map(([lid, chars]) => (
                         <option key={lid} value={lid}>
@@ -676,19 +682,21 @@ export const PartyManagementModal: React.FC<PartyManagementModalProps> = ({
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                     <input
                       type="text"
+                      className="field-input"
                       placeholder="Optional party name..."
                       value={npcBuilderName}
                       disabled={isLocked}
                       onChange={(e) => setNpcBuilderName(e.target.value)}
-                      style={{ fontSize: "0.76rem" }}
+                      style={{ fontSize: "0.76rem", padding: "6px 9px" }}
                     />
                     <input
                       type="text"
+                      className="field-input"
                       placeholder="Optional shared goal..."
                       value={npcBuilderGoal}
                       disabled={isLocked}
                       onChange={(e) => setNpcBuilderGoal(e.target.value)}
-                      style={{ fontSize: "0.76rem" }}
+                      style={{ fontSize: "0.76rem", padding: "6px 9px" }}
                     />
                   </div>
 
@@ -761,6 +769,7 @@ export const PartyManagementModal: React.FC<PartyManagementModalProps> = ({
                           <div className="party-member-actions">
                             <select
                               aria-label={`Relocate ${getCharName(mid)}`}
+                              className="field-select party-relocate-select"
                               value={targetLoc}
                               disabled={isLocked}
                               onChange={(e) =>
@@ -769,7 +778,6 @@ export const PartyManagementModal: React.FC<PartyManagementModalProps> = ({
                                   [mid]: e.target.value,
                                 }))
                               }
-                              style={{ fontSize: "0.74rem", padding: "3px 6px" }}
                             >
                               {locations.map((loc) => (
                                 <option key={loc.id} value={loc.id}>
@@ -869,6 +877,7 @@ export const PartyManagementModal: React.FC<PartyManagementModalProps> = ({
                         <div className="party-member-actions">
                           <select
                             aria-label={`Relocate ${ch.name}`}
+                            className="field-select party-relocate-select"
                             value={targetLoc}
                             disabled={isLocked}
                             onChange={(e) =>
@@ -877,7 +886,6 @@ export const PartyManagementModal: React.FC<PartyManagementModalProps> = ({
                                 [ch.id]: e.target.value,
                               }))
                             }
-                            style={{ fontSize: "0.74rem", padding: "3px 6px" }}
                           >
                             {locations.map((loc) => (
                               <option key={loc.id} value={loc.id}>
