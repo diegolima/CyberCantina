@@ -157,6 +157,7 @@ def heuristic_character_cognition(
     char_whisper: CharacterWhisper | None = None,
     active_parties: Sequence[PartyRecord] | None = None,
     active_location_id: str | None = None,
+    active_location_name: str | None = None,
 ) -> CognitionBlock:
     """Generate a deterministic, high-quality fallback CognitionBlock without LLM."""
     sentiment_lower = pre_turn.user_sentiment.lower()
@@ -172,8 +173,15 @@ def heuristic_character_cognition(
     new_valence = max(-1.0, min(1.0, round(previous_state.valence + val_drift, 2)))
     new_arousal = max(0.0, min(1.0, round(previous_state.arousal, 2)))
 
+    loc_label = (active_location_name or "").strip()
+    if not loc_label:
+        fallback_loc_id = (previous_state.current_location_id or active_location_id or "").strip()
+        if fallback_loc_id and not re.fullmatch(r"loc_[0-9a-f]{6,}", fallback_loc_id, flags=re.I):
+            loc_label = fallback_loc_id
+    loc_clause = f" in {loc_label}" if loc_label else " in the current scene"
+
     recall_bullets = [
-        f"- Sizing up the interaction in {previous_state.current_location_id}.",
+        f"- Sizing up the interaction{loc_clause}.",
         f"- Noted player tone: {pre_turn.user_sentiment}.",
     ]
     if known_persona:

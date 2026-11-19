@@ -70,6 +70,21 @@ from app.engine.cognition.xml_parser import (
     logger,
 )
 
+
+def _resolve_location_name(
+    location_id: str | None,
+    active_location: LocationNode,
+    world: WorldRecord | None = None,
+) -> str:
+    """Resolve a human-readable location name from active_location or world topology."""
+    if not location_id or location_id == active_location.id:
+        return active_location.name
+    if world is not None:
+        for loc in world.locations:
+            if loc.id == location_id and loc.name.strip():
+                return loc.name.strip()
+    return active_location.name
+
 async def run_character_cognition_agent(
     *,
     user_message: str,
@@ -420,18 +435,32 @@ async def run_character_cognition_agent(
             json_schema=eff_schema,
         )
 
+        resolved_loc_name = _resolve_location_name(
+            previous_state.current_location_id, active_location, world
+        )
         cog.recall = _sanitize_cognition_text(
             cog.recall,
             field_type="recall",
             location_id=active_location.id,
+            location_name=resolved_loc_name,
         )
         cog.recall = _format_cognition_bullets(cog.recall, max_bullets=3, max_words_per_bullet=12)
 
-        cog.want = _sanitize_cognition_text(cog.want, field_type="want")
+        cog.want = _sanitize_cognition_text(
+            cog.want,
+            field_type="want",
+            location_id=active_location.id,
+            location_name=resolved_loc_name,
+        )
         if not cog.want:
             cog.want = clean_prev_want
 
-        cog.plan = _sanitize_cognition_text(cog.plan, field_type="plan")
+        cog.plan = _sanitize_cognition_text(
+            cog.plan,
+            field_type="plan",
+            location_id=active_location.id,
+            location_name=resolved_loc_name,
+        )
         if not cog.plan:
             cog.plan = clean_prev_plan
         cog.plan = _format_cognition_bullets(cog.plan, max_bullets=3, max_words_per_bullet=25)
@@ -497,6 +526,9 @@ async def run_character_cognition_agent(
             char_whisper=char_whisper,
             active_parties=eff_parties,
             active_location_id=active_location.id,
+            active_location_name=_resolve_location_name(
+                previous_state.current_location_id, active_location, world
+            ),
         )
 
 
@@ -639,6 +671,9 @@ async def run_phase3_multi_cognition(
                     char_whisper=char_w,
                     active_parties=context.active_parties,
                     active_location_id=context.active_location.id,
+                    active_location_name=_resolve_location_name(
+                        char_prev.current_location_id, context.active_location, context.world
+                    ),
                 )
                 used_fallback = True
 
@@ -735,6 +770,9 @@ async def run_phase3_multi_cognition(
                     char_whisper=char_w,
                     active_parties=context.active_parties,
                     active_location_id=context.active_location.id,
+                    active_location_name=_resolve_location_name(
+                        char_prev.current_location_id, context.active_location, context.world
+                    ),
                 )
                 used_fallback = True
 

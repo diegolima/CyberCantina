@@ -125,6 +125,8 @@ def _clamp(val: float, low: float, high: float) -> float:
 def parse_cognition_xml(
     cognition_xml: str,
     fallback_state: CharacterStateSnapshot,
+    *,
+    location_name: str | None = None,
 ) -> CognitionBlock:
     """Parse inner tags of <cognition>...</cognition> supporting both CARE enums and legacy floats."""
     recall_match = _extract_xml_tag(cognition_xml, "recall")
@@ -203,7 +205,12 @@ def parse_cognition_xml(
                     pass
             impulse = impulse_from_legacy_floats(valence, arousal)
 
-    recall = _sanitize_cognition_text(recall, field_type="recall", location_id=fallback_state.current_location_id)
+    recall = _sanitize_cognition_text(
+        recall,
+        field_type="recall",
+        location_id=fallback_state.current_location_id,
+        location_name=location_name,
+    )
     recall = _format_cognition_bullets(recall, max_bullets=3, max_words_per_bullet=12)
     raw_want = want_match[1].strip() if want_match else fallback_state.active_want
     want = _sanitize_cognition_text(raw_want, field_type="want") or fallback_state.active_want
@@ -308,6 +315,7 @@ def _sanitize_cognition_text(
     *,
     field_type: str,
     location_id: str | None = None,
+    location_name: str | None = None,
 ) -> str:
     """Sanitize cognition text to remove prompt instruction leakage and malformed prefixes."""
     if not text:
@@ -328,9 +336,18 @@ def _sanitize_cognition_text(
         t = re.sub(r"^(?:<recall>|recall>|\[recall\]|\"recall\"[:=]|\brecall[:=])\s*", "", t, flags=re.I)
         t = re.sub(r"</recall>$", "", t, flags=re.I).strip()
 
+    clean_loc_name = (location_name or "").strip()
+    if clean_loc_name and location_id and location_id != clean_loc_name and location_id in t:
+        t = t.replace(location_id, clean_loc_name)
+
     if _PROMPT_LEAKAGE_RE.search(t):
         if field_type == "recall":
-            loc_str = f" in {location_id}" if location_id else ""
+            loc_label = clean_loc_name
+            if not loc_label and location_id:
+                cand = location_id.strip()
+                if not re.fullmatch(r"loc_[0-9a-f]{6,}", cand, flags=re.I):
+                    loc_label = cand
+            loc_str = f" in {loc_label}" if loc_label else ""
             return f"- Sizing up the interaction{loc_str}."
         elif field_type in ("want", "plan"):
             cleaned = _PROMPT_LEAKAGE_RE.sub("", t).strip()

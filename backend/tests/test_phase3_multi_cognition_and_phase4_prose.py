@@ -772,6 +772,21 @@ def test_sanitize_cognition_text_strips_echoed_instructions_and_malformed_prefix
     assert cleaned_recall == "- Sizing up the interaction in loc_test."
     assert "Strictly 1-2" not in cleaned_recall
 
+    cleaned_recall_named = _sanitize_cognition_text(
+        echoed_recall,
+        field_type="recall",
+        location_id="loc_e6391cba1d",
+        location_name="Main Floor",
+    )
+    assert cleaned_recall_named == "- Sizing up the interaction in Main Floor."
+
+    cleaned_recall_hex_only = _sanitize_cognition_text(
+        echoed_recall,
+        field_type="recall",
+        location_id="loc_e6391cba1d",
+    )
+    assert cleaned_recall_hex_only == "- Sizing up the interaction."
+
     # 2. Tag prefix & template instruction in want
     echoed_want = (
         "want>1 singular sentence defining Yva's immediate objective in this scene. "
@@ -791,4 +806,55 @@ def test_sanitize_cognition_text_strips_echoed_instructions_and_malformed_prefix
     cleaned_valid = _sanitize_cognition_text(valid_plan, field_type="plan")
     assert "I will stand firm" in cleaned_valid
     assert not cleaned_valid.startswith("- plan=")
+
+    # 4. Heuristic cognition fallback uses human-readable location name and never leaks hex loc_ IDs
+    from app.engine.phase3_cognition import heuristic_character_cognition
+
+    char_a = CharacterRecord(
+        id="char_yulia",
+        world_id="world_test",
+        name="Yulia Halim",
+        tagline="The scalpel is sharper than the truth.",
+        core_persona="Guarded and observant.",
+        baseline_psyche=BaselinePsyche(
+            valence=-0.2,
+            arousal=0.4,
+            mood_label="Wary & Guarded",
+            core_drive="Survival",
+            core_fear="Exposure",
+            default_want="Watch the entrance",
+            default_plan="Stay near the counter",
+        ),
+        created_at="2026-11-02T00:00:00Z",
+    )
+    prev_state = CharacterStateSnapshot(
+        turn_id="turn_0",
+        character_id="char_yulia",
+        current_location_id="loc_e6391cba1d",
+        mood_label="Wary & Guarded",
+        valence=-0.2,
+        arousal=0.4,
+        active_want="Watch the entrance",
+        active_plan="Stay near the counter",
+    )
+    pre_turn = PreTurnAnalysis(user_sentiment="determined")
+    cog_named = heuristic_character_cognition(
+        user_message="Let's team up.",
+        character=char_a,
+        previous_state=prev_state,
+        pre_turn=pre_turn,
+        active_location_id="loc_e6391cba1d",
+        active_location_name="Main Floor",
+    )
+    assert "- Sizing up the interaction in Main Floor." in cog_named.recall
+    assert "loc_e6391cba1d" not in cog_named.recall
+
+    cog_hex_fallback = heuristic_character_cognition(
+        user_message="Let's team up.",
+        character=char_a,
+        previous_state=prev_state,
+        pre_turn=pre_turn,
+    )
+    assert "loc_e6391cba1d" not in cog_hex_fallback.recall
+    assert "- Sizing up the interaction in the current scene." in cog_hex_fallback.recall
 

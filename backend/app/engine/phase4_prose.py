@@ -402,7 +402,9 @@ async def stream_phase4_prose(
                 cog_end = close_idx + len("</cognition>")
                 cog_raw = buffer[:cog_end]
                 remainder = re.sub(r"^[\s`]*", "", buffer[cog_end:])
-                primary_cognition = parse_cognition_xml(cog_raw, previous_state)
+                primary_cognition = parse_cognition_xml(
+                    cog_raw, previous_state, location_name=active_location.name
+                )
                 in_cognition = False
                 cognition_emitted = True
                 yield {
@@ -479,7 +481,9 @@ async def stream_phase4_prose(
     if in_cognition and not cognition_emitted:
         lower_buf = buffer.lower()
         if "<cognition" in lower_buf or "<recall" in lower_buf:
-            primary_cognition = parse_cognition_xml(buffer, previous_state)
+            primary_cognition = parse_cognition_xml(
+                buffer, previous_state, location_name=active_location.name
+            )
         else:
             primary_cognition = CognitionBlock(
                 recall="",
