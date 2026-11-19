@@ -62,10 +62,13 @@ export interface ChatComposerProps {
   hasActiveGates: boolean;
   choicePreview: ChoicePreviewResponse | null;
   choiceSlashWarning: string | null;
+  partySlashWarning?: string | null;
   decomposedInput: DecomposedUserMessage;
   mentionPickerOpen: boolean;
   setMentionPickerOpen: React.Dispatch<React.SetStateAction<boolean>>;
   mentionQuery: string;
+  mentionMode?: "whisper" | "party_invite" | "party_kick";
+  mentionCharacters?: CharacterRecord[];
   mentionSelectedIndex: number;
   setMentionSelectedIndex: React.Dispatch<React.SetStateAction<number>>;
   filteredMentionCharacters: CharacterRecord[];
@@ -119,10 +122,13 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   hasActiveGates,
   choicePreview,
   choiceSlashWarning,
+  partySlashWarning = null,
   decomposedInput,
   mentionPickerOpen,
   setMentionPickerOpen,
   mentionQuery,
+  mentionMode = "whisper",
+  mentionCharacters,
   mentionSelectedIndex,
   setMentionSelectedIndex,
   filteredMentionCharacters,
@@ -348,9 +354,10 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
             <CharacterMentionPicker
               isOpen={mentionPickerOpen}
               filterText={mentionQuery}
-              characters={allCampaignCharacters}
+              characters={mentionCharacters ?? allCampaignCharacters}
               presentCharacterIds={presentCharacterIds}
               selectedIndex={mentionSelectedIndex}
+              mode={mentionMode}
               onSelect={handleSelectMention}
               onClose={() => setMentionPickerOpen(false)}
             />
@@ -463,6 +470,13 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
             >
               <AlertTriangle size={12} />
               <span>{choiceSlashWarning}</span>
+            </div>
+          )}
+
+          {partySlashWarning && (
+            <div className="party-slash-warning" role="alert">
+              <AlertTriangle size={12} />
+              <span>{partySlashWarning}</span>
             </div>
           )}
 
@@ -732,6 +746,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                 className="btn btn-amber composer-send-btn"
                 disabled={
                   isBusy ||
+                  Boolean(partySlashWarning) ||
                   (!inputText.trim() && totalStagedOptionsCount === 0) ||
                   (diceMode === "forced" &&
                     diceOverride.trim() !== "" &&

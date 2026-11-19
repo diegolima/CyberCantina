@@ -892,6 +892,11 @@ class SchemaInitMixin:
                             (json.dumps(vis_conts), ws_row["turn_id"]),
                         )
 
+            if "parties_json" not in ws_cols:
+                conn.execute(
+                    "ALTER TABLE world_state_snapshots ADD COLUMN parties_json TEXT NOT NULL DEFAULT '[]'"
+                )
+
             camp_cols = {
                 r["name"]
                 for r in conn.execute("PRAGMA table_info(campaigns)").fetchall()

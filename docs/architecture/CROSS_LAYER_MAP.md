@@ -30,6 +30,7 @@
 | `POST` | `/api/campaigns` | `app.routers.campaign_routes.crud_and_state.create_campaign` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `DELETE` | `/api/campaigns/{campaign_id}` | `app.routers.campaign_routes.crud_and_state.delete_campaign` | `dict` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/characters` | `app.routers.campaign_routes.crud_and_state.add_campaign_character` | `CampaignStateBundle` | *(backend-only / test / SSE)* |
+| `POST` | `/api/campaigns/{campaign_id}/characters/{character_id}/location-override` | `app.routers.campaign_routes.crud_and_state.override_campaign_character_location` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/characters/{character_id}/memories` | `app.routers.campaign_routes.crud_and_state.update_campaign_character_memories` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/checkout` | `app.routers.campaign_routes.crud_and_state.checkout_campaign_branch` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `PUT` | `/api/campaigns/{campaign_id}/containers/{container_id}/lore` | `app.routers.campaign_routes.spatial_routes.update_campaign_container_lore` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
@@ -41,6 +42,8 @@
 | `POST` | `/api/campaigns/{campaign_id}/locations` | `app.routers.campaign_routes.spatial_routes.create_campaign_linked_location` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `PUT` | `/api/campaigns/{campaign_id}/locations/{location_id}/lore` | `app.routers.campaign_routes.spatial_routes.update_campaign_location_lore` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `PUT` | `/api/campaigns/{campaign_id}/map` | `app.routers.campaign_routes.spatial_routes.update_campaign_map` | `CampaignStateBundle` | `frontend/src/api/worlds.ts` |
+| `POST` | `/api/campaigns/{campaign_id}/parties` | `app.routers.campaign_routes.crud_and_state.create_campaign_npc_party` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
+| `DELETE` | `/api/campaigns/{campaign_id}/parties/{party_id}` | `app.routers.campaign_routes.crud_and_state.delete_campaign_party` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `GET` | `/api/campaigns/{campaign_id}/persona-state` | `app.routers.campaign_routes.crud_and_state.get_campaign_player_turn_state` | `Union` | `frontend/src/api/campaigns.ts` |
 | `PUT` | `/api/campaigns/{campaign_id}/prompt-preset` | `app.routers.prompts.set_campaign_prompt_preset` | `CampaignRecord` | `frontend/src/api/prompts.ts` |
 | `GET` | `/api/campaigns/{campaign_id}/state` | `app.routers.campaign_routes.crud_and_state.get_campaign_state` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
@@ -392,6 +395,12 @@ erDiagram
 | :--- | :--- |
 | `backend/app/engine/mentions.py` | Targeted Character Mentions and Mixed Sensory Whisper Engine. |
 
+#### `app.engine.parties`
+
+| File | Summary |
+| :--- | :--- |
+| `backend/app/engine/parties.py` | Pure deterministic engine helpers for parties, /party slash parsing, co-location, and prompt directives. |
+
 #### `app.engine.phase1_pre`
 
 | File | Summary |
@@ -524,6 +533,7 @@ erDiagram
 | `backend/app/schemas/import_export.py` | Schemas for native CyberCantina archive (.zcc) export and import. |
 | `backend/app/schemas/mechanics.py` | Schemas for mechanics checks, previews, and dice calculations. |
 | `backend/app/schemas/note.py` | Schemas for User Notes. |
+| `backend/app/schemas/party.py` | Leaf schemas for traveling parties, cognitive invite/travel intents, and party events. |
 | `backend/app/schemas/persona.py` | User persona, knowledge visibility, and dynamic state schemas. |
 | `backend/app/schemas/prompt.py` | Schemas for Prompt Presets, Template Customization, and Documentation. |
 | `backend/app/schemas/provider.py` | Pydantic schemas and domain records for LLM providers. |
@@ -681,6 +691,7 @@ erDiagram
 | `frontend/src/components/inspector/InspectorInternalsSection.tsx` |
 | `frontend/src/components/inspector/InspectorLocationCard.tsx` |
 | `frontend/src/components/inspector/InspectorPrimitives.tsx` |
+| `frontend/src/components/inspector/LocationOverrideButton.tsx` |
 | `frontend/src/components/inspector/LoreIndexModal.tsx` |
 | `frontend/src/components/inspector/campaignCharacter/CampaignCharacterInventoryTab.tsx` |
 | `frontend/src/components/inspector/campaignCharacter/CampaignCharacterMediaTab.tsx` |
@@ -723,6 +734,12 @@ erDiagram
 | `frontend/src/components/models/modelLimits.ts` |
 | `frontend/src/components/models/modelPickerLogic.ts` |
 | `frontend/src/components/models/sliderMath.ts` |
+
+#### `components/party`
+
+| File |
+| :--- |
+| `frontend/src/components/party/PartyManagementModal.tsx` |
 
 #### `components/prompts`
 
@@ -815,6 +832,7 @@ erDiagram
 | `frontend/src/types/index.ts` |
 | `frontend/src/types/mechanics.ts` |
 | `frontend/src/types/notes.ts` |
+| `frontend/src/types/party.ts` |
 | `frontend/src/types/persona.ts` |
 | `frontend/src/types/prompts.ts` |
 | `frontend/src/types/providers.ts` |
@@ -833,4 +851,6 @@ erDiagram
 | `frontend/src/utils/mentions.ts` |
 | `frontend/src/utils/narratorCognition.ts` |
 | `frontend/src/utils/noteSearch.ts` |
+| `frontend/src/utils/partyCommand.ts` |
+| `frontend/src/utils/partyHelpers.ts` |
 | `frontend/src/utils/unsupportedFields.ts` |

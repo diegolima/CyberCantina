@@ -14,6 +14,11 @@ import type {
   DiceMode,
   PreTurnAnalysis,
 } from "./mechanics";
+import type {
+  PartyActionSpec,
+  PartyEventDelta,
+  PartyRecord,
+} from "./party";
 import type { PersonaRecord } from "./persona";
 import type {
   CompassDirection,
@@ -45,6 +50,7 @@ export interface WorldStateSnapshot {
   scene_flags: string[];
   visited_location_ids?: string[];
   visited_container_ids?: string[];
+  parties?: PartyRecord[];
 }
 
 export interface CampaignWorldSettings {
@@ -154,6 +160,7 @@ export interface PostTurnStateDelta {
   compacted_character_ids?: string[];
   first_visit_cards?: FirstVisitDescriptionCard[];
   first_visit_media?: FirstVisitMediaItem[];
+  party_event_delta?: PartyEventDelta | null;
 }
 
 export type Phase5AgentKind = "world_clerk" | "character";
@@ -359,6 +366,7 @@ export interface TurnSubmitOptions {
   duration_minutes?: number | null;
   character_choices?: Record<string, CharacterChoiceSet>;
   whispers?: CharacterWhisper[];
+  party_action?: PartyActionSpec | null;
 }
 
 export type MentionTargetScope = "local" | "remote";
@@ -443,6 +451,7 @@ export interface CreateCampaignPayload {
   start_focus?: "world" | "character";
   focus_character_id?: string | null;
   character_locations?: Record<string, string>;
+  start_in_party_character_ids?: string[];
 }
 
 export interface CampaignStateBundle {

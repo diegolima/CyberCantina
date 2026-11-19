@@ -15,6 +15,7 @@ from app.schemas.character import (
     CharacterStateSnapshot,
     format_item_names,
 )
+from app.schemas.party import PartyActionSpec
 from app.schemas.persona import (
     DisclosureDetectionMode,
     PersonaItemInstance,
@@ -608,6 +609,7 @@ def _build_heuristic_llm_output(
     current_player_items: list[PersonaItemInstance] | None = None,
     already_unlocked_keys: set[str] | None = None,
     decomposed_message: DecomposedUserMessage | None = None,
+    party_action: PartyActionSpec | None = None,
 ) -> PreTurnLLMOutput:
     """Deterministic extractor producing structured PreTurnLLMOutput without invoking RNG."""
     msg_lower = user_message.lower()
@@ -636,24 +638,25 @@ def _build_heuristic_llm_output(
         if ent.lower() in msg_lower and ent not in mentioned:
             mentioned.append(ent)
 
-    # 3. Spatial movement detection
+    # 3. Spatial movement detection (explicit party actions stay in current room)
     spatial_intent = "stay"
     target_hint: str | None = None
-    move_verbs = ("go to", "head to", "walk into", "step into", "enter", "head out", "go through", "up the", "down to", "follow me to", "backroom", "clinic", "alley", "mezzanine", "tunnels", "hatch")
-    if any(v in msg_lower for v in move_verbs):
-        for nb in neighbors:
-            dest_words = [w.lower() for w in nb.destination.name.split() if len(w) > 3]
-            dir_words = [w.lower() for w in nb.direction_label.split() if len(w) > 3]
-            if any(w in msg_lower for w in dest_words + dir_words):
-                spatial_intent = "move_known"
-                target_hint = nb.destination.name
-                break
-        if spatial_intent == "stay" and re.search(
-            r"\b(kick open|step into the|head into the|open the door to|explore the)\b",
-            msg_lower,
-        ):
-            spatial_intent = "explore_new"
-            target_hint = user_message[:80]
+    if party_action is None:
+        move_verbs = ("go to", "head to", "walk into", "step into", "enter", "head out", "go through", "up the", "down to", "follow me to", "backroom", "clinic", "alley", "mezzanine", "tunnels", "hatch")
+        if any(v in msg_lower for v in move_verbs):
+            for nb in neighbors:
+                dest_words = [w.lower() for w in nb.destination.name.split() if len(w) > 3]
+                dir_words = [w.lower() for w in nb.direction_label.split() if len(w) > 3]
+                if any(w in msg_lower for w in dest_words + dir_words):
+                    spatial_intent = "move_known"
+                    target_hint = nb.destination.name
+                    break
+            if spatial_intent == "stay" and re.search(
+                r"\b(kick open|step into the|head into the|open the door to|explore the)\b",
+                msg_lower,
+            ):
+                spatial_intent = "explore_new"
+                target_hint = user_message[:80]
 
     # 4. Mechanics / RNG check detection
     mechanics = MechanicsTrigger(requires_roll=False)
@@ -682,10 +685,37 @@ def _build_heuristic_llm_output(
         previous_speaker_id=previous_speaker_id,
         decomposed_message=decomposed_message,
     )
+    if party_action and party_action.target_character_ids:
+        room_id_set = {c.id for c in room_chars}
+        prioritized = [cid for cid in party_action.target_character_ids if cid in room_id_set]
+        if prioritized:
+            speaker_order = prioritized + [cid for cid in speaker_order if cid not in prioritized]
     active_speaker_id = speaker_order[0] if speaker_order else None
 
-    # 7. Character checks for sensory cues
+    # 7. Character checks for sensory cues & party invite persuasion
     char_checks: list[CharacterCheckSpec] = []
+    if party_action and party_action.kind == "invite":
+        room_id_set = {c.id for c in room_chars}
+        persuasive_pitch = bool(
+            re.search(
+                r"\b(please|convince|persuade|trust|promise|pay|share|need you|with me|cover my|watch my|backup)\b",
+                msg_lower,
+            )
+        )
+        if persuasive_pitch:
+            for tid in party_action.target_character_ids:
+                if tid in room_id_set:
+                    char_checks.append(
+                        CharacterCheckSpec(
+                            character_id=tid,
+                            requires_roll=True,
+                            check_role="contested_reaction",
+                            action_description="Weighing player's party invitation pitch",
+                            skill_or_approach="Social / Persuasion",
+                            difficulty_class=12,
+                            relevant_modifier=1,
+                        )
+                    )
     if decomposed_message:
         for w in decomposed_message.whispers:
             if w.target_scope == MentionTargetScope.LOCAL and w.sensory_parts:
@@ -741,6 +771,7 @@ def heuristic_pre_turn_analysis(
     persona_snapshot: PersonaRecord | None = None,
     current_player_items: list[PersonaItemInstance] | None = None,
     already_unlocked_keys: set[str] | None = None,
+    party_action: PartyActionSpec | None = None,
 ) -> PreTurnAnalysis:
     """Fast deterministic analyzer used as fallback when no auxiliary LLM server is reachable."""
     room_chars = present_characters or []
@@ -754,6 +785,7 @@ def heuristic_pre_turn_analysis(
         persona_snapshot=persona_snapshot,
         current_player_items=current_player_items,
         already_unlocked_keys=already_unlocked_keys,
+        party_action=party_action,
     )
 
     character_rolls = resolve_character_dice_checks(
@@ -772,6 +804,7 @@ def heuristic_pre_turn_analysis(
         dice_mode=dice_mode,
         manual_dice_value=manual_dice_override if dice_mode == "forced" else None,
         character_rolls=character_rolls,
+        party_action=party_action,
     )
     return analysis
 
@@ -798,6 +831,7 @@ async def run_phase1_pre_analysis(
     disclosure_detection_mode: DisclosureDetectionMode = "llm_intent",
     already_unlocked_keys: set[str] | None = None,
     decomposed_message: DecomposedUserMessage | None = None,
+    party_action: PartyActionSpec | None = None,
 ) -> PreTurnAnalysis:
     """Execute Phase 1 Pre-Turn Analysis via the Auxiliary Clerk (with offline fallback) and resolve RNG."""
     has_any_gates = any(cs.has_gates for cs in (character_choices or {}).values())
@@ -901,6 +935,23 @@ async def run_phase1_pre_analysis(
             + "\nIf user message explicitly reveals any secret above, include its exact key in revealed_persona_keys."
         )
 
+    party_action_hint = ""
+    if party_action is not None:
+        name_lookup_p1 = {c.id: c.name for c in room_chars}
+        target_names_p1 = ", ".join(name_lookup_p1.get(tid, tid) for tid in party_action.target_character_ids)
+        if party_action.kind == "invite":
+            party_action_hint = (
+                f"\nParty Action: Player is inviting character(s) [{target_names_p1}] to join a traveling party. "
+                "Set spatial_intent='stay'. You MAY assign a Social/Persuasion check in character_checks for invited "
+                "target(s) when persuasion/leverage is contested (unless dice_mode is disabled), and prioritize them in speaker_order."
+            )
+        else:
+            party_action_hint = (
+                f"\nParty Action ({party_action.kind}): Unilateral party membership change"
+                f"{f' affecting [{target_names_p1}]' if target_names_p1 else ''}. "
+                "Set spatial_intent='stay'."
+            )
+
     system_prompt = render_template(
         prompt_template or get_default_prompt("clerk_pre_turn_system")
     )
@@ -909,7 +960,7 @@ async def run_phase1_pre_analysis(
         f"Previous Turn Speaker ID: {previous_speaker_id or ('__solo__' if is_solo else character.id)}\n"
         f"Current Location: {active_location.name} ({active_location.summary})\n"
         f"Adjacent Exits: {neighbor_desc}\n"
-        f"Known Entities/Lore Keywords: {', '.join(known_entities[:30])}\n{mode_prompt_hint}{persona_prompt_hint}{mention_hint}\n\n"
+        f"Known Entities/Lore Keywords: {', '.join(known_entities[:30])}\n{mode_prompt_hint}{party_action_hint}{persona_prompt_hint}{mention_hint}\n\n"
         f"User Message:\n{user_message}"
     )
 
@@ -938,8 +989,14 @@ async def run_phase1_pre_analysis(
             current_player_items=current_player_items,
             already_unlocked_keys=already_unlocked_keys,
             decomposed_message=decomp,
+            party_action=party_action,
         )
         analysis = PreTurnAnalysis(**raw_output.model_dump())
+
+    analysis.party_action = party_action
+    if party_action is not None:
+        analysis.spatial_intent = "stay"
+        analysis.target_location_hint = None
 
     # Resolve disclosed persona secrets with strategy and solitary action guard
     revealed_keys = detect_persona_disclosures(
@@ -969,6 +1026,16 @@ async def run_phase1_pre_analysis(
         elif valid_order and valid_order[0] != analysis.active_speaker_id:
             analysis.speaker_order = [analysis.active_speaker_id] + [
                 cid for cid in valid_order if cid != analysis.active_speaker_id
+            ]
+
+    # Speaker prioritization for explicit party actions affecting room targets
+    if not is_solo and party_action and party_action.target_character_ids:
+        target_ids = [tid for tid in party_action.target_character_ids if tid in room_char_ids]
+        if target_ids:
+            if analysis.active_speaker_id not in target_ids:
+                analysis.active_speaker_id = target_ids[0]
+            analysis.speaker_order = target_ids + [
+                cid for cid in analysis.speaker_order if cid not in target_ids
             ]
 
     # Speaker prioritization when prompt was synthesized from director choices

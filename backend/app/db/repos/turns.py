@@ -14,6 +14,7 @@ from app.schemas.character import (
     coerce_item_list,
     dump_items_json,
 )
+from app.schemas.party import PartyRecord
 from app.schemas.persona import PersonaTurnStateSnapshot
 from app.schemas.turn import (
     CampaignStateBundle,
@@ -142,9 +143,10 @@ class TurnsBranchesMixin:
                 """
                 INSERT INTO world_state_snapshots (
                     turn_id, world_timestamp, active_location_id, scene_flags_json,
-                    campaign_elapsed_minutes, visited_location_ids_json, visited_container_ids_json
+                    campaign_elapsed_minutes, visited_location_ids_json, visited_container_ids_json,
+                    parties_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     turn_id,
@@ -154,6 +156,7 @@ class TurnsBranchesMixin:
                     int(world_snapshot.campaign_elapsed_minutes),
                     json.dumps(visited_ids),
                     json.dumps(visited_container_ids),
+                    json.dumps([p.model_dump() for p in world_snapshot.parties]),
                 ),
             )
 
@@ -337,7 +340,7 @@ class TurnsBranchesMixin:
                 UPDATE world_state_snapshots
                 SET world_timestamp = ?, active_location_id = ?, scene_flags_json = ?,
                     campaign_elapsed_minutes = ?, visited_location_ids_json = ?,
-                    visited_container_ids_json = ?
+                    visited_container_ids_json = ?, parties_json = ?
                 WHERE turn_id = ?
                 """,
                 (
@@ -347,6 +350,7 @@ class TurnsBranchesMixin:
                     int(updated_world_snapshot.campaign_elapsed_minutes),
                     json.dumps(merged_visited),
                     json.dumps(merged_visited_containers),
+                    json.dumps([p.model_dump() for p in updated_world_snapshot.parties]),
                     turn_id,
                 ),
             )
@@ -690,6 +694,7 @@ class TurnsBranchesMixin:
                     ws.campaign_elapsed_minutes,
                     ws.visited_location_ids_json,
                     ws.visited_container_ids_json,
+                    ws.parties_json,
                     cs.character_id AS cs_character_id,
                     cs.current_location_id,
                     cs.mood_label,
@@ -743,6 +748,7 @@ class TurnsBranchesMixin:
                     ws.campaign_elapsed_minutes,
                     ws.visited_location_ids_json,
                     ws.visited_container_ids_json,
+                    ws.parties_json,
                     cs.character_id AS cs_character_id,
                     cs.current_location_id,
                     cs.mood_label,
@@ -786,6 +792,7 @@ class TurnsBranchesMixin:
                     ws.campaign_elapsed_minutes,
                     ws.visited_location_ids_json,
                     ws.visited_container_ids_json,
+                    ws.parties_json,
                     cs.character_id AS cs_character_id,
                     cs.current_location_id,
                     cs.mood_label,
@@ -1118,6 +1125,16 @@ class TurnsBranchesMixin:
             except Exception:
                 pass
 
+        parties_list: list[PartyRecord] = []
+        if "parties_json" in r.keys() and r["parties_json"]:
+            try:
+                parties_list = [
+                    PartyRecord.model_validate(p)
+                    for p in json.loads(r["parties_json"])
+                ]
+            except Exception:
+                pass
+
         return TurnNodeRecord(
             id=r["id"],
             campaign_id=r["campaign_id"],
@@ -1152,6 +1169,7 @@ class TurnsBranchesMixin:
                     if "visited_container_ids_json" in r.keys()
                     else []
                 ),
+                parties=parties_list,
             ),
             character_state=CharacterStateSnapshot(
                 turn_id=r["id"],

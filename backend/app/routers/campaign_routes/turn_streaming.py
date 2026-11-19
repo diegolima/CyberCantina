@@ -22,6 +22,13 @@ from app.engine.affective_engine import (
     materialize_snapshot_with_care,
 )
 from app.engine.mentions import decompose_user_message
+from app.engine.parties import (
+    is_party_slash_command,
+    parse_party_slash_command,
+    resolve_location_override_movement,
+    synthesize_party_action_message,
+    validate_party_action,
+)
 from app.engine.phase1_pre import run_phase1_pre_analysis
 from app.engine.phase2_context import (
     assemble_four_zone_messages,
@@ -43,6 +50,7 @@ from app.schemas.character import (
     CognitionBlock,
     format_item_names,
 )
+from app.schemas.party import PartyActionSpec
 from app.schemas.persona import (
     PersonaRecord,
     PersonaTurnStateSnapshot,
@@ -167,7 +175,8 @@ async def _execute_turn_stream_events_unlocked(
     participants_by_id = {c.id: c for c in participants}
 
     parent_active_loc_id = parent_turn.world_snapshot.active_location_id
-    if req.override_location_id:
+    active_parties = list(parent_turn.world_snapshot.parties or [])
+    if req.override_location_id and req.override_location_id != parent_active_loc_id:
         override_loc = repo.get_location(
             req.override_location_id, campaign_id=campaign.id
         )
@@ -175,12 +184,27 @@ async def _execute_turn_stream_events_unlocked(
             active_location = override_loc
             if active_location.created_at_turn_id:
                 valid_turn_ids = set(valid_turn_ids) | {active_location.created_at_turn_id}
+            all_char_locations = {
+                cid: st.current_location_id for cid, st in parent_turn.character_states.items()
+            }
+            active_parties, updated_char_locs, _moving = resolve_location_override_movement(
+                prior_parties=active_parties,
+                old_loc_id=parent_active_loc_id,
+                target_loc_id=active_location.id,
+                all_char_locations=all_char_locations,
+                move_mode="party",
+                turn_id=parent_turn.id,
+                name_map={c.id: c.name for c in participants},
+            )
             parent_turn.world_snapshot.active_location_id = active_location.id
-            for st in parent_turn.character_states.values():
-                if st.current_location_id == parent_active_loc_id:
-                    st.current_location_id = active_location.id
-            if parent_turn.character_state.current_location_id == parent_active_loc_id:
-                parent_turn.character_state.current_location_id = active_location.id
+            parent_turn.world_snapshot.parties = active_parties
+            for cid, st in parent_turn.character_states.items():
+                if cid in updated_char_locs:
+                    st.current_location_id = updated_char_locs[cid]
+            if parent_turn.character_state.character_id in updated_char_locs:
+                parent_turn.character_state.current_location_id = updated_char_locs[
+                    parent_turn.character_state.character_id
+                ]
         else:
             active_location = repo.get_location(
                 parent_active_loc_id, campaign_id=campaign.id
@@ -322,6 +346,71 @@ async def _execute_turn_stream_events_unlocked(
         }
 
     message_is_synthetic = False
+    effective_party_action: PartyActionSpec | None = req.party_action
+    if effective_party_action is not None:
+        if is_narrator:
+            raise HTTPException(
+                status_code=422,
+                detail="Party actions cannot be executed in narrator modes.",
+            )
+        try:
+            effective_party_action = validate_party_action(
+                effective_party_action,
+                all_characters=participants,
+                present_character_ids=present_char_ids,
+                active_parties=active_parties,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid party action for current room and party state.",
+            ) from exc
+        if not effective_user_message or is_party_slash_command(effective_user_message):
+            effective_user_message = synthesize_party_action_message(
+                effective_party_action, {c.id: c.name for c in participants}
+            )
+            message_is_synthetic = True
+    elif is_party_slash_command(effective_user_message):
+        if is_narrator:
+            raise HTTPException(
+                status_code=422,
+                detail="Party slash commands cannot be executed in narrator modes.",
+            )
+        loc_names = {loc.id: loc.name for loc in world.locations}
+        char_locs_map = {
+            cid: st.current_location_id for cid, st in parent_turn.character_states.items()
+        }
+        parsed_pa, parse_err = parse_party_slash_command(
+            effective_user_message,
+            all_characters=participants,
+            present_character_ids=present_char_ids,
+            active_parties=active_parties,
+            location_name_by_id=loc_names,
+            char_locations=char_locs_map,
+        )
+        if parse_err is not None or parsed_pa is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid /party command for current room and party state.",
+            )
+        try:
+            effective_party_action = validate_party_action(
+                parsed_pa,
+                all_characters=participants,
+                present_character_ids=present_char_ids,
+                active_parties=active_parties,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid /party command for current room and party state.",
+            ) from exc
+        effective_user_message = synthesize_party_action_message(
+            effective_party_action, {c.id: c.name for c in participants}
+        )
+        message_is_synthetic = True
+        is_solo = False
+
     if not effective_user_message:
         if applied_choices:
             effective_user_message = DIRECTOR_CONTINUE_MESSAGE
@@ -427,6 +516,7 @@ async def _execute_turn_stream_events_unlocked(
             current_player_items=(current_player_state.equipped + current_player_state.inventory) if current_player_state else None,
             disclosure_detection_mode=eff_disclosure_mode,
             decomposed_message=decomposed_msg,
+            party_action=effective_party_action,
         )
         character = primary_character
         actor_id = "__solo__"
@@ -459,6 +549,7 @@ async def _execute_turn_stream_events_unlocked(
             current_player_items=(current_player_state.equipped + current_player_state.inventory) if current_player_state else None,
             disclosure_detection_mode=eff_disclosure_mode,
             decomposed_message=decomposed_msg,
+            party_action=effective_party_action,
         )
         # Resolve active speaker selected by Phase 1 from characters present in the room
         character = (
@@ -598,6 +689,7 @@ async def _execute_turn_stream_events_unlocked(
         lod_importance_bonus=eff_models.lod_importance_bonus,
         zone2_budget_share_pct=eff_models.zone2_budget_share_pct,
         recall_budget_prose_tokens=eff_models.recall_budget_prose_tokens,
+        active_parties=active_parties,
     )
 
     is_sentinel_scene = is_narrator or is_solo
@@ -654,6 +746,7 @@ async def _execute_turn_stream_events_unlocked(
         campaign_elapsed_minutes=parent_elapsed,
         active_location_id=active_location.id,
         scene_flags=parent_turn.world_snapshot.scene_flags,
+        parties=active_parties,
     )
     base_primary_state = context_bundle.all_character_states.get(character.id) or prev_char_state
     base_primary_care = ensure_snapshot_care_state(
@@ -855,6 +948,14 @@ async def stream_campaign_turn(
             )
             msg = _RELAY_ERROR_MESSAGES.get(exc.code, _RELAY_ERROR_MESSAGES["inference_failed"])
             err_payload = json.dumps({"error": msg})
+            yield f"event: error\ndata: {err_payload}\n\n"
+        except HTTPException as exc:
+            logger.warning(
+                "Turn stream HTTP validation (%d) for campaign '%s'",
+                exc.status_code,
+                sanitize_log_value(campaign_id),
+            )
+            err_payload = json.dumps({"error": "Invalid turn or party command request."})
             yield f"event: error\ndata: {err_payload}\n\n"
         except KeyError as exc:
             logger.warning(

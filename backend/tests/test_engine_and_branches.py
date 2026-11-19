@@ -1375,17 +1375,17 @@ async def test_location_override_affects_next_turn_and_swipe(
     async for _ev in _execute_turn_stream_events(camp_id, req_t1):
         pass
     bundle_t1 = empty_repo.get_campaign_state_bundle(camp_id)
-    turn_1 = bundle_t1.active_branch_turns[-1]
     assert bundle_t1.active_location.name == "The Neon Rust Main Floor"
+    main_floor_id = bundle_t1.active_location.id
 
-    # 2. Player overrides current location to 'Shadowed VIP Mezzanine'
+    # 2. Player overrides location alone while NOT in a party -> non-party Kira stays put in Main Floor
     overridden_bundle = empty_repo.override_campaign_location(camp_id, mezzanine.id)
     assert overridden_bundle.active_location.id == mezzanine.id
     assert overridden_bundle.active_location.name == "Shadowed VIP Mezzanine"
-    assert overridden_bundle.current_character_state.current_location_id == mezzanine.id
-    assert _seed_char_id in overridden_bundle.present_character_ids
+    assert overridden_bundle.character_states[_seed_char_id].current_location_id == main_floor_id
+    assert _seed_char_id not in overridden_bundle.present_character_ids
 
-    # 3. Next Turn (Turn 2) automatically starts in 'Shadowed VIP Mezzanine'
+    # 3. Next Turn (Turn 2) automatically starts in 'Shadowed VIP Mezzanine' (solo turn)
     req_t2 = TurnSubmitRequest(user_message="I lean over the railing and watch the entrance.")
     async for _ev in _execute_turn_stream_events(camp_id, req_t2):
         pass
@@ -1405,7 +1405,36 @@ async def test_location_override_affects_next_turn_and_swipe(
     bundle_swipe = empty_repo.get_campaign_state_bundle(camp_id)
     assert bundle_swipe.active_location.id == cooling_tunnels.id
     assert bundle_swipe.active_location.name == "Sub-Basement Cooling Tunnels"
-    assert bundle_swipe.current_character_state.current_location_id == cooling_tunnels.id
+    assert bundle_swipe.character_states[_seed_char_id].current_location_id == main_floor_id
+
+    # 5. When Kira starts in the player's party, default override & swipe-with-override carry Kira along
+    party_camp = empty_repo.create_campaign(
+        name="Party Override Campaign",
+        world_id=_seed_world_id,
+        character_id=_seed_char_id,
+        start_in_party_character_ids=[_seed_char_id],
+    )
+    async for _ev in _execute_turn_stream_events(party_camp.id, TurnSubmitRequest(user_message="I scan the room.")):
+        pass
+    party_overridden = empty_repo.override_campaign_location(party_camp.id, mezzanine.id)
+    assert party_overridden.active_location.id == mezzanine.id
+    assert party_overridden.current_character_state.current_location_id == mezzanine.id
+    assert _seed_char_id in party_overridden.present_character_ids
+    async for _ev in _execute_turn_stream_events(party_camp.id, TurnSubmitRequest(user_message="We watch from the rail.")):
+        pass
+    party_t2 = empty_repo.get_campaign_state_bundle(party_camp.id).active_branch_turns[-1]
+    async for _ev in _execute_turn_stream_events(
+        party_camp.id,
+        TurnSubmitRequest(
+            user_message=party_t2.user_message,
+            parent_turn_id=party_t2.parent_turn_id,
+            override_location_id=cooling_tunnels.id,
+        ),
+    ):
+        pass
+    party_swipe = empty_repo.get_campaign_state_bundle(party_camp.id)
+    assert party_swipe.active_location.id == cooling_tunnels.id
+    assert party_swipe.current_character_state.current_location_id == cooling_tunnels.id
 
 
 async def test_item_equip_toggle_applies_from_next_turn(

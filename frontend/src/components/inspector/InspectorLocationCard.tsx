@@ -8,15 +8,16 @@ import {
   Globe,
   Lock,
   Maximize2,
-  Navigation,
 } from "lucide-react";
 import type {
   CampaignStateBundle,
   CompassDirection,
   LocationContainer,
   LocationNode,
+  LocationOverrideOptions,
   NeighborLocationView,
 } from "../../types";
+import { LocationOverrideButton } from "./LocationOverrideButton";
 import { resolveMapIconComponent } from "../map/mapIcons";
 import {
   computeBoundaryMarkerTicks,
@@ -62,8 +63,15 @@ export interface InspectorLocationCardProps {
   showExits: boolean;
   setShowExits: React.Dispatch<React.SetStateAction<boolean>>;
   isOverriding: boolean;
-  onOverrideLocation?: (locationId: string) => Promise<void> | void;
-  handleOverrideClick: (targetLocId: string) => Promise<void>;
+  coLocatedPartyNpcs?: Array<{ id: string; name: string }>;
+  onOverrideLocation?: (
+    locationId: string,
+    options?: LocationOverrideOptions
+  ) => Promise<void> | void;
+  handleOverrideClick: (
+    targetLocId: string,
+    options?: LocationOverrideOptions
+  ) => Promise<void>;
   handleOpenFullMap: () => void;
   onOpenWorldSheet?: () => void;
 }
@@ -85,6 +93,7 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
   showExits,
   setShowExits,
   isOverriding,
+  coLocatedPartyNpcs = [],
   onOverrideLocation,
   handleOverrideClick,
   handleOpenFullMap,
@@ -682,17 +691,15 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
               </span>
             ) : (
               onOverrideLocation && (
-                <button
-                  type="button"
-                  className="btn btn-amber"
-                  style={{ padding: "2px 8px", fontSize: "0.69rem" }}
+                <LocationOverrideButton
+                  targetLocationId={selectedLocation.id}
+                  targetLocationName={selectedLocation.name}
+                  coLocatedPartyNpcs={coLocatedPartyNpcs}
                   disabled={isOverriding}
-                  onClick={() => handleOverrideClick(selectedLocation.id)}
-                  title="Override the current scene location (fixes Clerk hallucinations for the next turn or swipe)"
-                >
-                  <Navigation size={11} />
-                  {isOverriding ? "Setting..." : "Override Location"}
-                </button>
+                  isPending={isOverriding}
+                  compact
+                  onOverride={handleOverrideClick}
+                />
               )
             )}
           </div>

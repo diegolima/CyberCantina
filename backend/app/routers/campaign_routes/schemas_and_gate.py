@@ -6,6 +6,7 @@ import asyncio
 import logging
 
 from app.schemas.character import ItemFlag
+from app.schemas.party import LocationOverrideMoveMode
 from fastapi import APIRouter
 from pydantic import (
     BaseModel,
@@ -35,6 +36,7 @@ class CampaignCreateRequest(BaseModel):
     persona_id: str | None = None
     character_ids: list[str] = Field(default_factory=list)
     character_locations: dict[str, str] | None = None
+    start_in_party_character_ids: list[str] = Field(default_factory=list)
     opening_prose: str | None = None
     start_focus: Literal["world", "character"] = "character"
     focus_character_id: str | None = None
@@ -51,6 +53,18 @@ class BranchCheckoutRequest(BaseModel):
 
 class LocationOverrideRequest(BaseModel):
     location_id: str
+    move_mode: LocationOverrideMoveMode = "party"
+    accompanying_character_ids: list[str] | None = None
+
+
+class CharacterLocationOverrideRequest(BaseModel):
+    location_id: str
+
+
+class PartyCreateRequest(BaseModel):
+    member_ids: list[str] = Field(default_factory=list)
+    name: str | None = None
+    shared_goal: str | None = None
 
 
 class ItemEquipToggleRequest(BaseModel):

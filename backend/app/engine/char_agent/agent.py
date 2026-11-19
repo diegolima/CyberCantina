@@ -12,11 +12,13 @@ from app.engine.affective_engine import (
     ensure_snapshot_care_state,
     render_zone4_affective_block,
 )
+from collections.abc import Sequence
 from app.engine.llm_client import llm_client
 from app.engine.mentions import (
     DecomposedUserMessage,
     filter_user_message_for_character,
 )
+from app.engine.parties import find_member_party
 from app.prompts import PROMPT_KEY_CHARACTER_POST_TURN
 from app.prompts.renderer import (
     get_default_prompt,
@@ -38,6 +40,7 @@ from app.schemas.character import (
     MemoryShard,
     format_item_names,
 )
+from app.schemas.party import USER_PARTY_MEMBER_ID, PartyRecord
 from app.schemas.turn import (
     CharacterAgentDelta,
     ExtractedCharacterMemory,
@@ -210,6 +213,7 @@ def heuristic_character_agent_delta(
     present_characters: list[CharacterRecord],
     extracted_memories_fn=None,
     user_message_override: str | None = None,
+    active_parties: Sequence[PartyRecord] | None = None,
 ) -> CharacterAgentDelta:
     """Deterministic per-character state delta used when running without a live Clerk LLM."""
     is_speaker = completed_turn.actor_id == character.id
@@ -477,12 +481,16 @@ def heuristic_character_agent_delta(
         prev_state=prev_state,
     )
 
-    # 4. Independent Character Location Transition
+    # 4. Independent Character Location Transition (respecting party allegiance & Phase 3 travel_intent)
     loc_transition: Literal["stay_here", "follow_player", "move_to_neighbor"] = "stay_here"
     target_loc_id: str | None = None
-    msg_low = user_msg.lower()
+    char_party = find_member_party(active_parties or [], character.id)
+    in_player_party = bool(
+        char_party is not None
+        and USER_PARTY_MEMBER_ID in char_party.member_ids
+        and char_party.location_id == active_location.id
+    )
 
-    # Check if this NPC independently departed to a neighbor while the player stayed
     if pre_turn.spatial_intent == "stay" and neighbors:
         depart_re = re.compile(
             rf"\b{re.escape(char_first)}\b[^.!?\n]{{0,50}}\b(?:storms?\s+out|leaves?|walks?\s+(?:into|out|toward)|heads?\s+(?:into|to|toward)|retreats?\s+(?:into|to))\b",
@@ -496,35 +504,15 @@ def heuristic_character_agent_delta(
                     target_loc_id = nb.destination.id
                     break
     elif pre_turn.spatial_intent in ("move_known", "explore_new"):
-        user_moved_alone = bool(
-            re.search(r"\b(alone|by myself|without you|slip out alone|leave .+ behind)\b", msg_low)
+        cog_intent = (
+            getattr(char_cog, "travel_intent", "default")
+            if char_cog and not char_cog.skipped
+            else "default"
         )
-        told_to_stay = len(char_first) >= 3 and bool(
-            re.search(
-                rf"\b{re.escape(char_first)}\b[^.!?\n]{{0,30}}\b(?:stay here|wait here|hold the door|watch the door|stay behind)\b",
-                msg_low,
-            )
-        )
-        other_invited_exclusively = False
-        if not is_speaker and len(present_characters) > 1 and not (
-            character.name.lower() in msg_low
-            or (len(char_first) >= 3 and re.search(rf"\b{re.escape(char_first)}\b", msg_low))
-        ):
-            for oc in present_characters:
-                if oc.id == character.id:
-                    continue
-                oc_first = oc.name.split()[0].lower()
-                if len(oc_first) >= 3 and re.search(
-                    rf"\b(?:just|only)\s+{re.escape(oc_first)}\b|\b{re.escape(oc_first)},\s*(?:come|follow|walk)\s+with\s+me\b",
-                    msg_low,
-                ):
-                    other_invited_exclusively = True
-                    break
-
-        if user_moved_alone or told_to_stay or other_invited_exclusively:
-            loc_transition = "stay_here"
+        if in_player_party:
+            loc_transition = "stay_here" if cog_intent == "stay_behind" else "follow_player"
         else:
-            loc_transition = "follow_player"
+            loc_transition = "follow_player" if cog_intent == "follow_player" else "stay_here"
 
     # 5. Character-Specific Personal Memories
     memories: list[ExtractedCharacterMemory] = []
@@ -578,6 +566,7 @@ async def run_character_post_turn_agent(
     persona_name: str | None = None,
     decomposed_message: DecomposedUserMessage | None = None,
     campaign_elapsed_minutes: int = 0,
+    active_parties: Sequence[PartyRecord] | None = None,
 ) -> CharacterAgentDelta:
     """Execute a focused Post-Turn Character State Agent for a single present character."""
     clerk_prof = profile or settings.clerk_profile
@@ -632,6 +621,16 @@ async def run_character_post_turn_agent(
     )
     cognition_context = ""
     if char_cog and not char_cog.skipped:
+        travel_line = (
+            f"- Travel Intent: {char_cog.travel_intent}\n"
+            if completed_turn.pre_turn.spatial_intent != "stay"
+            else ""
+        )
+        invite_line = (
+            f"- Party Invite Decision: {char_cog.party_invite_decision}\n"
+            if char_cog.party_invite_decision
+            else ""
+        )
         cognition_context = (
             f"\n{character.name}'s Intra-Turn Cognition Impulse (at start of response):\n"
             f"- Feeling Impulse: {char_cog.feeling} "
@@ -639,8 +638,24 @@ async def run_character_post_turn_agent(
             f"agency={char_cog.feeling_agency}, threat={char_cog.scene_threat}, coping={char_cog.scene_coping})\n"
             f"- Immediate Want: {char_cog.want}\n"
             f"- Planned Action: {char_cog.plan}\n"
+            f"{travel_line}{invite_line}"
             f"*(Note: Anchor post-turn affect_tone and relational_events relative to Pre-Turn Baseline State below.)*\n"
         )
+
+    eff_parties = (
+        list(active_parties)
+        if active_parties is not None
+        else list(completed_turn.world_snapshot.parties or [])
+    )
+    char_party = find_member_party(eff_parties, character.id)
+    if char_party is not None and char_party.location_id == active_location.id:
+        if USER_PARTY_MEMBER_ID in char_party.member_ids:
+            party_status_line = "- Party Membership: Currently in the player's traveling party.\n"
+        else:
+            leader_label = name_map.get(char_party.leader_id, char_party.leader_id)
+            party_status_line = f"- Party Membership: Member of NPC party '{char_party.name or char_party.id}' (leader: {leader_label}).\n"
+    else:
+        party_status_line = "- Party Membership: Not in any party.\n"
 
     char_roll = resolve_roll_for_character(completed_turn.pre_turn, character.id)
     roll_str = ""
@@ -678,6 +693,7 @@ async def run_character_post_turn_agent(
         f"- Starting Location: {active_location.name} (id='{active_location.id}')\n"
         f"- Player Spatial Intent: {completed_turn.pre_turn.spatial_intent}"
         f"{f' ({completed_turn.pre_turn.target_location_hint})' if completed_turn.pre_turn.target_location_hint else ''}\n"
+        f"{party_status_line}"
         f"- Co-Present Characters:\n{co_present_str}\n"
         f"- Known Exits:\n{neighbor_str}\n\n"
         f"Existing Memories for {character.name} (do NOT duplicate; use supersedes_memory_id if refining ephemeral):\n"
@@ -715,6 +731,7 @@ async def run_character_post_turn_agent(
             present_characters=present_characters,
             extracted_memories_fn=extracted_memories_fn,
             user_message_override=visible_user_msg,
+            active_parties=eff_parties,
         )
 
     # Post-process invariants: 2-4 word mood, canonical stance keys, and strict self-scoped memory ownership

@@ -19,12 +19,15 @@ import {
   WorldInspectorModal,
   type WorldTab,
 } from "./components/world/WorldInspectorModal";
+import { PartyManagementModal } from "./components/party/PartyManagementModal";
 import { buildCampaignCharacterEntries } from "./components/world/codexHelpers";
 import { LocalRelayProvider } from "./providers/LocalRelayContext";
 import { useCampaignTurnActions } from "./hooks/useCampaignTurnActions";
 import { useResponsiveCampaignLayout } from "./hooks/useResponsiveCampaignLayout";
 import { getShellClassNames } from "./utils/campaignLayout";
 import { slugifyTag } from "./utils/noteSearch";
+import { formatPartyActionTurnMessage } from "./utils/partyCommand";
+import { getActiveParties } from "./utils/partyHelpers";
 import {
   AppSettings,
   AuthSessionResponse,
@@ -82,6 +85,7 @@ export const App: React.FC = () => {
   );
   const [campaignWorldSheetTab, setCampaignWorldSheetTab] =
     useState<WorldTab | null>(null);
+  const [isPartyModalOpen, setIsPartyModalOpen] = useState(false);
   const [showPersonaModal, setShowPersonaModal] = useState(false);
   const [editingPersona, setEditingPersona] = useState<PersonaRecord | null>(null);
   const [showNewCampaignModal, setShowNewCampaignModal] = useState(false);
@@ -187,6 +191,9 @@ export const App: React.FC = () => {
     liveStream,
     handleSendTurn,
     handleOverrideLocation,
+    handleOverrideCharacterLocation,
+    handleCreateNpcParty,
+    handleDisbandParty,
     handleUpdateCampaignWorldSettings,
     handleToggleItemEquip,
     handleUpdateCampaignMemories,
@@ -231,6 +238,7 @@ export const App: React.FC = () => {
   const loadCampaignBundle = async (campaignId: string) => {
     setPendingLocationOverrideId(null);
     setCampaignWorldSheetTab(null);
+    setIsPartyModalOpen(false);
     layout.closeOverlays();
     const stateBundle = await api.getCampaignState(campaignId);
     setBundle(stateBundle);
@@ -255,6 +263,7 @@ export const App: React.FC = () => {
     setCampaignWorld(null);
     setCampaignCharacter(null);
     setCampaignWorldSheetTab(null);
+    setIsPartyModalOpen(false);
   };
 
   const refreshHomeMessages = async () => {
@@ -501,6 +510,7 @@ export const App: React.FC = () => {
           setCampaignWorld(null);
           setCampaignCharacter(null);
           setCampaignWorldSheetTab(null);
+          setIsPartyModalOpen(false);
         }
       }
       setDeleteTarget(null);
@@ -621,6 +631,12 @@ export const App: React.FC = () => {
         onOpenCodex={() => {
           layout.closeOverlays();
           setCampaignWorldSheetTab("codex");
+        }}
+        partyCount={getActiveParties(bundle).length}
+        isPartyOpen={isPartyModalOpen}
+        onOpenParty={() => {
+          layout.closeOverlays();
+          setIsPartyModalOpen(true);
         }}
         notes={notes}
         showNotesFlyout={showNotesFlyout}
@@ -794,6 +810,7 @@ export const App: React.FC = () => {
           memoryConfig={appSettings?.memory_config}
           pendingLocationOverrideId={pendingLocationOverrideId}
           onOverrideLocation={handleOverrideLocation}
+          onOverrideCharacterLocation={handleOverrideCharacterLocation}
           onOpenWorldSheet={() => setCampaignWorldSheetTab("base")}
           onSaveCampaignMap={handleSaveCampaignMap}
           onToggleItemEquip={handleToggleItemEquip}
@@ -832,6 +849,46 @@ export const App: React.FC = () => {
           onSaved={() => setCampaignWorldSheetTab(null)}
         />
       )}
+
+      {/* Lifted Party Management Modal */}
+      {bundle && campaignWorld && isPartyModalOpen && (() => {
+        const activeParties = getActiveParties(bundle);
+        const charRecordMap: Record<string, CharacterRecord> = {
+          ...(bundle.character_records ?? {}),
+        };
+        for (const p of campaignParticipants) {
+          if (p.id && !charRecordMap[p.id]) {
+            charRecordMap[p.id] = p;
+          }
+        }
+        const nameMap: Record<string, string> = Object.fromEntries(
+          Object.values(charRecordMap).map((c) => [c.id, c.name])
+        );
+        return (
+          <PartyManagementModal
+            isOpen={isPartyModalOpen}
+            onClose={() => setIsPartyModalOpen(false)}
+            parties={activeParties}
+            activeLocationId={bundle.active_location.id}
+            locations={bundle.visible_locations}
+            presentCharacterIds={bundle.present_character_ids ?? []}
+            characterRecords={charRecordMap}
+            characterStates={bundle.character_states ?? {}}
+            personaName={bundle.campaign.persona_snapshot?.name ?? null}
+            isMutatingLocked={isStreaming || isPhase4Running}
+            onSubmitPartyTurn={(action) => {
+              void handleSendTurn({
+                userMessage: formatPartyActionTurnMessage(action, nameMap),
+                diceMode: "auto",
+                partyAction: action,
+              });
+            }}
+            onOverrideCharacterLocation={handleOverrideCharacterLocation}
+            onCreateNpcParty={handleCreateNpcParty}
+            onDisbandNpcParty={handleDisbandParty}
+          />
+        );
+      })()}
 
       {/* Modals */}
       <AppModals

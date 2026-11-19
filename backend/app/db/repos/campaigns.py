@@ -6,6 +6,7 @@ import json
 import uuid
 from app.engine.affective_engine import seed_initial_care_state
 from app.schemas.character import CharacterStateSnapshot, CognitionBlock, dump_items_json
+from app.schemas.party import USER_PARTY_MEMBER_ID, PartyRecord
 from app.schemas.persona import PersonaRecord, get_default_persona
 from app.schemas.turn import (
     CampaignRecord,
@@ -61,6 +62,7 @@ class CampaignsMixin:
         actor_id: str | None = None,
         start_focus: str | None = None,
         skip_turn_0_cognition: bool = True,
+        start_in_party_character_ids: list[str] | None = None,
     ) -> CampaignRecord:
         """Create a new campaign and initialize Turn 0 (opening scene snapshot)."""
         camp_id = campaign_id or f"camp_{uuid.uuid4().hex[:10]}"
@@ -105,8 +107,15 @@ class CampaignsMixin:
             (loc for loc in world.locations if loc.is_starting_location),
             world.locations[0],
         )
-        loc_map = character_locations or {}
+        loc_map = dict(character_locations or {})
         primary_loc_id = loc_map.get(character.id, start_loc.id)
+        valid_start_party_ids = [
+            cid
+            for cid in dict.fromkeys(start_in_party_character_ids or [])
+            if cid in all_char_ids and cid != USER_PARTY_MEMBER_ID
+        ]
+        for party_cid in valid_start_party_ids:
+            loc_map[party_cid] = primary_loc_id
         camp_world_settings = CampaignWorldSettings(
             describe_on_first_visit=getattr(
                 world.global_rules, "describe_on_first_visit", True
@@ -193,6 +202,20 @@ class CampaignsMixin:
         )
 
         root_turn_id = f"turn_{uuid.uuid4().hex[:10]}"
+        root_parties: list[PartyRecord] = (
+            [
+                PartyRecord(
+                    id=f"party_{uuid.uuid4().hex[:8]}",
+                    name="Your Party",
+                    member_ids=[USER_PARTY_MEMBER_ID, *valid_start_party_ids],
+                    leader_id=USER_PARTY_MEMBER_ID,
+                    location_id=primary_loc_id,
+                    formed_at_turn_id=root_turn_id,
+                )
+            ]
+            if valid_start_party_ids
+            else []
+        )
         root_snapshot = WorldStateSnapshot(
             turn_id=root_turn_id,
             world_timestamp=world.global_rules.starting_timestamp,
@@ -201,6 +224,7 @@ class CampaignsMixin:
             campaign_elapsed_minutes=0,
             visited_location_ids=root_visited_ids,
             visited_container_ids=root_visited_container_ids,
+            parties=root_parties,
         )
         root_care = seed_initial_care_state(
             character.baseline_psyche,

@@ -5,7 +5,9 @@ from __future__ import annotations
 import re
 
 from app.config import settings
+from app.engine.affective_engine import ensure_snapshot_care_state
 from app.engine.mentions import CharacterWhisper
+from app.engine.parties import find_member_party, resolve_character_travel_intent_enum
 from app.engine.phase2_context import (
     DiscoveredPersonaView,
     pack_recalled_items_to_budget,
@@ -23,6 +25,12 @@ from app.schemas.character import (
     CharacterRecord,
     CharacterStateSnapshot,
     CognitionBlock,
+)
+from app.schemas.party import (
+    USER_PARTY_MEMBER_ID,
+    PartyInviteDecision,
+    PartyRecord,
+    TravelIntent,
 )
 from app.schemas.turn import (
     CanonicalOutcomeTier,
@@ -47,6 +55,94 @@ class PriorCognitionCue:
     observable_consequence_hint: str = ""
 
 
+def compute_heuristic_party_invite_decision(
+    *,
+    character: CharacterRecord,
+    previous_state: CharacterStateSnapshot,
+    pre_turn: PreTurnAnalysis,
+    active_parties: Sequence[PartyRecord] | None = None,
+    active_location_id: str | None = None,
+) -> PartyInviteDecision:
+    """Deterministically weigh CARE trust/warmth/grievance, roll tier, and NPC-party loyalty."""
+    care = ensure_snapshot_care_state(previous_state, character.baseline_psyche)
+    user_edge = care.relations.get(USER_PARTY_MEMBER_ID)
+    warmth = float(user_edge.warmth) if user_edge else 0.0
+    trust = float(user_edge.trust) if user_edge else 0.35
+    grievance = float(user_edge.grievance) if user_edge else 0.0
+
+    char_roll = pre_turn.character_rolls.get(character.id) or (
+        pre_turn.resolved_roll
+        if pre_turn.resolved_roll and pre_turn.resolved_roll.character_id in (None, character.id)
+        else None
+    )
+    roll_adj = 0.0
+    if char_roll:
+        if char_roll.outcome_tier == "Critical Success":
+            roll_adj = 0.35
+        elif char_roll.outcome_tier == "Clean Success":
+            roll_adj = 0.20
+        elif char_roll.outcome_tier == "Simple Failure":
+            roll_adj = -0.15
+        elif char_roll.outcome_tier == "Failure with Consequences":
+            roll_adj = -0.25
+        elif char_roll.outcome_tier == "Critical Failure":
+            roll_adj = -0.45
+
+    eff_loc = active_location_id or previous_state.current_location_id
+    npc_party_penalty = 0.0
+    existing_party = find_member_party(active_parties or [], character.id)
+    if (
+        existing_party is not None
+        and USER_PARTY_MEMBER_ID not in existing_party.member_ids
+        and existing_party.location_id == eff_loc
+    ):
+        npc_party_penalty = -0.32 if existing_party.leader_id == character.id else -0.22
+
+    score = warmth + (trust - 0.35) - (0.8 * grievance) + roll_adj + npc_party_penalty
+    return "accept" if score >= 0.15 else "refuse"
+
+
+def _compute_heuristic_travel_intent(
+    *,
+    user_message: str,
+    character: CharacterRecord,
+    allowed_enum: list[str],
+    public_message: str | None = None,
+    char_whisper: CharacterWhisper | None = None,
+) -> TravelIntent:
+    msg_low = (user_message or "").lower()
+    char_first = character.name.strip().split()[0].lower() if character.name.strip() else ""
+    mentions_self = bool(
+        character.name.strip().lower() in msg_low
+        or (len(char_first) >= 3 and re.search(rf"\b{re.escape(char_first)}\b", msg_low))
+    )
+    has_whisper = bool(char_whisper and char_whisper.raw_lines)
+
+    if "stay_behind" in allowed_enum:
+        alone_cue = bool(re.search(r"\b(alone|by myself|without you|slip out alone)\b", msg_low))
+        told_stay = len(char_first) >= 3 and bool(
+            re.search(
+                rf"\b{re.escape(char_first)}\b[^.!?\n]{{0,35}}\b(?:stay here|wait here|stay behind|hold the door|watch the door)\b",
+                msg_low,
+            )
+        )
+        if alone_cue or told_stay:
+            return "stay_behind"
+
+    if "follow_player" in allowed_enum:
+        pub_low = (public_message or msg_low).lower()
+        explicit_follow = bool(
+            re.search(r"\b(?:follow me|come with me|come along|tag along|walk with me|join me)\b", pub_low)
+        )
+        addressed_follow = (mentions_self or has_whisper) and bool(
+            re.search(r"\b(?:follow|come with|with me|after them|after him|after her)\b", msg_low)
+        )
+        if explicit_follow or addressed_follow:
+            return "follow_player"
+
+    return "default"
+
+
 def heuristic_character_cognition(
     *,
     user_message: str,
@@ -59,6 +155,8 @@ def heuristic_character_cognition(
     known_persona: DiscoveredPersonaView | None = None,
     public_message: str | None = None,
     char_whisper: CharacterWhisper | None = None,
+    active_parties: Sequence[PartyRecord] | None = None,
+    active_location_id: str | None = None,
 ) -> CognitionBlock:
     """Generate a deterministic, high-quality fallback CognitionBlock without LLM."""
     sentiment_lower = pre_turn.user_sentiment.lower()
@@ -192,6 +290,47 @@ def heuristic_character_cognition(
         threat=h_threat,
         coping=h_coping,
     )
+    eff_loc = active_location_id or previous_state.current_location_id
+    party_invite_decision: PartyInviteDecision | None = None
+    want_override: str | None = None
+    if (
+        pre_turn.party_action is not None
+        and pre_turn.party_action.kind == "invite"
+        and character.id in pre_turn.party_action.target_character_ids
+    ):
+        party_invite_decision = compute_heuristic_party_invite_decision(
+            character=character,
+            previous_state=previous_state,
+            pre_turn=pre_turn,
+            active_parties=active_parties,
+            active_location_id=eff_loc,
+        )
+        if party_invite_decision == "accept":
+            want_override = "Accept the invitation and coordinate closely with the group."
+            plan_bullets = [
+                "- Agree to join the traveling party for mutual leverage.",
+                "- Signal readiness while keeping personal guard intact.",
+            ]
+        else:
+            want_override = "Decline the party invitation and maintain current position."
+            plan_bullets = [
+                "- Refuse the invitation plainly without surrendering ground.",
+                "- Hold current loyalties and position in the room.",
+            ]
+
+    travel_intent: TravelIntent = "default"
+    if pre_turn.spatial_intent != "stay":
+        allowed_travel = resolve_character_travel_intent_enum(
+            character.id, active_parties or [], eff_loc
+        )
+        travel_intent = _compute_heuristic_travel_intent(
+            user_message=user_message,
+            character=character,
+            allowed_enum=allowed_travel,
+            public_message=public_message,
+            char_whisper=char_whisper,
+        )
+
     cog = CognitionBlock(
         recall="\n".join(recall_bullets),
         feeling=f"{previous_state.mood_label}.{cues_text}",
@@ -203,10 +342,12 @@ def heuristic_character_cognition(
         valence=new_valence,
         arousal=new_arousal,
         feeling_impulse=h_impulse,
-        want=previous_state.active_want or character.baseline_psyche.default_want,
+        want=want_override or previous_state.active_want or character.baseline_psyche.default_want,
         plan="\n".join(plan_bullets),
         skipped=False,
         roll_outcome_tier=char_roll.outcome_tier if char_roll else None,
+        travel_intent=travel_intent,
+        party_invite_decision=party_invite_decision,
     )
     if choice_resolution:
         from app.engine.choices import coerce_choice_compliance

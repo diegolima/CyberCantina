@@ -6,7 +6,17 @@ import json
 import sqlite3
 import uuid
 from typing import Any
+from app.engine.parties import (
+    apply_party_disband,
+    create_npc_only_party,
+    resolve_character_location_override,
+    resolve_location_override_movement,
+)
 from app.schemas.character import CognitionBlock
+from app.schemas.party import (
+    USER_PARTY_MEMBER_ID,
+    LocationOverrideMoveMode,
+)
 from app.schemas.turn import (
     CampaignStateBundle,
     ImprovisedLocationSpec,
@@ -30,13 +40,30 @@ from app.db.repos.campaign_lore_items import CampaignLoreItemsMixin
 class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
     """Campaign location overrides, edges, spatial projections, and row mappers."""
 
+    def _load_character_names(self, char_ids: list[str]) -> dict[str, str]:
+        if not char_ids:
+            return {}
+        placeholders = ",".join("?" for _ in char_ids)
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                f"SELECT id, name FROM characters WHERE id IN ({placeholders})",
+                char_ids,
+            ).fetchall()
+            return {r["id"]: r["name"] for r in rows}
+        finally:
+            conn.close()
+
     def override_campaign_location(
         self,
         campaign_id: str,
         location_id: str,
+        *,
+        move_mode: LocationOverrideMoveMode = "party",
+        accompanying_character_ids: list[str] | None = None,
         owner_id: str | None = None,
     ) -> CampaignStateBundle:
-        """Override the active location on the current leaf turn (fixing Clerk hallucinations for the next turn or swipe)."""
+        """Override the active player location on the current leaf turn with party-aware movement."""
         campaign = self.get_campaign(campaign_id, owner_id=owner_id)
         if not campaign.active_leaf_turn_id:
             raise ValueError(f"Campaign '{campaign_id}' has no active turn")
@@ -49,6 +76,14 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
 
         leaf_turn = self.get_turn_node(campaign.active_leaf_turn_id)
         old_loc_id = leaf_turn.world_snapshot.active_location_id
+
+        all_prev_states = dict(leaf_turn.character_states or {})
+        if leaf_turn.character_state.character_id not in all_prev_states:
+            all_prev_states[leaf_turn.character_state.character_id] = leaf_turn.character_state
+        all_char_locations = {
+            cid: st.current_location_id for cid, st in all_prev_states.items()
+        }
+        name_map = self._load_character_names(list(all_char_locations.keys()))
 
         branch_turns = self.get_branch_turn_chain(leaf_turn.id)
         valid_turn_ids = {t.id for t in branch_turns}
@@ -68,22 +103,27 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
             )
         )
 
-        if arrival_cards or arrival_media:
-            arrival_turn_id = f"turn_{uuid.uuid4().hex[:10]}"
-            all_prev_states = dict(leaf_turn.character_states or {})
-            if leaf_turn.character_state.character_id not in all_prev_states:
-                all_prev_states[leaf_turn.character_state.character_id] = leaf_turn.character_state
+        arrival_turn_id = (
+            f"turn_{uuid.uuid4().hex[:10]}" if (arrival_cards or arrival_media) else leaf_turn.id
+        )
+        reconciled_parties, updated_char_locs, moving_npcs = resolve_location_override_movement(
+            prior_parties=leaf_turn.world_snapshot.parties,
+            old_loc_id=old_loc_id,
+            target_loc_id=world_target.id,
+            all_char_locations=all_char_locations,
+            move_mode=move_mode,
+            accompanying_character_ids=accompanying_character_ids,
+            turn_id=arrival_turn_id,
+            name_map=name_map,
+        )
 
+        if arrival_cards or arrival_media:
             def _moved_state(st):
-                should_move = (
-                    st.current_location_id == old_loc_id
-                    or st.character_id == leaf_turn.actor_id
-                    or st.character_id == campaign.character_id
-                )
+                new_loc = updated_char_locs.get(st.character_id, st.current_location_id)
                 return st.model_copy(
                     update={
                         "turn_id": arrival_turn_id,
-                        "current_location_id": world_target.id if should_move else st.current_location_id,
+                        "current_location_id": new_loc,
                     }
                 )
 
@@ -115,6 +155,7 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                     campaign_elapsed_minutes=leaf_turn.world_snapshot.campaign_elapsed_minutes,
                     visited_location_ids=merged_visited,
                     visited_container_ids=merged_visited_containers,
+                    parties=reconciled_parties,
                 ),
                 character_state=moved_primary,
                 extra_character_states=moved_extras,
@@ -135,7 +176,8 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                 """
                 UPDATE world_state_snapshots
                 SET active_location_id = ?, scene_flags_json = ?,
-                    visited_location_ids_json = ?, visited_container_ids_json = ?
+                    visited_location_ids_json = ?, visited_container_ids_json = ?,
+                    parties_json = ?
                 WHERE turn_id = ?
                 """,
                 (
@@ -143,17 +185,178 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                     json.dumps(new_flags),
                     json.dumps(merged_visited),
                     json.dumps(merged_visited_containers),
+                    json.dumps([p.model_dump() for p in reconciled_parties]),
                     leaf_turn.id,
                 ),
             )
-            # Move characters who were present at old_loc_id (plus primary actor) to world_target.id
+            for cid in moving_npcs:
+                conn.execute(
+                    """
+                    UPDATE character_states
+                    SET current_location_id = ?
+                    WHERE turn_id = ? AND character_id = ?
+                    """,
+                    (world_target.id, leaf_turn.id, cid),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
+
+    def override_character_location(
+        self,
+        campaign_id: str,
+        character_id: str,
+        location_id: str,
+        *,
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
+        """Relocate a single campaign NPC in-place on the leaf turn without triggering arrival/visited side effects."""
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
+        if not campaign.active_leaf_turn_id:
+            raise ValueError(f"Campaign '{campaign_id}' has no active turn")
+
+        target_loc = self.get_location(location_id)
+        if target_loc.world_id != campaign.world_id:
+            raise ValueError(
+                f"Location '{location_id}' does not belong to world '{campaign.world_id}'"
+            )
+
+        leaf_turn = self.get_turn_node(campaign.active_leaf_turn_id)
+        participant_set = set(campaign.participant_character_ids or [campaign.character_id]) | set(
+            leaf_turn.character_states.keys()
+        )
+        if character_id not in participant_set:
+            raise ValueError(
+                f"Character '{character_id}' is not a participant in campaign '{campaign_id}'."
+            )
+
+        all_char_locations = {
+            cid: st.current_location_id for cid, st in leaf_turn.character_states.items()
+        }
+        name_map = self._load_character_names(list(participant_set))
+        reconciled_parties = resolve_character_location_override(
+            prior_parties=leaf_turn.world_snapshot.parties,
+            character_id=character_id,
+            target_location_id=target_loc.id,
+            active_location_id=leaf_turn.world_snapshot.active_location_id,
+            all_char_locations=all_char_locations,
+            turn_id=leaf_turn.id,
+            name_map=name_map,
+        )
+
+        conn = self._connect()
+        try:
             conn.execute(
                 """
                 UPDATE character_states
                 SET current_location_id = ?
-                WHERE turn_id = ? AND (current_location_id = ? OR character_id = ?)
+                WHERE turn_id = ? AND character_id = ?
                 """,
-                (world_target.id, leaf_turn.id, old_loc_id, leaf_turn.actor_id),
+                (target_loc.id, leaf_turn.id, character_id),
+            )
+            conn.execute(
+                """
+                UPDATE world_state_snapshots
+                SET parties_json = ?
+                WHERE turn_id = ?
+                """,
+                (
+                    json.dumps([p.model_dump() for p in reconciled_parties]),
+                    leaf_turn.id,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
+
+    def create_npc_party(
+        self,
+        campaign_id: str,
+        member_ids: list[str],
+        *,
+        name: str | None = None,
+        shared_goal: str | None = None,
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
+        """Create an NPC-only party in-place on the active leaf turn with a randomly elected leader."""
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
+        if not campaign.active_leaf_turn_id:
+            raise ValueError(f"Campaign '{campaign_id}' has no active turn")
+
+        leaf_turn = self.get_turn_node(campaign.active_leaf_turn_id)
+        all_char_locations = {
+            cid: st.current_location_id for cid, st in leaf_turn.character_states.items()
+        }
+        participant_ids = list(
+            dict.fromkeys([campaign.character_id, *(campaign.participant_character_ids or []), *all_char_locations.keys()])
+        )
+        name_map = self._load_character_names(participant_ids)
+        updated_parties, _created = create_npc_only_party(
+            leaf_turn.world_snapshot.parties,
+            member_ids=member_ids,
+            member_locations=all_char_locations,
+            name=name,
+            shared_goal=shared_goal,
+            turn_id=leaf_turn.id,
+            name_map=name_map,
+        )
+
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                UPDATE world_state_snapshots
+                SET parties_json = ?
+                WHERE turn_id = ?
+                """,
+                (json.dumps([p.model_dump() for p in updated_parties]), leaf_turn.id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
+
+    def disband_party(
+        self,
+        campaign_id: str,
+        party_id: str,
+        *,
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
+        """Disband an NPC-only party in-place on the active leaf turn (player parties must disband via turn)."""
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
+        if not campaign.active_leaf_turn_id:
+            raise ValueError(f"Campaign '{campaign_id}' has no active turn")
+
+        leaf_turn = self.get_turn_node(campaign.active_leaf_turn_id)
+        target = next(
+            (p for p in leaf_turn.world_snapshot.parties if p.id == party_id),
+            None,
+        )
+        if target is None:
+            raise KeyError(f"Party '{party_id}' not found on current turn")
+        if USER_PARTY_MEMBER_ID in target.member_ids:
+            raise ValueError(
+                "Player parties must be disbanded in-character via /party disband or the turn stream."
+            )
+
+        updated_parties, _delta = apply_party_disband(
+            leaf_turn.world_snapshot.parties, party_id
+        )
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                UPDATE world_state_snapshots
+                SET parties_json = ?
+                WHERE turn_id = ?
+                """,
+                (json.dumps([p.model_dump() for p in updated_parties]), leaf_turn.id),
             )
             conn.commit()
         finally:

@@ -10,6 +10,7 @@ import type {
   WorldviewProfile,
 } from "./affective";
 import type { ChoiceComplianceOutcome } from "./mechanics";
+import type { PartyInviteDecision, TravelIntent } from "./party";
 import type { PersonaKnowledgeProvenance } from "./persona";
 import type { WorldWizardDraft } from "./world";
 
@@ -265,6 +266,8 @@ export interface CognitionBlock {
   selected_choice?: string | null;
   choice_compliance?: ChoiceComplianceOutcome | null;
   choice_compliance_note?: string | null;
+  travel_intent?: TravelIntent;
+  party_invite_decision?: PartyInviteDecision | null;
 }
 
 export interface CharacterStateSnapshot {

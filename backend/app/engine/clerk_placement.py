@@ -17,11 +17,23 @@ from app.schemas.world import LocationNode, WorldRecord
 logger = logging.getLogger("cybercantina.engine.clerk_placement")
 
 
-def build_fallback_placement_prose(characters: Sequence[CharacterRecord]) -> str:
+def build_fallback_placement_prose(
+    characters: Sequence[CharacterRecord],
+    *,
+    party_character_ids: Sequence[str] | None = None,
+) -> str:
     """Deterministic fallback staging prose when Clerk LLM fails or times out."""
     if not characters:
         return ""
-    lines = [f"You see {c.name} nearby." for c in characters]
+    party_set = set(party_character_ids or [])
+    lines = [
+        (
+            f"{c.name} stands close by, arriving alongside you."
+            if c.id in party_set
+            else f"You see {c.name} nearby."
+        )
+        for c in characters
+    ]
     return "\n\n" + "\n".join(lines)
 
 
@@ -33,6 +45,7 @@ async def generate_clerk_starting_placement(
     profile: ModelProfile,
     llm_client: LLMClient | None = None,
     prompt_template: str | None = None,
+    party_character_ids: Sequence[str] | None = None,
     timeout_seconds: float = 10.0,
 ) -> str:
     """Invokes the Clerk LLM (max_tokens=256, temp=0.5) to stage non-user characters.
@@ -44,14 +57,24 @@ async def generate_clerk_starting_placement(
     if not participant_characters:
         return ""
 
-    fallback_text = build_fallback_placement_prose(participant_characters)
+    party_set = set(party_character_ids or [])
+    fallback_text = build_fallback_placement_prose(
+        participant_characters, party_character_ids=party_character_ids
+    )
 
     char_summaries: list[str] = []
     for c in participant_characters:
         tagline = getattr(c, "tagline", None) or ""
         core_persona = getattr(c, "core_persona", None) or ""
         char_desc = tagline or (core_persona[:120] if core_persona else "")
-        char_summaries.append(f"- **{c.name}**: {char_desc}")
+        party_tag = " [In Your Party — arriving alongside the protagonist]" if c.id in party_set else ""
+        char_summaries.append(f"- **{c.name}**{party_tag}: {char_desc}")
+
+    party_guidance = (
+        "\nCharacters marked [In Your Party] arrived together with the protagonist rather than as unacquainted locals."
+        if party_set
+        else ""
+    )
 
     system_prompt = (prompt_template or DEFAULT_CLERK_WORLD_START_PLACEMENT_SYSTEM).strip()
 
@@ -62,7 +85,7 @@ async def generate_clerk_starting_placement(
         f"Location Atmosphere:\n{location.starting_message or location.description}\n\n"
         f"=== CHARACTERS PRESENT IN THE ROOM ===\n"
         + "\n".join(char_summaries)
-        + "\n\n"
+        + f"{party_guidance}\n\n"
         "=== YOUR TASK ===\n"
         "Write a single descriptive paragraph placing these characters in the room. "
         "Strictly NO dialogue, NO internal thoughts. Begin your response with a double newline."

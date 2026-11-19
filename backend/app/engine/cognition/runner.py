@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import re
 
+from collections.abc import Sequence
+
 from app.config import settings
 from app.engine.affective_engine import (
     compute_provisional_cognition_preview,
@@ -15,6 +17,10 @@ from app.engine.llm_client import llm_client
 from app.engine.mentions import (
     CharacterWhisper,
     decompose_user_message,
+)
+from app.engine.parties import (
+    render_cognition_party_context,
+    resolve_character_travel_intent_enum,
 )
 from app.engine.phase2_context import (
     DiscoveredPersonaView,
@@ -36,6 +42,7 @@ from app.schemas.character import (
     CognitionBlock,
     format_item_names,
 )
+from app.schemas.party import PartyRecord
 from app.schemas.turn import (
     CharacterSpotlightRole,
     ChoiceResolution,
@@ -53,6 +60,7 @@ from app.schemas.world import (
 
 from app.engine.cognition.heuristics import (
     PriorCognitionCue,
+    compute_heuristic_party_invite_decision,
     heuristic_character_cognition,
     select_cognition_recalled_items,
 )
@@ -84,6 +92,7 @@ async def run_character_cognition_agent(
     public_message: str | None = None,
     char_whisper: CharacterWhisper | None = None,
     recall_budget_cognition_tokens: int | None = None,
+    active_parties: Sequence[PartyRecord] | None = None,
 ) -> CognitionBlock:
     """Execute a single character subconscious cognition agent turn."""
     template = system_prompt_template or get_default_prompt(
@@ -301,6 +310,20 @@ async def run_character_cognition_agent(
         f"{recalled_text}\n\n"
     )
 
+    eff_parties = list(active_parties or [])
+    party_name_map = {**co_present_name_map, character.id: character.name}
+    party_cognition_section = render_cognition_party_context(
+        character_id=character.id,
+        character_name=character.name,
+        active_parties=eff_parties,
+        active_location_id=active_location.id,
+        pre_turn=pre_turn,
+        character_name_map=party_name_map,
+        character_state=previous_state,
+        persona_name=known_persona.name if known_persona is not None else None,
+    )
+    party_ctx_block = f"{party_cognition_section}\n\n" if party_cognition_section else ""
+
     eff_public = public_message if public_message is not None else user_message
     directed_sections: list[str] = []
     if char_whisper:
@@ -315,6 +338,7 @@ async def run_character_cognition_agent(
     directed_block = ("\n\n" + "\n\n".join(directed_sections)) if directed_sections else ""
 
     user_prompt += (
+        f"{party_ctx_block}"
         f"Shared Scene Action (Observed by everyone in the room):\n"
         f"\"{eff_public}\""
         f"{directed_block}"
@@ -330,15 +354,35 @@ async def run_character_cognition_agent(
     p3_mod = sys.modules.get("app.engine.phase3_actor")
     active_client = getattr(p3_mod, "llm_client", llm_client) if p3_mod else llm_client
 
+    travel_intent_enum = (
+        resolve_character_travel_intent_enum(
+            character.id, eff_parties, active_location.id
+        )
+        if pre_turn.spatial_intent != "stay"
+        else None
+    )
+    include_party_invite = bool(
+        pre_turn.party_action is not None
+        and pre_turn.party_action.kind == "invite"
+        and character.id in set(pre_turn.party_action.target_character_ids)
+    )
+
     from app.engine.choices import (
         build_directed_cognition_schema,
         build_undirected_cognition_schema,
         coerce_choice_compliance,
     )
     if choice_resolution:
-        eff_schema = build_directed_cognition_schema(choice_resolution)
+        eff_schema = build_directed_cognition_schema(
+            choice_resolution,
+            travel_intent_enum=travel_intent_enum,
+            include_party_invite=include_party_invite,
+        )
     else:
-        eff_schema = build_undirected_cognition_schema()
+        eff_schema = build_undirected_cognition_schema(
+            travel_intent_enum=travel_intent_enum,
+            include_party_invite=include_party_invite,
+        )
 
     try:
         cog = await active_client.complete_structured(
@@ -392,6 +436,20 @@ async def run_character_cognition_agent(
         if char_roll and not cog.roll_outcome_tier:
             cog.roll_outcome_tier = char_roll.outcome_tier
 
+        if not travel_intent_enum or cog.travel_intent not in travel_intent_enum:
+            cog.travel_intent = "default"
+
+        if not include_party_invite:
+            cog.party_invite_decision = None
+        elif cog.party_invite_decision not in ("accept", "refuse"):
+            cog.party_invite_decision = compute_heuristic_party_invite_decision(
+                character=character,
+                previous_state=previous_state,
+                pre_turn=pre_turn,
+                active_parties=eff_parties,
+                active_location_id=active_location.id,
+            )
+
         cog.skipped = False
         return cog
     except Exception as exc:
@@ -409,6 +467,11 @@ async def run_character_cognition_agent(
             prior_cues=prior_cues,
             role=role,
             choice_resolution=choice_resolution,
+            known_persona=known_persona,
+            public_message=public_message,
+            char_whisper=char_whisper,
+            active_parties=eff_parties,
+            active_location_id=active_location.id,
         )
 
 
@@ -529,6 +592,7 @@ async def run_phase3_multi_cognition(
                         public_message=pub_text,
                         char_whisper=char_w,
                         recall_budget_cognition_tokens=context.recall_budget_cognition_tokens,
+                        active_parties=context.active_parties,
                     )
                 used_fallback = False
             except Exception as err:
@@ -548,6 +612,8 @@ async def run_phase3_multi_cognition(
                     known_persona=known_p,
                     public_message=pub_text,
                     char_whisper=char_w,
+                    active_parties=context.active_parties,
+                    active_location_id=context.active_location.id,
                 )
                 used_fallback = True
 
@@ -621,6 +687,7 @@ async def run_phase3_multi_cognition(
                     public_message=pub_text,
                     char_whisper=char_w,
                     recall_budget_cognition_tokens=context.recall_budget_cognition_tokens,
+                    active_parties=context.active_parties,
                 )
                 used_fallback = False
             except Exception as err:
@@ -641,6 +708,8 @@ async def run_phase3_multi_cognition(
                     known_persona=known_p,
                     public_message=pub_text,
                     char_whisper=char_w,
+                    active_parties=context.active_parties,
+                    active_location_id=context.active_location.id,
                 )
                 used_fallback = True
 

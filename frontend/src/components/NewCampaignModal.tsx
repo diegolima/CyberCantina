@@ -95,6 +95,7 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
     }
     return characters.length > 0 ? [characters[0].id] : [];
   });
+  const [startInPartyIds, setStartInPartyIds] = useState<string[]>([]);
 
   // --- Step 3 State: Focus & Preview ---
   const startingLoc =
@@ -136,6 +137,11 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
     setSelectedCharIds((prev) => {
       const exists = prev.includes(charId);
       const next = exists ? prev.filter((id) => id !== charId) : [...prev, charId];
+      if (exists) {
+        setStartInPartyIds((partyPrev) =>
+          partyPrev.filter((id) => id !== charId)
+        );
+      }
       if (next.length > 0 && !next.includes(focusCharId)) {
         setFocusCharId(next[0]);
       }
@@ -178,6 +184,7 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
         start_focus: startFocus,
         focus_character_id: effectiveFocusCharId,
         persona_id: selectedPersonaId ? selectedPersonaId : undefined,
+        start_in_party_character_ids: startInPartyIds,
       });
       onClose();
     } catch (err: any) {
@@ -573,6 +580,28 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
                         >
                           {char.tagline || char.core_persona?.slice(0, 50) || "No description"}
                         </div>
+                        {isSelected && (
+                          <label
+                            className="new-campaign-party-toggle"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={startInPartyIds.includes(char.id)}
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                setStartInPartyIds((prev) =>
+                                  checked
+                                    ? prev.includes(char.id)
+                                      ? prev
+                                      : [...prev, char.id]
+                                    : prev.filter((id) => id !== char.id)
+                                );
+                              }}
+                            />
+                            <span>Start in Party</span>
+                          </label>
+                        )}
                       </div>
                     </div>
                   );

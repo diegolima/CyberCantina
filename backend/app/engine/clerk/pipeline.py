@@ -38,6 +38,10 @@ from app.engine.mentions import (
     MentionTargetScope,
     decompose_user_message,
 )
+from app.engine.parties import (
+    find_member_party,
+    resolve_phase5_spatial_and_parties,
+)
 from app.engine.phase2_context import resolve_character_previous_state
 from app.engine.world_clock import (
     describe_world_timestamp,
@@ -57,6 +61,7 @@ from app.schemas.character import (
     CharacterStateSnapshot,
     MemoryShard,
 )
+from app.schemas.party import USER_PARTY_MEMBER_ID
 from app.schemas.persona import (
     PersonaRecord,
     PersonaTurnStateSnapshot,
@@ -111,6 +116,15 @@ def should_fast_path_passive_bystander(
         return True
     if character.id == completed_turn.actor_id:
         return False
+    if completed_turn.pre_turn.party_action is not None:
+        pa = completed_turn.pre_turn.party_action
+        if character.id in (pa.target_character_ids or []):
+            return False
+        char_party = find_member_party(
+            completed_turn.world_snapshot.parties or [], character.id
+        )
+        if char_party is not None and USER_PARTY_MEMBER_ID in char_party.member_ids:
+            return False
     if character.id in decomposed_message.whispers_by_character_id:
         return False
     if has_mechanics_roll or player_moved_location:
@@ -603,6 +617,7 @@ async def run_phase5_post_turn_clerk(
         scene_flags=merged_flags,
         visited_location_ids=merged_visited,
         visited_container_ids=merged_visited_containers,
+        parties=list(completed_turn.world_snapshot.parties or []),
     )
 
     # 3. Permanent Custody Protection + Two-Tier Inventory Contention Detection & Clerk Arbitration
@@ -643,6 +658,38 @@ async def run_phase5_post_turn_clerk(
             )
             arbitration_notes.extend(arb_notes)
 
+    # 3.5 Deterministic Party & Spatial Reconciliation (Model 1 strict co-location)
+    all_char_locations: dict[str, str] = {
+        cid: st.current_location_id
+        for cid, st in (completed_turn.character_states or {}).items()
+    }
+    for ch in scene_characters:
+        all_char_locations[ch.id] = active_location.id
+    for kp in known_participants:
+        all_char_locations.setdefault(kp.id, active_location.id)
+
+    cogs_for_resolution = dict(completed_turn.cognitions or {})
+    if (
+        completed_turn.actor_id not in ("__narrator__", "__arrival__", "__solo__")
+        and completed_turn.actor_id not in cogs_for_resolution
+    ):
+        cogs_for_resolution[completed_turn.actor_id] = completed_turn.cognition
+
+    resolved_parties, resolved_end_locs, party_event_delta = resolve_phase5_spatial_and_parties(
+        prior_parties=list(completed_turn.world_snapshot.parties or []),
+        start_location_id=active_location.id,
+        new_player_location_id=new_location_id,
+        all_character_locations=all_char_locations,
+        cognitions=cogs_for_resolution,
+        char_deltas=char_deltas,
+        valid_neighbor_ids=valid_neighbor_ids,
+        is_narrator_turn=is_narrator_turn,
+        party_action=completed_turn.pre_turn.party_action,
+        turn_id=completed_turn.id,
+        name_map=char_name_map,
+    )
+    updated_world_snapshot.parties = resolved_parties
+
     # 4. Reconcile CharacterStateSnapshots via CARE Solver + Witness Coupling (conserving ItemInstances)
     updated_states_by_char: dict[str, CharacterStateSnapshot] = {}
     if is_narrator_turn:
@@ -658,10 +705,11 @@ async def run_phase5_post_turn_clerk(
                 target_elapsed_minutes=new_campaign_elapsed,
                 psyche=ch.baseline_psyche,
             )
+            char_end_loc = resolved_end_locs.get(ch.id, prev_st.current_location_id)
             base_snap = CharacterStateSnapshot(
                 turn_id=completed_turn.id,
                 character_id=ch.id,
-                current_location_id=new_location_id,
+                current_location_id=char_end_loc,
                 mood_label=prev_st.mood_label,
                 valence=prev_st.valence,
                 arousal=prev_st.arousal,
@@ -695,17 +743,25 @@ async def run_phase5_post_turn_clerk(
             prev_st = prev_states_by_char[ch.id]
             c_delta = char_deltas[ch.id]
 
-            # Resolve independent character spatial location
-            if (
-                c_delta.location_transition == "move_to_neighbor"
-                and c_delta.target_location_id in valid_neighbor_ids
-            ):
-                char_loc_id = c_delta.target_location_id  # type: ignore[assignment]
-            elif c_delta.location_transition == "follow_player":
-                char_loc_id = new_location_id
-            else:
-                char_loc_id = active_location.id
+            # Apply deterministic Phase 5 party & spatial resolution
+            char_loc_id = resolved_end_locs.get(ch.id, active_location.id)
             end_loc_by_char[ch.id] = char_loc_id
+            if char_loc_id == active_location.id:
+                c_delta = c_delta.model_copy(
+                    update={"location_transition": "stay_here", "target_location_id": None}
+                )
+            elif location_changed and char_loc_id == new_location_id:
+                c_delta = c_delta.model_copy(
+                    update={"location_transition": "follow_player", "target_location_id": None}
+                )
+            else:
+                c_delta = c_delta.model_copy(
+                    update={
+                        "location_transition": "move_to_neighbor",
+                        "target_location_id": char_loc_id,
+                    }
+                )
+            char_deltas[ch.id] = c_delta
 
             char_cog = (completed_turn.cognitions or {}).get(ch.id) or (
                 completed_turn.cognition if ch.id == completed_turn.actor_id else None
@@ -1008,6 +1064,7 @@ async def run_phase5_post_turn_clerk(
         compacted_character_ids=[ch.id for ch, _idxs, _aged in compaction_jobs],
         first_visit_cards=first_visit_cards,
         first_visit_media=first_visit_media,
+        party_event_delta=party_event_delta,
     )
 
     primary_char_state = updated_states_by_char.get(

@@ -12,6 +12,7 @@ from app.schemas.character import (
     CharacterRecord,
     CognitionBlock,
 )
+from app.schemas.party import PartyRecord
 from app.schemas.persona import (
     PersonaRecord,
     PersonaTurnStateSnapshot,
@@ -211,6 +212,7 @@ async def resolve_phase2_turn_context(
         per_character_known_personas=per_char_known,
         decomposed_message=decomp,
         recall_budget_cognition_tokens=recall_budget_cognition_tokens,
+        active_parties=list(leaf_turn.world_snapshot.parties or []),
     )
 
 
@@ -246,6 +248,7 @@ def assemble_four_zone_messages(
     lod_importance_bonus: int | None = None,
     zone2_budget_share_pct: int | None = None,
     recall_budget_prose_tokens: int | None = None,
+    active_parties: list[PartyRecord] | None = None,
 ) -> list[dict[str, str]]:
     """Construct the complete 4-Zone OpenAI messages array for the Main Actor Model."""
     eff_is_solo = bool(
@@ -378,6 +381,11 @@ def assemble_four_zone_messages(
         decomposed_message=decomposed_message,
         world=world,
         origin_location_id=origin_location_id,
+        active_parties=(
+            list(active_parties)
+            if active_parties is not None
+            else list(leaf_turn.world_snapshot.parties or [])
+        ),
     )
     zone4_msg = {"role": "user", "content": zone4_content}
 

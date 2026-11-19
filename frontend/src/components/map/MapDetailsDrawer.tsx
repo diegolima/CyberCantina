@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
-  Compass,
   DoorOpen,
   Expand,
   GitBranch,
@@ -22,9 +21,11 @@ import {
   LocationContainer,
   LocationLoreNodeDraft,
   LocationNode,
+  LocationOverrideOptions,
   MagicContextRef,
   WorldMediaItem,
 } from "../../types";
+import { LocationOverrideButton } from "../inspector/LocationOverrideButton";
 import { ImageLightboxModal } from "../shared/ImageLightboxModal";
 import { useMagicWand } from "../../hooks/useMagicWand";
 import { MagicWandButton } from "../MagicWandButton";
@@ -100,7 +101,11 @@ export interface MapDetailsDrawerProps {
   onInspectEdgePair?: (edgeId: string, groupedEdgeIds?: string[]) => void;
   onJumpToContainer?: (containerId: string | null, focusLocId?: string) => void;
   onDrillIntoContainer: (contId: string) => void;
-  onOverrideLocation?: (locationId: string) => Promise<void> | void;
+  coLocatedPartyNpcs?: Array<{ id: string; name: string }>;
+  onOverrideLocation?: (
+    locationId: string,
+    options?: LocationOverrideOptions
+  ) => Promise<void> | void;
   isOverriding?: boolean;
   onSaveCampaignLocationLore?: (
     locationId: string,
@@ -860,6 +865,7 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
   onInspectEdgePair,
   onJumpToContainer,
   onDrillIntoContainer,
+  coLocatedPartyNpcs = [],
   onOverrideLocation,
   isOverriding = false,
   onSaveCampaignLocationLore,
@@ -1687,16 +1693,15 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
       </div>
 
       {mode === "campaign" && !isAnchor && onOverrideLocation && isLocationSavedInDb && (
-        <button
-          type="button"
-          className="btn btn-amber"
-          style={{ width: "100%", justifyContent: "center", fontSize: "0.74rem", padding: "5px 10px" }}
+        <LocationOverrideButton
+          targetLocationId={selectedLocation.id}
+          targetLocationName={selectedLocation.name}
+          coLocatedPartyNpcs={coLocatedPartyNpcs}
           disabled={isOverriding || isMutatingLocked}
-          onClick={() => onOverrideLocation(selectedLocation.id)}
-        >
-          <Compass size={13} />
-          {isOverriding ? "Overriding Scene..." : "Move Scene Here (Override)"}
-        </button>
+          isPending={isOverriding}
+          compact
+          onOverride={onOverrideLocation}
+        />
       )}
 
       {mode === "campaign" && selectedLocation.is_visited && (

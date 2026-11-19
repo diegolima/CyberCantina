@@ -10,6 +10,7 @@ import {
   StickyNote,
   User,
   UserCog,
+  Users,
   X,
 } from "lucide-react";
 import {
@@ -30,6 +31,9 @@ export interface AppSidebarProps {
   codexCount?: number;
   isCodexOpen?: boolean;
   onOpenCodex?: () => void;
+  partyCount?: number;
+  isPartyOpen?: boolean;
+  onOpenParty?: () => void;
   notes: UserNote[];
   showNotesFlyout: boolean;
   setShowNotesFlyout: React.Dispatch<React.SetStateAction<boolean>>;
@@ -63,6 +67,9 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   codexCount,
   isCodexOpen = false,
   onOpenCodex,
+  partyCount,
+  isPartyOpen = false,
+  onOpenParty,
   notes,
   showNotesFlyout,
   setShowNotesFlyout,
@@ -89,6 +96,11 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   const openCodexAction = () => {
     onCloseOverlay?.();
     onOpenCodex?.();
+  };
+
+  const openPartyAction = () => {
+    onCloseOverlay?.();
+    onOpenParty?.();
   };
 
   if (mode === "rail") {
@@ -131,6 +143,18 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
             aria-pressed={isCodexOpen}
           >
             <BookOpen size={17} color="var(--accent-violet)" />
+          </button>
+          <button
+            type="button"
+            className={`btn btn-ghost rail-icon-btn rail-category-btn ${
+              isPartyOpen ? "active" : ""
+            }`}
+            onClick={openPartyAction}
+            title="Manage Parties"
+            aria-label="Manage Parties"
+            aria-pressed={isPartyOpen}
+          >
+            <Users size={17} color="var(--accent-cyan)" />
           </button>
           <button
             type="button"
@@ -285,6 +309,21 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
             </span>
             {typeof codexCount === "number" && (
               <span className="sidebar-nav-count">{codexCount}</span>
+            )}
+          </button>
+          <button
+            type="button"
+            className={`sidebar-nav-item ${isPartyOpen ? "active" : ""}`}
+            onClick={openPartyAction}
+            title="Manage Parties & Companions"
+            aria-pressed={isPartyOpen}
+          >
+            <span className="sidebar-nav-item-main">
+              <Users size={15} color="var(--accent-cyan)" />
+              <span>Party</span>
+            </span>
+            {typeof partyCount === "number" && partyCount > 0 && (
+              <span className="sidebar-nav-count">{partyCount}</span>
             )}
           </button>
         </nav>

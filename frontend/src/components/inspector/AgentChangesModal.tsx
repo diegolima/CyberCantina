@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Sparkles,
   User,
+  Users,
   X,
   Zap,
 } from "lucide-react";
@@ -101,6 +102,17 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
 
     const arbitrationRulings = postTurn?.arbitration_rulings ?? [];
     const arbitrationNotes = postTurn?.arbitration_notes ?? [];
+    const partyDelta = postTurn?.party_event_delta ?? null;
+    const hasPartyDelta = Boolean(
+      partyDelta &&
+        (partyDelta.notes.length > 0 ||
+          partyDelta.invite_outcomes.length > 0 ||
+          partyDelta.formed_party_ids.length > 0 ||
+          partyDelta.updated_party_ids.length > 0 ||
+          partyDelta.disbanded_party_ids.length > 0 ||
+          partyDelta.stayed_behind_ids.length > 0 ||
+          partyDelta.followed_player_ids.length > 0)
+    );
 
     const hasAnyChanges =
       elapsedMinutes > 0 ||
@@ -108,7 +120,8 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
       flagsAdded.length > 0 ||
       flagsRemoved.length > 0 ||
       Boolean(notableSummary) ||
-      arbitrationRulings.length > 0;
+      arbitrationRulings.length > 0 ||
+      hasPartyDelta;
 
     return (
       <div className="modal-backdrop" onClick={onClose} style={{ zIndex: 85 }}>
@@ -396,6 +409,56 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
                       ))}
                     </div>
                   )}
+                </div>
+              </div>
+            )}
+
+            {hasPartyDelta && partyDelta && (
+              <div className="agent-modal-card">
+                <div className="agent-modal-card-header">
+                  <Users size={13} color="var(--accent-teal)" />
+                  <span>Party &amp; Co-Location Resolution</span>
+                </div>
+                <div
+                  className="agent-modal-card-body"
+                  style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: "0.78rem" }}
+                >
+                  {partyDelta.invite_outcomes.map((o) => (
+                    <div key={o.character_id}>
+                      <strong>{o.character_name}</strong>:{" "}
+                      <span
+                        style={{
+                          color:
+                            o.decision === "accept" ? "#6ee7b7" : "var(--accent-rose)",
+                          fontWeight: 600,
+                        }}
+                      >
+                        {o.decision.toUpperCase()}
+                      </span>
+                      {o.reason ? ` — ${o.reason}` : ""}
+                    </div>
+                  ))}
+                  {partyDelta.followed_player_ids.length > 0 && (
+                    <div style={{ color: "var(--accent-cyan)" }}>
+                      Traveled with you:{" "}
+                      {partyDelta.followed_player_ids
+                        .map((id) => bundle.character_records?.[id]?.name || id)
+                        .join(", ")}
+                    </div>
+                  )}
+                  {partyDelta.stayed_behind_ids.length > 0 && (
+                    <div style={{ color: "var(--text-secondary)" }}>
+                      Remained behind:{" "}
+                      {partyDelta.stayed_behind_ids
+                        .map((id) => bundle.character_records?.[id]?.name || id)
+                        .join(", ")}
+                    </div>
+                  )}
+                  {partyDelta.notes.map((n, idx) => (
+                    <div key={idx} style={{ color: "var(--text-secondary)" }}>
+                      • {n}
+                    </div>
+                  ))}
                 </div>
               </div>
             )}

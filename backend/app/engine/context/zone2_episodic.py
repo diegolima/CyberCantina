@@ -15,6 +15,7 @@ from app.schemas.character import (
     CharacterRecord,
     CharacterStateSnapshot,
 )
+from app.schemas.party import PartyRecord
 from app.schemas.persona import (
     PersonaRecord,
     PersonaTurnStateSnapshot,
@@ -74,6 +75,7 @@ class TurnContextBundle:
     per_character_known_personas: dict[str, DiscoveredPersonaView] = field(default_factory=dict)
     decomposed_message: DecomposedUserMessage | None = None
     recall_budget_cognition_tokens: int | None = None
+    active_parties: list[PartyRecord] = field(default_factory=list)
 
 
 def _chunk_synopsis_fallback(chunk: EpisodicChunkRecord) -> str:

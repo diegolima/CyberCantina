@@ -16,6 +16,7 @@ import {
   CharacterRecord,
   CharacterStateSnapshot,
   ItemEquipActionPayload,
+  LocationNode,
   MemoryShard,
   WorldRecord,
   getTemperamentPresetMeta,
@@ -48,6 +49,13 @@ interface CampaignCharacterModalProps {
   state: CharacterStateSnapshot;
   isPresent: boolean;
   elsewhereLocationName?: string;
+  partyRole?: "player_party" | "npc_leader" | "npc_party" | null;
+  partyName?: string | null;
+  locations?: LocationNode[];
+  onRelocateCharacter?: (
+    characterId: string,
+    locationId: string
+  ) => Promise<void> | void;
   campaignId: string;
   campaignWorld?: WorldRecord;
   worlds?: WorldRecord[];
@@ -65,6 +73,10 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
   state,
   isPresent,
   elsewhereLocationName,
+  partyRole = null,
+  partyName = null,
+  locations = [],
+  onRelocateCharacter,
   campaignId: _campaignId,
   campaignWorld,
   worlds = [],
@@ -151,6 +163,19 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
             >
               {temperamentMeta.label}
             </span>
+            {partyRole === "player_party" && (
+              <span className="party-pill party-pill--player">
+                <Users size={10} />
+                {partyName || "In Party"}
+              </span>
+            )}
+            {(partyRole === "npc_party" || partyRole === "npc_leader") && (
+              <span className="party-pill party-pill--npc">
+                <Users size={10} />
+                {partyName || "NPC Party"}
+                {partyRole === "npc_leader" ? " · Leader" : ""}
+              </span>
+            )}
             {!isPresent && (
               <span
                 className="badge"
@@ -421,6 +446,11 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
             state={state}
             isPresent={isPresent}
             elsewhereLocationName={elsewhereLocationName}
+            partyRole={partyRole}
+            partyName={partyName}
+            locations={locations}
+            isMutatingLocked={isMutatingLocked}
+            onRelocateCharacter={onRelocateCharacter}
             characterNameMap={characterNameMap}
             isActive={activeTab === "current"}
           />

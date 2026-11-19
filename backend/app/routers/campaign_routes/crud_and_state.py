@@ -34,8 +34,10 @@ from app.routers.campaign_routes.schemas_and_gate import (
     CampaignAddCharacterRequest,
     CampaignCreateRequest,
     CampaignWorldSettingsPatchRequest,
+    CharacterLocationOverrideRequest,
     ItemEquipToggleRequest,
     LocationOverrideRequest,
+    PartyCreateRequest,
     campaign_turn_gate,
     router,
 )
@@ -74,7 +76,13 @@ async def create_campaign(
     if not start_loc:
         raise HTTPException(status_code=400, detail="The selected world has no locations.")
 
-    loc_map = req.character_locations or {}
+    loc_map = dict(req.character_locations or {})
+    start_party_ids = [
+        cid for cid in dict.fromkeys(req.start_in_party_character_ids or []) if cid in all_char_ids
+    ]
+    for pid in start_party_ids:
+        loc_map[pid] = loc_map.get(primary_char_id, start_loc.id)
+
     opening_prose = req.opening_prose
     actor_id: str | None = None
 
@@ -105,6 +113,7 @@ async def create_campaign(
                 participant_characters=present_npcs,
                 profile=eff_clerk,
                 prompt_template=prompt_tpl,
+                party_character_ids=start_party_ids,
                 timeout_seconds=10.0,
             )
             opening_prose = f"{world_starting_msg}{staging_text}".strip()
@@ -119,13 +128,14 @@ async def create_campaign(
             world_id=req.world_id,
             character_id=primary_char_id,
             character_ids=all_char_ids,
-            character_locations=req.character_locations,
+            character_locations=loc_map,
             opening_prose=opening_prose,
             persona_id=req.persona_id,
             owner_id=current_user.id,
             actor_id=actor_id,
             start_focus=req.start_focus,
             skip_turn_0_cognition=True,
+            start_in_party_character_ids=start_party_ids,
         )
         return repo.get_campaign_state_bundle(camp.id, owner_id=current_user.id)
     except KeyError as exc:
@@ -216,20 +226,99 @@ async def checkout_campaign_branch(
 
 
 @router.post("/api/campaigns/{campaign_id}/location-override", response_model=CampaignStateBundle)
-def override_campaign_location(
+async def override_campaign_location(
     campaign_id: str,
     req: LocationOverrideRequest,
     current_user: UserProfile = Depends(get_current_user),
 ) -> CampaignStateBundle:
-    """Override the current active location on the leaf turn (fixing Clerk hallucinations for the next turn or swipe)."""
-    try:
-        return _resolve_facade_attr("get_repo", get_repo)().override_campaign_location(
-            campaign_id, req.location_id, owner_id=current_user.id
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    """Override the current active location on the leaf turn with party-aware movement semantics."""
+    async with campaign_turn_gate.lock_for(campaign_id):
+        try:
+            return await asyncio.to_thread(
+                _resolve_facade_attr("get_repo", get_repo)().override_campaign_location,
+                campaign_id,
+                req.location_id,
+                move_mode=req.move_mode,
+                accompanying_character_ids=req.accompanying_character_ids,
+                owner_id=current_user.id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Campaign or target location not found.") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid location override parameters.") from exc
+
+
+@router.post(
+    "/api/campaigns/{campaign_id}/characters/{character_id}/location-override",
+    response_model=CampaignStateBundle,
+)
+async def override_campaign_character_location(
+    campaign_id: str,
+    character_id: str,
+    req: CharacterLocationOverrideRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Relocate a single campaign NPC in-place on the leaf turn without triggering arrival/visited side effects."""
+    async with campaign_turn_gate.lock_for(campaign_id):
+        try:
+            return await asyncio.to_thread(
+                _resolve_facade_attr("get_repo", get_repo)().override_character_location,
+                campaign_id,
+                character_id,
+                req.location_id,
+                owner_id=current_user.id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Campaign, character, or location not found.") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid character location override request.") from exc
+
+
+@router.post("/api/campaigns/{campaign_id}/parties", response_model=CampaignStateBundle)
+async def create_campaign_npc_party(
+    campaign_id: str,
+    req: PartyCreateRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Create a co-located NPC-only party in-place on the active leaf turn."""
+    async with campaign_turn_gate.lock_for(campaign_id):
+        try:
+            return await asyncio.to_thread(
+                _resolve_facade_attr("get_repo", get_repo)().create_npc_party,
+                campaign_id,
+                req.member_ids,
+                name=req.name,
+                shared_goal=req.shared_goal,
+                owner_id=current_user.id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Campaign not found.") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Invalid NPC party creation request.") from exc
+
+
+@router.delete("/api/campaigns/{campaign_id}/parties/{party_id}", response_model=CampaignStateBundle)
+async def delete_campaign_party(
+    campaign_id: str,
+    party_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Instant OOC disband of an NPC-only party (rejects player parties with 422)."""
+    async with campaign_turn_gate.lock_for(campaign_id):
+        try:
+            return await asyncio.to_thread(
+                _resolve_facade_attr("get_repo", get_repo)().disband_party,
+                campaign_id,
+                party_id,
+                owner_id=current_user.id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Campaign or party not found.") from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="Player parties must be disbanded in-character via /party disband.",
+            ) from exc
 
 
 @router.patch("/api/campaigns/{campaign_id}/world-settings", response_model=CampaignStateBundle)

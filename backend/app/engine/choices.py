@@ -228,7 +228,38 @@ def render_choice_directive(resolution: ChoiceResolution, character_name: str) -
     return "\n".join(lines)
 
 
-def build_directed_cognition_schema(resolution: ChoiceResolution) -> dict[str, Any]:
+def _append_party_cognition_schema_fields(
+    ordered_props: dict[str, Any],
+    required_keys: list[str],
+    *,
+    travel_intent_enum: list[str] | None = None,
+    include_party_invite: bool = False,
+) -> None:
+    """Attach optional non-nullable flat enum party/travel fields when active on the turn."""
+    if travel_intent_enum:
+        ordered_props["travel_intent"] = {
+            "type": "string",
+            "enum": list(travel_intent_enum),
+            "description": "Explicit travel choice when player movement occurs this turn.",
+        }
+        if "travel_intent" not in required_keys:
+            required_keys.append("travel_intent")
+    if include_party_invite:
+        ordered_props["party_invite_decision"] = {
+            "type": "string",
+            "enum": ["accept", "refuse"],
+            "description": "Authentic decision on whether to accept or refuse the party invitation.",
+        }
+        if "party_invite_decision" not in required_keys:
+            required_keys.append("party_invite_decision")
+
+
+def build_directed_cognition_schema(
+    resolution: ChoiceResolution,
+    *,
+    travel_intent_enum: list[str] | None = None,
+    include_party_invite: bool = False,
+) -> dict[str, Any]:
     """Build a flat GBNF-safe JSON schema for CognitionBlock with categorical affect enums."""
     schema = CognitionBlock.model_json_schema()
     schema.pop("$defs", None)
@@ -264,8 +295,7 @@ def build_directed_cognition_schema(resolution: ChoiceResolution) -> dict[str, A
         if key in props:
             ordered_props[key] = props[key]
 
-    schema["properties"] = ordered_props
-    schema["required"] = [
+    required_keys = [
         "recall",
         "feeling",
         "feeling_tone",
@@ -278,10 +308,22 @@ def build_directed_cognition_schema(resolution: ChoiceResolution) -> dict[str, A
         "plan",
         "skipped",
     ]
+    _append_party_cognition_schema_fields(
+        ordered_props,
+        required_keys,
+        travel_intent_enum=travel_intent_enum,
+        include_party_invite=include_party_invite,
+    )
+    schema["properties"] = ordered_props
+    schema["required"] = required_keys
     return schema
 
 
-def build_undirected_cognition_schema() -> dict[str, Any]:
+def build_undirected_cognition_schema(
+    *,
+    travel_intent_enum: list[str] | None = None,
+    include_party_invite: bool = False,
+) -> dict[str, Any]:
     """Build flat structured schema omitting choice-related and raw float fields."""
     schema = CognitionBlock.model_json_schema()
     schema.pop("$defs", None)
@@ -303,8 +345,7 @@ def build_undirected_cognition_schema() -> dict[str, Any]:
         if key in props:
             ordered_props[key] = props[key]
 
-    schema["properties"] = ordered_props
-    schema["required"] = [
+    required_keys = [
         "recall",
         "feeling",
         "feeling_tone",
@@ -316,6 +357,14 @@ def build_undirected_cognition_schema() -> dict[str, Any]:
         "plan",
         "skipped",
     ]
+    _append_party_cognition_schema_fields(
+        ordered_props,
+        required_keys,
+        travel_intent_enum=travel_intent_enum,
+        include_party_invite=include_party_invite,
+    )
+    schema["properties"] = ordered_props
+    schema["required"] = required_keys
     return schema
 
 

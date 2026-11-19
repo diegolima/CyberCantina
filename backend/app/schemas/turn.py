@@ -31,6 +31,18 @@ from app.schemas.character import (
     CognitionBlock,
     MemoryShard,
 )
+from app.schemas.party import (
+    USER_PARTY_MEMBER_ID as USER_PARTY_MEMBER_ID,
+    LocationOverrideMoveMode as LocationOverrideMoveMode,
+    PartyActionKind as PartyActionKind,
+    PartyActionSource as PartyActionSource,
+    PartyActionSpec as PartyActionSpec,
+    PartyEventDelta as PartyEventDelta,
+    PartyInviteDecision as PartyInviteDecision,
+    PartyInviteOutcome as PartyInviteOutcome,
+    PartyRecord as PartyRecord,
+    TravelIntent as TravelIntent,
+)
 from app.schemas.persona import PersonaRecord
 from app.schemas.world import (
     CompassDirection,
@@ -289,6 +301,7 @@ class PreTurnAnalysis(PreTurnLLMOutput):
     character_choices: dict[str, CharacterChoiceSet] = Field(default_factory=dict)
     choice_resolutions: dict[str, ChoiceResolution] = Field(default_factory=dict)
     dice_mode_promoted: bool = False
+    party_action: PartyActionSpec | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -370,6 +383,7 @@ class WorldStateSnapshot(BaseModel):
     )
     visited_location_ids: list[str] = Field(default_factory=list)
     visited_container_ids: list[str] = Field(default_factory=list)
+    parties: list[PartyRecord] = Field(default_factory=list)
 
 
 class CampaignWorldSettings(BaseModel):
@@ -844,6 +858,10 @@ class PostTurnStateDelta(BaseModel):
         default_factory=list,
         description="Cosmetic first-visit location and container images grouped into a single arrival carousel.",
     )
+    party_event_delta: PartyEventDelta | None = Field(
+        default=None,
+        description="Structured party membership and travel outcomes reconciled in Phase 5.",
+    )
 
 
 CharacterSpotlightRole = Literal["primary_speaker", "co_present"]
@@ -1127,6 +1145,10 @@ class TurnSubmitRequest(BaseModel):
     character_choices: dict[str, CharacterChoiceSet] = Field(
         default_factory=dict,
         description="Optional director choices keyed by character_id to guide Phase 3 planning.",
+    )
+    party_action: PartyActionSpec | None = Field(
+        default=None,
+        description="Explicit party management action (/party slash command or Party Modal control).",
     )
 
     @field_validator("narrative_mode", mode="before")

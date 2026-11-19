@@ -144,12 +144,50 @@ def build_offline_simulated_prose(
 
     # Narrative dialogue and action for the active character
     target_exit = neighbors[0] if neighbors else None
-    if pre_turn.spatial_intent == "move_known" and pre_turn.target_location_hint:
-        action_prose = (
-            f"*{character.name} gives a curt nod toward {pre_turn.target_location_hint}, "
-            f"checking the sightlines of {active_location.name} before moving.*\n\n"
-            f"\"Come on, then. Let's not linger out in the open where every sensor in the sector can log us.\""
-        )
+    cogs_lookup = established_cognitions or {}
+    if pre_turn.party_action is not None:
+        pa = pre_turn.party_action
+        if pa.kind == "invite":
+            actor_cog = cogs_lookup.get(character.id) or established_cognition
+            dec = actor_cog.party_invite_decision if actor_cog else "refuse"
+            if dec == "accept":
+                action_prose = (
+                    f"*{character.name} weighs the offer in {active_location.name} before giving a sharp, decisive nod.*\n\n"
+                    f"\"Alright. Watch my blind spots and I'll watch yours—let's move together.\""
+                )
+            else:
+                action_prose = (
+                    f"*{character.name} holds ground inside {active_location.name}, shaking their head slowly.*\n\n"
+                    f"\"No. I have my own priorities here, and I'm not signing on with you right now.\""
+                )
+        elif pa.kind == "leave":
+            action_prose = (
+                f"*{character.name} steps back in {active_location.name}, taking in your decision to split off.*\n\n"
+                f"\"Fair enough. Go your own way—just don't expect me waiting at your heels.\""
+            )
+        elif pa.kind == "kick":
+            action_prose = (
+                f"*{character.name}'s jaw tightens in {active_location.name} at the dismissal, shoulders squaring deliberately.*\n\n"
+                f"\"Understood. Consider the arrangement terminated.\""
+            )
+        else:
+            action_prose = (
+                f"*{character.name} exhales slowly across {active_location.name} as the party disperses.*\n\n"
+                f"\"Then we're done traveling together. Watch yourself out there.\""
+            )
+    elif pre_turn.spatial_intent == "move_known" and pre_turn.target_location_hint:
+        actor_cog = cogs_lookup.get(character.id) or established_cognition
+        if actor_cog and actor_cog.travel_intent == "stay_behind":
+            action_prose = (
+                f"*{character.name} remains planted inside {active_location.name} as you head toward {pre_turn.target_location_hint}.*\n\n"
+                f"\"I'm holding my ground right here. Come back when you're finished.\""
+            )
+        else:
+            action_prose = (
+                f"*{character.name} gives a curt nod toward {pre_turn.target_location_hint}, "
+                f"checking the sightlines of {active_location.name} before moving.*\n\n"
+                f"\"Come on, then. Let's not linger out in the open where every sensor in the sector can log us.\""
+            )
     elif pre_turn.spatial_intent == "explore_new":
         action_prose = (
             f"*{character.name}'s eyes narrow as she steps forward beside you, the micro-servos in her "

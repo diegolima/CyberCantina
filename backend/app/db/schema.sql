@@ -356,7 +356,8 @@ CREATE TABLE IF NOT EXISTS world_state_snapshots (
     scene_flags_json TEXT NOT NULL DEFAULT '[]',
     campaign_elapsed_minutes INTEGER NOT NULL DEFAULT 0,
     visited_location_ids_json TEXT NOT NULL DEFAULT '[]',
-    visited_container_ids_json TEXT NOT NULL DEFAULT '[]'
+    visited_container_ids_json TEXT NOT NULL DEFAULT '[]',
+    parties_json TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS campaign_spatial_overrides (

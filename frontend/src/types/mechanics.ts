@@ -1,3 +1,5 @@
+import type { PartyActionSpec } from "./party";
+
 export type CanonicalOutcomeTier =
   | "Critical Failure"
   | "Failure with Consequences"
@@ -125,4 +127,5 @@ export interface PreTurnAnalysis {
   character_choices?: Record<string, CharacterChoiceSet>;
   choice_resolutions?: Record<string, ChoiceResolution>;
   dice_mode_promoted?: boolean;
+  party_action?: PartyActionSpec | null;
 }

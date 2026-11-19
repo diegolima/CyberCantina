@@ -8,6 +8,7 @@ import type {
   DiceMode,
   LiveStreamState,
   NarrativeMode,
+  PartyActionSpec,
   Phase3TurnProgress,
   Phase4TurnProgress,
 } from "../../types";
@@ -54,6 +55,7 @@ export interface ChatStageProps {
     narratorDirective?: string | null;
     durationMinutes?: number | null;
     characterChoices?: Record<string, CharacterChoiceSet>;
+    partyAction?: PartyActionSpec | null;
   }) => void;
   onCheckoutTurn: (turnId: string) => void;
   onDeleteLastTurn?: () => Promise<void> | void;

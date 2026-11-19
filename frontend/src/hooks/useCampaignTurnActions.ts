@@ -4,6 +4,7 @@ import type {
   CampaignStateBundle,
   CampaignWorldSettings,
   CharacterChoiceSet,
+  CreateNpcPartyPayload,
   DiceMode,
   ItemEquipActionPayload,
   LiveStreamState,
@@ -11,8 +12,10 @@ import type {
   LocationEdge,
   LocationLoreNodeDraft,
   LocationNode,
+  LocationOverrideOptions,
   MemoryShard,
   NarrativeMode,
+  PartyActionSpec,
   Phase3AgentProgressItem,
   Phase3TurnProgress,
   Phase4AgentProgressItem,
@@ -52,6 +55,7 @@ export function useCampaignTurnActions({
     narratorDirective?: string | null;
     durationMinutes?: number | null;
     characterChoices?: Record<string, CharacterChoiceSet>;
+    partyAction?: PartyActionSpec | null;
   }) => {
     if (!bundle) return;
     setIsStreaming(true);
@@ -94,6 +98,7 @@ export function useCampaignTurnActions({
           narrator_directive: opts.narratorDirective,
           duration_minutes: opts.durationMinutes,
           character_choices: opts.characterChoices,
+          ...(opts.partyAction ? { party_action: opts.partyAction } : {}),
         },
         {
           onChoicesAdjusted: (data) => {
@@ -447,11 +452,58 @@ export function useCampaignTurnActions({
     }
   };
 
-  const handleOverrideLocation = async (locationId: string) => {
+  const handleOverrideLocation = async (
+    locationId: string,
+    options?: LocationOverrideOptions
+  ) => {
     if (!bundle || isStreaming || isPhase4Running) return;
-    const updated = await api.overrideLocation(bundle.campaign.id, locationId);
+    const updated = await api.overrideLocation(
+      bundle.campaign.id,
+      locationId,
+      options
+    );
     setBundle(updated);
     setPendingLocationOverrideId(locationId);
+  };
+
+  const handleOverrideCharacterLocation = async (
+    characterId: string,
+    locationId: string
+  ) => {
+    if (!bundle || isStreaming || isPhase4Running) return;
+    try {
+      const updated = await api.overrideCharacterLocation(
+        bundle.campaign.id,
+        characterId,
+        locationId
+      );
+      setBundle(updated);
+    } catch (err) {
+      setStreamError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  };
+
+  const handleCreateNpcParty = async (payload: CreateNpcPartyPayload) => {
+    if (!bundle || isStreaming || isPhase4Running) return;
+    try {
+      const updated = await api.createNpcParty(bundle.campaign.id, payload);
+      setBundle(updated);
+    } catch (err) {
+      setStreamError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  };
+
+  const handleDisbandParty = async (partyId: string) => {
+    if (!bundle || isStreaming || isPhase4Running) return;
+    try {
+      const updated = await api.disbandParty(bundle.campaign.id, partyId);
+      setBundle(updated);
+    } catch (err) {
+      setStreamError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
   };
 
   const handleUpdateCampaignWorldSettings = async (
@@ -561,6 +613,9 @@ export function useCampaignTurnActions({
     liveStream,
     handleSendTurn,
     handleOverrideLocation,
+    handleOverrideCharacterLocation,
+    handleCreateNpcParty,
+    handleDisbandParty,
     handleUpdateCampaignWorldSettings,
     handleToggleItemEquip,
     handleUpdateCampaignMemories,

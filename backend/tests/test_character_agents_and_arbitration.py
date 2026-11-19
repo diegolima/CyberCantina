@@ -927,7 +927,32 @@ async def test_independent_character_spatial_transitions(
         user_message=f"Viktor, stay here and watch the door. Kira, Nyx, follow me into {ripper_neighbor.name}.",
         actor_id=kira.id,
         raw_prose=f'*Viktor nods by the bar while Kira and Nyx duck into {ripper_neighbor.name} with you.*',
-        cognition=CognitionBlock(feeling="Urgent focus", valence=0.0, arousal=0.6),
+        cognition=CognitionBlock(
+            feeling="Urgent focus",
+            valence=0.0,
+            arousal=0.6,
+            travel_intent="follow_player",
+        ),
+        cognitions={
+            kira.id: CognitionBlock(
+                feeling="Urgent focus",
+                valence=0.0,
+                arousal=0.6,
+                travel_intent="follow_player",
+            ),
+            viktor.id: CognitionBlock(
+                feeling="Guarded",
+                valence=0.0,
+                arousal=0.4,
+                travel_intent="default",
+            ),
+            nyx.id: CognitionBlock(
+                feeling="Alert",
+                valence=0.0,
+                arousal=0.5,
+                travel_intent="follow_player",
+            ),
+        },
         pre_turn=PreTurnAnalysis(
             spatial_intent="move_known",
             target_location_hint=ripper_neighbor.name,
@@ -1048,7 +1073,20 @@ async def test_independent_character_spatial_transitions(
         user_message="Let's pry open the floor grate and climb down into the cooling conduit.",
         actor_id=kira.id,
         raw_prose='*Kira drops her boots onto the wet catwalk of the sub-basement cooling conduit beside you.*',
-        cognition=CognitionBlock(feeling="Alert", valence=0.05, arousal=0.65),
+        cognition=CognitionBlock(
+            feeling="Alert",
+            valence=0.05,
+            arousal=0.65,
+            travel_intent="follow_player",
+        ),
+        cognitions={
+            kira.id: CognitionBlock(
+                feeling="Alert",
+                valence=0.05,
+                arousal=0.65,
+                travel_intent="follow_player",
+            ),
+        },
         pre_turn=PreTurnAnalysis(spatial_intent="explore_new", target_location_hint="cooling conduit"),
         world_snapshot=bundle2.current_world_snapshot.model_copy(update={"turn_id": "turn_move_3"}),
         character_state=bundle2.character_states[kira.id].model_copy(update={"turn_id": "turn_move_3"}),

@@ -36,6 +36,10 @@ from app.schemas.affective import (
     coerce_threat_level,
     impulse_from_legacy_floats,
 )
+from app.schemas.party import (
+    PartyInviteDecision as PartyInviteDecision,
+    TravelIntent as TravelIntent,
+)
 
 MemoryOrigin = Literal[
     "backstory", "clerk_ephemeral", "clerk_promoted", "compacted"
@@ -1212,6 +1216,34 @@ class CognitionBlock(BaseModel):
         default=None,
         description="Mechanical check outcome tier resolved for this character this turn.",
     )
+    travel_intent: TravelIntent = Field(
+        default="default",
+        description="Spatial movement intent when travel occurs this turn ('default', 'stay_behind', or 'follow_player').",
+    )
+    party_invite_decision: PartyInviteDecision | None = Field(
+        default=None,
+        description="Authentic party invitation response ('accept' or 'refuse') when invited to join a party this turn.",
+    )
+
+    @field_validator("travel_intent", mode="before")
+    @classmethod
+    def _coerce_travel_intent(cls, v: Any) -> TravelIntent:
+        if isinstance(v, str):
+            low = v.strip().lower()
+            if low in ("default", "stay_behind", "follow_player"):
+                return low  # type: ignore[return-value]
+        return "default"
+
+    @field_validator("party_invite_decision", mode="before")
+    @classmethod
+    def _coerce_party_invite_decision(cls, v: Any) -> PartyInviteDecision | None:
+        if v is None:
+            return None
+        if isinstance(v, str):
+            low = v.strip().lower()
+            if low in ("accept", "refuse"):
+                return low  # type: ignore[return-value]
+        return None
 
     @field_validator("roll_outcome_tier", mode="before")
     @classmethod

@@ -10,6 +10,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   UserCheck,
+  Users,
 } from "lucide-react";
 import {
   CharacterRecord,
@@ -34,6 +35,9 @@ interface CharacterRowProps {
   moodChanged?: boolean;
   /** True while turn streaming or Phase 5 Clerk is running. */
   isMutatingLocked?: boolean;
+  /** Party role badge for this character on the active turn. */
+  partyRole?: "player_party" | "npc_leader" | "npc_party" | null;
+  partyName?: string | null;
   /** Callback to toggle equipping or unequipping an item */
   onToggleItemEquip?: (payload: ItemEquipActionPayload) => Promise<void> | void;
   /** Open full character sheet dossier modal */
@@ -71,6 +75,8 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
   elsewhereLocationName,
   moodChanged,
   isMutatingLocked = false,
+  partyRole = null,
+  partyName = null,
   onToggleItemEquip,
   onOpenSheet,
   onInspectItem,
@@ -126,6 +132,28 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
           <span className="char-row-text">
             <span className="char-row-name-line">
               <span className="char-row-name">{character.name}</span>
+              {partyRole === "player_party" && (
+                <span
+                  className="party-pill party-pill--player"
+                  title={partyName || "In your party"}
+                >
+                  <Users size={10} />
+                  <span>In Party</span>
+                </span>
+              )}
+              {(partyRole === "npc_party" || partyRole === "npc_leader") && (
+                <span
+                  className="party-pill party-pill--npc"
+                  title={partyName || "NPC Party"}
+                >
+                  <Users size={10} />
+                  <span>
+                    {partyRole === "npc_leader"
+                      ? "NPC Party · Leader"
+                      : "NPC Party"}
+                  </span>
+                </span>
+              )}
               {activeEmotion !== "default" && (
                 <span
                   className="badge"

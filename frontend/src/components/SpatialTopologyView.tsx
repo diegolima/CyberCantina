@@ -6,6 +6,7 @@ import {
   LocationEdge,
   LocationLoreNodeDraft,
   LocationNode,
+  LocationOverrideOptions,
   WorldMediaItem,
 } from "../types";
 import {
@@ -124,7 +125,11 @@ export interface SpatialTopologyViewProps {
   onChangeGraph?: (next: GraphSnapshot) => void;
   onClose?: () => void;
   onReimagineMap?: () => void;
-  onOverrideLocation?: (locationId: string) => Promise<void> | void;
+  coLocatedPartyNpcs?: Array<{ id: string; name: string }>;
+  onOverrideLocation?: (
+    locationId: string,
+    options?: LocationOverrideOptions
+  ) => Promise<void> | void;
   isOverriding?: boolean;
   onSaveCampaignLocationLore?: (
     locationId: string,
@@ -161,6 +166,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   onChangeGraph,
   onClose,
   onReimagineMap,
+  coLocatedPartyNpcs = [],
   onOverrideLocation,
   isOverriding = false,
   onSaveCampaignLocationLore,
@@ -1402,6 +1408,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             onInspectEdgePair={openEdgeDetailsPopover}
             onJumpToContainer={handleJumpToContainer}
             onDrillIntoContainer={drillIntoContainer}
+            coLocatedPartyNpcs={coLocatedPartyNpcs}
             onOverrideLocation={onOverrideLocation}
             isOverriding={isOverriding}
             onSaveCampaignLocationLore={onSaveCampaignLocationLore}

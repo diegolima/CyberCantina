@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
   Activity,
   Brain,
@@ -10,6 +10,7 @@ import {
 import {
   CharacterRecord,
   CharacterStateSnapshot,
+  LocationNode,
 } from "../../../types";
 
 export interface CampaignCharacterStateTabProps {
@@ -17,6 +18,14 @@ export interface CampaignCharacterStateTabProps {
   state: CharacterStateSnapshot;
   isPresent: boolean;
   elsewhereLocationName?: string;
+  partyRole?: "player_party" | "npc_leader" | "npc_party" | null;
+  partyName?: string | null;
+  locations?: LocationNode[];
+  isMutatingLocked?: boolean;
+  onRelocateCharacter?: (
+    characterId: string,
+    locationId: string
+  ) => Promise<void> | void;
   characterNameMap: Record<string, string>;
   isActive: boolean;
 }
@@ -26,9 +35,20 @@ export const CampaignCharacterStateTab: React.FC<CampaignCharacterStateTabProps>
   state,
   isPresent,
   elsewhereLocationName,
+  partyRole = null,
+  partyName = null,
+  locations = [],
+  isMutatingLocked = false,
+  onRelocateCharacter,
   characterNameMap,
   isActive,
 }) => {
+  const [targetLocId, setTargetLocId] = useState(state.current_location_id);
+  const [isRelocating, setIsRelocating] = useState(false);
+
+  useEffect(() => {
+    setTargetLocId(state.current_location_id);
+  }, [character.id, state.current_location_id]);
   const valencePct = Math.round(((state.valence + 1) / 2) * 100);
   const arousalPct = Math.round(state.arousal * 100);
   const care = state.care_state ?? null;
@@ -102,6 +122,19 @@ export const CampaignCharacterStateTab: React.FC<CampaignCharacterStateTabProps>
                       Expression: {activeEmotion}
                     </span>
                   )}
+                  {partyRole === "player_party" && (
+                    <span className="party-pill party-pill--player">
+                      <Users size={11} />
+                      {partyName || "In Your Party"}
+                    </span>
+                  )}
+                  {(partyRole === "npc_party" || partyRole === "npc_leader") && (
+                    <span className="party-pill party-pill--npc">
+                      <Users size={11} />
+                      {partyName || "NPC Party"}
+                      {partyRole === "npc_leader" ? " · Leader" : ""}
+                    </span>
+                  )}
                 </div>
                 <div
                   style={{
@@ -116,6 +149,69 @@ export const CampaignCharacterStateTab: React.FC<CampaignCharacterStateTabProps>
                   Turn ID: {state.turn_id}
                 </div>
               </div>
+
+              {onRelocateCharacter && locations.length > 0 && (
+                <div
+                  style={{
+                    marginTop: 10,
+                    paddingTop: 10,
+                    borderTop: "1px solid var(--border-subtle)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                    <span style={{ fontSize: "0.76rem", fontWeight: 600 }}>
+                      Relocate Character (Override)
+                    </span>
+                    {partyRole && (
+                      <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>
+                        Moving away from their current room removes them from their party.
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <select
+                      aria-label={`Relocate ${character.name}`}
+                      className="field-select"
+                      style={{ fontSize: "0.76rem", padding: "4px 8px" }}
+                      value={targetLocId}
+                      disabled={isMutatingLocked || isRelocating}
+                      onChange={(e) => setTargetLocId(e.target.value)}
+                    >
+                      {locations.map((loc) => (
+                        <option key={loc.id} value={loc.id}>
+                          {loc.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ fontSize: "0.76rem", padding: "4px 10px" }}
+                      disabled={
+                        isMutatingLocked ||
+                        isRelocating ||
+                        !targetLocId ||
+                        targetLocId === state.current_location_id
+                      }
+                      onClick={async () => {
+                        setIsRelocating(true);
+                        try {
+                          await onRelocateCharacter(character.id, targetLocId);
+                        } finally {
+                          setIsRelocating(false);
+                        }
+                      }}
+                    >
+                      {isRelocating ? "Moving..." : "Move"}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {care?.outward_demeanor && (
                 <div

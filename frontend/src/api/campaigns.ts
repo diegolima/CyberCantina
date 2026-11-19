@@ -5,9 +5,11 @@ import type {
   CharacterChoiceSet,
   ChoicePreviewResponse,
   CreateCampaignPayload,
+  CreateNpcPartyPayload,
   DiceMode,
   ItemEquipActionPayload,
   LocationLoreNodeDraft,
+  LocationOverrideOptions,
   MemoryShard,
   PersonaTurnStateSnapshot,
 } from "../types";
@@ -44,12 +46,49 @@ export const campaignsApi = {
       body: JSON.stringify({ turn_id: turnId }),
     }),
 
-  overrideLocation: (campaignId: string, locationId: string) =>
+  overrideLocation: (
+    campaignId: string,
+    locationId: string,
+    options?: LocationOverrideOptions
+  ) =>
     fetchJson<CampaignStateBundle>(
       `${API_BASE}/campaigns/${campaignId}/location-override`,
       {
         method: "POST",
+        body: JSON.stringify({
+          location_id: locationId,
+          ...(options?.move_mode ? { move_mode: options.move_mode } : {}),
+          ...(options?.accompanying_character_ids
+            ? { accompanying_character_ids: options.accompanying_character_ids }
+            : {}),
+        }),
+      }
+    ),
+
+  overrideCharacterLocation: (
+    campaignId: string,
+    characterId: string,
+    locationId: string
+  ) =>
+    fetchJson<CampaignStateBundle>(
+      `${API_BASE}/campaigns/${campaignId}/characters/${characterId}/location-override`,
+      {
+        method: "POST",
         body: JSON.stringify({ location_id: locationId }),
+      }
+    ),
+
+  createNpcParty: (campaignId: string, payload: CreateNpcPartyPayload) =>
+    fetchJson<CampaignStateBundle>(`${API_BASE}/campaigns/${campaignId}/parties`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  disbandParty: (campaignId: string, partyId: string) =>
+    fetchJson<CampaignStateBundle>(
+      `${API_BASE}/campaigns/${campaignId}/parties/${partyId}`,
+      {
+        method: "DELETE",
       }
     ),
 

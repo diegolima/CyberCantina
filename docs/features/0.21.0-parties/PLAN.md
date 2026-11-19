@@ -2,7 +2,7 @@
 feature: parties
 target_version: 0.21.0
 document_type: plan
-status: in_progress
+status: completed
 last_updated: 2026-11-19
 ---
 
@@ -42,6 +42,26 @@ last_updated: 2026-11-19
   - [x] Run `npm --prefix frontend run arch:check && npm --prefix frontend run build && npm --prefix frontend test`.
   - [x] Run `backend/.venv/bin/python scripts/generate_arch_docs.py && backend/.venv/bin/python scripts/generate_arch_docs.py --check`.
 
-## Phase 2: Core Parties System *(Pending Phase 1 Completion)*
+## Phase 2: Core Parties System (`v0.21.0`) — Completed
 
-- Planned separately once Phase 1 passes all checks (`PartyRecord`, `parties_json` DDL/migration, `/party` commands, Phase 3 `travel_intent` / `party_invite_decision`, Phase 5 enforcement, Party Management Modal, Location Override split-button, `NewCampaignModal` checkbox, Quick Exits alignment).
+- [x] **1. Leaf Schemas, Pure Party Engine & Module Layering**
+  - [x] Create leaf `backend/app/schemas/party.py` (`USER_PARTY_MEMBER_ID`, `PartyRecord`, `PartyActionSpec`, `PartyInviteOutcome`, `PartyEventDelta`, enums/types) and extend `character.py` + `turn.py`.
+  - [x] Create pure deterministic `backend/app/engine/parties.py` (Model 1 strict co-location splitting, single-party disjointness, random NPC leader election, lifecycle mutations, longest-prefix `@Name` slash command parser/validator, Zone 4 / Phase 3 renderers) and register in `backend/tach.toml`.
+
+- [x] **2. SQLite Persistence, Legacy Migration & Repositories**
+  - [x] Add `parties_json TEXT NOT NULL DEFAULT '[]'` to `world_state_snapshots` in `schema.sql` with idempotent migration in `schema_init.py`.
+  - [x] Persist explicit empty `parties` snapshots cleanly in `turns.py` (`save_turn_node`, `update_turn_post_clerk`, branch hydration).
+  - [x] Extend `campaigns.py` (`start_in_party_character_ids`), `clerk_placement.py`, and `campaign_spatial.py` (`override_campaign_location`, `override_character_location`, `create_npc_party`, `disband_party`).
+
+- [x] **3. Backend Turn Pipeline & API Routes**
+  - [x] Extend `choices.py`, `phase1_pre.py`, `engine/context/{zone2_episodic,zone4_ephemeral,assembler}.py` (leaving `zone1_static.py` immutable), `engine/cognition/{heuristics,runner}.py`, `phase4_prose.py`, `engine/char_agent/agent.py`, and `engine/clerk/pipeline.py`.
+  - [x] Add `/characters/{character_id}/location-override`, `POST /parties`, `DELETE /parties/{party_id}` (`422` on player party), and update `/campaigns`, `/location-override`, and `/turns[/stream]` in `routers/campaign_routes/`.
+
+- [x] **4. Frontend Types, Pure Helpers & Party UI**
+  - [x] Create `frontend/src/types/party.ts`, extend `character.ts`, `mechanics.ts`, `turn.ts`, create `frontend/src/utils/{partyHelpers,partyCommand}.ts`, and wire `api/campaigns.ts` + `useCampaignTurnActions.ts`.
+  - [x] Add `AppSidebar.tsx` `Party` navigation button below `Codex`, `PartyManagementModal.tsx`, `LocationOverrideButton.tsx` (split button in `InspectorLocationCard.tsx` and `MapDetailsDrawer.tsx`), `CharacterRow.tsx` / `CampaignCharacterModal.tsx` party pills & relocation control, `ChatStage.tsx` / `ChatComposer.tsx` `/party` autocomplete & blocking warnings + quick-exit phrasing, `TurnCard.tsx` / `AgentChangesModal.tsx` party badges/deltas, and `NewCampaignModal.tsx` `"Start in Party"` checkboxes.
+
+- [x] **5. Verification & Documentation**
+  - [x] Add `backend/tests/test_parties.py` and align `test_location_override_affects_next_turn_and_swipe` + `test_independent_character_spatial_transitions`.
+  - [x] Add `frontend/src/utils/__tests__/{partyCommand,partyHelpers}.test.ts` and `frontend/src/components/__tests__/partyUi.test.tsx`.
+  - [x] Regenerate `docs/architecture/` (`generate_arch_docs.py --check`) and update `../cybercantina-wiki` pages.

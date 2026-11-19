@@ -42,3 +42,18 @@ This review documents architectural traps and invariants verified prior to imple
    - [`narratorCognition.ts`](file:///home/diegolima/Git/cybercantina/frontend/src/utils/narratorCognition.ts) would trigger a false `"Skipped by Model"` alert on `"__solo__"` turns unless handled alongside `"__narrator__"` and `"__arrival__"`.
    - Adding `activeLocationName?: string` to `ChatComposer` must stay optional so existing unit tests and callers keep compiling without breaking signatures.
    - Keeping `override_campaign_location` unchanged during Phase 1 preserves backward compatibility with `test_location_override_updates_active_state_and_swipe` until Phase 2 lands party-aware overrides (`FR-2.5`).
+
+
+---
+
+## Parties System — Phase 2: Core Parties System (`v0.21.0`)
+
+### Additional Edge Cases & Guardrails Verified
+1. **Explicit Empty `parties_json` Overwriting (No Parent Resurrection):**
+   - `save_turn_node` and `update_turn_post_clerk` in [`turns.py`](file:///home/diegolima/Git/cybercantina/backend/app/db/repos/turns.py) serialize `world_snapshot.parties` directly without falling back to the parent snapshot when `parties == []`, ensuring post-disband turns never resurrect prior party memberships.
+2. **Double-Application Guard on Next-Turn `override_location_id`:**
+   - [`turn_streaming.py`](file:///home/diegolima/Git/cybercantina/backend/app/routers/campaign_routes/turn_streaming.py) runs `resolve_location_override_movement` ONLY when `req.override_location_id != parent_active_loc_id`, preventing a `"Move Alone"` override applied prior to submission from re-moving left-behind party members on the subsequent turn while preserving swipe-with-override re-anchoring.
+3. **Slash `/party` Before `@Character:` Whisper Decomposition:**
+   - Validating and converting `/party ...` commands into `PartyActionSpec` + synthetic turn text before [`decompose_user_message`](file:///home/diegolima/Git/cybercantina/backend/app/engine/mentions.py) prevents `/party @Name` from being misparsed as a remote whisper or falling back to invite-all on typos/off-site targets.
+4. **In-Character Disband Boundary (`422`) & OOC NPC-Party Management:**
+   - `DELETE /api/campaigns/{campaign_id}/parties/{party_id}` rejects parties containing `"user"` with HTTP `422` (`disband_party`), guaranteeing player-party disbands always trigger an in-character turn while NPC-only parties disband immediately out-of-character.

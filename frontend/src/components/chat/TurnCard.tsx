@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Sparkles,
   Trash2,
+  Users,
 } from "lucide-react";
 import type {
   CampaignStateBundle,
@@ -25,6 +26,7 @@ import type {
   TurnNodeRecord,
 } from "../../types";
 import { getCharacterEmotionPortrait } from "../../utils/entityImages";
+import { formatPartyActionBadgeLabel } from "../../utils/partyCommand";
 import {
   isNarratorTurnNode,
   isSoloTurnNode,
@@ -189,6 +191,18 @@ export const TurnCard: React.FC<TurnCardProps> = ({
           mutations += pt.scene_flags_updated?.length || 0;
           mutations += pt.scene_flags_removed?.length || 0;
           if (pt.notable_event_summary) mutations += 1;
+          const ped = "party_event_delta" in pt ? pt.party_event_delta : null;
+          if (
+            ped &&
+            ((ped.notes?.length ?? 0) > 0 ||
+              (ped.invite_outcomes?.length ?? 0) > 0 ||
+              (ped.formed_party_ids?.length ?? 0) > 0 ||
+              (ped.disbanded_party_ids?.length ?? 0) > 0 ||
+              (ped.stayed_behind_ids?.length ?? 0) > 0 ||
+              (ped.followed_player_ids?.length ?? 0) > 0)
+          ) {
+            mutations += 1;
+          }
         }
       } else {
         const cd =
@@ -376,6 +390,16 @@ export const TurnCard: React.FC<TurnCardProps> = ({
                       {turn.pre_turn.target_location_hint
                         ? ` (${turn.pre_turn.target_location_hint})`
                         : ""}
+                    </span>
+                  )}
+
+                  {turn.pre_turn.party_action && (
+                    <span className="badge badge-party">
+                      <Users size={12} color="var(--accent-cyan)" />
+                      {formatPartyActionBadgeLabel(
+                        turn.pre_turn.party_action,
+                        turn.cognition_character_names
+                      )}
                     </span>
                   )}
 

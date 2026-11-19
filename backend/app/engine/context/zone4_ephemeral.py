@@ -13,6 +13,7 @@ from app.engine.affective_engine import (
     seed_initial_care_state,
 )
 from app.engine.mentions import DecomposedUserMessage
+from app.engine.parties import render_zone4_party_and_movement_blocks
 from app.engine.world_clock import describe_world_timestamp
 from app.schemas.character import (
     CharacterRecord,
@@ -20,6 +21,7 @@ from app.schemas.character import (
     CognitionBlock,
     format_item_names,
 )
+from app.schemas.party import PartyRecord
 from app.schemas.persona import (
     PersonaRecord,
     PersonaTurnStateSnapshot,
@@ -209,6 +211,7 @@ def build_zone4_ephemeral_tail_frame(
     decomposed_message: DecomposedUserMessage | None = None,
     world: WorldRecord | None = None,
     origin_location_id: str | None = None,
+    active_parties: list[PartyRecord] | None = None,
 ) -> str:
     """Zone 4: Dynamic turn-specific context injected at the tail of the prompt."""
     exits_text = "\n".join(
@@ -598,6 +601,22 @@ def build_zone4_ephemeral_tail_frame(
             "  </directed_character_cues>"
         )
 
+    eff_parties = (
+        list(active_parties)
+        if active_parties is not None
+        else list(world_snapshot.parties or [])
+    )
+    party_and_movement_section = render_zone4_party_and_movement_blocks(
+        active_parties=eff_parties,
+        active_location_id=active_location.id,
+        active_location_name=active_location.name,
+        present_characters=present_characters or ([] if is_solo else [character]),
+        pre_turn=pre_turn,
+        established_cognitions=established_cognitions,
+        character_name_map=name_lookup_local,
+        persona_name=persona_snapshot.name if persona_snapshot else None,
+    )
+
     return (
         "<scene_context>\n"
         f"  <world_clock>{describe_world_timestamp(world_snapshot.world_timestamp)}</world_clock>\n"
@@ -605,7 +624,7 @@ def build_zone4_ephemeral_tail_frame(
         f"  <active_location name=\"{active_location.name}\">{spatial_hierarchy_block}{parent_container_block}\n"
         f"    {active_location.description}\n"
         f"    Props & Atmosphere: {env_tags}{local_lore_block}\n"
-        f"  </active_location>{transition_cue_block}{co_present_section}\n"
+        f"  </active_location>{transition_cue_block}{co_present_section}{party_and_movement_section}\n"
         f"  <connected_locations>\n{exits_text}\n  </connected_locations>\n"
         f"  <recalled_memories_and_lore>\n{memories_text}\n  </recalled_memories_and_lore>\n"
         f"  <auxiliary_prompt_analysis>\n"

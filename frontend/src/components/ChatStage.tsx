@@ -26,6 +26,17 @@ import {
   isChoiceSlashCommand,
   parseChoiceSlashCommand,
 } from "../utils/choiceCommand";
+import {
+  applyPartyMentionSelection,
+  detectPartyMentionContext,
+  isPartySlashCommand,
+  parsePartySlashCommand,
+} from "../utils/partyCommand";
+import {
+  getActiveParties,
+  getCoLocatedPlayerPartyNpcs,
+  formatQuickExitMessage,
+} from "../utils/partyHelpers";
 import { useMagicWand } from "../hooks/useMagicWand";
 import {
   decomposeClientUserMessage,
@@ -225,20 +236,77 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
+  const [mentionMode, setMentionMode] = useState<
+    "whisper" | "party_invite" | "party_kick"
+  >("whisper");
+  const [mentionTriggerStart, setMentionTriggerStart] = useState<number | null>(
+    null
+  );
+  const [mentionCandidates, setMentionCandidates] = useState<CharacterRecord[]>(
+    []
+  );
+
+  const activeParties = getActiveParties(bundle);
+  const coLocatedPartyNpcs = useMemo(
+    () => getCoLocatedPlayerPartyNpcs(activeParties, bundle.active_location.id),
+    [activeParties, bundle.active_location.id]
+  );
+
+  const locationNameById = useMemo(
+    () =>
+      Object.fromEntries(
+        bundle.visible_locations.map((loc) => [loc.id, loc.name])
+      ),
+    [bundle.visible_locations]
+  );
+
+  const charLocationMap = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(bundle.character_states ?? {}).map(([cid, st]) => [
+          cid,
+          st.current_location_id,
+        ])
+      ),
+    [bundle.character_states]
+  );
+
+  const partyCommandState = useMemo(() => {
+    if (!isPartySlashCommand(inputText)) {
+      return { action: null, error: null };
+    }
+    return parsePartySlashCommand(inputText, {
+      allCharacters: allCampaignCharacters,
+      presentCharacterIds,
+      activeParties,
+      locationNameById,
+      charLocations: charLocationMap,
+    });
+  }, [
+    inputText,
+    allCampaignCharacters,
+    presentCharacterIds,
+    activeParties,
+    locationNameById,
+    charLocationMap,
+  ]);
+
+  const mentionPool =
+    mentionMode === "whisper" ? allCampaignCharacters : mentionCandidates;
 
   const filteredMentionCharacters = useMemo(() => {
     const clean = mentionQuery.trim().toLowerCase();
-    if (!clean) return allCampaignCharacters;
-    return allCampaignCharacters.filter(
+    if (!clean) return mentionPool;
+    return mentionPool.filter(
       (c) =>
         c.name.toLowerCase().includes(clean) ||
         (c.tagline && c.tagline.toLowerCase().includes(clean))
     );
-  }, [allCampaignCharacters, mentionQuery]);
+  }, [mentionPool, mentionQuery]);
 
   useEffect(() => {
     setMentionSelectedIndex(0);
-  }, [mentionQuery]);
+  }, [mentionQuery, mentionMode]);
 
   const decomposedInput = useMemo(() => {
     return decomposeClientUserMessage(
@@ -251,12 +319,30 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const checkAndTriggerMention = (newText: string, cursorOffset?: number) => {
     const textarea = textareaRef.current;
     const cursorPos = cursorOffset ?? textarea?.selectionStart ?? newText.length;
+
+    const partyCtx = detectPartyMentionContext(newText, cursorPos, {
+      allCharacters: allCampaignCharacters,
+      presentCharacterIds,
+      activeParties,
+    });
+    if (partyCtx) {
+      setMentionMode(partyCtx.mode);
+      setMentionTriggerStart(partyCtx.triggerStart);
+      setMentionCandidates(partyCtx.candidates);
+      setMentionQuery(partyCtx.query);
+      setMentionPickerOpen(partyCtx.candidates.length > 0);
+      return;
+    }
+
     const textBeforeCursor = newText.slice(0, cursorPos);
     const lastNewlineIdx = textBeforeCursor.lastIndexOf("\n");
     const lineStartIdx = lastNewlineIdx === -1 ? 0 : lastNewlineIdx + 1;
     const lineBeforeCursor = textBeforeCursor.slice(lineStartIdx);
 
     if (lineBeforeCursor.startsWith("@") && !lineBeforeCursor.includes(":")) {
+      setMentionMode("whisper");
+      setMentionTriggerStart(lineStartIdx);
+      setMentionCandidates(allCampaignCharacters);
       setMentionQuery(lineBeforeCursor.slice(1));
       setMentionPickerOpen(true);
     } else {
@@ -267,6 +353,26 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const handleSelectMention = (char: CharacterRecord) => {
     const textarea = textareaRef.current;
     const cursorPos = textarea?.selectionStart ?? inputText.length;
+
+    if (mentionMode !== "whisper" && mentionTriggerStart !== null) {
+      const { nextText, nextCursorPos } = applyPartyMentionSelection(
+        inputText,
+        cursorPos,
+        mentionTriggerStart,
+        char.name
+      );
+      setInputText(nextText);
+      setMentionPickerOpen(false);
+      setMentionQuery("");
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.focus();
+          textareaRef.current.setSelectionRange(nextCursorPos, nextCursorPos);
+        }
+      }, 10);
+      return;
+    }
+
     const textBeforeCursor = inputText.slice(0, cursorPos);
     const lastNewlineIdx = textBeforeCursor.lastIndexOf("\n");
     const lineStartIdx = lastNewlineIdx === -1 ? 0 : lastNewlineIdx + 1;
@@ -601,7 +707,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         : null;
 
     onSendTurn({
-      userMessage: `Let's head through the ${nb.direction_label.toLowerCase()} into ${nb.destination.name}.`,
+      userMessage: formatQuickExitMessage(nb, coLocatedPartyNpcs.length > 0),
       diceMode: diceMode === "forced" ? "forced" : (nb.is_locked_or_hidden ? "auto" : "disabled"),
       manualDiceOverride: diceMode === "forced" && forcedVal && !isNaN(forcedVal) ? forcedVal : null,
     });
@@ -692,9 +798,10 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     e.preventDefault();
     const raw = inputText.trim();
     if ((!raw && totalStagedOptionsCount === 0) || isBusy) return;
+    if (partyCommandState.error) return;
 
-    // Check for slash command shortcuts
-    if (raw.startsWith("/")) {
+    // Check for slash command shortcuts (excluding /party which submits as a full turn)
+    if (raw.startsWith("/") && !isPartySlashCommand(raw)) {
       if (isChoiceSlashCommand(raw)) {
         const parsed = parseChoiceSlashCommand(raw, presentCharacters);
         if (parsed && parsed.choiceSet.options.length > 0) {
@@ -829,6 +936,9 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         diceMode,
         manualDiceOverride: diceMode === "forced" ? parsedDice : null,
         characterChoices: effectiveChoices,
+        partyAction:
+          partyCommandState.action ??
+          (isEditMode ? editingTurn?.pre_turn?.party_action ?? null : null),
       });
     }
 
@@ -876,6 +986,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       diceMode: savedMode,
       manualDiceOverride: savedMode === "forced" ? savedManual : null,
       characterChoices: turn.pre_turn?.character_choices,
+      partyAction: turn.pre_turn?.party_action ?? null,
     });
   };
 
@@ -1173,10 +1284,13 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         hasActiveGates={hasActiveGates}
         choicePreview={choicePreview}
         choiceSlashWarning={choiceSlashWarning}
+        partySlashWarning={partyCommandState.error}
         decomposedInput={decomposedInput}
         mentionPickerOpen={mentionPickerOpen}
         setMentionPickerOpen={setMentionPickerOpen}
         mentionQuery={mentionQuery}
+        mentionMode={mentionMode}
+        mentionCharacters={mentionPool}
         mentionSelectedIndex={mentionSelectedIndex}
         setMentionSelectedIndex={setMentionSelectedIndex}
         filteredMentionCharacters={filteredMentionCharacters}

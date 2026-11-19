@@ -44,6 +44,7 @@ path = "app.db"
 depends_on = [
     "app.config",
     "app.engine.affective_engine",
+    "app.engine.parties",
     "app.prompts",
     "app.providers",
     "app.schemas",
@@ -94,6 +95,12 @@ depends_on = [
 ]
 
 [[modules]]
+path = "app.engine.parties"
+depends_on = [
+    "app.schemas",
+]
+
+[[modules]]
 path = "app.engine.world_clock"
 depends_on = [
     "app.schemas",
@@ -121,6 +128,7 @@ depends_on = [
     "app.engine.choices",
     "app.engine.llm_client",
     "app.engine.mentions",
+    "app.engine.parties",
     "app.prompts",
     "app.schemas",
 ]
@@ -133,6 +141,7 @@ depends_on = [
     "app.engine.affective_engine",
     "app.engine.choices",
     "app.engine.mentions",
+    "app.engine.parties",
     "app.engine.world_clock",
     "app.prompts",
     "app.providers",
@@ -147,6 +156,7 @@ depends_on = [
     "app.engine.affective_engine",
     "app.engine.context",
     "app.engine.mentions",
+    "app.engine.parties",
     "app.engine.world_clock",
     "app.prompts",
     "app.schemas",
@@ -160,6 +170,7 @@ depends_on = [
     "app.engine.choices",
     "app.engine.llm_client",
     "app.engine.mentions",
+    "app.engine.parties",
     "app.engine.phase2_context",
     "app.prompts",
     "app.schemas",
@@ -173,6 +184,7 @@ depends_on = [
     "app.engine.cognition",
     "app.engine.llm_client",
     "app.engine.mentions",
+    "app.engine.parties",
     "app.engine.phase2_context",
     "app.prompts",
     "app.schemas",
@@ -184,6 +196,7 @@ depends_on = [
     "app.config",
     "app.engine.llm_client",
     "app.engine.mentions",
+    "app.engine.parties",
     "app.engine.phase3_cognition",
     "app.schemas",
 ]
@@ -204,6 +217,7 @@ depends_on = [
     "app.engine.affective_engine",
     "app.engine.llm_client",
     "app.engine.mentions",
+    "app.engine.parties",
     "app.prompts",
     "app.schemas",
 ]
@@ -216,6 +230,7 @@ depends_on = [
     "app.engine.char_agent",
     "app.engine.llm_client",
     "app.engine.mentions",
+    "app.engine.parties",
     "app.prompts",
     "app.schemas",
 ]
@@ -229,6 +244,7 @@ depends_on = [
     "app.engine.character_agent",
     "app.engine.llm_client",
     "app.engine.mentions",
+    "app.engine.parties",
     "app.engine.phase2_context",
     "app.engine.world_clock",
     "app.prompts",
@@ -245,6 +261,7 @@ depends_on = [
     "app.engine.clerk",
     "app.engine.llm_client",
     "app.engine.mentions",
+    "app.engine.parties",
     "app.engine.phase2_context",
     "app.engine.world_clock",
     "app.prompts",
@@ -307,6 +324,7 @@ depends_on = [
     "app.engine.clerk_placement",
     "app.engine.llm_client",
     "app.engine.mentions",
+    "app.engine.parties",
     "app.engine.phase1_pre",
     "app.engine.phase2_context",
     "app.engine.phase3_actor",

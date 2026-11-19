@@ -8,6 +8,7 @@ export interface CharacterMentionPickerProps {
   characters: CharacterRecord[];
   presentCharacterIds: string[];
   selectedIndex: number;
+  mode?: "whisper" | "party_invite" | "party_kick";
   onSelect: (character: CharacterRecord) => void;
   onClose: () => void;
   position?: { top: number; left: number };
@@ -19,6 +20,7 @@ export const CharacterMentionPicker: React.FC<CharacterMentionPickerProps> = ({
   characters,
   presentCharacterIds,
   selectedIndex,
+  mode = "whisper",
   onSelect,
   onClose,
 }) => {
@@ -54,7 +56,13 @@ export const CharacterMentionPicker: React.FC<CharacterMentionPickerProps> = ({
   return (
     <div className="mention-picker-popover" ref={containerRef}>
       <div className="mention-picker-header">
-        <span className="mention-picker-title">Whisper to Character</span>
+        <span className="mention-picker-title">
+          {mode === "party_invite"
+            ? "Invite to Party"
+            : mode === "party_kick"
+            ? "Remove from Party"
+            : "Whisper to Character"}
+        </span>
         <span className="mention-picker-shortcut">Tab or Enter to select</span>
       </div>
       <div className="mention-picker-list">
