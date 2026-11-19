@@ -9,6 +9,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "typecheck:e2e": "tsc -p tsconfig.e2e.json --noEmit",
     "arch:check": "depcruise src --config .dependency-cruiser.cjs",
     "arch:graph": "depcruise src --config .dependency-cruiser.cjs --output-type mermaid"
   },
@@ -19,6 +22,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.1",
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.2.1",

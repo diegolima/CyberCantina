@@ -51,6 +51,20 @@ jobs:
         run: npm ci
       - name: Check boundaries, build, and run tests
         run: npm --prefix frontend run arch:check && npm --prefix frontend run build && npm --prefix frontend test
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Run Playwright E2E smoke suite
+        run: npm --prefix frontend run typecheck:e2e && npm --prefix frontend run test:e2e
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 7
 
   docker:
     name: Docker Build & Push
