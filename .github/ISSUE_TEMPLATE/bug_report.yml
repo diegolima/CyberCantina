@@ -69,10 +69,10 @@ body:
     id: steps
     attributes:
       label: Steps to Reproduce
-      description: Minimal steps for someone else (or an agent) to trigger the same issue. Note if you used the built-in *Midnight at the Neon Rust* campaign or a custom world/card.
+      description: Minimal steps for someone else (or an agent) to trigger the same issue. Note if you used the built-in *The Green Lie* / *Yulia Halim* showcase or a custom world/card.
       placeholder: |
-        1. Start a campaign in Midnight at the Neon Rust
-        2. Send "@Kira: Meet me outside" or trigger /choice
+        1. Start a campaign in The Green Lie with Yulia Halim
+        2. Send "@Yulia: Meet me outside" or trigger /choice
         3. Swipe/branch or inspect the turn...
     validations:
       required: true

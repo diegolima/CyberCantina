@@ -50,7 +50,7 @@ def showcase_env(
 def test_per_user_showcase_seeding_and_full_field_validation(
     showcase_env: tuple[TestClient, CantinaRepository, Path],
 ) -> None:
-    """Verify initial_setup, register, and admin_create_user seed The Green Lie + Kira Vance with 0 campaigns."""
+    """Verify initial_setup, register, and admin_create_user seed The Green Lie + Yulia Halim with 0 campaigns."""
     client, repo, media_dir = showcase_env
 
     # 1. Admin setup
@@ -99,7 +99,7 @@ def test_per_user_showcase_seeding_and_full_field_validation(
         w = worlds[0]
         c = chars[0]
         assert w["name"] == "The Green Lie"
-        assert c["name"] == "Kira Vance"
+        assert c["name"] == "Yulia Halim"
         assert w["id"].startswith("world_")
         assert c["id"].startswith("char_")
         seen_world_ids.add(w["id"])
@@ -137,6 +137,7 @@ def test_per_user_showcase_seeding_and_full_field_validation(
     unit_4b = next(loc for loc in w["locations"] if loc["name"] == "Unit 4B-12")
     assert unit_4b["lore_nodes"][0]["title"] == "Ghost Signal Location"
     assert unit_4b["lore_nodes"][0]["category"] == "secret"
+    assert "Yulia Halim" in unit_4b["lore_nodes"][0]["content"]
 
     chop = next(loc for loc in w["locations"] if loc["name"] == "The Chop-Cathedral")
     assert chop["lore_nodes"][0]["title"] == "Arming the Rust-Splicers"
@@ -150,6 +151,7 @@ def test_per_user_showcase_seeding_and_full_field_validation(
     assert c["baseline_psyche"]["initial_worldview"]["benevolence"] == pytest.approx(-0.8)
     assert len(c["memory_shards"]) == 8
     assert len(c["voice_anchors"]) == 3
+    assert "Yulia Halim" in c["gallery"][0]["caption"]
     assert "low_token_initial_message" in c["unsupported_fields"]
     assert "Sluice" in c["unsupported_fields"]["low_token_initial_message"]
 
@@ -281,11 +283,11 @@ def test_public_media_quota_cow_and_cross_tenant_isolation(
     expected_world_bytes = priv_wmed["byte_size"]
     assert client.get("/api/profile", headers=headers_a).json()["media_bytes_used"] == expected_world_bytes
 
-    # Alice CoW-edits Kira Vance -> public portrait & gallery stay public (0 bytes), not copied into private dir
+    # Alice CoW-edits Yulia Halim -> public portrait & gallery stay public (0 bytes), not copied into private dir
     c_upd = repo.update_character(
         c_a["id"],
         CharacterUpdatePayload(
-            name="Kira Vance (Alice Edit)",
+            name="Yulia Halim (Alice Edit)",
             tagline=c_a["tagline"],
             core_persona=c_a["core_persona"],
             baseline_psyche=c_a["baseline_psyche"],
@@ -423,7 +425,7 @@ def test_profile_restore_defaults_selective_and_non_destructive(
     assert r1["skipped_character"] is True
     assert "already exist" in r1["message"]
 
-    # 2. User edits The Green Lie (removing 'The Sovereign Cipher' lore) and deletes Kira Vance
+    # 2. User edits The Green Lie (removing 'The Sovereign Cipher' lore) and deletes Yulia Halim
     w_orig = client.get("/api/worlds", headers=headers_u).json()[0]
     c_orig = client.get("/api/characters", headers=headers_u).json()[0]
     edited_w = repo.update_world(
@@ -440,12 +442,13 @@ def test_profile_restore_defaults_selective_and_non_destructive(
     )
     assert client.delete(f"/api/characters/{c_orig['id']}", headers=headers_u).status_code == 200
 
-    # Restore -> restores ONLY Kira Vance (linked to edited world, gracefully clearing missing artifact lore_id), skips world
+    # Restore -> restores ONLY Yulia Halim (linked to edited world, gracefully clearing missing artifact lore_id), skips world
     r2 = client.post("/api/profile/restore-defaults", headers=headers_u).json()
     assert r2["restored_world"] is False
     assert r2["restored_character"] is True
     assert r2["skipped_world"] is True
     assert r2["skipped_character"] is False
+    assert "Restored default character 'Yulia Halim'" in r2["message"]
     assert "Skipped 'The Green Lie'" in r2["message"]
 
     worlds_after = client.get("/api/worlds", headers=headers_u).json()

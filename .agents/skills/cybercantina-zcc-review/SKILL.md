@@ -48,7 +48,7 @@ Confirm `warnings` is empty (no lingering `unsupported_fields`), `res.success` i
 - Verify `character.world_id` matches `world.id`, item `lore_id` values resolve to existing `lore_nodes`, and container/location `image_media_id` values exist in `world.media`.
 
 ## 3. Lore Gating & Secret Hygiene (`lore_scope.py`)
-- **`environmental_tags` are always visible on arrival:** Never place unrevealed plot facts (e.g., `"Kira Vance's Home"`) in `environmental_tags`; place them inside a `category: "secret"` lore node instead.
+- **`environmental_tags` are always visible on arrival:** Never place unrevealed plot facts (e.g., `"Yulia Halim's Home"`) in `environmental_tags`; place them inside a `category: "secret"` lore node instead.
 - **Secret `entity_tags` matching:** `secret` lore is gated by whole-word/phrase regex matching (`_tag_matches_text`) or Clean/Critical discovery rolls (`_DISCOVERY_CHECK_STEMS`).
   - Avoid overly generic tags like `"look around"` or `"hear"` when you want a secret gated behind discovery rolls or specific topics.
   - Pair room-description visual hooks (e.g., a paper cutout on a table) with noun/topic tags (`paper`, `cutout`, `article`, `envelope`) so inspecting the prop reliably unlocks the secret.

@@ -427,7 +427,7 @@ def test_tenant_isolation_for_worlds_characters_and_campaigns(
     assert len(u1_worlds) == 1
     assert u1_worlds[0]["name"] == "The Green Lie"
     assert len(u1_chars) == 1
-    assert u1_chars[0]["name"] == "Kira Vance"
+    assert u1_chars[0]["name"] == "Yulia Halim"
     assert len(u1_camps) == 0
 
     u1_world_id = u1_worlds[0]["id"]
@@ -444,7 +444,7 @@ def test_tenant_isolation_for_worlds_characters_and_campaigns(
     assert u1_camp_res.status_code == 200
     u1_camp_id = u1_camp_res.json()["campaign"]["id"]
 
-    # User 2 also receives their own private clones of The Green Lie and Kira Vance (0 campaigns), with distinct IDs
+    # User 2 also receives their own private clones of The Green Lie and Yulia Halim (0 campaigns), with distinct IDs
     u2_worlds = client.get("/api/worlds", headers=u2_headers).json()
     u2_chars = client.get("/api/characters", headers=u2_headers).json()
     assert len(u2_worlds) == 1

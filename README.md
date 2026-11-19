@@ -22,7 +22,7 @@ CyberCantina takes a different approach by giving your models a persistent world
 
 ## Key Features
 
-* **Built-In Showcase Campaign:** Start playing immediately with *Midnight at the Neon Rust* (Sector 9 & Kira Vance) already set up on first launch.
+* **Built-In Showcase Setting:** Every new account starts with *The Green Lie* (Neo-Veridia) and *Yulia Halim* pre-loaded so you can launch a world- or character-focused campaign right away.
 * **AI Creation Wizards & Magic Wand:** Turn brief concepts into interconnected multi-room worlds and deep characters with voice anchors, memories, and 8 dynamic emotion portrait slots.
 * **Player Personas with Secrets:** Create player identities with custom gear and hidden backstory/items that characters only learn when revealed in-scene (or spread through witness gossip).
 * **Import & Share:** Share exact, lossless `.zcc` bundles of worlds, characters, and personas—or import existing `.png` / `.json` character cards (experimental).

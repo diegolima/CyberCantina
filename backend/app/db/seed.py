@@ -1,4 +1,4 @@
-"""Default showcase scenario seeder ('The Green Lie' & 'Kira Vance')."""
+"""Default showcase scenario seeder ('The Green Lie' & 'Yulia Halim')."""
 
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ from app.security.media_path import (
 
 SHOWCASE_SEED_VERSION = 1
 SHOWCASE_WORLD_SEED_KEY = "showcase:the_green_lie"
+# Preserved as stable internal provenance/media keys for existing DB rows and immutable v1 public media URLs.
 SHOWCASE_CHARACTER_SEED_KEY = "showcase:kira_vance"
 
 _SHOWCASE_DATA_DIR = Path(__file__).resolve().parent / "showcase_data" / "the_green_lie"
@@ -502,13 +503,13 @@ def _resolve_existing_artifact_lore_id(
         conn.close()
 
 
-def _seed_kira_vance_for_user(
+def _seed_yulia_halim_for_user(
     repo: CantinaRepository,
     user_id: str,
     target_world_id: str | None,
     world_id_remap: dict[str, str],
 ) -> str:
-    """Insert a private clone of Kira Vance for user_id referencing public character media."""
+    """Insert a private clone of Yulia Halim for user_id referencing public character media."""
     c_data = _load_showcase_character_json()
     new_char_id = f"char_{uuid.uuid4().hex[:10]}"
 
@@ -551,9 +552,9 @@ def _seed_kira_vance_for_user(
     )
     orig_gallery = c_data.get("gallery") or []
     gallery_caption = (
-        str(orig_gallery[0].get("caption") or "Kira Vance in The Neon Rust")
+        str(orig_gallery[0].get("caption") or "Yulia Halim in The Neon Rust")
         if orig_gallery
-        else "Kira Vance in The Neon Rust"
+        else "Yulia Halim in The Neon Rust"
     )
     gallery_created_at = (
         str(orig_gallery[0].get("created_at") or utc_now_iso())
@@ -637,7 +638,7 @@ def seed_showcase_for_user(
     *,
     restore_missing_only: bool = False,
 ) -> dict[str, bool]:
-    """Seed private DB clones of The Green Lie and Kira Vance sharing immutable public media.
+    """Seed private DB clones of The Green Lie and Yulia Halim sharing immutable public media.
 
     Creates zero campaigns so players explore world- vs. character-focused campaign starts.
     When ``restore_missing_only`` is True (or on re-entrant calls), existing non-deleted
@@ -683,7 +684,7 @@ def seed_showcase_for_user(
         restored_world = True
 
     if existing_char_id is None:
-        _seed_kira_vance_for_user(repo, user_id, target_world_id, world_id_remap)
+        _seed_yulia_halim_for_user(repo, user_id, target_world_id, world_id_remap)
         restored_character = True
 
     return {

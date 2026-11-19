@@ -920,7 +920,7 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
                   }}
                 >
                   Restore deleted default showcase assets (&ldquo;The Green
-                  Lie&rdquo; world and &ldquo;Kira Vance&rdquo; character).
+                  Lie&rdquo; world and &ldquo;Yulia Halim&rdquo; character).
                   Existing or edited copies will not be overwritten.
                 </div>
               </div>

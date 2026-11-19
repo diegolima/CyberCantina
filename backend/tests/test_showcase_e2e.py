@@ -1,4 +1,4 @@
-"""Real-asset end-to-end tests exercising The Green Lie & Kira Vance showcase bundles."""
+"""Real-asset end-to-end tests exercising The Green Lie & Yulia Halim showcase bundles."""
 
 from __future__ import annotations
 
@@ -51,12 +51,12 @@ def test_showcase_zero_campaign_and_start_focus_launches(
     client, repo, _media_dir = showcase_api_env
     headers, uid = _register_showcase_user(client, username="e2e_launch_admin", setup_admin=True)
 
-    # Freshly seeded user has 0 campaigns and 1 private clone each of The Green Lie & Kira Vance
+    # Freshly seeded user has 0 campaigns and 1 private clone each of The Green Lie & Yulia Halim
     assert client.get("/api/campaigns", headers=headers).json() == []
     worlds = client.get("/api/worlds", headers=headers).json()
     chars = client.get("/api/characters", headers=headers).json()
     assert len(worlds) == 1 and worlds[0]["name"] == "The Green Lie"
-    assert len(chars) == 1 and chars[0]["name"] == "Kira Vance"
+    assert len(chars) == 1 and chars[0]["name"] == "Yulia Halim"
     w_id, c_id = worlds[0]["id"], chars[0]["id"]
 
     # 1. World-focused launch -> Turn 0 uses __narrator__, Main Floor.starting_message & arrival media
@@ -83,7 +83,7 @@ def test_showcase_zero_campaign_and_start_focus_launches(
     for url in media_urls:
         assert client.get(url, headers=headers).status_code == 200
 
-    # 2. Character-focused launch -> Turn 0 uses Kira Vance's initial_message and excludes unsupported_fields
+    # 2. Character-focused launch -> Turn 0 uses Yulia Halim's initial_message and excludes unsupported_fields
     char_camp_res = client.post(
         "/api/campaigns",
         headers=headers,
@@ -284,7 +284,7 @@ async def test_showcase_paranoiac_care_items_and_branch_rollback(
     camp_id = bundle0["campaign"]["id"]
     turn0_id = bundle0["campaign"]["active_leaf_turn_id"]
 
-    # Turn 0 has Kira's paranoiac baseline CARE state
+    # Turn 0 has Yulia's paranoiac baseline CARE state
     assert bundle0["character_records"][c_id]["baseline_psyche"]["temperament"]["archetype"] == "paranoiac"
     care0 = bundle0["current_character_state"]["care_state"]
     assert care0 is not None
@@ -446,7 +446,7 @@ async def test_showcase_zcc_roundtrip_into_playable_campaign(
         pkt
         async for pkt in _execute_turn_stream_events(
             campaign_id=camp_id,
-            req=TurnSubmitRequest(user_message="Look around the Main Floor and greet Kira."),
+            req=TurnSubmitRequest(user_message="Look around the Main Floor and greet Yulia."),
             owner_id=uid_b,
         )
     ]

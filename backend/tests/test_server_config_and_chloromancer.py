@@ -528,4 +528,4 @@ def test_sillytavern_text_only_warning_and_zcc_atomic_quota_rollback(
     after_dirs = set((media_dir / "characters").iterdir()) if (media_dir / "characters").exists() else set()
     assert after_dirs == existing_dirs
     player_uid = player_client.get("/api/profile").json()["id"]
-    assert [c.name for c in repo.list_characters(owner_id=player_uid)] == ["Kira Vance"]
+    assert [c.name for c in repo.list_characters(owner_id=player_uid)] == ["Yulia Halim"]

@@ -481,7 +481,7 @@ def reset_my_data(
 def restore_default_assets(
     current_user: UserProfile = Depends(get_current_user),
 ) -> RestoreDefaultsResponse:
-    """Restore deleted default showcase assets ('The Green Lie' / 'Kira Vance') without overwriting existing copies."""
+    """Restore deleted default showcase assets ('The Green Lie' / 'Yulia Halim') without overwriting existing copies."""
     repo = get_repo()
     with get_user_media_lock(current_user.id):
         res = seed_showcase_for_user(
@@ -490,20 +490,20 @@ def restore_default_assets(
     rw = res["restored_world"]
     rc = res["restored_character"]
     if rw and rc:
-        msg = "Restored default world 'The Green Lie' and character 'Kira Vance'."
+        msg = "Restored default world 'The Green Lie' and character 'Yulia Halim'."
     elif rw:
         msg = (
             "Restored default world 'The Green Lie'. "
-            "Skipped 'Kira Vance' because an active copy (or edited version) already exists."
+            "Skipped 'Yulia Halim' because an active copy (or edited version) already exists."
         )
     elif rc:
         msg = (
-            "Restored default character 'Kira Vance'. "
+            "Restored default character 'Yulia Halim'. "
             "Skipped 'The Green Lie' because an active copy (or edited version) already exists."
         )
     else:
         msg = (
-            "Nothing restored — 'The Green Lie' and 'Kira Vance' "
+            "Nothing restored — 'The Green Lie' and 'Yulia Halim' "
             "(or edited versions) already exist in your library."
         )
     return RestoreDefaultsResponse(
