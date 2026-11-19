@@ -675,6 +675,8 @@ erDiagram
 | `frontend/src/components/chat/ChatComposer.tsx` |
 | `frontend/src/components/chat/DirectorChoicesDrawer.tsx` |
 | `frontend/src/components/chat/LiveStreamingTurnCard.tsx` |
+| `frontend/src/components/chat/SlashCommandPicker.tsx` |
+| `frontend/src/components/chat/SlashHelpTray.tsx` |
 | `frontend/src/components/chat/StandaloneArrivalCard.tsx` |
 | `frontend/src/components/chat/TurnCard.tsx` |
 | `frontend/src/components/chat/arrivalHelpers.ts` |
@@ -853,4 +855,5 @@ erDiagram
 | `frontend/src/utils/noteSearch.ts` |
 | `frontend/src/utils/partyCommand.ts` |
 | `frontend/src/utils/partyHelpers.ts` |
+| `frontend/src/utils/slashCommands.ts` |
 | `frontend/src/utils/unsupportedFields.ts` |

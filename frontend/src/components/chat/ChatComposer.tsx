@@ -17,6 +17,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  ActiveSlashCommand,
   CharacterChoiceOption,
   CharacterChoiceSet,
   CharacterRecord,
@@ -29,10 +30,20 @@ import {
   NeighborLocationView,
   TurnNodeRecord,
 } from "../../types";
+import {
+  findNextEnabledIndex,
+  getSlashCommandSpec,
+  isExactZeroArgCommandText,
+  type ActiveSlashHint,
+  type SlashCommandAvailabilityContext,
+  type SlashPickerItem,
+} from "../../utils/slashCommands";
 import { useMagicWand } from "../../hooks/useMagicWand";
 import { MagicWandButton } from "../MagicWandButton";
 import { CharacterMentionPicker } from "../CharacterMentionPicker";
 import { DirectorChoicesDrawer } from "./DirectorChoicesDrawer";
+import { SlashCommandIcon, SlashCommandPicker } from "./SlashCommandPicker";
+import { SlashHelpTray } from "./SlashHelpTray";
 
 export interface ChatComposerProps {
   composerBarRef: React.RefObject<HTMLFormElement>;
@@ -72,6 +83,22 @@ export interface ChatComposerProps {
   mentionSelectedIndex: number;
   setMentionSelectedIndex: React.Dispatch<React.SetStateAction<number>>;
   filteredMentionCharacters: CharacterRecord[];
+  activeSlash?: ActiveSlashCommand | null;
+  slashPickerOpen?: boolean;
+  slashPickerStage?: "command" | "subcommand";
+  slashPickerItems?: SlashPickerItem[];
+  slashSelectedIndex?: number;
+  setSlashSelectedIndex?: React.Dispatch<React.SetStateAction<number>>;
+  slashHardError?: string | null;
+  slashSyntaxHint?: ActiveSlashHint | null;
+  slashAvailabilityContext?: SlashCommandAvailabilityContext;
+  onSelectSlashItem?: (item: SlashPickerItem) => void;
+  onDismissSlashPicker?: () => void;
+  onClearActiveSlash?: () => void;
+  onBackspaceSlashPill?: () => void;
+  onInsertSlashFromHelp?: (cmd: ActiveSlashCommand) => void;
+  onComposerInputChange?: (value: string, cursorPos: number) => void;
+  onComposerCursorChange?: (cursorPos: number) => void;
   inputText: string;
   setInputText: React.Dispatch<React.SetStateAction<string>>;
   isBusy: boolean;
@@ -132,6 +159,22 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   mentionSelectedIndex,
   setMentionSelectedIndex,
   filteredMentionCharacters,
+  activeSlash = null,
+  slashPickerOpen = false,
+  slashPickerStage = "command",
+  slashPickerItems = [],
+  slashSelectedIndex = 0,
+  setSlashSelectedIndex,
+  slashHardError = null,
+  slashSyntaxHint = null,
+  slashAvailabilityContext,
+  onSelectSlashItem,
+  onDismissSlashPicker,
+  onClearActiveSlash,
+  onBackspaceSlashPill,
+  onInsertSlashFromHelp,
+  onComposerInputChange,
+  onComposerCursorChange,
   inputText,
   setInputText,
   isBusy,
@@ -153,6 +196,17 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   handleCancelEdit,
   handleSend,
 }) => {
+  const activeSlashSpec = activeSlash
+    ? getSlashCommandSpec(activeSlash.command)
+    : null;
+  const effectiveSlashAvailability: SlashCommandAvailabilityContext =
+    slashAvailabilityContext ?? {
+      presentCharacterCount: presentCharacters.length,
+      eligiblePartyInviteCount: presentCharacters.length,
+      inPlayerParty: false,
+      isEditingTurn: Boolean(editingTurn),
+    };
+
   return (
       <form ref={composerBarRef} className="composer-bar" onSubmit={handleSend}>
         {/* Active Edit Mode Banner */}
@@ -299,6 +353,15 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
           />
         )}
 
+        {/* Slash Commands /help Reference Tray */}
+        {activeTray === "slash_help" && (
+          <SlashHelpTray
+            availabilityContext={effectiveSlashAvailability}
+            onInsertCommand={(cmd) => onInsertSlashFromHelp?.(cmd)}
+            onClose={() => setActiveTray("none")}
+          />
+        )}
+
         {/* Unified Modern Composer Card */}
         <div className="composer-card">
           {decomposedInput.whispers.length > 0 && (
@@ -361,101 +424,249 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
               onSelect={handleSelectMention}
               onClose={() => setMentionPickerOpen(false)}
             />
-            <textarea
-              ref={textareaRef}
-              className="composer-textarea"
-              placeholder={
-                editingTurn
-                  ? "Edit your action or dialogue... (Modify text, @whispers, dice, or staged choices)"
-                  : totalStagedOptionsCount > 0
-                  ? "Optional user action / dialogue (Leave blank to let characters act on your staged choices)..."
-                  : presentCharacters.length === 0
-                  ? `You are alone in ${activeLocationName || "this location"}. Describe your action... (Or try @Name: for comms, /look, /wait 30m)`
-                  : `Write your action or dialogue to ${character.name}... (Or try @Name:, /choice, /look, /wait 30m)`
+            <SlashCommandPicker
+              isOpen={slashPickerOpen && !mentionPickerOpen}
+              stage={slashPickerStage}
+              items={slashPickerItems}
+              selectedIndex={slashSelectedIndex}
+              onSelect={(item) => onSelectSlashItem?.(item)}
+              onHoverIndex={(idx) => setSlashSelectedIndex?.(idx)}
+              onClose={() => onDismissSlashPicker?.()}
+            />
+            <div
+              className={
+                activeSlashSpec
+                  ? "composer-pill-input-row"
+                  : "composer-plain-input-row"
               }
-              value={inputText}
-              onChange={(e) => {
-                const val = e.target.value;
-                setInputText(val);
-                checkAndTriggerMention(val, e.target.selectionStart);
-              }}
-              onKeyUp={(e) => {
-                if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
-                  checkAndTriggerMention(inputText);
+            >
+              {activeSlashSpec && activeSlash && (
+                <span
+                  className={`composer-slash-pill composer-slash-pill--${activeSlashSpec.accent}`}
+                  data-command={activeSlashSpec.id}
+                >
+                  <SlashCommandIcon iconKey={activeSlashSpec.iconKey} size={13} />
+                  <span className="composer-slash-pill-label">
+                    {activeSlashSpec.name}
+                  </span>
+                  {activeSlash.subcommand && (
+                    <span className="composer-slash-subpill">
+                      {activeSlash.subcommand}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    className="composer-slash-pill-clear"
+                    onClick={() => onClearActiveSlash?.()}
+                    aria-label={`Remove /${activeSlashSpec.name} command`}
+                    title={`Remove /${activeSlashSpec.name} (Backspace at start)`}
+                  >
+                    <X size={11} />
+                  </button>
+                </span>
+              )}
+              <textarea
+                ref={textareaRef}
+                className={
+                  activeSlashSpec
+                    ? "composer-textarea composer-textarea--with-pill"
+                    : "composer-textarea"
                 }
-              }}
-              onKeyDown={(e) => {
-                if (mentionPickerOpen && filteredMentionCharacters.length > 0) {
-                  if (e.key === "ArrowDown") {
-                    e.preventDefault();
-                    setMentionSelectedIndex(
-                      (prev) => (prev + 1) % filteredMentionCharacters.length
-                    );
-                    return;
+                placeholder={
+                  activeSlashSpec
+                    ? slashSyntaxHint?.placeholder || "Press Enter to run..."
+                    : editingTurn
+                    ? "Edit your action or dialogue... (Modify text, @whispers, dice, or staged choices)"
+                    : totalStagedOptionsCount > 0
+                    ? "Optional user action / dialogue (Leave blank to let characters act on your staged choices)..."
+                    : presentCharacters.length === 0
+                    ? `You are alone in ${activeLocationName || "this location"}. Describe your action... (Type / for commands, @ for comms)`
+                    : `Write your action or dialogue to ${character.name}... (Type / for commands, @ for whispers)`
+                }
+                value={inputText}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  const cursor = e.target.selectionStart ?? val.length;
+                  if (onComposerInputChange) {
+                    onComposerInputChange(val, cursor);
+                  } else {
+                    setInputText(val);
+                    checkAndTriggerMention(val, cursor);
                   }
-                  if (e.key === "ArrowUp") {
-                    e.preventDefault();
-                    setMentionSelectedIndex(
-                      (prev) =>
-                        (prev - 1 + filteredMentionCharacters.length) %
-                        filteredMentionCharacters.length
-                    );
-                    return;
-                  }
-                  if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
-                    e.preventDefault();
-                    const picked =
-                      filteredMentionCharacters[mentionSelectedIndex] ||
-                      filteredMentionCharacters[0];
-                    if (picked) {
-                      handleSelectMention(picked);
+                }}
+                onClick={(e) => {
+                  const cursor =
+                    e.currentTarget.selectionStart ?? inputText.length;
+                  onComposerCursorChange?.(cursor);
+                }}
+                onKeyUp={(e) => {
+                  if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+                    const cursor =
+                      e.currentTarget.selectionStart ?? inputText.length;
+                    if (onComposerCursorChange) {
+                      onComposerCursorChange(cursor);
+                    } else {
+                      checkAndTriggerMention(inputText, cursor);
                     }
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (mentionPickerOpen && filteredMentionCharacters.length > 0) {
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault();
+                      setMentionSelectedIndex(
+                        (prev) => (prev + 1) % filteredMentionCharacters.length
+                      );
+                      return;
+                    }
+                    if (e.key === "ArrowUp") {
+                      e.preventDefault();
+                      setMentionSelectedIndex(
+                        (prev) =>
+                          (prev - 1 + filteredMentionCharacters.length) %
+                          filteredMentionCharacters.length
+                      );
+                      return;
+                    }
+                    if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+                      e.preventDefault();
+                      const picked =
+                        filteredMentionCharacters[mentionSelectedIndex] ||
+                        filteredMentionCharacters[0];
+                      if (picked) {
+                        handleSelectMention(picked);
+                      }
+                      return;
+                    }
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setMentionPickerOpen(false);
+                      return;
+                    }
+                  }
+                  if (
+                    slashPickerOpen &&
+                    slashPickerItems.length > 0 &&
+                    !mentionPickerOpen
+                  ) {
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault();
+                      setSlashSelectedIndex?.((prev) =>
+                        findNextEnabledIndex(slashPickerItems, prev, 1)
+                      );
+                      return;
+                    }
+                    if (e.key === "ArrowUp") {
+                      e.preventDefault();
+                      setSlashSelectedIndex?.((prev) =>
+                        findNextEnabledIndex(slashPickerItems, prev, -1)
+                      );
+                      return;
+                    }
+                    if (e.key === "Tab") {
+                      e.preventDefault();
+                      const picked =
+                        slashPickerItems[slashSelectedIndex] ||
+                        slashPickerItems.find((item) => item.available);
+                      if (picked && picked.available) {
+                        onSelectSlashItem?.(picked);
+                      }
+                      return;
+                    }
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      if (
+                        slashPickerStage === "command" &&
+                        isExactZeroArgCommandText(
+                          inputText,
+                          effectiveSlashAvailability
+                        ) !== null
+                      ) {
+                        handleSend(e);
+                        return;
+                      }
+                      const picked =
+                        slashPickerItems[slashSelectedIndex] ||
+                        slashPickerItems.find((item) => item.available);
+                      if (picked && picked.available) {
+                        onSelectSlashItem?.(picked);
+                      }
+                      return;
+                    }
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onDismissSlashPicker?.();
+                      return;
+                    }
+                  }
+                  if (
+                    e.key === "Backspace" &&
+                    !e.ctrlKey &&
+                    !e.metaKey &&
+                    !e.altKey &&
+                    activeSlash !== null &&
+                    e.currentTarget.selectionStart === 0 &&
+                    e.currentTarget.selectionEnd === 0
+                  ) {
+                    e.preventDefault();
+                    onBackspaceSlashPill?.();
                     return;
                   }
                   if (e.key === "Escape") {
+                    if (activeTray !== "none") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setActiveTray("none");
+                      return;
+                    }
+                    if (editingTurn) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleCancelEdit();
+                      return;
+                    }
+                  }
+                  if (
+                    (e.altKey && e.shiftKey && (e.key === "E" || e.key === "e")) ||
+                    (e.ctrlKey && e.shiftKey && (e.key === "E" || e.key === "e"))
+                  ) {
                     e.preventDefault();
-                    setMentionPickerOpen(false);
+                    if (magicWand.canEnrich) {
+                      magicWand.triggerEnrich("auto");
+                    }
                     return;
                   }
-                }
-                if (e.key === "Escape") {
-                  if (activeTray !== "none") {
+                  if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
-                    setActiveTray("none");
-                    return;
+                    handleSend(e);
                   }
-                  if (editingTurn) {
-                    e.preventDefault();
-                    handleCancelEdit();
-                    return;
-                  }
-                }
-                if (
-                  (e.altKey && e.shiftKey && (e.key === "E" || e.key === "e")) ||
-                  (e.ctrlKey && e.shiftKey && (e.key === "E" || e.key === "e"))
-                ) {
-                  e.preventDefault();
-                  if (magicWand.canEnrich) {
-                    magicWand.triggerEnrich("auto");
-                  }
-                  return;
-                }
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend(e);
-                }
-              }}
-            />
+                }}
+              />
+            </div>
             <div className="composer-wand-slot">
               <MagicWandButton
                 wand={magicWand}
-                isInputEmpty={!inputText.trim()}
-                isSlashCommand={inputText.trim().startsWith("/")}
+                isInputEmpty={!inputText.trim() && !activeSlash}
+                isSlashCommand={
+                  Boolean(activeSlash) || inputText.trim().startsWith("/")
+                }
               />
             </div>
           </div>
 
-          {choiceSlashWarning && (
+          {slashHardError ? (
+            <div className="party-slash-warning" role="alert">
+              <AlertTriangle size={12} />
+              <span>{slashHardError}</span>
+            </div>
+          ) : partySlashWarning ? (
+            <div className="party-slash-warning" role="alert">
+              <AlertTriangle size={12} />
+              <span>{partySlashWarning}</span>
+            </div>
+          ) : choiceSlashWarning ? (
             <div
               style={{
                 padding: "5px 12px",
@@ -471,14 +682,14 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
               <AlertTriangle size={12} />
               <span>{choiceSlashWarning}</span>
             </div>
-          )}
-
-          {partySlashWarning && (
-            <div className="party-slash-warning" role="alert">
-              <AlertTriangle size={12} />
-              <span>{partySlashWarning}</span>
+          ) : slashSyntaxHint?.showStrip ? (
+            <div className="composer-slash-hint">
+              <code>{slashSyntaxHint.syntax}</code>
+              <span className="composer-slash-hint-example">
+                e.g. {slashSyntaxHint.example}
+              </span>
             </div>
-          )}
+          ) : null}
 
           {/* Composer Footer Bar */}
           <div className="composer-footer">
@@ -746,8 +957,11 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                 className="btn btn-amber composer-send-btn"
                 disabled={
                   isBusy ||
+                  Boolean(slashHardError) ||
                   Boolean(partySlashWarning) ||
-                  (!inputText.trim() && totalStagedOptionsCount === 0) ||
+                  (!inputText.trim() &&
+                    !activeSlash &&
+                    totalStagedOptionsCount === 0) ||
                   (diceMode === "forced" &&
                     diceOverride.trim() !== "" &&
                     (isNaN(parseInt(diceOverride, 10)) ||

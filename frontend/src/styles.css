@@ -7618,6 +7618,13 @@ body {
   flex-wrap: wrap;
 }
 
+.field-select.party-relocate-select {
+  width: auto;
+  max-width: 220px;
+  padding: 3px 8px;
+  font-size: 0.74rem;
+}
+
 .party-inline-invite {
   border-top: 1px solid var(--border-subtle);
   padding-top: 8px;
@@ -7681,4 +7688,430 @@ body {
   color: #67e8f9;
   cursor: pointer;
   user-select: none;
+}
+
+/* =========================================================================
+   Slash Command Autocomplete, Inline Command Pills & /help Reference Tray
+   ========================================================================= */
+
+.composer-plain-input-row {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.composer-pill-input-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px 8px;
+  padding: 10px 12px 30px 12px;
+  min-height: 64px;
+}
+
+.composer-textarea--with-pill {
+  flex: 1 1 200px;
+  min-width: 160px;
+  min-height: 34px;
+  padding: 3px 2px 4px 2px;
+}
+
+.composer-slash-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px 3px 8px;
+  margin-top: 2px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.25;
+  border: 1px solid transparent;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.composer-slash-pill--cyan {
+  background: rgba(6, 182, 212, 0.16);
+  border-color: rgba(6, 182, 212, 0.45);
+  color: #67e8f9;
+}
+
+.composer-slash-pill--blue {
+  background: rgba(59, 130, 246, 0.16);
+  border-color: rgba(59, 130, 246, 0.45);
+  color: #93c5fd;
+}
+
+.composer-slash-pill--amber {
+  background: rgba(245, 158, 11, 0.16);
+  border-color: rgba(245, 158, 11, 0.45);
+  color: #fcd34d;
+}
+
+.composer-slash-pill--violet {
+  background: rgba(139, 92, 246, 0.18);
+  border-color: rgba(139, 92, 246, 0.48);
+  color: #c4b5fd;
+}
+
+.composer-slash-pill-label {
+  letter-spacing: 0.01em;
+}
+
+.composer-slash-subpill {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.71rem;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #f8fafc;
+}
+
+.composer-slash-pill-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin-left: 1px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.72;
+  cursor: pointer;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+
+.composer-slash-pill-clear:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.composer-slash-hint {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 5px 12px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  background: rgba(6, 182, 212, 0.06);
+  border-top: 1px solid rgba(6, 182, 212, 0.18);
+}
+
+.composer-slash-hint code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.71rem;
+  color: #67e8f9;
+}
+
+.composer-slash-hint-example {
+  color: var(--text-secondary);
+  opacity: 0.85;
+}
+
+/* Slash Command Autocomplete Popover */
+.slash-picker-popover {
+  width: min(480px, 95vw);
+  border-color: rgba(6, 182, 212, 0.42);
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(6, 182, 212, 0.2);
+}
+
+.slash-picker-popover .mention-picker-header {
+  background: rgba(6, 182, 212, 0.1);
+  border-bottom-color: rgba(6, 182, 212, 0.2);
+}
+
+.slash-picker-popover .mention-picker-title {
+  color: #67e8f9;
+}
+
+.slash-picker-list {
+  max-height: 260px;
+}
+
+.slash-picker-item {
+  align-items: flex-start;
+  padding: 7px 8px;
+}
+
+.slash-picker-item.selected:not(.slash-picker-item--disabled),
+.slash-picker-item:hover:not(.slash-picker-item--disabled) {
+  background: rgba(6, 182, 212, 0.18);
+}
+
+.slash-picker-item--disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.slash-picker-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.slash-picker-icon--cyan {
+  background: rgba(6, 182, 212, 0.16);
+  color: #67e8f9;
+}
+
+.slash-picker-icon--blue {
+  background: rgba(59, 130, 246, 0.16);
+  color: #93c5fd;
+}
+
+.slash-picker-icon--amber {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fcd34d;
+}
+
+.slash-picker-icon--violet {
+  background: rgba(139, 92, 246, 0.2);
+  color: #c4b5fd;
+}
+
+.slash-picker-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.slash-picker-top-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.slash-picker-cmd {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.slash-picker-syntax {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.7rem;
+  color: #67e8f9;
+  background: rgba(15, 23, 42, 0.7);
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.slash-picker-alias-badge {
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+
+.slash-picker-reason {
+  font-size: 0.67rem;
+  font-weight: 500;
+  color: #cbd5e1;
+  background: rgba(148, 163, 184, 0.14);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 4px;
+  padding: 0 5px;
+  margin-left: auto;
+}
+
+.slash-picker-desc {
+  font-size: 0.73rem;
+  color: #94a3b8;
+  line-height: 1.35;
+}
+
+/* Above-Composer /help Reference Tray */
+.slash-help-tray {
+  background: rgba(17, 24, 39, 0.96);
+  border: 1px solid rgba(6, 182, 212, 0.4);
+  border-radius: 8px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: fadeIn 0.15s ease-out;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+}
+
+.slash-help-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.slash-help-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #67e8f9;
+  font-weight: 600;
+  font-size: 0.78rem;
+}
+
+.slash-help-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.slash-help-item-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.slash-help-row {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.slash-help-row:hover:not(:disabled) {
+  background: rgba(6, 182, 212, 0.12);
+  border-color: rgba(6, 182, 212, 0.35);
+}
+
+.slash-help-row--disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.slash-help-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.slash-help-row-top {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.slash-help-cmd {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.slash-help-aliases {
+  font-size: 0.69rem;
+  color: var(--text-muted);
+}
+
+.slash-help-syntax {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.7rem;
+  color: #67e8f9;
+  background: rgba(15, 23, 42, 0.7);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.slash-help-desc {
+  font-size: 0.72rem;
+  color: #94a3b8;
+  line-height: 1.35;
+}
+
+.slash-help-subcmds {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0 8px 4px 36px;
+}
+
+.slash-help-subcmds-label {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+.slash-help-subcmd-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  border: 1px solid rgba(139, 92, 246, 0.4);
+  background: rgba(139, 92, 246, 0.14);
+  color: #c4b5fd;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.slash-help-subcmd-btn:hover:not(:disabled) {
+  background: rgba(139, 92, 246, 0.28);
+  border-color: rgba(139, 92, 246, 0.65);
+}
+
+.slash-help-subcmd-btn--disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.slash-help-subcmd-reason {
+  font-weight: 400;
+  color: #cbd5e1;
+}
+
+.slash-help-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.71rem;
+  color: #94a3b8;
+}
+
+.slash-help-footer-title {
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.slash-help-footer-item code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.69rem;
+  color: #c4b5fd;
+  background: rgba(15, 23, 42, 0.65);
+  padding: 1px 4px;
+  border-radius: 3px;
 }

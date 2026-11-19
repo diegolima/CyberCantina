@@ -285,7 +285,39 @@ export type NarrativeMode =
   | "custom";
 
 export type ComposerPopoverId = "none" | "narrator" | "exits";
-export type ComposerTrayId = "none" | "pass_time" | "custom_directive" | "choices";
+export type ComposerTrayId =
+  | "none"
+  | "pass_time"
+  | "custom_directive"
+  | "choices"
+  | "slash_help";
+
+export type SlashCommandId =
+  | "choice"
+  | "event"
+  | "help"
+  | "look"
+  | "narrate"
+  | "party"
+  | "wait";
+
+export type PartySubcommandId = "disband" | "invite" | "kick" | "leave";
+
+export type SlashCommandIconKey =
+  | "list_checks"
+  | "zap"
+  | "help_circle"
+  | "eye"
+  | "sparkles"
+  | "users"
+  | "clock";
+
+export type SlashCommandAccent = "blue" | "amber" | "cyan" | "violet";
+
+export interface ActiveSlashCommand {
+  command: SlashCommandId;
+  subcommand: PartySubcommandId | null;
+}
 
 export type EnrichFieldRole =
   | "player_turn_prompt"

@@ -7,6 +7,7 @@ import {
   PanelRightOpen,
 } from "lucide-react";
 import {
+  ActiveSlashCommand,
   CharacterChoiceOption,
   CharacterChoiceSet,
   CharacterRecord,
@@ -35,8 +36,21 @@ import {
 import {
   getActiveParties,
   getCoLocatedPlayerPartyNpcs,
+  getPlayerParty,
   formatQuickExitMessage,
 } from "../utils/partyHelpers";
+import {
+  detectSlashAutocompleteContext,
+  findFirstEnabledIndex,
+  formatActiveSlashCommand,
+  getActiveSlashHint,
+  getSlashCommandPrefix,
+  resolveSlashCommandToken,
+  tryPromoteSlashInput,
+  validateSlashCommandInput,
+  type SlashCommandAvailabilityContext,
+  type SlashPickerItem,
+} from "../utils/slashCommands";
 import { useMagicWand } from "../hooks/useMagicWand";
 import {
   decomposeClientUserMessage,
@@ -75,6 +89,11 @@ export const ChatStage: React.FC<ChatStageProps> = ({
 }) => {
   const isBusy = isStreaming || isPhase4Running;
   const [inputText, setInputText] = useState("");
+  const [activeSlash, setActiveSlash] = useState<ActiveSlashCommand | null>(null);
+  const [slashPickerDismissed, setSlashPickerDismissed] = useState(false);
+  const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
+  const [slashCursorPos, setSlashCursorPos] = useState(0);
+  const [submitSlashError, setSubmitSlashError] = useState<string | null>(null);
   const [diceMode, setDiceMode] = useState<DiceMode>("auto");
   const [diceOverride, setDiceOverride] = useState<string>("");
   const [openCognitionIds, setOpenCognitionIds] = useState<Record<string, boolean>>({});
@@ -83,6 +102,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const [editingTurn, setEditingTurn] = useState<TurnNodeRecord | null>(null);
   const stashedDraftRef = useRef<{
     inputText: string;
+    activeSlash: ActiveSlashCommand | null;
     diceMode: DiceMode;
     diceOverride: string;
     stagedChoices: Record<string, CharacterChoiceSet>;
@@ -142,42 +162,9 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       override_location_id: pendingLocationOverrideId ?? null,
     },
     contextKey: wandContextKey,
-    disabled: isBusy,
+    disabled: isBusy || Boolean(activeSlash),
     maxWords: 120,
   });
-
-  // Global escape & outside click listener for popovers/drawers
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (activePopover === "none") return;
-      if (
-        composerBarRef.current &&
-        !composerBarRef.current.contains(e.target as Node)
-      ) {
-        setActivePopover("none");
-      }
-    };
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        if (activePopover !== "none") {
-          const prev = activePopover;
-          setActivePopover("none");
-          if (prev === "narrator" && narratorBtnRef.current) narratorBtnRef.current.focus();
-          if (prev === "exits" && exitsBtnRef.current) exitsBtnRef.current.focus();
-        } else if (activeTray !== "none") {
-          setActiveTray("none");
-        } else if (editingTurn) {
-          handleCancelEditRef.current();
-        }
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [activePopover, activeTray, editingTurn]);
 
   const presentCharacters = useMemo(() => {
     const rawIds =
@@ -247,6 +234,139 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   );
 
   const activeParties = getActiveParties(bundle);
+  const playerParty = useMemo(
+    () => getPlayerParty(activeParties),
+    [activeParties]
+  );
+  const eligiblePartyInviteCount = useMemo(() => {
+    const partyMemberIds = new Set(playerParty?.member_ids ?? []);
+    return presentCharacterIds.filter((cid) => !partyMemberIds.has(cid)).length;
+  }, [presentCharacterIds, playerParty]);
+
+  const slashAvailabilityContext: SlashCommandAvailabilityContext = useMemo(
+    () => ({
+      presentCharacterCount: presentCharacters.length,
+      eligiblePartyInviteCount,
+      inPlayerParty: Boolean(playerParty),
+      isEditingTurn: Boolean(editingTurn),
+    }),
+    [
+      presentCharacters.length,
+      eligiblePartyInviteCount,
+      playerParty,
+      editingTurn,
+    ]
+  );
+
+  const effectiveRawInput = useMemo(
+    () => formatActiveSlashCommand(activeSlash, inputText),
+    [activeSlash, inputText]
+  );
+
+  const slashAutocomplete = useMemo(() => {
+    if (mentionPickerOpen || slashPickerDismissed) return null;
+    return detectSlashAutocompleteContext(
+      inputText,
+      slashCursorPos,
+      activeSlash,
+      slashAvailabilityContext
+    );
+  }, [
+    mentionPickerOpen,
+    slashPickerDismissed,
+    inputText,
+    slashCursorPos,
+    activeSlash,
+    slashAvailabilityContext,
+  ]);
+
+  const slashPickerItems = slashAutocomplete?.items ?? [];
+  const slashPickerOpen = Boolean(
+    slashAutocomplete && slashPickerItems.length > 0
+  );
+  const slashPickerStage = slashAutocomplete?.stage ?? "command";
+
+  useEffect(() => {
+    if (!slashPickerOpen) {
+      setSlashSelectedIndex(0);
+      return;
+    }
+    setSlashSelectedIndex(findFirstEnabledIndex(slashPickerItems));
+  }, [
+    slashPickerStage,
+    slashAutocomplete?.query,
+    slashPickerOpen,
+    slashAvailabilityContext,
+  ]);
+
+  const slashHardError = useMemo(
+    () =>
+      submitSlashError ??
+      validateSlashCommandInput(
+        effectiveRawInput,
+        activeSlash,
+        slashAvailabilityContext
+      ),
+    [
+      submitSlashError,
+      effectiveRawInput,
+      activeSlash,
+      slashAvailabilityContext,
+    ]
+  );
+
+  const slashSyntaxHint = useMemo(
+    () => getActiveSlashHint(activeSlash),
+    [activeSlash]
+  );
+
+  // Global escape & outside click listener for popovers/drawers
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (activePopover === "none") return;
+      if (
+        composerBarRef.current &&
+        !composerBarRef.current.contains(e.target as Node)
+      ) {
+        setActivePopover("none");
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (mentionPickerOpen) {
+          setMentionPickerOpen(false);
+          return;
+        }
+        if (slashPickerOpen) {
+          setSlashPickerDismissed(true);
+          return;
+        }
+        if (activePopover !== "none") {
+          const prev = activePopover;
+          setActivePopover("none");
+          if (prev === "narrator" && narratorBtnRef.current) narratorBtnRef.current.focus();
+          if (prev === "exits" && exitsBtnRef.current) exitsBtnRef.current.focus();
+        } else if (activeTray !== "none") {
+          setActiveTray("none");
+        } else if (editingTurn) {
+          handleCancelEditRef.current();
+        }
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [
+    activePopover,
+    activeTray,
+    editingTurn,
+    mentionPickerOpen,
+    slashPickerOpen,
+  ]);
+
   const coLocatedPartyNpcs = useMemo(
     () => getCoLocatedPlayerPartyNpcs(activeParties, bundle.active_location.id),
     [activeParties, bundle.active_location.id]
@@ -272,10 +392,10 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   );
 
   const partyCommandState = useMemo(() => {
-    if (!isPartySlashCommand(inputText)) {
+    if (!isPartySlashCommand(effectiveRawInput)) {
       return { action: null, error: null };
     }
-    return parsePartySlashCommand(inputText, {
+    return parsePartySlashCommand(effectiveRawInput, {
       allCharacters: allCampaignCharacters,
       presentCharacterIds,
       activeParties,
@@ -283,7 +403,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       charLocations: charLocationMap,
     });
   }, [
-    inputText,
+    effectiveRawInput,
     allCampaignCharacters,
     presentCharacterIds,
     activeParties,
@@ -310,27 +430,54 @@ export const ChatStage: React.FC<ChatStageProps> = ({
 
   const decomposedInput = useMemo(() => {
     return decomposeClientUserMessage(
-      inputText,
+      activeSlash ? "" : inputText,
       allCampaignCharacters,
       presentCharacterIds
     );
-  }, [inputText, allCampaignCharacters, presentCharacterIds]);
+  }, [activeSlash, inputText, allCampaignCharacters, presentCharacterIds]);
 
-  const checkAndTriggerMention = (newText: string, cursorOffset?: number) => {
+  const focusTextareaAt = (pos: number) => {
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(pos, pos);
+      }
+    }, 0);
+  };
+
+  const checkAndTriggerMention = (
+    newText: string,
+    cursorOffset?: number,
+    slashOverride: ActiveSlashCommand | null = activeSlash
+  ) => {
     const textarea = textareaRef.current;
     const cursorPos = cursorOffset ?? textarea?.selectionStart ?? newText.length;
 
-    const partyCtx = detectPartyMentionContext(newText, cursorPos, {
-      allCharacters: allCampaignCharacters,
-      presentCharacterIds,
-      activeParties,
-    });
-    if (partyCtx) {
-      setMentionMode(partyCtx.mode);
-      setMentionTriggerStart(partyCtx.triggerStart);
-      setMentionCandidates(partyCtx.candidates);
-      setMentionQuery(partyCtx.query);
-      setMentionPickerOpen(partyCtx.candidates.length > 0);
+    if (slashOverride === null || slashOverride.command === "party") {
+      const prefix = getSlashCommandPrefix(slashOverride);
+      const partyCtx = detectPartyMentionContext(
+        prefix + newText,
+        prefix.length + cursorPos,
+        {
+          allCharacters: allCampaignCharacters,
+          presentCharacterIds,
+          activeParties,
+        }
+      );
+      if (partyCtx) {
+        setMentionMode(partyCtx.mode);
+        setMentionTriggerStart(
+          Math.max(0, partyCtx.triggerStart - prefix.length)
+        );
+        setMentionCandidates(partyCtx.candidates);
+        setMentionQuery(partyCtx.query);
+        setMentionPickerOpen(partyCtx.candidates.length > 0);
+        return;
+      }
+    }
+
+    if (slashOverride !== null) {
+      setMentionPickerOpen(false);
       return;
     }
 
@@ -350,6 +497,102 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     }
   };
 
+  const handleComposerInputChange = (nextVal: string, cursorPos: number) => {
+    setSubmitSlashError(null);
+    setSlashPickerDismissed(false);
+
+    const promoted = tryPromoteSlashInput(
+      nextVal,
+      cursorPos,
+      activeSlash,
+      slashAvailabilityContext
+    );
+    if (promoted) {
+      setActiveSlash(promoted.activeSlash);
+      setInputText(promoted.nextText);
+      setSlashCursorPos(promoted.nextCursorPos);
+      checkAndTriggerMention(
+        promoted.nextText,
+        promoted.nextCursorPos,
+        promoted.activeSlash
+      );
+      focusTextareaAt(promoted.nextCursorPos);
+      return;
+    }
+
+    setInputText(nextVal);
+    setSlashCursorPos(cursorPos);
+    checkAndTriggerMention(nextVal, cursorPos, activeSlash);
+  };
+
+  const handleComposerCursorChange = (cursorPos: number) => {
+    setSlashCursorPos(cursorPos);
+    checkAndTriggerMention(inputText, cursorPos, activeSlash);
+  };
+
+  const handleSelectSlashItem = (item: SlashPickerItem) => {
+    if (!item.available) return;
+    const start = slashAutocomplete?.tokenStart ?? 0;
+    const end = slashAutocomplete?.tokenEnd ?? inputText.length;
+    const before = inputText.slice(0, start);
+    const after = inputText.slice(end).replace(/^[ \t]+/, "");
+    const nextText = `${before}${after}`;
+    const nextCursorPos = before.length;
+    const nextSlash: ActiveSlashCommand =
+      item.stage === "subcommand"
+        ? { command: "party", subcommand: item.subcommandId }
+        : { command: item.commandId, subcommand: null };
+
+    setActiveSlash(nextSlash);
+    setInputText(nextText);
+    setSlashCursorPos(nextCursorPos);
+    setSubmitSlashError(null);
+    setSlashPickerDismissed(false);
+    checkAndTriggerMention(nextText, nextCursorPos, nextSlash);
+    focusTextareaAt(nextCursorPos);
+  };
+
+  const handleBackspaceSlashPill = () => {
+    if (!activeSlash) return;
+    setSubmitSlashError(null);
+    setSlashPickerDismissed(false);
+    if (activeSlash.subcommand !== null) {
+      const nextSlash: ActiveSlashCommand = {
+        command: activeSlash.command,
+        subcommand: null,
+      };
+      setActiveSlash(nextSlash);
+      setSlashCursorPos(0);
+      checkAndTriggerMention(inputText, 0, nextSlash);
+      focusTextareaAt(0);
+      return;
+    }
+    setActiveSlash(null);
+    setSlashCursorPos(0);
+    checkAndTriggerMention(inputText, 0, null);
+    focusTextareaAt(0);
+  };
+
+  const handleClearActiveSlash = () => {
+    setActiveSlash(null);
+    setSubmitSlashError(null);
+    setSlashPickerDismissed(false);
+    setSlashCursorPos(0);
+    checkAndTriggerMention(inputText, 0, null);
+    focusTextareaAt(0);
+  };
+
+  const handleInsertSlashFromHelp = (cmd: ActiveSlashCommand) => {
+    setActiveTray("none");
+    setActivePopover("none");
+    setSubmitSlashError(null);
+    setSlashPickerDismissed(false);
+    setActiveSlash(cmd);
+    setSlashCursorPos(0);
+    checkAndTriggerMention(inputText, 0, cmd);
+    focusTextareaAt(0);
+  };
+
   const handleSelectMention = (char: CharacterRecord) => {
     const textarea = textareaRef.current;
     const cursorPos = textarea?.selectionStart ?? inputText.length;
@@ -362,6 +605,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         char.name
       );
       setInputText(nextText);
+      setSlashCursorPos(nextCursorPos);
       setMentionPickerOpen(false);
       setMentionQuery("");
       setTimeout(() => {
@@ -428,8 +672,8 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   }, [stagedChoices]);
 
   const choiceSlashWarning = useMemo(() => {
-    if (!isChoiceSlashCommand(inputText)) return null;
-    const body = inputText.trim().replace(/^\/choices?\s*/i, "").trim();
+    if (!isChoiceSlashCommand(effectiveRawInput)) return null;
+    const body = effectiveRawInput.trim().replace(/^\/choices?\s*/i, "").trim();
     const colonIdx = body.indexOf(":");
     const optionsPart =
       colonIdx !== -1
@@ -453,7 +697,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       return `Choice label exceeds ${MAX_CHOICE_LABEL_LENGTH} character limit (will be trimmed)`;
     }
     return null;
-  }, [inputText]);
+  }, [effectiveRawInput]);
 
   // Decision D2: When gate choices are staged, promote disabled dice mode to auto
   useEffect(() => {
@@ -634,6 +878,10 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   useEffect(() => {
     setEditingTurn(null);
     stashedDraftRef.current = null;
+    setActiveSlash(null);
+    setSlashCursorPos(0);
+    setSubmitSlashError(null);
+    setSlashPickerDismissed(false);
     setActivePopover("none");
     setActiveTray("none");
     setStagedChoices({});
@@ -697,7 +945,11 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     if (isBusy) return;
     setActivePopover("none");
     setActiveTray("none");
+    setActiveSlash(null);
     setInputText("");
+    setSlashCursorPos(0);
+    setSubmitSlashError(null);
+    setSlashPickerDismissed(false);
     setStagedChoices({});
     magicWand.reset();
 
@@ -796,13 +1048,42 @@ export const ChatStage: React.FC<ChatStageProps> = ({
 
   const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
-    const raw = inputText.trim();
+    const raw = effectiveRawInput.trim();
     if ((!raw && totalStagedOptionsCount === 0) || isBusy) return;
+
+    const submitErr = validateSlashCommandInput(
+      effectiveRawInput,
+      activeSlash,
+      slashAvailabilityContext,
+      { isSubmitting: true }
+    );
+    if (submitErr) {
+      setSubmitSlashError(submitErr);
+      return;
+    }
+
     if (partyCommandState.error) return;
 
     // Check for slash command shortcuts (excluding /party which submits as a full turn)
     if (raw.startsWith("/") && !isPartySlashCommand(raw)) {
-      if (isChoiceSlashCommand(raw)) {
+      const parts = raw.slice(1).split(/\s+/);
+      const cmdSpec = resolveSlashCommandToken(parts[0] || "");
+      const arg = parts.slice(1).join(" ").trim();
+
+      if (cmdSpec?.id === "help") {
+        setActiveSlash(null);
+        setInputText("");
+        setSlashCursorPos(0);
+        setSubmitSlashError(null);
+        setSlashPickerDismissed(false);
+        setMentionPickerOpen(false);
+        setActivePopover("none");
+        setActiveTray("slash_help");
+        magicWand.reset();
+        return;
+      }
+
+      if (cmdSpec?.id === "choice") {
         const parsed = parseChoiceSlashCommand(raw, presentCharacters);
         if (parsed && parsed.choiceSet.options.length > 0) {
           const targetId = parsed.choiceSet.character_id;
@@ -812,32 +1093,44 @@ export const ChatStage: React.FC<ChatStageProps> = ({
           }));
           setActiveChoiceCharId(targetId);
           setActiveTray("choices");
+          setActiveSlash(null);
           setInputText("");
+          setSlashCursorPos(0);
+          setSubmitSlashError(null);
+          setSlashPickerDismissed(false);
           magicWand.reset();
           return;
         } else if (parsed && parsed.matchedCharacter) {
           setActiveChoiceCharId(parsed.matchedCharacter.id);
           setActiveTray("choices");
+          setActiveSlash(null);
           setInputText("");
+          setSlashCursorPos(0);
+          setSubmitSlashError(null);
+          setSlashPickerDismissed(false);
           magicWand.reset();
           return;
         }
       }
 
-      const parts = raw.slice(1).split(/\s+/);
-      const cmd = parts[0].toLowerCase();
-      const arg = parts.slice(1).join(" ").trim();
-
-      if (cmd === "look" || cmd === "scene" || cmd === "describe") {
+      if (cmdSpec?.id === "look") {
+        setActiveSlash(null);
         setInputText("");
+        setSlashCursorPos(0);
+        setSubmitSlashError(null);
+        setSlashPickerDismissed(false);
         setDiceMode("auto");
         setDiceOverride("");
         magicWand.reset();
         handleInvokeNarrator("describe");
         return;
       }
-      if (cmd === "wait" || cmd === "pass") {
+      if (cmdSpec?.id === "wait") {
+        setActiveSlash(null);
         setInputText("");
+        setSlashCursorPos(0);
+        setSubmitSlashError(null);
+        setSlashPickerDismissed(false);
         setDiceMode("auto");
         setDiceOverride("");
         magicWand.reset();
@@ -847,24 +1140,38 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         } else if (arg.endsWith("h") || arg.endsWith("hr") || arg.endsWith("hours")) {
           dur = parseInt(arg, 10) * 60;
         }
-        handleInvokeNarrator("advance", arg || "a few moments", isNaN(dur as number) ? undefined : dur);
+        handleInvokeNarrator(
+          "advance",
+          arg || "a few moments",
+          isNaN(dur as number) ? undefined : dur
+        );
         return;
       }
-      if (cmd === "event" || cmd === "complication") {
+      if (cmdSpec?.id === "event") {
+        setActiveSlash(null);
         setInputText("");
+        setSlashCursorPos(0);
+        setSubmitSlashError(null);
+        setSlashPickerDismissed(false);
         setDiceMode("auto");
         setDiceOverride("");
         magicWand.reset();
         handleInvokeNarrator("complication", arg || undefined);
         return;
       }
-      if (cmd === "narrate" || cmd === "direct" || cmd === "custom") {
+      if (cmdSpec?.id === "narrate") {
+        setActiveSlash(null);
         setInputText("");
+        setSlashCursorPos(0);
+        setSubmitSlashError(null);
+        setSlashPickerDismissed(false);
         setDiceMode("auto");
         setDiceOverride("");
         magicWand.reset();
         if (arg) {
-          const targetParentId = editingTurn ? editingTurn.parent_turn_id : undefined;
+          const targetParentId = editingTurn
+            ? editingTurn.parent_turn_id
+            : undefined;
           onSendTurn({
             userMessage: arg,
             parentTurnId: targetParentId,
@@ -946,7 +1253,11 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     stashedDraftRef.current = null;
     setEditingTurn(null);
 
+    setActiveSlash(null);
     setInputText("");
+    setSlashCursorPos(0);
+    setSubmitSlashError(null);
+    setSlashPickerDismissed(false);
     setMentionPickerOpen(false);
     setMentionQuery("");
     setMentionSelectedIndex(0);
@@ -994,9 +1305,15 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     if (isBusy || isDeletingTurn || !turn.parent_turn_id) return;
 
     // Stash current composer draft if not already in edit mode
-    if (!editingTurn && (inputText.trim() !== "" || Object.keys(stagedChoices).length > 0)) {
+    if (
+      !editingTurn &&
+      (inputText.trim() !== "" ||
+        activeSlash !== null ||
+        Object.keys(stagedChoices).length > 0)
+    ) {
       stashedDraftRef.current = {
         inputText,
+        activeSlash,
         diceMode,
         diceOverride,
         stagedChoices: JSON.parse(JSON.stringify(stagedChoices)),
@@ -1004,7 +1321,11 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     }
 
     setEditingTurn(turn);
+    setActiveSlash(null);
     setInputText(turn.user_message);
+    setSlashCursorPos(turn.user_message.length);
+    setSubmitSlashError(null);
+    setSlashPickerDismissed(false);
 
     const legacyForced = turn.pre_turn?.resolved_roll?.is_manual_override;
     const initialMode: DiceMode =
@@ -1044,16 +1365,22 @@ export const ChatStage: React.FC<ChatStageProps> = ({
 
   const handleCancelEdit = () => {
     setEditingTurn(null);
+    setSubmitSlashError(null);
+    setSlashPickerDismissed(false);
     magicWand.reset();
 
     if (stashedDraftRef.current) {
+      setActiveSlash(stashedDraftRef.current.activeSlash);
       setInputText(stashedDraftRef.current.inputText);
+      setSlashCursorPos(stashedDraftRef.current.inputText.length);
       setDiceMode(stashedDraftRef.current.diceMode);
       setDiceOverride(stashedDraftRef.current.diceOverride);
       setStagedChoices(stashedDraftRef.current.stagedChoices);
       stashedDraftRef.current = null;
     } else {
+      setActiveSlash(null);
       setInputText("");
+      setSlashCursorPos(0);
       setDiceMode("auto");
       setDiceOverride("");
       setStagedChoices({});
@@ -1294,6 +1621,22 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         mentionSelectedIndex={mentionSelectedIndex}
         setMentionSelectedIndex={setMentionSelectedIndex}
         filteredMentionCharacters={filteredMentionCharacters}
+        activeSlash={activeSlash}
+        slashPickerOpen={slashPickerOpen}
+        slashPickerStage={slashPickerStage}
+        slashPickerItems={slashPickerItems}
+        slashSelectedIndex={slashSelectedIndex}
+        setSlashSelectedIndex={setSlashSelectedIndex}
+        slashHardError={slashHardError}
+        slashSyntaxHint={slashSyntaxHint}
+        slashAvailabilityContext={slashAvailabilityContext}
+        onSelectSlashItem={handleSelectSlashItem}
+        onDismissSlashPicker={() => setSlashPickerDismissed(true)}
+        onClearActiveSlash={handleClearActiveSlash}
+        onBackspaceSlashPill={handleBackspaceSlashPill}
+        onInsertSlashFromHelp={handleInsertSlashFromHelp}
+        onComposerInputChange={handleComposerInputChange}
+        onComposerCursorChange={handleComposerCursorChange}
         inputText={inputText}
         setInputText={setInputText}
         isBusy={isBusy}
