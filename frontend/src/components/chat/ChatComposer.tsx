@@ -73,6 +73,7 @@ export interface ChatComposerProps {
   setInputText: React.Dispatch<React.SetStateAction<string>>;
   isBusy: boolean;
   magicWand: ReturnType<typeof useMagicWand>;
+  activeLocationName?: string;
   neighborLocations: NeighborLocationView[];
   handleSelectMention: (char: CharacterRecord) => void;
   handleRemoveMentionChip: (charName: string) => void;
@@ -129,6 +130,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   setInputText,
   isBusy,
   magicWand,
+  activeLocationName,
   neighborLocations,
   handleSelectMention,
   handleRemoveMentionChip,
@@ -360,6 +362,8 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                   ? "Edit your action or dialogue... (Modify text, @whispers, dice, or staged choices)"
                   : totalStagedOptionsCount > 0
                   ? "Optional user action / dialogue (Leave blank to let characters act on your staged choices)..."
+                  : presentCharacters.length === 0
+                  ? `You are alone in ${activeLocationName || "this location"}. Describe your action... (Or try @Name: for comms, /look, /wait 30m)`
                   : `Write your action or dialogue to ${character.name}... (Or try @Name:, /choice, /look, /wait 30m)`
               }
               value={inputText}
@@ -615,6 +619,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                 className={`btn composer-action-btn ${
                   activeTray === "choices" ? "active" : ""
                 }`}
+                disabled={presentCharacters.length === 0}
                 style={{
                   borderColor:
                     totalStagedOptionsCount > 0
@@ -632,7 +637,11 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                     prev === "choices" ? "none" : "choices"
                   );
                 }}
-                title="Present character choices to guide cognition [/choice]"
+                title={
+                  presentCharacters.length === 0
+                    ? "No characters present in this location to guide"
+                    : "Present character choices to guide cognition [/choice]"
+                }
               >
                 <ListChecks
                   size={12}

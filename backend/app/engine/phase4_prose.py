@@ -38,6 +38,7 @@ def build_offline_simulated_prose(
     present_characters: list[CharacterRecord] | None = None,
     all_character_states: dict[str, CharacterStateSnapshot] | None = None,
     is_narrator: bool = False,
+    is_solo: bool = False,
     narrative_mode: str | None = None,
     narrator_directive: str | None = None,
     established_cognition: CognitionBlock | None = None,
@@ -86,6 +87,60 @@ def build_offline_simulated_prose(
                 f"*{active_location.name}: {directive_note}. {active_location.description} "
                 f"Current surroundings: {env_tags_str}.*"
             )
+
+    if is_solo:
+        target_exit = neighbors[0] if neighbors else None
+        if pre_turn.spatial_intent == "move_known" and pre_turn.target_location_hint:
+            return (
+                f"*You move out alone through the passage toward {pre_turn.target_location_hint}, "
+                f"leaving {active_location.name} behind in quiet solitude.*"
+            )
+        if pre_turn.spatial_intent == "explore_new":
+            return (
+                f"*You push forward past the far threshold of {active_location.name} alone, "
+                f"your footsteps echoing off the empty structure ahead.*"
+            )
+        if pre_turn.resolved_roll is not None:
+            roll = pre_turn.resolved_roll
+            tier = roll.outcome_tier
+            roll_tag = f"[{tier}: rolled {roll.total} vs DC {roll.difficulty_class}]"
+            if tier == "Critical Success":
+                return (
+                    f"*Inside empty {active_location.name}, your solo attempt succeeds brilliantly {roll_tag}, "
+                    f"yielding full clarity and decisive leverage without a soul around to witness it.*"
+                )
+            if tier == "Clean Success":
+                return (
+                    f"*Inside empty {active_location.name}, your effort works cleanly as intended {roll_tag}.*"
+                )
+            if tier == "Simple Failure":
+                return (
+                    f"*Inside empty {active_location.name}, the attempt falls short {roll_tag}, "
+                    f"leaving the mechanism undisturbed and the silence unbroken.*"
+                )
+            if tier == "Failure with Consequences":
+                return (
+                    f"*Inside empty {active_location.name}, the attempt misfires with audible friction {roll_tag}, "
+                    f"creating fresh complications in the room.*"
+                )
+            return (
+                f"*Inside empty {active_location.name}, the attempt backfires sharply {roll_tag}, "
+                f"setting off immediate hazards across the solitude of the space.*"
+            )
+        exit_note = (
+            f" Ahead, an open route leads toward {target_exit.destination.name}."
+            if target_exit
+            else ""
+        )
+        mem_note = (
+            f" Something here recalls '{recalled_items[0].title}'."
+            if recalled_items
+            else ""
+        )
+        return (
+            f"*Alone inside {active_location.name}, ambient details hold steady in the empty space."
+            f"{exit_note}{mem_note}*"
+        )
 
     # Narrative dialogue and action for the active character
     target_exit = neighbors[0] if neighbors else None
@@ -208,6 +263,7 @@ async def stream_phase4_prose(
     established_cognitions: dict[str, CognitionBlock] | None = None,
     profile: ModelProfile | None = None,
     is_narrator: bool = False,
+    is_solo: bool = False,
     narrative_mode: str | None = None,
     narrator_directive: str | None = None,
     pregenerated_cognition: CognitionBlock | None = None,
@@ -217,31 +273,32 @@ async def stream_phase4_prose(
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream Phase 4 Narrative Prose generation with leading-tag guard and fallback."""
     actor_prof = profile or settings.actor_profile
+    is_sentinel_scene = is_narrator or is_solo
     cogs_map = established_cognitions or (
         {character.id: pregenerated_cognition}
-        if pregenerated_cognition is not None and not is_narrator
+        if pregenerated_cognition is not None and not is_sentinel_scene
         else {}
     )
     is_legacy_single_pass = (
-        not is_narrator
+        not is_sentinel_scene
         and pregenerated_cognition is None
         and not bool(established_cognitions)
     )
 
     primary_cognition = (
         cogs_map.get(character.id)
-        if not is_narrator and character.id in cogs_map
+        if not is_sentinel_scene and character.id in cogs_map
         else (
             pregenerated_cognition
-            if pregenerated_cognition is not None
+            if pregenerated_cognition is not None and not is_sentinel_scene
             else CognitionBlock(
                 recall=f"Observing {active_location.name}",
-                feeling="Objective / Detached" if is_narrator else previous_state.mood_label,
-                valence=0.0 if is_narrator else previous_state.valence,
-                arousal=0.0 if is_narrator else previous_state.arousal,
-                want="Depict environment neutrally" if is_narrator else previous_state.active_want,
-                plan=narrator_directive or "Describe scene" if is_narrator else previous_state.active_plan,
-                skipped=is_narrator or is_legacy_single_pass,
+                feeling="Objective / Detached" if is_sentinel_scene else previous_state.mood_label,
+                valence=0.0 if is_sentinel_scene else previous_state.valence,
+                arousal=0.0 if is_sentinel_scene else previous_state.arousal,
+                want="Depict environment neutrally" if is_sentinel_scene else previous_state.active_want,
+                plan=narrator_directive or "Describe scene" if is_sentinel_scene else previous_state.active_plan,
+                skipped=is_sentinel_scene or is_legacy_single_pass,
             )
         )
     )
@@ -274,6 +331,7 @@ async def stream_phase4_prose(
                 present_characters=present_characters,
                 all_character_states=all_character_states,
                 is_narrator=is_narrator,
+                is_solo=is_solo,
                 narrative_mode=narrative_mode,
                 narrator_directive=narrator_directive,
                 established_cognition=primary_cognition,

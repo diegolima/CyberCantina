@@ -867,6 +867,7 @@ export function buildCampaignCharacterEntries(
     primaryCharacter.id,
     ...ids.filter((id) => id !== primaryCharacter.id),
   ];
+  const hasExplicitPresentIds = bundle.present_character_ids !== undefined;
   const presentIds = new Set(bundle.present_character_ids ?? []);
   const locNames = new Map(
     bundle.visible_locations.map((l) => [l.id, l.name])
@@ -879,10 +880,9 @@ export function buildCampaignCharacterEntries(
       bundle.character_states?.[id] ??
       (id === primaryCharacter.id ? bundle.current_character_state : undefined);
     if (!record || !state) return [];
-    const isPresent =
-      presentIds.size === 0
-        ? state.current_location_id === activeLocId || id === primaryCharacter.id
-        : presentIds.has(id);
+    const isPresent = hasExplicitPresentIds
+      ? presentIds.has(id)
+      : state.current_location_id === activeLocId;
     return [
       {
         record,

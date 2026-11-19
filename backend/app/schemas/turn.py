@@ -334,7 +334,7 @@ class PreTurnAnalysis(PreTurnLLMOutput):
                 self.resolved_roll = self.character_rolls[self.active_speaker_id]
             else:
                 self.resolved_roll = next(iter(self.character_rolls.values()))
-        elif not self.character_rolls:
+        elif not self.character_rolls and self.active_speaker_id != "__solo__":
             self.resolved_roll = None
         return self
 

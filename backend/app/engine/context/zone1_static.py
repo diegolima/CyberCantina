@@ -157,6 +157,29 @@ def build_zone1_narrator_system_prompt(
     return base + format_zone1_player_protagonist_block(persona_snapshot)
 
 
+def build_zone1_solo_system_prompt(
+    world: WorldRecord,
+    prompt_template: str | None = None,
+    persona_snapshot: PersonaRecord | None = None,
+) -> str:
+    """Zone 1: Static system prompt prefix for solo-room player action narration."""
+    base = build_zone1_narrator_system_prompt(
+        world,
+        prompt_template=prompt_template,
+        persona_snapshot=persona_snapshot,
+    )
+    return (
+        base
+        + "\n\n=== SOLO SCENE PROTOCOL ===\n"
+        "The protagonist is currently alone in an empty location with no co-present companions or NPCs.\n"
+        "- Depict the tangible environmental, spatial, physical, and sensory consequences of the protagonist's action.\n"
+        "- When <mechanics_outcome> is provided, strictly honor its outcome tier (failures fail cleanly or complicate the attempt; successes achieve it proportionally).\n"
+        "- NEVER invent, teleport, or introduce absent characters into an empty location.\n"
+        "- NEVER speak dialogue, make decisions, or narrate unsolicited inner feelings on behalf of the protagonist.\n"
+        "- Do NOT output <cognition> blocks."
+    )
+
+
 def build_zone1_static_system_prompt(
     world: WorldRecord,
     character: CharacterRecord,

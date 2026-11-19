@@ -173,7 +173,7 @@ _USER_ALIASES: Final[frozenset[str]] = frozenset(
 
 
 _NARRATOR_ALIASES: Final[frozenset[str]] = frozenset(
-    {"__narrator__", "narrator", "system", "gm", "director"}
+    {"__narrator__", "__solo__", "narrator", "system", "gm", "director"}
 )
 
 

@@ -108,7 +108,7 @@ class CampaignLoreItemsMixin:
             turn_actor = turn_row["actor_id"]
             default_actor = (
                 turn_actor
-                if turn_actor and turn_actor != "__narrator__"
+                if turn_actor and turn_actor not in ("__narrator__", "__arrival__", "__solo__")
                 else campaign.character_id
             )
             target_char_id = character_id or default_actor or campaign.character_id

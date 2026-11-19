@@ -304,6 +304,7 @@ def elevate_compacted_episode_turns(
     )
     name_lookup = dict(character_name_map or {})
     name_lookup["__narrator__"] = "Narrator"
+    name_lookup["__solo__"] = "Narrator"
     for pc in present_characters or []:
         name_lookup.setdefault(pc.id, pc.name)
 

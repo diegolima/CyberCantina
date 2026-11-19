@@ -62,7 +62,7 @@ class TurnsBranchesMixin:
         now = utc_now_iso()
         eff_cognitions = cognitions if cognitions is not None else (
             {actor_id: cognition}
-            if actor_id not in ("__narrator__", "__arrival__") and not cognition.skipped
+            if actor_id not in ("__narrator__", "__arrival__", "__solo__") and not cognition.skipped
             else {}
         )
         cognitions_payload = {
@@ -434,7 +434,7 @@ class TurnsBranchesMixin:
         *,
         campaign_id: str,
         world_id: str,
-        character_id: str,
+        character_id: str | None = None,
         start_turn_depth: int,
         end_turn_depth: int,
         leaf_turn_id: str,
@@ -526,7 +526,7 @@ class TurnsBranchesMixin:
         *,
         campaign_id: str,
         world_id: str,
-        character_id: str,
+        character_id: str | None = None,
         start_turn_depth: int,
         end_turn_depth: int,
         leaf_turn_id: str,
@@ -706,7 +706,7 @@ class TurnsBranchesMixin:
                 FROM turn_nodes t
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
                 JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = (
-                    CASE WHEN t.actor_id IN ('__narrator__', '__arrival__') THEN (SELECT character_id FROM campaigns WHERE id = t.campaign_id)
+                    CASE WHEN t.actor_id IN ('__narrator__', '__arrival__', '__solo__') THEN (SELECT character_id FROM campaigns WHERE id = t.campaign_id)
                     ELSE t.actor_id END
                 )
                 WHERE t.id = ?
@@ -760,7 +760,7 @@ class TurnsBranchesMixin:
                 JOIN turn_nodes t ON t.id = bp.id
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
                 JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = (
-                    CASE WHEN t.actor_id IN ('__narrator__', '__arrival__') THEN (SELECT character_id FROM campaigns WHERE id = t.campaign_id)
+                    CASE WHEN t.actor_id IN ('__narrator__', '__arrival__', '__solo__') THEN (SELECT character_id FROM campaigns WHERE id = t.campaign_id)
                     ELSE t.actor_id END
                 )
                 ORDER BY t.depth_index ASC
@@ -802,7 +802,7 @@ class TurnsBranchesMixin:
                 FROM turn_nodes t
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
                 JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = (
-                    CASE WHEN t.actor_id IN ('__narrator__', '__arrival__') THEN (SELECT character_id FROM campaigns WHERE id = t.campaign_id)
+                    CASE WHEN t.actor_id IN ('__narrator__', '__arrival__', '__solo__') THEN (SELECT character_id FROM campaigns WHERE id = t.campaign_id)
                     ELSE t.actor_id END
                 )
                 WHERE t.campaign_id = ?
@@ -1105,7 +1105,7 @@ class TurnsBranchesMixin:
                     }
             except Exception:
                 pass
-        if not cognitions_map and r["actor_id"] not in ("__narrator__", "__arrival__") and not base_cog.skipped:
+        if not cognitions_map and r["actor_id"] not in ("__narrator__", "__arrival__", "__solo__") and not base_cog.skipped:
             cognitions_map = {r["actor_id"]: base_cog}
 
         whispers_list: list[CharacterWhisper] = []

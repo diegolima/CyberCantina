@@ -124,10 +124,10 @@ def resolve_character_previous_state(
     # Only rewind across narrator turns if current_state holds a detached narrator placeholder
     # or lacks a self-contained CARE snapshot (never overwrite valid narrator-decayed CARE states).
     if current_state.mood_label == "Objective / Detached" or (
-        parent_turn.actor_id in ("__narrator__", "__arrival__") and current_state.care_state is None
+        parent_turn.actor_id in ("__narrator__", "__arrival__", "__solo__") and current_state.care_state is None
     ):
         for turn in reversed(branch_turns):
-            if turn.actor_id in ("__narrator__", "__arrival__"):
+            if turn.actor_id in ("__narrator__", "__arrival__", "__solo__"):
                 continue
             hist_state = turn.character_states.get(
                 character.id,
@@ -199,6 +199,7 @@ def build_zone4_ephemeral_tail_frame(
     all_character_states: dict[str, CharacterStateSnapshot] | None = None,
     character_name_map: dict[str, str] | None = None,
     is_narrator: bool = False,
+    is_solo: bool = False,
     narrative_mode: str | None = None,
     narrator_directive: str | None = None,
     established_cognition: CognitionBlock | None = None,
@@ -267,7 +268,13 @@ def build_zone4_ephemeral_tail_frame(
     inventory_text = ", ".join(inv_names) if inv_names else "None"
 
     co_present_section = ""
-    if present_characters:
+    if is_solo:
+        co_present_section = (
+            "\n  <other_characters_in_room>\n"
+            "    - None (you are alone in this location)\n"
+            "  </other_characters_in_room>"
+        )
+    elif present_characters:
         others = [c for c in present_characters if c.id != character.id]
         if others:
             other_lines: list[str] = []
@@ -359,6 +366,16 @@ def build_zone4_ephemeral_tail_frame(
             f"  </narrator_directive>"
         )
         user_tail = f"Director / Narrator Request:\n{user_message}"
+    elif is_solo:
+        mind_state_section = (
+            "  <solo_scene_directive>\n"
+            "    The protagonist is acting alone in this empty location.\n"
+            "    - Depict concrete environmental, sensory, and spatial outcomes of the user's action.\n"
+            "    - Honor any <mechanics_outcome> roll tier strictly without narrating absent NPC reactions.\n"
+            "    - Keep absent campaign characters strictly off-screen unless triggered via remote comms.\n"
+            "  </solo_scene_directive>"
+        )
+        user_tail = f"User Action / Dialogue:\n{user_message}"
     else:
         char_roll_for_anchor = pre_turn.character_rolls.get(character.id) or (
             pre_turn.resolved_roll
@@ -414,7 +431,7 @@ def build_zone4_ephemeral_tail_frame(
         user_tail = f"User Action / Dialogue:\n{user_message}"
 
     established_cognition_section = ""
-    if not is_narrator:
+    if not is_narrator and not is_solo:
         if established_cognitions:
             cog_blocks: list[str] = []
             present_chars = present_characters or [character]

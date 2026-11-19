@@ -36,14 +36,18 @@ def compute_episodic_chunk_witnesses(turns: Sequence[TurnNodeRecord]) -> list[st
     candidate_ids: list[str] = []
     seen: set[str] = set()
     for t in turns:
-        if t.actor_id and t.actor_id != "__narrator__" and t.actor_id not in seen:
+        if t.actor_id and t.actor_id not in ("__narrator__", "__arrival__", "__solo__") and t.actor_id not in seen:
             seen.add(t.actor_id)
             candidate_ids.append(t.actor_id)
-        if t.character_state and t.character_state.character_id not in seen:
+        if (
+            t.character_state
+            and t.character_state.character_id not in ("__narrator__", "__arrival__", "__solo__")
+            and t.character_state.character_id not in seen
+        ):
             seen.add(t.character_state.character_id)
             candidate_ids.append(t.character_state.character_id)
         for cid in (t.character_states or {}):
-            if cid and cid != "__narrator__" and cid not in seen:
+            if cid and cid not in ("__narrator__", "__arrival__", "__solo__") and cid not in seen:
                 seen.add(cid)
                 candidate_ids.append(cid)
 
@@ -180,7 +184,7 @@ async def summarize_turn_chunk(
     for t in turns:
         speaker_label = (
             "Narrator"
-            if t.actor_id == "__narrator__"
+            if t.actor_id in ("__narrator__", "__solo__")
             else name_lookup.get(t.actor_id, character.name)
         )
         flags_str = (
@@ -258,7 +262,7 @@ async def summarize_turn_chunk_structured(
     for t in turns:
         speaker_label = (
             "Narrator"
-            if t.actor_id == "__narrator__"
+            if t.actor_id in ("__narrator__", "__solo__")
             else name_lookup.get(t.actor_id, character.name)
         )
         flags_str = (

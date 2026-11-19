@@ -107,7 +107,7 @@ def should_fast_path_passive_bystander(
     player_moved_location: bool,
 ) -> bool:
     """Return True when a co-present bystander was completely unengaged and needs only deterministic CARE math."""
-    if completed_turn.actor_id == "__narrator__":
+    if completed_turn.actor_id in ("__narrator__", "__solo__"):
         return True
     if character.id == completed_turn.actor_id:
         return False
@@ -170,13 +170,24 @@ async def run_phase5_post_turn_clerk(
     clerk_prof = profile or settings.clerk_profile
     eff_dispatch: AgentDispatchMode = dispatch_mode or settings.agent_dispatch_mode
     is_narrator_turn = completed_turn.actor_id == "__narrator__"
+    is_solo_turn = completed_turn.actor_id == "__solo__"
 
     scene_characters = (
-        [c for c in present_characters if c.id != "__narrator__"]
+        [c for c in present_characters if c.id not in ("__narrator__", "__solo__")]
         if present_characters is not None
-        else ([character] if character.id != "__narrator__" else [])
+        else (
+            [character]
+            if (not is_narrator_turn and not is_solo_turn and character.id not in ("__narrator__", "__solo__"))
+            else []
+        )
     )
-    if character.id != "__narrator__" and all(c.id != character.id for c in scene_characters):
+    if (
+        not is_narrator_turn
+        and not is_solo_turn
+        and (present_characters is None or len(present_characters) > 0)
+        and character.id not in ("__narrator__", "__solo__")
+        and all(c.id != character.id for c in scene_characters)
+    ):
         scene_characters = [character, *scene_characters]
 
     known_participants = list(all_participants or scene_characters)
@@ -186,7 +197,7 @@ async def run_phase5_post_turn_clerk(
 
     # Announce Phase 4 Roster upfront
     roster = [Phase4RosterEntry(agent_key="clerk", kind="world_clerk", label="clerk")]
-    if not is_narrator_turn:
+    if not is_narrator_turn and not is_solo_turn:
         for ch in scene_characters:
             roster.append(Phase4RosterEntry(agent_key=ch.id, kind="character", label=ch.name))
 
@@ -256,7 +267,7 @@ async def run_phase5_post_turn_clerk(
 
     current_timestamp = completed_turn.world_snapshot.world_timestamp
     current_time_str = describe_world_timestamp(current_timestamp)
-    speaker_label = "Narrator" if is_narrator_turn else character.name
+    speaker_label = "Narrator" if (is_narrator_turn or is_solo_turn) else character.name
 
     world_system_prompt = render_template(
         post_turn_prompt_template or get_default_prompt("clerk_post_turn_system"),
@@ -1018,12 +1029,15 @@ async def run_phase5_post_turn_clerk(
 
     # 6. Sequentially embed and index notable atomic event, episodic chunk, and updated character memories
     # (Serialized to prevent concurrent SQLite write contention under dispatch_mode='parallel')
+    primary_witness_id = (
+        character.id if any(c.id == character.id for c in scene_characters) else None
+    )
     if world_delta.notable_event_summary:
         await repo.vector_store.aupsert_entry(
             entry_id=f"event_{completed_turn.id}",
             source_type="episodic_chunk",
             world_id=world_id,
-            character_id=character.id,
+            character_id=primary_witness_id,
             campaign_id=campaign_id,
             anchor_turn_id=completed_turn.id,
             title=f"Turn {completed_turn.depth_index} Event ({new_timestamp})",
@@ -1044,7 +1058,7 @@ async def run_phase5_post_turn_clerk(
         saved_chunk = await repo.asave_episodic_chunk(
             campaign_id=campaign_id,
             world_id=world_id,
-            character_id=character.id,
+            character_id=character.id if character.id in chunk_witnesses else None,
             start_turn_depth=chunk_slice[0].depth_index,
             end_turn_depth=chunk_slice[-1].depth_index,
             leaf_turn_id=completed_turn.id,

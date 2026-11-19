@@ -170,10 +170,10 @@ export const ChatStage: React.FC<ChatStageProps> = ({
 
   const presentCharacters = useMemo(() => {
     const rawIds =
-      bundle.present_character_ids && bundle.present_character_ids.length > 0
+      bundle.present_character_ids !== undefined
         ? bundle.present_character_ids
         : [character.id];
-    const uniqueIds = Array.from(new Set([character.id, ...rawIds]));
+    const uniqueIds = Array.from(new Set(rawIds));
     return uniqueIds.map((id) => {
       const rec = bundle.character_records?.[id];
       if (rec) return rec;
@@ -183,16 +183,26 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   }, [bundle.present_character_ids, bundle.character_records, character]);
 
   useEffect(() => {
-    if (!presentCharacters.some((c) => c.id === activeChoiceCharId)) {
-      setActiveChoiceCharId(character.id);
+    if (presentCharacters.length === 0) {
+      if (activeChoiceCharId !== "") {
+        setActiveChoiceCharId("");
+      }
+      if (activeTray === "choices") {
+        setActiveTray("none");
+      }
+      return;
     }
-  }, [presentCharacters, activeChoiceCharId, character.id]);
+    if (!presentCharacters.some((c) => c.id === activeChoiceCharId)) {
+      setActiveChoiceCharId(presentCharacters[0].id);
+    }
+  }, [presentCharacters, activeChoiceCharId, activeTray]);
 
   const activeCharRecord = useMemo(() => {
     return (
-      presentCharacters.find((c) => c.id === activeChoiceCharId) || character
+      presentCharacters.find((c) => c.id === activeChoiceCharId) ||
+      presentCharacters[0]
     );
-  }, [presentCharacters, activeChoiceCharId, character]);
+  }, [presentCharacters, activeChoiceCharId]);
 
   const allCampaignCharacters = useMemo(() => {
     const map = new Map<string, CharacterRecord>();
@@ -984,9 +994,23 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               </div>
             </div>
             <div className="stage-actor-line">
-              Actor: <strong style={{ color: "var(--accent-amber)" }}>{character.name}</strong>
-              {character.tagline && (
-                <span className="stage-actor-tagline"> — {character.tagline}</span>
+              {presentCharacters.length === 0 ? (
+                <>
+                  <strong style={{ color: "var(--accent-cyan)" }}>
+                    Alone in {bundle.active_location.name}
+                  </strong>
+                  <span className="stage-actor-tagline">
+                    {" "}
+                    — No characters present here
+                  </span>
+                </>
+              ) : (
+                <>
+                  Actor: <strong style={{ color: "var(--accent-amber)" }}>{character.name}</strong>
+                  {character.tagline && (
+                    <span className="stage-actor-tagline"> — {character.tagline}</span>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -1160,6 +1184,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         setInputText={setInputText}
         isBusy={isBusy}
         magicWand={magicWand}
+        activeLocationName={bundle.active_location.name}
         neighborLocations={bundle.neighbor_locations}
         handleSelectMention={handleSelectMention}
         handleRemoveMentionChip={handleRemoveMentionChip}

@@ -104,6 +104,18 @@ export const DirectorChoicesDrawer: React.FC<DirectorChoicesDrawerProps> = ({
               </div>
             </div>
 
+            {presentCharacters.length === 0 ? (
+              <div
+                style={{
+                  padding: "10px 4px",
+                  fontSize: "0.78rem",
+                  color: "var(--text-muted)",
+                }}
+              >
+                No characters present in this location to guide.
+              </div>
+            ) : (
+              <>
             {/* Character selection tabs */}
             <div className="choices-char-tabs">
               {presentCharacters.map((c) => {
@@ -437,6 +449,8 @@ export const DirectorChoicesDrawer: React.FC<DirectorChoicesDrawerProps> = ({
                   </div>
                 </div>
               )}
+              </>
+            )}
           </div>
   );
 };

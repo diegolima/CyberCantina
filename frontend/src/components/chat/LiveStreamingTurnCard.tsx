@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Brain,
   Clock,
+  Compass,
   Dices,
   Eye,
   RefreshCw,
@@ -16,6 +17,7 @@ import type {
 import {
   isLiveStreamCognitionSkipped,
   isLiveStreamNarrator,
+  isLiveStreamSolo,
 } from "../../utils/narratorCognition";
 import {
   getTierBadgeClass,
@@ -42,6 +44,7 @@ export const LiveStreamingTurnCard: React.FC<LiveStreamingTurnCardProps> = ({
   phase3Progress,
 }) => {
   const [selectedLiveCognitionCharId, setSelectedLiveCognitionCharId] = useState<string | null>(null);
+  const isSoloStream = isLiveStreamSolo(liveStream);
   return (
           <div
             className="turn-card"
@@ -57,6 +60,12 @@ export const LiveStreamingTurnCard: React.FC<LiveStreamingTurnCardProps> = ({
             )}
             <div className="meta-strip">
               <span className="badge badge-dice">{liveStream.phaseStatus}</span>
+              {isSoloStream && (
+                <span className="badge badge-narrator">
+                  <Compass size={12} color="var(--accent-cyan)" />
+                  Solo Scene
+                </span>
+              )}
               {(() => {
                 const charRolls = liveStream.preTurn?.character_rolls;
                 if (charRolls && Object.keys(charRolls).length > 0) {
@@ -82,13 +91,17 @@ export const LiveStreamingTurnCard: React.FC<LiveStreamingTurnCardProps> = ({
                 }
                 if (liveStream.preTurn?.resolved_roll) {
                   const r = liveStream.preTurn.resolved_roll;
+                  const rollPrefix =
+                    r.character_name && r.character_name !== "Narrator"
+                      ? `${r.character_name}: `
+                      : "";
                   return (
                     <span
                       className={`badge badge-dice ${getTierBadgeClass(r.outcome_tier)}`}
                       title={r.narrative_directive}
                     >
                       <Dices size={13} />
-                      Rolled {r.total} vs DC {r.difficulty_class} [{r.outcome_tier}]
+                      {rollPrefix}Rolled {r.total} vs DC {r.difficulty_class} [{r.outcome_tier}]
                     </span>
                   );
                 }
@@ -171,6 +184,9 @@ export const LiveStreamingTurnCard: React.FC<LiveStreamingTurnCardProps> = ({
               )}
 
             {(() => {
+              if (isSoloStream) {
+                return null;
+              }
               const liveCharIds =
                 phase3Progress && phase3Progress.orderedCharacterIds.length > 0
                   ? phase3Progress.orderedCharacterIds

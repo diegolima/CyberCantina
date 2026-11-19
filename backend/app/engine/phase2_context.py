@@ -89,6 +89,7 @@ from app.engine.context.zone1_static import (  # noqa: F401
     build_all_character_known_personas,
     format_zone1_player_protagonist_block,
     build_zone1_narrator_system_prompt,
+    build_zone1_solo_system_prompt,
     build_zone1_static_system_prompt,
     build_zone1_ensemble_system_prompt,
 )
@@ -139,6 +140,7 @@ __all__ = [
     "build_all_character_known_personas",
     "format_zone1_player_protagonist_block",
     "build_zone1_narrator_system_prompt",
+    "build_zone1_solo_system_prompt",
     "build_zone1_static_system_prompt",
     "build_zone1_ensemble_system_prompt",
     "TurnContextBundle",

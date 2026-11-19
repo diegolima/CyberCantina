@@ -25,7 +25,11 @@ import type {
   TurnNodeRecord,
 } from "../../types";
 import { getCharacterEmotionPortrait } from "../../utils/entityImages";
-import { isNarratorTurnNode, isTurnCognitionSkipped } from "../../utils/narratorCognition";
+import {
+  isNarratorTurnNode,
+  isSoloTurnNode,
+  isTurnCognitionSkipped,
+} from "../../utils/narratorCognition";
 import type { ActiveAgentModalTarget } from "../inspector/AgentChangesModal";
 import { StandaloneArrivalCard } from "./StandaloneArrivalCard";
 import {
@@ -99,6 +103,7 @@ export const TurnCard: React.FC<TurnCardProps> = ({
   const isLastTurn = !isRoot && turnIdx === bundle.active_branch_turns.length - 1;
   const isArrivalTurn = turn.actor_id === "__arrival__";
   const isNarratorTurn = turn.actor_id === "__narrator__";
+  const isSoloTurn = isSoloTurnNode(turn);
   const firstVisitCards = turn.post_turn?.first_visit_cards ?? [];
   const firstVisitMedia = turn.post_turn?.first_visit_media ?? [];
   const effectiveLastTurnId =
@@ -353,6 +358,12 @@ export const TurnCard: React.FC<TurnCardProps> = ({
                         : "Narrator (Objective Lens)"}
                     </span>
                   )}
+                  {!isNarratorTurn && isSoloTurn && (
+                    <span className="badge badge-narrator">
+                      <Compass size={12} color="var(--accent-cyan)" />
+                      Solo Scene
+                    </span>
+                  )}
                   <span className="badge" title={turn.pre_turn.subtext_interpretation}>
                     <Sparkles size={12} color="var(--accent-cyan)" />
                     Tone: {turn.pre_turn.user_sentiment}
@@ -389,10 +400,12 @@ export const TurnCard: React.FC<TurnCardProps> = ({
 
                     return rollsToRender.map(({ id, roll: r }) => {
                       const charName =
-                        r.character_name ||
-                        (id !== "default" && turn.cognition_character_names?.[id]) ||
-                        (id !== "default" && bundle.character_records?.[id]?.name) ||
-                        (id === character.id ? character.name : null);
+                        id === "__solo__"
+                          ? r.character_name
+                          : r.character_name ||
+                            (id !== "default" && turn.cognition_character_names?.[id]) ||
+                            (id !== "default" && bundle.character_records?.[id]?.name) ||
+                            (id === character.id ? character.name : null);
                       const label = charName && charName !== "Narrator" ? `${charName}: ` : "";
                       return (
                         <span
@@ -451,7 +464,7 @@ export const TurnCard: React.FC<TurnCardProps> = ({
 
               {/* Phase 3 Multi-Step <cognition> Drawer */}
               {(() => {
-                if (turn.depth_index === 0) {
+                if (turn.depth_index === 0 || isSoloTurn) {
                   return null;
                 }
                 const isNarratorTurn = isNarratorTurnNode(turn);
@@ -927,6 +940,7 @@ export const TurnCard: React.FC<TurnCardProps> = ({
 
               {/* Speaker Emotion Portrait Header (when available) & Narrative Prose */}
               {!isNarratorTurn &&
+                !isSoloTurn &&
                 (() => {
                   const actorId = turn.actor_id || character.id;
                   const speakerChar =

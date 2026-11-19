@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   isLiveStreamCognitionSkipped,
   isLiveStreamNarrator,
+  isLiveStreamSolo,
   isNarratorTurnNode,
+  isSoloTurnNode,
   isTurnCognitionSkipped,
 } from "../narratorCognition";
 import type {
@@ -174,6 +176,73 @@ describe("Narrator Cognition Helper Logic", () => {
       };
 
       expect(isLiveStreamCognitionSkipped(live, skippedCog)).toBe(true);
+    });
+  });
+
+  describe("Solo Room Detection (__solo__)", () => {
+    it("identifies turn with actor_id='__solo__' via isSoloTurnNode", () => {
+      expect(isSoloTurnNode({ actor_id: "__solo__" })).toBe(true);
+      expect(isSoloTurnNode({ actor_id: "__narrator__" })).toBe(false);
+      expect(isSoloTurnNode({ actor_id: "char_alice" })).toBe(false);
+    });
+
+    it("does NOT trigger skipped warning for solo-room turns", () => {
+      const soloTurn = {
+        actor_id: "__solo__",
+        user_message: "I pry open the maintenance hatch.",
+      } as Pick<TurnNodeRecord, "actor_id" | "user_message">;
+      const soloCog: CognitionBlock = {
+        recall: "Observing Cooling Tunnels",
+        feeling: "Objective / Detached",
+        valence: 0.0,
+        arousal: 0.0,
+        want: "Depict environment",
+        plan: "Describe scene",
+        skipped: true,
+      };
+      expect(isTurnCognitionSkipped(soloTurn, soloCog)).toBe(false);
+      expect(isTurnCognitionSkipped(soloTurn, null)).toBe(false);
+    });
+
+    it("detects solo stream via isSolo or active_speaker_id='__solo__' and suppresses narrator/skip alerts", () => {
+      const soloByFlag = {
+        isSolo: true,
+        isNarrator: false,
+        cognitionParsed: {
+          recall: "Observing Annex",
+          feeling: "Objective / Detached",
+          valence: 0,
+          arousal: 0,
+          want: "",
+          plan: "",
+          skipped: true,
+        },
+      };
+      const soloByPreTurn = {
+        isNarrator: false,
+        preTurn: {
+          active_speaker_id: "__solo__",
+        } as PreTurnAnalysis,
+      };
+
+      expect(isLiveStreamSolo(soloByFlag)).toBe(true);
+      expect(isLiveStreamSolo(soloByPreTurn)).toBe(true);
+      expect(isLiveStreamNarrator(soloByFlag)).toBe(false);
+      expect(isLiveStreamNarrator(soloByPreTurn)).toBe(false);
+      expect(
+        isLiveStreamCognitionSkipped(soloByFlag, soloByFlag.cognitionParsed)
+      ).toBe(false);
+      expect(
+        isLiveStreamCognitionSkipped(soloByPreTurn, {
+          recall: "",
+          feeling: "",
+          valence: 0,
+          arousal: 0,
+          want: "",
+          plan: "",
+          skipped: true,
+        })
+      ).toBe(false);
     });
   });
 });

@@ -471,4 +471,5 @@ export interface LiveStreamState {
   proseText: string;
   phaseStatus: string;
   isNarrator?: boolean;
+  isSolo?: boolean;
 }

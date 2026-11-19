@@ -806,7 +806,8 @@ async def run_phase1_pre_analysis(
         dice_mode = "auto"
         dice_mode_promoted = True
 
-    room_chars = present_characters if present_characters else [character]
+    room_chars = list(present_characters) if present_characters is not None else [character]
+    is_solo = len(room_chars) == 0
     room_char_ids = {c.id for c in room_chars}
     decomp = (
         decomposed_message
@@ -824,19 +825,35 @@ async def run_phase1_pre_analysis(
         f"{n.destination.name} (via {n.direction_label})" for n in neighbors
     ) or "None"
 
-    present_desc_lines: list[str] = []
-    for c in room_chars:
-        c_st = (character_states or {}).get(c.id)
-        eq_names = format_item_names(c_st.equipped if c_st is not None else c.equipped)
-        inv_names = format_item_names(c_st.inventory if c_st is not None else c.inventory)
-        gear_str = f" | Equipped: {', '.join(eq_names)}" if eq_names else ""
-        if inv_names:
-            gear_str += f" | Carried: {', '.join(inv_names)}"
-        present_desc_lines.append(f"- id='{c.id}': {c.name} ({c.tagline}){gear_str}")
-    present_desc = "\n".join(present_desc_lines)
+    if is_solo:
+        present_desc = "None (protagonist is alone in this location)"
+    else:
+        present_desc_lines: list[str] = []
+        for c in room_chars:
+            c_st = (character_states or {}).get(c.id)
+            eq_names = format_item_names(c_st.equipped if c_st is not None else c.equipped)
+            inv_names = format_item_names(c_st.inventory if c_st is not None else c.inventory)
+            gear_str = f" | Equipped: {', '.join(eq_names)}" if eq_names else ""
+            if inv_names:
+                gear_str += f" | Carried: {', '.join(inv_names)}"
+            present_desc_lines.append(f"- id='{c.id}': {c.name} ({c.tagline}){gear_str}")
+        present_desc = "\n".join(present_desc_lines)
 
     mode_prompt_hint = ""
-    if dice_mode == "forced":
+    if is_solo:
+        if dice_mode == "forced":
+            mode_prompt_hint = (
+                "\nNote: Protagonist is alone and dice mechanics are forced for this turn. "
+                "Assign a protagonist check in mechanics_check and set character_checks=[]."
+            )
+        elif dice_mode == "auto":
+            mode_prompt_hint = (
+                "\nNote: Protagonist is alone in this location. "
+                "Evaluate risky physical/investigative/stealth actions in mechanics_check and set character_checks=[]."
+            )
+        elif dice_mode == "disabled":
+            mode_prompt_hint = "\nNote: Dice mechanics are disabled for this turn. Set character_checks=[] and mechanics_check.requires_roll=false."
+    elif dice_mode == "forced":
         mode_prompt_hint = "\nNote: Dice mechanics are forced for this turn. Identify characters facing risk/action or assign an active attempt to the primary speaker."
     elif dice_mode == "disabled":
         mode_prompt_hint = "\nNote: Dice mechanics are disabled for this turn. Set character_checks=[] and mechanics_check.requires_roll=false."
@@ -889,7 +906,7 @@ async def run_phase1_pre_analysis(
     )
     user_prompt = (
         f"Characters Present in Room ({active_location.name}):\n{present_desc}\n"
-        f"Previous Turn Speaker ID: {previous_speaker_id or character.id}\n"
+        f"Previous Turn Speaker ID: {previous_speaker_id or ('__solo__' if is_solo else character.id)}\n"
         f"Current Location: {active_location.name} ({active_location.summary})\n"
         f"Adjacent Exits: {neighbor_desc}\n"
         f"Known Entities/Lore Keywords: {', '.join(known_entities[:30])}\n{mode_prompt_hint}{persona_prompt_hint}{mention_hint}\n\n"
@@ -937,17 +954,22 @@ async def run_phase1_pre_analysis(
     analysis.revealed_persona_keys = revealed_keys
 
     # Ensure active_speaker_id and speaker_order only reference characters actually present in active_location
-    valid_order = [cid for cid in analysis.speaker_order if cid in room_char_ids]
-    for cid in fallback_order:
-        if cid not in valid_order:
-            valid_order.append(cid)
-    analysis.speaker_order = valid_order
-    if analysis.active_speaker_id not in room_char_ids:
-        analysis.active_speaker_id = valid_order[0] if valid_order else character.id
-    elif valid_order and valid_order[0] != analysis.active_speaker_id:
-        analysis.speaker_order = [analysis.active_speaker_id] + [
-            cid for cid in valid_order if cid != analysis.active_speaker_id
-        ]
+    if is_solo:
+        analysis.speaker_order = []
+        analysis.active_speaker_id = "__solo__"
+        analysis.character_checks = []
+    else:
+        valid_order = [cid for cid in analysis.speaker_order if cid in room_char_ids]
+        for cid in fallback_order:
+            if cid not in valid_order:
+                valid_order.append(cid)
+        analysis.speaker_order = valid_order
+        if analysis.active_speaker_id not in room_char_ids:
+            analysis.active_speaker_id = valid_order[0] if valid_order else character.id
+        elif valid_order and valid_order[0] != analysis.active_speaker_id:
+            analysis.speaker_order = [analysis.active_speaker_id] + [
+                cid for cid in valid_order if cid != analysis.active_speaker_id
+            ]
 
     # Speaker prioritization when prompt was synthesized from director choices
     if message_is_synthetic and character_choices:
@@ -982,6 +1004,33 @@ async def run_phase1_pre_analysis(
         analysis.mechanics_check.requires_roll = False
         for c in analysis.character_checks:
             c.requires_roll = False
+    elif is_solo:
+        analysis.character_rolls = {}
+        solo_trigger = analysis.mechanics_check
+        if dice_mode == "forced" and not solo_trigger.requires_roll:
+            solo_trigger = solo_trigger.model_copy(
+                update={
+                    "requires_roll": True,
+                    "action_description": solo_trigger.action_description
+                    or f"Protagonist attempts: {user_message[:70].strip()}",
+                }
+            )
+            analysis.mechanics_check = solo_trigger
+        if dice_mode == "forced" or solo_trigger.requires_roll:
+            protagonist_label = (
+                persona_snapshot.name.strip()
+                if persona_snapshot and persona_snapshot.name and persona_snapshot.name.strip()
+                else "Protagonist"
+            )
+            analysis.resolved_roll = resolve_dice_check(
+                solo_trigger,
+                manual_override=manual_dice_override if dice_mode == "forced" else None,
+                character_id="__solo__",
+                character_name=protagonist_label,
+                rng=rng,
+            )
+        else:
+            analysis.resolved_roll = None
     else:
         character_rolls = resolve_character_dice_checks(
             room_chars,

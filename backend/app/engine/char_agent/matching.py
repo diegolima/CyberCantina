@@ -103,6 +103,7 @@ _USER_ALIASES = {
 
 _NARRATOR_ALIASES = {
     "__narrator__",
+    "__solo__",
     "narrator",
     "the narrator",
     "gm",

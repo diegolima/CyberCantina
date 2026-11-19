@@ -60,6 +60,10 @@ export function useCampaignTurnActions({
     const isNarrator = Boolean(
       opts.narrativeMode && opts.narrativeMode !== "standard"
     );
+    const isInitialSolo =
+      !isNarrator &&
+      Array.isArray(bundle.present_character_ids) &&
+      bundle.present_character_ids.length === 0;
     setLiveStream({
       userMessage: opts.userMessage,
       preTurn: null,
@@ -68,9 +72,12 @@ export function useCampaignTurnActions({
       cognitionParsed: null,
       proseText: "",
       isNarrator,
+      isSolo: isInitialSolo,
       phaseStatus:
         isNarrator
           ? "Invoking Neutral Scene Narrator..."
+          : isInitialSolo
+          ? "Phase 1: Analyzing Solo Action & GraphRAG..."
           : "Phase 1: Pre-Turn Analysis & GraphRAG...",
     });
 
@@ -105,6 +112,9 @@ export function useCampaignTurnActions({
                     isNarrator:
                       prev.isNarrator ||
                       data.pre_turn?.active_speaker_id === "__narrator__",
+                    isSolo:
+                      !prev.isNarrator &&
+                      data.pre_turn?.active_speaker_id === "__solo__",
                     phaseStatus: "Phase 2: Scoped RAG & Context Resolved...",
                   }
                 : null

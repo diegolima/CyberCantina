@@ -41,6 +41,7 @@ from app.engine.context.zone1_static import (
     build_all_character_known_personas,
     build_zone1_ensemble_system_prompt,
     build_zone1_narrator_system_prompt,
+    build_zone1_solo_system_prompt,
     build_zone1_static_system_prompt,
 )
 from app.engine.context.zone2_episodic import (
@@ -229,6 +230,7 @@ def assemble_four_zone_messages(
     working_memory_turns: int | None = None,
     actor_system_prompt_template: str | None = None,
     is_narrator: bool = False,
+    is_solo: bool = False,
     narrative_mode: str | None = None,
     narrator_directive: str | None = None,
     established_cognition: CognitionBlock | None = None,
@@ -246,8 +248,14 @@ def assemble_four_zone_messages(
     recall_budget_prose_tokens: int | None = None,
 ) -> list[dict[str, str]]:
     """Construct the complete 4-Zone OpenAI messages array for the Main Actor Model."""
+    eff_is_solo = bool(
+        is_solo
+        or (not is_narrator and present_characters is not None and len(present_characters) == 0)
+    )
     if is_narrator:
         zone1_prompt = build_zone1_narrator_system_prompt(world, prompt_template=actor_system_prompt_template, persona_snapshot=persona_snapshot)
+    elif eff_is_solo:
+        zone1_prompt = build_zone1_solo_system_prompt(world, prompt_template=actor_system_prompt_template, persona_snapshot=persona_snapshot)
     elif present_characters and len(present_characters) > 1:
         zone1_prompt = build_zone1_ensemble_system_prompt(world, present_characters, prompt_template=actor_system_prompt_template, persona_snapshot=persona_snapshot)
     else:
@@ -264,7 +272,7 @@ def assemble_four_zone_messages(
         for t in branch_turns
         if t.depth_index > max_summarized_depth
         and t.actor_id != "__arrival__"
-        and (is_narrator or was_character_present_on_turn(t, character.id))
+        and (is_narrator or eff_is_solo or was_character_present_on_turn(t, character.id))
     ]
     wm_limit = (
         working_memory_turns
@@ -276,22 +284,30 @@ def assemble_four_zone_messages(
     # Zone 3: Verbatim recent turns (with old <cognition> stripped to preserve context window)
     name_lookup = dict(character_name_map or {})
     name_lookup["__narrator__"] = "Narrator"
+    name_lookup["__solo__"] = "Narrator"
     for c in present_characters or []:
         name_lookup[c.id] = c.name
     name_lookup[character.id] = character.name
 
-    active_actor_id = "__narrator__" if is_narrator else character.id
+    active_actor_id = (
+        "__narrator__"
+        if is_narrator
+        else ("__solo__" if eff_is_solo else character.id)
+    )
     zone3_turn_entries: list[list[dict[str, str]]] = []
     for turn in working_window:
         prose_text = turn.raw_prose
         if turn.actor_id != active_actor_id and turn.actor_id in name_lookup:
             prose_text = f"[{name_lookup[turn.actor_id]}]: {turn.raw_prose}"
-        elif turn.actor_id == "__narrator__" and active_actor_id != "__narrator__":
+        elif (
+            turn.actor_id in ("__narrator__", "__solo__")
+            and active_actor_id not in ("__narrator__", "__solo__")
+        ):
             prose_text = f"[Narrator]: {turn.raw_prose}"
 
         filtered_user_msg = (
             turn.user_message
-            if is_narrator
+            if (is_narrator or eff_is_solo)
             else filter_user_message_for_character(
                 turn.user_message,
                 target_character_id=character.id,
@@ -317,14 +333,18 @@ def assemble_four_zone_messages(
         character,
         target_elapsed,
     )
-    resolved_all_states = {
-        c.id: _project_snapshot_to_elapsed(
-            resolve_character_previous_state(branch_turns, c, active_location.id),
-            c,
-            target_elapsed,
-        )
-        for c in (present_characters or [character])
-    }
+    resolved_all_states = (
+        {}
+        if eff_is_solo
+        else {
+            c.id: _project_snapshot_to_elapsed(
+                resolve_character_previous_state(branch_turns, c, active_location.id),
+                c,
+                target_elapsed,
+            )
+            for c in (present_characters or [character])
+        }
+    )
     eff_recall_prose_budget = (
         recall_budget_prose_tokens
         if recall_budget_prose_tokens is not None
@@ -344,10 +364,11 @@ def assemble_four_zone_messages(
         neighbors=neighbors,
         recalled_items=packed_recalled_items,
         pre_turn=pre_turn,
-        present_characters=present_characters,
+        present_characters=[] if eff_is_solo else present_characters,
         all_character_states=resolved_all_states,
         character_name_map=name_lookup,
         is_narrator=is_narrator,
+        is_solo=eff_is_solo,
         narrative_mode=narrative_mode,
         narrator_directive=narrator_directive,
         established_cognition=established_cognition,

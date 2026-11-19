@@ -610,7 +610,7 @@ class VectorStore:
         query_text = " ".join(q for q in queries if q.strip())
         if not query_text and mentioned_entities:
             query_text = " ".join(mentioned_entities)
-        if not query_text or not char_set:
+        if not query_text:
             return ScopedMemoryRecallBundle(
                 shared_scene_items=[],
                 by_character={cid: [] for cid in character_ids},
@@ -630,15 +630,21 @@ class VectorStore:
                 if overridden_container_ids is not None
                 else self._load_overridden_container_ids(conn, campaign_id)
             )
-            placeholders = ",".join("?" for _ in char_set)
-            camp_shard_rows = conn.execute(
-                f"""
-                SELECT DISTINCT character_id FROM vector_entries
-                WHERE campaign_id = ? AND source_type = 'character_shard' AND character_id IN ({placeholders})
-                """,
-                (campaign_id, *char_set),
-            ).fetchall()
-            chars_with_camp_shards = {r["character_id"] for r in camp_shard_rows}
+            chars_with_camp_shards: set[str] = set()
+            shard_clause = ""
+            shard_params: tuple[str, ...] = ()
+            if char_set:
+                placeholders = ",".join("?" for _ in char_set)
+                camp_shard_rows = conn.execute(
+                    f"""
+                    SELECT DISTINCT character_id FROM vector_entries
+                    WHERE campaign_id = ? AND source_type = 'character_shard' AND character_id IN ({placeholders})
+                    """,
+                    (campaign_id, *char_set),
+                ).fetchall()
+                chars_with_camp_shards = {r["character_id"] for r in camp_shard_rows}
+                shard_clause = f" OR (source_type = 'character_shard' AND character_id IN ({placeholders}))"
+                shard_params = tuple(char_set)
 
             rows = conn.execute(
                 f"""
@@ -649,10 +655,10 @@ class VectorStore:
                 WHERE (world_id = ? AND source_type = 'lore')
                    OR (world_id = ? AND source_type = 'location_lore' AND (campaign_id IS NULL OR campaign_id = '' OR campaign_id = ?))
                    OR (world_id = ? AND source_type = 'container_lore' AND (campaign_id IS NULL OR campaign_id = '' OR campaign_id = ?))
-                   OR (source_type = 'character_shard' AND character_id IN ({placeholders}))
+                   {shard_clause}
                    OR (campaign_id = ? AND source_type = 'episodic_chunk')
                 """,
-                (world_id, world_id, campaign_id, world_id, campaign_id, *char_set, campaign_id),
+                (world_id, world_id, campaign_id, world_id, campaign_id, *shard_params, campaign_id),
             ).fetchall()
         finally:
             conn.close()
@@ -724,7 +730,12 @@ class VectorStore:
 
         # 1. Shared scene items: world lore + referenced remote location/container lore + witnessed episodic chunks
         shared_scene_items: list[RecalledMemoryItem] = []
-        all_present_turn_ids = set().union(*witnessed_by_char.values()) if witnessed_by_char else set()
+        if not char_set:
+            all_present_turn_ids = valid_turns
+        else:
+            all_present_turn_ids = (
+                set().union(*witnessed_by_char.values()) if witnessed_by_char else set()
+            )
 
         for item, row in scored_candidates:
             stype = row["source_type"]

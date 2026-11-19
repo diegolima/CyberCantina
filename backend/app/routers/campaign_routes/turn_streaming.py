@@ -205,8 +205,6 @@ async def _execute_turn_stream_events_unlocked(
         if parent_turn.character_states.get(c.id, parent_turn.character_state).current_location_id
         == active_location.id
     ]
-    if not present_characters:
-        present_characters = [primary_character]
 
     # Collect prioritized, deduplicated known entity tags (excluding secret tags!) for Phase 1
     raw_known_entities: list[str] = [c.name for c in present_characters]
@@ -306,6 +304,7 @@ async def _execute_turn_stream_events_unlocked(
                 pass
 
     is_narrator = req.narrative_mode in ("describe", "advance", "complication", "custom")
+    is_solo = (not is_narrator) and (len(present_characters) == 0)
     if applied_choices and is_narrator:
         raise HTTPException(
             status_code=422,
@@ -349,6 +348,15 @@ async def _execute_turn_stream_events_unlocked(
 
     # Decompose user message into public text vs character-directed whispers
     present_char_ids = {c.id for c in present_characters}
+    primary_is_present = primary_character.id in present_char_ids
+    parent_primary_state = parent_turn.character_states.get(
+        primary_character.id, parent_turn.character_state
+    )
+    primary_true_loc_id = (
+        parent_primary_state.current_location_id
+        if parent_primary_state.character_id == primary_character.id
+        else active_location.id
+    )
     decomposed_msg = decompose_user_message(
         effective_user_message,
         campaign_characters=participants,
@@ -397,7 +405,35 @@ async def _execute_turn_stream_events_unlocked(
         prev_char_state = resolve_character_previous_state(
             branch_turns,
             primary_character,
-            active_location.id,
+            active_location.id if primary_is_present else primary_true_loc_id,
+        )
+    elif is_solo:
+        pre_turn = await _resolve_facade_attr("run_phase1_pre_analysis", run_phase1_pre_analysis)(
+            user_message=effective_user_message,
+            character=primary_character,
+            active_location=active_location,
+            neighbors=neighbors,
+            known_entities=known_entities,
+            dice_mode=req.dice_mode,
+            manual_dice_override=req.manual_dice_override,
+            present_characters=[],
+            previous_speaker_id=parent_turn.actor_id,
+            character_states={},
+            profile=eff_clerk,
+            prompt_template=effective_prompts.get("clerk_pre_turn_system"),
+            character_choices=applied_choices,
+            message_is_synthetic=message_is_synthetic,
+            persona_snapshot=persona_snapshot,
+            current_player_items=(current_player_state.equipped + current_player_state.inventory) if current_player_state else None,
+            disclosure_detection_mode=eff_disclosure_mode,
+            decomposed_message=decomposed_msg,
+        )
+        character = primary_character
+        actor_id = "__solo__"
+        prev_char_state = resolve_character_previous_state(
+            branch_turns,
+            primary_character,
+            primary_true_loc_id,
         )
     else:
         char_states_for_p1 = {
@@ -456,7 +492,7 @@ async def _execute_turn_stream_events_unlocked(
         working_memory_turns=eff_wm_turns,
         actor_system_prompt_template=(
             effective_prompts.get("narrator_zone1_system")
-            if is_narrator
+            if (is_narrator or is_solo)
             else effective_prompts.get("actor_zone1_system")
         ),
         rag_top_k=settings.memory_config.rag_top_k,
@@ -470,7 +506,11 @@ async def _execute_turn_stream_events_unlocked(
     recalled_items: list[RecalledMemoryItem] = []
     for m in (
         *context_bundle.shared_scene_items,
-        *context_bundle.per_character_recalled_items.get(character.id, []),
+        *(
+            context_bundle.per_character_recalled_items.get(character.id, [])
+            if character.id in present_char_ids
+            else []
+        ),
     ):
         if m.id not in seen_recall_ids:
             seen_recall_ids.add(m.id)
@@ -540,10 +580,11 @@ async def _execute_turn_stream_events_unlocked(
         working_memory_turns=eff_wm_turns,
         actor_system_prompt_template=(
             effective_prompts.get("narrator_zone1_system")
-            if is_narrator
+            if (is_narrator or is_solo)
             else effective_prompts.get("actor_zone1_system")
         ),
         is_narrator=is_narrator,
+        is_solo=is_solo,
         narrative_mode=req.narrative_mode if is_narrator else None,
         narrator_directive=req.narrator_directive if is_narrator else None,
         established_cognitions=established_cognitions,
@@ -559,17 +600,18 @@ async def _execute_turn_stream_events_unlocked(
         recall_budget_prose_tokens=eff_models.recall_budget_prose_tokens,
     )
 
+    is_sentinel_scene = is_narrator or is_solo
     primary_cognition = (
         established_cognitions.get(character.id)
-        if not is_narrator and character.id in established_cognitions
+        if not is_sentinel_scene and character.id in established_cognitions
         else CognitionBlock(
             recall=f"Observing {active_location.name}",
-            feeling="Objective / Detached" if is_narrator else prev_char_state.mood_label,
-            valence=0.0 if is_narrator else prev_char_state.valence,
-            arousal=0.0 if is_narrator else prev_char_state.arousal,
-            want="Depict environment and world state neutrally" if is_narrator else prev_char_state.active_want,
-            plan=req.narrator_directive or "Describe scene" if is_narrator else prev_char_state.active_plan,
-            skipped=is_narrator,
+            feeling="Objective / Detached" if is_sentinel_scene else prev_char_state.mood_label,
+            valence=0.0 if is_sentinel_scene else prev_char_state.valence,
+            arousal=0.0 if is_sentinel_scene else prev_char_state.arousal,
+            want="Depict environment and world state neutrally" if is_sentinel_scene else prev_char_state.active_want,
+            plan=req.narrator_directive or "Describe scene" if is_sentinel_scene else prev_char_state.active_plan,
+            skipped=is_sentinel_scene,
         )
     )
     final_cognition = primary_cognition
@@ -589,6 +631,7 @@ async def _execute_turn_stream_events_unlocked(
         established_cognitions=established_cognitions,
         profile=eff_actor,
         is_narrator=is_narrator,
+        is_solo=is_solo,
         narrative_mode=req.narrative_mode if is_narrator else None,
         narrator_directive=req.narrator_directive if is_narrator else None,
         persona_snapshot=persona_snapshot,
@@ -618,7 +661,7 @@ async def _execute_turn_stream_events_unlocked(
         character.baseline_psyche,
         elapsed_minutes=parent_elapsed,
     )
-    if not is_narrator and not final_cognition.skipped:
+    if not is_sentinel_scene and not final_cognition.skipped:
         primary_roll = pre_turn.character_rolls.get(character.id) or (
             pre_turn.resolved_roll
             if pre_turn.resolved_roll and pre_turn.resolved_roll.character_id in (None, character.id)
@@ -632,19 +675,22 @@ async def _execute_turn_stream_events_unlocked(
     else:
         provisional_primary_care = base_primary_care
 
+    initial_char_loc_id = (
+        active_location.id if character.id in present_char_ids else primary_true_loc_id
+    )
     initial_char_state = CharacterStateSnapshot(
         turn_id=new_turn_id,
         character_id=character.id,
-        current_location_id=active_location.id,
+        current_location_id=initial_char_loc_id,
         mood_label=(
             base_primary_state.mood_label
-            if is_narrator
+            if is_sentinel_scene
             else (final_cognition.feeling[:80] or provisional_primary_care.short_mood_label)
         ),
-        valence=base_primary_state.valence if is_narrator else provisional_primary_care.valence,
-        arousal=base_primary_state.arousal if is_narrator else provisional_primary_care.arousal,
-        active_want=base_primary_state.active_want if is_narrator else (final_cognition.want or base_primary_state.active_want),
-        active_plan=base_primary_state.active_plan if is_narrator else (final_cognition.plan or base_primary_state.active_plan),
+        valence=base_primary_state.valence if is_sentinel_scene else provisional_primary_care.valence,
+        arousal=base_primary_state.arousal if is_sentinel_scene else provisional_primary_care.arousal,
+        active_want=base_primary_state.active_want if is_sentinel_scene else (final_cognition.want or base_primary_state.active_want),
+        active_plan=base_primary_state.active_plan if is_sentinel_scene else (final_cognition.plan or base_primary_state.active_plan),
         relationship_notes=dict(base_primary_state.relationship_notes),
         equipped=list(base_primary_state.equipped),
         inventory=list(base_primary_state.inventory),
