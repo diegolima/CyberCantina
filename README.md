@@ -4,7 +4,7 @@
 
 > **Alpha Release:** CyberCantina is in active public alpha. Features, interfaces, and schemas are evolving quickly—feedback and bug reports are welcome in [GitHub Issues](https://github.com/diegolima/CyberCantina/issues).
 
-![CyberCantina 3-Pane Campaign Workspace](docs/assets/campaign-workspace.jpg)
+![CyberCantina 3-Pane Campaign Workspace](docs/assets/campaign-workspace.png)
 
 ---
 
@@ -22,9 +22,9 @@ CyberCantina takes a different approach by giving your models a persistent world
 
 | Interactive Spatial Topology & Nested Containers | Live CARE Psychology & Relational Dossier |
 | :---: | :---: |
-| ![Interactive Spatial Topology Map](docs/assets/spatial-topology-map.jpg)<br><sub>35-location starter world (*The Green Lie*) with nested areas, travel times, portals, and live room inspection.</sub> | ![Character CARE Dossier](docs/assets/character-care-dossier.jpg)<br><sub>Multi-layer CARE affective state tracking valence, tension, composure mask, active tactical plans, and dyadic trust bonds.</sub> |
+| ![Interactive Spatial Topology Map](docs/assets/spatial-topology-map.png)<br><sub>35-location starter world (*The Green Lie*) with nested areas, travel times, portals, and live room inspection.</sub> | ![Character CARE Dossier](docs/assets/character-care-dossier.png)<br><sub>Multi-layer CARE affective state tracking valence, tension, composure mask, active tactical plans, and dyadic trust bonds.</sub> |
 | **Subconscious Inner Cognition & `d20` Checks** | **Structured Character Sheets & `.zcc` Bundles** |
-| ![Inner Cognition and d20 Roll](docs/assets/inner-cognition-d20.jpg)<br><sub>4-step inner cognition (`Recall → Feel → Want → Plan`) reacting to a `d20` persuasion roll and party invitation.</sub> | ![Character Sheet and ZCC Export](docs/assets/character-sheet.png)<br><sub>Deep character sheets with voice anchors, memory shards, persistent inventory, and lossless `.zcc` archive export.</sub> |
+| ![Inner Cognition and d20 Roll](docs/assets/inner-cognition-d20.png)<br><sub>4-step inner cognition (`Recall → Feel → Want → Plan`) reacting to a `d20` persuasion roll and party invitation.</sub> | ![Character Sheet and ZCC Export](docs/assets/character-sheet.png)<br><sub>Deep character sheets with voice anchors, memory shards, persistent inventory, and lossless `.zcc` archive export.</sub> |
 
 ---
 
