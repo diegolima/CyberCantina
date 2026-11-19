@@ -21,7 +21,7 @@ from app.schemas.party import (
     PartyInviteOutcome,
     PartyRecord,
 )
-from app.schemas.turn import PreTurnAnalysis
+from app.schemas.turn import CanonicalOutcomeTier, PreTurnAnalysis
 
 # ---------------------------------------------------------------------------
 # Basic Queries & Formatting
@@ -1114,6 +1114,65 @@ def _describe_care_edge_qualitative(rel_edge: object | None) -> str:
     return f"{warm_label} / {trust_label}{griev_note}"
 
 
+def build_party_invite_roll_directives(
+    outcome_tier: CanonicalOutcomeTier,
+    *,
+    character_name: str,
+    player_name: str | None = None,
+) -> tuple[str, str]:
+    """Return (plan_directive, narrative_directive) with unambiguous player-sided weighted-persuasion polarity."""
+    player_label = (player_name or "Player").strip() or "Player"
+    char_label = (character_name or "target").strip() or "target"
+
+    if outcome_tier == "Critical Success":
+        plan = (
+            f"{player_label}'s recruitment pitch lands with extraordinary persuasive force and credibility; "
+            f"weigh strongly toward `party_invite_decision='accept'` unless an unbreakable core boundary, "
+            f"deep hostility, or absolute loyalty conflict makes joining {player_label} impossible."
+        )
+        narr = (
+            f"{player_label}'s persuasion pitch to {char_label} lands with extraordinary force (Critical Success), "
+            f"strongly pulling {char_label} toward accepting the party invitation."
+        )
+    elif outcome_tier == "Clean Success":
+        plan = (
+            f"{player_label}'s recruitment pitch is genuinely persuasive and credible; "
+            f"weigh positively toward `party_invite_decision='accept'` when compatible with current trust, motives, and loyalties."
+        )
+        narr = (
+            f"{player_label}'s persuasion pitch to {char_label} lands cleanly (Clean Success), "
+            f"giving {char_label} genuine reason to accept if motives align."
+        )
+    elif outcome_tier == "Simple Failure":
+        plan = (
+            f"{player_label}'s recruitment pitch falls flat without causing offense; "
+            f"rely on existing trust, motives, and loyalties (lean toward `party_invite_decision='refuse'` unless already inclined to join)."
+        )
+        narr = (
+            f"{player_label}'s persuasion pitch to {char_label} falls flat without offense (Simple Failure), "
+            f"gaining no extra leverage over {char_label}'s existing stance."
+        )
+    elif outcome_tier == "Failure with Consequences":
+        plan = (
+            f"{player_label}'s recruitment pitch lands clumsily, raising skepticism or friction; "
+            f"weigh strongly toward `party_invite_decision='refuse'` unless overwhelming self-interest overrides {char_label}'s misgivings."
+        )
+        narr = (
+            f"{player_label}'s persuasion pitch to {char_label} falters awkwardly (Failure with Consequences), "
+            f"provoking skepticism or friction against joining."
+        )
+    else:  # Critical Failure
+        plan = (
+            f"{player_label}'s recruitment pitch backfires badly, provoking sharp distrust or irritation; "
+            f"weigh heavily toward `party_invite_decision='refuse'`."
+        )
+        narr = (
+            f"{player_label}'s persuasion pitch to {char_label} backfires badly (Critical Failure), "
+            f"triggering sharp distrust or refusal."
+        )
+    return plan, narr
+
+
 def render_cognition_party_context(
     *,
     character_id: str,
@@ -1191,9 +1250,12 @@ def render_cognition_party_context(
                     "ANTI-SYCOPHANCY DECISION PROTOCOL (Required field `party_invite_decision`):\n"
                     f"- Evaluate authentically from <internal_affective_state>, Trust/Warmth/Grievance toward {player_label}, "
                     "your Core Drive, Core Fear, active goals/obligations here, any persuasion roll tier, and existing party loyalty.\n"
+                    f"- ROLL POLARITY (Weighted Persuasion): Any persuasion check above measures how effectively {player_label}'s pitch landed "
+                    "(Success / Critical Success pulls toward `accept`; Failure / Critical Failure pulls toward `refuse`), NOT your willpower to resist. "
+                    "Strong persuasion sways neutral or skeptical characters toward accepting, though deep hostility or unbreakable boundaries can still refuse.\n"
                     "- Set `party_invite_decision='refuse'` whenever distrust, grievances, conflicting motives, loyalty to your "
-                    "current companions/post, or a failed persuasion check makes joining unrealistic. Do NOT blindly appease the player.\n"
-                    "- Set `party_invite_decision='accept'` only if joining genuinely aligns with trust, leverage, survival, or persuasion.\n"
+                    "current companions/post, or a failed persuasion check outweighs the pitch. Do NOT blindly appease the player.\n"
+                    "- Set `party_invite_decision='accept'` when trust, leverage, survival, or a persuasive roll genuinely justifies joining.\n"
                     "</party_invite_evaluation>"
                 )
             else:

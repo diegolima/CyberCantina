@@ -19,6 +19,7 @@ from app.engine.choices import (
     build_undirected_cognition_schema,
 )
 from app.engine.cognition.heuristics import compute_heuristic_party_invite_decision
+from app.engine.cognition.runner import run_character_cognition_agent
 from app.engine.context.assembler import assemble_four_zone_messages
 from app.engine.context.zone1_static import build_zone1_ensemble_system_prompt
 from app.engine.llm_client import llm_client
@@ -27,6 +28,7 @@ from app.engine.parties import (
     apply_party_invite_acceptances,
     apply_party_kick,
     apply_party_leave,
+    build_party_invite_roll_directives,
     create_npc_only_party,
     get_player_party,
     parse_party_slash_command,
@@ -47,9 +49,12 @@ from app.schemas.party import (
 )
 from app.schemas.turn import (
     CharacterAgentDelta,
+    CharacterCheckSpec,
     ChoiceResolution,
     DiceRollResult,
+    MechanicsTrigger,
     PreTurnAnalysis,
+    PreTurnLLMOutput,
     TurnSubmitRequest,
     WorldPostTurnDelta,
 )
@@ -776,3 +781,165 @@ async def test_subset_location_override_via_stream_and_in_place(empty_repo: Cant
     b_next = empty_repo.get_campaign_state_bundle(camp.id, owner_id=scen.user.id)
     assert b_next.character_states[kira.id].current_location_id == loc_b.id
     assert b_next.character_states[nyx.id].current_location_id == scen.locations[0].id
+
+
+
+def test_weighted_persuasion_party_invite_roll_directives() -> None:
+    crit_plan, crit_narr = build_party_invite_roll_directives(
+        "Critical Success",
+        character_name="Kira",
+        player_name="Merc",
+    )
+    assert "Merc's recruitment pitch lands with extraordinary persuasive force" in crit_plan
+    assert "party_invite_decision='accept'" in crit_plan
+    assert "deflect" not in crit_plan.lower()
+    assert "Critical Success" in crit_narr
+
+    clean_plan, _ = build_party_invite_roll_directives("Clean Success", character_name="Kira", player_name="Merc")
+    assert "genuinely persuasive" in clean_plan
+    assert "party_invite_decision='accept'" in clean_plan
+
+    simple_fail, _ = build_party_invite_roll_directives("Simple Failure", character_name="Kira", player_name="Merc")
+    assert "falls flat" in simple_fail
+    assert "party_invite_decision='refuse'" in simple_fail
+
+    conseq_fail, _ = build_party_invite_roll_directives("Failure with Consequences", character_name="Kira", player_name="Merc")
+    assert "clumsily" in conseq_fail
+    assert "party_invite_decision='refuse'" in conseq_fail
+
+    crit_fail, _ = build_party_invite_roll_directives("Critical Failure", character_name="Kira", player_name="Merc")
+    assert "backfires badly" in crit_fail
+    assert "party_invite_decision='refuse'" in crit_fail
+
+
+async def test_phase1_normalizes_contested_reaction_on_party_invite(
+    empty_repo: CantinaRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scen = seed_minimal_scenario(empty_repo, character_name="Kira")
+    kira = scen.character
+    loc_a = scen.locations[0]
+
+    async def mock_pre_llm(messages: list[dict[str, str]], response_model: type[Any], **_: Any) -> Any:
+        assert response_model is PreTurnLLMOutput
+        # Simulate LLM choosing contested_reaction / NPC-resistance framing
+        return PreTurnLLMOutput(
+            user_sentiment="persuasive",
+            subtext_interpretation="Player attempts to recruit Kira.",
+            mentioned_entities=[kira.name],
+            memory_search_queries=["party invite"],
+            spatial_intent="stay",
+            active_speaker_id=kira.id,
+            speaker_order=[kira.id],
+            mechanics_check=MechanicsTrigger(requires_roll=False),
+            character_checks=[
+                CharacterCheckSpec(
+                    character_id=kira.id,
+                    requires_roll=True,
+                    check_role="contested_reaction",
+                    action_description="Kira resists player's recruitment attempt",
+                    skill_or_approach="Willpower",
+                    difficulty_class=12,
+                    relevant_modifier=0,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(llm_client, "complete_structured", mock_pre_llm)
+    analysis = await run_phase1_pre_analysis(
+        user_message="/party @Kira Please cover my back across the catwalk",
+        character=kira,
+        active_location=loc_a,
+        neighbors=[],
+        known_entities=[kira.name],
+        dice_mode="forced",
+        manual_dice_override=20,
+        present_characters=[kira],
+        party_action=PartyActionSpec(
+            kind="invite",
+            target_character_ids=[kira.id],
+            message="Please cover my back across the catwalk",
+        ),
+    )
+    roll = analysis.character_rolls[kira.id]
+    assert roll.outcome_tier == "Critical Success"
+    assert roll.check_role == "active_attempt"
+    assert roll.skill_or_approach == "Social / Persuasion"
+    assert roll.action_description == f"Player persuading {kira.name} to join the party"
+    assert "deflect" not in roll.plan_directive.lower()
+    assert "party_invite_decision='accept'" in roll.plan_directive
+    assert "Critical Success" in roll.narrative_directive
+
+
+async def test_phase3_cognition_prompt_enforces_weighted_persuasion_polarity(
+    empty_repo: CantinaRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scen = seed_minimal_scenario(empty_repo, character_name="Kira")
+    kira = scen.character
+    loc_a = scen.locations[0]
+    plan_dir, narr_dir = build_party_invite_roll_directives(
+        "Critical Success",
+        character_name=kira.name,
+        player_name="Player",
+    )
+    roll = DiceRollResult(
+        character_id=kira.id,
+        character_name=kira.name,
+        check_role="active_attempt",
+        action_description=f"Player persuading {kira.name} to join the party",
+        skill_or_approach="Social / Persuasion",
+        d20_raw=20,
+        modifier=1,
+        total=21,
+        difficulty_class=12,
+        outcome_tier="Critical Success",
+        plan_directive=plan_dir,
+        narrative_directive=narr_dir,
+    )
+    pre_turn = PreTurnAnalysis(
+        party_action=PartyActionSpec(
+            kind="invite",
+            target_character_ids=[kira.id],
+            message="Come with me to the catwalk",
+        ),
+        character_rolls={kira.id: roll},
+    )
+
+    captured_prompts: list[str] = []
+
+    async def mock_cog_llm(messages: list[dict[str, str]], response_model: type[Any], **_: Any) -> Any:
+        captured_prompts.append(messages[-1]["content"])
+        return CognitionBlock(
+            recall="- Player offered a compelling pitch.",
+            feeling="Measured but genuinely swayed",
+            valence=0.3,
+            arousal=0.5,
+            want="Test this partnership across the catwalk.",
+            plan="- Accept the invitation while keeping an eye out.",
+            party_invite_decision="accept",
+        )
+
+    monkeypatch.setattr(llm_client, "complete_structured", mock_cog_llm)
+    cog = await run_character_cognition_agent(
+        user_message='[Party Invite to Kira] — "Come with me to the catwalk"',
+        character=kira,
+        world=scen.world,
+        role="primary_speaker",
+        previous_state=_char_state(kira.id, loc_a.id),
+        active_location=loc_a,
+        neighbors=[],
+        shared_scene_items=[],
+        character_recalled_items=[],
+        pre_turn=pre_turn,
+        co_present_characters=[],
+    )
+    assert cog.party_invite_decision == "accept"
+    assert len(captured_prompts) == 1
+    prompt = captured_prompts[0]
+    assert f"=== PARTY INVITATION PERSUASION CHECK (Player -> {kira.name}) ===" in prompt
+    assert f"NOT {kira.name}'s willpower to refuse" in prompt
+    assert "WEIGHTED PERSUASION RULE" in prompt
+    assert "ROLL POLARITY (Weighted Persuasion)" in prompt
+    assert "Your planned action backfires" not in prompt
+    assert "deflect the challenge" not in prompt

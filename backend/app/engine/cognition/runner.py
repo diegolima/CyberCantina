@@ -138,11 +138,36 @@ async def run_character_cognition_agent(
     roll_text = ""
     if char_roll:
         r = char_roll
+        is_party_invite_roll = bool(
+            pre_turn.party_action is not None
+            and pre_turn.party_action.kind == "invite"
+            and character.id in set(pre_turn.party_action.target_character_ids)
+            and not getattr(r, "is_choice_gate", False)
+        )
         if getattr(r, "is_choice_gate", False):
             roll_text = (
                 f"\n=== MECHANICS CHECK OUTCOME FOR {character.name} ===\n"
                 f"- Decisive Moment: Resulted in [{r.outcome_tier}] (d20({r.d20_raw}) = {r.total} vs DC {r.difficulty_class})\n"
                 f"- Directive: {r.plan_directive}\n"
+            )
+        elif is_party_invite_roll:
+            player_label = (
+                known_persona.name.strip()
+                if known_persona is not None and known_persona.name and known_persona.name.strip()
+                else "Player"
+            )
+            roll_text = (
+                f"\n=== PARTY INVITATION PERSUASION CHECK ({player_label} -> {character.name}) ===\n"
+                f"- Roll Meaning: This check measures how persuasively {player_label}'s recruitment pitch landed "
+                f"(NOT {character.name}'s willpower to refuse).\n"
+                f"- Polarity: Clean/Critical Success means {player_label}'s pitch landed persuasively and pulls toward accept; "
+                f"Failure/Critical Failure means the pitch fell flat or backfired and pulls toward refuse.\n"
+                f"- Attempt: {r.action_description} ({r.skill_or_approach})\n"
+                f"- Result: [{r.outcome_tier}] (d20({r.d20_raw}) + {r.modifier} = {r.total} vs DC {r.difficulty_class})\n"
+                f"- Guidance: {r.plan_directive}\n"
+                f"- WEIGHTED PERSUASION RULE: Weigh this outcome heavily alongside Trust/Warmth/Grievance, Core Drive/Fear, "
+                f"and existing companion loyalties. Strong persuasion (especially Critical Success) sways neutral or skeptical "
+                f"characters toward accepting; only deep hostility or an unbreakable core boundary should override it.\n"
             )
         else:
             directive_line = f"- Plan Directive: {r.plan_directive}\n" if r.plan_directive else f"- Directive: {r.narrative_directive}\n"

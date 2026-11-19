@@ -9,6 +9,7 @@ import re
 from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
 from app.engine.mentions import DecomposedUserMessage, MentionTargetScope, decompose_user_message
+from app.engine.parties import build_party_invite_roll_directives
 from app.prompts import get_default_prompt, render_template
 from app.schemas.character import (
     CharacterRecord,
@@ -695,7 +696,7 @@ def _build_heuristic_llm_output(
     # 7. Character checks for sensory cues & party invite persuasion
     char_checks: list[CharacterCheckSpec] = []
     if party_action and party_action.kind == "invite":
-        room_id_set = {c.id for c in room_chars}
+        room_by_id = {c.id: c for c in room_chars}
         persuasive_pitch = bool(
             re.search(
                 r"\b(please|convince|persuade|trust|promise|pay|share|need you|with me|cover my|watch my|backup)\b",
@@ -703,14 +704,16 @@ def _build_heuristic_llm_output(
             )
         )
         if persuasive_pitch:
-            for tid in party_action.target_character_ids:
-                if tid in room_id_set:
+            target_ids = party_action.target_character_ids or [c.id for c in room_chars]
+            for tid in target_ids:
+                if tid in room_by_id:
+                    t_name = room_by_id[tid].name
                     char_checks.append(
                         CharacterCheckSpec(
                             character_id=tid,
                             requires_roll=True,
-                            check_role="contested_reaction",
-                            action_description="Weighing player's party invitation pitch",
+                            check_role="active_attempt",
+                            action_description=f"Player persuading {t_name} to join the party",
                             skill_or_approach="Social / Persuasion",
                             difficulty_class=12,
                             relevant_modifier=1,
@@ -798,6 +801,11 @@ def heuristic_pre_turn_analysis(
         active_speaker_id=raw_llm.active_speaker_id,
         rng=rng,
     )
+    _normalize_party_invite_rolls(
+        character_rolls,
+        party_action=party_action,
+        persona_snapshot=persona_snapshot,
+    )
 
     analysis = PreTurnAnalysis(
         **raw_llm.model_dump(),
@@ -807,6 +815,41 @@ def heuristic_pre_turn_analysis(
         party_action=party_action,
     )
     return analysis
+
+
+def _normalize_party_invite_rolls(
+    character_rolls: dict[str, DiceRollResult],
+    *,
+    party_action: PartyActionSpec | None,
+    persona_snapshot: PersonaRecord | None = None,
+) -> None:
+    """Force unambiguous player-sided weighted-persuasion polarity on party-invite rolls."""
+    if party_action is None or party_action.kind != "invite" or not character_rolls:
+        return
+    target_ids = (
+        set(party_action.target_character_ids)
+        if party_action.target_character_ids
+        else set(character_rolls.keys())
+    )
+    player_label = (
+        persona_snapshot.name.strip()
+        if persona_snapshot and persona_snapshot.name and persona_snapshot.name.strip()
+        else "Player"
+    )
+    for cid, roll in character_rolls.items():
+        if cid not in target_ids or getattr(roll, "is_choice_gate", False):
+            continue
+        char_label = roll.character_name or cid
+        roll.check_role = "active_attempt"
+        roll.skill_or_approach = "Social / Persuasion"
+        roll.action_description = f"{player_label} persuading {char_label} to join the party"
+        plan_dir, narr_dir = build_party_invite_roll_directives(
+            roll.outcome_tier,
+            character_name=char_label,
+            player_name=player_label,
+        )
+        roll.plan_directive = plan_dir
+        roll.narrative_directive = narr_dir
 
 
 async def run_phase1_pre_analysis(
@@ -942,8 +985,12 @@ async def run_phase1_pre_analysis(
         if party_action.kind == "invite":
             party_action_hint = (
                 f"\nParty Action: Player is inviting character(s) [{target_names_p1}] to join a traveling party. "
-                "Set spatial_intent='stay'. You MAY assign a Social/Persuasion check in character_checks for invited "
-                "target(s) when persuasion/leverage is contested (unless dice_mode is disabled), and prioritize them in speaker_order."
+                "Set spatial_intent='stay'. You MAY assign a Social / Persuasion check in character_checks for invited "
+                "target(s) when persuasion/leverage is contested (unless dice_mode is disabled), and prioritize them in speaker_order. "
+                "POLARITY: Any persuasion check measures the PLAYER'S persuasion pitch toward the invited character "
+                "(use check_role='active_attempt', skill_or_approach='Social / Persuasion', "
+                "action_description='Player persuading <Name> to join the party')—where Success means the player's pitch persuaded well, "
+                "and Failure means the player's pitch fell flat or backfired."
             )
         else:
             party_action_hint = (
@@ -1109,6 +1156,11 @@ async def run_phase1_pre_analysis(
             active_speaker_id=analysis.active_speaker_id,
             rng=rng,
             gate_specs=gate_specs,
+        )
+        _normalize_party_invite_rolls(
+            character_rolls,
+            party_action=party_action,
+            persona_snapshot=persona_snapshot,
         )
         analysis.character_rolls = character_rolls
         if character_rolls:
