@@ -501,22 +501,22 @@ class WorldsMixin:
             if owner_id is not None:
                 if include_pending_deletion:
                     rows = conn.execute(
-                        "SELECT id FROM worlds WHERE owner_id = ? ORDER BY created_at DESC",
+                        "SELECT id FROM worlds WHERE owner_id = ? ORDER BY created_at DESC, rowid DESC",
                         (owner_id,),
                     ).fetchall()
                 else:
                     rows = conn.execute(
-                        "SELECT id FROM worlds WHERE owner_id = ? AND pending_deletion = 0 ORDER BY created_at DESC",
+                        "SELECT id FROM worlds WHERE owner_id = ? AND pending_deletion = 0 ORDER BY created_at DESC, rowid DESC",
                         (owner_id,),
                     ).fetchall()
             else:
                 if include_pending_deletion:
                     rows = conn.execute(
-                        "SELECT id FROM worlds ORDER BY created_at DESC"
+                        "SELECT id FROM worlds ORDER BY created_at DESC, rowid DESC"
                     ).fetchall()
                 else:
                     rows = conn.execute(
-                        "SELECT id FROM worlds WHERE pending_deletion = 0 ORDER BY created_at DESC"
+                        "SELECT id FROM worlds WHERE pending_deletion = 0 ORDER BY created_at DESC, rowid DESC"
                     ).fetchall()
         finally:
             conn.close()

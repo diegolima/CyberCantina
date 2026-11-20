@@ -402,11 +402,11 @@ class CampaignsMixin:
         try:
             if owner_id is not None:
                 rows = conn.execute(
-                    "SELECT id FROM campaigns WHERE owner_id = ? ORDER BY created_at DESC",
+                    "SELECT id FROM campaigns WHERE owner_id = ? ORDER BY created_at DESC, rowid DESC",
                     (owner_id,),
                 ).fetchall()
             else:
-                rows = conn.execute("SELECT id FROM campaigns ORDER BY created_at DESC").fetchall()
+                rows = conn.execute("SELECT id FROM campaigns ORDER BY created_at DESC, rowid DESC").fetchall()
         finally:
             conn.close()
         return [self.get_campaign(r["id"]) for r in rows]

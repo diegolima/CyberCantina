@@ -1517,7 +1517,9 @@ def test_zcc_selective_video_export_import_coupling_and_disabled_upload_policy(
                 },
             ).json()
             assert any("video" in w_msg.lower() for w_msg in com_novid["warnings"])
-            imp_w1 = empty_repo.list_worlds(owner_id=importer.id)[-1]
+            listed_worlds = empty_repo.list_worlds(owner_id=importer.id)
+            imp_w1 = next(w_rec for w_rec in listed_worlds if w_rec.id != imp_w0.id)
+            assert listed_worlds[0].id == imp_w1.id
             assert len(imp_w1.media) == 1
             assert imp_w1.media[0].video_url is None
 
@@ -1543,6 +1545,81 @@ def test_zcc_selective_video_export_import_coupling_and_disabled_upload_policy(
             assert adm_c.gallery[0].video_url is not None
     finally:
         main_module.app.dependency_overrides.clear()
+
+
+def test_repo_list_orders_newest_first_on_same_second_timestamp(
+    empty_repo: CantinaRepository, monkeypatch: pytest.MonkeyPatch
+):
+    """list_worlds, list_characters, and list_campaigns must break 1s created_at ties newest-first."""
+    from app.db.repos import campaigns as campaigns_repo
+    from app.db.repos import characters as characters_repo
+    from app.db.repos import worlds as worlds_repo
+
+    fixed_ts = "2026-11-20T12:00:00Z"
+    monkeypatch.setattr(worlds_repo, "utc_now_iso", lambda: fixed_ts)
+    monkeypatch.setattr(characters_repo, "utc_now_iso", lambda: fixed_ts)
+    monkeypatch.setattr(campaigns_repo, "utc_now_iso", lambda: fixed_ts)
+
+    owner = empty_repo.create_user(username="order_tester", display_name="Order Tester")
+
+    def _make_world(name: str):
+        return empty_repo.create_world_from_draft(
+            WorldWizardDraft(
+                name=name,
+                global_rules=WorldGlobalRules(
+                    genre="Noir",
+                    tone="Moody",
+                    setting_overview="Rain.",
+                    tech_or_magic_rules="Analog.",
+                ),
+                locations=[
+                    LocationNodeDraft(
+                        key="loc_a",
+                        name="Dock",
+                        summary="S",
+                        description="D",
+                        is_starting_location=True,
+                    )
+                ],
+                edges=[],
+                lore_nodes=[],
+            ),
+            owner_id=owner.id,
+        )
+
+    def _make_char(name: str, world_id: str):
+        return empty_repo.create_character_from_draft(
+            CharacterWizardDraft(
+                name=name,
+                tagline="Agent",
+                core_persona="Calm.",
+                baseline_psyche=BaselinePsyche(
+                    core_drive="Seek.",
+                    core_fear="Fail.",
+                    default_want="Act.",
+                    default_plan="Go.",
+                ),
+            ),
+            world_id=world_id,
+            owner_id=owner.id,
+        )
+
+    w1 = _make_world("World First")
+    w2 = _make_world("World Second")
+    assert [w.id for w in empty_repo.list_worlds(owner_id=owner.id)] == [w2.id, w1.id]
+
+    c1 = _make_char("Char First", w1.id)
+    c2 = _make_char("Char Second", w1.id)
+    assert [c.id for c in empty_repo.list_characters(owner_id=owner.id)] == [c2.id, c1.id]
+
+    camp1 = empty_repo.create_campaign(
+        name="Camp First", world_id=w1.id, character_id=c1.id, owner_id=owner.id
+    )
+    camp2 = empty_repo.create_campaign(
+        name="Camp Second", world_id=w1.id, character_id=c1.id, owner_id=owner.id
+    )
+    assert [cp.id for cp in empty_repo.list_campaigns(owner_id=owner.id)] == [camp2.id, camp1.id]
+
 
 
 
