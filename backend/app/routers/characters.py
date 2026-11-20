@@ -33,6 +33,7 @@ from app.dependencies import (
     get_user_media_lock,
     get_user_media_usage_bytes,
     get_user_quota_bytes,
+    read_upload_bytes_bounded,
     render_webp_bytes,
     run_entity_pruner,
     safe_resolve_asset_path,
@@ -199,7 +200,7 @@ async def wizard_import_sillytavern_card(
     eff_actor, *_ = get_effective_user_model_settings(current_user.id)
     effective_prompts = repo.resolve_effective_prompts(user_id=current_user.id)
 
-    file_bytes = await file.read()
+    file_bytes = await read_upload_bytes_bounded(file, 20 * 1024 * 1024)
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
@@ -555,7 +556,7 @@ async def upload_character_portrait(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    file_bytes = await file.read()
+    file_bytes = await read_upload_bytes_bounded(file, 20 * 1024 * 1024)
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty upload payload.")
 
@@ -680,7 +681,7 @@ async def upload_character_gallery_image(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    file_bytes = await file.read()
+    file_bytes = await read_upload_bytes_bounded(file, 20 * 1024 * 1024)
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty upload payload.")
 

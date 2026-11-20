@@ -11,6 +11,16 @@ import {
 } from "lucide-react";
 import { api } from "../../api";
 import { UserProfile } from "../../types";
+import {
+  MAX_DISPLAY_NAME_LENGTH,
+  MAX_PASSWORD_LENGTH,
+  MAX_USERNAME_LENGTH,
+  MIN_PASSWORD_LENGTH,
+  MIN_USERNAME_LENGTH,
+  validateDisplayName,
+  validateNewPassword,
+  validateUsername,
+} from "./authValidation";
 
 export interface AdminUsersTabProps {
   currentUser: UserProfile;
@@ -139,8 +149,9 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
     setStatusMsg(null);
     setGeneratedPassword(null);
 
-    if (!editUsername.trim()) {
-      setErrorMsg("Username cannot be empty.");
+    const usernameErr = validateUsername(editUsername);
+    if (usernameErr) {
+      setErrorMsg(usernameErr);
       return;
     }
 
@@ -243,8 +254,21 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
     e.preventDefault();
     setErrorMsg(null);
     setStatusMsg(null);
-    if (!newUsername.trim() || !newUserPassword) {
-      setErrorMsg("Username and password are required.");
+    const usernameErr = validateUsername(newUsername);
+    if (usernameErr) {
+      setErrorMsg(usernameErr);
+      return;
+    }
+    if (newDisplayName.trim()) {
+      const displayErr = validateDisplayName(newDisplayName);
+      if (displayErr) {
+        setErrorMsg(displayErr);
+        return;
+      }
+    }
+    const pwdErr = validateNewPassword(newUserPassword);
+    if (pwdErr) {
+      setErrorMsg(pwdErr);
       return;
     }
     setActionBusy(true);
@@ -473,6 +497,8 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
                           type="text"
                           className="form-input"
                           value={newUsername}
+                          minLength={MIN_USERNAME_LENGTH}
+                          maxLength={MAX_USERNAME_LENGTH}
                           onChange={(e) => setNewUsername(e.target.value)}
                           placeholder="e.g. player_one"
                           required
@@ -484,6 +510,7 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
                           type="text"
                           className="form-input"
                           value={newDisplayName}
+                          maxLength={MAX_DISPLAY_NAME_LENGTH}
                           onChange={(e) => setNewDisplayName(e.target.value)}
                           placeholder="Player One"
                         />
@@ -491,11 +518,15 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
                     </div>
                     <div className="grid-2">
                       <div className="form-group">
-                        <label className="form-label">Initial Password</label>
+                        <label className="form-label">
+                          Initial Password ({MIN_PASSWORD_LENGTH}–{MAX_PASSWORD_LENGTH} chars)
+                        </label>
                         <input
                           type="password"
                           className="form-input"
                           value={newUserPassword}
+                          minLength={MIN_PASSWORD_LENGTH}
+                          maxLength={MAX_PASSWORD_LENGTH}
                           onChange={(e) => setNewUserPassword(e.target.value)}
                           placeholder="Initial password..."
                           required
@@ -662,6 +693,8 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
                           type="text"
                           className="form-input"
                           value={editUsername}
+                          minLength={MIN_USERNAME_LENGTH}
+                          maxLength={MAX_USERNAME_LENGTH}
                           onChange={(e) => setEditUsername(e.target.value)}
                           placeholder="New username..."
                         />

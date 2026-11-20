@@ -7,7 +7,14 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from app.config import ModelProfile
-from app.schemas.auth import PasskeyInfo, UserModelSettingsPayload, UserProfile, UserRole
+from app.schemas.auth import (
+    PasskeyInfo,
+    UserModelSettingsPayload,
+    UserProfile,
+    UserRole,
+    validate_display_name_value,
+    validate_username_value,
+)
 from app.db.repos.base import _delete_campaign_rows, utc_now_iso, WEBAUTHN_CHALLENGE_TTL_SECONDS
 
 
@@ -69,10 +76,12 @@ class AuthUsersMixin:
         role: UserRole = "user",
         user_id: str | None = None,
     ) -> UserProfile:
-        clean_username = username.strip()
-        if not clean_username:
-            raise ValueError("Username cannot be empty")
-        clean_display = (display_name or clean_username).strip() or clean_username
+        clean_username = validate_username_value(username)
+        clean_display = (
+            validate_display_name_value(display_name)
+            if (display_name and display_name.strip())
+            else clean_username
+        )
         u_id = user_id or f"user_{uuid.uuid4().hex[:10]}"
         now = utc_now_iso()
 
@@ -189,9 +198,7 @@ class AuthUsersMixin:
         return [self.get_user_by_id(r["id"]) for r in rows]
 
     def update_user_display_name(self, user_id: str, display_name: str) -> UserProfile:
-        clean_name = display_name.strip()
-        if not clean_name:
-            raise ValueError("Display name cannot be empty")
+        clean_name = validate_display_name_value(display_name)
         now = utc_now_iso()
         conn = self._connect()
         try:
@@ -207,9 +214,7 @@ class AuthUsersMixin:
         return self.get_user_by_id(user_id)
 
     def update_user_username(self, user_id: str, new_username: str) -> UserProfile:
-        clean_username = new_username.strip()
-        if not clean_username:
-            raise ValueError("Username cannot be empty")
+        clean_username = validate_username_value(new_username)
         now = utc_now_iso()
         conn = self._connect()
         try:
@@ -844,12 +849,14 @@ class AuthUsersMixin:
         finally:
             conn.close()
 
+    SESSION_TOUCH_THROTTLE_SECONDS = 300
+
     def get_and_touch_session(
         self,
         session_id_hash: str,
         idle_timeout_seconds: int = 86400,
     ) -> UserProfile | None:
-        """Validate session against 24h sliding inactivity window and update last_active_at."""
+        """Validate session against 24h sliding inactivity window and update last_active_at (throttled)."""
         now_dt = datetime.now(timezone.utc)
         now_iso = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         conn = self._connect()
@@ -862,12 +869,14 @@ class AuthUsersMixin:
                 return None
 
             last_active_str = row["last_active_at"]
+            session_ts_invalid = False
             try:
                 last_active_dt = datetime.strptime(
                     last_active_str, "%Y-%m-%dT%H:%M:%SZ"
                 ).replace(tzinfo=timezone.utc)
             except ValueError:
                 last_active_dt = now_dt
+                session_ts_invalid = True
 
             idle_seconds = (now_dt - last_active_dt).total_seconds()
             if idle_seconds > idle_timeout_seconds:
@@ -877,10 +886,15 @@ class AuthUsersMixin:
                 conn.commit()
                 return None
 
-            conn.execute(
-                "UPDATE user_sessions SET last_active_at = ? WHERE id = ?",
-                (now_iso, session_id_hash),
+            should_touch_session = (
+                session_ts_invalid
+                or idle_seconds >= self.SESSION_TOUCH_THROTTLE_SECONDS
             )
+            if should_touch_session:
+                conn.execute(
+                    "UPDATE user_sessions SET last_active_at = ? WHERE id = ?",
+                    (now_iso, session_id_hash),
+                )
             user_id = row["user_id"]
             user_row = conn.execute(
                 "SELECT last_active_at FROM users WHERE id = ?",
@@ -901,7 +915,8 @@ class AuthUsersMixin:
                     "UPDATE users SET last_active_at = ? WHERE id = ?",
                     (now_iso, user_id),
                 )
-            conn.commit()
+            if should_touch_session or should_touch_user:
+                conn.commit()
         finally:
             conn.close()
 

@@ -298,7 +298,11 @@ def get_profile_models(
         default_zone2_budget_share_pct=settings.memory_config.zone2_budget_share_pct,
         default_recall_budget_prose_tokens=settings.memory_config.recall_budget_prose_tokens,
         default_recall_budget_cognition_tokens=settings.memory_config.recall_budget_cognition_tokens,
-        default_embedding_profile=settings.embedding_profile,
+        default_embedding_profile=(
+            settings.embedding_profile
+            if current_user.role == "admin"
+            else settings.embedding_profile.model_copy(update={"base_url": ""})
+        ),
     )
 
 

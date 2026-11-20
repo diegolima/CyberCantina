@@ -948,3 +948,236 @@ def test_admin_and_user_model_settings_and_overrides(
     assert eff_bob_reverted_actor.model == "llama3.2:3b"
     assert eff_bob_reverted_flags == settings.memory_config.max_scene_flags
 
+
+def test_session_cookie_secure_flag_respects_transport_and_proxy_trust(
+    auth_client: tuple[TestClient, CantinaRepository],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FR-3: Session cookies set Secure conditionally on trusted HTTPS / explicit overrides."""
+    http_client, _repo = auth_client
+    monkeypatch.setenv("CYBERCANTINA_COOKIE_SECURE", "auto")
+
+    setup_res = http_client.post(
+        "/api/auth/setup",
+        json={
+            "username": "cookie_admin",
+            "display_name": "Cookie Admin",
+            "password": "AdminPassword123!",
+        },
+    )
+    assert setup_res.status_code == 200
+    assert "; secure" not in setup_res.headers.get("set-cookie", "").lower()
+
+    # 1. Plain HTTP TestClient login omits Secure under auto
+    login_http = http_client.post(
+        "/api/auth/login",
+        json={"username": "cookie_admin", "password": "AdminPassword123!"},
+    )
+    assert login_http.status_code == 200
+    assert "; secure" not in login_http.headers.get("set-cookie", "").lower()
+
+    # 2. Trusted loopback proxy with X-Forwarded-Proto: https sets Secure
+    trusted_client = TestClient(main_module.app, client=("127.0.0.1", 50000))
+    login_xfp = trusted_client.post(
+        "/api/auth/login",
+        headers={"X-Forwarded-Proto": "https"},
+        json={"username": "cookie_admin", "password": "AdminPassword123!"},
+    )
+    assert login_xfp.status_code == 200
+    assert "; secure" in login_xfp.headers.get("set-cookie", "").lower()
+
+    # 3. Trusted loopback proxy with Cloudflare CF-Visitor HTTPS sets Secure
+    login_cf = trusted_client.post(
+        "/api/auth/login",
+        headers={"CF-Visitor": '{"scheme":"https"}'},
+        json={"username": "cookie_admin", "password": "AdminPassword123!"},
+    )
+    assert login_cf.status_code == 200
+    assert "; secure" in login_cf.headers.get("set-cookie", "").lower()
+
+    # 4. Untrusted public peer spoofing X-Forwarded-Proto: https must NOT trigger Secure
+    untrusted_client = TestClient(main_module.app, client=("203.0.113.10", 50000))
+    login_spoof = untrusted_client.post(
+        "/api/auth/login",
+        headers={"X-Forwarded-Proto": "https"},
+        json={"username": "cookie_admin", "password": "AdminPassword123!"},
+    )
+    assert login_spoof.status_code == 200
+    assert "; secure" not in login_spoof.headers.get("set-cookie", "").lower()
+
+    # 5. Logout clears session cookie with matching Secure attribute under trusted HTTPS
+    logout_https = trusted_client.post(
+        "/api/auth/logout",
+        headers={"X-Forwarded-Proto": "https"},
+    )
+    assert logout_https.status_code == 200
+    logout_cookie = logout_https.headers.get("set-cookie", "").lower()
+    assert "cantina_session=" in logout_cookie
+    assert "; secure" in logout_cookie
+
+    # 6. Explicit overrides true / false
+    monkeypatch.setenv("CYBERCANTINA_COOKIE_SECURE", "true")
+    forced_true = http_client.post(
+        "/api/auth/login",
+        json={"username": "cookie_admin", "password": "AdminPassword123!"},
+    )
+    assert "; secure" in forced_true.headers.get("set-cookie", "").lower()
+
+    monkeypatch.setenv("CYBERCANTINA_COOKIE_SECURE", "false")
+    forced_false = trusted_client.post(
+        "/api/auth/login",
+        headers={"X-Forwarded-Proto": "https"},
+        json={"username": "cookie_admin", "password": "AdminPassword123!"},
+    )
+    assert "; secure" not in forced_false.headers.get("set-cookie", "").lower()
+
+
+def test_credential_username_display_name_bounds_and_legacy_login(
+    auth_client: tuple[TestClient, CantinaRepository],
+) -> None:
+    """FR-5: Enforce registration/change bounds while preserving legacy short-password logins and short valid usernames."""
+    client, repo = auth_client
+    setup_res = client.post(
+        "/api/auth/setup",
+        json={
+            "username": "admin_bounds",
+            "display_name": "Bounds Admin",
+            "password": "ValidPassword123!",
+        },
+    )
+    assert setup_res.status_code == 200
+
+    # Short valid 2-char username succeeds with 8-char password
+    ok_u1 = client.post(
+        "/api/auth/register",
+        json={"username": "u1", "display_name": "U1", "password": "12345678"},
+    )
+    assert ok_u1.status_code == 200
+    u1_headers = {"Authorization": f"Bearer {ok_u1.json()['token']}"}
+
+    # Invalid usernames rejected (422)
+    for bad_uname in ("a", "bad name", "a" * 33, "-lead"):
+        bad_reg = client.post(
+            "/api/auth/register",
+            json={"username": bad_uname, "password": "ValidPassword123!"},
+        )
+        assert bad_reg.status_code == 422
+
+    # Invalid passwords (<8 or >128 chars) rejected (422)
+    for bad_pw in ("short7!", "x" * 129):
+        bad_reg = client.post(
+            "/api/auth/register",
+            json={"username": "valid_user_99", "password": bad_pw},
+        )
+        assert bad_reg.status_code == 422
+
+        bad_chg = client.post(
+            "/api/profile/password",
+            headers=u1_headers,
+            json={"current_password": "12345678", "new_password": bad_pw},
+        )
+        assert bad_chg.status_code == 422
+
+    # Invalid display names (control char or >64 chars) rejected (422)
+    for bad_dn in ("bad\nname", "d" * 65):
+        assert (
+            client.post(
+                "/api/auth/register",
+                json={
+                    "username": "dn_check_user",
+                    "display_name": bad_dn,
+                    "password": "ValidPassword123!",
+                },
+            ).status_code
+            == 422
+        )
+
+    # Legacy user with a 4-char password can still log in; >128 chars fails with 422
+    legacy_hash = auth_module.hash_password("old4")
+    repo.create_user(
+        username="legacy_pw_user",
+        display_name="Legacy User",
+        password_hash=legacy_hash,
+        role="user",
+    )
+    legacy_login = client.post(
+        "/api/auth/login",
+        json={"username": "legacy_pw_user", "password": "old4"},
+    )
+    assert legacy_login.status_code == 200
+
+    overlong_login = client.post(
+        "/api/auth/login",
+        json={"username": "legacy_pw_user", "password": "z" * 129},
+    )
+    assert overlong_login.status_code == 422
+
+
+def test_passkey_anti_enumeration_and_safe_verification_errors(
+    auth_client: tuple[TestClient, CantinaRepository],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FR-5: Passkey login/start prevents username enumeration and finish routes hide raw exception traces."""
+    from app.routers import auth as auth_router
+
+    client, repo = auth_client
+    client.post(
+        "/api/auth/setup",
+        json={"username": "pk_admin", "password": "AdminPassword123!"},
+    )
+    reg_res = client.post(
+        "/api/auth/register",
+        json={"username": "no_pk_user", "password": "UserPassword123!"},
+    )
+    assert reg_res.status_code == 200
+    user_id = reg_res.json()["user"]["id"]
+    user_headers = {"Authorization": f"Bearer {reg_res.json()['token']}"}
+
+    # Identical 400 status & detail for nonexistent username vs user without passkeys
+    res_missing = client.post(
+        "/api/auth/passkey/login/start",
+        json={"username": "definitely_nobody_here"},
+    )
+    res_no_pk = client.post(
+        "/api/auth/passkey/login/start",
+        json={"username": "no_pk_user"},
+    )
+    assert res_missing.status_code == 400
+    assert res_no_pk.status_code == 400
+    assert res_missing.json()["detail"] == res_no_pk.json()["detail"]
+
+    # Passkey verification exceptions must not leak internal traceback details
+    repo.add_passkey(
+        credential_id="cred_safe_err",
+        user_id=user_id,
+        friendly_name="Safety Key",
+        public_key=b"\x01\x02\x03",
+        sign_count=0,
+    )
+
+    def _boom_auth(**_kwargs):
+        raise RuntimeError("INTERNAL_WEBAUTHN_SECRET_DETAILS")
+
+    def _boom_reg(**_kwargs):
+        raise RuntimeError("INTERNAL_REG_STACK_DETAILS")
+
+    monkeypatch.setattr(auth_router, "verify_passkey_authentication", _boom_auth)
+    monkeypatch.setattr(auth_router, "verify_passkey_registration", _boom_reg)
+
+    finish_login = client.post(
+        "/api/auth/passkey/login/finish",
+        json={"challenge_id": "ch_fake", "credential": {"id": "cred_safe_err"}},
+    )
+    assert finish_login.status_code == 401
+    assert finish_login.json()["detail"] == "Passkey verification failed."
+    assert "INTERNAL_WEBAUTHN_SECRET_DETAILS" not in finish_login.text
+
+    finish_reg = client.post(
+        "/api/profile/passkeys/register/finish",
+        headers=user_headers,
+        json={"challenge_id": "ch_fake", "credential": {"id": "cred_safe_err"}},
+    )
+    assert finish_reg.status_code == 400
+    assert finish_reg.json()["detail"] == "Passkey registration verification failed."
+    assert "INTERNAL_REG_STACK_DETAILS" not in finish_reg.text
+

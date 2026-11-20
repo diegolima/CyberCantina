@@ -312,6 +312,7 @@ def test_media_sanitization_removes_invalid_entries(empty_repo: CantinaRepositor
         ],
     )
 
+    empty_repo.stage_character_media_ownership(user.id, "char_123")
     char = empty_repo.create_character_from_draft(draft, owner_id=user.id)
     # The hallucinated keys must be stripped, only valid emotion & media URL remains
     assert "location" not in char.portraits

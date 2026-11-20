@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -176,7 +177,7 @@ async def build_call_target(profile: ModelProfile, role: str = "model") -> CallT
             oai = {
                 "Authorization": f"Bearer {endpoint.bearer_token or ''}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "http://localhost:5173",
+                "HTTP-Referer": _public_referer_url(),
                 "X-Title": "Cybercantina",
             }
             return CallTarget(endpoint.root_url, {}, oai, provider_type=ptype)
@@ -186,7 +187,7 @@ async def build_call_target(profile: ModelProfile, role: str = "model") -> CallT
             oai = {
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "http://localhost:5173",
+                "HTTP-Referer": _public_referer_url(),
                 "X-Title": "Cybercantina",
             }
             return CallTarget(endpoint.root_url, {}, oai, provider_type="aihorde")
@@ -200,6 +201,14 @@ async def build_call_target(profile: ModelProfile, role: str = "model") -> CallT
         bearer_headers(legacy_token),
         {"Authorization": f"Bearer {profile.api_key}", "Content-Type": "application/json"},
         provider_type="ollama",
+    )
+
+
+def _public_referer_url() -> str:
+    """Return configured public referer URL for external cloud LLM providers."""
+    return (
+        os.environ.get("CYBERCANTINA_PUBLIC_URL", "https://cybercantina.io").strip()
+        or "https://cybercantina.io"
     )
 
 

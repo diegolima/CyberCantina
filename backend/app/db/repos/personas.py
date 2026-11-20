@@ -101,6 +101,13 @@ class PersonasMixin:
         clean_portrait, clean_gallery = _sanitize_persona_media(
             draft.portrait_url, draft.gallery
         )
+        if owner_id is not None:
+            urls_to_check: list[str | None] = [clean_portrait]
+            for img in clean_gallery:
+                urls_to_check.append(img.url)
+                if img.video_url:
+                    urls_to_check.append(img.video_url)
+            self.assert_user_can_reference_media_urls(owner_id, urls_to_check)
         gallery_json = json.dumps([img.model_dump() for img in clean_gallery])
         persona_bio = (draft.persona_bio or "").strip()
         canonical_physical, unsupported_fields = canonicalize_persona_legacy_fields(
@@ -754,14 +761,39 @@ class PersonasMixin:
             updated_at=r["updated_at"] if "updated_at" in r_keys else r["created_at"],
         )
 
-    def get_campaign_persona_turn_state(self, turn_id: str) -> PersonaTurnStateSnapshot | None:
+    def turn_belongs_to_campaign(self, campaign_id: str, turn_id: str) -> bool:
+        """Return True if ``turn_id`` belongs to ``campaign_id``."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM turn_nodes WHERE id = ? AND campaign_id = ?",
+                (turn_id, campaign_id),
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+
+    def get_campaign_persona_turn_state(
+        self, turn_id: str, campaign_id: str | None = None
+    ) -> PersonaTurnStateSnapshot | None:
         """Retrieve the player's dynamic inventory & equipped items for a turn."""
         conn = self._connect()
         try:
-            r = conn.execute(
-                "SELECT equipped_json, inventory_json FROM persona_turn_states WHERE turn_id = ?",
-                (turn_id,),
-            ).fetchone()
+            if campaign_id is not None:
+                r = conn.execute(
+                    """
+                    SELECT pts.equipped_json, pts.inventory_json
+                    FROM persona_turn_states pts
+                    JOIN turn_nodes tn ON tn.id = pts.turn_id
+                    WHERE pts.turn_id = ? AND tn.campaign_id = ?
+                    """,
+                    (turn_id, campaign_id),
+                ).fetchone()
+            else:
+                r = conn.execute(
+                    "SELECT equipped_json, inventory_json FROM persona_turn_states WHERE turn_id = ?",
+                    (turn_id,),
+                ).fetchone()
             if not r:
                 return None
             equipped_raw = json.loads(r["equipped_json"] or "[]")

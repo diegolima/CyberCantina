@@ -16,6 +16,7 @@ from app.dependencies import (
     enforce_quota_and_write_webp,
     enforce_upload_policy,
     get_repo,
+    read_upload_bytes_bounded,
     render_webp_bytes,
     safe_resolve_asset_path,
     safe_resolve_persona_media_path,
@@ -55,7 +56,13 @@ async def create_persona(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Persona name cannot be empty.",
         )
-    return repo.create_persona(draft=payload, owner_id=user.id)
+    try:
+        return repo.create_persona(draft=payload, owner_id=user.id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid persona payload or unauthorized media reference.",
+        ) from exc
 
 
 @router.get("/{persona_id}", response_model=PersonaRecord)
@@ -180,7 +187,7 @@ async def upload_persona_portrait(
             detail=f"Persona '{persona_id}' not found.",
         )
 
-    file_bytes = await file.read()
+    file_bytes = await read_upload_bytes_bounded(file, 20 * 1024 * 1024)
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty upload payload.")
 
@@ -283,7 +290,7 @@ async def upload_persona_gallery_image(
             detail=f"Persona '{persona_id}' not found.",
         )
 
-    file_bytes = await file.read()
+    file_bytes = await read_upload_bytes_bounded(file, 20 * 1024 * 1024)
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty upload payload.")
 

@@ -725,20 +725,38 @@ class TurnsBranchesMixin:
         finally:
             conn.close()
 
-    def get_branch_turn_chain(self, leaf_turn_id: str) -> list[TurnNodeRecord]:
+    def get_branch_turn_chain(
+        self, leaf_turn_id: str, campaign_id: str | None = None
+    ) -> list[TurnNodeRecord]:
         """Walk the conversation tree from root to leaf_turn_id using a recursive CTE."""
         conn = self._connect()
         try:
+            anchor_clause = (
+                "WHERE id = ? AND campaign_id = ?"
+                if campaign_id is not None
+                else "WHERE id = ?"
+            )
+            step_clause = (
+                "AND t.campaign_id = ?"
+                if campaign_id is not None
+                else ""
+            )
+            params: tuple[str, ...] = (
+                (leaf_turn_id, campaign_id, campaign_id)
+                if campaign_id is not None
+                else (leaf_turn_id,)
+            )
             rows = conn.execute(
-                """
+                f"""
                 WITH RECURSIVE branch_path AS (
                     SELECT id, parent_turn_id, depth_index
                     FROM turn_nodes
-                    WHERE id = ?
+                    {anchor_clause}
                     UNION ALL
                     SELECT t.id, t.parent_turn_id, t.depth_index
                     FROM turn_nodes t
                     JOIN branch_path bp ON t.id = bp.parent_turn_id
+                    WHERE 1=1 {step_clause}
                 )
                 SELECT
                     t.*,
@@ -771,7 +789,7 @@ class TurnsBranchesMixin:
                 )
                 ORDER BY t.depth_index ASC
                 """,
-                (leaf_turn_id,),
+                params,
             ).fetchall()
             turns = [self._row_to_turn_node(r) for r in rows]
             return self._populate_turn_character_states(conn, turns)

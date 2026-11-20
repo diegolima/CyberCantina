@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.config import (
     AgentDispatchMode,
@@ -15,6 +16,77 @@ from app.config import (
 from app.schemas.admin_messages import PublicAdminMessage
 
 UserRole = Literal["user", "admin"]
+
+MIN_USERNAME_LEN = 2
+MAX_USERNAME_LEN = 32
+USERNAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{1,31}$"
+_USERNAME_RE = re.compile(USERNAME_PATTERN)
+
+MIN_PASSWORD_LEN = 8
+MAX_PASSWORD_LEN = 128
+
+MIN_DISPLAY_NAME_LEN = 1
+MAX_DISPLAY_NAME_LEN = 64
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def validate_username_value(raw: str) -> str:
+    """Validate and normalize a CyberCantina username (2-32 chars, safe ASCII identifier)."""
+    cleaned = raw.strip()
+    if not cleaned:
+        raise ValueError("Username cannot be empty.")
+    if (
+        len(cleaned) < MIN_USERNAME_LEN
+        or len(cleaned) > MAX_USERNAME_LEN
+        or not _USERNAME_RE.fullmatch(cleaned)
+    ):
+        raise ValueError(
+            "Username must be 2-32 characters using letters, numbers, '.', '_', or '-' "
+            "(starting with a letter or digit)."
+        )
+    return cleaned
+
+
+def validate_display_name_value(raw: str) -> str:
+    """Validate and normalize a user display name (1-64 chars, no control characters)."""
+    cleaned = raw.strip()
+    if not cleaned:
+        raise ValueError("Display name cannot be empty.")
+    if len(cleaned) > MAX_DISPLAY_NAME_LEN or _CONTROL_CHAR_RE.search(cleaned):
+        raise ValueError(
+            "Display name must be 1-64 characters and cannot contain control characters."
+        )
+    return cleaned
+
+
+def _validate_optional_display_name(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    if not raw.strip():
+        return None
+    return validate_display_name_value(raw)
+
+
+def validate_new_password_value(raw: str, *, allow_blank: bool = False) -> str:
+    """Validate newly configured passwords (8-128 chars; blank allowed only where explicitly permitted)."""
+    if "\x00" in raw:
+        raise ValueError("Password cannot contain null bytes.")
+    if raw == "" and allow_blank:
+        return raw
+    if len(raw) < MIN_PASSWORD_LEN or len(raw) > MAX_PASSWORD_LEN:
+        raise ValueError(
+            f"Password must be between {MIN_PASSWORD_LEN} and {MAX_PASSWORD_LEN} characters."
+        )
+    return raw
+
+
+def validate_login_password_value(raw: str) -> str:
+    """Bound verification passwords to MAX_PASSWORD_LEN without locking out legacy short passwords."""
+    if "\x00" in raw:
+        raise ValueError("Invalid password format.")
+    if len(raw) > MAX_PASSWORD_LEN:
+        raise ValueError(f"Password cannot exceed {MAX_PASSWORD_LEN} characters.")
+    return raw
 
 
 class PasskeyInfo(BaseModel):
@@ -57,16 +129,51 @@ class InitialSetupRequest(BaseModel):
     password: str = ""
     confirm_blank_password: bool = False
 
+    @field_validator("username")
+    @classmethod
+    def _val_username(cls, v: str) -> str:
+        return validate_username_value(v)
+
+    @field_validator("display_name")
+    @classmethod
+    def _val_display_name(cls, v: str | None) -> str | None:
+        return _validate_optional_display_name(v)
+
+    @field_validator("password")
+    @classmethod
+    def _val_password(cls, v: str) -> str:
+        return validate_new_password_value(v, allow_blank=True)
+
 
 class LoginRequest(BaseModel):
-    username: str
+    username: str = Field(..., min_length=1, max_length=64)
     password: str = ""
+
+    @field_validator("password")
+    @classmethod
+    def _val_password(cls, v: str) -> str:
+        return validate_login_password_value(v)
 
 
 class RegisterRequest(BaseModel):
     username: str
     display_name: str | None = None
     password: str
+
+    @field_validator("username")
+    @classmethod
+    def _val_username(cls, v: str) -> str:
+        return validate_username_value(v)
+
+    @field_validator("display_name")
+    @classmethod
+    def _val_display_name(cls, v: str | None) -> str | None:
+        return _validate_optional_display_name(v)
+
+    @field_validator("password")
+    @classmethod
+    def _val_password(cls, v: str) -> str:
+        return validate_new_password_value(v, allow_blank=False)
 
 
 class AuthSessionResponse(BaseModel):
@@ -78,17 +185,37 @@ class AuthSessionResponse(BaseModel):
 class ProfileUpdateRequest(BaseModel):
     display_name: str
 
+    @field_validator("display_name")
+    @classmethod
+    def _val_display_name(cls, v: str) -> str:
+        return validate_display_name_value(v)
+
 
 class ChangePasswordRequest(BaseModel):
     current_password: str = ""
     new_password: str = ""
     confirm_blank_password: bool = False
 
+    @field_validator("current_password")
+    @classmethod
+    def _val_current_password(cls, v: str) -> str:
+        return validate_login_password_value(v)
+
+    @field_validator("new_password")
+    @classmethod
+    def _val_new_password(cls, v: str) -> str:
+        return validate_new_password_value(v, allow_blank=True)
+
 
 class PasskeyRegisterStartRequest(BaseModel):
     current_password: str = ""
-    friendly_name: str = "Passkey"
+    friendly_name: str = Field(default="Passkey", max_length=64)
     replace_credential_id: str | None = None
+
+    @field_validator("current_password")
+    @classmethod
+    def _val_current_password(cls, v: str) -> str:
+        return validate_login_password_value(v)
 
 
 class PasskeyRegisterStartResponse(BaseModel):
@@ -104,9 +231,14 @@ class PasskeyRegisterFinishRequest(BaseModel):
 class PasskeyDeleteRequest(BaseModel):
     current_password: str = ""
 
+    @field_validator("current_password")
+    @classmethod
+    def _val_current_password(cls, v: str) -> str:
+        return validate_login_password_value(v)
+
 
 class PasskeyLoginStartRequest(BaseModel):
-    username: str | None = None
+    username: str | None = Field(default=None, max_length=64)
 
 
 class PasskeyLoginStartResponse(BaseModel):
@@ -122,6 +254,11 @@ class PasskeyLoginFinishRequest(BaseModel):
 class AdminChangeUsernameRequest(BaseModel):
     username: str
 
+    @field_validator("username")
+    @classmethod
+    def _val_username(cls, v: str) -> str:
+        return validate_username_value(v)
+
 
 class AdminResetPasswordResponse(BaseModel):
     user: UserProfile
@@ -134,9 +271,29 @@ class AdminCreateUserRequest(BaseModel):
     password: str
     role: UserRole = "user"
 
+    @field_validator("username")
+    @classmethod
+    def _val_username(cls, v: str) -> str:
+        return validate_username_value(v)
+
+    @field_validator("display_name")
+    @classmethod
+    def _val_display_name(cls, v: str | None) -> str | None:
+        return _validate_optional_display_name(v)
+
+    @field_validator("password")
+    @classmethod
+    def _val_password(cls, v: str) -> str:
+        return validate_new_password_value(v, allow_blank=False)
+
 
 class ProfileResetDataRequest(BaseModel):
     current_password: str = ""
+
+    @field_validator("current_password")
+    @classmethod
+    def _val_current_password(cls, v: str) -> str:
+        return validate_login_password_value(v)
 
 
 class RestoreDefaultsResponse(BaseModel):
@@ -149,6 +306,11 @@ class RestoreDefaultsResponse(BaseModel):
 
 class ProfileDeleteAccountRequest(BaseModel):
     current_password: str = ""
+
+    @field_validator("current_password")
+    @classmethod
+    def _val_current_password(cls, v: str) -> str:
+        return validate_login_password_value(v)
 
 
 class UserModelSettingsPayload(BaseModel):

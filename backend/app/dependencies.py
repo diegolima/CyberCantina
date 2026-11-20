@@ -9,7 +9,7 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from fastapi import HTTPException, Request, Response
+from fastapi import HTTPException, Request, Response, UploadFile
 from PIL import Image
 
 from app.auth import (
@@ -36,6 +36,7 @@ from app.security.media_path import (
     safe_resolve_public_character_media_file_path,
     safe_resolve_world_media_file_path,
 )
+from app.security.transport import resolve_client_ip, should_set_secure_cookie
 
 logger = logging.getLogger("cybercantina.dependencies")
 
@@ -298,6 +299,42 @@ def get_effective_persona_disclosure_mode(user_id: str | None) -> str:
     return default_mode
 
 
+def cookie_secure_for_request(request: Request) -> bool:
+    """Return True when the session cookie should carry the Secure attribute for ``request``."""
+    client_host = request.client.host if request.client else None
+    return should_set_secure_cookie(request.url.scheme, request.headers, client_host)
+
+
+def clear_session_cookie(response: Response, request: Request) -> None:
+    """Clear the session cookie with matching attributes so HTTPS browsers expire it reliably."""
+    response.delete_cookie(
+        key=SESSION_COOKIE_NAME,
+        path="/",
+        httponly=True,
+        samesite="lax",
+        secure=cookie_secure_for_request(request),
+    )
+
+
+async def read_upload_bytes_bounded(
+    file: UploadFile, max_bytes: int = 20 * 1024 * 1024
+) -> bytes:
+    """Stream an UploadFile in 64 KB chunks, raising HTTP 413 as soon as ``max_bytes`` is exceeded."""
+    buf = bytearray()
+    while True:
+        chunk = await file.read(65536)
+        if not chunk:
+            break
+        if len(buf) + len(chunk) > max_bytes:
+            max_mb = max_bytes / (1024 * 1024)
+            raise HTTPException(
+                status_code=413,
+                detail=f"Uploaded file exceeds maximum allowed size ({max_mb:.0f} MB).",
+            )
+        buf.extend(chunk)
+    return bytes(buf)
+
+
 def issue_session_response(
     repo: CantinaRepository,
     user: UserProfile,
@@ -307,7 +344,8 @@ def issue_session_response(
     """Issue a new session token, set the HttpOnly cookie, and return AuthSessionResponse."""
     raw_token, token_hash = generate_session_token()
     ua = request.headers.get("user-agent", "")
-    ip = request.client.host if request.client else ""
+    peer_host = request.client.host if request.client else None
+    ip = resolve_client_ip(request.headers, peer_host)
     repo.create_session(
         session_id_hash=token_hash,
         user_id=user.id,
@@ -321,6 +359,7 @@ def issue_session_response(
         value=raw_token,
         httponly=True,
         samesite="lax",
+        secure=cookie_secure_for_request(request),
         max_age=SESSION_IDLE_TIMEOUT_SECONDS * 30,
         path="/",
     )

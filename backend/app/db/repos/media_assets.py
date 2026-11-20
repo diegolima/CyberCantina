@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import json
 import logging
 import re
 import sqlite3
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
-from app.db.repos.base import build_world_media_url, utc_now_iso
+from app.db.repos.base import (
+    _CHARACTER_MEDIA_URL_RE,
+    _PUBLIC_CHARACTER_MEDIA_URL_RE,
+    build_world_media_url,
+    utc_now_iso,
+)
 from app.schemas.character import CharacterRecord, GalleryImage
 from app.schemas.persona import PersonaRecord
 from app.security.log_sanitize import sanitize_log_value
@@ -22,6 +29,10 @@ from app.security.media_path import (
 logger = logging.getLogger("cybercantina.db.media_assets")
 
 _ASSET_URL_RE = re.compile(r"/api/media/assets/([a-zA-Z0-9_-]+)")
+_PERSONA_MEDIA_URL_RE = re.compile(
+    r"/api/media/personas/([^/]+)/(portraits|gallery)/([^/?#]+)"
+)
+_WORLD_MEDIA_URL_RE = re.compile(r"/api/media/worlds/(images|audio)/([^/?#]+)")
 
 
 def build_asset_url(asset_id: str) -> str:
@@ -270,11 +281,26 @@ class MediaAssetsMixin:
         conn = self._connect()
         replaced: dict[str, Any] | None = None
         try:
+            parent_row = conn.execute(
+                "SELECT id, owner_id, entity_scope, media_type, is_public FROM media_assets WHERE id = ?",
+                (parent_image_id,),
+            ).fetchone()
+            if not parent_row:
+                raise KeyError(f"Parent media asset '{parent_image_id}' not found")
+            if bool(parent_row["is_public"]):
+                raise PermissionError("Built-in public media assets cannot be modified.")
+            if str(parent_row["media_type"]) != "image" or str(parent_row["entity_scope"]) != entity_scope:
+                raise ValueError("Target media asset is not a compatible image for this entity scope.")
+            if owner_id is not None and parent_row["owner_id"] != owner_id:
+                raise PermissionError("Unauthorized access to parent image asset.")
+
             old_row = conn.execute(
                 "SELECT * FROM media_assets WHERE parent_image_id = ? AND media_type = 'video'",
                 (parent_image_id,),
             ).fetchone()
             if old_row:
+                if owner_id is not None and old_row["owner_id"] not in (None, owner_id):
+                    raise PermissionError("Unauthorized access to existing linked video asset.")
                 replaced = dict(old_row)
                 conn.execute("DELETE FROM media_assets WHERE id = ?", (old_row["id"],))
 
@@ -372,6 +398,71 @@ class MediaAssetsMixin:
             self._unlink_asset_file(dr)
         return deleted_rows
 
+    def assert_user_can_reference_media_urls(
+        self,
+        user_id: str,
+        urls: Iterable[str | None],
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
+        """Verify ``user_id`` is authorized to attach every referenced local ``/api/media/...`` URL."""
+        local_paths: list[str] = []
+        for raw_url in urls:
+            if not isinstance(raw_url, str):
+                continue
+            cleaned = raw_url.strip()
+            if not cleaned or cleaned.startswith(("http://", "https://")):
+                continue
+            parsed_path = urlparse(cleaned).path
+            if ".." in parsed_path.split("/"):
+                raise ValueError("Unauthorized media asset reference.")
+            if not parsed_path.startswith("/api/media/"):
+                raise ValueError("Unauthorized media asset reference.")
+            local_paths.append(parsed_path)
+
+        if not local_paths:
+            return
+
+        own_conn = conn is None
+        if conn is None:
+            conn = self._connect()
+        try:
+            for path in local_paths:
+                if _PUBLIC_CHARACTER_MEDIA_URL_RE.fullmatch(path):
+                    continue
+                aid = extract_asset_id_from_url(path)
+                if aid is not None and path == build_asset_url(aid):
+                    row = conn.execute(
+                        "SELECT owner_id, is_public FROM media_assets WHERE id = ?",
+                        (aid,),
+                    ).fetchone()
+                    if row is None or (not bool(row["is_public"]) and row["owner_id"] != user_id):
+                        raise ValueError("Unauthorized media asset reference.")
+                    continue
+                char_m = _CHARACTER_MEDIA_URL_RE.fullmatch(path)
+                if char_m is not None:
+                    if not self.user_can_access_character(user_id, char_m.group(1)):
+                        raise ValueError("Unauthorized media asset reference.")
+                    continue
+                pers_m = _PERSONA_MEDIA_URL_RE.fullmatch(path)
+                if pers_m is not None:
+                    if not self.user_can_access_persona_media(
+                        user_id, pers_m.group(1), pers_m.group(2), pers_m.group(3)
+                    ):
+                        raise ValueError("Unauthorized media asset reference.")
+                    continue
+                world_m = _WORLD_MEDIA_URL_RE.fullmatch(path)
+                if world_m is not None:
+                    if not self.user_can_access_world_media(
+                        user_id, world_m.group(1), world_m.group(2)
+                    ):
+                        raise ValueError("Unauthorized media asset reference.")
+                    continue
+                raise ValueError("Unauthorized media asset reference.")
+        finally:
+            if own_conn:
+                conn.close()
+
     def user_can_access_asset(self, user_id: str, asset_id: str) -> bool:
         """Authorize access if asset is public, owned by user, or referenced by user's worlds/chars/personas/campaigns."""
         conn = self._connect()
@@ -386,7 +477,7 @@ class MediaAssetsMixin:
                 return True
             if row["owner_id"] == user_id:
                 return True
-            target_id = row["parent_image_id"] or row["id"]
+            target_id = str(row["parent_image_id"] or row["id"])
             if row["entity_scope"] == "world":
                 hit = conn.execute(
                     """
@@ -403,7 +494,6 @@ class MediaAssetsMixin:
                 ).fetchone()
                 return hit is not None
 
-            url_needle = build_asset_url(target_id)
             if row["entity_scope"] == "character":
                 c_rows = conn.execute(
                     """
@@ -420,7 +510,12 @@ class MediaAssetsMixin:
                     (user_id, user_id, user_id),
                 ).fetchall()
                 for cr in c_rows:
-                    if url_needle in (cr["portraits_json"] or "") or url_needle in (cr["gallery_json"] or ""):
+                    try:
+                        p_raw = json.loads(cr["portraits_json"] or "{}")
+                        g_raw = json.loads(cr["gallery_json"] or "[]")
+                    except (ValueError, TypeError):
+                        continue
+                    if target_id in _collect_asset_ids_from_char_row(p_raw, g_raw):
                         return True
                 # Check uncommitted staged ownership
                 staged_cutoff = self._staged_ownership_cutoff_iso()
@@ -438,14 +533,28 @@ class MediaAssetsMixin:
                     (user_id,),
                 ).fetchall()
                 for pr in p_rows:
-                    if url_needle in (pr["portrait_url"] or "") or url_needle in (pr["gallery_json"] or ""):
+                    try:
+                        g_raw = json.loads(pr["gallery_json"] or "[]")
+                    except (ValueError, TypeError):
+                        g_raw = []
+                    if target_id in _collect_asset_ids_from_persona_row(
+                        pr["portrait_url"], g_raw
+                    ):
                         return True
                 camp_rows = conn.execute(
                     "SELECT persona_snapshot_json FROM campaigns WHERE owner_id = ? AND persona_snapshot_json IS NOT NULL",
                     (user_id,),
                 ).fetchall()
                 for cr in camp_rows:
-                    if url_needle in (cr["persona_snapshot_json"] or ""):
+                    try:
+                        snap = json.loads(cr["persona_snapshot_json"] or "{}")
+                    except (ValueError, TypeError):
+                        continue
+                    if not isinstance(snap, dict):
+                        continue
+                    if target_id in _collect_asset_ids_from_persona_row(
+                        snap.get("portrait_url"), snap.get("gallery")
+                    ):
                         return True
                 return False
             return False

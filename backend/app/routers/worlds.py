@@ -26,6 +26,7 @@ from app.dependencies import (
     enforce_upload_policy,
     get_effective_user_model_settings,
     get_repo,
+    read_upload_bytes_bounded,
     render_webp_bytes,
     run_entity_pruner,
     safe_resolve_asset_path,
@@ -261,7 +262,7 @@ async def upload_world_media(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    file_bytes = await file.read()
+    file_bytes = await read_upload_bytes_bounded(file, 20 * 1024 * 1024)
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty upload payload.")
 

@@ -11,6 +11,13 @@ import {
 } from "lucide-react";
 import { api } from "../../api";
 import { AuthStatusResponse, PasskeyInfo, UserProfile } from "../../types";
+import {
+  MAX_DISPLAY_NAME_LENGTH,
+  MAX_PASSWORD_LENGTH,
+  MIN_PASSWORD_LENGTH,
+  validateDisplayName,
+  validateNewPassword,
+} from "./authValidation";
 
 function formatAccountBytes(bytes?: number): string {
   if (!bytes || bytes <= 0) return "0 B";
@@ -72,8 +79,9 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
     e.preventDefault();
     setErrorMsg(null);
     setStatusMsg(null);
-    if (!displayName.trim()) {
-      setErrorMsg("Display name cannot be empty.");
+    const nameErr = validateDisplayName(displayName);
+    if (nameErr) {
+      setErrorMsg(nameErr);
       return;
     }
     setSavingName(true);
@@ -131,6 +139,14 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
     if (user.has_password && !currentPasswordForPwd) {
       setErrorMsg("Please confirm your current password before making changes.");
       return;
+    }
+
+    if (newPassword) {
+      const pwdErr = validateNewPassword(newPassword);
+      if (pwdErr) {
+        setErrorMsg(pwdErr);
+        return;
+      }
     }
 
     if (newPassword && newPassword !== confirmNewPassword) {
@@ -443,6 +459,7 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
                         type="text"
                         className="form-input"
                         value={displayName}
+                        maxLength={MAX_DISPLAY_NAME_LENGTH}
                         onChange={(e) => setDisplayName(e.target.value)}
                         placeholder="Your display name..."
                       />
@@ -625,6 +642,7 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
                   type="password"
                   className="form-input"
                   value={currentPasswordForPwd}
+                  maxLength={MAX_PASSWORD_LENGTH}
                   onChange={(e) => setCurrentPasswordForPwd(e.target.value)}
                   placeholder="Enter your current password to confirm..."
                 />
@@ -633,11 +651,14 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
 
             <div className="grid-2">
               <div className="form-group">
-                <label className="form-label">New Password</label>
+                <label className="form-label">
+                  New Password ({MIN_PASSWORD_LENGTH}–{MAX_PASSWORD_LENGTH} chars)
+                </label>
                 <input
                   type="password"
                   className="form-input"
                   value={newPassword}
+                  maxLength={MAX_PASSWORD_LENGTH}
                   onChange={(e) => {
                     setNewPassword(e.target.value);
                     if (e.target.value) setShowBlankPwdConfirm(false);
@@ -655,6 +676,7 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
                   type="password"
                   className="form-input"
                   value={confirmNewPassword}
+                  maxLength={MAX_PASSWORD_LENGTH}
                   onChange={(e) => setConfirmNewPassword(e.target.value)}
                   placeholder="Repeat new password..."
                 />

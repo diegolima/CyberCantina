@@ -53,6 +53,13 @@ class CharactersMixin(CharacterVersionsMixin):
         clean_portraits, clean_gallery = _sanitize_character_media(
             draft.portraits, draft.gallery
         )
+        if owner_id is not None:
+            urls_to_check: list[str | None] = list(clean_portraits.values())
+            for img in clean_gallery:
+                urls_to_check.append(img.url)
+                if img.video_url:
+                    urls_to_check.append(img.video_url)
+            self.assert_user_can_reference_media_urls(owner_id, urls_to_check)
         portraits_json = json.dumps(clean_portraits)
         gallery_json = json.dumps([img.model_dump() for img in clean_gallery])
         conn = self._connect()

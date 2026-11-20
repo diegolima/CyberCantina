@@ -171,11 +171,19 @@ def get_campaign_player_turn_state(
 ) -> PersonaTurnStateSnapshot | None:
     """Retrieve player dynamic inventory & equipment for the campaign's active (or target) turn."""
     repo = _resolve_facade_attr("get_repo", get_repo)()
-    camp = repo.get_campaign(campaign_id, owner_id=current_user.id)
+    try:
+        camp = repo.get_campaign(campaign_id, owner_id=current_user.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Campaign not found.") from exc
     target_turn_id = turn_id or camp.active_leaf_turn_id
     if not target_turn_id:
         return None
-    return repo.get_campaign_persona_turn_state(target_turn_id)
+    if turn_id and not repo.turn_belongs_to_campaign(camp.id, target_turn_id):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Turn '{target_turn_id}' not found in campaign '{campaign_id}'.",
+        )
+    return repo.get_campaign_persona_turn_state(target_turn_id, campaign_id=camp.id)
 
 
 @router.delete("/api/campaigns/{campaign_id}")

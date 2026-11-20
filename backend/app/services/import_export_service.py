@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 import zipfile
@@ -77,10 +78,30 @@ from app.wizards.sillytavern_parser import extract_card_from_bytes
 
 logger = logging.getLogger("cybercantina.import_export")
 
-# Safety limits for ZIP decompression
-MAX_TOTAL_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024  # 1 GB
+# Safety limits for ZIP decompression, upload staging, and memory bounds
+MAX_TOTAL_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024  # 1 GB decompression bomb ceiling
 MAX_ZIP_ENTRIES = 500
 STAGED_IMPORT_TTL_SECONDS = 1800  # 30 minutes
+MAX_CARD_IMPORT_BYTES = 20 * 1024 * 1024  # 20 MB ceiling for non-ZIP SillyTavern cards
+DEFAULT_MAX_IMPORT_UPLOAD_MB = 100
+MAX_STAGED_IMPORTS_PER_USER = 3
+MAX_STAGED_IMPORTS_GLOBAL = 20
+MAX_STAGED_DISK_BYTES_GLOBAL = 256 * 1024 * 1024  # 256 MB total staged files across users
+MAX_STAGED_RAM_BYTES_GLOBAL = 32 * 1024 * 1024  # 32 MB total in-RAM SillyTavern buffers
+
+
+def get_max_import_upload_bytes() -> int:
+    """Return compressed/raw upload byte ceiling for /api/import/inspect."""
+    raw = os.environ.get("CYBERCANTINA_MAX_IMPORT_UPLOAD_MB", "").strip()
+    if raw:
+        try:
+            mb = int(raw)
+        except ValueError:
+            mb = DEFAULT_MAX_IMPORT_UPLOAD_MB
+    else:
+        mb = DEFAULT_MAX_IMPORT_UPLOAD_MB
+    clamped_mb = max(1, min(mb, 1024))
+    return clamped_mb * 1024 * 1024
 
 
 @dataclass
@@ -96,14 +117,81 @@ class StagedImport:
 
 
 _staged_imports: dict[str, StagedImport] = {}
+_staged_imports_lock = threading.Lock()
 
 
-def _cleanup_expired_staged_imports() -> None:
-    now = time.time()
-    expired = [k for k, v in _staged_imports.items() if now - v.created_at_epoch > STAGED_IMPORT_TTL_SECONDS]
+def _staged_entry_disk_bytes(entry: StagedImport) -> int:
+    if entry.staged_file_path is None:
+        return 0
+    try:
+        if entry.staged_file_path.is_file():
+            return entry.staged_file_path.stat().st_size
+    except OSError:
+        return 0
+    return 0
+
+
+def _staged_entry_ram_bytes(entry: StagedImport) -> int:
+    return len(entry.data_bytes) if entry.data_bytes is not None else 0
+
+
+def _cleanup_expired_staged_imports_locked(now: float | None = None) -> None:
+    ts = now if now is not None else time.time()
+    expired = [
+        k for k, v in _staged_imports.items() if ts - v.created_at_epoch > STAGED_IMPORT_TTL_SECONDS
+    ]
     for k in expired:
         entry = _staged_imports.pop(k, None)
         if entry and entry.staged_file_path:
+            cleanup_staging_paths(entry.staged_file_path)
+
+
+def _cleanup_expired_staged_imports() -> None:
+    with _staged_imports_lock:
+        _cleanup_expired_staged_imports_locked()
+
+
+def _register_staged_import(entry: StagedImport) -> None:
+    """Store a staged import under per-user FIFO eviction and global disk/RAM caps."""
+    incoming_disk = _staged_entry_disk_bytes(entry)
+    incoming_ram = _staged_entry_ram_bytes(entry)
+    with _staged_imports_lock:
+        _cleanup_expired_staged_imports_locked()
+
+        user_entries = sorted(
+            (v for v in _staged_imports.values() if v.user_id == entry.user_id),
+            key=lambda item: item.created_at_epoch,
+        )
+        while len(user_entries) >= MAX_STAGED_IMPORTS_PER_USER:
+            oldest = user_entries.pop(0)
+            popped = _staged_imports.pop(oldest.token, None)
+            if popped and popped.staged_file_path:
+                cleanup_staging_paths(popped.staged_file_path)
+
+        total_disk = sum(_staged_entry_disk_bytes(v) for v in _staged_imports.values()) + incoming_disk
+        total_ram = sum(_staged_entry_ram_bytes(v) for v in _staged_imports.values()) + incoming_ram
+        if (
+            len(_staged_imports) >= MAX_STAGED_IMPORTS_GLOBAL
+            or total_disk > MAX_STAGED_DISK_BYTES_GLOBAL
+            or total_ram > MAX_STAGED_RAM_BYTES_GLOBAL
+        ):
+            if entry.staged_file_path:
+                cleanup_staging_paths(entry.staged_file_path)
+            raise HTTPException(
+                status_code=503,
+                detail="Too many pending import sessions are currently active. Please retry shortly.",
+            )
+
+        _staged_imports[entry.token] = entry
+
+
+def clear_staged_imports() -> None:
+    """Clear all staged imports and unlink any temporary staging files (for tests)."""
+    with _staged_imports_lock:
+        entries = list(_staged_imports.values())
+        _staged_imports.clear()
+    for entry in entries:
+        if entry.staged_file_path:
             cleanup_staging_paths(entry.staged_file_path)
 
 
@@ -226,12 +314,19 @@ def _resolve_local_media_disk_path(
     entity_scope: str,
     entity_id: str,
     category: str,
+    owner_id: str | None = None,
 ) -> Path | None:
-    """Resolve any unified, public, or legacy local media URL to an existing file on disk."""
+    """Resolve an authorized unified, public, or legacy local media URL to an existing file on disk."""
     aid = extract_asset_id_from_url(url)
     if aid:
         asset = repo.get_media_asset(aid)
         if asset:
+            if owner_id is not None:
+                asset_owner = asset.get("owner_id")
+                if not bool(asset.get("is_public")) and asset_owner not in (None, owner_id):
+                    return None
+                if not repo.user_can_access_asset(owner_id, aid):
+                    return None
             p = repo.resolve_asset_disk_path(asset)
             if p.is_file():
                 return p
@@ -249,27 +344,55 @@ def _resolve_local_media_disk_path(
         m = re.search(rf"/api/media/characters/([^/]+)/{category}/([^/?#]+)", url or "")
         if m:
             c_id, fname = m.group(1), m.group(2)
+            if owner_id is not None and not repo.user_can_access_character(owner_id, c_id):
+                if c_id != entity_id and repo.user_can_access_character(owner_id, entity_id):
+                    alt = safe_resolve_media_path(entity_id, category, fname, media_dir=repo.media_dir)
+                    if alt.is_file():
+                        return alt
+                return None
             p = safe_resolve_media_path(c_id, category, fname, media_dir=repo.media_dir)
             if not p.is_file() and c_id != entity_id:
-                alt = safe_resolve_media_path(entity_id, category, fname, media_dir=repo.media_dir)
-                if alt.is_file():
-                    p = alt
+                if owner_id is None or repo.user_can_access_character(owner_id, entity_id):
+                    alt = safe_resolve_media_path(entity_id, category, fname, media_dir=repo.media_dir)
+                    if alt.is_file():
+                        p = alt
             if p.is_file():
                 return p
     elif entity_scope == "persona":
         m = re.search(rf"/api/media/personas/([^/]+)/{category}/([^/?#]+)", url or "")
         if m:
             p_id, fname = m.group(1), m.group(2)
+            if owner_id is not None and not repo.user_can_access_persona_media(
+                owner_id, p_id, category, fname
+            ):
+                if p_id != entity_id and repo.user_can_access_persona_media(
+                    owner_id, entity_id, category, fname
+                ):
+                    alt = safe_resolve_persona_media_path(
+                        entity_id, category, fname, media_dir=repo.media_dir
+                    )
+                    if alt.is_file():
+                        return alt
+                return None
             p = safe_resolve_persona_media_path(p_id, category, fname, media_dir=repo.media_dir)
             if not p.is_file() and p_id != entity_id:
-                alt = safe_resolve_persona_media_path(entity_id, category, fname, media_dir=repo.media_dir)
-                if alt.is_file():
-                    p = alt
+                if owner_id is None or repo.user_can_access_persona_media(
+                    owner_id, entity_id, category, fname
+                ):
+                    alt = safe_resolve_persona_media_path(
+                        entity_id, category, fname, media_dir=repo.media_dir
+                    )
+                    if alt.is_file():
+                        p = alt
             if p.is_file():
                 return p
     elif entity_scope == "world":
         m = re.search(r"/api/media/worlds/(images|audio)/([^/?#]+)", url or "")
         if m:
+            if owner_id is not None and not repo.user_can_access_world_media(
+                owner_id, m.group(1), m.group(2)
+            ):
+                return None
             p = safe_resolve_world_media_path(m.group(1), m.group(2), media_dir=repo.media_dir)
             if p.is_file():
                 return p
@@ -287,13 +410,19 @@ def _stage_entity_image_and_optional_video(
     media_sources: dict[str, Path],
     include_videos: bool,
     selected_video_ids: set[str] | None,
+    owner_id: str | None = None,
 ) -> str:
     """Stage image (and optionally linked video on item_copy) into media_sources; return relative image ZIP path."""
     scope_dir = "characters" if entity_scope == "character" else ("personas" if entity_scope == "persona" else "worlds")
     staged_img_url = image_url
     try:
         fpath = _resolve_local_media_disk_path(
-            repo, image_url, entity_scope=entity_scope, entity_id=entity_id, category=image_category
+            repo,
+            image_url,
+            entity_scope=entity_scope,
+            entity_id=entity_id,
+            category=image_category,
+            owner_id=owner_id,
         )
         if fpath is not None and fpath.is_file():
             rel_zip_path = f"media/{scope_dir}/{entity_id}/{image_category}/{fpath.name}"
@@ -314,7 +443,12 @@ def _stage_entity_image_and_optional_video(
         if should_stage_vid:
             try:
                 vfpath = _resolve_local_media_disk_path(
-                    repo, vid_url, entity_scope=entity_scope, entity_id=entity_id, category="videos"
+                    repo,
+                    vid_url,
+                    entity_scope=entity_scope,
+                    entity_id=entity_id,
+                    category="videos",
+                    owner_id=owner_id,
                 )
                 if vfpath is not None and vfpath.is_file():
                     rel_vid_zip = f"media/{scope_dir}/{entity_id}/videos/{vfpath.name}"
@@ -339,6 +473,7 @@ def _serialize_persona_for_zcc(
     media_sources: dict[str, Path] | None = None,
     include_videos: bool = False,
     selected_video_ids: set[str] | None = None,
+    owner_id: str | None = None,
 ) -> dict[str, Any]:
     """Serialize a PersonaRecord for .zcc export with top-level unsupported_fields re-emission."""
     persona_data = persona.model_dump()
@@ -359,6 +494,7 @@ def _serialize_persona_for_zcc(
                 media_sources=media_sources,
                 include_videos=False,
                 selected_video_ids=None,
+                owner_id=owner_id,
             )
         rewritten_gallery: list[dict[str, Any]] = []
         for g_item in persona_data.get("gallery", []):
@@ -373,6 +509,7 @@ def _serialize_persona_for_zcc(
                 media_sources=media_sources,
                 include_videos=include_videos,
                 selected_video_ids=selected_video_ids,
+                owner_id=owner_id,
             )
             rewritten_gallery.append(item_copy)
         persona_data["gallery"] = rewritten_gallery
@@ -395,6 +532,7 @@ def _serialize_world_for_zcc(
     include_media: bool = True,
     include_videos: bool = False,
     selected_video_ids: set[str] | None = None,
+    owner_id: str | None = None,
 ) -> dict[str, Any]:
     """Serialize a WorldRecord for .zcc export, restoring extension keys and optionally staging media."""
     world_data = world.model_dump()
@@ -414,6 +552,7 @@ def _serialize_world_for_zcc(
                 media_sources=media_sources,
                 include_videos=include_videos,
                 selected_video_ids=selected_video_ids,
+                owner_id=owner_id,
             )
             staged_media.append(item_copy)
         world_data["media"] = staged_media
@@ -529,7 +668,7 @@ def build_zcc_export_to_file(
 
     for cid in character_ids:
         try:
-            char = repo.get_character(cid)
+            char = repo.get_character(cid, owner_id=owner_id)
         except KeyError:
             continue
 
@@ -573,6 +712,7 @@ def build_zcc_export_to_file(
                 media_sources=media_sources,
                 include_videos=False,
                 selected_video_ids=None,
+                owner_id=owner_id,
             )
             for emotion, url in char.portraits.items()
         }
@@ -590,6 +730,7 @@ def build_zcc_export_to_file(
                 media_sources=media_sources,
                 include_videos=include_videos,
                 selected_video_ids=video_filter,
+                owner_id=owner_id,
             )
             rewritten_gallery.append(item_copy)
         char_data["gallery"] = rewritten_gallery
@@ -604,6 +745,7 @@ def build_zcc_export_to_file(
             include_media=include_world_media,
             include_videos=include_videos,
             selected_video_ids=video_filter,
+            owner_id=owner_id,
         )
         for w in worlds
     ]
@@ -614,6 +756,7 @@ def build_zcc_export_to_file(
             media_sources=media_sources,
             include_videos=include_videos,
             selected_video_ids=video_filter,
+            owner_id=owner_id,
         )
         for p in personas
     ]
@@ -838,8 +981,7 @@ def _inspect_zcc_archive(
             )
 
         conflicts: list[ImportEntityConflict] = []
-        existing_chars = repo.list_characters(include_pending_deletion=False)
-        user_chars = [c for c in existing_chars if getattr(c, "owner_id", None) == user_id or not getattr(c, "owner_id", None)]
+        user_chars = repo.list_characters(include_pending_deletion=False, owner_id=user_id)
         user_char_names = {c.name.strip().lower(): c.id for c in user_chars}
 
         for c in characters_raw:
@@ -974,22 +1116,24 @@ def _inspect_zcc_archive(
             for p in personas_raw
         ]
 
-        _staged_imports[staged_token] = StagedImport(
-            token=staged_token,
-            user_id=user_id,
-            format_type="zcc",
-            is_native=True,
-            data_bytes=source if isinstance(source, bytes) else None,
-            staged_file_path=source if isinstance(source, Path) else None,
-            created_at_epoch=time.time(),
-            parsed_payload={
-                "manifest": manifest.model_dump(),
-                "characters": characters_raw,
-                "worlds": worlds_raw,
-                "personas": personas_raw,
-                "images_count": images_count,
-                "videos_count": videos_count,
-            },
+        _register_staged_import(
+            StagedImport(
+                token=staged_token,
+                user_id=user_id,
+                format_type="zcc",
+                is_native=True,
+                data_bytes=source if isinstance(source, bytes) else None,
+                staged_file_path=source if isinstance(source, Path) else None,
+                created_at_epoch=time.time(),
+                parsed_payload={
+                    "manifest": manifest.model_dump(),
+                    "characters": characters_raw,
+                    "worlds": worlds_raw,
+                    "personas": personas_raw,
+                    "images_count": images_count,
+                    "videos_count": videos_count,
+                },
+            )
         )
 
         return ImportInspectResponse(
@@ -1036,8 +1180,15 @@ def inspect_uploaded_path(
             cleanup_staging_paths(staged_path)
             raise
 
-    # SillyTavern PNG/JSON card: small payload, inspect in-memory and unlink staging file
+    # SillyTavern PNG/JSON card: enforce strict RAM guard before reading into memory
     try:
+        file_size = staged_path.stat().st_size
+        if file_size > MAX_CARD_IMPORT_BYTES:
+            max_mb = MAX_CARD_IMPORT_BYTES // (1024 * 1024)
+            raise HTTPException(
+                status_code=413,
+                detail=f"Uploaded character card exceeds maximum allowed size ({max_mb} MB).",
+            )
         file_bytes = staged_path.read_bytes()
     finally:
         cleanup_staging_paths(staged_path)
@@ -1064,21 +1215,30 @@ def inspect_uploaded_file(
             repo, source=file_bytes, user_id=user_id, staged_token=staged_token
         )
 
+    if len(file_bytes) > MAX_CARD_IMPORT_BYTES:
+        max_mb = MAX_CARD_IMPORT_BYTES // (1024 * 1024)
+        raise HTTPException(
+            status_code=413,
+            detail=f"Uploaded character card exceeds maximum allowed size ({max_mb} MB).",
+        )
+
     # B) Check PNG or JSON SillyTavern card
     try:
         pkg = extract_card_from_bytes(file_bytes, filename=filename)
-        _staged_imports[staged_token] = StagedImport(
-            token=staged_token,
-            user_id=user_id,
-            format_type="sillytavern_png" if file_bytes.startswith(b"\x89PNG") else "sillytavern_json",
-            is_native=False,
-            data_bytes=file_bytes,
-            created_at_epoch=time.time(),
-            parsed_payload={
-                "name": pkg.card.name,
-                "description": pkg.card.description,
-                "creator_notes": pkg.card.creator_notes,
-            },
+        _register_staged_import(
+            StagedImport(
+                token=staged_token,
+                user_id=user_id,
+                format_type="sillytavern_png" if file_bytes.startswith(b"\x89PNG") else "sillytavern_json",
+                is_native=False,
+                data_bytes=file_bytes,
+                created_at_epoch=time.time(),
+                parsed_payload={
+                    "name": pkg.card.name,
+                    "description": pkg.card.description,
+                    "creator_notes": pkg.card.creator_notes,
+                },
+            )
         )
         return ImportInspectResponse(
             is_native=False,
@@ -1094,6 +1254,8 @@ def inspect_uploaded_file(
             ],
             manifest=None,
         )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.debug("Not a SillyTavern card: %s", sanitize_log_value(exc))
 
@@ -1153,9 +1315,9 @@ async def commit_staged_import(
     user_id: str,
 ) -> ImportCommitResponse:
     """Execute transactional ingestion of a staged native CyberCantina bundle."""
-    _cleanup_expired_staged_imports()
-
-    staged = _staged_imports.get(req.staged_token)
+    with _staged_imports_lock:
+        _cleanup_expired_staged_imports_locked()
+        staged = _staged_imports.get(req.staged_token)
     if not staged:
         raise HTTPException(status_code=404, detail="Staged import session expired or not found.")
 
@@ -2165,7 +2327,8 @@ async def commit_staged_import(
                 logger.exception("Failed importing character '%s': %s", sanitize_log_value(c_name), sanitize_log_value(exc))
                 errors.append(f"Character '{c_name}': {exc}")
 
-        popped = _staged_imports.pop(req.staged_token, None)
+        with _staged_imports_lock:
+            popped = _staged_imports.pop(req.staged_token, None)
         if popped and popped.staged_file_path:
             cleanup_staging_paths(popped.staged_file_path)
 

@@ -567,7 +567,9 @@ erDiagram
 | `backend/app/security/__init__.py` | Security helpers: secret encryption at rest and outbound URL policy. |
 | `backend/app/security/log_sanitize.py` | Log sanitation helpers preventing CR/LF log injection. |
 | `backend/app/security/media_path.py` | Safe filesystem path validation and resolution helpers for character media assets. |
+| `backend/app/security/rate_limit.py` | Thread-safe, bounded-memory sliding-window rate limiter for auth and upload endpoints. |
 | `backend/app/security/secret_box.py` | Encryption at rest for provider credentials (Fernet, auto-generated key file). |
+| `backend/app/security/transport.py` | Trusted-proxy transport inspection, client IP extraction, and cookie/HSTS security helpers. |
 | `backend/app/security/url_policy.py` | Outbound URL normalization and SSRF policy for provider endpoints. |
 
 #### `app.services`
@@ -671,6 +673,7 @@ erDiagram
 | `frontend/src/components/auth/ProfileBehaviorCards.tsx` |
 | `frontend/src/components/auth/ProfileModal.tsx` |
 | `frontend/src/components/auth/ProfilePreferencesTab.tsx` |
+| `frontend/src/components/auth/authValidation.ts` |
 
 #### `components/character`
 

@@ -704,3 +704,245 @@ def test_safe_resolve_media_path_blocks_newlines_and_symlinks(
     assert exc_sym.value.status_code == 403
 
 
+def test_cross_campaign_turn_and_embedding_redaction_idor(
+    api_env: tuple[TestClient, CantinaRepository, Path],
+    api_user_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FR-1: Cross-campaign turn_id parameters return 404 and embedding base_url is redacted for non-admins."""
+    from tests.factories import seed_minimal_scenario
+
+    client, repo, _media_dir = api_env
+    admin_headers, _admin_id, _ = api_user_factory("sec_admin_emb", role="admin")
+    headers_a, user_a_id, _ = api_user_factory("sec_user_a", role="user")
+    headers_b, user_b_id, _ = api_user_factory("sec_user_b", role="user")
+
+    bundle_a = seed_minimal_scenario(repo, owner_id=user_a_id, character_name="Alpha Char")
+    bundle_b = seed_minimal_scenario(repo, owner_id=user_b_id, character_name="Beta Char")
+    assert bundle_a.campaign.active_leaf_turn_id is not None
+    assert bundle_b.campaign.active_leaf_turn_id is not None
+
+    conn = repo._connect()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO persona_turn_states (turn_id, equipped_json, inventory_json) VALUES (?, ?, ?)",
+            (
+                bundle_b.campaign.active_leaf_turn_id,
+                json.dumps([{"name": "Victim Secret Weapon", "notes": ""}]),
+                json.dumps([]),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Cross-campaign parent_turn_id on sync /turns must return 404, and SSE /turns/stream must emit safe error without executing
+    sync_turn_res = client.post(
+        f"/api/campaigns/{bundle_a.campaign.id}/turns",
+        headers=headers_a,
+        json={
+            "user_message": "Hello?",
+            "parent_turn_id": bundle_b.campaign.active_leaf_turn_id,
+        },
+    )
+    assert sync_turn_res.status_code == 404
+
+    stream_res = client.post(
+        f"/api/campaigns/{bundle_a.campaign.id}/turns/stream",
+        headers=headers_a,
+        json={
+            "user_message": "Hello?",
+            "parent_turn_id": bundle_b.campaign.active_leaf_turn_id,
+        },
+    )
+    assert stream_res.status_code == 200
+    assert "event: error" in stream_res.text
+    assert "Campaign or required entity not found." in stream_res.text
+    assert bundle_b.campaign.active_leaf_turn_id not in stream_res.text
+
+    # Cross-campaign turn_id on persona-state must return 404
+    pstate_res = client.get(
+        f"/api/campaigns/{bundle_a.campaign.id}/persona-state",
+        params={"turn_id": bundle_b.campaign.active_leaf_turn_id},
+        headers=headers_a,
+    )
+    assert pstate_res.status_code == 404
+
+    # Regular users must not see internal embedding service base_url; admins still receive it
+    secret_embed_url = "http://internal-tei-cluster.local:8080/v1"
+    monkeypatch.setattr(settings.embedding_profile, "base_url", secret_embed_url)
+
+    user_models = client.get("/api/profile/models", headers=headers_a)
+    assert user_models.status_code == 200
+    assert user_models.json()["default_embedding_profile"]["base_url"] == ""
+
+    admin_models = client.get("/api/profile/models", headers=admin_headers)
+    assert admin_models.status_code == 200
+    assert admin_models.json()["default_embedding_profile"]["base_url"] == secret_embed_url
+
+
+def test_private_media_smuggling_export_filter_and_asset_prefix_collision(
+    api_env: tuple[TestClient, CantinaRepository, Path],
+    api_user_factory,
+) -> None:
+    """FR-2: Block private media smuggling, export-time cross-owner leakage, linked-video overwrite IDOR, and asset substring collisions."""
+    import zipfile
+
+    from app.schemas.character import GalleryImage
+    from app.schemas.persona import PersonaCreatePayload
+    from app.security.media_path import safe_resolve_asset_file_path
+    from tests.factories import seed_character, seed_world
+
+    client, repo, media_dir = api_env
+    headers_a, user_a_id, _ = api_user_factory("media_owner_a")
+    headers_b, user_b_id, _ = api_user_factory("media_attacker_b")
+
+    world_a = seed_world(repo, owner_id=user_a_id, name="A World")
+    char_a = seed_character(repo, owner_id=user_a_id, world_id=world_a.id, name="A Char")
+    world_b = seed_world(repo, owner_id=user_b_id, name="B World")
+    char_b = seed_character(repo, owner_id=user_b_id, world_id=world_b.id, name="B Char")
+
+    # Upload an image for A's character and register a private unified asset img_123 (+ prefix sibling img_12345)
+    img_res = client.post(
+        f"/api/characters/{char_a.id}/gallery",
+        headers=headers_a,
+        files={"file": ("secret.png", _create_test_image(color="red"), "image/png")},
+        data={"caption": "A Secret Photo"},
+    )
+    assert img_res.status_code == 200
+    char_a_after = repo.get_character(char_a.id, owner_id=user_a_id)
+    victim_asset_url = char_a_after.gallery[0].url
+    victim_asset_id = victim_asset_url.rsplit("/", 1)[-1]
+
+    # Legacy character-scoped file belonging to A
+    legacy_dir = media_dir / "characters" / char_a.id / "portraits"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    (legacy_dir / "legacy_a.webp").write_bytes(b"LEGACY_WEBP")
+    victim_legacy_url = f"/api/media/characters/{char_a.id}/portraits/legacy_a.webp"
+
+    # Explicit IDs for prefix collision check (img_123 owned by A, img_12345 owned by B)
+    img_123_path = safe_resolve_asset_file_path(media_dir, "images", "img_123.webp")
+    img_123_path.parent.mkdir(parents=True, exist_ok=True)
+    img_123_path.write_bytes(b"SECRET_123")
+    repo.register_media_asset(
+        asset_id="img_123",
+        owner_id=user_a_id,
+        entity_scope="character",
+        media_type="image",
+        role="album",
+        filename="img_123.webp",
+        mime_type="image/webp",
+        byte_size=10,
+    )
+    img_12345_path = safe_resolve_asset_file_path(media_dir, "images", "img_12345.webp")
+    img_12345_path.write_bytes(b"PUBLIC_12345")
+    repo.register_media_asset(
+        asset_id="img_12345",
+        owner_id=user_b_id,
+        entity_scope="character",
+        media_type="image",
+        role="album",
+        filename="img_12345.webp",
+        mime_type="image/webp",
+        byte_size=12,
+    )
+
+    # Prefix collision: B referencing img_12345 must NOT grant access to img_123
+    repo.update_character_gallery(
+        char_b.id,
+        [
+            GalleryImage(
+                id="img_12345",
+                url="/api/media/assets/img_12345",
+                caption="B own",
+                created_at="2026-11-20T00:00:00Z",
+            )
+        ],
+        owner_id=user_b_id,
+    )
+    assert repo.user_can_access_asset(user_b_id, "img_123") is False
+    assert client.get("/api/media/assets/img_123", headers=headers_b).status_code == 404
+
+    # 1. Smuggling victim asset URL or legacy character URL via commit, update, persona -> 400
+    smuggle_draft = CharacterWizardDraft(
+        name="Smuggled Char",
+        tagline="T",
+        core_persona="P",
+        portraits={"default": victim_asset_url},
+        baseline_psyche=BaselinePsyche(
+            core_drive="D", core_fear="F", default_want="W", default_plan="P"
+        ),
+    )
+    assert (
+        client.post(
+            "/api/wizards/character/commit",
+            headers=headers_b,
+            json={"draft": smuggle_draft.model_dump(), "world_id": world_b.id},
+        ).status_code
+        == 400
+    )
+
+    upd_payload = CharacterUpdatePayload(
+        name=char_b.name,
+        tagline=char_b.tagline,
+        core_persona=char_b.core_persona,
+        portraits={"happy": victim_legacy_url},
+        baseline_psyche=char_b.baseline_psyche,
+    )
+    assert (
+        client.put(
+            f"/api/characters/{char_b.id}",
+            headers=headers_b,
+            json=upd_payload.model_dump(),
+        ).status_code
+        == 400
+    )
+
+    persona_payload = PersonaCreatePayload(name="Smuggled Persona", portrait_url=victim_asset_url)
+    assert (
+        client.post(
+            "/api/personas",
+            headers=headers_b,
+            json=persona_payload.model_dump(),
+        ).status_code
+        == 400
+    )
+
+    # 2. Export-time defense-in-depth: even if SQLite already contains a foreign URL on B's character, export skips it
+    conn = repo._connect()
+    try:
+        conn.execute(
+            "UPDATE characters SET portraits_json = ? WHERE id = ?",
+            (json.dumps({"default": victim_asset_url}), char_b.id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    exp_b = client.get(f"/api/export/character/{char_b.id}", headers=headers_b)
+    assert exp_b.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(exp_b.content), "r") as zf:
+        assert not [n for n in zf.namelist() if victim_asset_id in n]
+
+    # 3. Linked video overwrite IDOR blocked at both repo and HTTP layers
+    with pytest.raises(PermissionError):
+        repo.attach_or_replace_linked_video(
+            victim_asset_id,
+            video_id="vid_evil_overwrite",
+            owner_id=user_b_id,
+            entity_scope="character",
+            filename="vid_evil_overwrite.mp4",
+            mime_type="video/mp4",
+            byte_size=100,
+        )
+    assert repo.get_linked_video_for_image(victim_asset_id) is None
+
+    http_vid_idor = client.post(
+        f"/api/characters/{char_b.id}/gallery/videos",
+        headers=headers_b,
+        files={"file": ("evil.mp4", b"\x00\x00\x00\x18ftypmp42", "video/mp4")},
+        data={"caption": "Overwrite", "linked_image_id": victim_asset_id},
+    )
+    assert http_vid_idor.status_code in (403, 404)
+
+

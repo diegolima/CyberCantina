@@ -285,6 +285,15 @@ class CharacterVersionsMixin:
                 else orig.gallery
             )
             clean_p, clean_g = _sanitize_character_media(portraits_dict, gallery_list)
+            if owner_id is not None:
+                urls_to_check: list[str | None] = list(clean_p.values())
+                for img in clean_g:
+                    urls_to_check.append(img.url)
+                    if img.video_url:
+                        urls_to_check.append(img.video_url)
+                self.assert_user_can_reference_media_urls(
+                    owner_id, urls_to_check, conn=conn
+                )
 
             max_ver_row = conn.execute(
                 "SELECT COALESCE(MAX(version), 0) AS max_v FROM character_versions WHERE character_id = ?",

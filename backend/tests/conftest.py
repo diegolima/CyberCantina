@@ -33,6 +33,8 @@ def isolate_provider_state(
     from app.config import AppSettings
     from app.engine.llm_client import llm_client
     from app.providers.probe import probe_service
+    from app.security.rate_limit import reset_rate_limiters
+    from app.services.import_export_service import clear_staged_imports
 
     defaults = AppSettings()
     for field_name in AppSettings.model_fields:
@@ -63,10 +65,14 @@ def isolate_provider_state(
     probe_service._inflight.clear()
     probe_service._cache.clear()
     probe_service._semaphore = None
+    reset_rate_limiters()
+    clear_staged_imports()
 
     try:
         yield
     finally:
+        reset_rate_limiters()
+        clear_staged_imports()
         main_mod = sys.modules.get("app.main")
         if main_mod is not None and hasattr(main_mod, "app"):
             main_mod.app.dependency_overrides.clear()

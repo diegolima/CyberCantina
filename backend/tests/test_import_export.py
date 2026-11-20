@@ -1621,5 +1621,164 @@ def test_repo_list_orders_newest_first_on_same_second_timestamp(
     assert [cp.id for cp in empty_repo.list_campaigns(owner_id=owner.id)] == [camp2.id, camp1.id]
 
 
+def test_export_and_inspect_cross_user_isolation(api_env, api_user_factory):
+    """FR-1: Exports must never leak cross-tenant characters, and import/inspect must scope conflicts to owner."""
+    client, repo, _media_dir = api_env
+    headers_a, user_a_id, _ = api_user_factory("exp_owner_a")
+    headers_b, user_b_id, _ = api_user_factory("exp_attacker_b")
+
+    world_a = repo.create_world_from_draft(
+        WorldWizardDraft(
+            name="Owner A Sector",
+            global_rules=WorldGlobalRules(
+                genre="Sci-Fi",
+                tone="Noir",
+                setting_overview="Neon docks.",
+                tech_or_magic_rules="Cyberware.",
+            ),
+            locations=[
+                LocationNodeDraft(
+                    key="loc_a",
+                    name="Dock A",
+                    summary="Secret dock",
+                    description="Restricted quay.",
+                    is_starting_location=True,
+                )
+            ],
+            edges=[],
+            lore_nodes=[],
+        ),
+        owner_id=user_a_id,
+    )
+    char_a = repo.create_character_from_draft(
+        CharacterWizardDraft(
+            name="Owner A Operative",
+            tagline="Covert agent",
+            core_persona="Secretive.",
+            baseline_psyche=BaselinePsyche(
+                core_drive="Survive.",
+                core_fear="Exposure.",
+                default_want="Hide.",
+                default_plan="Lay low.",
+            ),
+        ),
+        world_id=world_a.id,
+        owner_id=user_a_id,
+    )
+    persona_a = repo.create_persona(
+        PersonaCreatePayload(name="Owner A Persona", tagline="Shadow"),
+        owner_id=user_a_id,
+    )
+
+    world_b = repo.create_world_from_draft(
+        WorldWizardDraft(
+            name="Attacker B World",
+            global_rules=WorldGlobalRules(
+                genre="Sci-Fi",
+                tone="Bleak",
+                setting_overview="Empty sector.",
+                tech_or_magic_rules="None.",
+            ),
+            locations=[
+                LocationNodeDraft(
+                    key="loc_b",
+                    name="Dock B",
+                    summary="Public dock",
+                    description="Open pier.",
+                    is_starting_location=True,
+                )
+            ],
+            edges=[],
+            lore_nodes=[],
+        ),
+        owner_id=user_b_id,
+    )
+    # Even if another user's character points at world_b.id, B must not export it.
+    repo.create_character_from_draft(
+        CharacterWizardDraft(
+            name="Victim Char Linked To B World",
+            tagline="Private",
+            core_persona="Private.",
+            baseline_psyche=BaselinePsyche(
+                core_drive="A.",
+                core_fear="B.",
+                default_want="C.",
+                default_plan="D.",
+            ),
+        ),
+        world_id=world_b.id,
+        owner_id=user_a_id,
+    )
+
+    # 1. Cross-user single character / single world export -> 404
+    assert client.get(f"/api/export/character/{char_a.id}", headers=headers_b).status_code == 404
+    assert client.get(f"/api/export/world/{world_a.id}", headers=headers_b).status_code == 404
+
+    # 2. Single world export for B must exclude cross-user character linked to B's world_id
+    world_b_exp = client.get(
+        f"/api/export/world/{world_b.id}?include_characters=true",
+        headers=headers_b,
+    )
+    assert world_b_exp.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(world_b_exp.content), "r") as zf:
+        manifest_b = json.loads(zf.read("manifest.json"))
+        assert manifest_b["contents"]["worlds_count"] == 1
+        assert manifest_b["contents"]["characters_count"] == 0
+        assert not [n for n in zf.namelist() if n.startswith("characters/") and n.endswith(".json")]
+
+    # 3. Bundle export containing only victim's IDs produces an empty archive without victim's character
+    empty_bundle = client.post(
+        "/api/export/bundle",
+        headers=headers_b,
+        json={"character_ids": [char_a.id], "world_ids": [], "persona_ids": []},
+    )
+    assert empty_bundle.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(empty_bundle.content), "r") as zf:
+        manifest_empty = json.loads(zf.read("manifest.json"))
+        assert manifest_empty["contents"]["characters_count"] == 0
+        raw_chars = zf.read("characters.json").decode("utf-8") if "characters.json" in zf.namelist() else "[]"
+        assert char_a.id not in raw_chars
+        assert "Owner A Operative" not in raw_chars
+
+    mixed_bundle = client.post(
+        "/api/export/bundle",
+        headers=headers_b,
+        json={"character_ids": [char_a.id], "world_ids": [world_b.id], "persona_ids": []},
+    )
+    assert mixed_bundle.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(mixed_bundle.content), "r") as zf:
+        manifest_mixed = json.loads(zf.read("manifest.json"))
+        assert manifest_mixed["contents"]["characters_count"] == 0
+        assert manifest_mixed["contents"]["worlds_count"] == 1
+
+    # 4. Import inspect conflict check must only match the importing user's entities
+    a_bundle = client.post(
+        "/api/export/bundle",
+        headers=headers_a,
+        json={
+            "character_ids": [char_a.id],
+            "world_ids": [world_a.id],
+            "persona_ids": [persona_a.id],
+        },
+    )
+    assert a_bundle.status_code == 200
+
+    inspect_b = client.post(
+        "/api/import/inspect",
+        headers=headers_b,
+        files={"file": ("a_pack.zcc", a_bundle.content, "application/octet-stream")},
+    )
+    assert inspect_b.status_code == 200
+    assert inspect_b.json()["conflicts"] == []
+
+    inspect_a = client.post(
+        "/api/import/inspect",
+        headers=headers_a,
+        files={"file": ("a_pack.zcc", a_bundle.content, "application/octet-stream")},
+    )
+    assert inspect_a.status_code == 200
+    assert len(inspect_a.json()["conflicts"]) == 3
+
+
 
 

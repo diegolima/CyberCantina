@@ -87,7 +87,9 @@ async def enrich_text(
         if not parent_id:
             raise HTTPException(status_code=400, detail="Campaign has no turns")
 
-        branch_turns = repo.get_branch_turn_chain(parent_id)
+        branch_turns = repo.get_branch_turn_chain(parent_id, campaign_id=campaign.id)
+        if not branch_turns:
+            raise HTTPException(status_code=404, detail="Turn not found in campaign")
         valid_turn_ids = {t.id for t in branch_turns}
         leaf_turn = branch_turns[-1]
 
@@ -161,7 +163,11 @@ async def enrich_text(
         if ref.location_id and not ref.location_id.startswith("new_"):
             try:
                 candidate = repo.get_location(ref.location_id)
-                if db_world is None or candidate.world_id == db_world.id:
+                if db_world is not None:
+                    if candidate.world_id == db_world.id:
+                        db_loc = candidate
+                else:
+                    repo.get_world(candidate.world_id, owner_id=current_user.id)
                     db_loc = candidate
             except KeyError:
                 pass
@@ -257,7 +263,9 @@ async def enrich_text(
 
     elif req.context_ref.scope == "character_field":
         try:
-            char = repo.get_character(req.context_ref.character_id)
+            char = repo.get_character(
+                req.context_ref.character_id, owner_id=current_user.id
+            )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Character not found") from exc
 

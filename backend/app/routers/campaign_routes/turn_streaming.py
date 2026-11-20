@@ -138,7 +138,9 @@ async def _execute_turn_stream_events_unlocked(
         raise RuntimeError(f"Campaign '{campaign_id}' has no parent turn node")
 
     # Resolve parent branch chain (allows instantaneous swipe/branch from any node!)
-    branch_turns = repo.get_branch_turn_chain(parent_id)
+    branch_turns = repo.get_branch_turn_chain(parent_id, campaign_id=campaign.id)
+    if not branch_turns:
+        raise KeyError(f"Turn '{parent_id}' not found in campaign '{campaign_id}'")
     valid_turn_ids = {t.id for t in branch_turns}
     parent_turn = branch_turns[-1]
 

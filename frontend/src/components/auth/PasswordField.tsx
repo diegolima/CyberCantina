@@ -13,6 +13,8 @@ export interface PasswordFieldProps {
   invalid?: boolean;
   describedBy?: string;
   required?: boolean;
+  minLength?: number;
+  maxLength?: number;
   resetKey?: string;
 }
 
@@ -31,6 +33,8 @@ export const PasswordField: React.FC<PasswordFieldProps> = ({
   invalid = false,
   describedBy,
   required = false,
+  minLength,
+  maxLength,
   resetKey,
 }) => {
   const [visible, setVisible] = useState(false);
@@ -62,6 +66,8 @@ export const PasswordField: React.FC<PasswordFieldProps> = ({
           autoComplete={autoComplete}
           disabled={disabled}
           required={required}
+          minLength={minLength}
+          maxLength={maxLength}
           aria-invalid={invalid || undefined}
           aria-describedby={invalid && describedBy ? describedBy : undefined}
         />

@@ -2,6 +2,16 @@ import React, { useState } from "react";
 import { AlertTriangle, Shield } from "lucide-react";
 import { api } from "../../api";
 import { AuthSessionResponse } from "../../types";
+import {
+  MAX_DISPLAY_NAME_LENGTH,
+  MAX_PASSWORD_LENGTH,
+  MAX_USERNAME_LENGTH,
+  MIN_PASSWORD_LENGTH,
+  MIN_USERNAME_LENGTH,
+  validateDisplayName,
+  validateNewPassword,
+  validateUsername,
+} from "./authValidation";
 import { PasswordField } from "./PasswordField";
 
 export interface InitialSetupScreenProps {
@@ -30,10 +40,28 @@ export const InitialSetupScreen: React.FC<InitialSetupScreenProps> = ({
     setError(null);
     setInvalidField(null);
 
-    if (!username.trim()) {
-      setError("Please enter an administrator username.");
+    const usernameErr = validateUsername(username);
+    if (usernameErr) {
+      setError(usernameErr);
       setInvalidField("username");
       return;
+    }
+
+    if (displayName.trim()) {
+      const displayErr = validateDisplayName(displayName);
+      if (displayErr) {
+        setError(displayErr);
+        return;
+      }
+    }
+
+    if (password) {
+      const pwdErr = validateNewPassword(password);
+      if (pwdErr) {
+        setError(pwdErr);
+        setInvalidField("confirmPassword");
+        return;
+      }
     }
 
     if (password && password !== confirmPassword) {
@@ -119,6 +147,8 @@ export const InitialSetupScreen: React.FC<InitialSetupScreenProps> = ({
               }}
               placeholder="admin"
               autoComplete="username"
+              minLength={MIN_USERNAME_LENGTH}
+              maxLength={MAX_USERNAME_LENGTH}
               disabled={submitting}
               autoFocus
               required
@@ -141,6 +171,7 @@ export const InitialSetupScreen: React.FC<InitialSetupScreenProps> = ({
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="Administrator"
               autoComplete="name"
+              maxLength={MAX_DISPLAY_NAME_LENGTH}
               disabled={submitting}
             />
           </div>
@@ -148,7 +179,7 @@ export const InitialSetupScreen: React.FC<InitialSetupScreenProps> = ({
           <PasswordField
             id="setup-password"
             label="Admin Password"
-            labelHint="(Leave blank for local single-user mode)"
+            labelHint={`(${MIN_PASSWORD_LENGTH}–${MAX_PASSWORD_LENGTH} chars, or leave blank for single-user mode)`}
             value={password}
             onChange={(e) => {
               setPassword(e.target.value);
@@ -160,6 +191,7 @@ export const InitialSetupScreen: React.FC<InitialSetupScreenProps> = ({
             }}
             placeholder="Enter a strong password or leave blank..."
             autoComplete="new-password"
+            maxLength={MAX_PASSWORD_LENGTH}
             disabled={submitting}
           />
 
@@ -177,6 +209,8 @@ export const InitialSetupScreen: React.FC<InitialSetupScreenProps> = ({
               }}
               placeholder="Confirm password..."
               autoComplete="new-password"
+              minLength={MIN_PASSWORD_LENGTH}
+              maxLength={MAX_PASSWORD_LENGTH}
               disabled={submitting}
               invalid={invalidField === "confirmPassword"}
               describedBy="setup-form-error"

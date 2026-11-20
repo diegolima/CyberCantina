@@ -6,7 +6,6 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.auth import (
-    SESSION_COOKIE_NAME,
     create_passkey_authentication_challenge,
     create_passkey_registration_challenge,
     extract_raw_token,
@@ -26,6 +25,7 @@ from app.db.repos.base import utc_now_iso
 from app.db.seed import seed_showcase_for_user
 from app.dependencies import (
     attach_user_media_stats,
+    clear_session_cookie,
     get_repo,
     get_user_media_lock,
     issue_session_response,
@@ -56,9 +56,21 @@ from app.schemas.auth import (
     UserProfile,
 )
 from app.security.log_sanitize import sanitize_log_value
+from app.security.rate_limit import (
+    clear_rate_limit_key,
+    enforce_rate_limit,
+    record_rate_limit_hit,
+)
+from app.security.transport import resolve_client_ip
 
 logger = logging.getLogger("cybercantina.routers.auth")
 router = APIRouter(tags=["auth"])
+
+
+def _client_ip(request: Request) -> str:
+    return resolve_client_ip(
+        request.headers, request.client.host if request.client else None
+    )
 
 
 @router.get("/api/auth/status", response_model=AuthStatusResponse)
@@ -92,6 +104,7 @@ def initial_setup(
     request: Request,
     response: Response,
 ) -> AuthSessionResponse:
+    enforce_rate_limit("auth_setup_ip", _client_ip(request))
     repo = get_repo()
     if repo.count_users() > 0:
         raise HTTPException(
@@ -125,7 +138,10 @@ def initial_setup(
 
     repo.claim_unowned_entities(admin_user.id)
     seed_showcase_for_user(repo, admin_user.id, restore_missing_only=True)
-    logger.info("Initial setup completed for admin user '%s'", admin_user.username)
+    logger.info(
+        "Initial setup completed for admin user '%s'",
+        sanitize_log_value(admin_user.username),
+    )
     return issue_session_response(repo, admin_user, request, response)
 
 
@@ -135,10 +151,20 @@ def login_with_password(
     request: Request,
     response: Response,
 ) -> AuthSessionResponse:
+    client_ip = _client_ip(request)
+    norm_username = req.username.strip().lower()
+    enforce_rate_limit("auth_login_ip", client_ip)
+    enforce_rate_limit(
+        "auth_login_user_fail",
+        norm_username,
+        record_hit=False,
+        detail="Too many failed login attempts for this account. Please wait and try again.",
+    )
     repo = get_repo()
     try:
         user = repo.get_user_by_username(req.username)
     except KeyError as exc:
+        record_rate_limit_hit("auth_login_user_fail", norm_username)
         raise HTTPException(
             status_code=401, detail="Invalid username or password."
         ) from exc
@@ -146,15 +172,19 @@ def login_with_password(
     pwd_hash = repo.get_user_password_hash(user.id)
     if pwd_hash is None:
         if repo.is_single_user_passwordless_mode():
+            clear_rate_limit_key("auth_login_user_fail", norm_username)
             return issue_session_response(repo, user, request, response)
+        record_rate_limit_hit("auth_login_user_fail", norm_username)
         raise HTTPException(
             status_code=401,
             detail="Password login is not configured for this account. Use a passkey or contact an administrator.",
         )
 
     if not verify_password(req.password, pwd_hash):
+        record_rate_limit_hit("auth_login_user_fail", norm_username)
         raise HTTPException(status_code=401, detail="Invalid username or password.")
 
+    clear_rate_limit_key("auth_login_user_fail", norm_username)
     return issue_session_response(repo, user, request, response)
 
 
@@ -164,6 +194,7 @@ def register_user(
     request: Request,
     response: Response,
 ) -> AuthSessionResponse:
+    enforce_rate_limit("auth_register_ip", _client_ip(request))
     repo = get_repo()
     if repo.count_users() == 0:
         raise HTTPException(
@@ -199,19 +230,20 @@ def register_user(
 
     auto_provision_webgpu_for_user(repo, user.id, settings)
     seed_showcase_for_user(repo, user.id)
-    logger.info("Registered new user '%s'", user.username)
+    logger.info("Registered new user '%s'", sanitize_log_value(user.username))
     return issue_session_response(repo, user, request, response)
 
 
 @router.post("/api/auth/logout")
 def logout_user(
+    request: Request,
     response: Response,
     raw_token: str | None = Depends(extract_raw_token),
 ) -> dict[str, str]:
     repo = get_repo()
     if raw_token:
         repo.delete_session(hash_session_token(raw_token))
-    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
+    clear_session_cookie(response, request)
     return {"status": "logged_out"}
 
 
@@ -220,6 +252,7 @@ def start_passkey_login(
     req: PasskeyLoginStartRequest,
     request: Request,
 ) -> PasskeyLoginStartResponse:
+    enforce_rate_limit("auth_passkey_ip", _client_ip(request))
     repo = get_repo()
     rp_id, origin = resolve_rp_id_and_origin(request)
     allowed_ids: list[str] | None = None
@@ -230,12 +263,19 @@ def start_passkey_login(
             user = repo.get_user_by_username(req.username.strip())
         except KeyError as exc:
             raise HTTPException(
-                status_code=404, detail=f"User '{req.username.strip()}' not found."
+                status_code=400,
+                detail=(
+                    "Unable to start passkey sign-in for the supplied username. "
+                    "Try password sign-in or discoverable passkey login."
+                ),
             ) from exc
         if not user.passkeys:
             raise HTTPException(
                 status_code=400,
-                detail=f"User '{user.username}' has no registered passkeys.",
+                detail=(
+                    "Unable to start passkey sign-in for the supplied username. "
+                    "Try password sign-in or discoverable passkey login."
+                ),
             )
         allowed_ids = [pk.id for pk in user.passkeys]
         target_user_id = user.id
@@ -255,6 +295,7 @@ def finish_passkey_login(
     request: Request,
     response: Response,
 ) -> AuthSessionResponse:
+    enforce_rate_limit("auth_passkey_ip", _client_ip(request))
     repo = get_repo()
     cred_id = str(req.credential.get("id", "")).strip()
     if not cred_id:
@@ -275,8 +316,12 @@ def finish_passkey_login(
             credential_current_sign_count=sign_count,
         )
     except Exception as exc:
+        logger.warning(
+            "Passkey authentication verification failed: %s",
+            sanitize_log_value(exc),
+        )
         raise HTTPException(
-            status_code=401, detail=f"Passkey verification failed: {exc}"
+            status_code=401, detail="Passkey verification failed."
         ) from exc
 
     repo.update_passkey_sign_count(cred_id, new_sign_count)
@@ -308,6 +353,7 @@ def change_my_password(
     req: ChangePasswordRequest,
     current_user: UserProfile = Depends(get_current_user),
 ) -> AuthStatusResponse:
+    enforce_rate_limit("profile_sensitive_user", current_user.id)
     repo = get_repo()
     existing_hash = repo.get_user_password_hash(current_user.id)
 
@@ -363,6 +409,7 @@ def start_passkey_registration(
     request: Request,
     current_user: UserProfile = Depends(get_current_user),
 ) -> PasskeyRegisterStartResponse:
+    enforce_rate_limit("profile_sensitive_user", current_user.id)
     repo = get_repo()
     existing_hash = repo.get_user_password_hash(current_user.id)
     if existing_hash is None:
@@ -414,9 +461,13 @@ def finish_passkey_registration(
             credential_payload=req.credential,
         )
     except Exception as exc:
+        logger.warning(
+            "Passkey registration verification failed: %s",
+            sanitize_log_value(exc),
+        )
         raise HTTPException(
             status_code=400,
-            detail=f"Passkey registration verification failed: {exc}",
+            detail="Passkey registration verification failed.",
         ) from exc
 
     if pending.user_id != current_user.id:
@@ -462,6 +513,7 @@ def reset_my_data(
     req: ProfileResetDataRequest,
     current_user: UserProfile = Depends(get_current_user),
 ) -> dict[str, str]:
+    enforce_rate_limit("profile_sensitive_user", current_user.id)
     repo = get_repo()
     pwd_hash = repo.get_user_password_hash(current_user.id)
     if pwd_hash is not None and not verify_password(req.current_password, pwd_hash):
@@ -519,9 +571,11 @@ def restore_default_assets(
 @router.post("/api/profile/delete")
 def delete_my_account(
     req: ProfileDeleteAccountRequest,
+    request: Request,
     response: Response,
     current_user: UserProfile = Depends(get_current_user),
 ) -> dict[str, str]:
+    enforce_rate_limit("profile_sensitive_user", current_user.id)
     repo = get_repo()
     if current_user.role == "admin":
         if repo.count_admin_users() <= 1:
@@ -536,7 +590,7 @@ def delete_my_account(
             detail="Current password confirmation failed.",
         )
     repo.delete_user(current_user.id)
-    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
+    clear_session_cookie(response, request)
     logger.info("Deleted account for user '%s'", sanitize_log_value(current_user.username))
     return {"status": "deleted"}
 
@@ -636,6 +690,7 @@ def admin_reset_user_password(
 @router.delete("/api/admin/users/{user_id}")
 def admin_delete_user(
     user_id: str,
+    request: Request,
     response: Response,
     admin_user: UserProfile = Depends(require_admin),
 ) -> dict[str, str]:
@@ -654,5 +709,5 @@ def admin_delete_user(
 
     repo.delete_user(user_id)
     if user_id == admin_user.id:
-        response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
+        clear_session_cookie(response, request)
     return {"status": "deleted", "user_id": user_id}

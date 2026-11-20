@@ -31,6 +31,7 @@ from app.dependencies import (
 )
 from app.engine.llm_client import auto_configure_ollama_models, llm_client
 from app.housekeeping import chloromancer_scheduler
+from app.housekeeping.purge_inactive import cleanup_stale_staging_files
 from app.routers.admin_housekeeping import router as admin_housekeeping_router
 from app.routers.admin_messages import router as admin_messages_router
 from app.routers.auth import router as auth_router
@@ -48,6 +49,7 @@ from app.routers.providers import router as providers_router
 from app.routers.settings import router as settings_router
 from app.routers.worlds import router as worlds_router
 from app.security.log_sanitize import sanitize_log_value
+from app.security.transport import should_emit_hsts
 
 # Configure root logger
 logging.basicConfig(
@@ -110,6 +112,7 @@ async def _periodic_provider_probe(interval_seconds: float = 300.0) -> None:
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     repo = get_repo()
     repo.init_db()
+    cleanup_stale_staging_files(repo.media_dir)
     run_entity_pruner()
     ensure_public_showcase_media(repo)
     users = repo.list_users()
@@ -136,66 +139,91 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await local_relay_hub.close_all()
 
 
-app = FastAPI(
-    title="CyberCantina Agentic Roleplay API",
-    version="0.1.0",
-    lifespan=lifespan,
-)
+def create_app() -> FastAPI:
+    """Build and configure the CyberCantina FastAPI application instance."""
+    enable_docs = (
+        os.environ.get("CYBERCANTINA_ENABLE_API_DOCS", "false")
+        .strip()
+        .lower()
+        in ("1", "true", "yes", "on")
+    )
+    app_instance = FastAPI(
+        title="CyberCantina Agentic Roleplay API",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url="/docs" if enable_docs else None,
+        redoc_url="/redoc" if enable_docs else None,
+        openapi_url="/openapi.json" if enable_docs else None,
+    )
 
-allowed_origins_env = os.environ.get("CYBERCANTINA_ALLOWED_ORIGINS")
-if allowed_origins_env:
-    cors_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
-else:
-    cors_origins = [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-        "http://testserver",
-    ]
+    allowed_origins_env = os.environ.get("CYBERCANTINA_ALLOWED_ORIGINS")
+    if allowed_origins_env:
+        cors_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+    else:
+        cors_origins = [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+            "http://testserver",
+        ]
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    app_instance.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    @app_instance.middleware("http")
+    async def attach_relay_tab_context(request: Request, call_next):
+        raw_tab = request.headers.get("x-cantina-tab-id")
+        tab_id = sanitize_log_value(raw_tab).strip()[:64] if raw_tab else None
+        tab_token = relay_tab_context.set(tab_id or None)
+        user_token = relay_user_context.set(None)
+        try:
+            response = await call_next(request)
+            response.headers.setdefault("X-Content-Type-Options", "nosniff")
+            response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+            response.headers.setdefault(
+                "Referrer-Policy", "strict-origin-when-cross-origin"
+            )
+            response.headers.setdefault(
+                "Permissions-Policy", "loopback-network=(self)"
+            )
+            client_host = request.client.host if request.client else None
+            if should_emit_hsts(request.url.scheme, request.headers, client_host):
+                response.headers.setdefault(
+                    "Strict-Transport-Security",
+                    "max-age=31536000; includeSubDomains",
+                )
+            return response
+        finally:
+            relay_user_context.reset(user_token)
+            relay_tab_context.reset(tab_token)
+
+    # Register modular domain routers
+    app_instance.include_router(auth_router)
+    app_instance.include_router(admin_housekeeping_router)
+    app_instance.include_router(admin_messages_router)
+    app_instance.include_router(settings_router)
+    app_instance.include_router(providers_router)
+    app_instance.include_router(local_relay_router)
+    app_instance.include_router(prompts_router)
+    app_instance.include_router(notes_router)
+    app_instance.include_router(media_router)
+    app_instance.include_router(worlds_router)
+    app_instance.include_router(characters_router)
+    app_instance.include_router(personas_router)
+    app_instance.include_router(persona_media_router)
+    app_instance.include_router(mechanics_router)
+    app_instance.include_router(campaigns_router)
+    app_instance.include_router(enrich_router)
+    app_instance.include_router(import_export_router)
+    return app_instance
 
 
-@app.middleware("http")
-async def attach_relay_tab_context(request: Request, call_next):
-    raw_tab = request.headers.get("x-cantina-tab-id")
-    tab_id = sanitize_log_value(raw_tab).strip()[:64] if raw_tab else None
-    tab_token = relay_tab_context.set(tab_id or None)
-    user_token = relay_user_context.set(None)
-    try:
-        response = await call_next(request)
-        if "Permissions-Policy" not in response.headers:
-            response.headers["Permissions-Policy"] = "loopback-network=(self)"
-        return response
-    finally:
-        relay_user_context.reset(user_token)
-        relay_tab_context.reset(tab_token)
-
-
-# Register modular domain routers
-app.include_router(auth_router)
-app.include_router(admin_housekeeping_router)
-app.include_router(admin_messages_router)
-app.include_router(settings_router)
-app.include_router(providers_router)
-app.include_router(local_relay_router)
-app.include_router(prompts_router)
-app.include_router(notes_router)
-app.include_router(media_router)
-app.include_router(worlds_router)
-app.include_router(characters_router)
-app.include_router(personas_router)
-app.include_router(persona_media_router)
-app.include_router(mechanics_router)
-app.include_router(campaigns_router)
-app.include_router(enrich_router)
-app.include_router(import_export_router)
+app = create_app()

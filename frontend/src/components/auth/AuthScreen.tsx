@@ -11,6 +11,16 @@ import {
 import { api } from "../../api";
 import { AuthSessionResponse, PublicAdminMessage } from "../../types";
 import { AdminMessageBannerList } from "../shared/AdminMessageBannerList";
+import {
+  MAX_DISPLAY_NAME_LENGTH,
+  MAX_PASSWORD_LENGTH,
+  MAX_USERNAME_LENGTH,
+  MIN_PASSWORD_LENGTH,
+  MIN_USERNAME_LENGTH,
+  validateDisplayName,
+  validateNewPassword,
+  validateUsername,
+} from "./authValidation";
 import { PasswordField } from "./PasswordField";
 
 export interface AuthScreenProps {
@@ -64,8 +74,27 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     }
 
     if (mode === "register") {
+      const usernameErr = validateUsername(username);
+      if (usernameErr) {
+        setError(usernameErr);
+        setInvalidField("username");
+        return;
+      }
+      if (displayName.trim()) {
+        const displayErr = validateDisplayName(displayName);
+        if (displayErr) {
+          setError(displayErr);
+          return;
+        }
+      }
       if (!password) {
         setError("Password is required.");
+        setInvalidField("password");
+        return;
+      }
+      const pwdErr = validateNewPassword(password);
+      if (pwdErr) {
+        setError(pwdErr);
         setInvalidField("password");
         return;
       }
@@ -221,6 +250,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 placeholder="Enter your username..."
                 autoComplete="username"
                 disabled={busy}
+                minLength={mode === "register" ? MIN_USERNAME_LENGTH : undefined}
+                maxLength={mode === "register" ? MAX_USERNAME_LENGTH : 64}
                 autoFocus
                 required
                 aria-invalid={invalidField === "username" || undefined}
@@ -243,6 +274,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                   onChange={(e) => setDisplayName(e.target.value)}
                   placeholder="How your name appears in the studio..."
                   autoComplete="name"
+                  maxLength={MAX_DISPLAY_NAME_LENGTH}
                   disabled={busy}
                 />
               </div>
@@ -251,6 +283,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             <PasswordField
               id="auth-password"
               label="Password"
+              labelHint={
+                mode === "register"
+                  ? `(${MIN_PASSWORD_LENGTH}–${MAX_PASSWORD_LENGTH} characters)`
+                  : undefined
+              }
               value={password}
               onChange={(e) => {
                 setPassword(e.target.value);
@@ -263,6 +300,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               autoComplete={mode === "login" ? "current-password" : "new-password"}
               disabled={busy}
               required={mode === "register"}
+              minLength={mode === "register" ? MIN_PASSWORD_LENGTH : undefined}
+              maxLength={MAX_PASSWORD_LENGTH}
               invalid={invalidField === "password"}
               describedBy="auth-form-error"
               resetKey={mode}
@@ -284,6 +323,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 autoComplete="new-password"
                 disabled={busy}
                 required
+                minLength={MIN_PASSWORD_LENGTH}
+                maxLength={MAX_PASSWORD_LENGTH}
                 invalid={invalidField === "confirmPassword"}
                 describedBy="auth-form-error"
                 resetKey={mode}

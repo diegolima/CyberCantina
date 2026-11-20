@@ -20,10 +20,11 @@ from app.schemas.import_export import (
     ImportInspectResponse,
 )
 from app.security.media_path import safe_resolve_staging_file_path
+from app.security.rate_limit import enforce_rate_limit
 from app.services.import_export_service import (
-    MAX_TOTAL_UNCOMPRESSED_BYTES,
     build_zcc_export_to_file,
     commit_staged_import,
+    get_max_import_upload_bytes,
     inspect_uploaded_path,
 )
 from app.services.video_processor import cleanup_staging_paths
@@ -81,7 +82,7 @@ async def export_single_character(
     """Export a single character as a .zcc archive, optionally bundling their associated world."""
     repo = get_repo()
     try:
-        char = repo.get_character(character_id)
+        char = repo.get_character(character_id, owner_id=current_user.id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Character '{character_id}' not found.") from None
 
@@ -123,7 +124,9 @@ async def export_single_world(
 
     character_ids: list[str] = []
     if include_characters:
-        all_chars = repo.list_characters(include_pending_deletion=False)
+        all_chars = repo.list_characters(
+            include_pending_deletion=False, owner_id=current_user.id
+        )
         character_ids = [c.id for c in all_chars if c.world_id == world_id]
 
     tmp_path = build_zcc_export_to_file(
@@ -152,7 +155,13 @@ async def inspect_import(
     current_user: UserProfile = Depends(get_current_user),
 ) -> ImportInspectResponse:
     """Stream-stage and inspect an uploaded file (.zcc, .zip, .png, .json) to auto-detect its format."""
+    enforce_rate_limit(
+        "import_inspect_user",
+        current_user.id,
+        detail="Too many import inspections in a short period. Please wait and try again.",
+    )
     repo = get_repo()
+    max_upload_bytes = get_max_import_upload_bytes()
     staged_path = safe_resolve_staging_file_path(
         repo.media_dir, f"import_{uuid.uuid4().hex}.part"
     )
@@ -165,7 +174,7 @@ async def inspect_import(
                 if not chunk:
                     break
                 total += len(chunk)
-                if total > MAX_TOTAL_UNCOMPRESSED_BYTES:
+                if total > max_upload_bytes:
                     raise HTTPException(
                         status_code=413,
                         detail="Uploaded import package exceeds maximum allowed size.",

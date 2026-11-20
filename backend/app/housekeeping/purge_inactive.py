@@ -28,6 +28,7 @@ from app.security.media_path import (
 logger = logging.getLogger("cybercantina.housekeeping.purge_inactive")
 
 ORPHAN_MEDIA_GRACE_SECONDS = 24 * 60 * 60
+STAGED_IMPORT_FILE_GRACE_SECONDS = 1800
 
 
 def _dir_bytes(media_dir: str, character_id: str) -> int:
@@ -129,6 +130,50 @@ def compute_purge_preview(
     )
 
 
+def cleanup_stale_staging_files(
+    media_dir: str | Path,
+    *,
+    import_export_grace_seconds: int = STAGED_IMPORT_FILE_GRACE_SECONDS,
+    other_grace_seconds: int | None = None,
+) -> int:
+    """Remove expired import_*.part / export_*.zcc (and optionally other) temporary files in .staging/."""
+    try:
+        staging_dir = safe_resolve_staging_dir(media_dir)
+    except (PathTraversalError, ValueError):
+        return 0
+    if not staging_dir.is_dir():
+        return 0
+    now_epoch = time.time()
+    removed = 0
+    for entry in staging_dir.iterdir():
+        if not entry.is_file():
+            continue
+        is_import_export_temp = (
+            (entry.name.startswith("import_") and entry.name.endswith(".part"))
+            or (entry.name.startswith("export_") and entry.name.endswith(".zcc"))
+        )
+        if not is_import_export_temp and other_grace_seconds is None:
+            continue
+        grace_seconds = (
+            import_export_grace_seconds
+            if is_import_export_temp
+            else int(other_grace_seconds)
+        )
+        try:
+            age_seconds = now_epoch - entry.stat().st_mtime
+        except OSError:
+            continue
+        if age_seconds < grace_seconds:
+            continue
+        try:
+            safe_file = safe_resolve_staging_file_path(media_dir, entry.name)
+            safe_file.unlink(missing_ok=True)
+            removed += 1
+        except (PathTraversalError, ValueError, OSError):
+            continue
+    return removed
+
+
 def _sweep_orphan_media_dirs(repo: CantinaRepository) -> int:
     """Remove unreferenced character media dirs and world media files older than ORPHAN_MEDIA_GRACE_SECONDS."""
     now_epoch = time.time()
@@ -208,27 +253,11 @@ def _sweep_orphan_media_dirs(repo: CantinaRepository) -> int:
             safe_file.unlink(missing_ok=True)
             removed += 1
 
-    try:
-        staging_dir = safe_resolve_staging_dir(repo.media_dir)
-    except (PathTraversalError, ValueError):
-        staging_dir = None
-    if staging_dir is not None and staging_dir.is_dir():
-        for entry in staging_dir.iterdir():
-            if not entry.is_file():
-                continue
-            try:
-                age_seconds = now_epoch - entry.stat().st_mtime
-            except OSError:
-                continue
-            if age_seconds < ORPHAN_MEDIA_GRACE_SECONDS:
-                continue
-            try:
-                safe_file = safe_resolve_staging_file_path(repo.media_dir, entry.name)
-                safe_file.unlink(missing_ok=True)
-                removed += 1
-            except (PathTraversalError, ValueError, OSError):
-                continue
-
+    removed += cleanup_stale_staging_files(
+        repo.media_dir,
+        import_export_grace_seconds=STAGED_IMPORT_FILE_GRACE_SECONDS,
+        other_grace_seconds=ORPHAN_MEDIA_GRACE_SECONDS,
+    )
     removed += repo.prune_orphaned_persona_media(min_age_seconds=ORPHAN_MEDIA_GRACE_SECONDS)
     return removed
 

@@ -144,6 +144,15 @@ async def stage_and_commit_linked_video(
     )
     replaced_bytes = 0
     if clean_linked_id is not None:
+        parent_asset = repo.get_media_asset(clean_linked_id)
+        if (
+            parent_asset is None
+            or bool(parent_asset.get("is_public"))
+            or str(parent_asset.get("media_type")) != "image"
+            or str(parent_asset.get("entity_scope")) != entity_scope
+            or parent_asset.get("owner_id") != target_owner_id
+        ):
+            raise HTTPException(status_code=404, detail="Target image asset not found.")
         existing_vid = repo.get_linked_video_for_image(clean_linked_id)
         if existing_vid:
             replaced_bytes = int(existing_vid.get("byte_size") or 0)
@@ -234,6 +243,31 @@ async def stage_and_commit_linked_video(
                 height=probe.height,
                 label=label_or_caption.strip(),
             )
+        except PermissionError as exc:
+            if created_new_image:
+                repo.delete_media_asset(image_id)
+            for t in committed_targets:
+                cleanup_staging_paths(t)
+            raise HTTPException(
+                status_code=403, detail="Unauthorized access to target media asset."
+            ) from exc
+        except KeyError as exc:
+            if created_new_image:
+                repo.delete_media_asset(image_id)
+            for t in committed_targets:
+                cleanup_staging_paths(t)
+            raise HTTPException(
+                status_code=404, detail="Target media asset not found."
+            ) from exc
+        except ValueError as exc:
+            if created_new_image:
+                repo.delete_media_asset(image_id)
+            for t in committed_targets:
+                cleanup_staging_paths(t)
+            raise HTTPException(
+                status_code=400,
+                detail="Target media asset is invalid for this operation.",
+            ) from exc
         except Exception:
             if created_new_image:
                 repo.delete_media_asset(image_id)
