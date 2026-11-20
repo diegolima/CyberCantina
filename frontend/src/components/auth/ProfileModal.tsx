@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -8,7 +8,15 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../../api";
-import { UserProfile } from "../../types";
+import { ProfileModelSettingsResponse, UserProfile } from "../../types";
+import {
+  hasExplicitPrefSubTab,
+  ProfileInitialTab,
+  ProfilePrefSubTab,
+  ProfileTopTab,
+  resolveProfileInitialTab,
+  resolveProfilePrefSubTab,
+} from "../../utils/profilePreferences";
 import { FeedbackModal } from "./FeedbackModal";
 import { ProvidersProvider } from "../providers/ProvidersContext";
 import { ProfileAccountTab } from "./ProfileAccountTab";
@@ -18,8 +26,9 @@ export interface ProfileModalProps {
   user: UserProfile;
   singleUserMode: boolean;
   inactiveUserPurgeDays?: number | null;
-  initialTab?: "identity" | "account" | "preferences" | "models" | "prompts" | "behavior";
-  initialSubTab?: "behavior" | "prompts" | "models" | "providers";
+  initialTab?: ProfileInitialTab;
+  initialSubTab?: ProfilePrefSubTab;
+  initialModelSettings?: ProfileModelSettingsResponse | null;
   onClose: () => void;
   onUserUpdated: (updated: UserProfile, singleUserMode?: boolean) => void;
   onAccountReset: () => Promise<void>;
@@ -33,37 +42,26 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
   inactiveUserPurgeDays = null,
   initialTab,
   initialSubTab,
+  initialModelSettings = null,
   onClose,
   onUserUpdated,
   onAccountReset,
   onAccountDeleted,
   onDefaultsRestored,
 }) => {
-  const getInitialTab = (): "identity" | "account" | "preferences" => {
-    if (initialTab === "account") return "account";
-    if (
-      initialTab === "preferences" ||
-      initialTab === "models" ||
-      initialTab === "prompts" ||
-      initialTab === "behavior"
-    ) {
-      return "preferences";
-    }
-    return "identity";
-  };
-
-  const getInitialPrefTab = (): "behavior" | "prompts" | "models" | "providers" => {
-    if (initialSubTab === "providers") return "providers";
-    if (initialTab === "models" || initialSubTab === "models") return "models";
-    if (initialTab === "prompts" || initialSubTab === "prompts") return "prompts";
-    return "behavior";
-  };
-
-  const [activeTab, setActiveTab] = useState<"identity" | "account" | "preferences">(getInitialTab);
-  const [activePrefTab, setActivePrefTab] = useState<"behavior" | "prompts" | "models" | "providers">(getInitialPrefTab);
-  const [displayName, setDisplayName] = useState(user.display_name);
-  const [savingName, setSavingName] = useState(false);
-  const [preferencesLocked, setPreferencesLocked] = useState(false);
+  const [activeTab, setActiveTab] = useState<ProfileTopTab>(() =>
+    resolveProfileInitialTab(initialTab)
+  );
+  const [activePrefTab, setActivePrefTab] = useState<ProfilePrefSubTab>(() =>
+    resolveProfilePrefSubTab({
+      initialTab,
+      initialSubTab,
+      allowUserProviders: initialModelSettings?.allow_user_providers,
+    })
+  );
+  const [preferencesLocked, setPreferencesLocked] = useState(() =>
+    initialModelSettings ? !initialModelSettings.allow_user_model_overrides : false
+  );
 
   const [feedback, setFeedback] = useState<{
     type: "success" | "error";
@@ -76,90 +74,52 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    setDisplayName(user.display_name);
-  }, [user.display_name]);
-
-  useEffect(() => {
-    api.getProfileModels()
+    api
+      .getProfileModels()
       .then((d) => setPreferencesLocked(!d.allow_user_model_overrides))
       .catch(() => undefined);
   }, []);
 
-  const handleSaveName = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMsg(null);
+  const handleSelectTab = useCallback((tab: ProfileTopTab) => {
     setStatusMsg(null);
-    if (!displayName.trim()) {
-      setErrorMsg("Display name cannot be empty.");
-      return;
-    }
-    setSavingName(true);
-    try {
-      const updated = await api.updateProfile({
-        display_name: displayName.trim(),
-      });
-      onUserUpdated(updated);
-      setStatusMsg("Profile display name updated.");
-    } catch (err: any) {
-      setErrorMsg(err?.message || "Failed to update display name.");
-    } finally {
-      setSavingName(false);
-    }
-  };
+    setErrorMsg(null);
+    setActiveTab(tab);
+  }, []);
 
-
-  const isWideTab =
-    (activeTab === "preferences" && (activePrefTab === "models" || activePrefTab === "prompts")) ||
-    (activeTab as string) === "models";
+  const handleSelectPrefTab = useCallback((subTab: ProfilePrefSubTab) => {
+    setStatusMsg(null);
+    setErrorMsg(null);
+    setActivePrefTab(subTab);
+  }, []);
 
   return (
     <div className="modal-backdrop">
-      <div
-        className="modal-panel"
-        style={{
-          maxWidth: isWideTab ? 880 : 660,
-          width: isWideTab ? "min(880px, 95vw)" : undefined,
-          transition: "max-width 0.2s ease",
-        }}
-      >
+      <div className="modal-panel profile-modal-panel">
         <div className="modal-header">
           <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <User size={18} color="var(--accent-amber)" />
             User Profile &amp; Preferences
           </span>
-          <button type="button" className="btn" onClick={onClose}>
+          <button
+            type="button"
+            className="btn"
+            onClick={onClose}
+            aria-label="Close User Profile"
+          >
             <X size={15} />
           </button>
         </div>
 
-        {/* Profile Modal Tabs */}
-        <div className="modal-tabs">
+        {/* Profile Modal Tabs (Preferences -> Account) */}
+        <div className="modal-tabs" role="tablist" aria-label="Profile sections">
           <button
             type="button"
-            className={`modal-tab-btn ${
-              activeTab === "identity" ? "active" : ""
-            }`}
-            onClick={() => setActiveTab("identity")}
-          >
-            <User size={14} />
-            Identity
-          </button>
-          <button
-            type="button"
-            className={`modal-tab-btn ${
-              activeTab === "account" ? "active" : ""
-            }`}
-            onClick={() => setActiveTab("account")}
-          >
-            <Lock size={14} />
-            Account
-          </button>
-          <button
-            type="button"
+            role="tab"
+            aria-selected={activeTab === "preferences"}
             className={`modal-tab-btn ${
               activeTab === "preferences" ? "active" : ""
             }`}
-            onClick={() => setActiveTab("preferences")}
+            onClick={() => handleSelectTab("preferences")}
           >
             <Sliders size={14} />
             Preferences
@@ -167,9 +127,21 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
               <span className="modal-tab-badge">Locked</span>
             )}
           </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "account"}
+            className={`modal-tab-btn ${
+              activeTab === "account" ? "active" : ""
+            }`}
+            onClick={() => handleSelectTab("account")}
+          >
+            <Lock size={14} />
+            Account
+          </button>
         </div>
 
-        <div className="modal-body" style={{ gap: 18 }}>
+        <div className="modal-body" style={{ gap: 18 }} role="tabpanel">
           {statusMsg && (
             <div className="auth-alert auth-alert-success">
               <Check size={15} />
@@ -178,90 +150,23 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
           )}
 
           {errorMsg && (
-            <div className="auth-alert auth-alert-error">
+            <div className="auth-alert auth-alert-error" role="alert">
               <AlertTriangle size={15} />
               <span>{errorMsg}</span>
             </div>
           )}
 
-          {/* 1. Identity & Display Name */}
-          {activeTab === "identity" && (
-            <form
-            onSubmit={handleSaveName}
-            style={{
-              background: "var(--bg-card)",
-              border: "1px solid var(--border-subtle)",
-              borderRadius: 8,
-              padding: 14,
-              display: "flex",
-              flexDirection: "column",
-              gap: 12,
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-              }}
-            >
-              <span style={{ fontWeight: 600, fontSize: "0.86rem" }}>
-                Account Identity
-              </span>
-              <span
-                className="role-pill"
-                style={{
-                  borderColor:
-                    user.role === "admin"
-                      ? "var(--accent-amber)"
-                      : "var(--accent-cyan)",
-                  color:
-                    user.role === "admin"
-                      ? "var(--accent-amber)"
-                      : "var(--accent-cyan)",
-                }}
-              >
-                {user.role.toUpperCase()}
-              </span>
-            </div>
-
-            <div className="grid-2">
-              <div className="form-group">
-                <label className="form-label">Username (Read-Only)</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  value={user.username}
-                  readOnly
-                  disabled
-                  style={{ opacity: 0.75, cursor: "not-allowed" }}
-                />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Display Name</label>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <input
-                    type="text"
-                    className="form-input"
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="Your display name..."
-                  />
-                  <button
-                    type="submit"
-                    className="btn btn-amber"
-                    style={{ flexShrink: 0 }}
-                    disabled={savingName}
-                  >
-                    {savingName ? "Saving..." : "Save"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </form>
+          {activeTab === "preferences" && (
+            <ProfilePreferencesTab
+              activePrefTab={activePrefTab}
+              setActivePrefTab={handleSelectPrefTab}
+              hasExplicitSubTab={hasExplicitPrefSubTab(initialTab, initialSubTab)}
+              setStatusMsg={setStatusMsg}
+              setErrorMsg={setErrorMsg}
+              onLockStateChange={setPreferencesLocked}
+              initialModelSettings={initialModelSettings}
+            />
           )}
-
 
           {activeTab === "account" && (
             <ProfileAccountTab
@@ -276,16 +181,6 @@ const ProfileModalInner: React.FC<ProfileModalProps> = ({
               onAccountDeleted={onAccountDeleted}
               onDefaultsRestored={onDefaultsRestored}
               onClose={onClose}
-            />
-          )}
-
-          {activeTab === "preferences" && (
-            <ProfilePreferencesTab
-              activePrefTab={activePrefTab}
-              setActivePrefTab={setActivePrefTab}
-              setStatusMsg={setStatusMsg}
-              setErrorMsg={setErrorMsg}
-              onLockStateChange={setPreferencesLocked}
             />
           )}
         </div>
@@ -308,4 +203,3 @@ export const ProfileModal: React.FC<ProfileModalProps> = (props) => (
     <ProfileModalInner {...props} />
   </ProvidersProvider>
 );
-

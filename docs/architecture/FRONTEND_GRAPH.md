@@ -123,7 +123,7 @@ flowchart TD
 | `App` | 1 | `api`, `components (root)`, `components/party`, `components/world`, `hooks`, `providers`, `types`, `utils` |
 | `api` | 14 | `types` |
 | `components (root)` | 24 | `api`, `components/auth`, `components/character`, `components/chat`, `components/inspector`, `components/map`, `components/prompts`, `components/shared`, `components/wizard`, `components/world`, `hooks`, `providers`, `types`, `utils` |
-| `components/auth` | 12 | `api`, `components (root)`, `components/models`, `components/providers`, `components/shared`, `types`, `utils` |
+| `components/auth` | 13 | `api`, `components (root)`, `components/models`, `components/providers`, `components/shared`, `types`, `utils` |
 | `components/character` | 12 | `api`, `components (root)`, `components/shared`, `types`, `utils` |
 | `components/chat` | 11 | `components (root)`, `components/inspector`, `components/shared`, `hooks`, `types`, `utils` |
 | `components/inspector` | 13 | `components (root)`, `components/map`, `components/shared`, `types`, `utils` |
@@ -140,4 +140,4 @@ flowchart TD
 | `main` | 1 | `App`, `styles.css` |
 | `providers` | 1 | `api`, `local`, `types` |
 | `types` | 14 | *(leaf)* |
-| `utils` | 12 | `types` |
+| `utils` | 13 | `types` |

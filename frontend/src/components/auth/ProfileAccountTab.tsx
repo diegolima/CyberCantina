@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   AlertTriangle,
   Clock,
@@ -7,6 +7,7 @@ import {
   KeyRound,
   RefreshCw,
   Trash2,
+  User,
 } from "lucide-react";
 import { api } from "../../api";
 import { AuthStatusResponse, PasskeyInfo, UserProfile } from "../../types";
@@ -59,6 +60,36 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
   onDefaultsRestored,
   onClose,
 }) => {
+  // Identity & display name state
+  const [displayName, setDisplayName] = useState(user.display_name);
+  const [savingName, setSavingName] = useState(false);
+
+  useEffect(() => {
+    setDisplayName(user.display_name);
+  }, [user.display_name]);
+
+  const handleSaveName = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    setStatusMsg(null);
+    if (!displayName.trim()) {
+      setErrorMsg("Display name cannot be empty.");
+      return;
+    }
+    setSavingName(true);
+    try {
+      const updated = await api.updateProfile({
+        display_name: displayName.trim(),
+      });
+      onUserUpdated(updated);
+      setStatusMsg("Profile display name updated.");
+    } catch (err: any) {
+      setErrorMsg(err?.message || "Failed to update display name.");
+    } finally {
+      setSavingName(false);
+    }
+  };
+
   // Password change state
   const [currentPasswordForPwd, setCurrentPasswordForPwd] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -337,6 +368,97 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
 
   return (
             <>
+              {/* Account Identity & Display Name Card */}
+              <form
+                onSubmit={handleSaveName}
+                style={{
+                  background: "var(--bg-card)",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: 8,
+                  padding: 14,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 12,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                  }}
+                >
+                  <span
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontWeight: 600,
+                      fontSize: "0.86rem",
+                    }}
+                  >
+                    <User size={15} color="var(--accent-amber)" />
+                    Account Identity
+                  </span>
+                  <span
+                    className="role-pill"
+                    style={{
+                      borderColor:
+                        user.role === "admin"
+                          ? "var(--accent-amber)"
+                          : "var(--accent-cyan)",
+                      color:
+                        user.role === "admin"
+                          ? "var(--accent-amber)"
+                          : "var(--accent-cyan)",
+                    }}
+                  >
+                    {user.role.toUpperCase()}
+                  </span>
+                </div>
+
+                <div className="grid-2">
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="profile-username">
+                      Username (Read-Only)
+                    </label>
+                    <input
+                      id="profile-username"
+                      type="text"
+                      className="form-input"
+                      value={user.username}
+                      readOnly
+                      disabled
+                      style={{ opacity: 0.75, cursor: "not-allowed" }}
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="profile-display-name">
+                      Display Name
+                    </label>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <input
+                        id="profile-display-name"
+                        type="text"
+                        className="form-input"
+                        value={displayName}
+                        onChange={(e) => setDisplayName(e.target.value)}
+                        placeholder="Your display name..."
+                      />
+                      <button
+                        type="submit"
+                        className="btn btn-amber"
+                        style={{ flexShrink: 0 }}
+                        disabled={savingName}
+                      >
+                        {savingName ? "Saving..." : "Save"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </form>
+
               {/* Media Storage Quota & Activity Retention Card */}
               <div
                 style={{

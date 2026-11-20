@@ -55,7 +55,7 @@ export const App: React.FC = () => {
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [profileInitialTab, setProfileInitialTab] = useState<
     "identity" | "account" | "preferences" | "models" | "prompts" | "behavior"
-  >("identity");
+  >("preferences");
   const [profileInitialSubTab, setProfileInitialSubTab] = useState<
     "behavior" | "prompts" | "models" | "providers" | undefined
   >(undefined);
@@ -731,7 +731,7 @@ export const App: React.FC = () => {
             setShowPersonaModal(true);
           }}
           onOpenProfile={() => {
-            setProfileInitialTab("identity");
+            setProfileInitialTab("preferences");
             setProfileInitialSubTab(undefined);
             setShowProfileModal(true);
           }}

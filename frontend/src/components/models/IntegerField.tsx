@@ -3,10 +3,12 @@ import { SliderSpec, formatValue, parseDraft, clamp } from "./sliderMath";
 
 export interface IntegerFieldProps {
   label: string;
+  labelAction?: React.ReactNode;
   value: number;
   min: number;
   max: number;
   onCommit: (value: number) => void;
+  onBlurSettled?: () => void;
   onValidityChange?: (valid: boolean) => void;
   disabled?: boolean;
   hint?: string;
@@ -15,10 +17,12 @@ export interface IntegerFieldProps {
 /** Integer input with a draft string: never writes NaN, flags out-of-range text, reverts on blur. */
 export const IntegerField: React.FC<IntegerFieldProps> = ({
   label,
+  labelAction,
   value,
   min,
   max,
   onCommit,
+  onBlurSettled,
   onValidityChange,
   disabled,
   hint,
@@ -48,9 +52,18 @@ export const IntegerField: React.FC<IntegerFieldProps> = ({
 
   return (
     <div className="form-group">
-      <label className="form-label" htmlFor={id}>
-        {label}
-      </label>
+      {labelAction ? (
+        <div className="behavior-field-label-row">
+          <label className="form-label" htmlFor={id}>
+            {label}
+          </label>
+          {labelAction}
+        </div>
+      ) : (
+        <label className="form-label" htmlFor={id}>
+          {label}
+        </label>
+      )}
       <input
         id={id}
         type="text"
@@ -69,11 +82,18 @@ export const IntegerField: React.FC<IntegerFieldProps> = ({
             setDraft(formatValue(bounded, 0));
             if (bounded !== value) onCommit(bounded);
           }
+          onBlurSettled?.();
         }}
         onChange={(e) => {
           setDraft(e.target.value);
           const next = parseDraft(e.target.value, spec);
           if (next !== null && next !== value) onCommit(next);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            (e.target as HTMLInputElement).blur();
+          }
         }}
       />
       {hint && <div className="form-hint" style={{ fontSize: "0.7rem" }}>{hint}</div>}

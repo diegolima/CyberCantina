@@ -128,15 +128,50 @@ test.describe("01 - Auth Gate, Admin Banners, Home Catalog & Browser Credential 
       page.getByText("Control Deck", { exact: true })
     ).toBeVisible();
 
-    // Open Profile Modal -> Preferences -> Providers
+    // Open Profile Modal -> opens on Preferences -> Providers by default
     await page.locator(".home-nav-profile-chip").click();
     const profileModal = page.locator(".modal-panel", {
       hasText: "User Profile & Preferences",
     });
     await expect(profileModal).toBeVisible();
 
-    await profileModal.getByRole("button", { name: /Preferences/i }).click();
-    await profileModal.getByRole("button", { name: /Providers/i }).click();
+    const prefTab = profileModal.getByRole("tab", { name: /Preferences/i });
+    const accountTab = profileModal.getByRole("tab", { name: /^Account/i });
+    const providersTab = profileModal.getByRole("tab", { name: /Providers/i });
+    const modelsTab = profileModal.getByRole("tab", { name: /Models/i });
+    const promptsTab = profileModal.getByRole("tab", { name: /Prompts & Presets/i });
+    const behaviorTab = profileModal.getByRole("tab", { name: /Behavior/i });
+
+    await expect(prefTab).toHaveAttribute("aria-selected", "true");
+    await expect(providersTab).toHaveAttribute("aria-selected", "true");
+    const initialBox = await profileModal.boundingBox();
+    expect(initialBox).toBeTruthy();
+
+    // Verify stable modal dimensions and auto-save across tabs
+    await modelsTab.click();
+    expect(await profileModal.boundingBox()).toEqual(initialBox);
+    await promptsTab.click();
+    expect(await profileModal.boundingBox()).toEqual(initialBox);
+    await behaviorTab.click();
+    expect(await profileModal.boundingBox()).toEqual(initialBox);
+    await expect(profileModal.getByText("Scene State & Turn Engine")).toBeVisible();
+
+    // Toggle Delegate Cognition to Clerk and confirm debounced auto-save fires
+    await profileModal.getByLabel("Delegate Cognition to Clerk").check();
+    await expect(profileModal.getByText("Saved")).toBeVisible();
+    const putPref = mock.requests.find(
+      (r) => r.method === "PUT" && r.pathname === "/api/profile/models"
+    );
+    expect(putPref?.body?.delegate_cognition_to_clerk).toBe(true);
+
+    // Check Account tab holds merged Account Identity and keeps identical modal size
+    await accountTab.click();
+    expect(await profileModal.boundingBox()).toEqual(initialBox);
+    await expect(profileModal.getByText("Account Identity")).toBeVisible();
+
+    // Return to Preferences -> Providers to test adding a browser provider
+    await prefTab.click();
+    await providersTab.click();
 
     // Click "+ Add Provider"
     await profileModal.getByRole("button", { name: /Add Provider/i }).click();

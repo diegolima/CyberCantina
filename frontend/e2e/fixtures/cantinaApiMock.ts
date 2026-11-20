@@ -808,6 +808,24 @@ export async function installCantinaApiMock(
       return fulfillJson(route, state.profileModels);
     }
     if (pathname === "/api/profile/models" && method === "PUT") {
+      state.profileModels = {
+        ...state.profileModels,
+        has_override: true,
+        user_actor_profile: body?.actor_profile ?? state.profileModels.user_actor_profile,
+        user_clerk_profile: body?.clerk_profile ?? state.profileModels.user_clerk_profile,
+        user_working_memory_turns: body?.working_memory_turns ?? state.profileModels.user_working_memory_turns,
+        user_delegate_cognition_to_clerk: body?.delegate_cognition_to_clerk ?? state.profileModels.user_delegate_cognition_to_clerk,
+        user_max_scene_flags: body?.max_scene_flags ?? state.profileModels.user_max_scene_flags,
+        user_agent_dispatch_mode: body?.agent_dispatch_mode ?? state.profileModels.user_agent_dispatch_mode,
+        user_persona_disclosure_mode: body?.persona_disclosure_mode ?? state.profileModels.user_persona_disclosure_mode,
+        user_clerk_mirrors_actor: body?.clerk_mirrors_actor ?? state.profileModels.user_clerk_mirrors_actor,
+        user_min_working_memory_turns: body?.min_working_memory_turns ?? state.profileModels.user_min_working_memory_turns,
+        user_lod_summary_chunks: body?.lod_summary_chunks ?? state.profileModels.user_lod_summary_chunks,
+        user_lod_importance_bonus: body?.lod_importance_bonus ?? state.profileModels.user_lod_importance_bonus,
+        user_zone2_budget_share_pct: body?.zone2_budget_share_pct ?? state.profileModels.user_zone2_budget_share_pct,
+        user_recall_budget_prose_tokens: body?.recall_budget_prose_tokens ?? state.profileModels.user_recall_budget_prose_tokens,
+        user_recall_budget_cognition_tokens: body?.recall_budget_cognition_tokens ?? state.profileModels.user_recall_budget_cognition_tokens,
+      };
       return fulfillJson(route, state.profileModels);
     }
     if (pathname === "/api/providers" && method === "GET") {
@@ -867,7 +885,22 @@ export async function installCantinaApiMock(
       return fulfillJson(route, { active_prompt_preset_id: null });
     }
     if (pathname === "/api/prompts/defaults" && method === "GET") {
-      return fulfillJson(route, { prompts: {} });
+      return fulfillJson(route, {
+        defaults: {},
+        metadata: [],
+        presets: [
+          {
+            id: "builtin-default",
+            name: "CyberCantina Default",
+            description: "Built-in system prompts",
+            is_builtin: true,
+            prompts: {},
+            created_at: "2026-11-20T00:00:00Z",
+            updated_at: "2026-11-20T00:00:00Z",
+          },
+        ],
+        active_preset_id: null,
+      });
     }
     if (pathname === "/api/admin/embeddings/status" && method === "GET") {
       return fulfillJson(route, { fingerprint: "local_hash:384", stale_entries: 0 });

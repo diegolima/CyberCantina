@@ -186,7 +186,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
             type="button"
             className="btn btn-ghost rail-icon-btn"
             onClick={() => {
-              setProfileInitialTab("identity");
+              setProfileInitialTab("preferences");
               setShowProfileModal(true);
             }}
             title={`User Profile (@${currentUser.username})`}
@@ -378,10 +378,10 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         <div
           className="sidebar-user-card"
           onClick={() => {
-            setProfileInitialTab("identity");
+            setProfileInitialTab("preferences");
             setShowProfileModal(true);
           }}
-          title="Open User Profile, Password & Passkeys"
+          title="Open User Profile, Preferences & Account"
         >
           <User size={15} color="var(--accent-cyan)" />
           <div style={{ minWidth: 0, flex: 1 }}>

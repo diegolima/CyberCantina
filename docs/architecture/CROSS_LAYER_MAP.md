@@ -668,6 +668,7 @@ erDiagram
 | `frontend/src/components/auth/InitialSetupScreen.tsx` |
 | `frontend/src/components/auth/PasswordField.tsx` |
 | `frontend/src/components/auth/ProfileAccountTab.tsx` |
+| `frontend/src/components/auth/ProfileBehaviorCards.tsx` |
 | `frontend/src/components/auth/ProfileModal.tsx` |
 | `frontend/src/components/auth/ProfilePreferencesTab.tsx` |
 
@@ -878,5 +879,6 @@ erDiagram
 | `frontend/src/utils/noteSearch.ts` |
 | `frontend/src/utils/partyCommand.ts` |
 | `frontend/src/utils/partyHelpers.ts` |
+| `frontend/src/utils/profilePreferences.ts` |
 | `frontend/src/utils/slashCommands.ts` |
 | `frontend/src/utils/unsupportedFields.ts` |
