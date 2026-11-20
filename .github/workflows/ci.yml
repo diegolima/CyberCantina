@@ -21,6 +21,10 @@ jobs:
           python-version: "3.14"
           cache: "pip"
           cache-dependency-path: "backend/pyproject.toml"
+      - name: Install system dependencies (ffmpeg)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Install backend dependencies
         working-directory: backend
         run: |
