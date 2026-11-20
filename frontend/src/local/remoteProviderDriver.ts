@@ -944,6 +944,9 @@ async function readSseStream(
   const decoder = new TextDecoder();
   let buffer = "";
   let fullContent = "";
+  let promptTokens: number | null = null;
+  let completionTokens: number | null = null;
+  let finishReason: string | null = null;
 
   const processLine = (rawLine: string) => {
     const line = rawLine.trim();
@@ -952,6 +955,15 @@ async function readSseStream(
     if (dataStr === "[DONE]") return;
     try {
       const chunk = JSON.parse(dataStr);
+      const usage = chunk?.usage;
+      if (usage && typeof usage === "object") {
+        if (typeof usage.prompt_tokens === "number") promptTokens = usage.prompt_tokens;
+        if (typeof usage.completion_tokens === "number") completionTokens = usage.completion_tokens;
+      }
+      const fr = chunk?.choices?.[0]?.finish_reason;
+      if (typeof fr === "string" && fr) {
+        finishReason = fr;
+      }
       const delta = chunk?.choices?.[0]?.delta?.content;
       if (typeof delta === "string" && delta.length > 0) {
         fullContent += delta;
@@ -974,7 +986,12 @@ async function readSseStream(
     }
   }
   if (buffer.trim()) processLine(buffer);
-  return { content: fullContent, done_reason: null };
+  return {
+    content: fullContent,
+    done_reason: finishReason,
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+  };
 }
 
 async function readOllamaNdjsonStream(
@@ -1007,7 +1024,12 @@ async function readOllamaNdjsonStream(
             onChunk(delta);
           }
           if (chunk?.done) {
-            return { content: fullContent, done_reason: chunk?.done_reason || null };
+            return {
+              content: fullContent,
+              done_reason: chunk?.done_reason || null,
+              prompt_tokens: typeof chunk?.prompt_eval_count === "number" ? chunk.prompt_eval_count : null,
+              completion_tokens: typeof chunk?.eval_count === "number" ? chunk.eval_count : null,
+            };
           }
         } catch {
           // ignore partial NDJSON line
@@ -1215,7 +1237,13 @@ export async function runRemoteProviderChat(
     const content = String(
       choiceMsg.content || choiceMsg.reasoning_content || choiceMsg.reasoning || ""
     );
-    return { content, done_reason: data?.choices?.[0]?.finish_reason || null };
+    const usage = data?.usage;
+    return {
+      content,
+      done_reason: data?.choices?.[0]?.finish_reason || null,
+      prompt_tokens: typeof usage?.prompt_tokens === "number" ? usage.prompt_tokens : null,
+      completion_tokens: typeof usage?.completion_tokens === "number" ? usage.completion_tokens : null,
+    };
   } catch (err) {
     if (err instanceof RemoteDriverError) throw err;
     if (err instanceof TypeError) {

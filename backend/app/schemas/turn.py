@@ -44,6 +44,7 @@ from app.schemas.party import (
     TravelIntent as TravelIntent,
 )
 from app.schemas.persona import PersonaRecord
+from app.schemas.telemetry import TurnTelemetry
 from app.schemas.world import (
     CompassDirection,
     LocationContainer,
@@ -1030,6 +1031,7 @@ class TurnNodeRecord(BaseModel):
         description="Targeted whispers and directed perceptions associated with this turn.",
     )
     recalled_items: list[RecalledMemoryItem] = Field(default_factory=list)
+    telemetry: TurnTelemetry | None = None
     created_at: str
 
 

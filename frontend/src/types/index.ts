@@ -3,6 +3,7 @@ export * from "./adminMessages";
 export * from "./character";
 export * from "./world";
 export * from "./mechanics";
+export * from "./telemetry";
 export * from "./turn";
 export * from "./providers";
 export * from "./auth";

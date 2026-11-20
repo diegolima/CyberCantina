@@ -64,6 +64,7 @@ def parse_openrouter_models_payload(payload: dict[str, Any]) -> list[ProviderMod
                 quantization_level="",
                 family=family,
                 is_embedding=is_embed,
+                context_length=ctx if isinstance(ctx, int) and ctx > 0 else None,
             )
         )
     return models

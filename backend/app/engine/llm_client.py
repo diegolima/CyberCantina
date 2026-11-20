@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, TypeVar
@@ -14,7 +16,17 @@ import httpx
 from pydantic import BaseModel, Field
 
 from app.config import ModelProfile, persist_settings, settings
-from app.providers.local_relay import RelayUnavailableError, local_relay_hub, relay_user_context
+from app.engine.telemetry import (
+    active_telemetry_label,
+    active_telemetry_phase,
+    active_turn_telemetry,
+)
+from app.providers.local_relay import (
+    RelayStreamUsage,
+    RelayUnavailableError,
+    local_relay_hub,
+    relay_user_context,
+)
 from app.providers.models import parse_aihorde_models, parse_ollama_tags
 from app.providers.openai_compat import (
     DEFAULT_OPENAI_COMPAT_PROVIDER,
@@ -22,9 +34,11 @@ from app.providers.openai_compat import (
     get_openai_compat_provider,
     is_openai_compat_provider,
 )
-from app.providers.probe import bearer_headers
+from app.providers.openrouter_catalog import openrouter_catalog_service
+from app.providers.probe import bearer_headers, probe_service
 from app.providers.resolver import ProviderUnavailableError, resolve_system_profile
 from app.providers.webgpu_catalog import get_webgpu_max_context
+from app.schemas.telemetry import LlmCallTelemetry
 from app.security.url_policy import UrlBlockedError, assert_url_allowed, normalize_base_url
 
 logger = logging.getLogger("cybercantina.llm")
@@ -35,6 +49,108 @@ _THINK_BLOCK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.D
 _UNCLOSED_THINK_RE = re.compile(r"^.*?<(?:think|thought)>", re.DOTALL | re.I)
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _EMBED_MODEL_KEYWORDS = ("embed", "minilm", "bge-", "nomic-embed", "mxbai-embed", "arctic-embed")
+
+
+def _estimate_text_tokens_local(text: str) -> int:
+    if not text:
+        return 0
+    return max(1, math.ceil(len(text) / 3.3))
+
+
+def _estimate_messages_tokens_local(messages: list[dict[str, str]]) -> int:
+    return sum(_estimate_text_tokens_local(str(m.get("content") or "")) + 12 for m in messages)
+
+
+def _coerce_nonneg_int(val: Any) -> int | None:
+    if isinstance(val, bool) or val is None:
+        return None
+    if isinstance(val, int) and val >= 0:
+        return val
+    return None
+
+
+def _normalize_finish_reason(raw: Any) -> str:
+    if not raw:
+        return "unknown"
+    s = str(raw).strip().lower()
+    if s in ("stop", "end_turn", "eos"):
+        return "stop"
+    if s in ("length", "max_tokens"):
+        return "length"
+    if s in ("error", "content_filter"):
+        return s
+    return s
+
+
+def _resolve_telemetry_context_ceiling(
+    profile: ModelProfile,
+    provider_type: str,
+    provider_id: str | None,
+) -> int | None:
+    ctx = getattr(profile, "context_size", None)
+    if provider_type == "webgpu":
+        wgpu_max = get_webgpu_max_context(profile.model)
+        if ctx is not None and int(ctx) > 0:
+            return min(int(ctx), wgpu_max)
+        return wgpu_max
+    if provider_type in ("ollama", "browser_ollama"):
+        if ctx is not None and int(ctx) > 0:
+            return int(ctx)
+        return None
+    if provider_type == "openrouter":
+        for m in openrouter_catalog_service.get_cached_models_sync():
+            if m.name == profile.model and m.context_length and m.context_length > 0:
+                return m.context_length
+    return probe_service.get_cached_model_context_length(provider_id, profile.model)
+
+
+def _record_llm_telemetry(
+    *,
+    messages: list[dict[str, str]],
+    output_text: str,
+    profile: ModelProfile,
+    provider_type: str,
+    provider_id: str | None,
+    prompt_tokens: int | None,
+    completion_tokens: int | None,
+    finish_reason: Any,
+    started_at: float,
+    retries: int = 0,
+    error: str | None = None,
+) -> None:
+    collector = active_turn_telemetry.get()
+    phase = active_telemetry_phase.get()
+    if collector is None or phase is None:
+        return
+    exact_prompt = _coerce_nonneg_int(prompt_tokens)
+    exact_completion = _coerce_nonneg_int(completion_tokens)
+    if exact_prompt is not None and exact_completion is not None:
+        usage_source = "exact"
+        p_tok = exact_prompt
+        c_tok = exact_completion
+    else:
+        usage_source = "estimated"
+        p_tok = exact_prompt if exact_prompt is not None else _estimate_messages_tokens_local(messages)
+        c_tok = exact_completion if exact_completion is not None else _estimate_text_tokens_local(output_text)
+
+    label = active_telemetry_label.get() or phase
+    duration_ms = max(0, int((time.monotonic() - started_at) * 1000))
+    collector.record_call(
+        LlmCallTelemetry(
+            phase=phase,
+            label=label,
+            model=profile.model,
+            provider_type=provider_type,
+            prompt_tokens=p_tok,
+            completion_tokens=c_tok,
+            usage_source=usage_source,
+            context_ceiling=_resolve_telemetry_context_ceiling(profile, provider_type, provider_id),
+            finish_reason=_normalize_finish_reason(finish_reason),
+            retries=retries,
+            duration_ms=duration_ms,
+            error=error,
+        )
+    )
 
 
 async def _get_aihorde_fallback_model(
@@ -418,6 +534,7 @@ class LLMClient:
         active_profile = profile or settings.clerk_profile
         temp = temperature if temperature is not None else active_profile.temperature
         max_tok = max_tokens if max_tokens is not None else active_profile.max_tokens
+        started_at = time.monotonic()
 
         target = await build_call_target(active_profile)
 
@@ -442,12 +559,20 @@ class LLMClient:
                 provider_id=target.provider_id,
             )
             content = (res.content or "").strip()
-            if content:
-                return content
             thinking_text = (res.thinking or "").strip()
-            if thinking_text and "{" in thinking_text:
-                return thinking_text
-            return content
+            final_text = content or (thinking_text if thinking_text and "{" in thinking_text else content)
+            _record_llm_telemetry(
+                messages=messages,
+                output_text=final_text,
+                profile=active_profile,
+                provider_type=target.provider_type,
+                provider_id=target.provider_id,
+                prompt_tokens=res.prompt_tokens,
+                completion_tokens=res.completion_tokens,
+                finish_reason=res.done_reason,
+                started_at=started_at,
+            )
+            return final_text
 
         client = await self.get_http_client(timeout=active_profile.timeout_seconds)
 
@@ -472,8 +597,10 @@ class LLMClient:
                 ollama_payload["format"] = "json"
 
             try:
+                ollama_retries = 0
                 resp = await client.post(ollama_chat_url, headers=target.native_headers, json=ollama_payload, timeout=active_profile.timeout_seconds)
                 if resp.status_code == 400:
+                    ollama_retries += 1
                     retry_payload = {k: v for k, v in ollama_payload.items() if k != "think"}
                     retry_payload["options"] = _build_ollama_options(
                         active_profile, temperature=temp, num_predict=max(max_tok * 3, 4096)
@@ -485,9 +612,22 @@ class LLMClient:
                     msg = data.get("message") or {}
                     content = (msg.get("content") or "").strip()
                     if content:
+                        _record_llm_telemetry(
+                            messages=messages,
+                            output_text=content,
+                            profile=active_profile,
+                            provider_type=target.provider_type,
+                            provider_id=target.provider_id,
+                            prompt_tokens=data.get("prompt_eval_count"),
+                            completion_tokens=data.get("eval_count"),
+                            finish_reason=data.get("done_reason"),
+                            started_at=started_at,
+                            retries=ollama_retries,
+                        )
                         return content
 
                     if json_schema is not None or data.get("done_reason") == "length":
+                        ollama_retries += 1
                         fallback_payload = dict(ollama_payload)
                         if json_schema is not None:
                             fallback_payload["format"] = "json"
@@ -500,13 +640,49 @@ class LLMClient:
                             retry_msg = retry_data.get("message") or {}
                             retry_content = (retry_msg.get("content") or "").strip()
                             if retry_content:
+                                _record_llm_telemetry(
+                                    messages=messages,
+                                    output_text=retry_content,
+                                    profile=active_profile,
+                                    provider_type=target.provider_type,
+                                    provider_id=target.provider_id,
+                                    prompt_tokens=retry_data.get("prompt_eval_count"),
+                                    completion_tokens=retry_data.get("eval_count"),
+                                    finish_reason=retry_data.get("done_reason"),
+                                    started_at=started_at,
+                                    retries=ollama_retries,
+                                )
                                 return retry_content
                             thinking_fallback = (retry_msg.get("thinking") or "").strip()
                             if thinking_fallback and "{" in thinking_fallback:
+                                _record_llm_telemetry(
+                                    messages=messages,
+                                    output_text=thinking_fallback,
+                                    profile=active_profile,
+                                    provider_type=target.provider_type,
+                                    provider_id=target.provider_id,
+                                    prompt_tokens=retry_data.get("prompt_eval_count"),
+                                    completion_tokens=retry_data.get("eval_count"),
+                                    finish_reason=retry_data.get("done_reason"),
+                                    started_at=started_at,
+                                    retries=ollama_retries,
+                                )
                                 return thinking_fallback
 
                     thinking_text = (msg.get("thinking") or "").strip()
                     if thinking_text and "{" in thinking_text:
+                        _record_llm_telemetry(
+                            messages=messages,
+                            output_text=thinking_text,
+                            profile=active_profile,
+                            provider_type=target.provider_type,
+                            provider_id=target.provider_id,
+                            prompt_tokens=data.get("prompt_eval_count"),
+                            completion_tokens=data.get("eval_count"),
+                            finish_reason=data.get("done_reason"),
+                            started_at=started_at,
+                            retries=ollama_retries,
+                        )
                         return thinking_text
                 elif resp.status_code == 404:
                     err_body = resp.text
@@ -570,13 +746,28 @@ class LLMClient:
                 )
             resp.raise_for_status()
         data = resp.json()
-        choice_msg = data["choices"][0]["message"]
-        return (
+        choice0 = data["choices"][0]
+        choice_msg = choice0["message"]
+        usage = data.get("usage") or {}
+        final_text = (
             choice_msg.get("content")
             or choice_msg.get("reasoning_content")
             or choice_msg.get("reasoning")
             or ""
         )
+        _record_llm_telemetry(
+            messages=messages,
+            output_text=final_text,
+            profile=active_profile,
+            provider_type=target.provider_type,
+            provider_id=target.provider_id,
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+            finish_reason=choice0.get("finish_reason"),
+            started_at=started_at,
+            retries=attempt,
+        )
+        return final_text
 
     async def complete_structured(
         self,
@@ -643,27 +834,46 @@ class LLMClient:
     ) -> AsyncIterator[str]:
         """Stream token deltas from Ollama (/api/chat or /v1/chat/completions) or OpenRouter."""
         active_profile = profile or settings.actor_profile
+        started_at = time.monotonic()
         target = await build_call_target(active_profile)
 
         if target.provider_type in ("browser_ollama", "webgpu") or target.credential_storage == "browser":
             ctx = getattr(active_profile, "context_size", None)
             if target.provider_type == "webgpu" and ctx is not None:
                 ctx = min(int(ctx), get_webgpu_max_context(active_profile.model))
-            async for delta in local_relay_hub.stream(
-                user_id=target.owner_id or target.caller_user_id or relay_user_context.get(),
-                driver=target.provider_type,  # type: ignore[arg-type]
-                base_url=target.root_url,
-                model=active_profile.model,
-                messages=messages,
-                temperature=active_profile.temperature,
-                max_tokens=active_profile.max_tokens,
-                context_size=int(ctx) if ctx is not None else None,
-                keep_alive=format_ollama_keep_alive(getattr(active_profile, "keep_alive_minutes", 30)),
-                disable_reasoning=disable_reasoning,
-                timeout=active_profile.timeout_seconds,
-                provider_id=target.provider_id,
-            ):
-                yield delta
+            usage_out: list[RelayStreamUsage] = []
+            output_parts: list[str] = []
+            try:
+                async for delta in local_relay_hub.stream(
+                    user_id=target.owner_id or target.caller_user_id or relay_user_context.get(),
+                    driver=target.provider_type,  # type: ignore[arg-type]
+                    base_url=target.root_url,
+                    model=active_profile.model,
+                    messages=messages,
+                    temperature=active_profile.temperature,
+                    max_tokens=active_profile.max_tokens,
+                    context_size=int(ctx) if ctx is not None else None,
+                    keep_alive=format_ollama_keep_alive(getattr(active_profile, "keep_alive_minutes", 30)),
+                    disable_reasoning=disable_reasoning,
+                    timeout=active_profile.timeout_seconds,
+                    provider_id=target.provider_id,
+                    usage_out=usage_out,
+                ):
+                    output_parts.append(delta)
+                    yield delta
+            finally:
+                u = usage_out[-1] if usage_out else None
+                _record_llm_telemetry(
+                    messages=messages,
+                    output_text="".join(output_parts),
+                    profile=active_profile,
+                    provider_type=target.provider_type,
+                    provider_id=target.provider_id,
+                    prompt_tokens=u.prompt_tokens if u else None,
+                    completion_tokens=u.completion_tokens if u else None,
+                    finish_reason=u.done_reason if u else None,
+                    started_at=started_at,
+                )
             return
 
         client = await self.get_http_client(timeout=active_profile.timeout_seconds)
@@ -687,21 +897,42 @@ class LLMClient:
             }
             try:
                 need_retry_without_think = False
+                ollama_stream_parts: list[str] = []
+                ollama_prompt_tok: int | None = None
+                ollama_comp_tok: int | None = None
+                ollama_done_reason: Any = None
                 async with client.stream("POST", ollama_chat_url, headers=target.native_headers, json=ollama_payload, timeout=active_profile.timeout_seconds) as resp:
                     if resp.status_code == 200:
-                        async for line in resp.aiter_lines():
-                            if not line.strip():
-                                continue
-                            try:
-                                chunk = json.loads(line)
-                                delta = chunk.get("message", {}).get("content")
-                                if delta:
-                                    yield delta
-                                if chunk.get("done"):
-                                    return
-                            except json.JSONDecodeError:
-                                continue
-                        return
+                        try:
+                            async for line in resp.aiter_lines():
+                                if not line.strip():
+                                    continue
+                                try:
+                                    chunk = json.loads(line)
+                                    delta = chunk.get("message", {}).get("content")
+                                    if delta:
+                                        ollama_stream_parts.append(delta)
+                                        yield delta
+                                    if chunk.get("done"):
+                                        ollama_prompt_tok = chunk.get("prompt_eval_count")
+                                        ollama_comp_tok = chunk.get("eval_count")
+                                        ollama_done_reason = chunk.get("done_reason")
+                                        return
+                                except json.JSONDecodeError:
+                                    continue
+                            return
+                        finally:
+                            _record_llm_telemetry(
+                                messages=messages,
+                                output_text="".join(ollama_stream_parts),
+                                profile=active_profile,
+                                provider_type=target.provider_type,
+                                provider_id=target.provider_id,
+                                prompt_tokens=ollama_prompt_tok,
+                                completion_tokens=ollama_comp_tok,
+                                finish_reason=ollama_done_reason,
+                                started_at=started_at,
+                            )
                     elif resp.status_code == 400:
                         need_retry_without_think = True
                     elif resp.status_code == 404:
@@ -717,19 +948,37 @@ class LLMClient:
                     retry_stream_payload = {k: v for k, v in ollama_payload.items() if k != "think"}
                     async with client.stream("POST", ollama_chat_url, headers=target.native_headers, json=retry_stream_payload, timeout=active_profile.timeout_seconds) as resp:
                         if resp.status_code == 200:
-                            async for line in resp.aiter_lines():
-                                if not line.strip():
-                                    continue
-                                try:
-                                    chunk = json.loads(line)
-                                    delta = chunk.get("message", {}).get("content")
-                                    if delta:
-                                        yield delta
-                                    if chunk.get("done"):
-                                        return
-                                except json.JSONDecodeError:
-                                    continue
-                            return
+                            try:
+                                async for line in resp.aiter_lines():
+                                    if not line.strip():
+                                        continue
+                                    try:
+                                        chunk = json.loads(line)
+                                        delta = chunk.get("message", {}).get("content")
+                                        if delta:
+                                            ollama_stream_parts.append(delta)
+                                            yield delta
+                                        if chunk.get("done"):
+                                            ollama_prompt_tok = chunk.get("prompt_eval_count")
+                                            ollama_comp_tok = chunk.get("eval_count")
+                                            ollama_done_reason = chunk.get("done_reason")
+                                            return
+                                    except json.JSONDecodeError:
+                                        continue
+                                return
+                            finally:
+                                _record_llm_telemetry(
+                                    messages=messages,
+                                    output_text="".join(ollama_stream_parts),
+                                    profile=active_profile,
+                                    provider_type=target.provider_type,
+                                    provider_id=target.provider_id,
+                                    prompt_tokens=ollama_prompt_tok,
+                                    completion_tokens=ollama_comp_tok,
+                                    finish_reason=ollama_done_reason,
+                                    started_at=started_at,
+                                    retries=1,
+                                )
             except RuntimeError:
                 raise
             except httpx.HTTPError:
@@ -750,14 +999,23 @@ class LLMClient:
 
         async with adapter.request_semaphore(headers):
             active_payload = dict(oai_payload)
+            if target.provider_type != "aihorde":
+                active_payload["stream_options"] = {"include_usage": True}
             bad_request_attempt = 0
-            for attempt in range(3):
+            oai_stream_parts: list[str] = []
+            oai_prompt_tok: int | None = None
+            oai_comp_tok: int | None = None
+            oai_finish_reason: Any = None
+            for attempt in range(4):
                 try:
                     stream_ok = False
                     async with client.stream("POST", v1_url, headers=headers, json=active_payload, timeout=active_profile.timeout_seconds) as resp:
                         if resp.status_code == 400:
                             err_bytes = await resp.aread()
                             err_text = err_bytes.decode("utf-8", errors="ignore").lower()
+                            if "stream_options" in active_payload and "stream_options" in err_text:
+                                active_payload = {k: v for k, v in active_payload.items() if k != "stream_options"}
+                                continue
                             retry_payload = adapter.next_bad_request_payload(
                                 active_payload, err_text, bad_request_attempt
                             )
@@ -791,26 +1049,49 @@ class LLMClient:
 
                         resp.raise_for_status()
                         stream_ok = True
-                        async for line in resp.aiter_lines():
-                            if not line or not line.startswith("data:"):
-                                continue
-                            data_str = line[len("data:") :].strip()
-                            if data_str == "[DONE]":
-                                break
-                            try:
-                                chunk = json.loads(data_str)
-                                choices = chunk.get("choices", [])
-                                if choices:
-                                    delta = choices[0].get("delta", {})
-                                    content = delta.get("content")
-                                    if content:
-                                        yield content
-                            except json.JSONDecodeError:
-                                continue
+                        try:
+                            async for line in resp.aiter_lines():
+                                if not line or not line.startswith("data:"):
+                                    continue
+                                data_str = line[len("data:") :].strip()
+                                if data_str == "[DONE]":
+                                    break
+                                try:
+                                    chunk = json.loads(data_str)
+                                    chunk_usage = chunk.get("usage")
+                                    if isinstance(chunk_usage, dict):
+                                        if chunk_usage.get("prompt_tokens") is not None:
+                                            oai_prompt_tok = chunk_usage.get("prompt_tokens")
+                                        if chunk_usage.get("completion_tokens") is not None:
+                                            oai_comp_tok = chunk_usage.get("completion_tokens")
+                                    choices = chunk.get("choices", [])
+                                    if choices:
+                                        if choices[0].get("finish_reason"):
+                                            oai_finish_reason = choices[0].get("finish_reason")
+                                        delta = choices[0].get("delta", {})
+                                        content = delta.get("content")
+                                        if content:
+                                            oai_stream_parts.append(content)
+                                            yield content
+                                except json.JSONDecodeError:
+                                    continue
+                        finally:
+                            _record_llm_telemetry(
+                                messages=messages,
+                                output_text="".join(oai_stream_parts),
+                                profile=active_profile,
+                                provider_type=target.provider_type,
+                                provider_id=target.provider_id,
+                                prompt_tokens=oai_prompt_tok,
+                                completion_tokens=oai_comp_tok,
+                                finish_reason=oai_finish_reason,
+                                started_at=started_at,
+                                retries=bad_request_attempt,
+                            )
                     if stream_ok:
                         break
                 except Exception:
-                    if attempt == 2 or not is_openai_compat_provider(target.provider_type):
+                    if attempt == 3 or not is_openai_compat_provider(target.provider_type):
                         raise
 
 

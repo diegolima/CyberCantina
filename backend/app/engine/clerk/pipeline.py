@@ -33,6 +33,7 @@ from app.engine.character_agent import (
     run_character_post_turn_agent,
 )
 from app.engine.llm_client import llm_client
+from app.engine.telemetry import telemetry_phase_scope
 from app.engine.mentions import (
     DecomposedUserMessage,
     MentionTargetScope,
@@ -308,14 +309,15 @@ async def run_phase5_post_turn_clerk(
                 )
             )
         try:
-            w_delta = await llm_client.complete_structured(
-                [
-                    {"role": "system", "content": world_system_prompt},
-                    {"role": "user", "content": world_user_prompt},
-                ],
-                WorldPostTurnDelta,
-                profile=clerk_prof,
-            )
+            with telemetry_phase_scope("phase5_clerk", "World Clerk"):
+                w_delta = await llm_client.complete_structured(
+                    [
+                        {"role": "system", "content": world_system_prompt},
+                        {"role": "user", "content": world_user_prompt},
+                    ],
+                    WorldPostTurnDelta,
+                    profile=clerk_prof,
+                )
         except Exception as exc:
             if not settings.allow_offline_fallback:
                 if on_progress:

@@ -23,6 +23,9 @@ import {
   TurnNodeRecord,
 } from "../types";
 import { api } from "../api";
+import { ContextHealthPill } from "./chat/ContextHealthPill";
+import { ContextHealthModal } from "./chat/ContextHealthModal";
+import { getActiveTurnForTelemetry } from "./chat/contextHealthHelpers";
 import {
   isChoiceSlashCommand,
   parseChoiceSlashCommand,
@@ -111,6 +114,10 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const [isDeletingTurn, setIsDeletingTurn] = useState(false);
   const [customDirectiveText, setCustomDirectiveText] = useState("");
   const [activeAgentModal, setActiveAgentModal] = useState<ActiveAgentModalTarget | null>(null);
+  const [isContextHealthOpen, setIsContextHealthOpen] = useState(false);
+
+  const activeTelemetryTurn = useMemo(() => getActiveTurnForTelemetry(bundle), [bundle]);
+  const activeTurnTelemetry = activeTelemetryTurn?.telemetry ?? null;
 
   // Consolidated Popover & Tray State
   const [activePopover, setActivePopover] = useState<ComposerPopoverId>("none");
@@ -1430,6 +1437,10 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               <div className="stage-campaign-title" title={bundle.campaign.name}>
                 {bundle.campaign.name}
               </div>
+              <ContextHealthPill
+                telemetry={activeTurnTelemetry}
+                onClick={() => setIsContextHealthOpen(true)}
+              />
             </div>
             <div className="stage-actor-line">
               {presentCharacters.length === 0 ? (
@@ -1668,6 +1679,15 @@ export const ChatStage: React.FC<ChatStageProps> = ({
           onClose={() => setActiveAgentModal(null)}
         />
       )}
+
+      {/* Turn Context Telemetry & Context Health Modal */}
+      <ContextHealthModal
+        isOpen={isContextHealthOpen}
+        onClose={() => setIsContextHealthOpen(false)}
+        telemetry={activeTurnTelemetry}
+        turnDepth={activeTelemetryTurn?.depth_index ?? null}
+        onOpenSettings={onOpenSettings}
+      />
     </main>
   );
 };

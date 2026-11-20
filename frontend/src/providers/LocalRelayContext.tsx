@@ -322,6 +322,8 @@ export const LocalRelayProvider: React.FC<{
           content: result.content,
           thinking: result.thinking || "",
           done_reason: result.done_reason || null,
+          prompt_tokens: typeof result.prompt_tokens === "number" ? result.prompt_tokens : null,
+          completion_tokens: typeof result.completion_tokens === "number" ? result.completion_tokens : null,
         });
       } catch (err: any) {
         if (!controller.signal.aborted) {

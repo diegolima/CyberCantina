@@ -33,6 +33,14 @@ def parse_ollama_tags(payload: dict[str, Any]) -> list[ProviderModelInfo]:
     return models
 
 
+def _extract_context_length(item: dict[str, Any]) -> int | None:
+    for key in ("context_length", "context_window", "max_model_len"):
+        val = item.get(key)
+        if isinstance(val, int) and val > 0:
+            return val
+    return None
+
+
 def parse_openai_models(payload: dict[str, Any]) -> list[ProviderModelInfo]:
     """Parse an OpenAI-compatible ``/models`` payload."""
     models: list[ProviderModelInfo] = []
@@ -44,11 +52,13 @@ def parse_openai_models(payload: dict[str, Any]) -> list[ProviderModelInfo]:
         seen_names.add(name)
         lowered = name.lower()
         family = name.split("/", 1)[0] if "/" in name else ""
+        ctx = _extract_context_length(item)
         models.append(
             ProviderModelInfo(
                 name=name,
                 family=family,
                 is_embedding=any(k in lowered for k in EMBED_MODEL_KEYWORDS),
+                context_length=ctx,
             )
         )
     return models
@@ -83,6 +93,7 @@ def parse_aihorde_models(payload: dict[str, Any]) -> list[ProviderModelInfo]:
                 is_embedding=False,
                 workers=workers,
                 queued=queued,
+                context_length=ctx if isinstance(ctx, int) and ctx > 0 else None,
                 supported_parameters=supported_params,
             )
         )
@@ -105,11 +116,13 @@ def parse_nanogpt_models(
             continue
         seen_names.add(name)
         family = name.split("/", 1)[0] if "/" in name else ""
+        ctx = _extract_context_length(item)
         models.append(
             ProviderModelInfo(
                 name=name,
                 family=family,
                 is_embedding=any(k in name.lower() for k in EMBED_MODEL_KEYWORDS),
+                context_length=ctx,
             )
         )
 

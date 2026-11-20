@@ -8,6 +8,7 @@ import re
 
 from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
+from app.engine.telemetry import telemetry_phase_scope
 from app.engine.mentions import DecomposedUserMessage, MentionTargetScope, decompose_user_message
 from app.engine.parties import build_party_invite_roll_directives
 from app.prompts import get_default_prompt, render_template
@@ -1013,14 +1014,15 @@ async def run_phase1_pre_analysis(
 
     clerk_prof = profile or settings.clerk_profile
     try:
-        raw_output = await llm_client.complete_structured(
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            PreTurnLLMOutput,
-            profile=clerk_prof,
-        )
+        with telemetry_phase_scope("phase1_pre", "Pre-Turn Analysis"):
+            raw_output = await llm_client.complete_structured(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                PreTurnLLMOutput,
+                profile=clerk_prof,
+            )
         analysis = PreTurnAnalysis(**raw_output.model_dump())
     except Exception:
         if not settings.allow_offline_fallback:

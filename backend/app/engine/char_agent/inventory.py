@@ -10,6 +10,7 @@ from app.config import (
     settings,
 )
 from app.engine.llm_client import llm_client
+from app.engine.telemetry import telemetry_phase_scope
 from app.prompts import PROMPT_KEY_CLERK_ARBITRATION
 from app.prompts.renderer import (
     get_default_prompt,
@@ -621,15 +622,16 @@ async def arbitrate_inventory_disputes_detailed(
 
     rulings_by_norm: dict[str, tuple[str, str]] = {}
     try:
-        arb_res = await llm_client.complete_structured(
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            InventoryArbitrationResult,
-            profile=clerk_prof,
-            temperature=0.1,
-        )
+        with telemetry_phase_scope("phase5_clerk", "Inventory Arbiter"):
+            arb_res = await llm_client.complete_structured(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                InventoryArbitrationResult,
+                profile=clerk_prof,
+                temperature=0.1,
+            )
         for dec in arb_res.decisions:
             d_norm = normalize_inventory_item(dec.item_name)
             w_raw = dec.winner_id.strip()

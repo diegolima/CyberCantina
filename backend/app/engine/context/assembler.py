@@ -8,6 +8,7 @@ from app.engine.mentions import (
     decompose_user_message,
     filter_user_message_for_character,
 )
+from app.engine.telemetry import active_turn_telemetry
 from app.schemas.character import (
     CharacterRecord,
     CognitionBlock,
@@ -17,6 +18,7 @@ from app.schemas.persona import (
     PersonaRecord,
     PersonaTurnStateSnapshot,
 )
+from app.schemas.telemetry import Phase4BudgetReport
 from app.schemas.turn import (
     EpisodicChunkRecord,
     PreTurnAnalysis,
@@ -249,6 +251,7 @@ def assemble_four_zone_messages(
     zone2_budget_share_pct: int | None = None,
     recall_budget_prose_tokens: int | None = None,
     active_parties: list[PartyRecord] | None = None,
+    budget_report_out: list[Phase4BudgetReport] | None = None,
 ) -> list[dict[str, str]]:
     """Construct the complete 4-Zone OpenAI messages array for the Main Actor Model."""
     eff_is_solo = bool(
@@ -415,11 +418,31 @@ def assemble_four_zone_messages(
     )
 
     active_chunks = list(episodic_chunks)
-    zone2, lod_tiers = render_zone2_lod_episodic_summary(
+    zone2, initial_lod_tiers = render_zone2_lod_episodic_summary(
         active_chunks,
         lod_summary_chunks=eff_lod_chunks,
         lod_importance_bonus=eff_lod_bonus,
     )
+    lod_tiers = dict(initial_lod_tiers)
+    total_zone3_available = len(zone3_turn_entries)
+    total_zone2_available = len(active_chunks)
+    zone1_tokens = estimate_messages_tokens([zone1_msg])
+    zone4_tokens = estimate_messages_tokens([zone4_msg])
+    turn_costs = [estimate_messages_tokens(entry) for entry in zone3_turn_entries]
+    zone3_tokens = sum(turn_costs)
+    zone2_tokens = (
+        estimate_messages_tokens([{"role": "system", "content": zone2}])
+        if zone2
+        else 0
+    )
+    dropped_zone3 = 0
+    dropped_zone2 = 0
+    downgraded_zone2 = 0
+    trimmed_below_min_wm = False
+    base_exceeds_budget = False
+    estimated_cropped_tokens = 0
+    input_budget: int | None = None
+
     if max_context_tokens is not None and max_context_tokens > 0:
         input_budget = max(
             0,
@@ -427,17 +450,10 @@ def assemble_four_zone_messages(
             - max(0, int(reserved_output_tokens))
             - _PROMPT_SAFETY_MARGIN_TOKENS,
         )
-        base_tokens = estimate_messages_tokens([zone1_msg, zone4_msg])
-        turn_costs = [estimate_messages_tokens(entry) for entry in zone3_turn_entries]
-        zone3_tokens = sum(turn_costs)
+        base_tokens = zone1_tokens + zone4_tokens
 
         remaining_history_budget = max(0, input_budget - base_tokens)
         z2_share_cap = int(remaining_history_budget * (eff_z2_share_pct / 100.0))
-        zone2_tokens = (
-            estimate_messages_tokens([{"role": "system", "content": zone2}])
-            if zone2
-            else 0
-        )
 
         # Guaranteed Zone 3 budget is at least (100 - eff_z2_share_pct)% of remaining_history_budget,
         # plus any unused portion of Zone 2's share cap.
@@ -474,7 +490,6 @@ def assemble_four_zone_messages(
             )
 
         # Step 1: Trim oldest Zone 3 turns ONLY down to protected_floor_count
-        dropped_zone3 = 0
         while (
             len(zone3_turn_entries) > protected_floor_count
             and (base_tokens + zone2_tokens + zone3_tokens) > input_budget
@@ -503,8 +518,22 @@ def assemble_four_zone_messages(
             zone3_turn_entries.pop(0)
             zone3_tokens -= turn_costs.pop(0)
             dropped_zone3 += 1
+            trimmed_below_min_wm = True
+
+        # Also flag trimmed_below_min_wm if we had enough turns to meet eff_min_wm but ended up below it due to budget
+        if (
+            total_zone3_available >= max(1, eff_min_wm)
+            and len(zone3_turn_entries) < max(1, eff_min_wm)
+            and dropped_zone3 > 0
+        ):
+            trimmed_below_min_wm = True
 
         dropped_zone2 = sum(1 for t in lod_tiers.values() if t == "dropped")
+        downgraded_zone2 = sum(
+            1
+            for cid, init_tier in initial_lod_tiers.items()
+            if init_tier == "summary" and lod_tiers.get(cid) == "synopsis"
+        )
 
         if dropped_zone3 or dropped_zone2:
             logger.warning(
@@ -518,12 +547,38 @@ def assemble_four_zone_messages(
                 dropped_zone2,
             )
         if (base_tokens + zone2_tokens) > input_budget:
+            base_exceeds_budget = True
+            estimated_cropped_tokens = max(0, (base_tokens + zone2_tokens) - input_budget)
             logger.warning(
                 "Zone 1 + Zone 4 alone (~%d tok) exceed Actor input budget (%d tok); "
                 "increase Actor context_size or switch to Fast & Concise preset.",
                 base_tokens + zone2_tokens,
                 input_budget,
             )
+
+    report = Phase4BudgetReport(
+        context_ceiling=int(max_context_tokens) if max_context_tokens and max_context_tokens > 0 else None,
+        reserved_output_tokens=max(0, int(reserved_output_tokens)),
+        safety_margin_tokens=_PROMPT_SAFETY_MARGIN_TOKENS,
+        input_budget=input_budget,
+        zone1_tokens=zone1_tokens,
+        zone2_tokens=zone2_tokens,
+        zone3_tokens=zone3_tokens,
+        zone4_tokens=zone4_tokens,
+        total_zone3_turns_available=total_zone3_available,
+        dropped_zone3_turns=dropped_zone3,
+        trimmed_below_min_wm=trimmed_below_min_wm,
+        total_zone2_chunks_available=total_zone2_available,
+        downgraded_zone2_chunks=downgraded_zone2,
+        dropped_zone2_chunks=dropped_zone2,
+        base_exceeds_budget=base_exceeds_budget,
+        estimated_cropped_tokens=estimated_cropped_tokens,
+    )
+    if budget_report_out is not None:
+        budget_report_out.append(report)
+    collector = active_turn_telemetry.get()
+    if collector is not None:
+        collector.set_phase4_budget(report)
 
     messages: list[dict[str, str]] = [zone1_msg]
     if zone2:

@@ -22,6 +22,7 @@ from app.providers.openai_compat import (
 from app.schemas.provider import (
     ProbeErrorCode,
     ProviderDraft,
+    ProviderModelInfo,
     ProviderProbeResponse,
     ProviderRecord,
 )
@@ -167,6 +168,21 @@ class ProbeService:
                 latest_version = ver
                 latest_proto = resp.protocol
         return latest_proto
+
+    def get_cached_model_context_length(self, provider_id: str | None, model_name: str) -> int | None:
+        """Return cached model context_length for a probed provider, if available."""
+        if not provider_id or not model_name:
+            return None
+        latest_version = -1
+        latest_models: list[ProviderModelInfo] = []
+        for (pid, ver), (_ts, resp) in self._cache.items():
+            if pid == provider_id and ver >= latest_version:
+                latest_version = ver
+                latest_models = resp.models
+        for m in latest_models:
+            if m.name == model_name and m.context_length and m.context_length > 0:
+                return m.context_length
+        return None
 
     async def probe(
         self, record: ProviderRecord, store: ProviderStore, *, force: bool = False

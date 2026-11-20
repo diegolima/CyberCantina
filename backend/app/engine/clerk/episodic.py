@@ -7,6 +7,7 @@ from app.config import (
     settings,
 )
 from app.engine.llm_client import llm_client
+from app.engine.telemetry import telemetry_phase_scope
 from app.engine.mentions import sanitize_history_for_episodic_summary
 from app.engine.phase2_context import was_character_present_on_turn
 from app.prompts import (
@@ -202,15 +203,16 @@ async def summarize_turn_chunk(
     )
     clerk_prof = profile or settings.clerk_profile
     try:
-        summary = await llm_client.complete_text(
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": transcript},
-            ],
-            profile=clerk_prof,
-            temperature=0.2,
-            max_tokens=256,
-        )
+        with telemetry_phase_scope("phase5_clerk", "Episodic Compaction"):
+            summary = await llm_client.complete_text(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": transcript},
+                ],
+                profile=clerk_prof,
+                temperature=0.2,
+                max_tokens=256,
+            )
         if summary.strip():
             return summary.strip()
     except Exception:
@@ -280,17 +282,18 @@ async def summarize_turn_chunk_structured(
     )
     clerk_prof = profile or settings.clerk_profile
     try:
-        structured = await llm_client.complete_structured(
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": transcript},
-            ],
-            EpisodicChunkLLMOutput,
-            profile=clerk_prof,
-            temperature=0.2,
-            max_tokens=320,
-            required_properties=list(EpisodicChunkLLMOutput.model_fields.keys()),
-        )
+        with telemetry_phase_scope("phase5_clerk", "Episodic Compaction"):
+            structured = await llm_client.complete_structured(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": transcript},
+                ],
+                EpisodicChunkLLMOutput,
+                profile=clerk_prof,
+                temperature=0.2,
+                max_tokens=320,
+                required_properties=list(EpisodicChunkLLMOutput.model_fields.keys()),
+            )
         if structured.summary_text.strip():
             fallback_fields = _derive_fallback_episodic_fields(turns, structured.summary_text)
             return EpisodicChunkLLMOutput(

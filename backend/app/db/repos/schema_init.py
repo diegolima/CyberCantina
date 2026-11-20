@@ -800,6 +800,10 @@ class SchemaInitMixin:
                 conn.execute(
                     "ALTER TABLE turn_nodes ADD COLUMN whispers_json TEXT NULL"
                 )
+            if "telemetry_json" not in tn_cols:
+                conn.execute(
+                    "ALTER TABLE turn_nodes ADD COLUMN telemetry_json TEXT NULL"
+                )
 
             ws_cols = {
                 r["name"]

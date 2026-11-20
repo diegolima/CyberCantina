@@ -63,6 +63,7 @@ class ProviderModelInfo(BaseModel):
     is_embedding: bool = False
     workers: int = 0
     queued: float = 0.0
+    context_length: int | None = None
     supported_parameters: list[str] = Field(default_factory=list)
 
 

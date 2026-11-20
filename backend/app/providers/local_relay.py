@@ -44,6 +44,23 @@ class RelayCompletionResult:
     content: str
     thinking: str = ""
     done_reason: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+
+
+@dataclass(frozen=True)
+class RelayStreamUsage:
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    done_reason: str | None = None
+
+
+def _coerce_opt_int(val: Any) -> int | None:
+    if isinstance(val, bool) or val is None:
+        return None
+    if isinstance(val, int) and val >= 0:
+        return val
+    return None
 
 
 @dataclass
@@ -76,6 +93,7 @@ class _PendingRequest:
     kind: Literal["complete", "stream", "probe"]
     future: asyncio.Future[Any] | None = None
     queue: asyncio.Queue[str | BaseException | None] | None = None
+    usage_out: list[RelayStreamUsage] | None = None
 
 
 class LocalRelayHub:
@@ -185,6 +203,14 @@ class LocalRelayHub:
         if msg_type == "llm.done":
             self._pending.pop(req_id, None)
             if pend.kind == "stream" and pend.queue is not None:
+                if pend.usage_out is not None:
+                    pend.usage_out.append(
+                        RelayStreamUsage(
+                            prompt_tokens=_coerce_opt_int(raw.get("prompt_tokens")),
+                            completion_tokens=_coerce_opt_int(raw.get("completion_tokens")),
+                            done_reason=(str(raw["done_reason"]) if raw.get("done_reason") else None),
+                        )
+                    )
                 pend.queue.put_nowait(None)
             elif pend.future is not None and not pend.future.done():
                 pend.future.set_result(
@@ -192,6 +218,8 @@ class LocalRelayHub:
                         content=str(raw.get("content") or ""),
                         thinking=str(raw.get("thinking") or ""),
                         done_reason=(str(raw["done_reason"]) if raw.get("done_reason") else None),
+                        prompt_tokens=_coerce_opt_int(raw.get("prompt_tokens")),
+                        completion_tokens=_coerce_opt_int(raw.get("completion_tokens")),
                     )
                 )
             return
@@ -287,6 +315,7 @@ class LocalRelayHub:
         disable_reasoning: bool,
         timeout: float,
         provider_id: str | None = None,
+        usage_out: list[RelayStreamUsage] | None = None,
     ) -> AsyncIterator[str]:
         session = self._pick_session(user_id, relay_tab_context.get())
         request_id = f"req_{uuid.uuid4().hex}"
@@ -297,6 +326,7 @@ class LocalRelayHub:
             tab_id=session.tab_id,
             kind="stream",
             queue=queue,
+            usage_out=usage_out,
         )
         payload = {
             "type": "llm.request",

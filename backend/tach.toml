@@ -107,10 +107,18 @@ depends_on = [
 ]
 
 [[modules]]
+path = "app.engine.telemetry"
+depends_on = [
+    "app.schemas",
+]
+
+[[modules]]
 path = "app.engine.llm_client"
 depends_on = [
     "app.config",
+    "app.engine.telemetry",
     "app.providers",
+    "app.schemas",
     "app.security",
 ]
 
@@ -129,6 +137,7 @@ depends_on = [
     "app.engine.llm_client",
     "app.engine.mentions",
     "app.engine.parties",
+    "app.engine.telemetry",
     "app.prompts",
     "app.schemas",
 ]
@@ -142,6 +151,7 @@ depends_on = [
     "app.engine.choices",
     "app.engine.mentions",
     "app.engine.parties",
+    "app.engine.telemetry",
     "app.engine.world_clock",
     "app.prompts",
     "app.providers",
@@ -172,6 +182,7 @@ depends_on = [
     "app.engine.mentions",
     "app.engine.parties",
     "app.engine.phase2_context",
+    "app.engine.telemetry",
     "app.prompts",
     "app.schemas",
 ]
@@ -198,6 +209,7 @@ depends_on = [
     "app.engine.mentions",
     "app.engine.parties",
     "app.engine.phase3_cognition",
+    "app.engine.telemetry",
     "app.schemas",
 ]
 
@@ -218,6 +230,7 @@ depends_on = [
     "app.engine.llm_client",
     "app.engine.mentions",
     "app.engine.parties",
+    "app.engine.telemetry",
     "app.prompts",
     "app.schemas",
 ]
@@ -246,6 +259,7 @@ depends_on = [
     "app.engine.mentions",
     "app.engine.parties",
     "app.engine.phase2_context",
+    "app.engine.telemetry",
     "app.engine.world_clock",
     "app.prompts",
     "app.schemas",
@@ -333,6 +347,7 @@ depends_on = [
     "app.engine.phase4_clerk",
     "app.engine.phase4_prose",
     "app.engine.phase5_clerk",
+    "app.engine.telemetry",
     "app.housekeeping",
     "app.prompts",
     "app.providers",

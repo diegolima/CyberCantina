@@ -14,6 +14,7 @@ from app.engine.affective_engine import (
     render_zone4_affective_block,
 )
 from app.engine.llm_client import llm_client
+from app.engine.telemetry import telemetry_phase_scope
 from app.engine.mentions import (
     CharacterWhisper,
     decompose_user_message,
@@ -425,15 +426,16 @@ async def run_character_cognition_agent(
         )
 
     try:
-        cog = await active_client.complete_structured(
-            messages,
-            CognitionBlock,
-            profile=eff_profile,
-            max_tokens=1024,
-            temperature=0.7,
-            required_properties=eff_schema.get("required"),
-            json_schema=eff_schema,
-        )
+        with telemetry_phase_scope("phase3_cognition", f"Cognition: {character.name}"):
+            cog = await active_client.complete_structured(
+                messages,
+                CognitionBlock,
+                profile=eff_profile,
+                max_tokens=1024,
+                temperature=0.7,
+                required_properties=eff_schema.get("required"),
+                json_schema=eff_schema,
+            )
 
         resolved_loc_name = _resolve_location_name(
             previous_state.current_location_id, active_location, world

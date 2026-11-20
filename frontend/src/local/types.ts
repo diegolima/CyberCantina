@@ -43,6 +43,8 @@ export interface RelayDriverResult {
   content: string;
   thinking?: string;
   done_reason?: string | null;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
 }
 
 export interface WebGpuProgress {

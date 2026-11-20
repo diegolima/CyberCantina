@@ -461,6 +461,12 @@ erDiagram
 | :--- | :--- |
 | `backend/app/engine/phase5_clerk.py` | Phase 5: Async Post-Turn Clerk & Character State Engine. |
 
+#### `app.engine.telemetry`
+
+| File | Summary |
+| :--- | :--- |
+| `backend/app/engine/telemetry.py` | Turn-scoped ContextVar telemetry collector and Context Health classifier. |
+
 #### `app.engine.world_clock`
 
 | File | Summary |
@@ -557,6 +563,7 @@ erDiagram
 | `backend/app/schemas/persona.py` | User persona, knowledge visibility, and dynamic state schemas. |
 | `backend/app/schemas/prompt.py` | Schemas for Prompt Presets, Template Customization, and Documentation. |
 | `backend/app/schemas/provider.py` | Pydantic schemas and domain records for LLM providers. |
+| `backend/app/schemas/telemetry.py` | Leaf Pydantic v2 schemas for per-turn LLM token usage and Context Health telemetry. |
 | `backend/app/schemas/turn.py` | Turn pipeline, mechanics/RNG, state snapshot, and campaign tree schemas. |
 | `backend/app/schemas/unsupported.py` | Shared bounded validation helpers for entity unsupported_fields extension containers. |
 | `backend/app/schemas/world.py` | World settings, spatial topology graph, and lore schemas. |
@@ -699,6 +706,8 @@ erDiagram
 | :--- |
 | `frontend/src/components/chat/ArrivalDescriptionCards.tsx` |
 | `frontend/src/components/chat/ChatComposer.tsx` |
+| `frontend/src/components/chat/ContextHealthModal.tsx` |
+| `frontend/src/components/chat/ContextHealthPill.tsx` |
 | `frontend/src/components/chat/DirectorChoicesDrawer.tsx` |
 | `frontend/src/components/chat/LiveStreamingTurnCard.tsx` |
 | `frontend/src/components/chat/SlashCommandPicker.tsx` |
@@ -708,6 +717,7 @@ erDiagram
 | `frontend/src/components/chat/arrivalHelpers.ts` |
 | `frontend/src/components/chat/arrivalMediaHelpers.ts` |
 | `frontend/src/components/chat/chatHelpers.tsx` |
+| `frontend/src/components/chat/contextHealthHelpers.ts` |
 
 #### `components/inspector`
 
@@ -866,6 +876,7 @@ erDiagram
 | `frontend/src/types/persona.ts` |
 | `frontend/src/types/prompts.ts` |
 | `frontend/src/types/providers.ts` |
+| `frontend/src/types/telemetry.ts` |
 | `frontend/src/types/turn.ts` |
 | `frontend/src/types/world.ts` |
 

@@ -11,6 +11,7 @@ from typing import Any
 
 from app.config import settings
 from app.engine.llm_client import llm_client
+from app.engine.telemetry import telemetry_phase_scope
 from app.engine.phase3_cognition import parse_cognition_xml, strip_xml_tag_blocks
 from app.engine.mentions import DecomposedUserMessage
 from app.schemas.auth import ModelProfile
@@ -350,10 +351,13 @@ async def stream_phase4_prose(
     p3_mod = sys.modules.get("app.engine.phase3_actor")
     effective_client = getattr(p3_mod, "llm_client", llm_client) if p3_mod else llm_client
 
+    prose_label = "Narrator Prose" if (is_narrator or is_solo) else f"Prose: {character.name}"
+
     async def _token_generator() -> AsyncIterator[str]:
         try:
-            async for delta in effective_client.stream_chat(messages, profile=actor_prof, disable_reasoning=True):
-                yield delta
+            with telemetry_phase_scope("phase4_prose", prose_label):
+                async for delta in effective_client.stream_chat(messages, profile=actor_prof, disable_reasoning=True):
+                    yield delta
         except Exception as exc:
             if not settings.allow_offline_fallback:
                 raise

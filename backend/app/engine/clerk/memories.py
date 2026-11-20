@@ -11,6 +11,7 @@ from app.config import (
 )
 from app.db.repository import CantinaRepository
 from app.engine.llm_client import llm_client
+from app.engine.telemetry import telemetry_phase_scope
 from app.engine.mentions import filter_user_message_for_character
 from app.prompts import (
     DEFAULT_CLERK_MEMORY_COMPACTION_SYSTEM,
@@ -429,14 +430,15 @@ async def compact_character_memories(
         for s in aged_shards
     )
     try:
-        spec = await llm_client.complete_structured(
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": shards_input},
-            ],
-            CompactedMemorySpec,
-            profile=clerk_prof,
-        )
+        with telemetry_phase_scope("phase5_clerk", f"Memory Compaction: {character.name}"):
+            spec = await llm_client.complete_structured(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": shards_input},
+                ],
+                CompactedMemorySpec,
+                profile=clerk_prof,
+            )
         spec.content = _synthesize_concise_sentences(spec.content, max_sentences=3)
         if not spec.keywords:
             spec.keywords = merged_keywords

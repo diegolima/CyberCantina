@@ -14,6 +14,7 @@ from app.engine.affective_engine import (
 )
 from collections.abc import Sequence
 from app.engine.llm_client import llm_client
+from app.engine.telemetry import telemetry_phase_scope
 from app.engine.mentions import (
     DecomposedUserMessage,
     filter_user_message_for_character,
@@ -705,15 +706,16 @@ async def run_character_post_turn_agent(
     )
 
     try:
-        delta = await llm_client.complete_structured(
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            CharacterAgentDelta,
-            profile=clerk_prof,
-            temperature=0.25,
-        )
+        with telemetry_phase_scope("phase5_clerk", f"Character Agent: {character.name}"):
+            delta = await llm_client.complete_structured(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                CharacterAgentDelta,
+                profile=clerk_prof,
+                temperature=0.25,
+            )
     except Exception as exc:
         if not settings.allow_offline_fallback:
             raise

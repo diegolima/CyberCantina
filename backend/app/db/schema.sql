@@ -355,6 +355,7 @@ CREATE TABLE IF NOT EXISTS turn_nodes (
     pre_turn_json TEXT NOT NULL,
     post_turn_json TEXT NULL,
     recalled_items_json TEXT NOT NULL DEFAULT '[]',
+    telemetry_json TEXT NULL,
     created_at TEXT NOT NULL
 );
 

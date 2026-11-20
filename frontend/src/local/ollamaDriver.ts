@@ -314,7 +314,12 @@ export async function runBrowserOllamaChat(
             }
             if (chunk?.done) {
               doneReason = chunk?.done_reason || null;
-              return { content: fullContent, done_reason: doneReason };
+              return {
+                content: fullContent,
+                done_reason: doneReason,
+                prompt_tokens: typeof chunk?.prompt_eval_count === "number" ? chunk.prompt_eval_count : null,
+                completion_tokens: typeof chunk?.eval_count === "number" ? chunk.eval_count : null,
+              };
             }
           } catch {
             // ignore partial/malformed NDJSON line
@@ -344,7 +349,13 @@ export async function runBrowserOllamaChat(
   const content = String(msg.content || "").trim();
   const thinking = String(msg.thinking || "").trim();
   if (content) {
-    return { content, thinking, done_reason: data?.done_reason || null };
+    return {
+      content,
+      thinking,
+      done_reason: data?.done_reason || null,
+      prompt_tokens: typeof data?.prompt_eval_count === "number" ? data.prompt_eval_count : null,
+      completion_tokens: typeof data?.eval_count === "number" ? data.eval_count : null,
+    };
   }
 
   if (req.options.json_schema || data?.done_reason === "length") {
@@ -368,14 +379,28 @@ export async function runBrowserOllamaChat(
           content: retryContent,
           thinking: String(retryMsg.thinking || "").trim(),
           done_reason: retryData?.done_reason || null,
+          prompt_tokens: typeof retryData?.prompt_eval_count === "number" ? retryData.prompt_eval_count : null,
+          completion_tokens: typeof retryData?.eval_count === "number" ? retryData.eval_count : null,
         };
       }
       const retryThinking = String(retryMsg.thinking || "").trim();
       if (retryThinking.includes("{")) {
-        return { content: "", thinking: retryThinking, done_reason: retryData?.done_reason || null };
+        return {
+          content: "",
+          thinking: retryThinking,
+          done_reason: retryData?.done_reason || null,
+          prompt_tokens: typeof retryData?.prompt_eval_count === "number" ? retryData.prompt_eval_count : null,
+          completion_tokens: typeof retryData?.eval_count === "number" ? retryData.eval_count : null,
+        };
       }
     }
   }
 
-  return { content, thinking, done_reason: data?.done_reason || null };
+  return {
+    content,
+    thinking,
+    done_reason: data?.done_reason || null,
+    prompt_tokens: typeof data?.prompt_eval_count === "number" ? data.prompt_eval_count : null,
+    completion_tokens: typeof data?.eval_count === "number" ? data.eval_count : null,
+  };
 }

@@ -39,6 +39,7 @@ from app.engine.phase2_context import (
 from app.engine.phase3_cognition import run_phase3_multi_cognition
 from app.engine.phase4_prose import stream_phase4_prose
 from app.engine.phase5_clerk import run_phase5_post_turn_clerk
+from app.engine.telemetry import TurnTelemetryCollector, active_turn_telemetry
 from app.providers.local_relay import (
     RelayRemoteError,
     RelayUnavailableError,
@@ -118,11 +119,15 @@ async def _execute_turn_stream_events(
     owner_id: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Serialize per-campaign turn execution through CampaignTurnGate until Phase 5 commits."""
-    async with campaign_turn_gate.lock_for(campaign_id):
-        async for packet in _execute_turn_stream_events_unlocked(
-            campaign_id, req, owner_id=owner_id
-        ):
-            yield packet
+    telemetry_tok = active_turn_telemetry.set(TurnTelemetryCollector())
+    try:
+        async with campaign_turn_gate.lock_for(campaign_id):
+            async for packet in _execute_turn_stream_events_unlocked(
+                campaign_id, req, owner_id=owner_id
+            ):
+                yield packet
+    finally:
+        active_turn_telemetry.reset(telemetry_tok)
 
 
 async def _execute_turn_stream_events_unlocked(
@@ -821,6 +826,13 @@ async def _execute_turn_stream_events_unlocked(
                 )
             extra_character_states.append(st)
 
+    telemetry_collector = active_turn_telemetry.get()
+    provisional_telemetry = (
+        telemetry_collector.build_snapshot(phase5_pending=True)
+        if telemetry_collector is not None
+        else None
+    )
+
     saved_turn = repo.save_turn_node(
         turn_id=new_turn_id,
         campaign_id=campaign.id,
@@ -838,6 +850,7 @@ async def _execute_turn_stream_events_unlocked(
         character_state=initial_char_state,
         extra_character_states=extra_character_states,
         recalled_items=recalled_items,
+        telemetry=provisional_telemetry,
     )
 
     yield {"event": "turn_saved", "data": saved_turn.model_dump()}
@@ -878,6 +891,10 @@ async def _execute_turn_stream_events_unlocked(
                 current_player_state=current_player_state,
                 on_progress=_phase5_progress_cb,
             )
+            if telemetry_collector is not None:
+                final_telemetry = telemetry_collector.build_snapshot(phase5_pending=False)
+                repo.update_turn_telemetry(saved_turn.id, final_telemetry)
+                updated_turn = updated_turn.model_copy(update={"telemetry": final_telemetry})
             bundle = repo.get_campaign_state_bundle(campaign.id)
             # Emit both phase5_complete and legacy phase4_complete
             complete_payload = {

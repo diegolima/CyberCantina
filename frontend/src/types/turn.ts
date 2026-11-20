@@ -20,6 +20,7 @@ import type {
   PartyRecord,
 } from "./party";
 import type { PersonaRecord } from "./persona";
+import type { TurnTelemetry } from "./telemetry";
 import type {
   CompassDirection,
   LocationContainer,
@@ -458,6 +459,7 @@ export interface TurnNodeRecord {
   character_states?: Record<string, CharacterStateSnapshot>;
   whispers?: CharacterWhisper[];
   recalled_items: RecalledMemoryItem[];
+  telemetry?: TurnTelemetry | null;
   created_at: string;
 }
 

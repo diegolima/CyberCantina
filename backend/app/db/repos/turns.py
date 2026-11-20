@@ -15,6 +15,7 @@ from app.schemas.character import (
     dump_items_json,
 )
 from app.schemas.party import PartyRecord
+from app.schemas.telemetry import TurnTelemetry
 from app.schemas.persona import PersonaTurnStateSnapshot
 from app.schemas.turn import (
     CampaignStateBundle,
@@ -58,6 +59,7 @@ class TurnsBranchesMixin:
         recalled_items: list[RecalledMemoryItem],
         post_turn: PostTurnStateDelta | None = None,
         extra_character_states: list[CharacterStateSnapshot] | None = None,
+        telemetry: TurnTelemetry | None = None,
     ) -> TurnNodeRecord:
         """Persist a new turn node + snapshots and advance campaign active_leaf_turn_id."""
         now = utc_now_iso()
@@ -82,9 +84,9 @@ class TurnsBranchesMixin:
                 INSERT INTO turn_nodes (
                     id, campaign_id, parent_turn_id, depth_index, user_message,
                     actor_id, raw_prose, cognition_json, cognitions_json, whispers_json, pre_turn_json,
-                    post_turn_json, recalled_items_json, created_at
+                    post_turn_json, recalled_items_json, telemetry_json, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     turn_id,
@@ -100,6 +102,7 @@ class TurnsBranchesMixin:
                     pre_turn.model_dump_json(),
                     post_turn.model_dump_json() if post_turn else None,
                     json.dumps([item.model_dump() for item in recalled_items]),
+                    telemetry.model_dump_json() if telemetry else None,
                     now,
                 ),
             )
@@ -1120,6 +1123,18 @@ class TurnsBranchesMixin:
                     )
                 t.post_turn.first_visit_media = updated_items
 
+    def update_turn_telemetry(self, turn_id: str, telemetry: TurnTelemetry) -> None:
+        """Persist finalized per-turn context telemetry onto an existing turn node."""
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE turn_nodes SET telemetry_json = ? WHERE id = ?",
+                (telemetry.model_dump_json(), turn_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     @staticmethod
     def _row_to_turn_node(r: sqlite3.Row) -> TurnNodeRecord:
         post_json = r["post_turn_json"]
@@ -1164,6 +1179,13 @@ class TurnsBranchesMixin:
                 ]
             except Exception:
                 pass
+
+        telemetry_obj: TurnTelemetry | None = None
+        if "telemetry_json" in r.keys() and r["telemetry_json"]:
+            try:
+                telemetry_obj = TurnTelemetry.model_validate_json(r["telemetry_json"])
+            except Exception:
+                telemetry_obj = None
 
         return TurnNodeRecord(
             id=r["id"],
@@ -1237,5 +1259,6 @@ class TurnsBranchesMixin:
                 RecalledMemoryItem.model_validate(item)
                 for item in json.loads(r["recalled_items_json"] or "[]")
             ],
+            telemetry=telemetry_obj,
             created_at=r["created_at"],
         )
