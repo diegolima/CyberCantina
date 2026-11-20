@@ -44,7 +44,12 @@ export const LiveStreamingTurnCard: React.FC<LiveStreamingTurnCardProps> = ({
   phase3Progress,
 }) => {
   const [selectedLiveCognitionCharId, setSelectedLiveCognitionCharId] = useState<string | null>(null);
+  const [brokenPersonaPortraitUrl, setBrokenPersonaPortraitUrl] = useState<string | null>(null);
   const isSoloStream = isLiveStreamSolo(liveStream);
+  const personaPortraitUrl = bundle.campaign.persona_snapshot?.portrait_url || null;
+  const showPersonaPortrait = Boolean(
+    personaPortraitUrl && brokenPersonaPortraitUrl !== personaPortraitUrl
+  );
   return (
           <div
             className="turn-card"
@@ -54,6 +59,21 @@ export const LiveStreamingTurnCard: React.FC<LiveStreamingTurnCardProps> = ({
               <div className="user-bubble user-bubble-narrator-cue">
                 <Sparkles size={12} color="var(--accent-amber)" />
                 <span>{liveStream.userMessage}</span>
+              </div>
+            ) : showPersonaPortrait ? (
+              <div className="user-prompt-row">
+                {renderUserMessageBubble(
+                  liveStream.userMessage,
+                  allCampaignCharacters,
+                  presentCharacterIds
+                )}
+                <img
+                  src={personaPortraitUrl!}
+                  alt={bundle.campaign.persona_snapshot?.name || "Protagonist"}
+                  title={bundle.campaign.persona_snapshot?.name || "Protagonist"}
+                  className="user-prompt-avatar"
+                  onError={() => setBrokenPersonaPortraitUrl(personaPortraitUrl)}
+                />
               </div>
             ) : (
               renderUserMessageBubble(liveStream.userMessage, allCampaignCharacters, presentCharacterIds)

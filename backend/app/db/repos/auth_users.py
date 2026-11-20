@@ -361,7 +361,8 @@ class AuthUsersMixin:
             ).fetchall()
             conn.execute("DELETE FROM world_media WHERE owner_id = ? AND is_public = 0", (user_id,))
 
-            # 4. Delete user private notes and personas
+            # 4. Delete user private notes and personas (collecting persona media refs first)
+            persona_media_refs = self.list_user_persona_media_files(user_id)
             conn.execute("DELETE FROM user_notes WHERE owner_id = ?", (user_id,))
             conn.execute("DELETE FROM personas WHERE owner_id = ?", (user_id,))
 
@@ -371,6 +372,8 @@ class AuthUsersMixin:
 
         for wmr in world_media_rows:
             self._delete_world_media_file(wmr["media_type"], wmr["filename"])
+        if persona_media_refs:
+            self.prune_orphaned_persona_media()
 
     def delete_user(self, user_id: str) -> None:
         """Permanently delete a user account, credentials, passkeys, sessions, and all their user data."""

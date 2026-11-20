@@ -31,6 +31,13 @@ def validate_safe_media_id(media_id: str) -> str:
     return media_id
 
 
+def validate_safe_persona_id(persona_id: str) -> str:
+    """Validate that a persona ID uses only safe identifier characters."""
+    if not isinstance(persona_id, str) or not _SAFE_ID_RE.fullmatch(persona_id):
+        raise ValueError("Invalid persona ID.")
+    return persona_id
+
+
 def _resolve_within_base(base_dir: str | Path, relative_subpath: str) -> Path:
     """Normalize base_dir + relative_subpath and ensure canonical target stays inside base_dir."""
     base_norm = os.path.normpath(os.path.abspath(str(base_dir)))
@@ -77,6 +84,34 @@ def safe_resolve_media_file_path(
 
     char_dir = safe_resolve_character_media_dir(media_dir, clean_id)
     return _resolve_within_base(char_dir, os.path.join(category, filename))
+
+
+def safe_resolve_persona_media_dir(media_dir: str | Path, persona_id: str) -> Path:
+    """Resolve and verify a persona's media folder stays within media_dir/personas."""
+    clean_id = validate_safe_persona_id(persona_id)
+    personas_root = _resolve_within_base(media_dir, "personas")
+    return _resolve_within_base(personas_root, clean_id)
+
+
+def safe_resolve_persona_media_file_path(
+    media_dir: str | Path,
+    persona_id: str,
+    category: str,
+    filename: str,
+) -> Path:
+    """Validate category, persona_id, and filename, and resolve safely within media_dir/personas."""
+    if category not in _VALID_MEDIA_CATEGORIES:
+        raise ValueError("Invalid media category.")
+    clean_id = validate_safe_persona_id(persona_id)
+    if (
+        not isinstance(filename, str)
+        or filename.startswith(".")
+        or not _SAFE_FILENAME_RE.fullmatch(filename)
+    ):
+        raise ValueError("Invalid filename.")
+
+    persona_dir = safe_resolve_persona_media_dir(media_dir, clean_id)
+    return _resolve_within_base(persona_dir, os.path.join(category, filename))
 
 
 def safe_resolve_world_media_root(

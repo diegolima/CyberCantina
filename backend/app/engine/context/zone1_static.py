@@ -126,7 +126,9 @@ def format_zone1_player_protagonist_block(persona_snapshot: PersonaRecord | None
         lines.append(" | ".join(demographics))
 
     if persona_snapshot.build_and_height and persona_snapshot.build_and_height.strip():
-        lines.append(f"Build & Height: {persona_snapshot.build_and_height.strip()}")
+        height_val = persona_snapshot.build_and_height.strip()
+        height_label = "Build & Height" if "," in height_val else "Height"
+        lines.append(f"{height_label}: {height_val}")
     if persona_snapshot.distinctive_features:
         lines.append(f"Distinctive Features: {', '.join(persona_snapshot.distinctive_features)}")
 

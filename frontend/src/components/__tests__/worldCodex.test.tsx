@@ -198,6 +198,7 @@ function makeCharacterFixtures(): {
     id: "persona_1",
     owner_id: "u1",
     name: "Ren Corvo",
+    tagline: "Charting reefs no ship returns from.",
     species: "Human",
     age: "31",
     age_is_secret: true,
@@ -207,6 +208,15 @@ function makeCharacterFixtures(): {
     tags: ["cartographer"],
     build_and_height: "180 cm, lean",
     distinctive_features: ["ink-stained fingers"],
+    portrait_url: "/api/media/personas/persona_1/portraits/default_123.webp",
+    gallery: [
+      {
+        id: "img_p1",
+        url: "/api/media/personas/persona_1/gallery/img_p1.webp",
+        caption: "Survey Rig",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ],
     equipped: [
       {
         id: "p_eq_1",
@@ -690,6 +700,23 @@ describe("World Codex Helpers & Components (v0.20.0)", () => {
     );
     expect(personaHtml).toContain("Storm Lantern");
     expect(personaHtml).not.toContain("Brass Sextant");
+    expect(personaHtml).toContain("/api/media/personas/persona_1/portraits/default_123.webp");
+    expect(personaHtml).toContain("Charting reefs no ship returns from.");
+    expect(personaHtml).toContain("Build &amp; Height:");
+    expect(personaHtml).toContain("Photo Album (1)");
+    expect(personaHtml).toContain("Survey Rig");
+
+    const metricPersonaHtml = renderToStaticMarkup(
+      <CodexCharacterDetail
+        kind="persona"
+        persona={{ ...persona, build_and_height: "180 cm" }}
+        personaTurnState={personaTurnState}
+        loreNodes={world.lore_nodes}
+        onJumpToLore={() => {}}
+      />
+    );
+    expect(metricPersonaHtml).toContain("Height:");
+    expect(metricPersonaHtml).not.toContain("Build &amp; Height:");
 
     const charHtml = renderToStaticMarkup(
       <CodexCharacterDetail

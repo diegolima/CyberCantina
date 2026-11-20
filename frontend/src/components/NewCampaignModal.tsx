@@ -466,14 +466,31 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
                     gap: 6,
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <strong style={{ color: "var(--accent-emerald)" }}>{selectedPersona.name}</strong>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                      {selectedPersona.portrait_url && (
+                        <img
+                          src={selectedPersona.portrait_url}
+                          alt={selectedPersona.name}
+                          style={{
+                            width: 28,
+                            height: 28,
+                            borderRadius: "50%",
+                            objectFit: "cover",
+                            border: "1px solid rgba(16, 185, 129, 0.4)",
+                            flexShrink: 0,
+                          }}
+                        />
+                      )}
+                      <strong style={{ color: "var(--accent-emerald)" }}>{selectedPersona.name}</strong>
+                    </div>
                     <span style={{ fontSize: "0.7rem", color: "var(--text-secondary)" }}>
                       Frozen snapshot for this campaign
                     </span>
                   </div>
                   <div style={{ color: "var(--text-secondary)", lineHeight: 1.4 }}>
-                    {selectedPersona.persona_bio ||
+                    {selectedPersona.tagline ||
+                      selectedPersona.persona_bio ||
                       selectedPersona.build_and_height ||
                       (selectedPersona.distinctive_features?.length
                         ? selectedPersona.distinctive_features.join(", ")

@@ -223,6 +223,30 @@ def _sanitize_character_media(
 
     return clean_portraits, clean_gallery
 
+
+def _is_valid_media_url(url: str) -> bool:
+    u = url.strip()
+    return u.startswith("/api/media/") or u.startswith("http://") or u.startswith("https://")
+
+
+def _sanitize_persona_media(
+    portrait_url: str | None, gallery: list[GalleryImage] | None
+) -> tuple[str | None, list[GalleryImage]]:
+    """Filter persona portrait URL and gallery entries to safe media URLs."""
+    clean_portrait: str | None = None
+    if isinstance(portrait_url, str) and portrait_url.strip() and _is_valid_media_url(portrait_url):
+        clean_portrait = portrait_url.strip()
+
+    clean_gallery: list[GalleryImage] = []
+    if gallery and isinstance(gallery, list):
+        for img in gallery:
+            if isinstance(img, GalleryImage) and isinstance(img.url, str) and _is_valid_media_url(img.url):
+                clean_gallery.append(img.model_copy(update={"url": img.url.strip()}))
+            elif isinstance(img, dict) and isinstance(img.get("url"), str) and _is_valid_media_url(str(img["url"])):
+                clean_gallery.append(GalleryImage(**{**img, "url": str(img["url"]).strip()}))
+
+    return clean_portrait, clean_gallery
+
 def slugify_tag(text: str) -> str:
     """Normalize tag string to lowercase kebab-case matching frontend slugifyTag."""
     cleaned = re.sub(r"[^\w\s-]", "", text.strip().lower())

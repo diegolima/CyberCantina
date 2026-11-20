@@ -8,6 +8,7 @@ import {
   Eye,
   EyeOff,
   FileText,
+  Image as ImageIcon,
   Lock,
   Package,
   Plus,
@@ -18,6 +19,7 @@ import {
 } from "lucide-react";
 import { api } from "../api";
 import {
+  GalleryImage,
   PersonaCreatePayload,
   PersonaItemInstance,
   PersonaLoreEntry,
@@ -29,16 +31,17 @@ import {
   buildPersonaUnsupportedFieldsState,
   filterRemainingUnsupportedFields,
 } from "../utils/unsupportedFields";
+import { PersonaMediaTab } from "./PersonaMediaTab";
 import { TagChipsInput } from "./TagChipsInput";
 import { UnsupportedFieldsTab } from "./shared/UnsupportedFieldsTab";
 
-export type PersonaTab = "base" | "appearance" | "lore" | "inventory" | "unsupported";
+export type PersonaTab = "base" | "appearance" | "media" | "lore" | "inventory" | "unsupported";
 
 interface PersonaEditorModalProps {
   persona?: PersonaRecord | null;
   isDefault?: boolean;
   onClose: () => void;
-  onSaved: (persona: PersonaRecord) => void;
+  onSaved: (persona: PersonaRecord, closeModal?: boolean) => void;
   onDeleted?: (personaId: string) => Promise<void> | void;
   onSetDefault?: (persona: PersonaRecord) => void;
 }
@@ -62,6 +65,7 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
 
   // Base Tab Fields
   const [name, setName] = useState(persona?.name ?? "");
+  const [tagline, setTagline] = useState(persona?.tagline ?? "");
   const [species, setSpecies] = useState(persona?.species ?? "Human");
   const [age, setAge] = useState(persona?.age ?? "");
   const [ageIsSecret, setAgeIsSecret] = useState(persona?.age_is_secret ?? true);
@@ -72,6 +76,12 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
 
   // Appearance Tab Fields
   const [buildAndHeight, setBuildAndHeight] = useState(persona?.build_and_height ?? "");
+
+  // Media Tab Fields
+  const [portraitUrl, setPortraitUrl] = useState<string | null>(persona?.portrait_url ?? null);
+  const [gallery, setGallery] = useState<GalleryImage[]>(
+    persona?.gallery ? JSON.parse(JSON.stringify(persona.gallery)) : []
+  );
   const unsupportedFields = useMemo(
     () => (persona ? buildPersonaUnsupportedFieldsState(persona) : {}),
     [persona]
@@ -102,11 +112,12 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Shortcut pills for quick demographic selection
+  // Shortcut pills for quick demographic & height selection
   const speciesShortcuts = ["Human", "Cyborg", "Android", "Replicant", "Elf", "Synth"];
   const ageShortcuts = ["Unknown", "Ageless", "Early 20s", "Mid 30s"];
   const sexShortcuts = ["Male", "Female", "Non-binary", "Other"];
   const pronounShortcuts = ["he/him", "she/her", "they/them", "it/its"];
+  const heightShortcuts = ["180 cm", "175 cm", "185 cm", "168 cm", "190 cm", "162 cm"];
 
   // Item & Lore helpers
   const handleAddEquipped = () => {
@@ -224,6 +235,7 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
 
       const payload: PersonaCreatePayload = {
         name: name.trim(),
+        tagline: tagline.trim(),
         species: species.trim() || "Human",
         age: age.trim() || null,
         age_is_secret: ageIsSecret,
@@ -246,7 +258,7 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
       } else {
         result = await api.createPersona(payload);
       }
-      onSaved(result);
+      onSaved(result, true);
       onClose();
     } catch (err: any) {
       setError(err?.message || "Failed to save persona.");
@@ -343,6 +355,21 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
           >
             <Eye size={14} />
             <span>Appearance</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "media"}
+            className={`modal-tab-btn ${activeTab === "media" ? "active" : ""}`}
+            onClick={() => setActiveTab("media")}
+          >
+            <ImageIcon size={14} />
+            <span>Media</span>
+            {(portraitUrl ? 1 : 0) + gallery.length > 0 && (
+              <span className="modal-tab-badge">
+                {(portraitUrl ? 1 : 0) + gallery.length}
+              </span>
+            )}
           </button>
           <button
             type="button"
@@ -459,6 +486,20 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
                   disabled={isReadOnly}
                   onChange={(e) => setName(e.target.value)}
                   autoFocus={!isReadOnly}
+                />
+              </div>
+
+              {/* Tagline (Quick Reference) */}
+              <div className="field-group">
+                <label>Tagline (Quick Reference)</label>
+                <input
+                  type="text"
+                  className="field-input"
+                  maxLength={200}
+                  placeholder="One-line evocative summary for pickers and Codex..."
+                  value={tagline}
+                  disabled={isReadOnly}
+                  onChange={(e) => setTagline(e.target.value)}
                 />
               </div>
 
@@ -646,30 +687,60 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
                 gap: 14,
               }}
             >
-              {/* Build & Height */}
+              {/* Height */}
               <div className="field-group">
-                <label>Build &amp; Height</label>
+                <label>Height</label>
                 <input
                   type="text"
                   className="field-input"
-                  placeholder="e.g. 182 cm, lean wiry cybernetic frame..."
+                  placeholder="e.g. 180 cm"
                   value={buildAndHeight}
                   disabled={isReadOnly}
                   onChange={(e) => setBuildAndHeight(e.target.value)}
                 />
+                {!isReadOnly && (
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+                    {heightShortcuts.map((sc) => (
+                      <button
+                        key={sc}
+                        type="button"
+                        className="btn btn-sm"
+                        style={{ fontSize: "0.68rem", padding: "1px 6px" }}
+                        onClick={() => setBuildAndHeight(sc)}
+                      >
+                        {sc}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Distinctive Features */}
               <div className="field-group">
-                <label>Distinctive Features (Anatomy, Hair, Eyes, Scars, Cyberware — Optional)</label>
+                <label>Distinctive Features (Build, Anatomy, Hair, Eyes, Scars, Cyberware — Optional)</label>
                 <TagChipsInput
                   value={distinctiveFeatures}
                   onChange={setDistinctiveFeatures}
                   disabled={isReadOnly}
-                  placeholder="Add physical trait (e.g. neon blue iris, scarred eyebrow, cybernetic left arm)..."
+                  placeholder="Add physical trait (e.g. lean wiry build, neon blue iris, scarred eyebrow, cybernetic left arm)..."
                 />
               </div>
             </div>
+
+            {/* TAB 2.5: MEDIA */}
+            <PersonaMediaTab
+              isActive={activeTab === "media"}
+              personaId={persona?.id ?? null}
+              isReadOnly={isReadOnly}
+              isUnsavedDraft={!persona?.id || clonedMode}
+              portraitUrl={portraitUrl}
+              gallery={gallery}
+              onMediaUpdated={(updated) => {
+                setPortraitUrl(updated.portrait_url ?? null);
+                setGallery(updated.gallery ?? []);
+                onSaved(updated, false);
+              }}
+            />
 
             {/* TAB 3: LORE & SECRETS */}
             <div

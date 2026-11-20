@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from "react";
-import { Lock, MapPin, Package, Sparkles, User, UserCheck } from "lucide-react";
+import { Image as ImageIcon, Lock, MapPin, Package, Sparkles, User, UserCheck, X } from "lucide-react";
 import {
+  GalleryImage,
   LoreNode,
   PersonaRecord,
   PersonaTurnStateSnapshot,
   normalizeItemList,
 } from "../../types";
-import { getCharacterEmotionPortrait } from "../../utils/entityImages";
+import { getCharacterEmotionPortrait, getEntityPrimaryImage } from "../../utils/entityImages";
 import type { CodexCampaignCharacterEntry } from "./codexHelpers";
 
 interface CodexCharacterDetailProps {
@@ -27,6 +28,7 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
   onJumpToLore,
 }) => {
   const [portraitBroken, setPortraitBroken] = useState(false);
+  const [lightboxImage, setLightboxImage] = useState<GalleryImage | null>(null);
 
   const portraitUrl =
     kind === "character" && characterEntry
@@ -34,15 +36,29 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
           characterEntry.record,
           characterEntry.state?.care_state?.active_emotion ?? "default"
         )
+      : kind === "persona" && persona
+      ? getEntityPrimaryImage("personas", persona)
       : null;
 
   useEffect(() => {
     setPortraitBroken(false);
-  }, [kind, characterEntry?.record.id, portraitUrl]);
+  }, [kind, characterEntry?.record.id, persona?.id, portraitUrl]);
+
+  useEffect(() => {
+    if (!lightboxImage) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setLightboxImage(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [lightboxImage]);
 
   if (kind === "persona" && persona) {
     const equipped = personaTurnState?.equipped ?? persona.equipped ?? [];
     const inventory = personaTurnState?.inventory ?? persona.inventory ?? [];
+    const gallery = persona.gallery ?? [];
     const hasCanonicalAppearance =
       Boolean(persona.build_and_height?.trim()) ||
       (persona.distinctive_features?.length ?? 0) > 0;
@@ -50,56 +66,77 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
       !hasCanonicalAppearance && persona.physical_appearance?.trim()
         ? persona.physical_appearance.trim()
         : "";
+    const heightLabel = persona.build_and_height?.includes(",")
+      ? "Build & Height:"
+      : "Height:";
 
     return (
-      <div className="codex-detail-stack">
-        <div className="codex-detail-header">
-          <div style={{ minWidth: 0 }}>
-            <div className="codex-detail-title-row">
-              <UserCheck size={16} color="var(--accent-emerald)" />
-              <h3 className="codex-detail-title">{persona.name}</h3>
-            </div>
-            <div className="codex-badge-row">
-              <span className="badge codex-badge--persona">Player Persona</span>
-              {persona.species?.trim() && (
-                <span className="badge codex-badge--muted">{persona.species}</span>
+      <>
+        <div className="codex-detail-stack">
+          <div className="codex-detail-header">
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 12, minWidth: 0 }}>
+              {portraitUrl && !portraitBroken ? (
+                <img
+                  src={portraitUrl}
+                  alt={persona.name}
+                  className="codex-character-portrait"
+                  onError={() => setPortraitBroken(true)}
+                />
+              ) : (
+                <div className="codex-character-portrait codex-character-portrait--fallback">
+                  <UserCheck size={22} color="var(--accent-emerald)" />
+                </div>
               )}
-              {persona.sex?.trim() && (
-                <span className="badge codex-badge--muted">{persona.sex}</span>
-              )}
-              {persona.pronouns?.trim() && (
-                <span className="badge codex-badge--muted">{persona.pronouns}</span>
-              )}
-              {persona.age?.trim() && (
-                <span className="badge codex-badge--muted">
-                  Age: {persona.age}
-                  {persona.age_is_secret && (
-                    <>
-                      {" "}
-                      <Lock size={10} />
-                    </>
+
+              <div style={{ minWidth: 0 }}>
+                <div className="codex-detail-title-row">
+                  <h3 className="codex-detail-title">{persona.name}</h3>
+                </div>
+                {persona.tagline?.trim() && (
+                  <div className="codex-character-tagline">{persona.tagline}</div>
+                )}
+                <div className="codex-badge-row">
+                  <span className="badge codex-badge--persona">Player Persona</span>
+                  {persona.species?.trim() && (
+                    <span className="badge codex-badge--muted">{persona.species}</span>
                   )}
-                </span>
-              )}
+                  {persona.sex?.trim() && (
+                    <span className="badge codex-badge--muted">{persona.sex}</span>
+                  )}
+                  {persona.pronouns?.trim() && (
+                    <span className="badge codex-badge--muted">{persona.pronouns}</span>
+                  )}
+                  {persona.age?.trim() && (
+                    <span className="badge codex-badge--muted">
+                      Age: {persona.age}
+                      {persona.age_is_secret && (
+                        <>
+                          {" "}
+                          <Lock size={10} />
+                        </>
+                      )}
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
-        </div>
 
-        {persona.persona_bio?.trim() && (
-          <div className="codex-section-card">
-            <div className="codex-section-label">Bio &amp; Concept</div>
-            <p className="codex-prose-text">{persona.persona_bio}</p>
-          </div>
-        )}
+          {persona.persona_bio?.trim() && (
+            <div className="codex-section-card">
+              <div className="codex-section-label">Bio &amp; Concept</div>
+              <p className="codex-prose-text">{persona.persona_bio}</p>
+            </div>
+          )}
 
-        {(hasCanonicalAppearance || legacyAppearance) && (
-          <div className="codex-section-card">
-            <div className="codex-section-label">Appearance</div>
-            {persona.build_and_height?.trim() && (
-              <div className="codex-kv-line">
-                <span>Build &amp; Height:</span> {persona.build_and_height}
-              </div>
-            )}
+          {(hasCanonicalAppearance || legacyAppearance) && (
+            <div className="codex-section-card">
+              <div className="codex-section-label">Appearance</div>
+              {persona.build_and_height?.trim() && (
+                <div className="codex-kv-line">
+                  <span>{heightLabel}</span> {persona.build_and_height}
+                </div>
+              )}
             {(persona.distinctive_features?.length ?? 0) > 0 && (
               <div className="codex-chip-list">
                 {persona.distinctive_features!.map((feat) => (
@@ -200,7 +237,131 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
             </div>
           </div>
         )}
+
+        {gallery.length > 0 && (
+          <div className="codex-section-card">
+            <div className="codex-section-label">
+              <ImageIcon size={12} /> Photo Album ({gallery.length})
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))",
+                gap: 8,
+              }}
+            >
+              {gallery.map((img) => (
+                <button
+                  key={img.id || img.url}
+                  type="button"
+                  style={{
+                    position: "relative",
+                    aspectRatio: "1 / 1",
+                    borderRadius: 6,
+                    overflow: "hidden",
+                    border: "1px solid var(--border-subtle)",
+                    background: "rgba(0,0,0,0.35)",
+                    padding: 0,
+                    cursor: "pointer",
+                  }}
+                  onClick={() => setLightboxImage(img)}
+                  title={img.caption || "Inspect photo"}
+                >
+                  <img
+                    src={img.url}
+                    alt={img.caption || persona.name}
+                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                  />
+                  {img.caption && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        bottom: 0,
+                        left: 0,
+                        right: 0,
+                        background: "linear-gradient(transparent, rgba(0,0,0,0.85))",
+                        padding: "10px 4px 3px",
+                        fontSize: "0.66rem",
+                        color: "#fff",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {img.caption}
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
+
+      {lightboxImage && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0, 0, 0, 0.9)",
+            backdropFilter: "blur(6px)",
+            zIndex: 10000,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 24,
+          }}
+          onClick={() => setLightboxImage(null)}
+        >
+          <div
+            style={{
+              position: "relative",
+              maxWidth: "90vw",
+              maxHeight: "85vh",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="btn"
+              style={{
+                position: "absolute",
+                top: -40,
+                right: 0,
+                borderRadius: "50%",
+                width: 32,
+                height: 32,
+                padding: 0,
+              }}
+              onClick={() => setLightboxImage(null)}
+              aria-label="Close photo preview"
+            >
+              <X size={16} />
+            </button>
+            <img
+              src={lightboxImage.url}
+              alt={lightboxImage.caption || persona.name}
+              style={{
+                maxWidth: "100%",
+                maxHeight: "75vh",
+                objectFit: "contain",
+                borderRadius: 8,
+                border: "1px solid var(--border-subtle)",
+              }}
+            />
+            {lightboxImage.caption && (
+              <div style={{ marginTop: 10, fontSize: "0.82rem", color: "var(--text-secondary)" }}>
+                {lightboxImage.caption}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </>
     );
   }
 

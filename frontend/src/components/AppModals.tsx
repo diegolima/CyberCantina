@@ -402,14 +402,18 @@ export const AppModals: React.FC<AppModalsProps> = ({
             setEditingPersona(null);
           }}
           onSetDefault={(p) => handleSetDefaultPersona(p)}
-          onSaved={async (savedPersona) => {
+          onSaved={async (savedPersona, closeModal = true) => {
             const list = await api.listPersonas();
             setPersonas(list);
             if (!activePersona || activePersona.id === savedPersona.id) {
               handleSetDefaultPersona(savedPersona);
             }
-            setShowPersonaModal(false);
-            setEditingPersona(null);
+            if (closeModal) {
+              setShowPersonaModal(false);
+              setEditingPersona(null);
+            } else {
+              setEditingPersona(savedPersona);
+            }
           }}
           onDeleted={async () => {
             const list = await api.listPersonas();

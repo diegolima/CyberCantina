@@ -520,6 +520,7 @@ class SchemaInitMixin:
                     id TEXT PRIMARY KEY,
                     owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                     name TEXT NOT NULL CHECK(length(trim(name)) >= 1),
+                    tagline TEXT NOT NULL DEFAULT '',
                     species TEXT NOT NULL DEFAULT 'Human',
                     age TEXT NULL,
                     age_is_secret INTEGER NOT NULL DEFAULT 1,
@@ -533,6 +534,8 @@ class SchemaInitMixin:
                     equipped_json TEXT NOT NULL DEFAULT '[]',
                     inventory_json TEXT NOT NULL DEFAULT '[]',
                     lore_entries_json TEXT NOT NULL DEFAULT '[]',
+                    portrait_url TEXT NULL,
+                    gallery_json TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -544,6 +547,8 @@ class SchemaInitMixin:
                 r["name"]
                 for r in conn.execute("PRAGMA table_info(personas)").fetchall()
             }
+            if "tagline" not in persona_cols:
+                conn.execute("ALTER TABLE personas ADD COLUMN tagline TEXT NOT NULL DEFAULT ''")
             if "species" not in persona_cols:
                 conn.execute("ALTER TABLE personas ADD COLUMN species TEXT NOT NULL DEFAULT 'Human'")
             if "sex" not in persona_cols:
@@ -558,6 +563,10 @@ class SchemaInitMixin:
                 conn.execute("ALTER TABLE personas ADD COLUMN build_and_height TEXT NOT NULL DEFAULT ''")
             if "distinctive_features_json" not in persona_cols:
                 conn.execute("ALTER TABLE personas ADD COLUMN distinctive_features_json TEXT NOT NULL DEFAULT '[]'")
+            if "portrait_url" not in persona_cols:
+                conn.execute("ALTER TABLE personas ADD COLUMN portrait_url TEXT NULL")
+            if "gallery_json" not in persona_cols:
+                conn.execute("ALTER TABLE personas ADD COLUMN gallery_json TEXT NOT NULL DEFAULT '[]'")
             if "unsupported_fields_json" not in persona_cols:
                 conn.execute("ALTER TABLE personas ADD COLUMN unsupported_fields_json TEXT NOT NULL DEFAULT '{}'")
 

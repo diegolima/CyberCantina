@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import re
 import sqlite3
+import time
+from typing import Any
 import uuid
+from app.schemas.character import GalleryImage
 from app.schemas.persona import (
     DEFAULT_PERSONA_ID,
     PersonaCreatePayload,
@@ -19,7 +24,57 @@ from app.schemas.persona import (
     is_default_persona_id,
     sanitize_persona_unsupported_fields,
 )
-from app.db.repos.base import utc_now_iso
+from app.db.repos.base import _sanitize_persona_media, utc_now_iso
+from app.security.media_path import (
+    PathTraversalError,
+    safe_resolve_persona_media_dir,
+    safe_resolve_persona_media_file_path,
+    validate_safe_persona_id,
+)
+
+_PERSONA_MEDIA_URL_RE = re.compile(
+    r"^/api/media/personas/([a-zA-Z0-9_-]+)/(portraits|gallery)/([a-zA-Z0-9_.-]+)$"
+)
+
+
+def _parse_persona_media_url(url: str | None) -> tuple[str, str, str] | None:
+    if not isinstance(url, str):
+        return None
+    m = _PERSONA_MEDIA_URL_RE.fullmatch(url.strip())
+    if not m:
+        return None
+    return m.group(1), m.group(2), m.group(3)
+
+
+def _extract_refs_from_persona_fields(
+    portrait_url: str | None, gallery_raw: Any
+) -> set[tuple[str, str, str]]:
+    refs: set[tuple[str, str, str]] = set()
+    p_ref = _parse_persona_media_url(portrait_url)
+    if p_ref:
+        refs.add(p_ref)
+    if isinstance(gallery_raw, list):
+        for item in gallery_raw:
+            url = item.get("url") if isinstance(item, dict) else getattr(item, "url", None)
+            g_ref = _parse_persona_media_url(url)
+            if g_ref:
+                refs.add(g_ref)
+    return refs
+
+
+def _extract_refs_from_snapshot_json(snapshot_json: str | None) -> set[tuple[str, str, str]]:
+    if not snapshot_json:
+        return set()
+    try:
+        data = json.loads(snapshot_json)
+    except Exception:
+        return set()
+    if not isinstance(data, dict):
+        return set()
+    return _extract_refs_from_persona_fields(
+        data.get("portrait_url"),
+        data.get("gallery"),
+    )
 
 
 class PersonasMixin:
@@ -32,13 +87,21 @@ class PersonasMixin:
         persona_id: str | None = None,
     ) -> PersonaRecord:
         """Create a new user persona in the master gallery."""
-        p_id = persona_id or f"persona_{uuid.uuid4().hex[:10]}"
+        p_id = (
+            validate_safe_persona_id(persona_id)
+            if persona_id is not None
+            else f"persona_{uuid.uuid4().hex[:10]}"
+        )
         now = utc_now_iso()
         equipped_json = json.dumps([it.model_dump() for it in draft.equipped])
         inventory_json = json.dumps([it.model_dump() for it in draft.inventory])
         lore_json = json.dumps([entry.model_dump() for entry in draft.lore_entries])
         tags_json = json.dumps(draft.tags or [])
         features_json = json.dumps(draft.distinctive_features or [])
+        clean_portrait, clean_gallery = _sanitize_persona_media(
+            draft.portrait_url, draft.gallery
+        )
+        gallery_json = json.dumps([img.model_dump() for img in clean_gallery])
         persona_bio = (draft.persona_bio or "").strip()
         canonical_physical, unsupported_fields = canonicalize_persona_legacy_fields(
             persona_bio=persona_bio,
@@ -53,17 +116,18 @@ class PersonasMixin:
             conn.execute(
                 """
                 INSERT INTO personas (
-                    id, owner_id, name, species, age, age_is_secret, sex, pronouns,
+                    id, owner_id, name, tagline, species, age, age_is_secret, sex, pronouns,
                     persona_bio, tags_json, build_and_height, distinctive_features_json,
                     physical_appearance, equipped_json, inventory_json, lore_entries_json,
-                    unsupported_fields_json, created_at, updated_at
+                    portrait_url, gallery_json, unsupported_fields_json, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     p_id,
                     owner_id,
                     draft.name.strip(),
+                    (draft.tagline or "").strip(),
                     (draft.species or "Human").strip(),
                     draft.age.strip() if draft.age else None,
                     1 if draft.age_is_secret else 0,
@@ -77,6 +141,8 @@ class PersonasMixin:
                     equipped_json,
                     inventory_json,
                     lore_json,
+                    clean_portrait,
+                    gallery_json,
                     unsupported_json,
                     now,
                     now,
@@ -102,12 +168,12 @@ class PersonasMixin:
         conn.execute(
             """
             INSERT OR IGNORE INTO personas (
-                id, owner_id, name, species, age, age_is_secret, sex, pronouns,
+                id, owner_id, name, tagline, species, age, age_is_secret, sex, pronouns,
                 persona_bio, tags_json, build_and_height, distinctive_features_json,
                 physical_appearance, equipped_json, inventory_json, lore_entries_json,
-                created_at, updated_at
+                portrait_url, gallery_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, 'Human', NULL, 0, '', '', '', '[]', '', '[]', '', '[]', '[]', '[]', ?, ?)
+            VALUES (?, ?, ?, '', 'Human', NULL, 0, '', '', '', '[]', '', '[]', '', '[]', '[]', '[]', NULL, '[]', ?, ?)
             """,
             (
                 def_id,
@@ -194,6 +260,11 @@ class PersonasMixin:
 
         now = utc_now_iso()
         name = payload.name.strip() if payload.name is not None else existing.name
+        tagline = (
+            payload.tagline.strip()
+            if payload.tagline is not None
+            else getattr(existing, "tagline", "")
+        )
         species = (
             payload.species.strip()
             if payload.species is not None
@@ -273,7 +344,7 @@ class PersonasMixin:
             conn.execute(
                 """
                 UPDATE personas
-                SET name = ?, species = ?, age = ?, age_is_secret = ?, sex = ?, pronouns = ?,
+                SET name = ?, tagline = ?, species = ?, age = ?, age_is_secret = ?, sex = ?, pronouns = ?,
                     persona_bio = ?, tags_json = ?, build_and_height = ?, distinctive_features_json = ?,
                     physical_appearance = ?, equipped_json = ?, inventory_json = ?, lore_entries_json = ?,
                     unsupported_fields_json = ?, updated_at = ?
@@ -281,6 +352,7 @@ class PersonasMixin:
                 """,
                 (
                     name,
+                    tagline,
                     species,
                     age,
                     age_is_secret,
@@ -312,7 +384,7 @@ class PersonasMixin:
         persona_id: str,
         owner_id: str | None = None,
     ) -> bool:
-        """Delete a persona from the master gallery. Campaigns retain their snapshots."""
+        """Delete a persona from the master gallery while preserving snapshot-referenced media."""
         if is_default_persona_id(persona_id):
             raise ValueError("The default 'User' persona is hard-coded and cannot be deleted.")
         conn = self._connect()
@@ -328,9 +400,290 @@ class PersonasMixin:
                     (persona_id,),
                 )
             conn.commit()
-            return res.rowcount > 0
+            deleted = res.rowcount > 0
+            if deleted:
+                active_refs = self._collect_all_active_persona_media_refs(conn)
+            else:
+                active_refs = set()
         finally:
             conn.close()
+
+        if deleted:
+            self._cleanup_persona_dir_unreferenced(persona_id, active_refs)
+        return deleted
+
+    def update_persona_portrait(
+        self,
+        persona_id: str,
+        portrait_url: str | None,
+        owner_id: str | None = None,
+    ) -> PersonaRecord:
+        """Update only the primary portrait URL for a non-default persona."""
+        if is_default_persona_id(persona_id):
+            raise ValueError("The default 'User' persona is hard-coded and cannot be modified.")
+        existing = self.get_persona(persona_id, owner_id=owner_id)
+        if not existing:
+            raise KeyError(f"Persona '{persona_id}' not found")
+        clean_portrait, _ = _sanitize_persona_media(portrait_url, [])
+        now = utc_now_iso()
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE personas SET portrait_url = ?, updated_at = ? WHERE id = ?",
+                (clean_portrait, now, persona_id),
+            )
+            conn.commit()
+            updated = self.get_persona(persona_id, owner_id=owner_id)
+            if not updated:
+                raise RuntimeError(f"Failed to retrieve updated persona '{persona_id}'")
+            return updated
+        finally:
+            conn.close()
+
+    def update_persona_gallery(
+        self,
+        persona_id: str,
+        gallery: list[GalleryImage],
+        owner_id: str | None = None,
+    ) -> PersonaRecord:
+        """Update only the photo album list for a non-default persona."""
+        if is_default_persona_id(persona_id):
+            raise ValueError("The default 'User' persona is hard-coded and cannot be modified.")
+        existing = self.get_persona(persona_id, owner_id=owner_id)
+        if not existing:
+            raise KeyError(f"Persona '{persona_id}' not found")
+        _, clean_gallery = _sanitize_persona_media(None, gallery)
+        now = utc_now_iso()
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE personas SET gallery_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps([img.model_dump() for img in clean_gallery]), now, persona_id),
+            )
+            conn.commit()
+            updated = self.get_persona(persona_id, owner_id=owner_id)
+            if not updated:
+                raise RuntimeError(f"Failed to retrieve updated persona '{persona_id}'")
+            return updated
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _collect_all_campaign_persona_media_refs(
+        conn: sqlite3.Connection,
+    ) -> set[tuple[str, str, str]]:
+        refs: set[tuple[str, str, str]] = set()
+        rows = conn.execute(
+            "SELECT persona_snapshot_json FROM campaigns WHERE persona_snapshot_json IS NOT NULL"
+        ).fetchall()
+        for row in rows:
+            refs.update(_extract_refs_from_snapshot_json(row["persona_snapshot_json"]))
+        return refs
+
+    @classmethod
+    def _collect_all_active_persona_media_refs(
+        cls,
+        conn: sqlite3.Connection,
+    ) -> set[tuple[str, str, str]]:
+        refs = cls._collect_all_campaign_persona_media_refs(conn)
+        rows = conn.execute(
+            "SELECT portrait_url, gallery_json FROM personas"
+        ).fetchall()
+        for row in rows:
+            try:
+                gal = json.loads(row["gallery_json"] or "[]")
+            except Exception:
+                gal = []
+            refs.update(_extract_refs_from_persona_fields(row["portrait_url"], gal))
+        return refs
+
+    def is_persona_media_url_referenced_by_campaigns(self, media_url: str | None) -> bool:
+        """Return True if any campaign persona_snapshot_json still references media_url."""
+        ref = _parse_persona_media_url(media_url)
+        if ref is None:
+            return False
+        conn = self._connect()
+        try:
+            return ref in self._collect_all_campaign_persona_media_refs(conn)
+        finally:
+            conn.close()
+
+    def user_can_access_persona_media(
+        self,
+        user_id: str,
+        persona_id: str,
+        category: str,
+        filename: str,
+    ) -> bool:
+        """Authorize persona media reads via persona ownership or campaign snapshot ownership."""
+        target_ref = (persona_id, category, filename)
+        conn = self._connect()
+        try:
+            owns_persona = conn.execute(
+                "SELECT 1 FROM personas WHERE id = ? AND owner_id = ?",
+                (persona_id, user_id),
+            ).fetchone()
+            if owns_persona:
+                return True
+            camp_rows = conn.execute(
+                "SELECT persona_snapshot_json FROM campaigns WHERE owner_id = ? AND persona_snapshot_json IS NOT NULL",
+                (user_id,),
+            ).fetchall()
+            for row in camp_rows:
+                if target_ref in _extract_refs_from_snapshot_json(row["persona_snapshot_json"]):
+                    return True
+            return False
+        finally:
+            conn.close()
+
+    def list_user_persona_media_files(self, user_id: str) -> set[tuple[str, str, str]]:
+        """List deduplicated persona media file tuples owned via personas or campaign snapshots."""
+        refs: set[tuple[str, str, str]] = set()
+        conn = self._connect()
+        try:
+            p_rows = conn.execute(
+                "SELECT portrait_url, gallery_json FROM personas WHERE owner_id = ?",
+                (user_id,),
+            ).fetchall()
+            for row in p_rows:
+                try:
+                    gal = json.loads(row["gallery_json"] or "[]")
+                except Exception:
+                    gal = []
+                refs.update(_extract_refs_from_persona_fields(row["portrait_url"], gal))
+
+            c_rows = conn.execute(
+                "SELECT persona_snapshot_json FROM campaigns WHERE owner_id = ? AND persona_snapshot_json IS NOT NULL",
+                (user_id,),
+            ).fetchall()
+            for row in c_rows:
+                refs.update(_extract_refs_from_snapshot_json(row["persona_snapshot_json"]))
+            return refs
+        finally:
+            conn.close()
+
+    def unlink_persona_media_if_unreferenced(self, media_url: str | None) -> bool:
+        """Unlink a persona media file on disk only if no campaign snapshot or persona references it."""
+        ref = _parse_persona_media_url(media_url)
+        if ref is None:
+            return False
+        p_id, category, filename = ref
+        conn = self._connect()
+        try:
+            active_refs = self._collect_all_active_persona_media_refs(conn)
+        finally:
+            conn.close()
+        if ref in active_refs:
+            return False
+        try:
+            target = safe_resolve_persona_media_file_path(
+                self.media_dir, p_id, category, filename
+            )
+            if target.is_file():
+                target.unlink(missing_ok=True)
+                self._remove_empty_persona_dirs(p_id)
+                return True
+        except (PathTraversalError, ValueError, OSError):
+            pass
+        return False
+
+    def _remove_empty_persona_dirs(self, persona_id: str) -> None:
+        try:
+            p_dir = safe_resolve_persona_media_dir(self.media_dir, persona_id)
+        except (PathTraversalError, ValueError):
+            return
+        if not p_dir.is_dir():
+            return
+        for sub in ("portraits", "gallery"):
+            sub_dir = p_dir / sub
+            if sub_dir.is_dir():
+                try:
+                    sub_dir.rmdir()
+                except OSError:
+                    pass
+        try:
+            p_dir.rmdir()
+        except OSError:
+            pass
+
+    def _cleanup_persona_dir_unreferenced(
+        self,
+        persona_id: str,
+        active_refs: set[tuple[str, str, str]],
+    ) -> int:
+        removed = 0
+        try:
+            p_dir = safe_resolve_persona_media_dir(self.media_dir, persona_id)
+        except (PathTraversalError, ValueError):
+            return 0
+        if not p_dir.is_dir():
+            return 0
+        for category in ("portraits", "gallery"):
+            cat_dir = p_dir / category
+            if not cat_dir.is_dir():
+                continue
+            for entry in cat_dir.iterdir():
+                if not entry.is_file():
+                    continue
+                if (persona_id, category, entry.name) in active_refs:
+                    continue
+                try:
+                    safe_file = safe_resolve_persona_media_file_path(
+                        self.media_dir, persona_id, category, entry.name
+                    )
+                    safe_file.unlink(missing_ok=True)
+                    removed += 1
+                except (PathTraversalError, ValueError, OSError):
+                    continue
+        self._remove_empty_persona_dirs(persona_id)
+        return removed
+
+    def prune_orphaned_persona_media(self, min_age_seconds: float = 0.0) -> int:
+        """Remove persona media files referenced by neither personas nor any campaign snapshot."""
+        personas_root = Path(self.media_dir) / "personas"
+        if not personas_root.is_dir():
+            return 0
+        conn = self._connect()
+        try:
+            active_refs = self._collect_all_active_persona_media_refs(conn)
+        finally:
+            conn.close()
+
+        now_epoch = time.time()
+        removed = 0
+        for p_entry in personas_root.iterdir():
+            if not p_entry.is_dir():
+                continue
+            p_id = p_entry.name
+            try:
+                p_dir = safe_resolve_persona_media_dir(self.media_dir, p_id)
+            except (PathTraversalError, ValueError):
+                continue
+            for category in ("portraits", "gallery"):
+                cat_dir = p_dir / category
+                if not cat_dir.is_dir():
+                    continue
+                for f_entry in cat_dir.iterdir():
+                    if not f_entry.is_file():
+                        continue
+                    if (p_id, category, f_entry.name) in active_refs:
+                        continue
+                    if min_age_seconds > 0:
+                        try:
+                            if (now_epoch - f_entry.stat().st_mtime) < min_age_seconds:
+                                continue
+                        except OSError:
+                            continue
+                    try:
+                        safe_file = safe_resolve_persona_media_file_path(
+                            self.media_dir, p_id, category, f_entry.name
+                        )
+                        safe_file.unlink(missing_ok=True)
+                        removed += 1
+                    except (PathTraversalError, ValueError, OSError):
+                        continue
+            self._remove_empty_persona_dirs(p_id)
+        return removed
 
     @staticmethod
     def _row_to_persona_record(r: sqlite3.Row) -> PersonaRecord:
@@ -353,6 +706,11 @@ class PersonasMixin:
         unsupported_raw = json.loads(
             r["unsupported_fields_json"] if "unsupported_fields_json" in r_keys and r["unsupported_fields_json"] else "{}"
         )
+        gallery_raw = json.loads(
+            r["gallery_json"] if "gallery_json" in r_keys and r["gallery_json"] else "[]"
+        )
+        raw_portrait = r["portrait_url"] if "portrait_url" in r_keys and r["portrait_url"] else None
+        clean_portrait, clean_gallery = _sanitize_persona_media(raw_portrait, gallery_raw)
         persona_bio = r["persona_bio"] if "persona_bio" in r_keys and r["persona_bio"] else ""
         raw_physical = r["physical_appearance"] if "physical_appearance" in r_keys and r["physical_appearance"] else ""
         unsupported_fields = sanitize_persona_unsupported_fields(unsupported_raw)
@@ -369,6 +727,7 @@ class PersonasMixin:
             id=r["id"],
             owner_id=r["owner_id"] if "owner_id" in r_keys else None,
             name=r["name"],
+            tagline=r["tagline"] if "tagline" in r_keys and r["tagline"] else "",
             species=r["species"] if "species" in r_keys and r["species"] else "Human",
             age=r["age"] if "age" in r_keys else None,
             age_is_secret=bool(r["age_is_secret"]) if "age_is_secret" in r_keys else True,
@@ -382,6 +741,8 @@ class PersonasMixin:
             equipped=[PersonaItemInstance.model_validate(it) for it in equipped_raw],
             inventory=[PersonaItemInstance.model_validate(it) for it in inventory_raw],
             lore_entries=[PersonaLoreEntry.model_validate(entry) for entry in lore_raw],
+            portrait_url=clean_portrait,
+            gallery=clean_gallery,
             unsupported_fields=unsupported_fields,
             created_at=r["created_at"],
             updated_at=r["updated_at"] if "updated_at" in r_keys else r["created_at"],

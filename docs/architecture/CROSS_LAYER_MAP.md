@@ -74,6 +74,7 @@
 | `WS` | `/api/local-relay/ws` | `app.routers.local_relay.local_relay_ws` | — | *(backend-only / test / SSE)* |
 | `POST` | `/api/mechanics/choice-preview` | `app.routers.mechanics.preview_choices` | `ChoicePreviewResponse` | `frontend/src/api/campaigns.ts` |
 | `GET` | `/api/media/characters/{character_id}/{category}/{filename}` | `app.routers.characters.get_character_media` | — | *(backend-only / test / SSE)* |
+| `GET` | `/api/media/personas/{persona_id}/{category}/{filename}` | `app.routers.personas.get_persona_media` | — | *(backend-only / test / SSE)* |
 | `GET` | `/api/media/public/{version_tag}/characters/{seed_slug}/{category}/{filename}` | `app.routers.characters.get_public_character_media` | — | *(backend-only / test / SSE)* |
 | `GET` | `/api/media/worlds/{category}/{filename}` | `app.routers.worlds.get_world_media` | — | *(backend-only / test / SSE)* |
 | `GET` | `/api/messages/home` | `app.routers.admin_messages.list_home_messages` | `list` | `frontend/src/api/adminMessages.ts` |
@@ -88,6 +89,10 @@
 | `DELETE` | `/api/personas/{persona_id}` | `app.routers.personas.delete_persona` | — | `frontend/src/api/personas.ts` |
 | `GET` | `/api/personas/{persona_id}` | `app.routers.personas.get_persona` | `PersonaRecord` | `frontend/src/api/personas.ts` |
 | `PUT` | `/api/personas/{persona_id}` | `app.routers.personas.update_persona` | `PersonaRecord` | `frontend/src/api/personas.ts` |
+| `POST` | `/api/personas/{persona_id}/gallery` | `app.routers.personas.upload_persona_gallery_image` | `PersonaRecord` | `frontend/src/api/personas.ts` |
+| `DELETE` | `/api/personas/{persona_id}/gallery/{image_id}` | `app.routers.personas.delete_persona_gallery_image` | `PersonaRecord` | `frontend/src/api/personas.ts` |
+| `DELETE` | `/api/personas/{persona_id}/portrait` | `app.routers.personas.delete_persona_portrait` | `PersonaRecord` | `frontend/src/api/personas.ts` |
+| `POST` | `/api/personas/{persona_id}/portrait` | `app.routers.personas.upload_persona_portrait` | `PersonaRecord` | `frontend/src/api/personas.ts` |
 | `DELETE` | `/api/profile` | `app.routers.auth.delete_my_account` | `dict` | `frontend/src/api/auth.ts` |
 | `GET` | `/api/profile` | `app.routers.auth.get_my_profile` | `UserProfile` | `frontend/src/api/auth.ts` |
 | `PUT` | `/api/profile` | `app.routers.auth.update_my_profile` | `UserProfile` | `frontend/src/api/auth.ts` |
@@ -626,6 +631,7 @@ erDiagram
 | `frontend/src/components/NewCampaignModal.tsx` |
 | `frontend/src/components/NotesDrawer.tsx` |
 | `frontend/src/components/PersonaEditorModal.tsx` |
+| `frontend/src/components/PersonaMediaTab.tsx` |
 | `frontend/src/components/PromptPresetsManager.tsx` |
 | `frontend/src/components/RelaySidebarBadge.tsx` |
 | `frontend/src/components/SettingsModal.tsx` |

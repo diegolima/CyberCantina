@@ -502,7 +502,7 @@ export function searchAllCodexEntries(opts: {
         q,
         [activePersona.name],
         activePersona.tags ?? [],
-        [activePersona.persona_bio, activePersona.species]
+        [activePersona.tagline, activePersona.persona_bio, activePersona.species]
       );
       if (tier !== null) {
         hits.push({
@@ -805,7 +805,7 @@ export function buildCodexMajorCharacterList(
           q,
           [activePersona.name],
           activePersona.tags ?? [],
-          [activePersona.persona_bio, activePersona.species]
+          [activePersona.tagline, activePersona.persona_bio, activePersona.species]
         )
       : null;
     if (!q || tier !== null) {

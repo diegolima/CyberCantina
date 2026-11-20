@@ -1,4 +1,4 @@
-import type { ItemFlag } from "./character";
+import type { GalleryImage, ItemFlag } from "./character";
 
 export type DisclosureDetectionMode = "llm_intent" | "token_matching" | "hybrid";
 
@@ -28,6 +28,7 @@ export interface PersonaRecord {
   id: string;
   owner_id: string;
   name: string;
+  tagline?: string;
   species?: string;
   age?: string | null;
   age_is_secret: boolean;
@@ -41,6 +42,8 @@ export interface PersonaRecord {
   equipped: PersonaItemInstance[];
   inventory: PersonaItemInstance[];
   lore_entries: PersonaLoreEntry[];
+  portrait_url?: string | null;
+  gallery?: GalleryImage[];
   unsupported_fields?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -48,6 +51,7 @@ export interface PersonaRecord {
 
 export interface PersonaCreatePayload {
   name: string;
+  tagline?: string;
   species?: string;
   age?: string | null;
   age_is_secret?: boolean;
@@ -61,11 +65,14 @@ export interface PersonaCreatePayload {
   equipped?: PersonaItemInstance[];
   inventory?: PersonaItemInstance[];
   lore_entries?: PersonaLoreEntry[];
+  portrait_url?: string | null;
+  gallery?: GalleryImage[];
   unsupported_fields?: Record<string, unknown>;
 }
 
 export interface PersonaUpdatePayload {
   name?: string;
+  tagline?: string;
   species?: string;
   age?: string | null;
   age_is_secret?: boolean;

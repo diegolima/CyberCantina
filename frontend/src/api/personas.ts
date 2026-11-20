@@ -26,4 +26,35 @@ export const personasApi = {
         method: "DELETE",
       }
     ),
+
+  uploadPersonaPortrait: (personaId: string, fileBlob: Blob) => {
+    const formData = new FormData();
+    formData.append("file", fileBlob, "portrait.webp");
+    return fetchJson<PersonaRecord>(`${API_BASE}/personas/${personaId}/portrait`, {
+      method: "POST",
+      body: formData,
+    });
+  },
+
+  deletePersonaPortrait: (personaId: string) =>
+    fetchJson<PersonaRecord>(`${API_BASE}/personas/${personaId}/portrait`, {
+      method: "DELETE",
+    }),
+
+  uploadPersonaGalleryImage: (personaId: string, file: File, caption?: string) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    if (caption) {
+      formData.append("caption", caption);
+    }
+    return fetchJson<PersonaRecord>(`${API_BASE}/personas/${personaId}/gallery`, {
+      method: "POST",
+      body: formData,
+    });
+  },
+
+  deletePersonaGalleryImage: (personaId: string, imageId: string) =>
+    fetchJson<PersonaRecord>(`${API_BASE}/personas/${personaId}/gallery/${imageId}`, {
+      method: "DELETE",
+    }),
 };

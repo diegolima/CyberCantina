@@ -232,6 +232,7 @@ CREATE TABLE IF NOT EXISTS personas (
     id TEXT PRIMARY KEY,
     owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL CHECK(length(trim(name)) >= 1),
+    tagline TEXT NOT NULL DEFAULT '',
     species TEXT NOT NULL DEFAULT 'Human',
     age TEXT NULL,
     age_is_secret INTEGER NOT NULL DEFAULT 1,
@@ -245,6 +246,8 @@ CREATE TABLE IF NOT EXISTS personas (
     equipped_json TEXT NOT NULL DEFAULT '[]',
     inventory_json TEXT NOT NULL DEFAULT '[]',
     lore_entries_json TEXT NOT NULL DEFAULT '[]',
+    portrait_url TEXT NULL,
+    gallery_json TEXT NOT NULL DEFAULT '[]',
     unsupported_fields_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL

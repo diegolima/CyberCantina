@@ -31,6 +31,7 @@ from app.security.media_path import (
     PathTraversalError,
     safe_resolve_character_media_dir,
     safe_resolve_media_file_path,
+    safe_resolve_persona_media_file_path,
     safe_resolve_public_character_media_file_path,
     safe_resolve_world_media_file_path,
 )
@@ -43,20 +44,23 @@ def get_repo() -> CantinaRepository:
     return CantinaRepository(settings.db_path, media_dir=settings.media_dir)
 
 
-def run_entity_pruner() -> dict[str, list[str]]:
-    """Prune any characters and worlds marked pending_deletion that are no longer referenced by any campaign."""
+def run_entity_pruner() -> dict[str, list[str] | int]:
+    """Prune unreferenced pending_deletion characters/worlds and orphaned persona media files."""
     repo = get_repo()
     pruned_chars = repo.prune_pending_deletion_characters()
     pruned_worlds = repo.prune_pending_deletion_worlds()
-    if pruned_chars or pruned_worlds:
+    pruned_persona_media = repo.prune_orphaned_persona_media()
+    if pruned_chars or pruned_worlds or pruned_persona_media:
         logger.info(
-            "Pruned entities: %d characters, %d worlds",
+            "Pruned entities: %d characters, %d worlds, %d persona media files",
             len(pruned_chars),
             len(pruned_worlds),
+            pruned_persona_media,
         )
     return {
         "pruned_characters": pruned_chars,
         "pruned_worlds": pruned_worlds,
+        "pruned_persona_media": pruned_persona_media,
     }
 
 
@@ -343,6 +347,23 @@ def safe_resolve_media_path(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def safe_resolve_persona_media_path(
+    persona_id: str,
+    category: str,
+    filename: str,
+    *,
+    media_dir: str | Path | None = None,
+) -> Path:
+    """Safely validate and resolve a persona media file path to prevent directory traversal."""
+    base_dir = media_dir if media_dir is not None else settings.media_dir
+    try:
+        return safe_resolve_persona_media_file_path(base_dir, persona_id, category, filename)
+    except PathTraversalError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def safe_resolve_world_media_path(
     category: str,
     filename: str,
@@ -424,11 +445,27 @@ def get_world_media_bytes(repo: CantinaRepository, user_id: str) -> int:
     return total
 
 
+def get_persona_media_bytes(repo: CantinaRepository, user_id: str) -> int:
+    """Sum persisted persona media file bytes owned via personas or campaign snapshots."""
+    total = 0
+    for persona_id, category, filename in repo.list_user_persona_media_files(user_id):
+        try:
+            fpath = safe_resolve_persona_media_file_path(
+                repo.media_dir, persona_id, category, filename
+            )
+            if fpath.is_file():
+                total += fpath.stat().st_size
+        except (PathTraversalError, ValueError, OSError):
+            continue
+    return total
+
+
 def get_user_media_usage_bytes(repo: CantinaRepository, user_id: str) -> int:
-    """Compute total persisted media bytes across all characters and world media owned by ``user_id``."""
+    """Compute total persisted media bytes across characters, personas, and worlds owned by ``user_id``."""
     total = 0
     for cid in repo.list_user_media_character_ids(user_id):
         total += get_character_media_bytes(repo.media_dir, cid)
+    total += get_persona_media_bytes(repo, user_id)
     total += get_world_media_bytes(repo, user_id)
     return total
 

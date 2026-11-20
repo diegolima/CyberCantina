@@ -72,6 +72,22 @@ describe("entityImages utility", () => {
     const persona = { avatar_url: "https://example.com/persona.png" };
     expect(getEntityPrimaryImage("personas", persona)).toBe("https://example.com/persona.png");
 
+    const personaWithMedia = {
+      portrait_url: "/api/media/personas/p1/portraits/default_abc.webp",
+      gallery: [{ id: "img_1", url: "/api/media/personas/p1/gallery/img_1.webp", created_at: "2026" }],
+    };
+    expect(getEntityPrimaryImage("personas", personaWithMedia)).toBe(
+      "/api/media/personas/p1/portraits/default_abc.webp"
+    );
+
+    const personaGalleryOnly = {
+      portrait_url: null,
+      gallery: [{ id: "img_1", url: "/api/media/personas/p1/gallery/img_1.webp", created_at: "2026" }],
+    };
+    expect(getEntityPrimaryImage("personas", personaGalleryOnly)).toBe(
+      "/api/media/personas/p1/gallery/img_1.webp"
+    );
+
     const campaign = { cover_url: "https://example.com/campaign.png" };
     expect(getEntityPrimaryImage("campaigns", campaign)).toBe("https://example.com/campaign.png");
   });

@@ -6,7 +6,7 @@ import hashlib
 import re
 from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
-from app.schemas.character import ItemFlag
+from app.schemas.character import GalleryImage, ItemFlag
 from app.schemas.unsupported import sanitize_unsupported_fields_dict
 
 DisclosureDetectionMode = Literal["llm_intent", "token_matching", "hybrid"]
@@ -138,6 +138,11 @@ class PersonaRecord(BaseModel):
     id: str
     owner_id: str
     name: str = Field(..., min_length=1, max_length=100)
+    tagline: str = Field(
+        default="",
+        max_length=200,
+        description="One-line quick-reference summary for the player.",
+    )
     species: str = Field(default="Human", description="Biological or mechanical heritage.")
     age: str | None = None
     age_is_secret: bool = Field(
@@ -156,11 +161,11 @@ class PersonaRecord(BaseModel):
     )
     build_and_height: str = Field(
         default="",
-        description="Physical frame and stature (e.g. '182 cm, lean wiry build').",
+        description="Metric height (e.g. '180 cm'). Put physical build in distinctive_features.",
     )
     distinctive_features: list[str] = Field(
         default_factory=list,
-        description="Discrete physical traits: hair, eyes, scars, tattoos, augmentations.",
+        description="Discrete physical traits: hair, eyes, scars, tattoos, build, augmentations.",
     )
     physical_appearance: str = Field(
         default="",
@@ -178,6 +183,14 @@ class PersonaRecord(BaseModel):
         default_factory=list,
         description="Secret background facets. Default is_secret: True.",
     )
+    portrait_url: str | None = Field(
+        default=None,
+        description="Optional primary square portrait URL.",
+    )
+    gallery: list[GalleryImage] = Field(
+        default_factory=list,
+        description="Optional photo album images.",
+    )
     unsupported_fields: dict[str, Any] = Field(
         default_factory=dict,
         description="Read-only deprecated or unrecognized future .zcc attributes excluded from LLM prompts.",
@@ -192,6 +205,7 @@ CANONICAL_PERSONA_RECORD_KEYS: frozenset[str] = frozenset(
         "id",
         "owner_id",
         "name",
+        "tagline",
         "species",
         "age",
         "age_is_secret",
@@ -204,6 +218,8 @@ CANONICAL_PERSONA_RECORD_KEYS: frozenset[str] = frozenset(
         "equipped",
         "inventory",
         "lore_entries",
+        "portrait_url",
+        "gallery",
         "unsupported_fields",
         "created_at",
         "updated_at",
@@ -262,6 +278,7 @@ def get_default_persona(owner_id: str = "default_user") -> PersonaRecord:
         id=p_id,
         owner_id=resolved_owner,
         name=DEFAULT_PERSONA_NAME,
+        tagline="",
         species="Human",
         age=None,
         age_is_secret=False,
@@ -275,6 +292,8 @@ def get_default_persona(owner_id: str = "default_user") -> PersonaRecord:
         equipped=[],
         inventory=[],
         lore_entries=[],
+        portrait_url=None,
+        gallery=[],
         unsupported_fields={},
         created_at="2025-01-01T00:00:00Z",
         updated_at="2025-01-01T00:00:00Z",
@@ -285,6 +304,7 @@ class PersonaCreatePayload(BaseModel):
     """Payload to create a new persona in the master gallery."""
 
     name: str = Field(..., min_length=1, max_length=100)
+    tagline: str = Field(default="", max_length=200)
     species: str = "Human"
     age: str | None = None
     age_is_secret: bool = True
@@ -298,6 +318,8 @@ class PersonaCreatePayload(BaseModel):
     equipped: list[PersonaItemInstance] = Field(default_factory=list)
     inventory: list[PersonaItemInstance] = Field(default_factory=list)
     lore_entries: list[PersonaLoreEntry] = Field(default_factory=list)
+    portrait_url: str | None = None
+    gallery: list[GalleryImage] = Field(default_factory=list)
     unsupported_fields: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -305,6 +327,7 @@ class PersonaUpdatePayload(BaseModel):
     """Payload to update an existing persona in the master gallery."""
 
     name: str | None = None
+    tagline: str | None = Field(default=None, max_length=200)
     species: str | None = None
     age: str | None = None
     age_is_secret: bool | None = None

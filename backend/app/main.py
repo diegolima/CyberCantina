@@ -41,7 +41,7 @@ from app.routers.import_export import router as import_export_router
 from app.routers.local_relay import router as local_relay_router
 from app.routers.mechanics import router as mechanics_router
 from app.routers.notes import router as notes_router
-from app.routers.personas import router as personas_router
+from app.routers.personas import media_router as persona_media_router, router as personas_router
 from app.routers.prompts import router as prompts_router
 from app.routers.providers import router as providers_router
 from app.routers.settings import router as settings_router
@@ -192,6 +192,7 @@ app.include_router(notes_router)
 app.include_router(worlds_router)
 app.include_router(characters_router)
 app.include_router(personas_router)
+app.include_router(persona_media_router)
 app.include_router(mechanics_router)
 app.include_router(campaigns_router)
 app.include_router(enrich_router)

@@ -62,8 +62,13 @@ export function getEntityPrimaryImage(
       );
     }
     case "personas": {
-      const p = entity as any;
-      return p.avatar_url || p.portrait_url || p.image_url || null;
+      const p = entity as PersonaRecord & Record<string, any>;
+      if (p.portrait_url) return p.portrait_url;
+      if (p.avatar_url || p.image_url) return p.avatar_url || p.image_url;
+      if (p.gallery && p.gallery.length > 0 && p.gallery[0]?.url) {
+        return p.gallery[0].url;
+      }
+      return null;
     }
     case "campaigns": {
       const camp = entity as any;

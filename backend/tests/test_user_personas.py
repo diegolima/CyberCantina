@@ -1143,4 +1143,254 @@ def test_persona_legacy_canonicalization_dedup_and_zone1_exclusion(empty_repo: C
     assert "DO_NOT_INJECT_UNSUPPORTED_PHYS" not in repr(known)
 
 
+def _create_png_bytes(width: int = 320, height: int = 240, color: str = "teal") -> bytes:
+    import io
+    from PIL import Image
+
+    img = Image.new("RGB", (width, height), color=color)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_persona_tagline_height_heuristic_and_schema_migration(empty_repo: CantinaRepository) -> None:
+    """v0.23.0: Tagline persists without entering Zone 1, and Height vs Build & Height renders cleanly."""
+    owner_id = _get_or_create_test_user(empty_repo)
+    created = empty_repo.create_persona(
+        PersonaCreatePayload(
+            name="Vesper Lin",
+            tagline="Quiet syndicate archivist with a photographic memory.",
+            build_and_height="174 cm",
+            distinctive_features=["slender frame", "silver-rimmed glasses"],
+            persona_bio="Works out of Sector 4 ledger vaults.",
+        ),
+        owner_id=owner_id,
+    )
+    assert created.tagline == "Quiet syndicate archivist with a photographic memory."
+
+    z1_metric = format_zone1_player_protagonist_block(created)
+    assert "Height: 174 cm" in z1_metric
+    assert "Build & Height:" not in z1_metric
+    assert "Quiet syndicate archivist" not in z1_metric
+
+    # Legacy comma-separated value keeps 'Build & Height:' label
+    legacy = empty_repo.update_persona(
+        created.id,
+        PersonaUpdatePayload(
+            tagline="Updated quick tagline",
+            build_and_height="174 cm, lean build",
+        ),
+        owner_id=owner_id,
+    )
+    assert legacy.tagline == "Updated quick tagline"
+    z1_legacy = format_zone1_player_protagonist_block(legacy)
+    assert "Build & Height: 174 cm, lean build" in z1_legacy
+
+    # Idempotent migration: recreate a pre-v0.23.0 personas table lacking tagline/portrait_url/gallery_json
+    import sqlite3
+
+    db_path = empty_repo.db_path
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("DROP TABLE personas")
+        conn.execute(
+            """
+            CREATE TABLE personas (
+                id TEXT PRIMARY KEY,
+                owner_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                species TEXT NOT NULL DEFAULT 'Human',
+                age TEXT NULL,
+                age_is_secret INTEGER NOT NULL DEFAULT 1,
+                sex TEXT NOT NULL DEFAULT '',
+                pronouns TEXT NOT NULL DEFAULT '',
+                persona_bio TEXT NOT NULL DEFAULT '',
+                tags_json TEXT NOT NULL DEFAULT '[]',
+                build_and_height TEXT NOT NULL DEFAULT '',
+                distinctive_features_json TEXT NOT NULL DEFAULT '[]',
+                physical_appearance TEXT NOT NULL DEFAULT '',
+                equipped_json TEXT NOT NULL DEFAULT '[]',
+                inventory_json TEXT NOT NULL DEFAULT '[]',
+                lore_entries_json TEXT NOT NULL DEFAULT '[]',
+                unsupported_fields_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    migrated_repo = CantinaRepository(db_path, media_dir=empty_repo.media_dir)
+    migrated_repo.init_db()
+    migrated_persona = migrated_repo.create_persona(
+        PersonaCreatePayload(name="Migrated", tagline="Post-migration tagline"),
+        owner_id=owner_id,
+    )
+    assert migrated_persona.tagline == "Post-migration tagline"
+    assert migrated_persona.portrait_url is None
+    assert migrated_persona.gallery == []
+
+
+def test_persona_media_lifecycle_snapshot_retention_and_quota(
+    authed_client: tuple[TestClient, CantinaRepository],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v0.23.0: Portrait & gallery CRUD, default persona lock, snapshot-safe retention, and pruner cleanup."""
+    import io
+    from PIL import Image
+    from app.config import settings
+    from app.dependencies import get_user_media_usage_bytes, run_entity_pruner
+    from app.housekeeping.purge_inactive import _sweep_orphan_media_dirs
+
+    client, repo = authed_client
+    owner_id = "user_persona_tester"
+
+    # Non-admin user so media quota is enforced cleanly
+    std_user = repo.create_user(
+        username="std_persona_user",
+        display_name="Standard User",
+        role="user",
+        user_id="user_std_persona",
+    )
+    app.dependency_overrides[get_current_user] = lambda: std_user
+
+    # 1. Default persona rejects media uploads
+    def_p = repo.ensure_default_persona_for_user(std_user.id)
+    res_def = client.post(
+        f"/api/personas/{def_p.id}/portrait",
+        files={"file": ("p.png", _create_png_bytes(), "image/png")},
+    )
+    assert res_def.status_code == 400
+
+    # 2. Create persona & upload portrait (cropped to <=512x512 square WebP)
+    p = repo.create_persona(
+        PersonaCreatePayload(name="Kira Sato", tagline="Courier"),
+        owner_id=std_user.id,
+    )
+    res_up = client.post(
+        f"/api/personas/{p.id}/portrait",
+        files={"file": ("avatar.png", _create_png_bytes(800, 600, "purple"), "image/png")},
+    )
+    assert res_up.status_code == 200
+    p_after_up = res_up.json()
+    portrait_1 = p_after_up["portrait_url"]
+    assert portrait_1.startswith(f"/api/media/personas/{p.id}/portraits/default_")
+    assert portrait_1.endswith(".webp")
+
+    media_res = client.get(portrait_1)
+    assert media_res.status_code == 200
+    assert media_res.headers["content-type"] == "image/webp"
+    img = Image.open(io.BytesIO(media_res.content))
+    assert img.size == (512, 512)
+
+    # Path traversal / invalid filename returns 400/404
+    assert client.get(f"/api/media/personas/{p.id}/portraits/..%2Fsecret.webp").status_code in (400, 403, 404)
+
+    # 3. Upload gallery image
+    res_gal = client.post(
+        f"/api/personas/{p.id}/gallery",
+        files={"file": ("outfit.png", _create_png_bytes(600, 400, "orange"), "image/png")},
+        data={"caption": "Winter Coat"},
+    )
+    assert res_gal.status_code == 200
+    gal_items = res_gal.json()["gallery"]
+    assert len(gal_items) == 1
+    assert gal_items[0]["caption"] == "Winter Coat"
+    gal_url_1 = gal_items[0]["url"]
+    assert client.get(gal_url_1).status_code == 200
+    assert get_user_media_usage_bytes(repo, std_user.id) > 0
+
+    # 4. Freeze persona snapshot into a campaign; replacing portrait and deleting master persona
+    # must preserve campaign snapshot media files!
+    world = seed_world(repo, owner_id=std_user.id)
+    char = seed_character(repo, owner_id=std_user.id, world_id=world.id)
+    camp = repo.create_campaign(
+        name="Snapshot Integrity Run",
+        world_id=world.id,
+        character_id=char.id,
+        persona_id=p.id,
+        owner_id=std_user.id,
+    )
+    assert camp.persona_snapshot is not None
+    assert camp.persona_snapshot.portrait_url == portrait_1
+
+    # Replace portrait on master persona: portrait_1 must remain readable for the campaign!
+    res_replace = client.post(
+        f"/api/personas/{p.id}/portrait",
+        files={"file": ("avatar2.png", _create_png_bytes(300, 300, "green"), "image/png")},
+    )
+    assert res_replace.status_code == 200
+    portrait_2 = res_replace.json()["portrait_url"]
+    assert portrait_2 != portrait_1
+    assert client.get(portrait_1).status_code == 200
+    assert client.get(portrait_2).status_code == 200
+
+    # Delete master persona: portrait_1 & gal_url_1 (in snapshot) remain readable; portrait_2 (unreferenced) is unlinked!
+    res_del_p = client.delete(f"/api/personas/{p.id}")
+    assert res_del_p.status_code == 204
+    assert client.get(portrait_1).status_code == 200
+    assert client.get(gal_url_1).status_code == 200
+    assert client.get(portrait_2).status_code == 404
+
+    # Other user cannot read std_user's snapshot media
+    other_user = repo.create_user(
+        username="other_snooper",
+        display_name="Other",
+        role="user",
+        user_id="user_other_snooper",
+    )
+    app.dependency_overrides[get_current_user] = lambda: other_user
+    assert client.get(portrait_1).status_code == 404
+
+    # 5. Deleting the campaign frees snapshot-pinned media on prune
+    app.dependency_overrides[get_current_user] = lambda: std_user
+    repo.delete_campaign(camp.id, owner_id=std_user.id)
+    pruned = run_entity_pruner()
+    assert pruned["pruned_persona_media"] >= 2
+    assert client.get(portrait_1).status_code == 404
+    assert client.get(gal_url_1).status_code == 404
+    assert get_user_media_usage_bytes(repo, std_user.id) == 0
+
+    # 6. Quota enforcement blocks oversized persona upload
+    p_quota = repo.create_persona(PersonaCreatePayload(name="Quota Test"), owner_id=std_user.id)
+    monkeypatch.setattr(settings, "user_media_quota_mb", 0.0001)
+    res_over = client.post(
+        f"/api/personas/{p_quota.id}/portrait",
+        files={"file": ("big.png", _create_png_bytes(800, 800, "blue"), "image/png")},
+    )
+    assert res_over.status_code == 413
+
+    # 7. Chloromancer orphan sweep cleans stale unreferenced persona files & reset_user_data wipes persona media
+    monkeypatch.setattr(settings, "user_media_quota_mb", 50.0)
+    res_q2 = client.post(
+        f"/api/personas/{p_quota.id}/portrait",
+        files={"file": ("ok.png", _create_png_bytes(200, 200, "red"), "image/png")},
+    )
+    assert res_q2.status_code == 200
+    q2_url = res_q2.json()["portrait_url"]
+    assert client.get(q2_url).status_code == 200
+
+    # Write a stray orphan file with old mtime
+    import os
+    import time
+    from app.housekeeping.purge_inactive import ORPHAN_MEDIA_GRACE_SECONDS
+
+    orphan_dir = Path(repo.media_dir) / "personas" / p_quota.id / "gallery"
+    orphan_dir.mkdir(parents=True, exist_ok=True)
+    orphan_file = orphan_dir / "img_stray.webp"
+    orphan_file.write_bytes(b"RIFFfake")
+    old_ts = time.time() - (ORPHAN_MEDIA_GRACE_SECONDS + 120)
+    os.utime(orphan_file, (old_ts, old_ts))
+    assert _sweep_orphan_media_dirs(repo) >= 1
+    assert not orphan_file.exists()
+
+    # reset_user_data deletes p_quota and its media
+    repo.reset_user_data(std_user.id)
+    assert get_user_media_usage_bytes(repo, std_user.id) == 0
+    assert not (Path(repo.media_dir) / "personas" / p_quota.id).exists()
+
+
+
 

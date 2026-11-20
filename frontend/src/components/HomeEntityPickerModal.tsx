@@ -498,7 +498,8 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
                         )}
                       </div>
                       <div className="home-picker-item-sub">
-                        {persona.persona_bio ||
+                        {persona.tagline ||
+                          persona.persona_bio ||
                           persona.build_and_height ||
                           (persona.distinctive_features?.length
                             ? persona.distinctive_features.join(", ")

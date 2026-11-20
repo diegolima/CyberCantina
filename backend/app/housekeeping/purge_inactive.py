@@ -175,6 +175,7 @@ def _sweep_orphan_media_dirs(repo: CantinaRepository) -> int:
             safe_file.unlink(missing_ok=True)
             removed += 1
 
+    removed += repo.prune_orphaned_persona_media(min_age_seconds=ORPHAN_MEDIA_GRACE_SECONDS)
     return removed
 
 

@@ -156,6 +156,7 @@ def test_bundle_export_and_import_roundtrip(client_and_repo, tmp_path):
     # 3. Create a Persona
     persona_payload = PersonaCreatePayload(
         name="Operator Zero",
+        tagline="Ghost in the orbital relay.",
         age="29",
         age_is_secret=False,
         physical_appearance="Long trenchcoat, dark goggles.",
@@ -164,6 +165,17 @@ def test_bundle_export_and_import_roundtrip(client_and_repo, tmp_path):
         lore_entries=[PersonaLoreEntry(title="Ex-Militech Analyst", content="Deserted after uncovering illicit projects.", trigger_keywords=["militech"])],
     )
     created_persona = repo.create_persona(persona_payload, owner_id=user.id)
+    p_portrait_res = client.post(
+        f"/api/personas/{created_persona.id}/portrait",
+        files={"file": ("op_zero.png", _create_test_image(300, 300, "teal"), "image/png")},
+    )
+    assert p_portrait_res.status_code == 200
+    p_gal_res = client.post(
+        f"/api/personas/{created_persona.id}/gallery",
+        files={"file": ("op_gal.png", _create_test_image(320, 240, "navy"), "image/png")},
+        data={"caption": "Safehouse Rig"},
+    )
+    assert p_gal_res.status_code == 200
 
     # 4. Call Export Endpoint
     export_payload = {
@@ -187,9 +199,11 @@ def test_bundle_export_and_import_roundtrip(client_and_repo, tmp_path):
         assert "characters.json" in namelist
         assert "worlds.json" in namelist
         assert "personas.json" in namelist
-        # Portrait media should be packed
+        # Portrait + gallery media should be packed (1 char portrait + 1 persona portrait + 1 persona gallery)
         media_files = [n for n in namelist if n.startswith("media/")]
-        assert len(media_files) == 1
+        assert len(media_files) == 3
+        assert any(n.startswith(f"media/personas/{created_persona.id}/portraits/") for n in media_files)
+        assert any(n.startswith(f"media/personas/{created_persona.id}/gallery/") for n in media_files)
 
         manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
         assert manifest["generator"] == "CyberCantina"
@@ -237,6 +251,18 @@ def test_bundle_export_and_import_roundtrip(client_and_repo, tmp_path):
     all_worlds = repo.list_worlds(owner_id=user.id)
     imported_world = next(w for w in all_worlds if "Neo-Kyoto 2099 (Imported)" in w.name)
     assert imported_char.world_id == imported_world.id
+
+    all_personas = repo.list_personas(owner_id=user.id)
+    imported_persona = next(p for p in all_personas if "Operator Zero (Imported)" in p.name)
+    assert imported_persona.id != created_persona.id
+    assert imported_persona.tagline == "Ghost in the orbital relay."
+    assert imported_persona.portrait_url is not None
+    assert imported_persona.portrait_url.startswith(f"/api/media/personas/{imported_persona.id}/portraits/")
+    assert len(imported_persona.gallery) == 1
+    assert imported_persona.gallery[0].caption == "Safehouse Rig"
+    assert imported_persona.gallery[0].url.startswith(f"/api/media/personas/{imported_persona.id}/gallery/")
+    assert client.get(imported_persona.portrait_url).status_code == 200
+    assert client.get(imported_persona.gallery[0].url).status_code == 200
 
     # Verify vector embeddings were created for memory shards and lore
     conn = repo._connect()

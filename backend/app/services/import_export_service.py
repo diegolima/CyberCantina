@@ -26,6 +26,7 @@ from app.dependencies import (
     remove_character_media_dir,
     render_webp_bytes,
     safe_resolve_media_path,
+    safe_resolve_persona_media_path,
     safe_resolve_public_character_media_path,
     safe_resolve_world_media_path,
 )
@@ -195,7 +196,43 @@ def _extract_persona_unsupported_fields(
     return merged
 
 
-def _serialize_persona_for_zcc(persona: PersonaRecord) -> dict[str, Any]:
+def _stage_persona_media_for_export(
+    repo: CantinaRepository,
+    persona_id: str,
+    url: str,
+    category: str,
+    media_entries: dict[str, bytes],
+) -> str:
+    """Resolve a persona media asset on disk, stage it into the ZIP, and return relative path."""
+    m = re.search(rf"/api/media/personas/([^/]+)/{category}/([^/?#]+)", url or "")
+    if not m:
+        return url
+    p_id, filename = m.group(1), m.group(2)
+    try:
+        fpath = safe_resolve_persona_media_path(
+            p_id, category, filename, media_dir=repo.media_dir
+        )
+        if not fpath.is_file() and p_id != persona_id:
+            fallback_path = safe_resolve_persona_media_path(
+                persona_id, category, filename, media_dir=repo.media_dir
+            )
+            if fallback_path.is_file():
+                fpath = fallback_path
+        if fpath.is_file():
+            rel_zip_path = f"media/personas/{persona_id}/{category}/{filename}"
+            media_entries[rel_zip_path] = fpath.read_bytes()
+            return rel_zip_path
+    except Exception as exc:
+        logger.warning("Failed staging persona %s asset for export: %s", category, exc)
+    return url
+
+
+def _serialize_persona_for_zcc(
+    persona: PersonaRecord,
+    *,
+    repo: CantinaRepository | None = None,
+    media_entries: dict[str, bytes] | None = None,
+) -> dict[str, Any]:
     """Serialize a PersonaRecord for .zcc export with top-level unsupported_fields re-emission."""
     persona_data = persona.model_dump()
     persona_data.pop("unsupported_fields", None)
@@ -203,6 +240,19 @@ def _serialize_persona_for_zcc(persona: PersonaRecord) -> dict[str, Any]:
     phys_norm = str(persona_data.get("physical_appearance") or "").strip()
     if not phys_norm or phys_norm == bio_norm:
         persona_data.pop("physical_appearance", None)
+    if repo is not None and media_entries is not None:
+        if persona.portrait_url:
+            persona_data["portrait_url"] = _stage_persona_media_for_export(
+                repo, persona.id, persona.portrait_url, "portraits", media_entries
+            )
+        rewritten_gallery: list[dict[str, Any]] = []
+        for g_item in persona_data.get("gallery", []):
+            item_copy = dict(g_item)
+            item_copy["url"] = _stage_persona_media_for_export(
+                repo, persona.id, g_item.get("url", ""), "gallery", media_entries
+            )
+            rewritten_gallery.append(item_copy)
+        persona_data["gallery"] = rewritten_gallery
     for ext_k, ext_v in (persona.unsupported_fields or {}).items():
         if ext_k in CANONICAL_PERSONA_RECORD_KEYS:
             continue
@@ -463,7 +513,10 @@ def build_zcc_export(
         )
         for w in worlds
     ]
-    exported_personas_json = [_serialize_persona_for_zcc(p) for p in personas]
+    exported_personas_json = [
+        _serialize_persona_for_zcc(p, repo=repo, media_entries=media_entries)
+        for p in personas
+    ]
 
     # 4. Build Manifest
     manifest = ZccManifest(
@@ -695,6 +748,7 @@ def inspect_uploaded_file(
             EntitySummary(
                 id=str(p.get("id") or ""),
                 name=str(p.get("name") or "Unnamed Persona"),
+                tagline=str(p.get("tagline") or ""),
                 category="persona",
                 extra_info={"equipped_count": len(p.get("equipped", []))},
             )
@@ -804,10 +858,37 @@ async def commit_staged_import(
     quota_bytes = get_user_quota_bytes(actor_user) if actor_user is not None else None
     pre_rendered_media: dict[tuple[int, str, str], bytes] = {}
     pre_rendered_world_media: dict[tuple[int, int], bytes] = {}
+    pre_rendered_persona_media: dict[tuple[int, str, str], bytes] = {}
     zip_names = set(zf.namelist())
 
     if quota_bytes is not None and actor_user is not None:
         total_media_bytes = 0
+        for p_idx, p in enumerate(personas_data):
+            old_p_id = str(p.get("id") or "")
+            p_name = str(p.get("name") or "Unnamed Persona").strip()
+            p_strategy = (
+                req.conflict_strategies.get(old_p_id)
+                or req.conflict_strategies.get(p_name)
+                or req.default_conflict_strategy
+            )
+            if p_strategy == "skip":
+                continue
+            raw_portrait = p.get("portrait_url")
+            if isinstance(raw_portrait, str) and raw_portrait.strip():
+                zip_member = _resolve_zip_member(raw_portrait, zip_names)
+                if zip_member:
+                    webp_bytes = render_webp_bytes(zf.read(zip_member), square_crop=True, max_size=512)
+                    pre_rendered_persona_media[(p_idx, "portrait", "default")] = webp_bytes
+                    total_media_bytes += len(webp_bytes)
+            for g_idx, g_item in enumerate(p.get("gallery") or []):
+                zip_member = _resolve_zip_member(
+                    g_item.get("url", "") if isinstance(g_item, dict) else "",
+                    zip_names,
+                )
+                if zip_member:
+                    webp_bytes = render_webp_bytes(zf.read(zip_member), square_crop=False, max_size=1920)
+                    pre_rendered_persona_media[(p_idx, "gallery", str(g_idx))] = webp_bytes
+                    total_media_bytes += len(webp_bytes)
         for w_idx, w in enumerate(worlds_data):
             old_world_id = str(w.get("id") or "")
             w_name = str(w.get("name") or "Unnamed World").strip()
@@ -1270,7 +1351,7 @@ async def commit_staged_import(
             errors.append(f"World '{w_name}': {exc}")
 
     # 2. Ingest Personas
-    for p in personas_data:
+    for p_idx, p in enumerate(personas_data):
         old_p_id = str(p.get("id") or "")
         p_name = str(p.get("name") or "Unnamed Persona").strip()
         strategy = (
@@ -1283,6 +1364,7 @@ async def commit_staged_import(
             skipped_entities.append(f"Persona: {p_name}")
             continue
 
+        written_persona_files: list[Path] = []
         try:
             new_p_id = f"persona_{uuid.uuid4().hex[:10]}"
             id_remap[old_p_id] = new_p_id
@@ -1297,9 +1379,64 @@ async def commit_staged_import(
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+            new_portrait_url: str | None = None
+            raw_portrait = p.get("portrait_url")
+            if isinstance(raw_portrait, str) and raw_portrait.strip():
+                zip_member = _resolve_zip_member(raw_portrait, zip_names)
+                if zip_member:
+                    filename = f"default_{uuid.uuid4().hex[:8]}.webp"
+                    target_path = safe_resolve_persona_media_path(
+                        new_p_id, "portraits", filename, media_dir=repo.media_dir
+                    )
+                    pre = pre_rendered_persona_media.get((p_idx, "portrait", "default"))
+                    if actor_user is not None:
+                        webp_bytes = pre if pre is not None else render_webp_bytes(
+                            zf.read(zip_member), square_crop=True, max_size=512
+                        )
+                        enforce_quota_and_write_webp(repo, actor_user, webp_bytes, target_path)
+                    else:
+                        process_and_save_image(zf.read(zip_member), target_path, square_crop=True, max_size=512)
+                    written_persona_files.append(target_path)
+                    new_portrait_url = f"/api/media/personas/{new_p_id}/portraits/{filename}"
+                elif raw_portrait.strip().startswith(("http://", "https://")):
+                    new_portrait_url = raw_portrait.strip()
+
+            new_persona_gallery: list[GalleryImage] = []
+            for g_idx, g_item in enumerate(p.get("gallery") or []):
+                if not isinstance(g_item, dict):
+                    continue
+                rel_path = str(g_item.get("url") or "").strip()
+                zip_member = _resolve_zip_member(rel_path, zip_names)
+                if zip_member:
+                    g_id = f"img_{uuid.uuid4().hex[:10]}"
+                    filename = f"{g_id}.webp"
+                    target_path = safe_resolve_persona_media_path(
+                        new_p_id, "gallery", filename, media_dir=repo.media_dir
+                    )
+                    pre = pre_rendered_persona_media.get((p_idx, "gallery", str(g_idx)))
+                    if actor_user is not None:
+                        webp_bytes = pre if pre is not None else render_webp_bytes(
+                            zf.read(zip_member), square_crop=False, max_size=1920
+                        )
+                        enforce_quota_and_write_webp(repo, actor_user, webp_bytes, target_path)
+                    else:
+                        process_and_save_image(zf.read(zip_member), target_path, square_crop=False, max_size=1920)
+                    written_persona_files.append(target_path)
+                    new_persona_gallery.append(
+                        GalleryImage(
+                            id=g_id,
+                            url=f"/api/media/personas/{new_p_id}/gallery/{filename}",
+                            caption=str(g_item.get("caption") or ""),
+                            created_at=str(g_item.get("created_at") or utc_now_iso()),
+                        )
+                    )
+                elif rel_path.startswith(("http://", "https://")):
+                    new_persona_gallery.append(GalleryImage.model_validate(g_item))
+
             raw_age = p.get("age")
             persona_payload = PersonaCreatePayload(
                 name=final_name,
+                tagline=str(p.get("tagline") or ""),
                 species=p.get("species") or "Human",
                 age=str(raw_age) if raw_age is not None else None,
                 age_is_secret=True if p.get("age_is_secret") is None else bool(p.get("age_is_secret")),
@@ -1313,13 +1450,19 @@ async def commit_staged_import(
                 equipped=p.get("equipped") or [],
                 inventory=p.get("inventory") or [],
                 lore_entries=p.get("lore_entries") or [],
+                portrait_url=new_portrait_url,
+                gallery=new_persona_gallery,
                 unsupported_fields=persona_unsupported,
             )
             repo.create_persona(persona_payload, owner_id=user_id, persona_id=new_p_id)
             imported_personas.append(final_name)
         except HTTPException:
+            for pf in written_persona_files:
+                pf.unlink(missing_ok=True)
             raise
         except Exception as exc:
+            for pf in written_persona_files:
+                pf.unlink(missing_ok=True)
             logger.exception("Failed importing persona '%s': %s", p_name, exc)
             errors.append(f"Persona '{p_name}': {exc}")
 

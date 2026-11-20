@@ -99,8 +99,13 @@ export const TurnCard: React.FC<TurnCardProps> = ({
 }) => {
   const [selectedCognitionCharIdByTurn, setSelectedCognitionCharIdByTurn] = useState<Record<string, string>>({});
   const [showRetainedIds, setShowRetainedIds] = useState<Record<string, boolean>>({});
+  const [brokenPersonaPortraitUrl, setBrokenPersonaPortraitUrl] = useState<string | null>(null);
   const toggleRetained = (id: string) =>
     setShowRetainedIds((prev) => ({ ...prev, [id]: !prev[id] }));
+  const personaPortraitUrl = bundle.campaign.persona_snapshot?.portrait_url || null;
+  const showPersonaPortrait = Boolean(
+    personaPortraitUrl && brokenPersonaPortraitUrl !== personaPortraitUrl
+  );
   const isRoot = turn.depth_index === 0;
   const isLastTurn = !isRoot && turnIdx === bundle.active_branch_turns.length - 1;
   const isArrivalTurn = turn.actor_id === "__arrival__";
@@ -300,6 +305,22 @@ export const TurnCard: React.FC<TurnCardProps> = ({
                         <span>{turn.user_message}</span>
                       </div>
                     )
+                  ) : showPersonaPortrait ? (
+                    <div className="user-prompt-row">
+                      {renderUserMessageBubble(
+                        turn.user_message,
+                        allCampaignCharacters,
+                        presentCharacterIds,
+                        turn.whispers
+                      )}
+                      <img
+                        src={personaPortraitUrl!}
+                        alt={bundle.campaign.persona_snapshot?.name || "Protagonist"}
+                        title={bundle.campaign.persona_snapshot?.name || "Protagonist"}
+                        className="user-prompt-avatar"
+                        onError={() => setBrokenPersonaPortraitUrl(personaPortraitUrl)}
+                      />
+                    </div>
                   ) : (
                     renderUserMessageBubble(turn.user_message, allCampaignCharacters, presentCharacterIds, turn.whispers)
                   )}
