@@ -12,8 +12,10 @@ import {
   computePurgeToggleState,
 } from "../../utils/importExportLogic";
 import { AdminServerConfigTab } from "../auth/AdminServerConfigTab";
+import { CharacterMediaTab } from "../character/CharacterMediaTab";
 import { ExportBundleModal } from "../ExportBundleModal";
 import { ImportPreviewModal } from "../ImportPreviewModal";
+import { PersonaMediaTab } from "../PersonaMediaTab";
 import { ImageLightboxModal } from "../shared/ImageLightboxModal";
 import {
   CardMediaActionStrip,
@@ -470,5 +472,53 @@ describe("Image-linked video logic helpers & UI components", () => {
     );
     expect(publicStrip).not.toContain('aria-label="Upload linked video"');
     expect(publicStrip).toContain('aria-label="Delete photo permanently"');
+  });
+
+  it("uses consistent administrator-disabled tooltips on character and persona media upload buttons", () => {
+    const c = makeCharacterWithVideo();
+    const p = makePersonaWithVideo();
+    const restrictedSettings: AppSettings = {
+      ...BASE_SETTINGS,
+      allow_image_uploads: false,
+      allow_video_uploads: false,
+    };
+
+    const charHtml = renderToStaticMarkup(
+      <CharacterMediaTab
+        isActive={true}
+        characterId={c.id}
+        latestCharacter={c}
+        setLatestCharacter={vi.fn()}
+        setCharacterId={vi.fn()}
+        portraits={c.portraits ?? {}}
+        gallery={c.gallery ?? []}
+        setPortraits={vi.fn()}
+        setGallery={vi.fn()}
+        viewingHistory={false}
+        appSettings={restrictedSettings}
+        isAdmin={false}
+        onSaved={vi.fn()}
+      />
+    );
+    expect(charHtml).toContain(
+      'title="Image uploads are currently disabled by the server administrator."'
+    );
+
+    const personaHtml = renderToStaticMarkup(
+      <PersonaMediaTab
+        isActive={true}
+        personaId={p.id}
+        isReadOnly={false}
+        isUnsavedDraft={false}
+        portraitUrl={p.portrait_url ?? null}
+        gallery={p.gallery ?? []}
+        appSettings={restrictedSettings}
+        isAdmin={false}
+        onMediaUpdated={vi.fn()}
+      />
+    );
+    expect(personaHtml).toContain(
+      'title="Image uploads are currently disabled by the server administrator."'
+    );
   });
 });

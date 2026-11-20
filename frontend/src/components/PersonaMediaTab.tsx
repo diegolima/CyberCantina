@@ -336,7 +336,7 @@ export const PersonaMediaTab: React.FC<PersonaMediaTabProps> = ({
                   title={
                     allowImageUploads
                       ? undefined
-                      : "Image uploads are disabled by administrator"
+                      : "Image uploads are currently disabled by the server administrator."
                   }
                 >
                   <Upload size={12} />

@@ -423,7 +423,7 @@ export const CharacterMediaTab: React.FC<CharacterMediaTabProps> = ({
                               title={
                                 allowImageUploads
                                   ? undefined
-                                  : "Image uploads are disabled by administrator"
+                                  : "Image uploads are currently disabled by the server administrator."
                               }
                             >
                               <Upload size={11} />

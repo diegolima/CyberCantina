@@ -200,11 +200,11 @@ export const UnifiedMediaUploadButton: React.FC<
   );
 
   const tooltip = bothDisabled
-    ? "Image and video uploads are disabled by administrator"
+    ? "Image and video uploads are currently disabled by the server administrator."
     : !allowVideoUploads
-    ? "Upload image(s) (video uploads are disabled by administrator)"
+    ? "Upload image(s) (video uploads are currently disabled by the server administrator)"
     : !allowImageUploads
-    ? `Upload video(s): MP4 / WebM · Max ${maxVideoUploadMb} MB (image uploads are disabled by administrator)`
+    ? `Upload video(s): MP4 / WebM · Max ${maxVideoUploadMb} MB (image uploads are currently disabled by the server administrator)`
     : `Upload images or videos (MP4 / WebM · Max ${maxVideoUploadMb} MB)`;
 
   return (
@@ -361,7 +361,7 @@ export const CardMediaActionStrip: React.FC<CardMediaActionStripProps> = ({
             aria-label={hasVideo ? "Replace linked video" : "Upload linked video"}
             title={
               !allowVideoUploads
-                ? "Video uploads are disabled by administrator"
+                ? "Video uploads are currently disabled by the server administrator."
                 : hasVideo
                 ? `Replace linked video (MP4 / WebM · Max ${maxVideoUploadMb} MB)`
                 : `Upload linked video (MP4 / WebM · Max ${maxVideoUploadMb} MB)`
