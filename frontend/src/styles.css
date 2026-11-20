@@ -2390,6 +2390,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 5px;
+  width: 100%;
+  min-width: 0;
 }
 
 .field-group label,
@@ -2412,7 +2414,8 @@ body {
   border-radius: 6px;
   padding: 8px 11px;
   color: var(--text-primary);
-  font-size: 0.86rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
@@ -2513,7 +2516,7 @@ body {
 }
 
 .field-textarea {
-  min-height: 76px;
+  min-height: 58px;
   resize: vertical;
 }
 
@@ -2529,16 +2532,24 @@ body {
 
 .editable-field-box {
   position: relative;
+  width: 100%;
+  min-width: 0;
   background: var(--bg-deep);
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   padding: 8px 11px;
   color: var(--text-primary);
+  font-family: inherit;
   font-size: 0.85rem;
   line-height: 1.5;
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.editable-field-box--multiline {
+  min-height: 58px;
 }
 
 .editable-field-box:hover {

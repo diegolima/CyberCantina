@@ -1,5 +1,10 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Edit3 } from "lucide-react";
+
+const useIsomorphicLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect;
+
+const MIN_MULTILINE_HEIGHT_PX = 58;
 
 export interface ClickToEditFieldProps {
   label?: string;
@@ -26,12 +31,27 @@ export const ClickToEditField: React.FC<ClickToEditFieldProps> = ({
 }) => {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const preservedHeightRef = useRef<number>(0);
 
   useEffect(() => {
     if (!editing) {
       setDraft(value);
     }
   }, [value, editing]);
+
+  useIsomorphicLayoutEffect(() => {
+    if (!editing || !multiline) return;
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const borderV = el.offsetHeight - el.clientHeight;
+    const minPx = Math.max(MIN_MULTILINE_HEIGHT_PX, preservedHeightRef.current);
+    const nextHeight = Math.max(minPx, el.scrollHeight + borderV);
+    el.style.height = `${nextHeight}px`;
+    preservedHeightRef.current = 0;
+  }, [editing, multiline, draft]);
 
   const handleCommit = (commitVal?: string) => {
     setEditing(false);
@@ -44,9 +64,18 @@ export const ClickToEditField: React.FC<ClickToEditFieldProps> = ({
     <div className="field-group">
       {displayLabel && <label>{displayLabel}</label>}
       {editing && !readOnly ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+            width: "100%",
+            minWidth: 0,
+          }}
+        >
           {multiline ? (
             <textarea
+              ref={textareaRef}
               className="field-textarea"
               rows={rows}
               autoFocus
@@ -59,6 +88,7 @@ export const ClickToEditField: React.FC<ClickToEditFieldProps> = ({
               onBlur={() => handleCommit()}
               onKeyDown={(e) => {
                 if (e.key === "Escape") {
+                  e.stopPropagation();
                   setDraft(value);
                   setEditing(false);
                 }
@@ -78,6 +108,7 @@ export const ClickToEditField: React.FC<ClickToEditFieldProps> = ({
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleCommit();
                 if (e.key === "Escape") {
+                  e.stopPropagation();
                   setDraft(value);
                   setEditing(false);
                 }
@@ -117,9 +148,12 @@ export const ClickToEditField: React.FC<ClickToEditFieldProps> = ({
         </div>
       ) : (
         <div
-          className={`editable-field-box ${readOnly ? "read-only" : ""}`}
+          ref={boxRef}
+          className={`editable-field-box${multiline ? " editable-field-box--multiline" : ""}${readOnly ? " read-only" : ""}`}
           onClick={() => {
             if (!readOnly) {
+              const rect = boxRef.current?.getBoundingClientRect();
+              preservedHeightRef.current = rect ? Math.ceil(rect.height) : 0;
               setDraft(value);
               setEditing(true);
             }

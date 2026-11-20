@@ -32,6 +32,41 @@ test.describe("02 - Character Inspector, TagChipsInput & World Codex Authoring",
     await page.getByRole("tab", { name: /^Base$/i }).click();
     expect(await charModal.boundingBox()).toEqual(initialCharBox);
 
+    // Populate multi-line Creator Notes, then verify clicking it does not shrink width/height
+    // and clicking directly onto Initial Message below opens Initial Message cleanly.
+    const creatorNotesGroup = charModal.locator(".field-group", {
+      hasText: "Creator Notes (Built-in usage notes; viewable in User Notes)",
+    });
+    const initialMsgGroup = charModal.locator(".field-group", {
+      hasText: "Initial Message (Turn 0 Opening Scene Prose)",
+    });
+
+    await creatorNotesGroup.locator(".editable-field-box").click();
+    await creatorNotesGroup
+      .locator("textarea")
+      .fill(
+        "Line 1: Keep Kira guarded during initial meet.\nLine 2: Emphasize encrypted courier jargon.\nLine 3: Reveal Sovereign cipher only on high trust.\nLine 4: Reference Booth 4 surveillance feeds.\nLine 5: Prefer terse replies under stress."
+      );
+    await creatorNotesGroup.locator("textarea").blur();
+
+    const notesBoxBefore = await creatorNotesGroup
+      .locator(".editable-field-box")
+      .boundingBox();
+    expect(notesBoxBefore).toBeTruthy();
+
+    await creatorNotesGroup.locator(".editable-field-box").click();
+    const notesTextareaAfter = await creatorNotesGroup
+      .locator("textarea")
+      .boundingBox();
+    expect(notesTextareaAfter).toBeTruthy();
+    expect(Math.abs(notesTextareaAfter!.width - notesBoxBefore!.width)).toBeLessThanOrEqual(1);
+    expect(Math.abs(notesTextareaAfter!.height - notesBoxBefore!.height)).toBeLessThanOrEqual(2);
+
+    // Click directly on Initial Message below while Creator Notes is open for editing
+    await initialMsgGroup.locator(".editable-field-box").click();
+    await expect(initialMsgGroup.locator("textarea")).toBeFocused();
+    await initialMsgGroup.locator("textarea").press("Escape");
+
     // Locate Character Tags TagChipsInput on Base tab (has 2 existing tags: fixer, broker)
     const tagInput = page.locator(".tag-chips-inline-input").first();
     await expect(tagInput).toBeVisible();
