@@ -134,6 +134,7 @@ export const ModelCard: React.FC<ModelCardProps> = ({
   const formatProviderBadge = (ptype: LLMProvider["type"]) => {
     if (ptype === "browser_ollama") return "LOCAL OLLAMA";
     if (ptype === "webgpu") return "WEBGPU";
+    if (ptype === "openai_compat") return "OPENAI API";
     return ptype.toUpperCase();
   };
 

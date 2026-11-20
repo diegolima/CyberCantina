@@ -34,15 +34,22 @@ def parse_ollama_tags(payload: dict[str, Any]) -> list[ProviderModelInfo]:
 
 
 def parse_openai_models(payload: dict[str, Any]) -> list[ProviderModelInfo]:
-    """Parse an OpenAI-compatible ``/v1/models`` payload."""
+    """Parse an OpenAI-compatible ``/models`` payload."""
     models: list[ProviderModelInfo] = []
+    seen_names: set[str] = set()
     for item in payload.get("data", []) or []:
-        name = item.get("id") or ""
-        if not name:
+        name = str(item.get("id") or "").strip()
+        if not name or name in seen_names:
             continue
+        seen_names.add(name)
         lowered = name.lower()
+        family = name.split("/", 1)[0] if "/" in name else ""
         models.append(
-            ProviderModelInfo(name=name, is_embedding=any(k in lowered for k in EMBED_MODEL_KEYWORDS))
+            ProviderModelInfo(
+                name=name,
+                family=family,
+                is_embedding=any(k in lowered for k in EMBED_MODEL_KEYWORDS),
+            )
         )
     return models
 

@@ -48,115 +48,8 @@ function isBlockedLiteralHost(host: string): boolean {
   return false;
 }
 
-export type RemoteProviderDriverType = "ollama" | "openrouter" | "aihorde" | "nanogpt";
-
-export function normalizeRemoteBaseUrl(
-  type: ProviderType | RemoteProviderDriverType,
-  rawUrl?: string | null
-): string {
-  const trimmed = (rawUrl ?? "").trim();
-  if (!trimmed) {
-    if (type === "openrouter") {
-      return "https://openrouter.ai/api/v1";
-    }
-    if (type === "aihorde") {
-      return "https://oai.stablehorde.net/v1";
-    }
-    if (type === "nanogpt") {
-      return "https://nano-gpt.com/api/v1";
-    }
-    throw new RemoteDriverError("invalid_url", "Server URL is required.");
-  }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(trimmed);
-  } catch {
-    throw new RemoteDriverError("invalid_url", "Server URL is not a valid URL.");
-  }
-
-  if (type === "openrouter" || type === "aihorde" || type === "nanogpt") {
-    if (parsed.protocol !== "https:") {
-      throw new RemoteDriverError("invalid_url", "Cloud provider URL must use https://.");
-    }
-  } else if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new RemoteDriverError("invalid_url", "Server URL must use http:// or https://.");
-  }
-  const protocol = parsed.protocol === "https:" ? "https:" : "http:";
-
-  if (parsed.username || parsed.password) {
-    throw new RemoteDriverError(
-      "invalid_url",
-      "Credentials in the URL are not allowed; use the API key field."
-    );
-  }
-  if (parsed.search || parsed.hash) {
-    throw new RemoteDriverError(
-      "invalid_url",
-      "Server URL must not contain a query string or fragment."
-    );
-  }
-
-  const host = parsed.hostname.toLowerCase();
-  if (!host) {
-    throw new RemoteDriverError("invalid_url", "Server URL has no host.");
-  }
-  if (isBlockedLiteralHost(host)) {
-    throw new RemoteDriverError(
-      "blocked_by_policy",
-      "Link-local, metadata, or unspecified addresses are not allowed."
-    );
-  }
-
-  let portSuffix = "";
-  if (parsed.port) {
-    const portNum = Number.parseInt(parsed.port, 10);
-    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535 || String(portNum) !== parsed.port) {
-      throw new RemoteDriverError("invalid_url", "Server URL has an invalid port.");
-    }
-    portSuffix = `:${portNum}`;
-  }
-
-  const schemeEnd = trimmed.indexOf("://");
-  const afterScheme = schemeEnd >= 0 ? trimmed.slice(schemeEnd + 3) : "";
-  const pathStart = afterScheme.search(/[/?#]/);
-  const rawPath = pathStart >= 0 ? afterScheme.slice(pathStart).split(/[?#]/, 1)[0] : "";
-  const segments = rawPath.split("/");
-  if (
-    segments.some((seg) => {
-      const lower = seg.toLowerCase();
-      return (
-        lower === "." ||
-        lower === ".." ||
-        lower === "%2e" ||
-        lower === "%2e%2e" ||
-        lower === ".%2e" ||
-        lower === "%2e."
-      );
-    })
-  ) {
-    throw new RemoteDriverError("invalid_url", "Server URL must not contain path traversal segments.");
-  }
-
-  let path = parsed.pathname.replace(/\/+$/, "");
-  if (type === "openrouter" || type === "nanogpt") {
-    if (!path) {
-      path = "/api/v1";
-    }
-  } else if (type === "aihorde") {
-    if (!path || !path.endsWith("/v1")) {
-      path = path ? `${path}/v1` : "/v1";
-    }
-  } else {
-    if (path.endsWith("/v1")) {
-      path = path.slice(0, -3).replace(/\/+$/, "");
-    } else if (path.endsWith("/api")) {
-      path = path.slice(0, -4).replace(/\/+$/, "");
-    }
-  }
-
-  return `${protocol}//${host}${portSuffix}${path}`;
-}
+export type OpenAiCompatDriverType = "openai_compat" | "openrouter" | "aihorde" | "nanogpt";
+export type RemoteProviderDriverType = "ollama" | OpenAiCompatDriverType;
 
 function bearerHeaders(token?: string | null): Record<string, string> {
   const clean = (token ?? "").trim();
@@ -184,19 +77,22 @@ function parseOllamaTags(payload: any): ProviderModelInfo[] {
 
 function parseOpenAiModels(payload: any): ProviderModelInfo[] {
   const raw = Array.isArray(payload?.data) ? payload.data : [];
-  return raw
-    .filter((m: any) => typeof m?.id === "string" && m.id.trim())
-    .map((m: any) => {
-      const name = String(m.id);
-      return {
-        name,
-        size_mb: 0,
-        parameter_size: "",
-        quantization_level: "",
-        family: "",
-        is_embedding: isEmbeddingName(name),
-      };
+  const seen = new Set<string>();
+  const models: ProviderModelInfo[] = [];
+  for (const m of raw) {
+    const name = typeof m?.id === "string" ? m.id.trim() : "";
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    models.push({
+      name,
+      size_mb: 0,
+      parameter_size: "",
+      quantization_level: "",
+      family: name.includes("/") ? name.split("/")[0] : "",
+      is_embedding: isEmbeddingName(name),
     });
+  }
+  return models;
 }
 
 function parseOpenRouterModels(payload: any): ProviderModelInfo[] {
@@ -307,6 +203,578 @@ function buildProbeResponse(opts: {
   };
 }
 
+interface ProbeContext {
+  root: string;
+  cleanToken: string;
+  requireToken?: boolean;
+  providerId?: string | null;
+  configVersion?: number;
+  signal: AbortSignal;
+}
+
+/**
+ * Base adapter for any OpenAI-compatible HTTP API (/models, /chat/completions).
+ * Provider-specific adapters (OpenRouter, NanoGPT, AI Horde) extend this class.
+ */
+class OpenAiCompatAdapter {
+  readonly type: OpenAiCompatDriverType = "openai_compat";
+  readonly label: string = "OpenAI API";
+  readonly defaultBaseUrl: string | null = null;
+  readonly requireHttps: boolean = false;
+  readonly requiresBrowserChatToken: boolean = false;
+  readonly minMaxTokens: number | null = null;
+
+  normalizePath(path: string): string {
+    return path || "/v1";
+  }
+
+  parseModels(payload: any): ProviderModelInfo[] {
+    return parseOpenAiModels(payload);
+  }
+
+  protected mapProbeHttpError(
+    status: number,
+    ctx: ProbeContext
+  ): ProviderProbeResponse {
+    if (status === 401) {
+      return buildProbeResponse({
+        providerId: ctx.providerId,
+        reachable: false,
+        protocol: null,
+        models: [],
+        errorCode: "unauthorized",
+        error: `Invalid ${this.label} API key.`,
+        configVersion: ctx.configVersion,
+      });
+    }
+    if (status === 403) {
+      return buildProbeResponse({
+        providerId: ctx.providerId,
+        reachable: false,
+        protocol: null,
+        models: [],
+        errorCode: "forbidden",
+        error: `${this.label} access forbidden.`,
+        configVersion: ctx.configVersion,
+      });
+    }
+    if (status === 404) {
+      return buildProbeResponse({
+        providerId: ctx.providerId,
+        reachable: false,
+        protocol: null,
+        models: [],
+        errorCode: "not_found",
+        error: `${this.label} /models endpoint was not found.`,
+        configVersion: ctx.configVersion,
+      });
+    }
+    return buildProbeResponse({
+      providerId: ctx.providerId,
+      reachable: false,
+      protocol: null,
+      models: [],
+      errorCode: status === 502 ? "connect_refused" : "unknown",
+      error: `HTTP ${status}`,
+      configVersion: ctx.configVersion,
+    });
+  }
+
+  async probe(ctx: ProbeContext): Promise<ProviderProbeResponse> {
+    const resp = await fetch(`${ctx.root}/models`, {
+      method: "GET",
+      headers: bearerHeaders(ctx.cleanToken),
+      signal: ctx.signal,
+    });
+    if (resp.ok) {
+      let payload: any;
+      try {
+        payload = await resp.json();
+      } catch {
+        return buildProbeResponse({
+          providerId: ctx.providerId,
+          reachable: false,
+          protocol: null,
+          models: [],
+          errorCode: "bad_payload",
+          error: `${this.label} returned a non-JSON model list.`,
+          configVersion: ctx.configVersion,
+        });
+      }
+      if (!payload || !Array.isArray(payload.data)) {
+        return buildProbeResponse({
+          providerId: ctx.providerId,
+          reachable: false,
+          protocol: null,
+          models: [],
+          errorCode: "bad_payload",
+          error: `${this.label} returned an unexpected model list.`,
+          configVersion: ctx.configVersion,
+        });
+      }
+      return buildProbeResponse({
+        providerId: ctx.providerId,
+        reachable: true,
+        protocol: "openai_compat",
+        models: this.parseModels(payload),
+        errorCode: null,
+        error: null,
+        configVersion: ctx.configVersion,
+      });
+    }
+    return this.mapProbeHttpError(resp.status, ctx);
+  }
+
+  buildChatPayload(req: RelayLlmRequest): Record<string, unknown> {
+    const maxTokens = this.minMaxTokens
+      ? Math.max(req.options.max_tokens, this.minMaxTokens)
+      : req.options.max_tokens;
+    const payload: Record<string, unknown> = {
+      model: req.model,
+      messages: req.messages,
+      temperature: req.options.temperature,
+      max_tokens: maxTokens,
+      stream: req.mode === "stream",
+    };
+    if (req.mode === "complete" && (req.options.json_mode || req.options.json_schema)) {
+      payload.response_format = { type: "json_object" };
+    }
+    if (req.options.disable_reasoning) {
+      this.applyDisableReasoning(payload);
+    }
+    return payload;
+  }
+
+  applyDisableReasoning(_payload: Record<string, unknown>): void {
+    // Generic OpenAI-compatible APIs do not accept non-standard reasoning params.
+  }
+
+  async retryBadRequest(
+    _activePayload: Record<string, unknown>,
+    _errTextLower: string,
+    _postOai: (payload: Record<string, unknown>) => Promise<Response>
+  ): Promise<{ resp: Response; payload: Record<string, unknown> } | null> {
+    return null;
+  }
+
+  async resolveModelFallback(
+    _root: string,
+    _headers: Record<string, string>,
+    _model: string,
+    _status: number,
+    _errTextLower: string,
+    _signal?: AbortSignal
+  ): Promise<string | null> {
+    return null;
+  }
+}
+
+class ReasoningObjectOpenAiAdapter extends OpenAiCompatAdapter {
+  override readonly requireHttps: boolean = true;
+  override readonly requiresBrowserChatToken: boolean = true;
+
+  override normalizePath(path: string): string {
+    return path || "/api/v1";
+  }
+
+  override applyDisableReasoning(payload: Record<string, unknown>): void {
+    payload.reasoning = { effort: "none" };
+  }
+
+  override async retryBadRequest(
+    activePayload: Record<string, unknown>,
+    errTextLower: string,
+    postOai: (payload: Record<string, unknown>) => Promise<Response>
+  ): Promise<{ resp: Response; payload: Record<string, unknown> } | null> {
+    if (!activePayload.reasoning || !errTextLower.includes("reasoning")) {
+      return null;
+    }
+    const retry1: Record<string, unknown> = { ...activePayload, reasoning: { exclude: true } };
+    let resp = await postOai(retry1);
+    if (resp.status === 400) {
+      const retry2: Record<string, unknown> = { ...retry1 };
+      delete retry2.reasoning;
+      resp = await postOai(retry2);
+      return { resp, payload: retry2 };
+    }
+    return { resp, payload: retry1 };
+  }
+}
+
+class OpenRouterAdapter extends ReasoningObjectOpenAiAdapter {
+  override readonly type: OpenAiCompatDriverType = "openrouter";
+  override readonly label: string = "OpenRouter";
+  override readonly defaultBaseUrl: string = "https://openrouter.ai/api/v1";
+
+  override async probe(ctx: ProbeContext): Promise<ProviderProbeResponse> {
+    if (!ctx.cleanToken) {
+      return buildProbeResponse({
+        providerId: ctx.providerId,
+        reachable: false,
+        protocol: null,
+        models: [],
+        errorCode: "browser_credential_missing",
+        error: "OpenRouter API key is missing in this browser.",
+        configVersion: ctx.configVersion,
+      });
+    }
+    const authResp = await fetch(`${ctx.root}/auth/key`, {
+      method: "GET",
+      headers: bearerHeaders(ctx.cleanToken),
+      signal: ctx.signal,
+    });
+    if (authResp.status === 401) {
+      return buildProbeResponse({
+        providerId: ctx.providerId,
+        reachable: false,
+        protocol: null,
+        models: [],
+        errorCode: "unauthorized",
+        error: "Invalid OpenRouter API key.",
+        configVersion: ctx.configVersion,
+      });
+    }
+    if (authResp.status === 403) {
+      return buildProbeResponse({
+        providerId: ctx.providerId,
+        reachable: false,
+        protocol: null,
+        models: [],
+        errorCode: "forbidden",
+        error: "OpenRouter API key forbidden or restricted.",
+        configVersion: ctx.configVersion,
+      });
+    }
+    if (!authResp.ok) {
+      return buildProbeResponse({
+        providerId: ctx.providerId,
+        reachable: false,
+        protocol: null,
+        models: [],
+        errorCode: "unknown",
+        error: `HTTP ${authResp.status}`,
+        configVersion: ctx.configVersion,
+      });
+    }
+    let models: ProviderModelInfo[] = [];
+    try {
+      const modelsResp = await fetch(`${ctx.root}/models`, {
+        method: "GET",
+        signal: ctx.signal,
+      });
+      if (modelsResp.ok) {
+        models = parseOpenRouterModels(await modelsResp.json());
+      }
+    } catch {
+      // Key check succeeded; model list fallback handled by server catalog if available.
+    }
+    return buildProbeResponse({
+      providerId: ctx.providerId,
+      reachable: true,
+      protocol: "openai_compat",
+      models,
+      errorCode: null,
+      error: null,
+      configVersion: ctx.configVersion,
+    });
+  }
+}
+
+class NanoGptAdapter extends ReasoningObjectOpenAiAdapter {
+  override readonly type: OpenAiCompatDriverType = "nanogpt";
+  override readonly label: string = "NanoGPT";
+  override readonly defaultBaseUrl: string = "https://nano-gpt.com/api/v1";
+
+  override async probe(ctx: ProbeContext): Promise<ProviderProbeResponse> {
+    // Reachability-only probe: /models is public and does not verify the API key.
+    const headers = bearerHeaders(ctx.cleanToken);
+    const resp = await fetch(`${ctx.root}/models`, {
+      method: "GET",
+      headers,
+      signal: ctx.signal,
+    });
+    if (resp.ok) {
+      let chatPayload: any;
+      try {
+        chatPayload = await resp.json();
+      } catch {
+        return buildProbeResponse({
+          providerId: ctx.providerId,
+          reachable: false,
+          protocol: null,
+          models: [],
+          errorCode: "bad_payload",
+          error: "NanoGPT returned a non-JSON model list.",
+          configVersion: ctx.configVersion,
+        });
+      }
+      if (!chatPayload || !Array.isArray(chatPayload.data)) {
+        return buildProbeResponse({
+          providerId: ctx.providerId,
+          reachable: false,
+          protocol: null,
+          models: [],
+          errorCode: "bad_payload",
+          error: "NanoGPT returned an unexpected model list.",
+          configVersion: ctx.configVersion,
+        });
+      }
+      let embedPayload: any = null;
+      try {
+        const embedResp = await fetch(`${ctx.root}/embedding-models`, {
+          method: "GET",
+          headers,
+          signal: ctx.signal,
+        });
+        if (embedResp.ok) {
+          embedPayload = await embedResp.json();
+        }
+      } catch {
+        // Embedding catalog is supplemental to chat model discovery.
+      }
+      return buildProbeResponse({
+        providerId: ctx.providerId,
+        reachable: true,
+        protocol: "openai_compat",
+        models: parseNanoGptModels(chatPayload, embedPayload),
+        errorCode: null,
+        error: null,
+        configVersion: ctx.configVersion,
+      });
+    }
+    return this.mapProbeHttpError(resp.status, ctx);
+  }
+}
+
+class AiHordeAdapter extends OpenAiCompatAdapter {
+  override readonly type: OpenAiCompatDriverType = "aihorde";
+  override readonly label: string = "AI Horde";
+  override readonly defaultBaseUrl: string = "https://oai.stablehorde.net/v1";
+  override readonly requireHttps: boolean = true;
+  override readonly requiresBrowserChatToken: boolean = true;
+  override readonly minMaxTokens: number = 16;
+
+  override normalizePath(path: string): string {
+    if (!path || !path.endsWith("/v1")) {
+      return path ? `${path}/v1` : "/v1";
+    }
+    return path;
+  }
+
+  override parseModels(payload: any): ProviderModelInfo[] {
+    return parseAiHordeModels(payload);
+  }
+
+  override async probe(ctx: ProbeContext): Promise<ProviderProbeResponse> {
+    if (ctx.requireToken && !ctx.cleanToken) {
+      return buildProbeResponse({
+        providerId: ctx.providerId,
+        reachable: false,
+        protocol: null,
+        models: [],
+        errorCode: "browser_credential_missing",
+        error: "AI Horde API key is missing in this browser.",
+        configVersion: ctx.configVersion,
+      });
+    }
+    const effectiveToken = ctx.cleanToken || "0000000000";
+    const resp = await fetch(`${ctx.root}/models`, {
+      method: "GET",
+      headers: bearerHeaders(effectiveToken),
+      signal: ctx.signal,
+    });
+    if (resp.ok) {
+      try {
+        const models = this.parseModels(await resp.json());
+        return buildProbeResponse({
+          providerId: ctx.providerId,
+          reachable: true,
+          protocol: "openai_compat",
+          models,
+          errorCode: null,
+          error: null,
+          configVersion: ctx.configVersion,
+        });
+      } catch {
+        return buildProbeResponse({
+          providerId: ctx.providerId,
+          reachable: false,
+          protocol: null,
+          models: [],
+          errorCode: "bad_payload",
+          error: "AI Horde returned a non-JSON model list.",
+          configVersion: ctx.configVersion,
+        });
+      }
+    }
+    return this.mapProbeHttpError(resp.status, ctx);
+  }
+
+  override applyDisableReasoning(payload: Record<string, unknown>): void {
+    payload.reasoning_effort = "none";
+  }
+
+  override async retryBadRequest(
+    activePayload: Record<string, unknown>,
+    _errTextLower: string,
+    postOai: (payload: Record<string, unknown>) => Promise<Response>
+  ): Promise<{ resp: Response; payload: Record<string, unknown> } | null> {
+    if (!("reasoning_effort" in activePayload)) {
+      return null;
+    }
+    const retryPayload = { ...activePayload };
+    delete retryPayload.reasoning_effort;
+    const resp = await postOai(retryPayload);
+    return { resp, payload: retryPayload };
+  }
+
+  override async resolveModelFallback(
+    root: string,
+    headers: Record<string, string>,
+    model: string,
+    status: number,
+    errTextLower: string,
+    signal?: AbortSignal
+  ): Promise<string | null> {
+    if (status !== 404 && status !== 403) return null;
+    if (
+      !errTextLower.includes("unknownchatmodel") &&
+      !errTextLower.includes("noeligibleworker") &&
+      !errTextLower.includes("model")
+    ) {
+      return null;
+    }
+    try {
+      const resp = await fetch(`${root}/models`, { method: "GET", headers, signal });
+      if (resp.ok) {
+        const models = this.parseModels(await resp.json());
+        const alt = models.find((m) => m.name !== model);
+        return alt ? alt.name : null;
+      }
+    } catch {
+      // ignore fallback fetch errors
+    }
+    return null;
+  }
+}
+
+const DEFAULT_OPENAI_COMPAT_ADAPTER = new OpenAiCompatAdapter();
+
+const OPENAI_COMPAT_ADAPTERS: Record<OpenAiCompatDriverType, OpenAiCompatAdapter> = {
+  openai_compat: DEFAULT_OPENAI_COMPAT_ADAPTER,
+  openrouter: new OpenRouterAdapter(),
+  nanogpt: new NanoGptAdapter(),
+  aihorde: new AiHordeAdapter(),
+};
+
+function getOpenAiCompatAdapter(
+  type: ProviderType | RemoteProviderDriverType
+): OpenAiCompatAdapter | null {
+  return (OPENAI_COMPAT_ADAPTERS as Record<string, OpenAiCompatAdapter | undefined>)[type] ?? null;
+}
+
+export function normalizeRemoteBaseUrl(
+  type: ProviderType | RemoteProviderDriverType,
+  rawUrl?: string | null
+): string {
+  const adapter = getOpenAiCompatAdapter(type);
+  const trimmed = (rawUrl ?? "").trim();
+  if (!trimmed) {
+    if (adapter?.defaultBaseUrl) {
+      return adapter.defaultBaseUrl;
+    }
+    throw new RemoteDriverError("invalid_url", "Server URL is required.");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new RemoteDriverError("invalid_url", "Server URL is not a valid URL.");
+  }
+
+  if (adapter?.requireHttps) {
+    if (parsed.protocol !== "https:") {
+      throw new RemoteDriverError("invalid_url", "Cloud provider URL must use https://.");
+    }
+  } else if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new RemoteDriverError("invalid_url", "Server URL must use http:// or https://.");
+  }
+  const protocol = parsed.protocol === "https:" ? "https:" : "http:";
+
+  if (parsed.username || parsed.password) {
+    throw new RemoteDriverError(
+      "invalid_url",
+      "Credentials in the URL are not allowed; use the API key field."
+    );
+  }
+  if (parsed.search || parsed.hash) {
+    throw new RemoteDriverError(
+      "invalid_url",
+      "Server URL must not contain a query string or fragment."
+    );
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  if (!host) {
+    throw new RemoteDriverError("invalid_url", "Server URL has no host.");
+  }
+  if (isBlockedLiteralHost(host)) {
+    throw new RemoteDriverError(
+      "blocked_by_policy",
+      "Link-local, metadata, or unspecified addresses are not allowed."
+    );
+  }
+
+  let portSuffix = "";
+  if (parsed.port) {
+    const portNum = Number.parseInt(parsed.port, 10);
+    if (
+      !Number.isInteger(portNum) ||
+      portNum < 1 ||
+      portNum > 65535 ||
+      String(portNum) !== parsed.port
+    ) {
+      throw new RemoteDriverError("invalid_url", "Server URL has an invalid port.");
+    }
+    portSuffix = `:${portNum}`;
+  }
+
+  const schemeEnd = trimmed.indexOf("://");
+  const afterScheme = schemeEnd >= 0 ? trimmed.slice(schemeEnd + 3) : "";
+  const pathStart = afterScheme.search(/[/?#]/);
+  const rawPath = pathStart >= 0 ? afterScheme.slice(pathStart).split(/[?#]/, 1)[0] : "";
+  const segments = rawPath.split("/");
+  if (
+    segments.some((seg) => {
+      const lower = seg.toLowerCase();
+      return (
+        lower === "." ||
+        lower === ".." ||
+        lower === "%2e" ||
+        lower === "%2e%2e" ||
+        lower === ".%2e" ||
+        lower === "%2e."
+      );
+    })
+  ) {
+    throw new RemoteDriverError("invalid_url", "Server URL must not contain path traversal segments.");
+  }
+
+  let path = parsed.pathname.replace(/\/+$/, "");
+  if (adapter) {
+    path = adapter.normalizePath(path);
+  } else {
+    if (path.endsWith("/v1")) {
+      path = path.slice(0, -3).replace(/\/+$/, "");
+    } else if (path.endsWith("/api")) {
+      path = path.slice(0, -4).replace(/\/+$/, "");
+    }
+  }
+
+  return `${protocol}//${host}${portSuffix}${path}`;
+}
+
 function classifyFetchError(
   err: unknown,
   rootUrl: string
@@ -361,241 +829,15 @@ export async function probeRemoteProvider(opts: {
       : timeoutCtrl.signal;
 
   try {
-    if (opts.type === "openrouter") {
-      if (!cleanToken) {
-        return buildProbeResponse({
-          providerId: opts.providerId,
-          reachable: false,
-          protocol: null,
-          models: [],
-          errorCode: "browser_credential_missing",
-          error: "OpenRouter API key is missing in this browser.",
-          configVersion: opts.configVersion,
-        });
-      }
-      const authResp = await fetch(`${root}/auth/key`, {
-        method: "GET",
-        headers: bearerHeaders(cleanToken),
-        signal: combinedSignal,
-      });
-      if (authResp.status === 401) {
-        return buildProbeResponse({
-          providerId: opts.providerId,
-          reachable: false,
-          protocol: null,
-          models: [],
-          errorCode: "unauthorized",
-          error: "Invalid OpenRouter API key.",
-          configVersion: opts.configVersion,
-        });
-      }
-      if (authResp.status === 403) {
-        return buildProbeResponse({
-          providerId: opts.providerId,
-          reachable: false,
-          protocol: null,
-          models: [],
-          errorCode: "forbidden",
-          error: "OpenRouter API key forbidden or restricted.",
-          configVersion: opts.configVersion,
-        });
-      }
-      if (!authResp.ok) {
-        return buildProbeResponse({
-          providerId: opts.providerId,
-          reachable: false,
-          protocol: null,
-          models: [],
-          errorCode: "unknown",
-          error: `HTTP ${authResp.status}`,
-          configVersion: opts.configVersion,
-        });
-      }
-      let models: ProviderModelInfo[] = [];
-      try {
-        const modelsResp = await fetch(`${root}/models`, {
-          method: "GET",
-          signal: combinedSignal,
-        });
-        if (modelsResp.ok) {
-          models = parseOpenRouterModels(await modelsResp.json());
-        }
-      } catch {
-        // Key check succeeded; model list fallback handled by server catalog if available.
-      }
-      return buildProbeResponse({
+    const adapter = getOpenAiCompatAdapter(opts.type);
+    if (adapter) {
+      return await adapter.probe({
+        root,
+        cleanToken,
+        requireToken: opts.requireToken,
         providerId: opts.providerId,
-        reachable: true,
-        protocol: "openai_compat",
-        models,
-        errorCode: null,
-        error: null,
         configVersion: opts.configVersion,
-      });
-    }
-
-    if (opts.type === "aihorde") {
-      if (opts.requireToken && !cleanToken) {
-        return buildProbeResponse({
-          providerId: opts.providerId,
-          reachable: false,
-          protocol: null,
-          models: [],
-          errorCode: "browser_credential_missing",
-          error: "AI Horde API key is missing in this browser.",
-          configVersion: opts.configVersion,
-        });
-      }
-      const effectiveToken = cleanToken || "0000000000";
-      const resp = await fetch(`${root}/models`, {
-        method: "GET",
-        headers: bearerHeaders(effectiveToken),
         signal: combinedSignal,
-      });
-      if (resp.ok) {
-        try {
-          const models = parseAiHordeModels(await resp.json());
-          return buildProbeResponse({
-            providerId: opts.providerId,
-            reachable: true,
-            protocol: "openai_compat",
-            models,
-            errorCode: null,
-            error: null,
-            configVersion: opts.configVersion,
-          });
-        } catch {
-          return buildProbeResponse({
-            providerId: opts.providerId,
-            reachable: false,
-            protocol: null,
-            models: [],
-            errorCode: "bad_payload",
-            error: "AI Horde returned a non-JSON model list.",
-            configVersion: opts.configVersion,
-          });
-        }
-      }
-      if (resp.status === 401) {
-        return buildProbeResponse({
-          providerId: opts.providerId,
-          reachable: false,
-          protocol: null,
-          models: [],
-          errorCode: "unauthorized",
-          error: "Invalid AI Horde API key.",
-          configVersion: opts.configVersion,
-        });
-      }
-      if (resp.status === 403) {
-        return buildProbeResponse({
-          providerId: opts.providerId,
-          reachable: false,
-          protocol: null,
-          models: [],
-          errorCode: "forbidden",
-          error: "AI Horde access forbidden.",
-          configVersion: opts.configVersion,
-        });
-      }
-      return buildProbeResponse({
-        providerId: opts.providerId,
-        reachable: false,
-        protocol: null,
-        models: [],
-        errorCode: resp.status === 502 ? "connect_refused" : "unknown",
-        error: `HTTP ${resp.status}`,
-        configVersion: opts.configVersion,
-      });
-    }
-
-    if (opts.type === "nanogpt") {
-      // Reachability-only probe: /models is public and does not verify the API key.
-      const headers = bearerHeaders(cleanToken);
-      const resp = await fetch(`${root}/models`, {
-        method: "GET",
-        headers,
-        signal: combinedSignal,
-      });
-      if (resp.ok) {
-        let chatPayload: any;
-        try {
-          chatPayload = await resp.json();
-        } catch {
-          return buildProbeResponse({
-            providerId: opts.providerId,
-            reachable: false,
-            protocol: null,
-            models: [],
-            errorCode: "bad_payload",
-            error: "NanoGPT returned a non-JSON model list.",
-            configVersion: opts.configVersion,
-          });
-        }
-        if (!chatPayload || !Array.isArray(chatPayload.data)) {
-          return buildProbeResponse({
-            providerId: opts.providerId,
-            reachable: false,
-            protocol: null,
-            models: [],
-            errorCode: "bad_payload",
-            error: "NanoGPT returned an unexpected model list.",
-            configVersion: opts.configVersion,
-          });
-        }
-        let embedPayload: any = null;
-        try {
-          const embedResp = await fetch(`${root}/embedding-models`, {
-            method: "GET",
-            headers,
-            signal: combinedSignal,
-          });
-          if (embedResp.ok) {
-            embedPayload = await embedResp.json();
-          }
-        } catch {
-          // Embedding catalog is supplemental to chat model discovery.
-        }
-        return buildProbeResponse({
-          providerId: opts.providerId,
-          reachable: true,
-          protocol: "openai_compat",
-          models: parseNanoGptModels(chatPayload, embedPayload),
-          errorCode: null,
-          error: null,
-          configVersion: opts.configVersion,
-        });
-      }
-      if (resp.status === 401 || resp.status === 403) {
-        return buildProbeResponse({
-          providerId: opts.providerId,
-          reachable: false,
-          protocol: null,
-          models: [],
-          errorCode: resp.status === 401 ? "unauthorized" : "forbidden",
-          error: `HTTP ${resp.status}`,
-          configVersion: opts.configVersion,
-        });
-      }
-      if (resp.status === 404) {
-        return buildProbeResponse({
-          providerId: opts.providerId,
-          reachable: false,
-          protocol: null,
-          models: [],
-          errorCode: "not_found",
-          error: "NanoGPT /models endpoint was not found.",
-          configVersion: opts.configVersion,
-        });
-      }
-      return buildProbeResponse({
-        providerId: opts.providerId,
-        reachable: false,
-        protocol: null,
-        models: [],
-        errorCode: "unknown",
-        error: `HTTP ${resp.status}`,
-        configVersion: opts.configVersion,
       });
     }
 
@@ -790,25 +1032,6 @@ async function readOllamaNdjsonStream(
   return { content: fullContent, done_reason: doneReason };
 }
 
-async function getAiHordeFallbackModel(
-  rootUrl: string,
-  headers: Record<string, string>,
-  excludeModel: string,
-  signal?: AbortSignal
-): Promise<string | null> {
-  try {
-    const resp = await fetch(`${rootUrl}/models`, { method: "GET", headers, signal });
-    if (resp.ok) {
-      const models = parseAiHordeModels(await resp.json());
-      const alt = models.find((m) => m.name !== excludeModel);
-      return alt ? alt.name : null;
-    }
-  } catch {
-    // ignore fallback fetch errors
-  }
-  return null;
-}
-
 export async function runRemoteProviderChat(
   req: RelayLlmRequest,
   token: string | null,
@@ -816,15 +1039,14 @@ export async function runRemoteProviderChat(
   signal?: AbortSignal
 ): Promise<RelayDriverResult> {
   const driver = req.driver as RemoteProviderDriverType;
+  const adapter = getOpenAiCompatAdapter(driver);
   const root = normalizeRemoteBaseUrl(driver, req.base_url);
   const cleanToken = (token ?? "").trim();
 
-  if ((driver === "openrouter" || driver === "aihorde" || driver === "nanogpt") && !cleanToken) {
-    const label =
-      driver === "openrouter" ? "OpenRouter" : driver === "nanogpt" ? "NanoGPT" : "AI Horde";
+  if (adapter?.requiresBrowserChatToken && !cleanToken) {
     throw new RemoteDriverError(
       "browser_credential_missing",
-      `No ${label} credential is stored in this browser.`
+      `No ${adapter.label} credential is stored in this browser.`
     );
   }
 
@@ -927,31 +1149,13 @@ export async function runRemoteProviderChat(
       // Otherwise fall through to OpenAI-compatible /v1/chat/completions.
     }
 
-    const v1Url =
-      driver === "openrouter" || driver === "aihorde" || driver === "nanogpt"
-        ? `${root}/chat/completions`
-        : `${root}/v1/chat/completions`;
+    const activeAdapter = adapter ?? DEFAULT_OPENAI_COMPAT_ADAPTER;
+    const v1Url = adapter ? `${root}/chat/completions` : `${root}/v1/chat/completions`;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       ...bearerHeaders(cleanToken || (driver === "ollama" ? "ollama" : "")),
     };
-    const maxTokens =
-      driver === "aihorde" ? Math.max(req.options.max_tokens, 16) : req.options.max_tokens;
-    const basePayload: Record<string, unknown> = {
-      model: req.model,
-      messages: req.messages,
-      temperature: req.options.temperature,
-      max_tokens: maxTokens,
-      stream: req.mode === "stream",
-    };
-    if (req.mode === "complete" && (req.options.json_mode || req.options.json_schema)) {
-      basePayload.response_format = { type: "json_object" };
-    }
-    if ((driver === "openrouter" || driver === "nanogpt") && req.options.disable_reasoning) {
-      basePayload.reasoning = { effort: "none" };
-    } else if (driver === "aihorde" && req.options.disable_reasoning) {
-      basePayload.reasoning_effort = "none";
-    }
+    const basePayload = activeAdapter.buildChatPayload(req);
 
     const postOai = (payload: Record<string, unknown>) =>
       fetch(v1Url, {
@@ -966,36 +1170,25 @@ export async function runRemoteProviderChat(
 
     if (resp.status === 400) {
       const errText = (await resp.text().catch(() => "")).toLowerCase();
-      if (
-        (driver === "openrouter" || driver === "nanogpt") &&
-        activePayload.reasoning &&
-        errText.includes("reasoning")
-      ) {
-        activePayload = { ...activePayload, reasoning: { exclude: true } };
-        resp = await postOai(activePayload);
-        if (resp.status === 400) {
-          const retry2 = { ...activePayload };
-          delete retry2.reasoning;
-          resp = await postOai(retry2);
-        }
-      } else if (driver === "aihorde" && "reasoning_effort" in activePayload) {
-        const retryPayload = { ...activePayload };
-        delete retryPayload.reasoning_effort;
-        resp = await postOai(retryPayload);
+      const retried = await activeAdapter.retryBadRequest(activePayload, errText, postOai);
+      if (retried) {
+        resp = retried.resp;
+        activePayload = retried.payload;
       }
     }
 
-    if (driver === "aihorde" && (resp.status === 404 || resp.status === 403)) {
+    if (resp.status === 404 || resp.status === 403) {
       const errText = (await resp.text().catch(() => "")).toLowerCase();
-      if (
-        errText.includes("unknownchatmodel") ||
-        errText.includes("noeligibleworker") ||
-        errText.includes("model")
-      ) {
-        const fallback = await getAiHordeFallbackModel(root, headers, req.model, signal);
-        if (fallback) {
-          resp = await postOai({ ...activePayload, model: fallback });
-        }
+      const fallback = await activeAdapter.resolveModelFallback(
+        root,
+        headers,
+        req.model,
+        resp.status,
+        errText,
+        signal
+      );
+      if (fallback) {
+        resp = await postOai({ ...activePayload, model: fallback });
       }
     }
 

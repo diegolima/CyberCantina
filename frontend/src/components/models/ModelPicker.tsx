@@ -67,12 +67,13 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
   const isAihorde = selected?.type === "aihorde";
   const isOpenrouter = selected?.type === "openrouter";
   const isNanoGpt = selected?.type === "nanogpt";
+  const isOpenAiCompat = selected?.type === "openai_compat";
   const isWebGpu = selected?.type === "webgpu";
-  const isCombobox = isOpenrouter || isAihorde || isNanoGpt;
+  const isCombobox = isOpenrouter || isAihorde || isNanoGpt || isOpenAiCompat;
   const webgpuSpec = isWebGpu ? getWebGpuModelSpec(value.model) : undefined;
 
   const catalogSuggestions = useMemo(() => {
-    if (!isOpenrouter && !isNanoGpt) return [];
+    if (!isOpenrouter && !isNanoGpt && !isOpenAiCompat) return [];
     const query = (value.model || "").trim().toLowerCase();
     if (query.length < 2) {
       return visibleModels.slice(0, 15);
@@ -80,7 +81,7 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({
     return visibleModels
       .filter((m) => m.name.toLowerCase().includes(query) || m.family.toLowerCase().includes(query))
       .slice(0, 15);
-  }, [isOpenrouter, isNanoGpt, value.model, visibleModels]);
+  }, [isOpenrouter, isNanoGpt, isOpenAiCompat, value.model, visibleModels]);
 
   const aihordeSuggestions = useMemo(() => {
     if (!isAihorde) return [];

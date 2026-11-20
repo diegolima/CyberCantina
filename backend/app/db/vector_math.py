@@ -13,6 +13,7 @@ import httpx
 import numpy as np
 
 from app.config import settings
+from app.providers.openai_compat import get_openai_compat_provider
 from app.providers.probe import bearer_headers
 from app.providers.resolver import resolve_system_profile
 from app.schemas.turn import RecalledMemoryItem
@@ -276,18 +277,22 @@ async def embed_text(text: str) -> np.ndarray:
             else:
                 base = profile.base_url.rstrip("/")
                 token = profile.api_key if profile.api_key not in ("", "ollama") else None
-            is_remote_v1 = endpoint is not None and endpoint.type in ("openrouter", "aihorde", "nanogpt")
-            if is_remote_v1:
+            adapter = get_openai_compat_provider(endpoint.type) if endpoint is not None else None
+            if adapter is not None:
                 v1_url = endpoint.root_url.rstrip("/")
                 root_url = v1_url
+                native_headers = {}
+                headers = adapter.build_probe_headers(token)
+                embeddings_endpoint = adapter.embeddings_url(v1_url)
             else:
                 root_url = base[: -len("/v1")].rstrip("/") if base.endswith("/v1") else base
                 v1_url = base if base.endswith("/v1") else f"{base}/v1"
-            native_headers = bearer_headers(token)
-            headers = {"Authorization": f"Bearer {token or 'ollama'}"}
+                native_headers = bearer_headers(token)
+                headers = {"Authorization": f"Bearer {token or 'ollama'}"}
+                embeddings_endpoint = f"{v1_url}/embeddings"
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
-                # 1. Try native Ollama /api/embed (skip for openrouter and aihorde)
-                if not is_remote_v1:
+                # 1. Try native Ollama /api/embed (skip for OpenAI-compatible providers)
+                if adapter is None:
                     ollama_resp = await client.post(
                         f"{root_url}/api/embed",
                         headers=native_headers,
@@ -303,9 +308,9 @@ async def embed_text(text: str) -> np.ndarray:
                                 arr /= norm
                             return arr
 
-                # 2. Fallback to OpenAI-compatible /v1/embeddings
+                # 2. Fallback to OpenAI-compatible /embeddings
                 resp = await client.post(
-                    f"{v1_url}/embeddings",
+                    embeddings_endpoint,
                     headers=headers,
                     json={"model": profile.model, "input": text},
                 )

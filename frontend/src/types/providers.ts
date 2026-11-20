@@ -64,6 +64,7 @@ export interface SettingsUpdateResponse extends AppSettings {
 
 export type ProviderType =
   | "ollama"
+  | "openai_compat"
   | "openrouter"
   | "aihorde"
   | "nanogpt"

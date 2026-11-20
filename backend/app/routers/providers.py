@@ -18,6 +18,7 @@ from app.db.provider_store import (
 )
 from app.dependencies import get_repo
 from app.providers.local_relay import local_relay_hub
+from app.providers.openai_compat import OPENAI_COMPAT_PROVIDERS
 from app.providers.openrouter_catalog import openrouter_catalog_service
 from app.providers.probe import ProbeRateLimited, probe_service
 from app.providers.references import clear_user_overrides, find_references
@@ -35,10 +36,7 @@ from app.schemas.provider import (
     ProviderUpdatePayload,
 )
 from app.security.url_policy import (
-    AIHORDE_DEFAULT_BASE_URL,
     BROWSER_OLLAMA_DEFAULT_BASE_URL,
-    NANOGPT_DEFAULT_BASE_URL,
-    OPENROUTER_DEFAULT_BASE_URL,
     WEBGPU_SENTINEL_URL,
     UrlBlockedError,
     assert_url_allowed,
@@ -46,15 +44,18 @@ from app.security.url_policy import (
 )
 
 _DEFAULT_URLS_BY_TYPE: dict[str, str] = {
-    "openrouter": OPENROUTER_DEFAULT_BASE_URL,
-    "aihorde": AIHORDE_DEFAULT_BASE_URL,
-    "nanogpt": NANOGPT_DEFAULT_BASE_URL,
+    **{
+        ptype: adapter.default_base_url
+        for ptype, adapter in OPENAI_COMPAT_PROVIDERS.items()
+        if adapter.default_base_url
+    },
     "browser_ollama": BROWSER_OLLAMA_DEFAULT_BASE_URL,
     "webgpu": WEBGPU_SENTINEL_URL,
 }
 _REQUIRED_SERVER_KEY_LABELS: dict[str, str] = {
-    "openrouter": "OpenRouter",
-    "nanogpt": "NanoGPT",
+    ptype: adapter.display_name
+    for ptype, adapter in OPENAI_COMPAT_PROVIDERS.items()
+    if adapter.requires_server_api_key
 }
 
 logger = logging.getLogger("cybercantina.routers.providers")
@@ -185,23 +186,19 @@ async def create_provider(
                 detail="Browser-stored credentials cannot be sent to the server.",
             )
 
-    if payload.type in _REQUIRED_SERVER_KEY_LABELS:
-        if storage == "server" and not raw_token:
-            raise HTTPException(
-                status_code=422,
-                detail=f"{_REQUIRED_SERVER_KEY_LABELS[payload.type]} requires an API key (Bearer token).",
-            )
-        raw_url = (payload.settings.base_url or "").strip() or _DEFAULT_URLS_BY_TYPE[payload.type]
-    elif payload.type == "aihorde":
-        raw_url = (payload.settings.base_url or "").strip() or AIHORDE_DEFAULT_BASE_URL
-    elif payload.type == "webgpu":
+    if payload.type in _REQUIRED_SERVER_KEY_LABELS and storage == "server" and not raw_token:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{_REQUIRED_SERVER_KEY_LABELS[payload.type]} requires an API key (Bearer token).",
+        )
+    if payload.type == "webgpu":
         raw_url = WEBGPU_SENTINEL_URL
         raw_token = ""
     elif payload.type == "browser_ollama":
         raw_url = (payload.settings.base_url or "").strip() or BROWSER_OLLAMA_DEFAULT_BASE_URL
         raw_token = ""
     else:
-        raw_url = (payload.settings.base_url or "").strip()
+        raw_url = (payload.settings.base_url or "").strip() or _DEFAULT_URLS_BY_TYPE.get(payload.type, "")
 
     url = _validate_url(raw_url, provider_type=payload.type, allow_private=allow_private)
     await _check_url_policy(url, provider_type=payload.type, allow_private=allow_private)

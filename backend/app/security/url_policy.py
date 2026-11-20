@@ -82,6 +82,9 @@ def normalize_base_url(raw: str, *, provider_type: str = "ollama") -> Normalized
     elif provider_type == "aihorde":
         if not path or not path.endswith("/v1"):
             path = f"{path}/v1" if path else "/v1"
+    elif provider_type == "openai_compat":
+        if not path:
+            path = "/v1"
     else:
         for suffix in ("/v1", "/api"):
             if path.endswith(suffix):

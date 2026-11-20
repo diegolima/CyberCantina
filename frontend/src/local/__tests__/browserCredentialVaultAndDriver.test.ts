@@ -294,7 +294,72 @@ describe("remoteProviderDriver", () => {
     expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe("Bearer ng-live");
   });
 
+  it("probes and streams generic OpenAI-compatible providers with or without an API key", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              { id: "gpt-4o-mini" },
+              { id: "text-embedding-3-small" },
+            ],
+          }),
+          { status: 200 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          'data: {"choices":[{"delta":{"content":"Generic "}}]}\n\ndata: {"choices":[{"delta":{"content":"OpenAI"}}]}\n\ndata: [DONE]\n\n',
+          { status: 200, headers: { "Content-Type": "text/event-stream" } }
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Probe without token (e.g. local llama.cpp / LM Studio)
+    const probe = await probeRemoteProvider({
+      type: "openai_compat",
+      baseUrl: "http://localhost:1234",
+      token: null,
+    });
+    expect(probe.reachable).toBe(true);
+    expect(probe.protocol).toBe("openai_compat");
+    expect(probe.chat_models).toEqual(["gpt-4o-mini"]);
+    expect(probe.embedding_models).toEqual(["text-embedding-3-small"]);
+    expect(fetchMock.mock.calls[0][0]).toBe("http://localhost:1234/v1/models");
+    expect(fetchMock.mock.calls[0][1].headers).toEqual({});
+
+    // Stream without token (does not throw browser_credential_missing)
+    const chunks: string[] = [];
+    const res = await runRemoteProviderChat(
+      {
+        type: "llm.request",
+        request_id: "r-oai-1",
+        driver: "openai_compat",
+        provider_id: "prov_oai",
+        mode: "stream",
+        base_url: "https://api.groq.com/openai/v1",
+        model: "llama-3.3-70b-versatile",
+        messages: [{ role: "user", content: "hello" }],
+        options: { temperature: 0.7, max_tokens: 64, disable_reasoning: true },
+      },
+      null,
+      (delta) => chunks.push(delta)
+    );
+    expect(chunks.join("")).toBe("Generic OpenAI");
+    expect(res.content).toBe("Generic OpenAI");
+    expect(fetchMock.mock.calls[1][0]).toBe("https://api.groq.com/openai/v1/chat/completions");
+    const sentBody = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(sentBody.reasoning).toBeUndefined();
+    expect(sentBody.reasoning_effort).toBeUndefined();
+  });
+
   it("normalizes valid remote URLs and rejects unsafe schemes, credentials, queries, fragments, traversal, and metadata IPs", async () => {
+    expect(normalizeRemoteBaseUrl("openai_compat", "https://api.openai.com")).toBe("https://api.openai.com/v1");
+    expect(normalizeRemoteBaseUrl("openai_compat", "https://api.groq.com/openai/v1/")).toBe(
+      "https://api.groq.com/openai/v1"
+    );
+    expect(normalizeRemoteBaseUrl("openai_compat", "http://localhost:1234")).toBe("http://localhost:1234/v1");
     expect(normalizeRemoteBaseUrl("openrouter", "")).toBe("https://openrouter.ai/api/v1");
     expect(normalizeRemoteBaseUrl("openrouter", "https://openrouter.ai")).toBe("https://openrouter.ai/api/v1");
     expect(normalizeRemoteBaseUrl("nanogpt", "")).toBe("https://nano-gpt.com/api/v1");
@@ -307,8 +372,12 @@ describe("remoteProviderDriver", () => {
       "http://192.168.1.50:11434"
     );
 
-    const invalidCases: Array<{ type: "ollama" | "openrouter" | "aihorde" | "nanogpt"; url: string }> = [
+    const invalidCases: Array<{
+      type: "ollama" | "openai_compat" | "openrouter" | "aihorde" | "nanogpt";
+      url: string;
+    }> = [
       { type: "ollama", url: "" },
+      { type: "openai_compat", url: "" },
       { type: "ollama", url: "not-a-url" },
       { type: "ollama", url: "javascript:alert(1)" },
       { type: "ollama", url: "ftp://ollama.example.com" },

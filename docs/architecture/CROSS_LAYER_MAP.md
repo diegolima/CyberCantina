@@ -498,6 +498,7 @@ erDiagram
 | `backend/app/providers/endpoint.py` | Leaf module (no app imports) holding the resolved-endpoint value object. |
 | `backend/app/providers/local_relay.py` | In-memory WebSocket relay hub bridging backend LLM calls to browser-local drivers. |
 | `backend/app/providers/models.py` | Model catalog parsing shared by probes and the legacy Ollama status call. |
+| `backend/app/providers/openai_compat.py` | Generic OpenAI-compatible provider adapter and provider-specific extensions. |
 | `backend/app/providers/openrouter_catalog.py` | Global singleton in-memory cache for OpenRouter model catalog. |
 | `backend/app/providers/probe.py` | Provider health probing: bounded, single-flight, cached, SSRF-checked, secret-safe. |
 | `backend/app/providers/references.py` | Find (and clear) everything that points at a provider: system roles and per-user overrides. |

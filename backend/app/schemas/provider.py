@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ProviderType = Literal["ollama", "openrouter", "aihorde", "nanogpt", "browser_ollama", "webgpu"]
+ProviderType = Literal["ollama", "openai_compat", "openrouter", "aihorde", "nanogpt", "browser_ollama", "webgpu"]
 ProviderScope = Literal["system", "user"]
 ProviderColor = Literal["neutral", "cyan", "purple", "indigo", "bronze"]
 CredentialStorage = Literal["server", "browser"]
@@ -69,7 +69,7 @@ class ProviderModelInfo(BaseModel):
 class OllamaProviderSettings(BaseModel):
     base_url: str | None = Field(
         default=None,
-        description="Server URL, e.g. http://localhost:11434 (defaults to https://openrouter.ai/api/v1 for OpenRouter, https://oai.stablehorde.net/v1 for AI Horde, https://nano-gpt.com/api/v1 for NanoGPT).",
+        description="Server URL, e.g. http://localhost:11434 or https://api.openai.com/v1 (defaults to https://openrouter.ai/api/v1 for OpenRouter, https://oai.stablehorde.net/v1 for AI Horde, https://nano-gpt.com/api/v1 for NanoGPT).",
     )
     bearer_token: str | None = Field(default=None, description="Optional bearer token, or mandatory API key for cloud providers.")
 

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import json
 import logging
 import os
@@ -18,6 +16,12 @@ from pydantic import BaseModel, Field
 from app.config import ModelProfile, persist_settings, settings
 from app.providers.local_relay import RelayUnavailableError, local_relay_hub, relay_user_context
 from app.providers.models import parse_aihorde_models, parse_ollama_tags
+from app.providers.openai_compat import (
+    DEFAULT_OPENAI_COMPAT_PROVIDER,
+    OPENAI_COMPAT_PROVIDER_TYPES,
+    get_openai_compat_provider,
+    is_openai_compat_provider,
+)
 from app.providers.probe import bearer_headers
 from app.providers.resolver import ProviderUnavailableError, resolve_system_profile
 from app.providers.webgpu_catalog import get_webgpu_max_context
@@ -31,7 +35,6 @@ _THINK_BLOCK_RE = re.compile(r"<(?:think|thought)>.*?</(?:think|thought)>", re.D
 _UNCLOSED_THINK_RE = re.compile(r"^.*?<(?:think|thought)>", re.DOTALL | re.I)
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _EMBED_MODEL_KEYWORDS = ("embed", "minilm", "bge-", "nomic-embed", "mxbai-embed", "arctic-embed")
-_AIHORDE_ANON_SEMAPHORE = asyncio.Semaphore(1)
 
 
 async def _get_aihorde_fallback_model(
@@ -137,12 +140,13 @@ class CallTarget:
     credential_storage: str = "server"
 
 
-_CLOUD_OPENAI_PROVIDER_TYPES = ("openrouter", "aihorde", "nanogpt")
+_CLOUD_OPENAI_PROVIDER_TYPES = OPENAI_COMPAT_PROVIDER_TYPES
 
 
 def get_chat_completions_url(target: CallTarget) -> str:
-    if target.provider_type in _CLOUD_OPENAI_PROVIDER_TYPES:
-        return f"{target.root_url.rstrip('/')}/chat/completions"
+    adapter = get_openai_compat_provider(target.provider_type)
+    if adapter is not None:
+        return adapter.chat_completions_url(target.root_url)
     return f"{get_openai_v1_url(target.root_url)}/chat/completions"
 
 
@@ -173,24 +177,10 @@ async def build_call_target(profile: ModelProfile, role: str = "model") -> CallT
                 await assert_url_allowed(normalize_base_url(endpoint.root_url, provider_type=ptype), allow_private=False)
             except UrlBlockedError as exc:
                 raise RuntimeError(f"Provider endpoint blocked by network policy: {exc}") from exc
-        if ptype in ("openrouter", "nanogpt"):
-            oai = {
-                "Authorization": f"Bearer {endpoint.bearer_token or ''}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": _public_referer_url(),
-                "X-Title": "Cybercantina",
-            }
+        adapter = get_openai_compat_provider(ptype)
+        if adapter is not None:
+            oai = adapter.build_chat_headers(endpoint.bearer_token, referer_url=_public_referer_url())
             return CallTarget(endpoint.root_url, {}, oai, provider_type=ptype)
-
-        if ptype == "aihorde":
-            token = (endpoint.bearer_token or "").strip() or "0000000000"
-            oai = {
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": _public_referer_url(),
-                "X-Title": "Cybercantina",
-            }
-            return CallTarget(endpoint.root_url, {}, oai, provider_type="aihorde")
 
         native = bearer_headers(endpoint.bearer_token)
         oai = {"Authorization": f"Bearer {endpoint.bearer_token or 'ollama'}", "Content-Type": "application/json"}
@@ -462,7 +452,7 @@ class LLMClient:
         client = await self.get_http_client(timeout=active_profile.timeout_seconds)
 
         # 1. Try native Ollama /api/chat first (only for Ollama providers)
-        if target.provider_type not in _CLOUD_OPENAI_PROVIDER_TYPES:
+        if not is_openai_compat_provider(target.provider_type):
             ollama_root = target.root_url
             ollama_chat_url = f"{ollama_root}/api/chat"
             ollama_opts = _build_ollama_options(
@@ -530,60 +520,49 @@ class LLMClient:
             except httpx.HTTPError:
                 pass
 
-        # 2. OpenAI-compatible / OpenRouter / AI Horde /chat/completions endpoint
+        # 2. OpenAI-compatible (/chat/completions) via adapter hierarchy
+        adapter = get_openai_compat_provider(target.provider_type) or DEFAULT_OPENAI_COMPAT_PROVIDER
         v1_url = get_chat_completions_url(target)
         headers = target.openai_headers
-        if target.provider_type == "aihorde":
-            max_tok = max(max_tok, 16)
-        oai_payload: dict[str, Any] = {
-            "model": active_profile.model,
-            "messages": messages,
-            "temperature": temp,
-            "max_tokens": max_tok,
-            "stream": False,
-        }
-        if json_mode or json_schema is not None:
-            oai_payload["response_format"] = {"type": "json_object"}
-        if target.provider_type in ("openrouter", "nanogpt") and disable_reasoning:
-            oai_payload["reasoning"] = {"effort": "none"}
-        elif target.provider_type == "aihorde" and disable_reasoning:
-            oai_payload["reasoning_effort"] = "none"
+        oai_payload = adapter.build_chat_payload(
+            model=active_profile.model,
+            messages=messages,
+            temperature=temp,
+            max_tokens=max_tok,
+            stream=False,
+            json_mode=json_mode,
+            json_schema=json_schema,
+            disable_reasoning=disable_reasoning,
+        )
 
-        is_horde_anon = target.provider_type == "aihorde" and "0000000000" in headers.get("Authorization", "")
-        sem = _AIHORDE_ANON_SEMAPHORE if is_horde_anon else contextlib.nullcontext()
+        async with adapter.request_semaphore(headers):
+            active_payload = dict(oai_payload)
+            resp = await client.post(v1_url, headers=headers, json=active_payload, timeout=active_profile.timeout_seconds)
+            attempt = 0
+            while resp.status_code == 400:
+                retry_payload = adapter.next_bad_request_payload(active_payload, resp.text.lower(), attempt)
+                if retry_payload is None:
+                    break
+                active_payload = retry_payload
+                attempt += 1
+                resp = await client.post(v1_url, headers=headers, json=active_payload, timeout=active_profile.timeout_seconds)
 
-        async with sem:
-            resp = await client.post(v1_url, headers=headers, json=oai_payload, timeout=active_profile.timeout_seconds)
-            if resp.status_code == 400 and target.provider_type in ("openrouter", "nanogpt") and disable_reasoning and "reasoning" in resp.text.lower():
-                # If the model enforces reasoning (e.g. DeepSeek R1), retry with exclude: True to omit CoT
-                retry_oai = dict(oai_payload)
-                retry_oai["reasoning"] = {"exclude": True}
-                resp = await client.post(v1_url, headers=headers, json=retry_oai, timeout=active_profile.timeout_seconds)
-                if resp.status_code == 400 and "reasoning" in resp.text.lower():
-                    retry_oai.pop("reasoning", None)
-                    resp = await client.post(v1_url, headers=headers, json=retry_oai, timeout=active_profile.timeout_seconds)
-            elif resp.status_code == 400 and target.provider_type == "aihorde" and "reasoning_effort" in oai_payload:
-                retry_oai = dict(oai_payload)
-                retry_oai.pop("reasoning_effort", None)
-                resp = await client.post(v1_url, headers=headers, json=retry_oai, timeout=active_profile.timeout_seconds)
-
-            if target.provider_type == "aihorde" and resp.status_code in (404, 403) and ("unknownchatmodel" in resp.text.lower() or "noeligibleworker" in resp.text.lower() or "model" in resp.text.lower()):
-                fallback = await _get_aihorde_fallback_model(client, target.root_url, headers, active_profile.model)
-                if fallback:
-                    logger.warning("AI Horde model '%s' offline; attempting fallback to '%s'", active_profile.model, fallback)
-                    fallback_payload = dict(oai_payload)
-                    fallback_payload["model"] = fallback
-                    fallback_resp = await client.post(v1_url, headers=headers, json=fallback_payload, timeout=active_profile.timeout_seconds)
-                    if fallback_resp.status_code == 200:
-                        resp = fallback_resp
-                    else:
-                        raise RuntimeError(
-                            f"AI Horde model '{active_profile.model}' is offline, and automatic fallback to '{fallback}' failed (HTTP {fallback_resp.status_code}: {fallback_resp.text}). Please choose an active model in Settings."
-                        )
+            fallback, fatal_err = await adapter.resolve_model_fallback(
+                client, target.root_url, headers, active_profile.model, resp.status_code, resp.text
+            )
+            if fallback:
+                logger.warning("%s model '%s' offline; attempting fallback to '%s'", adapter.display_name, active_profile.model, fallback)
+                fallback_payload = dict(active_payload)
+                fallback_payload["model"] = fallback
+                fallback_resp = await client.post(v1_url, headers=headers, json=fallback_payload, timeout=active_profile.timeout_seconds)
+                if fallback_resp.status_code == 200:
+                    resp = fallback_resp
                 else:
                     raise RuntimeError(
-                        f"AI Horde model '{active_profile.model}' is currently offline on the network (no workers available). Please choose an active model in Settings."
+                        f"{adapter.display_name} model '{active_profile.model}' is offline, and automatic fallback to '{fallback}' failed (HTTP {fallback_resp.status_code}: {fallback_resp.text}). Please choose an active model in Settings."
                     )
+            elif fatal_err:
+                raise RuntimeError(fatal_err)
 
             if resp.status_code == 404 and "model" in resp.text.lower():
                 raise RuntimeError(
@@ -690,7 +669,7 @@ class LLMClient:
         client = await self.get_http_client(timeout=active_profile.timeout_seconds)
 
         # 1. Prefer native Ollama streaming on /api/chat (only for Ollama providers)
-        if target.provider_type not in _CLOUD_OPENAI_PROVIDER_TYPES:
+        if not is_openai_compat_provider(target.provider_type):
             ollama_root = target.root_url
             ollama_chat_url = f"{ollama_root}/api/chat"
             stream_opts = _build_ollama_options(
@@ -756,29 +735,22 @@ class LLMClient:
             except httpx.HTTPError:
                 pass
 
-        # 2. Direct OpenAI-compatible / OpenRouter / AI Horde SSE streaming (/chat/completions)
+        # 2. Direct OpenAI-compatible SSE streaming (/chat/completions) via adapter hierarchy
+        adapter = get_openai_compat_provider(target.provider_type) or DEFAULT_OPENAI_COMPAT_PROVIDER
         v1_url = get_chat_completions_url(target)
         headers = target.openai_headers
-        stream_tokens = active_profile.max_tokens
-        if target.provider_type == "aihorde":
-            stream_tokens = max(stream_tokens, 16)
-        oai_payload: dict[str, Any] = {
-            "model": active_profile.model,
-            "messages": messages,
-            "temperature": active_profile.temperature,
-            "max_tokens": stream_tokens,
-            "stream": True,
-        }
-        if target.provider_type in ("openrouter", "nanogpt") and disable_reasoning:
-            oai_payload["reasoning"] = {"effort": "none"}
-        elif target.provider_type == "aihorde" and disable_reasoning:
-            oai_payload["reasoning_effort"] = "none"
+        oai_payload = adapter.build_chat_payload(
+            model=active_profile.model,
+            messages=messages,
+            temperature=active_profile.temperature,
+            max_tokens=active_profile.max_tokens,
+            stream=True,
+            disable_reasoning=disable_reasoning,
+        )
 
-        is_horde_anon = target.provider_type == "aihorde" and "0000000000" in headers.get("Authorization", "")
-        sem = _AIHORDE_ANON_SEMAPHORE if is_horde_anon else contextlib.nullcontext()
-
-        async with sem:
+        async with adapter.request_semaphore(headers):
             active_payload = dict(oai_payload)
+            bad_request_attempt = 0
             for attempt in range(3):
                 try:
                     stream_ok = False
@@ -786,30 +758,36 @@ class LLMClient:
                         if resp.status_code == 400:
                             err_bytes = await resp.aread()
                             err_text = err_bytes.decode("utf-8", errors="ignore").lower()
-                            if target.provider_type in ("openrouter", "nanogpt") and "reasoning" in active_payload:
-                                if "reasoning" in err_text:
-                                    if attempt == 0:
-                                        active_payload["reasoning"] = {"exclude": True}
-                                        continue
-                                    elif attempt == 1:
-                                        active_payload.pop("reasoning", None)
-                                        continue
-                            elif target.provider_type == "aihorde" and "reasoning_effort" in active_payload:
-                                active_payload.pop("reasoning_effort", None)
+                            retry_payload = adapter.next_bad_request_payload(
+                                active_payload, err_text, bad_request_attempt
+                            )
+                            if retry_payload is not None:
+                                active_payload = retry_payload
+                                bad_request_attempt += 1
                                 continue
 
-                        if target.provider_type == "aihorde" and resp.status_code in (404, 403):
+                        if resp.status_code in (403, 404):
                             err_bytes = await resp.aread()
-                            err_text = err_bytes.decode("utf-8", errors="ignore").lower()
-                            if "unknownchatmodel" in err_text or "noeligibleworker" in err_text or "model" in err_text:
-                                fallback = await _get_aihorde_fallback_model(client, target.root_url, headers, active_payload["model"])
-                                if fallback and fallback != active_payload["model"]:
-                                    logger.warning("AI Horde streaming model '%s' offline; attempting fallback to '%s'", active_payload["model"], fallback)
-                                    active_payload["model"] = fallback
-                                    continue
-                                raise RuntimeError(
-                                    f"AI Horde model '{active_profile.model}' is currently offline on the network (no workers available). Please choose an active model in Settings."
+                            err_text = err_bytes.decode("utf-8", errors="ignore")
+                            fallback, fatal_err = await adapter.resolve_model_fallback(
+                                client,
+                                target.root_url,
+                                headers,
+                                str(active_payload["model"]),
+                                resp.status_code,
+                                err_text,
+                            )
+                            if fallback and fallback != active_payload["model"]:
+                                logger.warning(
+                                    "%s streaming model '%s' offline; attempting fallback to '%s'",
+                                    adapter.display_name,
+                                    active_payload["model"],
+                                    fallback,
                                 )
+                                active_payload["model"] = fallback
+                                continue
+                            if fatal_err:
+                                raise RuntimeError(fatal_err)
 
                         resp.raise_for_status()
                         stream_ok = True
@@ -832,7 +810,7 @@ class LLMClient:
                     if stream_ok:
                         break
                 except Exception:
-                    if attempt == 2 or target.provider_type not in _CLOUD_OPENAI_PROVIDER_TYPES:
+                    if attempt == 2 or not is_openai_compat_provider(target.provider_type):
                         raise
 
 

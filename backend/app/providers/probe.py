@@ -3,25 +3,25 @@
 from __future__ import annotations
 
 import asyncio
-import ssl
 import time
-from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import httpx
 
 from app.db.provider_store import ProviderStore
 from app.providers.models import (
-    parse_aihorde_models,
-    parse_nanogpt_models,
     parse_ollama_tags,
     parse_openai_models,
 )
-from app.providers.openrouter_catalog import openrouter_catalog_service
+from app.providers.openai_compat import (
+    ProbeOutcome as _Outcome,
+    bearer_headers,
+    classify_probe_exception as _classify_exception,
+    get_openai_compat_provider,
+)
 from app.schemas.provider import (
     ProbeErrorCode,
     ProviderDraft,
-    ProviderModelInfo,
     ProviderProbeResponse,
     ProviderRecord,
 )
@@ -32,11 +32,6 @@ PROBE_TIMEOUT_SECONDS = 3.0
 PROBE_CACHE_TTL_SECONDS = 10.0
 MAX_CONCURRENT_PROBES = 8
 USER_PROBES_PER_MINUTE = 30
-
-
-def bearer_headers(token: str | None) -> dict[str, str]:
-    """The single place that turns a token into request headers (never set on shared clients)."""
-    return {"Authorization": f"Bearer {token}"} if token else {}
 
 
 class ProbeRateLimited(RuntimeError):
@@ -61,30 +56,6 @@ class TokenBucket:
         self._hits[key] = hits
 
 
-@dataclass
-class _Outcome:
-    reachable: bool
-    protocol: str | None = None
-    models: list[ProviderModelInfo] | None = None
-    error_code: ProbeErrorCode | None = None
-    error: str | None = None
-
-
-def _classify_exception(exc: Exception) -> tuple[ProbeErrorCode, str]:
-    text = str(exc) or exc.__class__.__name__
-    if isinstance(exc, (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.PoolTimeout, asyncio.TimeoutError)):
-        return "timeout", text
-    if isinstance(exc, httpx.ConnectError):
-        cause = exc.__cause__ or exc.__context__
-        if isinstance(cause, ssl.SSLError) or "ssl" in text.lower() or "certificate" in text.lower():
-            return "tls_error", text
-        lowered = text.lower()
-        if "name or service not known" in lowered or "nodename nor servname" in lowered or "getaddrinfo" in lowered:
-            return "dns_failure", text
-        return "connect_refused", text
-    return "unknown", text
-
-
 async def _probe_once(
     root_url: str,
     token: str | None,
@@ -98,85 +69,12 @@ async def _probe_once(
         await assert_url_allowed(url, allow_private=not restricted)
     except UrlBlockedError as exc:
         return _Outcome(False, error_code=exc.code if exc.code in ("dns_failure", "invalid_url") else "blocked_by_policy", error=str(exc))  # type: ignore[arg-type]
+
+    adapter = get_openai_compat_provider(provider_type)
+    if adapter is not None:
+        return await adapter.probe(url.root, token, client=client)
+
     headers = bearer_headers(token)
-
-    if provider_type == "openrouter":
-        if not token or not token.strip():
-            return _Outcome(False, error_code="unauthorized", error="OpenRouter API key is required.")
-        auth_url = f"{url.root.rstrip('/')}/auth/key"
-        try:
-            resp = await client.get(auth_url, headers=headers, timeout=5.0)
-            if resp.status_code == 200:
-                try:
-                    models = await openrouter_catalog_service.get_models(client=client)
-                except Exception:
-                    models = openrouter_catalog_service.get_cached_models_sync()
-                return _Outcome(True, "openai_compat", models)
-            if resp.status_code == 401:
-                return _Outcome(False, error_code="unauthorized", error="Invalid OpenRouter API key.")
-            if resp.status_code == 403:
-                return _Outcome(False, error_code="forbidden", error="OpenRouter API key forbidden or restricted.")
-            return _Outcome(False, error_code="unknown", error=f"HTTP {resp.status_code}")
-        except Exception as exc:  # noqa: BLE001
-            code, text = _classify_exception(exc)
-            return _Outcome(False, error_code=code, error=text)
-
-    if provider_type == "aihorde":
-        effective_token = (token or "").strip() or "0000000000"
-        horde_headers = bearer_headers(effective_token)
-        models_url = f"{url.root.rstrip('/')}/models"
-        try:
-            resp = await client.get(models_url, headers=horde_headers, timeout=5.0)
-            if resp.status_code == 200:
-                try:
-                    models = parse_aihorde_models(resp.json())
-                    return _Outcome(True, "openai_compat", models)
-                except (ValueError, KeyError):
-                    return _Outcome(False, error_code="bad_payload", error="AI Horde returned a non-JSON model list.")
-            if resp.status_code == 401:
-                return _Outcome(False, error_code="unauthorized", error="Invalid AI Horde API key.")
-            if resp.status_code == 403:
-                return _Outcome(False, error_code="forbidden", error="AI Horde access forbidden.")
-            if resp.status_code == 502:
-                return _Outcome(False, error_code="connect_refused", error="AI Horde gateway unavailable (502).")
-            return _Outcome(False, error_code="unknown", error=f"HTTP {resp.status_code}")
-        except Exception as exc:  # noqa: BLE001
-            code, text = _classify_exception(exc)
-            return _Outcome(False, error_code=code, error=text)
-
-    if provider_type == "nanogpt":
-        root = url.root.rstrip("/")
-        models_url = f"{root}/models"
-        embed_url = f"{root}/embedding-models"
-        try:
-            resp = await client.get(models_url, headers=headers, timeout=5.0)
-            if resp.status_code == 200:
-                try:
-                    chat_payload = resp.json()
-                except ValueError:
-                    return _Outcome(False, error_code="bad_payload", error="NanoGPT returned a non-JSON model list.")
-                if not isinstance(chat_payload, dict) or not isinstance(chat_payload.get("data"), list):
-                    return _Outcome(False, error_code="bad_payload", error="NanoGPT returned an unexpected model list.")
-                embed_payload: dict | None = None
-                try:
-                    embed_resp = await client.get(embed_url, headers=headers, timeout=3.0)
-                    if embed_resp.status_code == 200:
-                        candidate = embed_resp.json()
-                        if isinstance(candidate, dict) and isinstance(candidate.get("data"), list):
-                            embed_payload = candidate
-                except Exception:  # noqa: BLE001 - embedding catalog is supplemental to chat models
-                    embed_payload = None
-                return _Outcome(True, "openai_compat", parse_nanogpt_models(chat_payload, embed_payload))
-            if resp.status_code == 401:
-                return _Outcome(False, error_code="unauthorized", error="Invalid NanoGPT API key.")
-            if resp.status_code == 403:
-                return _Outcome(False, error_code="forbidden", error="NanoGPT access forbidden.")
-            if resp.status_code == 404:
-                return _Outcome(False, error_code="not_found", error="NanoGPT /models endpoint was not found.")
-            return _Outcome(False, error_code="unknown", error=f"HTTP {resp.status_code}")
-        except Exception as exc:  # noqa: BLE001
-            code, text = _classify_exception(exc)
-            return _Outcome(False, error_code=code, error=text)
 
     try:
         resp = await client.get(f"{url.root}/api/tags", headers=headers, timeout=PROBE_TIMEOUT_SECONDS)
@@ -306,9 +204,11 @@ class ProbeService:
         )
         self._cache[(record.id, record.version)] = (time.monotonic(), response)
         # Persist off the event loop (sync sqlite); only the catalog changes cause row writes.
+        adapter = get_openai_compat_provider(record.type)
+        should_persist = adapter.persist_probed_models if adapter is not None else True
         persist_models = (
             outcome.models
-            if (outcome.reachable and record.type != "openrouter" and outcome.models is not None and len(outcome.models) > 0)
+            if (outcome.reachable and should_persist and outcome.models is not None and len(outcome.models) > 0)
             else None
         )
         await asyncio.to_thread(

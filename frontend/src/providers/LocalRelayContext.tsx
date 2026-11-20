@@ -279,6 +279,7 @@ export const LocalRelayProvider: React.FC<{
       }
       if (
         req.driver !== "ollama" &&
+        req.driver !== "openai_compat" &&
         req.driver !== "openrouter" &&
         req.driver !== "aihorde" &&
         req.driver !== "nanogpt"

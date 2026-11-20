@@ -68,7 +68,9 @@ def resolve_actor_context_ceiling(actor_profile: ModelProfile) -> tuple[int | No
         return None, 0
     endpoint = getattr(actor_profile, "resolved", None)
     if endpoint is not None:
-        if endpoint.type in ("openrouter", "aihorde", "nanogpt"):
+        from app.providers.openai_compat import is_openai_compat_provider
+
+        if is_openai_compat_provider(endpoint.type):
             return None, 0
         if endpoint.type == "webgpu":
             from app.providers.webgpu_catalog import get_webgpu_max_context

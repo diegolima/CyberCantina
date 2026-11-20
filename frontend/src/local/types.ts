@@ -14,6 +14,7 @@ export type RelayDriver =
   | "browser_ollama"
   | "webgpu"
   | "ollama"
+  | "openai_compat"
   | "openrouter"
   | "aihorde"
   | "nanogpt";

@@ -8,6 +8,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 
+from app.providers.openai_compat import get_openai_compat_provider
 from app.schemas.provider import (
     ProviderModelInfo,
     ProviderRecord,
@@ -176,12 +177,9 @@ class ProviderStore:
         conn: sqlite3.Connection | None = None,
     ) -> ProviderRecord:
         if name is None or not name.strip():
-            if type == "openrouter":
-                base_label = "OpenRouter"
-            elif type == "aihorde":
-                base_label = "AI Horde"
-            elif type == "nanogpt":
-                base_label = "NanoGPT"
+            oai_adapter = get_openai_compat_provider(type)
+            if oai_adapter is not None:
+                base_label = oai_adapter.display_name
             elif type == "browser_ollama":
                 base_label = "Local Ollama (Browser)"
             elif type == "webgpu":
@@ -324,7 +322,7 @@ class ProviderStore:
                 WHERE scope = 'user'
                   AND (
                     secret_enc IS NOT NULL
-                    OR (credential_storage = 'server' AND type IN ('ollama', 'openrouter', 'aihorde', 'nanogpt'))
+                    OR (credential_storage = 'server' AND type IN ('ollama', 'openai_compat', 'openrouter', 'aihorde', 'nanogpt'))
                   )
                 """
             ).fetchall()
@@ -341,7 +339,7 @@ class ProviderStore:
                     WHERE scope = 'user'
                       AND (
                         secret_enc IS NOT NULL
-                        OR (credential_storage = 'server' AND type IN ('ollama', 'openrouter', 'aihorde', 'nanogpt'))
+                        OR (credential_storage = 'server' AND type IN ('ollama', 'openai_compat', 'openrouter', 'aihorde', 'nanogpt'))
                       )
                     """,
                     (now,),

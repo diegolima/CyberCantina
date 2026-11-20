@@ -49,6 +49,7 @@ const PRESET_CLOUD_HOSTS = new Set([
 
 const DEFAULT_URL_BY_TYPE: Record<ProviderType, string> = {
   ollama: "",
+  openai_compat: "",
   openrouter: "https://openrouter.ai/api/v1",
   aihorde: "https://oai.stablehorde.net/v1",
   nanogpt: "https://nano-gpt.com/api/v1",
@@ -58,6 +59,7 @@ const DEFAULT_URL_BY_TYPE: Record<ProviderType, string> = {
 
 const DEFAULT_NAME_BY_TYPE: Record<ProviderType, string> = {
   ollama: "",
+  openai_compat: "OpenAI API",
   openrouter: "OpenRouter",
   aihorde: "AI Horde",
   nanogpt: "NanoGPT",
@@ -67,6 +69,7 @@ const DEFAULT_NAME_BY_TYPE: Record<ProviderType, string> = {
 
 const PRESET_NAMES = new Set([
   "Ollama",
+  "OpenAI API",
   "OpenRouter",
   "AI Horde",
   "NanoGPT",
@@ -182,7 +185,7 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
   const isRemoteHttpMixedContent = (() => {
     if (
       !effectiveStoreInBrowser ||
-      providerType !== "ollama" ||
+      (providerType !== "ollama" && providerType !== "openai_compat") ||
       typeof window === "undefined" ||
       window.location.protocol !== "https:"
     ) {
@@ -213,7 +216,9 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
     };
   }, [isWebGpu]);
 
-  const urlMissing = providerType === "ollama" && url.trim() === "";
+  const urlMissing =
+    (providerType === "ollama" || providerType === "openai_compat") &&
+    url.trim() === "";
   const canReuseExistingOrVaultOpenRouterKey =
     props.mode === "edit" &&
     (effectiveStoreInBrowser
@@ -533,6 +538,15 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
           <button
             type="button"
             disabled={deleteOnly || props.mode === "edit"}
+            className={`btn ${providerType === "openai_compat" ? "btn--primary" : "btn--subtle"}`}
+            style={{ padding: "7px 10px", fontSize: "0.8rem" }}
+            onClick={() => selectProviderType("openai_compat")}
+          >
+            OpenAI-Compatible API
+          </button>
+          <button
+            type="button"
+            disabled={deleteOnly || props.mode === "edit"}
             className={`btn ${providerType === "openrouter" ? "btn--primary" : "btn--subtle"}`}
             style={{ padding: "7px 10px", fontSize: "0.8rem" }}
             onClick={() => selectProviderType("openrouter")}
@@ -569,7 +583,9 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
             disabled={deleteOnly}
             placeholder={
               props.mode === "create"
-                ? providerType === "openrouter"
+                ? providerType === "openai_compat"
+                  ? "Defaults to “OpenAI API”"
+                  : providerType === "openrouter"
                   ? "Defaults to “OpenRouter”"
                   : providerType === "nanogpt"
                   ? "Defaults to “NanoGPT”"
@@ -589,8 +605,14 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
         {!isWebGpu && (
           <div className="form-group">
             <label className="form-label">
-              {isBrowserOllama ? "Local Ollama URL" : "Server URL"}{" "}
-              {providerType === "openrouter" ? (
+              {isBrowserOllama
+                ? "Local Ollama URL"
+                : providerType === "openai_compat"
+                  ? "API Base URL"
+                  : "Server URL"}{" "}
+              {providerType === "openai_compat" ? (
+                <span className="form-hint">(e.g. OpenAI, Groq, Together, vLLM, LM Studio, llama.cpp)</span>
+              ) : providerType === "openrouter" ? (
                 <span className="form-hint">(default: openrouter.ai/api/v1)</span>
               ) : providerType === "nanogpt" ? (
                 <span className="form-hint">(default: nano-gpt.com/api/v1)</span>
@@ -605,7 +627,9 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
               value={url}
               disabled={deleteOnly || providerType === "aihorde"}
               placeholder={
-                providerType === "openrouter"
+                providerType === "openai_compat"
+                  ? "https://api.openai.com/v1"
+                  : providerType === "openrouter"
                   ? "https://openrouter.ai/api/v1"
                   : providerType === "nanogpt"
                   ? "https://nano-gpt.com/api/v1"
@@ -664,6 +688,8 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
               ? "NanoGPT API Key"
               : providerType === "aihorde"
               ? "AI Horde API Key"
+              : providerType === "openai_compat"
+              ? "API Key / Bearer token"
               : "Bearer token"}{" "}
             <span className="form-hint">
               {providerType === "openrouter"
@@ -674,6 +700,8 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
                 ? effectiveStoreInBrowser
                   ? "(required when stored in browser)"
                   : "(optional, defaults to anonymous 0000000000)"
+                : providerType === "openai_compat"
+                ? "(optional; required by most cloud APIs)"
                 : "(optional, for hosted/cloud endpoints)"}
             </span>
           </label>
@@ -750,8 +778,8 @@ export const ProviderEditor: React.FC<EditorProps> = (props) => {
           {isRemoteHttpMixedContent && (
             <div className="provider-warning" role="status" style={{ marginTop: 6 }}>
               <AlertTriangle size={13} /> This page is loaded over HTTPS; browsers block direct{" "}
-              <code>http://</code> requests to non-loopback Ollama servers. Use an{" "}
-              <code>https://</code> reverse proxy with <code>OLLAMA_ORIGINS</code> CORS enabled.
+              <code>http://</code> requests to non-loopback servers. Use an{" "}
+              <code>https://</code> endpoint with CORS enabled.
             </div>
           )}
           {effectiveHasSavedToken && (

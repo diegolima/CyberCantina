@@ -209,5 +209,25 @@ describe("Browser credential store UI", () => {
     );
     expect(nanoGptEditorHtml).toContain("NanoGPT (Cloud API)");
     expect(nanoGptEditorHtml).toContain("NanoGPT API Key");
+
+    const openAiCompatEditorHtml = renderToStaticMarkup(
+      <ProvidersProvider probeSystem={false}>
+        <ProviderEditor
+          mode="edit"
+          provider={{
+            ...USER_BROWSER_OR,
+            id: "prov_u_oai",
+            name: "My Groq",
+            type: "openai_compat",
+            base_url: "https://api.groq.com/openai/v1",
+          }}
+          credentialStoreMode="prefer_browser"
+          onDone={vi.fn()}
+        />
+      </ProvidersProvider>
+    );
+    expect(openAiCompatEditorHtml).toContain("OpenAI-Compatible API");
+    expect(openAiCompatEditorHtml).toContain("API Key / Bearer token");
+    expect(openAiCompatEditorHtml).toContain("https://api.openai.com/v1");
   });
 });
