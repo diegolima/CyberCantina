@@ -43,6 +43,7 @@ import {
   validateContainersState,
 } from "./map/mapValidation";
 import { PortalPromotionModal } from "./map/PortalPromotionModal";
+import { type MapSearchMatch } from "./map/mapSearch";
 import { SpatialTopologyCanvas } from "./map/SpatialTopologyCanvas";
 import { TopologyHeaderToolbar } from "./map/TopologyHeaderToolbar";
 import {
@@ -612,7 +613,25 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     return map;
   }, [workingEdges]);
 
+  const [pendingCenterTarget, setPendingCenterTarget] = useState<{
+    id: string;
+    nonce: number;
+  } | null>(null);
+  const centerNonceRef = useRef(0);
+
+  useEffect(() => {
+    if (!pendingCenterTarget) return;
+    const pt = fullMapCoords[pendingCenterTarget.id];
+    if (!pt) return;
+    setPan({
+      x: pt.x === 0 ? 0 : -pt.x,
+      y: pt.y === 0 ? 0 : -pt.y,
+    });
+    setPendingCenterTarget(null);
+  }, [pendingCenterTarget, fullMapCoords]);
+
   const drillIntoContainer = useCallback((contId: string | null) => {
+    setPendingCenterTarget(null);
     setCurrentContainerId(contId);
     setSelectedContainerId(null);
     setSelectedGhostLocId(null);
@@ -631,7 +650,21 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       setContextMenu(null);
       setInlineEdgeEdit(null);
       setZoom(1);
-      const targetLoc = focusLocId ? locationMap.get(focusLocId) : undefined;
+      if (!focusLocId) {
+        setPendingCenterTarget(null);
+        setPan({ x: 0, y: 0 });
+        return;
+      }
+      if (targetContainerId === currentContainerId && fullMapCoords[focusLocId]) {
+        const pt = fullMapCoords[focusLocId];
+        setPendingCenterTarget(null);
+        setPan({
+          x: pt.x === 0 ? 0 : -pt.x,
+          y: pt.y === 0 ? 0 : -pt.y,
+        });
+        return;
+      }
+      const targetLoc = locationMap.get(focusLocId);
       if (
         targetLoc &&
         typeof targetLoc.ui_x === "number" &&
@@ -639,15 +672,39 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         typeof targetLoc.ui_y === "number" &&
         Number.isFinite(targetLoc.ui_y)
       ) {
+        setPendingCenterTarget(null);
         setPan({
           x: targetLoc.ui_x === 0 ? 0 : -targetLoc.ui_x,
           y: targetLoc.ui_y === 0 ? 0 : -targetLoc.ui_y,
         });
       } else {
         setPan({ x: 0, y: 0 });
+        setPendingCenterTarget({
+          id: focusLocId,
+          nonce: ++centerNonceRef.current,
+        });
       }
     },
-    [locationMap]
+    [currentContainerId, fullMapCoords, locationMap]
+  );
+
+  const handleFocusSearchResult = useCallback(
+    (match: MapSearchMatch) => {
+      if (match.kind === "container") {
+        if (!containerMap.has(match.id)) return;
+        setSelectedLocId(null);
+        drillIntoContainer(match.id);
+        return;
+      }
+      const targetLoc = locationMap.get(match.id);
+      if (!targetLoc) return;
+      const targetScopeId =
+        targetLoc.container_id && containerMap.has(targetLoc.container_id)
+          ? targetLoc.container_id
+          : null;
+      handleJumpToContainer(targetScopeId, targetLoc.id);
+    },
+    [containerMap, locationMap, drillIntoContainer, handleJumpToContainer]
   );
 
   const handleCenter = useCallback(() => {
@@ -707,6 +764,10 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       });
     } else {
       setPan({ x: 0, y: 0 });
+      setPendingCenterTarget({
+        id: targetCont.id,
+        nonce: ++centerNonceRef.current,
+      });
     }
   }, [externalFocusRequest, locationMap, containerMap, handleJumpToContainer]);
 
@@ -1064,6 +1125,10 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         currentContainerId={currentContainerId}
         projectedTopology={projectedTopology}
         drillIntoContainer={drillIntoContainer}
+        searchLocations={workingLocations}
+        searchContainers={workingContainers}
+        activeLocationId={activeLoc?.id}
+        onFocusSearchResult={handleFocusSearchResult}
       />
 
       {/* Draggable Node Palette Bar + Undo + Validation Status */}

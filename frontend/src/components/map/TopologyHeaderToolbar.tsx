@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Check,
   ChevronRight,
@@ -6,13 +6,19 @@ import {
   Crosshair,
   FolderOpen,
   Save,
+  Search,
   Sparkles,
   X,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
+import type { LocationContainer, LocationNode } from "../../types";
 import type { ProjectedDepthTopology } from "./topologyProjection";
 import { MAX_MAP_ZOOM, MIN_MAP_ZOOM, clampZoom } from "./mapGeometry";
+import {
+  type MapSearchMatch,
+  filterAndRankMapSearchResults,
+} from "./mapSearch";
 
 export interface TopologyHeaderToolbarProps {
   title?: string;
@@ -35,6 +41,10 @@ export interface TopologyHeaderToolbarProps {
   currentContainerId: string | null;
   projectedTopology: ProjectedDepthTopology;
   drillIntoContainer: (contId: string | null) => void;
+  searchLocations?: readonly LocationNode[];
+  searchContainers?: readonly LocationContainer[];
+  activeLocationId?: string;
+  onFocusSearchResult?: (match: MapSearchMatch) => void;
 }
 
 export const TopologyHeaderToolbar: React.FC<TopologyHeaderToolbarProps> = ({
@@ -58,7 +68,133 @@ export const TopologyHeaderToolbar: React.FC<TopologyHeaderToolbarProps> = ({
   currentContainerId,
   projectedTopology,
   drillIntoContainer,
+  searchLocations = [],
+  searchContainers = [],
+  activeLocationId,
+  onFocusSearchResult,
 }) => {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const searchWrapRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const listboxId = useId();
+
+  const headerTitle =
+    title ||
+    `Spatial Topology (${locationsCount} Locations, ${edgesCount} Passages)`;
+
+  const searchMatches = useMemo(
+    () =>
+      onFocusSearchResult
+        ? filterAndRankMapSearchResults({
+            query: searchQuery,
+            locations: searchLocations,
+            containers: searchContainers,
+          })
+        : [],
+    [onFocusSearchResult, searchQuery, searchLocations, searchContainers]
+  );
+
+  const hasQuery = searchQuery.trim().length > 0;
+  const showDropdown = Boolean(onFocusSearchResult && isDropdownOpen && hasQuery);
+  const clampedHighlight =
+    searchMatches.length > 0
+      ? Math.max(0, Math.min(highlightedIndex, searchMatches.length - 1))
+      : -1;
+
+  useEffect(() => {
+    if (!showDropdown) return;
+    const handleOutsideMouseDown = (e: MouseEvent) => {
+      if (
+        searchWrapRef.current &&
+        !searchWrapRef.current.contains(e.target as Node)
+      ) {
+        setIsDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutsideMouseDown);
+    return () =>
+      document.removeEventListener("mousedown", handleOutsideMouseDown);
+  }, [showDropdown]);
+
+  useEffect(() => {
+    if (!showDropdown || clampedHighlight < 0) return;
+    const optEl = optionRefs.current[clampedHighlight];
+    if (optEl && typeof optEl.scrollIntoView === "function") {
+      optEl.scrollIntoView({ block: "nearest" });
+    }
+  }, [showDropdown, clampedHighlight]);
+
+  const commitMatch = (match: MapSearchMatch) => {
+    if (!onFocusSearchResult) return;
+    onFocusSearchResult(match);
+    setSearchQuery("");
+    setIsDropdownOpen(false);
+    setHighlightedIndex(0);
+    searchInputRef.current?.blur();
+  };
+
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown") {
+      if (!hasQuery) return;
+      e.preventDefault();
+      if (!isDropdownOpen) {
+        setIsDropdownOpen(true);
+        setHighlightedIndex(0);
+        return;
+      }
+      if (searchMatches.length > 0) {
+        setHighlightedIndex((prev) => (prev + 1) % searchMatches.length);
+      }
+      return;
+    }
+
+    if (e.key === "ArrowUp") {
+      if (!hasQuery) return;
+      e.preventDefault();
+      if (!isDropdownOpen) {
+        setIsDropdownOpen(true);
+        setHighlightedIndex(Math.max(0, searchMatches.length - 1));
+        return;
+      }
+      if (searchMatches.length > 0) {
+        setHighlightedIndex(
+          (prev) => (prev - 1 + searchMatches.length) % searchMatches.length
+        );
+      }
+      return;
+    }
+
+    if (e.key === "Enter") {
+      if (!hasQuery || searchMatches.length === 0) return;
+      e.preventDefault();
+      const chosen =
+        searchMatches[clampedHighlight >= 0 ? clampedHighlight : 0];
+      if (chosen) {
+        commitMatch(chosen);
+      }
+      return;
+    }
+
+    if (e.key === "Escape") {
+      if (isDropdownOpen || searchQuery.length > 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDropdownOpen(false);
+        setSearchQuery("");
+        setHighlightedIndex(0);
+        searchInputRef.current?.blur();
+      }
+    }
+  };
+
+  const activeDescendantId =
+    showDropdown && clampedHighlight >= 0 && searchMatches[clampedHighlight]
+      ? `${listboxId}-opt-${clampedHighlight}`
+      : undefined;
+
   return (
     <>
       {/* Unified Header Toolbar */}
@@ -73,20 +209,192 @@ export const TopologyHeaderToolbar: React.FC<TopologyHeaderToolbarProps> = ({
         }}
       >
         <span
+          title={headerTitle}
           style={{
             display: "flex",
             alignItems: "center",
             gap: 8,
             fontSize: "0.88rem",
             fontWeight: 600,
+            minWidth: 0,
+            flex: "1 1 220px",
           }}
         >
-          <Compass size={17} color="var(--accent-cyan)" />
-          {title ||
-            `Spatial Topology (${locationsCount} Locations, ${edgesCount} Passages)`}
+          <Compass size={17} color="var(--accent-cyan)" style={{ flexShrink: 0 }} />
+          <span
+            style={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {headerTitle}
+          </span>
         </span>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            flexWrap: "wrap",
+          }}
+        >
+          {onFocusSearchResult && (
+            <div className="map-search-wrap" ref={searchWrapRef}>
+              <Search
+                size={13}
+                className="map-search-icon"
+                aria-hidden="true"
+              />
+              <input
+                ref={searchInputRef}
+                type="text"
+                className="map-search-input"
+                role="combobox"
+                aria-expanded={showDropdown}
+                aria-controls={showDropdown ? listboxId : undefined}
+                aria-activedescendant={activeDescendantId}
+                aria-autocomplete="list"
+                aria-label="Search locations and containers"
+                placeholder="Search locations & areas…"
+                value={searchQuery}
+                onFocus={() => {
+                  if (searchQuery.trim().length > 0) {
+                    setIsDropdownOpen(true);
+                  }
+                }}
+                onBlur={(e) => {
+                  const nextTarget = e.relatedTarget as Node | null;
+                  if (
+                    nextTarget &&
+                    searchWrapRef.current?.contains(nextTarget)
+                  ) {
+                    return;
+                  }
+                  setIsDropdownOpen(false);
+                }}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setSearchQuery(next);
+                  setHighlightedIndex(0);
+                  setIsDropdownOpen(next.trim().length > 0);
+                }}
+                onKeyDown={handleSearchKeyDown}
+              />
+              {searchQuery.length > 0 && (
+                <button
+                  type="button"
+                  className="map-search-clear"
+                  aria-label="Clear map search"
+                  title="Clear search"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    setSearchQuery("");
+                    setIsDropdownOpen(false);
+                    setHighlightedIndex(0);
+                    searchInputRef.current?.focus();
+                  }}
+                >
+                  <X size={12} />
+                </button>
+              )}
+
+              {showDropdown && (
+                <div
+                  id={listboxId}
+                  role="listbox"
+                  aria-label="Matching locations and containers"
+                  className="map-search-dropdown"
+                >
+                  {searchMatches.length === 0 ? (
+                    <div className="map-search-empty">
+                      No matching locations or containers
+                    </div>
+                  ) : (
+                    searchMatches.map((match, idx) => {
+                      const isHighlighted = idx === clampedHighlight;
+                      const isActiveLoc =
+                        match.kind === "location" &&
+                        match.id === activeLocationId;
+                      const isCurrentCont =
+                        match.kind === "container" &&
+                        match.id === currentContainerId;
+                      return (
+                        <button
+                          key={match.key}
+                          id={`${listboxId}-opt-${idx}`}
+                          ref={(el) => {
+                            optionRefs.current[idx] = el;
+                          }}
+                          type="button"
+                          role="option"
+                          aria-selected={isHighlighted}
+                          data-map-search-option={match.id}
+                          data-map-search-kind={match.kind}
+                          className={`map-search-item${
+                            isHighlighted ? " map-search-item--active" : ""
+                          }`}
+                          onMouseEnter={() => setHighlightedIndex(idx)}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => commitMatch(match)}
+                        >
+                          <div className="map-search-item-top">
+                            <span className="map-search-item-name">
+                              {match.name}
+                            </span>
+                            <span className="map-search-item-badges">
+                              {isActiveLoc && (
+                                <span className="map-search-status">
+                                  Active
+                                </span>
+                              )}
+                              {!isActiveLoc && match.isStarting && (
+                                <span className="map-search-status">
+                                  Start
+                                </span>
+                              )}
+                              {isCurrentCont && (
+                                <span className="map-search-status">
+                                  Inside
+                                </span>
+                              )}
+                              <span
+                                className={`map-search-badge map-search-badge--${
+                                  match.kind === "container"
+                                    ? "container"
+                                    : match.isHub
+                                    ? "hub"
+                                    : "location"
+                                }`}
+                                title={
+                                  match.kind === "container"
+                                    ? match.depthLabel
+                                    : match.isHub
+                                    ? "Transit Hub"
+                                    : "Location"
+                                }
+                              >
+                                {match.kind === "container"
+                                  ? `L${match.containerDepth}`
+                                  : match.isHub
+                                  ? "Hub"
+                                  : "Location"}
+                              </span>
+                            </span>
+                          </div>
+                          <div className="map-search-item-breadcrumb">
+                            {match.breadcrumb}
+                          </div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           <div
             role="group"
             aria-label="Map zoom controls"

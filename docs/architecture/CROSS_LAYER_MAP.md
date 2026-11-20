@@ -715,6 +715,7 @@ erDiagram
 | `frontend/src/components/map/TopologyHeaderToolbar.tsx` |
 | `frontend/src/components/map/mapGeometry.ts` |
 | `frontend/src/components/map/mapIcons.ts` |
+| `frontend/src/components/map/mapSearch.ts` |
 | `frontend/src/components/map/mapValidation.ts` |
 | `frontend/src/components/map/topologyProjection.ts` |
 | `frontend/src/components/map/useTopologyMutations.ts` |

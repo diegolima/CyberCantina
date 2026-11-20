@@ -105,4 +105,79 @@ test.describe("03 - Interactive SVG Map Topology Canvas (SpatialTopologyView)", 
 
     mock.assertNoPageErrors();
   });
+
+  test("searches locations and containers across depths, requires Enter/click to jump, and opens containers from an inside viewpoint", async ({
+    page,
+  }) => {
+    const mock = await installCantinaApiMock(page, {
+      authMode: "authenticated",
+    });
+
+    await page.goto("/");
+    await page.locator(".home-card", { hasText: "Worlds" }).click();
+    await page.getByRole("button", { name: "Inspect" }).first().click();
+    await page.locator(".modal-tab-btn", { hasText: "Map" }).click();
+
+    const mapTitle = page.getByText(/The Green Lie — Spatial Topology/i);
+    await expect(mapTitle).toBeVisible();
+
+    const searchInput = page.getByRole("combobox", {
+      name: "Search locations and containers",
+    });
+    await expect(searchInput).toBeVisible();
+
+    const mainFloorNode = page.locator(
+      'g[data-node-kind="location"][data-node-id="loc_main_floor"]'
+    );
+    const tunnelsNode = page.locator(
+      'g[data-node-kind="location"][data-node-id="loc_tunnels"]'
+    );
+    await expect(mainFloorNode).toBeVisible();
+
+    // 1. Typing full location name shows dropdown match without auto-jumping prematurely
+    await searchInput.fill("Cooling Tunnels");
+    const tunnelsOption = page.locator('[data-map-search-option="loc_tunnels"]');
+    await expect(tunnelsOption).toBeVisible();
+    await expect(tunnelsOption).toContainText("Sector 9: The Drain");
+    await expect(mainFloorNode).toBeVisible();
+
+    // 2. Pressing Enter commits the match, switches container scope, selects Cooling Tunnels, and clears input
+    await searchInput.press("Enter");
+    await expect(searchInput).toHaveValue("");
+    await expect(tunnelsOption).toBeHidden();
+    await expect(tunnelsNode).toBeVisible();
+    await expect(
+      page.locator('input[value="Cooling Tunnels"]').first()
+    ).toBeVisible();
+
+    // 3. Searching and clicking a container adopts its "inside" viewpoint showing child locations
+    await searchInput.fill("Neon");
+    const neonOption = page.locator('[data-map-search-option="cont_neon_rust"]');
+    await expect(neonOption).toBeVisible();
+    await expect(neonOption).toContainText("L1");
+    await neonOption.click();
+
+    await expect(searchInput).toHaveValue("");
+    await expect(mainFloorNode).toBeVisible();
+    await expect(
+      page.locator('g[data-node-kind="location"][data-node-id="loc_clinic"]')
+    ).toBeVisible();
+
+    // 4. Typing inside search guards Delete and Escape clears dropdown without closing modal
+    await searchInput.fill("Main");
+    await expect(
+      page.locator('[data-map-search-option="loc_main_floor"]')
+    ).toBeVisible();
+    await page.keyboard.press("Delete");
+    await expect(mainFloorNode).toBeVisible();
+
+    await searchInput.press("Escape");
+    await expect(searchInput).toHaveValue("");
+    await expect(
+      page.locator('[data-map-search-option="loc_main_floor"]')
+    ).toBeHidden();
+    await expect(mapTitle).toBeVisible();
+
+    mock.assertNoPageErrors();
+  });
 });
