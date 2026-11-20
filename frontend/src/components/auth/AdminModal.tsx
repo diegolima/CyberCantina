@@ -207,28 +207,15 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
   }, [singleUserMode, activeTab]);
 
 
+  const handleSelectTab = (tab: AdminModalTab) => {
+    setStatusMsg(null);
+    setErrorMsg(null);
+    setActiveTab(tab);
+  };
+
   return (
     <div className="modal-backdrop">
-      <div
-        className="modal-panel"
-        style={{
-          maxWidth:
-            activeTab === "models" ||
-            activeTab === "prompts" ||
-            activeTab === "server" ||
-            activeTab === "communication"
-              ? 880
-              : 740,
-          width:
-            activeTab === "models" ||
-            activeTab === "prompts" ||
-            activeTab === "server" ||
-            activeTab === "communication"
-              ? "min(880px, 95vw)"
-              : undefined,
-          transition: "max-width 0.2s ease",
-        }}
-      >
+      <div className="modal-panel modal-panel--sheet">
         <div className="modal-header">
           <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <UserCog size={18} color="var(--accent-amber)" />
@@ -240,59 +227,71 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
         </div>
 
         {/* Admin Modal Tabs */}
-        <div className="modal-tabs">
+        <div className="modal-tabs" role="tablist" aria-label="Admin sections">
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === "users"}
             className={`modal-tab-btn ${
               activeTab === "users" ? "active" : ""
             }`}
-            onClick={() => setActiveTab("users")}
+            onClick={() => handleSelectTab("users")}
           >
             <Users size={14} />
             Users ({users.length})
           </button>
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === "providers"}
             className={`modal-tab-btn ${
               activeTab === "providers" ? "active" : ""
             }`}
-            onClick={() => setActiveTab("providers")}
+            onClick={() => handleSelectTab("providers")}
           >
             <Server size={14} />
             Providers
           </button>
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === "models"}
             className={`modal-tab-btn ${
               activeTab === "models" ? "active" : ""
             }`}
-            onClick={() => setActiveTab("models")}
+            onClick={() => handleSelectTab("models")}
           >
             <Cpu size={14} />
             Models
           </button>
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === "prompts"}
             className={`modal-tab-btn ${
               activeTab === "prompts" ? "active" : ""
             }`}
-            onClick={() => setActiveTab("prompts")}
+            onClick={() => handleSelectTab("prompts")}
           >
             <FileText size={14} />
             Prompts & Presets
           </button>
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === "server"}
             className={`modal-tab-btn ${
               activeTab === "server" ? "active" : ""
             }`}
-            onClick={() => setActiveTab("server")}
+            onClick={() => handleSelectTab("server")}
           >
             <Sliders size={14} />
             Server Configuration
           </button>
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === "communication"}
             className={`modal-tab-btn ${
               activeTab === "communication" ? "active" : ""
             }${singleUserMode ? " is-disabled" : ""}`}
@@ -303,7 +302,7 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
                 : undefined
             }
             onClick={() => {
-              if (!singleUserMode) setActiveTab("communication");
+              if (!singleUserMode) handleSelectTab("communication");
             }}
           >
             <Megaphone size={14} />
@@ -311,7 +310,7 @@ const AdminModalInner: React.FC<AdminModalProps> = ({
           </button>
         </div>
 
-        <div className="modal-body" style={{ gap: 14 }}>
+        <div className="modal-body" style={{ gap: 14 }} role="tabpanel">
           {singleUserMode && (
             <div className="auth-warning-box" style={{ padding: "10px 12px" }}>
               <div

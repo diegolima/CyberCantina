@@ -294,8 +294,7 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
-        className="modal-panel"
-        style={{ width: "min(820px, 95vw)" }}
+        className="modal-panel modal-panel--sheet"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
@@ -303,13 +302,16 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <UserCheck size={18} color="var(--accent-emerald)" />
             <span style={{ fontWeight: 700, fontSize: "1.05rem" }}>
+              Persona Sheet
+            </span>
+            <span style={{ color: "var(--text-muted)", fontSize: "0.82rem" }}>
               {isReadOnly
-                ? `Default Persona: ${persona?.name} (Read Only)`
+                ? `· ${persona?.name} (Read Only)`
                 : clonedMode
-                ? "Create Persona (Cloned from Default)"
+                ? "· Cloned from Default"
                 : isEditing
-                ? `Edit Persona: ${persona?.name}`
-                : "Create Player Persona"}
+                ? `· ${persona?.name}`
+                : "· New Persona"}
             </span>
             {isDefault && (
               <span
@@ -422,7 +424,7 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
         {/* Modal Body / Form */}
         <form
           onSubmit={handleSubmit}
-          style={{ display: "flex", flexDirection: "column", overflow: "hidden", flex: 1 }}
+          className="modal-sheet-form"
         >
           <div className="modal-body">
             {error && (

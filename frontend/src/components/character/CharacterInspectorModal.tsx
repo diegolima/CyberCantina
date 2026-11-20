@@ -574,8 +574,7 @@ export const CharacterInspectorModal: React.FC<
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
-        className="modal-panel"
-        style={{ width: "min(820px, 95vw)" }}
+        className="modal-panel modal-panel--sheet"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">

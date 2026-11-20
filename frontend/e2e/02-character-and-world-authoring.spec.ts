@@ -19,8 +19,18 @@ test.describe("02 - Character Inspector, TagChipsInput & World Codex Authoring",
     await expect(page.getByText("Select Character")).toBeVisible();
     await page.getByRole("button", { name: "Inspect" }).first().click();
 
-    // Verify CharacterInspectorModal opens on Base tab
+    // Verify CharacterInspectorModal opens on Base tab with stable sheet dimensions
+    const charModal = page.locator(".modal-panel", { hasText: "Character Sheet" });
+    await expect(charModal).toBeVisible();
+    const initialCharBox = await charModal.boundingBox();
+    expect(initialCharBox).toBeTruthy();
     await expect(page.getByText("Demographics & Identity")).toBeVisible();
+
+    // Verify switching to sparse Memories tab preserves modal dimensions
+    await page.getByRole("tab", { name: /Memories/i }).click();
+    expect(await charModal.boundingBox()).toEqual(initialCharBox);
+    await page.getByRole("tab", { name: /^Base$/i }).click();
+    expect(await charModal.boundingBox()).toEqual(initialCharBox);
 
     // Locate Character Tags TagChipsInput on Base tab (has 2 existing tags: fixer, broker)
     const tagInput = page.locator(".tag-chips-inline-input").first();
@@ -56,6 +66,7 @@ test.describe("02 - Character Inspector, TagChipsInput & World Codex Authoring",
 
     // Switch to Inventory tab and add a new equipped item
     await page.getByRole("tab", { name: /Inventory/i }).click();
+    expect(await charModal.boundingBox()).toEqual(initialCharBox);
     await expect(
       page.getByText(/Equipped Attire & Gear \(1\)/i)
     ).toBeVisible();
@@ -104,8 +115,18 @@ test.describe("02 - Character Inspector, TagChipsInput & World Codex Authoring",
     await expect(page.getByText("Select World")).toBeVisible();
     await page.getByRole("button", { name: "Inspect" }).first().click();
 
-    // Switch to Codex tab inside WorldInspectorModal
+    // Verify WorldInspectorModal opens at wide 1120px sheet width and stays identical across tabs
+    const worldModal = page.locator(".modal-panel", { hasText: "World Sheet" });
+    await expect(worldModal).toBeVisible();
+    const initialWorldBox = await worldModal.boundingBox();
+    expect(initialWorldBox).toBeTruthy();
+    expect(initialWorldBox?.width).toBe(1120);
+
+    // Switch to Map and Codex tabs inside WorldInspectorModal and confirm zero resize
+    await page.locator(".modal-tab-btn", { hasText: "Map" }).click();
+    expect(await worldModal.boundingBox()).toEqual(initialWorldBox);
     await page.locator(".modal-tab-btn", { hasText: "Codex" }).click();
+    expect(await worldModal.boundingBox()).toEqual(initialWorldBox);
     await expect(page.getByText(/World Codex \(2\)/i)).toBeVisible();
 
     // Global quick-search in Codex Hub transitions to 2-Pane Search Results

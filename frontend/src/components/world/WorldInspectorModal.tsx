@@ -543,16 +543,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
       onClick={mode === "wizard" ? undefined : onClose}
     >
       <div
-        className="modal-panel"
-        style={{
-          width:
-            activeTab === "map"
-              ? "min(1120px, 96vw)"
-              : activeTab === "codex"
-                ? "min(980px, 95vw)"
-                : "min(860px, 95vw)",
-          transition: "width 0.2s ease",
-        }}
+        className="modal-panel modal-panel--sheet-wide"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
@@ -796,8 +787,9 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
               display: activeTab === "map" ? "flex" : "none",
               flexDirection: "column",
               gap: 10,
-              minHeight: 520,
-              height: "calc(88vh - 220px)",
+              flex: 1,
+              minHeight: 420,
+              height: "100%",
             }}
           >
             {effectiveLocations.length === 0 ? (

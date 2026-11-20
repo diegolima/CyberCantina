@@ -129,8 +129,7 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
   return (
     <div className="modal-backdrop" onClick={onClose} style={{ zIndex: 85 }}>
       <div
-        className="modal-panel"
-        style={{ width: "min(860px, 95vw)", maxHeight: "92vh", display: "flex", flexDirection: "column" }}
+        className="modal-panel modal-panel--sheet"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -154,7 +153,7 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
             )}
             <span style={{ fontWeight: 700 }}>{character.name}</span>
             <span style={{ color: "var(--text-muted)", fontSize: "0.82rem" }}>
-              · Character Dossier
+              · Character Sheet
             </span>
             <span
               className="badge"
@@ -463,15 +462,8 @@ export const CampaignCharacterModal: React.FC<CampaignCharacterModalProps> = ({
 
         {/* Modal Footer */}
         <div
-          style={{
-            padding: "10px 16px",
-            borderTop: "1px solid var(--border-subtle)",
-            display: "flex",
-            justifyContent: "flex-end",
-            background: "var(--bg-panel)",
-            borderBottomLeftRadius: 10,
-            borderBottomRightRadius: 10,
-          }}
+          className="modal-footer"
+          style={{ justifyContent: "flex-end" }}
         >
           <button type="button" className="btn" onClick={onClose}>
             Close

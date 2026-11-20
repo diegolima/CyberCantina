@@ -8371,14 +8371,58 @@ body {
   height: min(740px, 88vh);
 }
 
-.profile-modal-panel > .modal-body {
+.modal-panel--sheet,
+.modal-panel--sheet-wide {
+  height: min(760px, 88vh);
+}
+
+.modal-panel--sheet {
+  width: min(880px, 95vw);
+  max-width: 880px;
+}
+
+.modal-panel--sheet-wide {
+  width: min(1120px, 96vw);
+  max-width: 1120px;
+  height: min(820px, 88vh);
+}
+
+.profile-modal-panel > .modal-header,
+.profile-modal-panel > .modal-tabs,
+.modal-panel--sheet > .modal-header,
+.modal-panel--sheet > .modal-tabs,
+.modal-panel--sheet > .modal-footer,
+.modal-panel--sheet-wide > .modal-header,
+.modal-panel--sheet-wide > .modal-tabs,
+.modal-panel--sheet-wide > .modal-footer {
+  flex-shrink: 0;
+}
+
+.profile-modal-panel > .modal-body,
+.modal-panel--sheet > .modal-body,
+.modal-panel--sheet-wide > .modal-body,
+.modal-sheet-form > .modal-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
 }
 
+.modal-sheet-form {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.modal-sheet-form > .modal-footer {
+  flex-shrink: 0;
+}
+
 @media (max-width: 640px) {
-  .profile-modal-panel {
+  .profile-modal-panel,
+  .modal-panel--sheet,
+  .modal-panel--sheet-wide {
     width: 96vw;
     height: 92vh;
   }
