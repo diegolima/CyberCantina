@@ -545,6 +545,7 @@ export const WorldMediaTab: React.FC<WorldMediaTabProps> = ({
                       <span>
                         {formatByteSize(item.byte_size)}
                         {item.video_byte_size ? ` + ${formatByteSize(item.video_byte_size)} vid` : ""}
+                        {item.is_public ? " · Built-in" : ""}
                       </span>
                       <span>
                         {linkedCount > 0

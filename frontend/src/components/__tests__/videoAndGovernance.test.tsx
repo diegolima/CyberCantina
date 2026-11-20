@@ -442,6 +442,30 @@ describe("Image-linked video logic helpers & UI components", () => {
     );
     expect(openHtml).toContain("MP4 / WebM · Max 25 MB");
 
+    // Built-in world media cards append a "Built-in" quota hint next to the byte size
+    const publicWorld = makeWorldWithVideo();
+    publicWorld.media = [
+      {
+        ...publicWorld.media![0],
+        is_public: true,
+      },
+    ];
+    const publicWorldHtml = renderToStaticMarkup(
+      <WorldMediaTab
+        isActive={true}
+        mode="inspector"
+        worldId={publicWorld.id}
+        media={publicWorld.media ?? []}
+        containers={publicWorld.containers ?? []}
+        locations={publicWorld.locations ?? []}
+        isDirty={false}
+        appSettings={{ ...BASE_SETTINGS, max_video_upload_mb: 25 }}
+        isAdmin={false}
+        onWorldMutated={vi.fn()}
+      />
+    );
+    expect(publicWorldHtml).toContain("· Built-in");
+
     // Still-only card shows Upload linked video (no Remove icon); public card omits video icons
     const stillOnlyStrip = renderToStaticMarkup(
       <CardMediaActionStrip

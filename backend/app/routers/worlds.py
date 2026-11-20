@@ -372,7 +372,12 @@ def delete_world_media_video(
     if target_media is None:
         raise HTTPException(status_code=404, detail=f"Media '{media_id}' not found on world '{world_id}'.")
 
-    deleted = repo.delete_linked_video(media_id, owner_id=current_user.id)
+    try:
+        deleted = repo.delete_linked_video(media_id, owner_id=current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     if not deleted:
         raise HTTPException(status_code=404, detail=f"No linked video found for media '{media_id}'.")
     return repo.get_world(world_id, base_only=True, owner_id=current_user.id)

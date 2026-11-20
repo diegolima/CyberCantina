@@ -25,13 +25,15 @@ from app.schemas.character import (
 )
 from app.schemas.world import WorldGlobalRules
 from app.security.media_path import (
+    PathTraversalError,
+    safe_resolve_asset_file_path,
     safe_resolve_public_character_media_file_path,
     safe_resolve_world_media_file_path,
 )
 
-SHOWCASE_SEED_VERSION = 1
+SHOWCASE_SEED_VERSION = 2
 SHOWCASE_WORLD_SEED_KEY = "showcase:the_green_lie"
-# Preserved as stable internal provenance/media keys for existing DB rows and immutable v1 public media URLs.
+# Preserved as stable internal provenance/media keys for existing DB rows and immutable public media URLs.
 SHOWCASE_CHARACTER_SEED_KEY = "showcase:kira_vance"
 
 _SHOWCASE_DATA_DIR = Path(__file__).resolve().parent / "showcase_data" / "the_green_lie"
@@ -64,12 +66,222 @@ def _public_world_media_filename(orig_media_id: str) -> str:
     return f"pub_v{SHOWCASE_SEED_VERSION}_{orig_media_id}.webp"
 
 
+def _public_world_video_id(orig_video_id: str) -> str:
+    return f"pub_v{SHOWCASE_SEED_VERSION}_{orig_video_id}"
+
+
+def _public_world_video_filename(orig_video_id: str, ext: str = ".mp4") -> str:
+    clean_ext = ext if ext.startswith(".") else f".{ext}"
+    return f"pub_v{SHOWCASE_SEED_VERSION}_{orig_video_id}{clean_ext}"
+
+
 def _copy_if_needed(src: Path, dst: Path) -> int:
     dst.parent.mkdir(parents=True, exist_ok=True)
     src_size = src.stat().st_size
     if not dst.is_file() or dst.stat().st_size != src_size:
         shutil.copy2(src, dst)
     return src_size
+
+
+def _migrate_v1_showcase_to_v2(
+    conn: Any,
+    world_data: dict[str, Any],
+) -> None:
+    """Idempotently migrate v1 showcase DB references (pub_v1_* / public/v1/) to current version."""
+    v1_to_v2_media: dict[str, str] = {}
+    for item in world_data.get("media", []):
+        orig_id = str(item.get("id") or "").strip()
+        if not orig_id:
+            continue
+        v1_id = f"pub_v1_{orig_id}"
+        v2_id = _public_world_media_id(orig_id)
+        if v1_id != v2_id:
+            v1_to_v2_media[v1_id] = v2_id
+
+    if not v1_to_v2_media:
+        return
+
+    old_char_prefix = f"/api/media/public/v1/characters/{_PUBLIC_CHARACTER_SLUG}/"
+    new_char_prefix = f"/api/media/public/{_PUBLIC_CHARACTER_VERSION_TAG}/characters/{_PUBLIC_CHARACTER_SLUG}/"
+
+    v1_ids = list(v1_to_v2_media.keys())
+    ph = ",".join("?" for _ in v1_ids)
+    has_v1_assets = conn.execute(
+        f"SELECT 1 FROM media_assets WHERE id IN ({ph}) LIMIT 1",
+        v1_ids,
+    ).fetchone()
+    has_v1_worlds = conn.execute(
+        "SELECT 1 FROM worlds WHERE seed_key = ? AND COALESCE(seed_version, 0) < ? LIMIT 1",
+        (SHOWCASE_WORLD_SEED_KEY, SHOWCASE_SEED_VERSION),
+    ).fetchone()
+    has_v1_chars = conn.execute(
+        """
+        SELECT 1 FROM characters
+        WHERE (seed_key = ? AND COALESCE(seed_version, 0) < ?)
+           OR portraits_json LIKE ? OR gallery_json LIKE ?
+        LIMIT 1
+        """,
+        (
+            SHOWCASE_CHARACTER_SEED_KEY,
+            SHOWCASE_SEED_VERSION,
+            f"%{old_char_prefix}%",
+            f"%{old_char_prefix}%",
+        ),
+    ).fetchone()
+    has_v1_char_vers = conn.execute(
+        "SELECT 1 FROM character_versions WHERE data_json LIKE ? LIMIT 1",
+        (f"%{old_char_prefix}%",),
+    ).fetchone()
+    has_v1_turns = conn.execute(
+        "SELECT 1 FROM turn_nodes WHERE post_turn_json LIKE '%pub_v1_%' LIMIT 1"
+    ).fetchone()
+
+    if not (has_v1_assets or has_v1_worlds or has_v1_chars or has_v1_char_vers or has_v1_turns):
+        return
+
+    for old_id, new_id in v1_to_v2_media.items():
+        conn.execute(
+            """
+            DELETE FROM world_media_links
+            WHERE media_id = ?
+              AND world_id IN (SELECT world_id FROM world_media_links WHERE media_id = ?)
+            """,
+            (old_id, new_id),
+        )
+        conn.execute(
+            "UPDATE world_media_links SET media_id = ? WHERE media_id = ?",
+            (new_id, old_id),
+        )
+        conn.execute(
+            "UPDATE location_containers SET image_media_id = ? WHERE image_media_id = ?",
+            (new_id, old_id),
+        )
+        conn.execute(
+            "UPDATE location_nodes SET image_media_id = ? WHERE image_media_id = ?",
+            (new_id, old_id),
+        )
+
+    if has_v1_turns:
+        turn_rows = conn.execute(
+            "SELECT id, post_turn_json FROM turn_nodes WHERE post_turn_json LIKE '%pub_v1_%'"
+        ).fetchall()
+        for t_row in turn_rows:
+            raw_post = t_row["post_turn_json"]
+            if not raw_post:
+                continue
+            try:
+                post_data = json.loads(raw_post)
+            except Exception:
+                continue
+            if not isinstance(post_data, dict):
+                continue
+            fvm = post_data.get("first_visit_media")
+            if not isinstance(fvm, list):
+                continue
+            changed = False
+            for m_entry in fvm:
+                if not isinstance(m_entry, dict):
+                    continue
+                old_mid = str(m_entry.get("media_id") or "")
+                new_mid = v1_to_v2_media.get(old_mid)
+                if new_mid:
+                    m_entry["media_id"] = new_mid
+                    m_entry["image_url"] = f"/api/media/worlds/images/{new_mid}.webp"
+                    changed = True
+            if changed:
+                conn.execute(
+                    "UPDATE turn_nodes SET post_turn_json = ? WHERE id = ?",
+                    (json.dumps(post_data), t_row["id"]),
+                )
+
+    conn.execute(
+        """
+        UPDATE worlds
+        SET seed_version = ?
+        WHERE seed_key = ? AND COALESCE(seed_version, 0) < ?
+        """,
+        (SHOWCASE_SEED_VERSION, SHOWCASE_WORLD_SEED_KEY, SHOWCASE_SEED_VERSION),
+    )
+
+    if old_char_prefix != new_char_prefix:
+        c_rows = conn.execute(
+            """
+            SELECT id, portraits_json, gallery_json
+            FROM characters
+            WHERE portraits_json LIKE ? OR gallery_json LIKE ?
+            """,
+            (f"%{old_char_prefix}%", f"%{old_char_prefix}%"),
+        ).fetchall()
+        for cr in c_rows:
+            new_p = str(cr["portraits_json"] or "{}").replace(old_char_prefix, new_char_prefix)
+            new_g = str(cr["gallery_json"] or "[]").replace(old_char_prefix, new_char_prefix)
+            conn.execute(
+                "UPDATE characters SET portraits_json = ?, gallery_json = ? WHERE id = ?",
+                (new_p, new_g, cr["id"]),
+            )
+        conn.execute(
+            """
+            UPDATE characters
+            SET seed_version = ?
+            WHERE seed_key = ? AND COALESCE(seed_version, 0) < ?
+            """,
+            (SHOWCASE_SEED_VERSION, SHOWCASE_CHARACTER_SEED_KEY, SHOWCASE_SEED_VERSION),
+        )
+
+        cv_rows = conn.execute(
+            "SELECT id, data_json FROM character_versions WHERE data_json LIKE ?",
+            (f"%{old_char_prefix}%",),
+        ).fetchall()
+        for cv in cv_rows:
+            new_data_json = str(cv["data_json"] or "{}").replace(old_char_prefix, new_char_prefix)
+            conn.execute(
+                "UPDATE character_versions SET data_json = ? WHERE id = ?",
+                (new_data_json, cv["id"]),
+            )
+
+    conn.execute(
+        f"DELETE FROM media_assets WHERE id IN ({ph}) AND is_public = 1 AND seed_key = ?",
+        (*v1_ids, SHOWCASE_WORLD_SEED_KEY),
+    )
+
+
+def _cleanup_legacy_v1_showcase_files(
+    repo: CantinaRepository,
+    world_data: dict[str, Any],
+) -> None:
+    """Best-effort removal of superseded v1 showcase media files on disk."""
+    if SHOWCASE_SEED_VERSION <= 1:
+        return
+    for item in world_data.get("media", []):
+        orig_id = str(item.get("id") or "").strip()
+        if not orig_id:
+            continue
+        try:
+            old_img = safe_resolve_world_media_file_path(
+                repo.media_dir, "images", f"pub_v1_{orig_id}.webp"
+            )
+            old_img.unlink(missing_ok=True)
+        except (PathTraversalError, ValueError, OSError):
+            pass
+
+    for cat, fname in (
+        ("portraits", _PUBLIC_CHARACTER_PORTRAIT_FILE),
+        ("gallery", _PUBLIC_CHARACTER_GALLERY_FILE),
+    ):
+        try:
+            old_char_file = safe_resolve_public_character_media_file_path(
+                repo.media_dir, "v1", _PUBLIC_CHARACTER_SLUG, cat, fname
+            )
+            old_char_file.unlink(missing_ok=True)
+            # Clean empty directories up to public/v1
+            for parent in (old_char_file.parent, old_char_file.parent.parent, old_char_file.parent.parent.parent):
+                if parent.is_dir():
+                    try:
+                        parent.rmdir()
+                    except OSError:
+                        break
+        except (PathTraversalError, ValueError, OSError):
+            pass
 
 
 def _get_cached_showcase_embedding(cache_key: str, text: str) -> np.ndarray:
@@ -87,7 +299,7 @@ def _get_cached_showcase_embedding(cache_key: str, text: str) -> np.ndarray:
 
 
 def ensure_public_showcase_media(repo: CantinaRepository) -> dict[str, str]:
-    """Materialize immutable shared showcase media on disk and upsert public world_media rows.
+    """Materialize immutable shared showcase media (images & linked videos) on disk and upsert media_assets rows.
 
     Returns a mapping from original bundle world media ID -> public DB media ID.
     """
@@ -113,6 +325,9 @@ def ensure_public_showcase_media(repo: CantinaRepository) -> dict[str, str]:
 
     media_id_map: dict[str, str] = {}
     media_rows: list[tuple[str, str, str, str, int, str]] = []
+    video_rows: list[
+        tuple[str, str, str, str, int, str, int | None, int | None, int | None, str]
+    ] = []
     for item in world_data.get("media", []):
         orig_id = str(item["id"])
         pub_id = _public_world_media_id(orig_id)
@@ -121,16 +336,42 @@ def ensure_public_showcase_media(repo: CantinaRepository) -> dict[str, str]:
         dst = safe_resolve_world_media_file_path(repo.media_dir, "images", pub_filename)
         byte_size = _copy_if_needed(_SHOWCASE_MEDIA_DIR / src_name, dst)
         media_id_map[orig_id] = pub_id
+        created_at = str(item.get("created_at") or utc_now_iso())
+        label = str(item.get("label") or "")
         media_rows.append(
             (
                 pub_id,
                 pub_filename,
-                str(item.get("label") or ""),
+                label,
                 str(item.get("mime_type") or "image/webp"),
                 int(byte_size),
-                str(item.get("created_at") or utc_now_iso()),
+                created_at,
             )
         )
+
+        raw_vid_url = str(item.get("video_url") or "").strip()
+        raw_vid_id = str(item.get("video_asset_id") or "").strip()
+        if raw_vid_url and raw_vid_id:
+            vid_src_name = Path(raw_vid_url).name
+            vid_ext = Path(vid_src_name).suffix or ".mp4"
+            pub_vid_id = _public_world_video_id(raw_vid_id)
+            pub_vid_filename = _public_world_video_filename(raw_vid_id, vid_ext)
+            vid_dst = safe_resolve_asset_file_path(repo.media_dir, "videos", pub_vid_filename)
+            vid_bytes = _copy_if_needed(_SHOWCASE_MEDIA_DIR / vid_src_name, vid_dst)
+            video_rows.append(
+                (
+                    pub_vid_id,
+                    pub_vid_filename,
+                    label,
+                    str(item.get("video_mime_type") or "video/mp4"),
+                    int(vid_bytes),
+                    pub_id,
+                    int(item["video_duration_ms"]) if item.get("video_duration_ms") is not None else None,
+                    int(item["video_width"]) if item.get("video_width") is not None else None,
+                    int(item["video_height"]) if item.get("video_height") is not None else None,
+                    created_at,
+                )
+            )
 
     conn = repo._connect()
     try:
@@ -163,10 +404,67 @@ def ensure_public_showcase_media(repo: CantinaRepository) -> dict[str, str]:
                     created_at,
                 ),
             )
+
+        for (
+            pub_vid_id,
+            pub_vid_filename,
+            label,
+            vid_mime_type,
+            vid_bytes,
+            parent_image_id,
+            duration_ms,
+            width,
+            height,
+            created_at,
+        ) in video_rows:
+            conn.execute(
+                "DELETE FROM media_assets WHERE parent_image_id = ? AND id != ?",
+                (parent_image_id, pub_vid_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO media_assets (
+                    id, owner_id, entity_scope, media_type, role, filename, label,
+                    mime_type, byte_size, is_public, seed_key, parent_image_id,
+                    duration_ms, width, height, created_at
+                )
+                VALUES (?, NULL, 'world', 'video', 'linked_video', ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    owner_id = NULL,
+                    entity_scope = 'world',
+                    role = 'linked_video',
+                    filename = excluded.filename,
+                    label = excluded.label,
+                    mime_type = excluded.mime_type,
+                    byte_size = excluded.byte_size,
+                    is_public = 1,
+                    seed_key = excluded.seed_key,
+                    parent_image_id = excluded.parent_image_id,
+                    duration_ms = excluded.duration_ms,
+                    width = excluded.width,
+                    height = excluded.height
+                """,
+                (
+                    pub_vid_id,
+                    pub_vid_filename,
+                    label,
+                    vid_mime_type,
+                    vid_bytes,
+                    SHOWCASE_WORLD_SEED_KEY,
+                    parent_image_id,
+                    duration_ms,
+                    width,
+                    height,
+                    created_at,
+                ),
+            )
+
+        _migrate_v1_showcase_to_v2(conn, world_data)
         conn.commit()
     finally:
         conn.close()
 
+    _cleanup_legacy_v1_showcase_files(repo, world_data)
     return media_id_map
 
 
