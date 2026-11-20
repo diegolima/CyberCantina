@@ -475,9 +475,10 @@ def test_admin_cannot_access_user_data_except_on_deletion(
     assert client.delete(f"/api/campaigns/{d_camp_id}", headers=admin_headers).status_code == 404
     assert client.put(f"/api/campaigns/{d_camp_id}/prompt-preset", headers=admin_headers, json={"preset_id": None}).status_code == 404
 
-    # Verify character media directory exists on disk before deletion
-    char_media_dir = Path(settings.media_dir) / "characters" / d_char_id
-    assert char_media_dir.exists()
+    # Verify character media asset exists on disk before deletion
+    portrait_asset_id = Path(media_url).name
+    char_media_file = Path(settings.media_dir) / "assets" / "images" / f"{portrait_asset_id}.webp"
+    assert char_media_file.is_file()
 
     # 5. Admin deletes David's account via the account management endpoint
     del_user_res = client.delete(f"/api/admin/users/{david_id}", headers=admin_headers)
@@ -498,7 +499,7 @@ def test_admin_cannot_access_user_data_except_on_deletion(
         conn.close()
 
     # Character media on disk is also removed
-    assert not char_media_dir.exists()
+    assert not char_media_file.exists()
 
 
 def test_character_id_path_injection_blocked_at_commit_and_filesystem_sinks(

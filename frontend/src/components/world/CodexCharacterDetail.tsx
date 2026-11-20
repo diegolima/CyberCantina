@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Image as ImageIcon, Lock, MapPin, Package, Sparkles, User, UserCheck, X } from "lucide-react";
+import { Film, Image as ImageIcon, Lock, MapPin, Package, Sparkles, User, UserCheck } from "lucide-react";
 import {
   GalleryImage,
   LoreNode,
@@ -8,6 +8,7 @@ import {
   normalizeItemList,
 } from "../../types";
 import { getCharacterEmotionPortrait, getEntityPrimaryImage } from "../../utils/entityImages";
+import { ImageLightboxModal } from "../shared/ImageLightboxModal";
 import type { CodexCampaignCharacterEntry } from "./codexHelpers";
 
 interface CodexCharacterDetailProps {
@@ -28,7 +29,7 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
   onJumpToLore,
 }) => {
   const [portraitBroken, setPortraitBroken] = useState(false);
-  const [lightboxImage, setLightboxImage] = useState<GalleryImage | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   const portraitUrl =
     kind === "character" && characterEntry
@@ -40,20 +41,52 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
       ? getEntityPrimaryImage("personas", persona)
       : null;
 
-  useEffect(() => {
-    setPortraitBroken(false);
-  }, [kind, characterEntry?.record.id, persona?.id, portraitUrl]);
+  const activeGallery: GalleryImage[] =
+    kind === "persona" && persona
+      ? persona.gallery ?? []
+      : kind === "character" && characterEntry
+      ? characterEntry.record.gallery ?? []
+      : [];
 
   useEffect(() => {
-    if (!lightboxImage) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setLightboxImage(null);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [lightboxImage]);
+    setPortraitBroken(false);
+    setLightboxIndex(null);
+  }, [kind, characterEntry?.record.id, persona?.id, portraitUrl]);
+
+  const activeLightboxItem =
+    lightboxIndex !== null && lightboxIndex >= 0 && lightboxIndex < activeGallery.length
+      ? activeGallery[lightboxIndex]
+      : null;
+  const activeEntityName =
+    kind === "persona" ? persona?.name : characterEntry?.record.name;
+
+  const renderLightbox = () => {
+    if (!activeLightboxItem) return null;
+    const idx = lightboxIndex ?? 0;
+    const total = activeGallery.length;
+    return (
+      <ImageLightboxModal
+        url={activeLightboxItem.url}
+        videoUrl={activeLightboxItem.video_url}
+        videoMimeType={activeLightboxItem.video_mime_type}
+        autoPlayVideo={true}
+        label={activeLightboxItem.caption || activeEntityName || "Photo"}
+        subtitle={activeLightboxItem.caption ? activeEntityName || undefined : undefined}
+        counterText={total > 1 ? `${idx + 1} / ${total}` : undefined}
+        onPrev={
+          total > 1
+            ? () => setLightboxIndex((prev) => ((prev ?? 0) - 1 + total) % total)
+            : undefined
+        }
+        onNext={
+          total > 1
+            ? () => setLightboxIndex((prev) => ((prev ?? 0) + 1) % total)
+            : undefined
+        }
+        onClose={() => setLightboxIndex(null)}
+      />
+    );
+  };
 
   if (kind === "persona" && persona) {
     const equipped = personaTurnState?.equipped ?? persona.equipped ?? [];
@@ -250,7 +283,7 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
                 gap: 8,
               }}
             >
-              {gallery.map((img) => (
+              {gallery.map((img, idx) => (
                 <button
                   key={img.id || img.url}
                   type="button"
@@ -264,14 +297,32 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
                     padding: 0,
                     cursor: "pointer",
                   }}
-                  onClick={() => setLightboxImage(img)}
-                  title={img.caption || "Inspect photo"}
+                  onClick={() => setLightboxIndex(idx)}
+                  title={img.video_url ? `${img.caption || "Photo"} (video linked)` : img.caption || "Inspect photo"}
                 >
                   <img
                     src={img.url}
                     alt={img.caption || persona.name}
                     style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
                   />
+                  {img.video_url && (
+                    <span
+                      style={{
+                        position: "absolute",
+                        top: 4,
+                        left: 4,
+                        background: "rgba(15, 23, 42, 0.84)",
+                        color: "#e2e8f0",
+                        borderRadius: 4,
+                        padding: "2px 4px",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 2,
+                      }}
+                    >
+                      <Film size={10} />
+                    </span>
+                  )}
                   {img.caption && (
                     <div
                       style={{
@@ -298,69 +349,7 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
         )}
       </div>
 
-      {lightboxImage && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0, 0, 0, 0.9)",
-            backdropFilter: "blur(6px)",
-            zIndex: 10000,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 24,
-          }}
-          onClick={() => setLightboxImage(null)}
-        >
-          <div
-            style={{
-              position: "relative",
-              maxWidth: "90vw",
-              maxHeight: "85vh",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button
-              type="button"
-              className="btn"
-              style={{
-                position: "absolute",
-                top: -40,
-                right: 0,
-                borderRadius: "50%",
-                width: 32,
-                height: 32,
-                padding: 0,
-              }}
-              onClick={() => setLightboxImage(null)}
-              aria-label="Close photo preview"
-            >
-              <X size={16} />
-            </button>
-            <img
-              src={lightboxImage.url}
-              alt={lightboxImage.caption || persona.name}
-              style={{
-                maxWidth: "100%",
-                maxHeight: "75vh",
-                objectFit: "contain",
-                borderRadius: 8,
-                border: "1px solid var(--border-subtle)",
-              }}
-            />
-            {lightboxImage.caption && (
-              <div style={{ marginTop: 10, fontSize: "0.82rem", color: "var(--text-secondary)" }}>
-                {lightboxImage.caption}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {renderLightbox()}
     </>
     );
   }
@@ -372,6 +361,7 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
     const loreById = new Map(loreNodes.map((ln) => [ln.id, ln]));
 
     return (
+      <>
       <div className="codex-detail-stack">
         <div className="codex-detail-header">
           <div style={{ display: "flex", alignItems: "flex-start", gap: 12, minWidth: 0 }}>
@@ -547,7 +537,86 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
             </div>
           </div>
         )}
+
+        {activeGallery.length > 0 && (
+          <div className="codex-section-card">
+            <div className="codex-section-label">
+              <ImageIcon size={12} /> Photo Album ({activeGallery.length})
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))",
+                gap: 8,
+              }}
+            >
+              {activeGallery.map((img, idx) => (
+                <button
+                  key={img.id || img.url}
+                  type="button"
+                  style={{
+                    position: "relative",
+                    aspectRatio: "1 / 1",
+                    borderRadius: 6,
+                    overflow: "hidden",
+                    border: "1px solid var(--border-subtle)",
+                    background: "rgba(0,0,0,0.35)",
+                    padding: 0,
+                    cursor: "pointer",
+                  }}
+                  onClick={() => setLightboxIndex(idx)}
+                  title={img.video_url ? `${img.caption || "Photo"} (video linked)` : img.caption || "Inspect photo"}
+                >
+                  <img
+                    src={img.url}
+                    alt={img.caption || record.name}
+                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                  />
+                  {img.video_url && (
+                    <span
+                      style={{
+                        position: "absolute",
+                        top: 4,
+                        left: 4,
+                        background: "rgba(15, 23, 42, 0.84)",
+                        color: "#e2e8f0",
+                        borderRadius: 4,
+                        padding: "2px 4px",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 2,
+                      }}
+                    >
+                      <Film size={10} />
+                    </span>
+                  )}
+                  {img.caption && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        bottom: 0,
+                        left: 0,
+                        right: 0,
+                        background: "linear-gradient(transparent, rgba(0,0,0,0.85))",
+                        padding: "10px 4px 3px",
+                        fontSize: "0.66rem",
+                        color: "#fff",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {img.caption}
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
+      {renderLightbox()}
+      </>
     );
   }
 

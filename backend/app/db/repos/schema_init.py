@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sqlite3
+import uuid
 from pathlib import Path
 from app.prompts import BUILTIN_PRESETS
 from app.schemas.world import (
@@ -14,6 +16,13 @@ from app.schemas.world import (
     pick_available_compass_direction,
 )
 from app.db.repos.base import utc_now_iso
+from app.security.media_path import (
+    PathTraversalError,
+    safe_resolve_asset_file_path,
+    safe_resolve_media_file_path,
+    safe_resolve_persona_media_file_path,
+    safe_resolve_world_media_file_path,
+)
 
 
 class SchemaInitMixin:
@@ -359,17 +368,6 @@ class SchemaInitMixin:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_worlds_owner_seed ON worlds(owner_id, seed_key, pending_deletion)"
             )
-
-            wm_cols = {
-                r["name"]
-                for r in conn.execute("PRAGMA table_info(world_media)").fetchall()
-            }
-            if "is_public" not in wm_cols:
-                conn.execute(
-                    "ALTER TABLE world_media ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0"
-                )
-            if "seed_key" not in wm_cols:
-                conn.execute("ALTER TABLE world_media ADD COLUMN seed_key TEXT NULL")
 
             wml_cols = {
                 r["name"]
@@ -937,7 +935,7 @@ class SchemaInitMixin:
                 )
             if "image_media_id" not in cont_cols:
                 conn.execute(
-                    "ALTER TABLE location_containers ADD COLUMN image_media_id TEXT NULL REFERENCES world_media(id) ON DELETE SET NULL"
+                    "ALTER TABLE location_containers ADD COLUMN image_media_id TEXT NULL REFERENCES media_assets(id) ON DELETE SET NULL"
                 )
 
             cs_cols = {
@@ -995,7 +993,7 @@ class SchemaInitMixin:
                 )
             if "image_media_id" not in loc_cols:
                 conn.execute(
-                    "ALTER TABLE location_nodes ADD COLUMN image_media_id TEXT NULL REFERENCES world_media(id) ON DELETE SET NULL"
+                    "ALTER TABLE location_nodes ADD COLUMN image_media_id TEXT NULL REFERENCES media_assets(id) ON DELETE SET NULL"
                 )
 
             edge_cols = {
@@ -1287,5 +1285,379 @@ class SchemaInitMixin:
                 "CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_epoch ON webauthn_challenges(created_at_epoch)"
             )
             conn.commit()
+            self._migrate_to_unified_media_assets(conn)
         finally:
             conn.close()
+
+    def _migrate_to_unified_media_assets(self, conn: sqlite3.Connection) -> None:
+        """Idempotently migrate legacy world_media and per-entity character/persona media into media_assets."""
+        has_world_media = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='world_media'"
+        ).fetchone()
+        if has_world_media:
+            wm_cols = {
+                r["name"] for r in conn.execute("PRAGMA table_info(world_media)").fetchall()
+            }
+            is_pub_expr = "is_public" if "is_public" in wm_cols else "0"
+            seed_expr = "seed_key" if "seed_key" in wm_cols else "NULL"
+            wm_rows = conn.execute(
+                f"""
+                SELECT id, owner_id, media_type, filename, label, mime_type, byte_size,
+                       {is_pub_expr} AS is_public, {seed_expr} AS seed_key, created_at
+                FROM world_media
+                """
+            ).fetchall()
+
+            conn.commit()
+            conn.execute("PRAGMA foreign_keys = OFF;")
+            try:
+                conn.execute("BEGIN IMMEDIATE;")
+                for r in wm_rows:
+                    m_type = str(r["media_type"] or "image")
+                    fname = str(r["filename"])
+                    is_pub = int(r["is_public"] or 0)
+                    byte_sz = int(r["byte_size"] or 0)
+                    if not is_pub:
+                        cat = "audio" if m_type == "audio" else "images"
+                        try:
+                            src = safe_resolve_world_media_file_path(self.media_dir, cat, fname)
+                            dst = safe_resolve_asset_file_path(self.media_dir, cat, fname)
+                            if src.is_file() and not dst.is_file():
+                                dst.parent.mkdir(parents=True, exist_ok=True)
+                                shutil.copy2(src, dst)
+                            if dst.is_file():
+                                byte_sz = dst.stat().st_size
+                                if src.is_file() and src != dst:
+                                    src.unlink(missing_ok=True)
+                        except (PathTraversalError, ValueError, OSError):
+                            pass
+
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO media_assets (
+                            id, owner_id, entity_scope, media_type, role, filename, label,
+                            mime_type, byte_size, is_public, seed_key, parent_image_id,
+                            duration_ms, width, height, created_at
+                        )
+                        VALUES (?, ?, 'world', ?, 'world_scene', ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?)
+                        """,
+                        (
+                            r["id"],
+                            r["owner_id"],
+                            m_type,
+                            fname,
+                            r["label"] or "",
+                            r["mime_type"] or "image/webp",
+                            byte_sz,
+                            is_pub,
+                            r["seed_key"],
+                            r["created_at"] or utc_now_iso(),
+                        ),
+                    )
+
+                for tbl_name, create_sql, copy_cols in (
+                    (
+                        "world_media_links",
+                        """
+                        CREATE TABLE world_media_links_migrated (
+                            world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+                            media_id TEXT NOT NULL REFERENCES media_assets(id) ON DELETE CASCADE,
+                            sort_order INTEGER NOT NULL DEFAULT 0,
+                            label_override TEXT NULL,
+                            created_at TEXT NOT NULL,
+                            PRIMARY KEY (world_id, media_id)
+                        )
+                        """,
+                        "world_id, media_id, sort_order, label_override, created_at",
+                    ),
+                    (
+                        "location_containers",
+                        """
+                        CREATE TABLE location_containers_migrated (
+                            id TEXT PRIMARY KEY,
+                            world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+                            created_at_turn_id TEXT NULL,
+                            parent_container_id TEXT NULL REFERENCES location_containers(id) ON DELETE CASCADE,
+                            depth INTEGER NOT NULL CHECK (depth BETWEEN 1 AND 4),
+                            name TEXT NOT NULL,
+                            description TEXT NOT NULL DEFAULT '',
+                            environmental_tags_json TEXT NOT NULL DEFAULT '[]',
+                            ui_x REAL NULL,
+                            ui_y REAL NULL,
+                            icon TEXT NULL,
+                            image_media_id TEXT NULL REFERENCES media_assets(id) ON DELETE SET NULL,
+                            created_at TEXT NOT NULL
+                        )
+                        """,
+                        "id, world_id, created_at_turn_id, parent_container_id, depth, name, description, environmental_tags_json, ui_x, ui_y, icon, image_media_id, created_at",
+                    ),
+                    (
+                        "location_nodes",
+                        """
+                        CREATE TABLE location_nodes_migrated (
+                            id TEXT PRIMARY KEY,
+                            world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+                            created_at_turn_id TEXT NULL,
+                            superseded_at_turn_id TEXT NULL,
+                            container_id TEXT NULL REFERENCES location_containers(id) ON DELETE SET NULL,
+                            is_entry_exit INTEGER NOT NULL DEFAULT 0,
+                            name TEXT NOT NULL,
+                            summary TEXT NOT NULL,
+                            description TEXT NOT NULL,
+                            environmental_tags_json TEXT NOT NULL DEFAULT '[]',
+                            is_starting_location INTEGER NOT NULL DEFAULT 0,
+                            is_hub INTEGER NOT NULL DEFAULT 0,
+                            starting_message TEXT NOT NULL DEFAULT '',
+                            ui_x REAL NULL,
+                            ui_y REAL NULL,
+                            icon TEXT NULL,
+                            image_media_id TEXT NULL REFERENCES media_assets(id) ON DELETE SET NULL
+                        )
+                        """,
+                        "id, world_id, created_at_turn_id, superseded_at_turn_id, container_id, is_entry_exit, name, summary, description, environmental_tags_json, is_starting_location, is_hub, starting_message, ui_x, ui_y, icon, image_media_id",
+                    ),
+                ):
+                    ddl_row = conn.execute(
+                        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+                        (tbl_name,),
+                    ).fetchone()
+                    if ddl_row and "world_media" in (ddl_row["sql"] or ""):
+                        mig_tbl = f"{tbl_name}_migrated"
+                        conn.execute(f"DROP TABLE IF EXISTS {mig_tbl}")
+                        conn.execute(create_sql)
+                        conn.execute(
+                            f"INSERT INTO {mig_tbl} ({copy_cols}) SELECT {copy_cols} FROM {tbl_name}"
+                        )
+                        conn.execute(f"DROP TABLE {tbl_name}")
+                        conn.execute(f"ALTER TABLE {mig_tbl} RENAME TO {tbl_name}")
+                        if tbl_name == "world_media_links":
+                            conn.execute(
+                                "CREATE INDEX IF NOT EXISTS idx_world_media_links_media ON world_media_links(media_id)"
+                            )
+                        elif tbl_name == "location_containers":
+                            conn.execute(
+                                "CREATE INDEX IF NOT EXISTS idx_location_containers_world ON location_containers(world_id)"
+                            )
+                            conn.execute(
+                                "CREATE INDEX IF NOT EXISTS idx_location_containers_parent ON location_containers(parent_container_id)"
+                            )
+                        elif tbl_name == "location_nodes":
+                            conn.execute(
+                                "CREATE INDEX IF NOT EXISTS idx_location_nodes_world ON location_nodes(world_id)"
+                            )
+                            conn.execute(
+                                "CREATE INDEX IF NOT EXISTS idx_location_nodes_container ON location_nodes(world_id, container_id)"
+                            )
+
+                conn.execute("DROP TABLE IF EXISTS world_media")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.execute("PRAGMA foreign_keys = ON;")
+
+        # Migrate legacy private character & persona URLs into media_assets once
+        char_url_re = re.compile(
+            r"^/api/media/characters/([a-zA-Z0-9_-]+)/(portraits|gallery)/([a-zA-Z0-9_.-]+)$"
+        )
+        persona_url_re = re.compile(
+            r"^/api/media/personas/([a-zA-Z0-9_-]+)/(portraits|gallery)/([a-zA-Z0-9_.-]+)$"
+        )
+        migrated_cache: dict[tuple[str, str, str, str], str] = {}
+        sources_to_unlink: list[tuple[Path, Path]] = []
+        now = utc_now_iso()
+
+        def _migrate_legacy_file(
+            *,
+            scope: str,
+            owner_id: str | None,
+            entity_id: str,
+            cat: str,
+            fname: str,
+            preferred_id: str | None = None,
+        ) -> str | None:
+            cache_key = (scope, entity_id, cat, fname)
+            if cache_key in migrated_cache:
+                return migrated_cache[cache_key]
+            try:
+                if scope == "character":
+                    src = safe_resolve_media_file_path(self.media_dir, entity_id, cat, fname)
+                else:
+                    src = safe_resolve_persona_media_file_path(self.media_dir, entity_id, cat, fname)
+            except (PathTraversalError, ValueError):
+                return None
+            if not src.is_file():
+                return None
+
+            stem_id = preferred_id or Path(fname).stem
+            if not re.fullmatch(r"[a-zA-Z0-9_-]+", stem_id):
+                stem_id = f"{'por' if cat == 'portraits' else 'img'}_{uuid.uuid4().hex[:10]}"
+            existing = conn.execute(
+                "SELECT id FROM media_assets WHERE id = ?", (stem_id,)
+            ).fetchone()
+            asset_id = (
+                f"{'por' if cat == 'portraits' else 'img'}_{uuid.uuid4().hex[:10]}"
+                if existing
+                else stem_id
+            )
+            dst_fname = f"{asset_id}.webp"
+            dst = safe_resolve_asset_file_path(self.media_dir, "images", dst_fname)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            sources_to_unlink.append((src, dst))
+            byte_sz = dst.stat().st_size
+            role = "portrait" if cat == "portraits" else "album"
+            conn.execute(
+                """
+                INSERT INTO media_assets (
+                    id, owner_id, entity_scope, media_type, role, filename, label,
+                    mime_type, byte_size, is_public, seed_key, parent_image_id,
+                    duration_ms, width, height, created_at
+                )
+                VALUES (?, ?, ?, 'image', ?, ?, '', 'image/webp', ?, 0, NULL, NULL, NULL, NULL, NULL, ?)
+                """,
+                (asset_id, owner_id, scope, role, dst_fname, byte_sz, now),
+            )
+            new_url = f"/api/media/assets/{asset_id}"
+            migrated_cache[cache_key] = new_url
+            return new_url
+
+        for cr in conn.execute(
+            "SELECT id, owner_id, portraits_json, gallery_json FROM characters"
+        ).fetchall():
+            changed = False
+            p_map = json.loads(cr["portraits_json"] or "{}")
+            if isinstance(p_map, dict):
+                for emo, raw_u in list(p_map.items()):
+                    m = char_url_re.fullmatch(str(raw_u or "").strip())
+                    if m:
+                        new_u = _migrate_legacy_file(
+                            scope="character",
+                            owner_id=cr["owner_id"],
+                            entity_id=m.group(1),
+                            cat=m.group(2),
+                            fname=m.group(3),
+                        )
+                        if new_u:
+                            p_map[emo] = new_u
+                            changed = True
+            g_list = json.loads(cr["gallery_json"] or "[]")
+            if isinstance(g_list, list):
+                for item in g_list:
+                    if not isinstance(item, dict):
+                        continue
+                    m = char_url_re.fullmatch(str(item.get("url") or "").strip())
+                    if m:
+                        new_u = _migrate_legacy_file(
+                            scope="character",
+                            owner_id=cr["owner_id"],
+                            entity_id=m.group(1),
+                            cat=m.group(2),
+                            fname=m.group(3),
+                            preferred_id=str(item.get("id") or "") or None,
+                        )
+                        if new_u:
+                            item["url"] = new_u
+                            item["id"] = new_u.rsplit("/", 1)[-1]
+                            changed = True
+            if changed:
+                conn.execute(
+                    "UPDATE characters SET portraits_json = ?, gallery_json = ? WHERE id = ?",
+                    (json.dumps(p_map), json.dumps(g_list), cr["id"]),
+                )
+
+        for pr in conn.execute(
+            "SELECT id, owner_id, portrait_url, gallery_json FROM personas"
+        ).fetchall():
+            changed = False
+            p_url = pr["portrait_url"]
+            m_p = persona_url_re.fullmatch(str(p_url or "").strip())
+            if m_p:
+                new_u = _migrate_legacy_file(
+                    scope="persona",
+                    owner_id=pr["owner_id"],
+                    entity_id=m_p.group(1),
+                    cat=m_p.group(2),
+                    fname=m_p.group(3),
+                )
+                if new_u:
+                    p_url = new_u
+                    changed = True
+            g_list = json.loads(pr["gallery_json"] or "[]")
+            if isinstance(g_list, list):
+                for item in g_list:
+                    if not isinstance(item, dict):
+                        continue
+                    m = persona_url_re.fullmatch(str(item.get("url") or "").strip())
+                    if m:
+                        new_u = _migrate_legacy_file(
+                            scope="persona",
+                            owner_id=pr["owner_id"],
+                            entity_id=m.group(1),
+                            cat=m.group(2),
+                            fname=m.group(3),
+                            preferred_id=str(item.get("id") or "") or None,
+                        )
+                        if new_u:
+                            item["url"] = new_u
+                            item["id"] = new_u.rsplit("/", 1)[-1]
+                            changed = True
+            if changed:
+                conn.execute(
+                    "UPDATE personas SET portrait_url = ?, gallery_json = ? WHERE id = ?",
+                    (p_url, json.dumps(g_list), pr["id"]),
+                )
+
+        for camp_r in conn.execute(
+            "SELECT id, owner_id, persona_snapshot_json FROM campaigns WHERE persona_snapshot_json IS NOT NULL"
+        ).fetchall():
+            try:
+                snap = json.loads(camp_r["persona_snapshot_json"])
+            except Exception:
+                continue
+            if not isinstance(snap, dict):
+                continue
+            changed = False
+            m_p = persona_url_re.fullmatch(str(snap.get("portrait_url") or "").strip())
+            if m_p:
+                new_u = _migrate_legacy_file(
+                    scope="persona",
+                    owner_id=camp_r["owner_id"],
+                    entity_id=m_p.group(1),
+                    cat=m_p.group(2),
+                    fname=m_p.group(3),
+                )
+                if new_u:
+                    snap["portrait_url"] = new_u
+                    changed = True
+            if isinstance(snap.get("gallery"), list):
+                for item in snap["gallery"]:
+                    if not isinstance(item, dict):
+                        continue
+                    m = persona_url_re.fullmatch(str(item.get("url") or "").strip())
+                    if m:
+                        new_u = _migrate_legacy_file(
+                            scope="persona",
+                            owner_id=camp_r["owner_id"],
+                            entity_id=m.group(1),
+                            cat=m.group(2),
+                            fname=m.group(3),
+                            preferred_id=str(item.get("id") or "") or None,
+                        )
+                        if new_u:
+                            item["url"] = new_u
+                            item["id"] = new_u.rsplit("/", 1)[-1]
+                            changed = True
+            if changed:
+                conn.execute(
+                    "UPDATE campaigns SET persona_snapshot_json = ? WHERE id = ?",
+                    (json.dumps(snap), camp_r["id"]),
+                )
+        conn.commit()
+        for src, dst in sources_to_unlink:
+            try:
+                if src.is_file() and src != dst:
+                    src.unlink(missing_ok=True)
+            except OSError:
+                pass

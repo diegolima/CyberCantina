@@ -67,3 +67,33 @@ class PurgePreviewResponse(BaseModel):
     total_worlds: int = 0
     total_campaigns: int = 0
     total_media_bytes: int = 0
+
+
+class AdminMediaPurgePreviewResponse(BaseModel):
+    """Dry-run counts and byte totals of non-built-in media eligible for admin purge."""
+
+    purge_images: bool = False
+    purge_videos: bool = False
+    images_count: int = 0
+    images_bytes: int = 0
+    videos_count: int = 0
+    videos_bytes: int = 0
+    total_bytes: int = 0
+    cascade_videos_included: bool = False
+
+
+class AdminMediaPurgeRequest(BaseModel):
+    """Fine-grained admin purge request for non-built-in media."""
+
+    purge_images: bool = False
+    purge_videos: bool = False
+
+
+class AdminMediaPurgeResponse(BaseModel):
+    """Result of purging non-built-in media from disk and database."""
+
+    purge_images: bool
+    purge_videos: bool
+    images_deleted: int = 0
+    videos_deleted: int = 0
+    bytes_reclaimed: int = 0

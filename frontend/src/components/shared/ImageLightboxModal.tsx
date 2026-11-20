@@ -1,30 +1,124 @@
-import React, { useEffect } from "react";
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Play,
+  RotateCcw,
+  Volume2,
+  VolumeX,
+  X,
+} from "lucide-react";
 
 export interface ImageLightboxModalProps {
   url: string;
   label?: string;
   subtitle?: string;
   counterText?: string;
+  videoUrl?: string | null;
+  videoMimeType?: string | null;
+  autoPlayVideo?: boolean;
+  autoPlayDelayMs?: number;
   onPrev?: () => void;
   onNext?: () => void;
   onImageError?: () => void;
   onClose: () => void;
 }
 
+type LightboxVideoPhase = "idle" | "waiting" | "playing" | "ended";
+
 /**
- * Reusable full-screen lightbox overlay for inspecting world, map, and arrival images.
+ * Reusable full-screen lightbox overlay for inspecting world, map, character, persona, and arrival media.
+ * Displays the still image immediately (waiting at least 1s before cross-fading into linked video),
+ * plays linked videos once (no loop), fades back to the still image on completion, and exposes mute/replay controls.
  */
 export const ImageLightboxModal: React.FC<ImageLightboxModalProps> = ({
   url,
   label,
   subtitle,
   counterText,
+  videoUrl,
+  videoMimeType,
+  autoPlayVideo = false,
+  autoPlayDelayMs = 1000,
   onPrev,
   onNext,
   onImageError,
   onClose,
 }) => {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [phase, setPhase] = useState<LightboxVideoPhase>(
+    videoUrl && autoPlayVideo ? "waiting" : "idle"
+  );
+  const [isVideoVisible, setIsVideoVisible] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
+  const isMutedRef = useRef(isMuted);
+  isMutedRef.current = isMuted;
+
+  // Reset playback state and schedule the 1s still-image pause before auto-playing on slide open/change
+  useEffect(() => {
+    setIsVideoVisible(false);
+    if (!videoUrl) {
+      setPhase("idle");
+      return;
+    }
+    if (!autoPlayVideo) {
+      setPhase("idle");
+      return;
+    }
+    setPhase("waiting");
+    const timer = window.setTimeout(() => {
+      setPhase((cur) => (cur === "waiting" ? "playing" : cur));
+    }, Math.max(0, autoPlayDelayMs));
+    return () => window.clearTimeout(timer);
+  }, [url, videoUrl, autoPlayVideo, autoPlayDelayMs]);
+
+  useEffect(() => {
+    const vid = videoRef.current;
+    if (vid) {
+      vid.defaultMuted = isMuted;
+      vid.muted = isMuted;
+    }
+  }, [isMuted, url, videoUrl]);
+
+  useEffect(() => {
+    if (!videoUrl || phase !== "playing") return;
+    const vid = videoRef.current;
+    if (!vid) return;
+    let cancelled = false;
+    vid.defaultMuted = isMutedRef.current;
+    vid.muted = isMutedRef.current;
+    const playPromise = vid.play();
+    if (playPromise && typeof playPromise.then === "function") {
+      playPromise.then(
+        () => {
+          if (!cancelled && vid.readyState >= 2) {
+            setIsVideoVisible(true);
+          }
+        },
+        (err: any) => {
+          // Ignore AbortError from strict-mode/unmount cleanup; only fall back on real playback blocks
+          if (!cancelled && err?.name !== "AbortError") {
+            setIsVideoVisible(false);
+            setPhase("ended");
+          }
+        }
+      );
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [url, videoUrl, phase]);
+
+  const handlePlayOrReplay = () => {
+    if (!videoUrl) return;
+    const vid = videoRef.current;
+    if (vid) {
+      vid.currentTime = 0;
+    }
+    setIsVideoVisible(false);
+    setPhase("playing");
+  };
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -119,19 +213,53 @@ export const ImageLightboxModal: React.FC<ImageLightboxModalProps> = ({
               <ChevronLeft size={18} />
             </button>
           )}
-          <img
-            src={url}
-            alt={label || "World scene image"}
-            onError={onImageError}
-            style={{
-              maxWidth: "90vw",
-              maxHeight: "80vh",
-              borderRadius: 10,
-              border: "1px solid var(--border-subtle)",
-              objectFit: "contain",
-              boxShadow: "0 18px 50px rgba(0, 0, 0, 0.65)",
-            }}
-          />
+          <div style={{ position: "relative", display: "inline-flex" }}>
+            <img
+              src={url}
+              alt={label || "World scene image"}
+              onError={onImageError}
+              style={{
+                maxWidth: "90vw",
+                maxHeight: "80vh",
+                borderRadius: 10,
+                border: "1px solid var(--border-subtle)",
+                objectFit: "contain",
+                boxShadow: "0 18px 50px rgba(0, 0, 0, 0.65)",
+                display: "block",
+              }}
+            />
+            {videoUrl && (
+              <video
+                key={`${url}::${videoUrl}`}
+                ref={videoRef}
+                playsInline
+                muted={isMuted}
+                preload="auto"
+                onPlaying={() => setIsVideoVisible(true)}
+                onEnded={() => {
+                  setIsVideoVisible(false);
+                  setPhase("ended");
+                }}
+                onError={() => {
+                  setIsVideoVisible(false);
+                  setPhase("ended");
+                }}
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "contain",
+                  borderRadius: 10,
+                  pointerEvents: "none",
+                  opacity: phase === "playing" && isVideoVisible ? 1 : 0,
+                  transition: "opacity 450ms ease-in-out",
+                }}
+              >
+                <source src={videoUrl} type={videoMimeType || undefined} />
+              </video>
+            )}
+          </div>
           {onNext && (
             <button
               type="button"
@@ -145,19 +273,21 @@ export const ImageLightboxModal: React.FC<ImageLightboxModalProps> = ({
           )}
         </div>
 
-        {(label || subtitle || counterText) && (
+        {(label || subtitle || counterText || videoUrl) && (
           <div
             style={{
               textAlign: "center",
               color: "var(--text-primary)",
               fontSize: "0.84rem",
               fontWeight: 600,
-              background: "rgba(15, 23, 42, 0.82)",
+              background: "rgba(15, 23, 42, 0.86)",
               padding: "6px 14px",
               borderRadius: 999,
               border: "1px solid var(--border-subtle)",
               display: "inline-flex",
               alignItems: "center",
+              flexWrap: "wrap",
+              justifyContent: "center",
               gap: 8,
             }}
           >
@@ -182,6 +312,73 @@ export const ImageLightboxModal: React.FC<ImageLightboxModalProps> = ({
                 }}
               >
                 {counterText}
+              </span>
+            )}
+            {videoUrl && (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  marginLeft: 4,
+                  paddingLeft: 8,
+                  borderLeft: "1px solid var(--border-subtle)",
+                }}
+              >
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => setIsMuted((m) => !m)}
+                  aria-label={isMuted ? "Unmute video" : "Mute video"}
+                  title={isMuted ? "Unmute video" : "Mute video"}
+                  style={{
+                    padding: "2px 8px",
+                    fontSize: "0.72rem",
+                    borderRadius: 999,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                  }}
+                >
+                  {isMuted ? <VolumeX size={12} /> : <Volume2 size={12} />}
+                  {isMuted ? "Muted" : "Sound"}
+                </button>
+                {(phase === "idle" || phase === "ended") ? (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={handlePlayOrReplay}
+                    aria-label={phase === "ended" ? "Replay video" : "Play video"}
+                    style={{
+                      padding: "2px 8px",
+                      fontSize: "0.72rem",
+                      borderRadius: 999,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                    }}
+                  >
+                    {phase === "ended" ? (
+                      <>
+                        <RotateCcw size={12} /> Replay
+                      </>
+                    ) : (
+                      <>
+                        <Play size={12} /> Play
+                      </>
+                    )}
+                  </button>
+                ) : phase === "playing" && !isVideoVisible ? (
+                  <span
+                    style={{
+                      fontSize: "0.72rem",
+                      color: "var(--text-secondary)",
+                      fontWeight: 400,
+                    }}
+                  >
+                    Buffering…
+                  </span>
+                ) : null}
               </span>
             )}
           </div>

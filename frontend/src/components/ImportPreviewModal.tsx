@@ -16,6 +16,11 @@ import {
   ImportConflictStrategy,
   ImportInspectResponse,
 } from "../types";
+import {
+  type ImportMediaSelection,
+  computeImportMediaToggleState,
+  formatMediaBytes,
+} from "../utils/importExportLogic";
 
 export interface ImportPreviewModalProps {
   initialFile?: File | null;
@@ -46,6 +51,8 @@ export const ImportPreviewModal: React.FC<ImportPreviewModalProps> = ({
     Record<string, ImportConflictStrategy>
   >({});
   const defaultStrategy: ImportConflictStrategy = "copy";
+  const [importMediaSelection, setImportMediaSelection] =
+    useState<ImportMediaSelection>({ importImages: true, importVideos: true });
   const [commitResult, setCommitResult] =
     useState<ImportCommitResponse | null>(null);
 
@@ -66,6 +73,10 @@ export const ImportPreviewModal: React.FC<ImportPreviewModalProps> = ({
     try {
       const res = await api.inspectImport(targetFile);
       setInspectResult(res);
+      setImportMediaSelection({
+        importImages: true,
+        importVideos: (res.videos_count ?? 0) > 0,
+      });
 
       // Initialize default conflict strategies
       const initStrategies: Record<string, ImportConflictStrategy> = {};
@@ -127,6 +138,8 @@ export const ImportPreviewModal: React.FC<ImportPreviewModalProps> = ({
         staged_token: inspectResult.staged_token,
         conflict_strategies: conflictStrategies,
         default_conflict_strategy: defaultStrategy,
+        import_images: importMediaSelection.importImages,
+        import_videos: importMediaSelection.importVideos,
       });
       setCommitResult(res);
       if (res.success) {
@@ -278,6 +291,28 @@ export const ImportPreviewModal: React.FC<ImportPreviewModalProps> = ({
                   </div>
                 )}
               </div>
+              {commitResult.warnings && commitResult.warnings.length > 0 && (
+                <div
+                  style={{
+                    border: "1px solid rgba(245, 158, 11, 0.35)",
+                    background: "rgba(245, 158, 11, 0.08)",
+                    borderRadius: 6,
+                    padding: 10,
+                    fontSize: "0.79rem",
+                    color: "var(--text-secondary)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                  }}
+                >
+                  <div style={{ fontWeight: 600, color: "var(--accent-amber)", display: "flex", alignItems: "center", gap: 6 }}>
+                    <AlertTriangle size={14} /> Media &amp; Import Notices
+                  </div>
+                  {commitResult.warnings.map((w, idx) => (
+                    <div key={idx}>{w}</div>
+                  ))}
+                </div>
+              )}
               <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
                 <button type="button" className="btn btn-emerald" onClick={onClose}>
                   Done
@@ -434,6 +469,119 @@ export const ImportPreviewModal: React.FC<ImportPreviewModalProps> = ({
                       </div>
                     </div>
                   </div>
+
+                  {/* Media Import Selection (.zcc archives with images/videos) */}
+                  {((inspectResult.images_count ?? 0) > 0 ||
+                    (inspectResult.videos_count ?? 0) > 0) && (
+                    <div
+                      style={{
+                        border: "1px solid var(--border-color)",
+                        background: "var(--bg-card)",
+                        borderRadius: 6,
+                        padding: 12,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8,
+                      }}
+                    >
+                      <label
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          fontSize: "0.84rem",
+                          fontWeight: 600,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={
+                            importMediaSelection.importImages ||
+                            importMediaSelection.importVideos
+                          }
+                          onChange={(e) =>
+                            setImportMediaSelection((prev) =>
+                              computeImportMediaToggleState(
+                                prev,
+                                "parent",
+                                e.target.checked
+                              )
+                            )
+                          }
+                        />
+                        <span>Import media</span>
+                      </label>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: 16,
+                          paddingLeft: 22,
+                          fontSize: "0.79rem",
+                          color: "var(--text-secondary)",
+                        }}
+                      >
+                        <label
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 6,
+                            cursor: "pointer",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={importMediaSelection.importImages}
+                            onChange={(e) =>
+                              setImportMediaSelection((prev) =>
+                                computeImportMediaToggleState(
+                                  prev,
+                                  "images",
+                                  e.target.checked
+                                )
+                              )
+                            }
+                          />
+                          <span>
+                            Images ({inspectResult.images_count ?? 0} ·{" "}
+                            {formatMediaBytes(inspectResult.images_bytes ?? 0)})
+                          </span>
+                        </label>
+                        {(inspectResult.videos_count ?? 0) > 0 && (
+                          <label
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 6,
+                              cursor: "pointer",
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={importMediaSelection.importVideos}
+                              onChange={(e) =>
+                                setImportMediaSelection((prev) =>
+                                  computeImportMediaToggleState(
+                                    prev,
+                                    "videos",
+                                    e.target.checked
+                                  )
+                                )
+                              }
+                            />
+                            <span>
+                              Videos ({inspectResult.videos_count ?? 0} ·{" "}
+                              {formatMediaBytes(inspectResult.videos_bytes ?? 0)})
+                            </span>
+                          </label>
+                        )}
+                      </div>
+                      <div style={{ fontSize: "0.73rem", color: "var(--text-muted)", paddingLeft: 22 }}>
+                        Linked videos require their parent images; enabling Videos automatically includes Images.
+                      </div>
+                    </div>
+                  )}
 
                   {/* Non-blocking Warnings (e.g. unsupported/deprecated fields) */}
                   {inspectResult.warnings && inspectResult.warnings.length > 0 && (

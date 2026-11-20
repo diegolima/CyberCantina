@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -15,16 +16,18 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from app.config import settings
+from app.db.repos.media_assets import build_asset_url, extract_asset_id_from_url
 from app.db.repository import CantinaRepository, _location_lore_vector_fields, utc_now_iso
 from app.dependencies import (
+    enforce_quota_and_commit_staged_files,
     enforce_quota_and_write_webp,
     format_mb,
     get_user_media_lock,
     get_user_media_usage_bytes,
     get_user_quota_bytes,
-    process_and_save_image,
-    remove_character_media_dir,
     render_webp_bytes,
+    safe_resolve_asset_path,
     safe_resolve_media_path,
     safe_resolve_persona_media_path,
     safe_resolve_public_character_media_path,
@@ -63,13 +66,20 @@ from app.schemas.world import (
     find_nested_world_unsupported_keys,
     normalize_lore_category,
 )
+from app.security.log_sanitize import sanitize_log_value
+from app.security.media_path import safe_resolve_staging_file_path
+from app.services.video_processor import (
+    VideoProbeMetadata,
+    cleanup_staging_paths,
+    probe_video_file,
+)
 from app.wizards.sillytavern_parser import extract_card_from_bytes
 
 logger = logging.getLogger("cybercantina.import_export")
 
 # Safety limits for ZIP decompression
-MAX_TOTAL_UNCOMPRESSED_BYTES = 100 * 1024 * 1024  # 100 MB
-MAX_ZIP_ENTRIES = 250
+MAX_TOTAL_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024  # 1 GB
+MAX_ZIP_ENTRIES = 500
 STAGED_IMPORT_TTL_SECONDS = 1800  # 30 minutes
 
 
@@ -79,9 +89,10 @@ class StagedImport:
     user_id: str
     format_type: str
     is_native: bool
-    data_bytes: bytes
+    data_bytes: bytes | None
     created_at_epoch: float
     parsed_payload: dict[str, Any]
+    staged_file_path: Path | None = None
 
 
 _staged_imports: dict[str, StagedImport] = {}
@@ -91,18 +102,24 @@ def _cleanup_expired_staged_imports() -> None:
     now = time.time()
     expired = [k for k, v in _staged_imports.items() if now - v.created_at_epoch > STAGED_IMPORT_TTL_SECONDS]
     for k in expired:
-        _staged_imports.pop(k, None)
+        entry = _staged_imports.pop(k, None)
+        if entry and entry.staged_file_path:
+            cleanup_staging_paths(entry.staged_file_path)
 
 
-def _safe_zip_read(zip_bytes: bytes) -> zipfile.ZipFile:
+def _open_safe_zip(source: bytes | Path) -> zipfile.ZipFile:
     """Validate archive integrity, total size, entry count, and path traversal safety."""
     try:
-        zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+        if isinstance(source, Path):
+            zf = zipfile.ZipFile(source, "r")
+        else:
+            zf = zipfile.ZipFile(io.BytesIO(source), "r")
     except zipfile.BadZipFile as exc:
         raise HTTPException(status_code=400, detail="Uploaded file is not a valid ZIP archive.") from exc
 
     infolist = zf.infolist()
     if len(infolist) > MAX_ZIP_ENTRIES:
+        zf.close()
         raise HTTPException(
             status_code=400,
             detail=f"Archive contains too many entries ({len(infolist)} > {MAX_ZIP_ENTRIES}).",
@@ -110,6 +127,7 @@ def _safe_zip_read(zip_bytes: bytes) -> zipfile.ZipFile:
 
     total_size = sum(info.file_size for info in infolist)
     if total_size > MAX_TOTAL_UNCOMPRESSED_BYTES:
+        zf.close()
         raise HTTPException(
             status_code=400,
             detail=f"Uncompressed archive exceeds size limit ({total_size} bytes > {MAX_TOTAL_UNCOMPRESSED_BYTES} bytes).",
@@ -118,12 +136,17 @@ def _safe_zip_read(zip_bytes: bytes) -> zipfile.ZipFile:
     for info in infolist:
         p = Path(info.filename)
         if p.is_absolute() or ".." in p.parts:
+            zf.close()
             raise HTTPException(
                 status_code=400,
                 detail=f"Archive contains illegal path traversal member: '{info.filename}'.",
             )
 
     return zf
+
+
+def _safe_zip_read(zip_bytes: bytes) -> zipfile.ZipFile:
+    return _open_safe_zip(zip_bytes)
 
 
 def _extract_character_unsupported_fields(
@@ -196,42 +219,126 @@ def _extract_persona_unsupported_fields(
     return merged
 
 
-def _stage_persona_media_for_export(
+def _resolve_local_media_disk_path(
     repo: CantinaRepository,
-    persona_id: str,
     url: str,
+    *,
+    entity_scope: str,
+    entity_id: str,
     category: str,
-    media_entries: dict[str, bytes],
-) -> str:
-    """Resolve a persona media asset on disk, stage it into the ZIP, and return relative path."""
-    m = re.search(rf"/api/media/personas/([^/]+)/{category}/([^/?#]+)", url or "")
-    if not m:
-        return url
-    p_id, filename = m.group(1), m.group(2)
-    try:
-        fpath = safe_resolve_persona_media_path(
-            p_id, category, filename, media_dir=repo.media_dir
+) -> Path | None:
+    """Resolve any unified, public, or legacy local media URL to an existing file on disk."""
+    aid = extract_asset_id_from_url(url)
+    if aid:
+        asset = repo.get_media_asset(aid)
+        if asset:
+            p = repo.resolve_asset_disk_path(asset)
+            if p.is_file():
+                return p
+    if entity_scope == "character":
+        pub_m = re.search(
+            rf"/api/media/public/(v\d+)/characters/([^/]+)/{category}/([^/?#]+)",
+            url or "",
         )
-        if not fpath.is_file() and p_id != persona_id:
-            fallback_path = safe_resolve_persona_media_path(
-                persona_id, category, filename, media_dir=repo.media_dir
+        if pub_m:
+            p = safe_resolve_public_character_media_path(
+                pub_m.group(1), pub_m.group(2), category, pub_m.group(3), media_dir=repo.media_dir
             )
-            if fallback_path.is_file():
-                fpath = fallback_path
-        if fpath.is_file():
-            rel_zip_path = f"media/personas/{persona_id}/{category}/{filename}"
-            media_entries[rel_zip_path] = fpath.read_bytes()
-            return rel_zip_path
+            if p.is_file():
+                return p
+        m = re.search(rf"/api/media/characters/([^/]+)/{category}/([^/?#]+)", url or "")
+        if m:
+            c_id, fname = m.group(1), m.group(2)
+            p = safe_resolve_media_path(c_id, category, fname, media_dir=repo.media_dir)
+            if not p.is_file() and c_id != entity_id:
+                alt = safe_resolve_media_path(entity_id, category, fname, media_dir=repo.media_dir)
+                if alt.is_file():
+                    p = alt
+            if p.is_file():
+                return p
+    elif entity_scope == "persona":
+        m = re.search(rf"/api/media/personas/([^/]+)/{category}/([^/?#]+)", url or "")
+        if m:
+            p_id, fname = m.group(1), m.group(2)
+            p = safe_resolve_persona_media_path(p_id, category, fname, media_dir=repo.media_dir)
+            if not p.is_file() and p_id != entity_id:
+                alt = safe_resolve_persona_media_path(entity_id, category, fname, media_dir=repo.media_dir)
+                if alt.is_file():
+                    p = alt
+            if p.is_file():
+                return p
+    elif entity_scope == "world":
+        m = re.search(r"/api/media/worlds/(images|audio)/([^/?#]+)", url or "")
+        if m:
+            p = safe_resolve_world_media_path(m.group(1), m.group(2), media_dir=repo.media_dir)
+            if p.is_file():
+                return p
+    return None
+
+
+def _stage_entity_image_and_optional_video(
+    repo: CantinaRepository,
+    *,
+    entity_scope: str,
+    entity_id: str,
+    image_url: str,
+    image_category: str,
+    item_copy: dict[str, Any] | None,
+    media_sources: dict[str, Path],
+    include_videos: bool,
+    selected_video_ids: set[str] | None,
+) -> str:
+    """Stage image (and optionally linked video on item_copy) into media_sources; return relative image ZIP path."""
+    scope_dir = "characters" if entity_scope == "character" else ("personas" if entity_scope == "persona" else "worlds")
+    staged_img_url = image_url
+    try:
+        fpath = _resolve_local_media_disk_path(
+            repo, image_url, entity_scope=entity_scope, entity_id=entity_id, category=image_category
+        )
+        if fpath is not None and fpath.is_file():
+            rel_zip_path = f"media/{scope_dir}/{entity_id}/{image_category}/{fpath.name}"
+            media_sources[rel_zip_path] = fpath
+            staged_img_url = rel_zip_path
     except Exception as exc:
-        logger.warning("Failed staging persona %s asset for export: %s", category, exc)
-    return url
+        logger.warning("Failed staging %s %s asset for export: %s", entity_scope, image_category, sanitize_log_value(exc))
+
+    if item_copy is not None:
+        vid_id = str(item_copy.get("video_asset_id") or "").strip()
+        vid_url = str(item_copy.get("video_url") or "").strip()
+        should_stage_vid = (
+            include_videos
+            and bool(vid_url)
+            and (selected_video_ids is None or (vid_id and vid_id in selected_video_ids))
+        )
+        staged_vid_path: str | None = None
+        if should_stage_vid:
+            try:
+                vfpath = _resolve_local_media_disk_path(
+                    repo, vid_url, entity_scope=entity_scope, entity_id=entity_id, category="videos"
+                )
+                if vfpath is not None and vfpath.is_file():
+                    rel_vid_zip = f"media/{scope_dir}/{entity_id}/videos/{vfpath.name}"
+                    media_sources[rel_vid_zip] = vfpath
+                    staged_vid_path = rel_vid_zip
+            except Exception as exc:
+                logger.warning("Failed staging %s video asset for export: %s", entity_scope, sanitize_log_value(exc))
+        if staged_vid_path:
+            item_copy["video_url"] = staged_vid_path
+        else:
+            item_copy.pop("video_url", None)
+            item_copy.pop("video_mime_type", None)
+        item_copy.pop("video_asset_id", None)
+        item_copy.pop("video_byte_size", None)
+    return staged_img_url
 
 
 def _serialize_persona_for_zcc(
     persona: PersonaRecord,
     *,
     repo: CantinaRepository | None = None,
-    media_entries: dict[str, bytes] | None = None,
+    media_sources: dict[str, Path] | None = None,
+    include_videos: bool = False,
+    selected_video_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Serialize a PersonaRecord for .zcc export with top-level unsupported_fields re-emission."""
     persona_data = persona.model_dump()
@@ -240,16 +347,32 @@ def _serialize_persona_for_zcc(
     phys_norm = str(persona_data.get("physical_appearance") or "").strip()
     if not phys_norm or phys_norm == bio_norm:
         persona_data.pop("physical_appearance", None)
-    if repo is not None and media_entries is not None:
+    if repo is not None and media_sources is not None:
         if persona.portrait_url:
-            persona_data["portrait_url"] = _stage_persona_media_for_export(
-                repo, persona.id, persona.portrait_url, "portraits", media_entries
+            persona_data["portrait_url"] = _stage_entity_image_and_optional_video(
+                repo,
+                entity_scope="persona",
+                entity_id=persona.id,
+                image_url=persona.portrait_url,
+                image_category="portraits",
+                item_copy=None,
+                media_sources=media_sources,
+                include_videos=False,
+                selected_video_ids=None,
             )
         rewritten_gallery: list[dict[str, Any]] = []
         for g_item in persona_data.get("gallery", []):
             item_copy = dict(g_item)
-            item_copy["url"] = _stage_persona_media_for_export(
-                repo, persona.id, g_item.get("url", ""), "gallery", media_entries
+            item_copy["url"] = _stage_entity_image_and_optional_video(
+                repo,
+                entity_scope="persona",
+                entity_id=persona.id,
+                image_url=str(g_item.get("url") or ""),
+                image_category="gallery",
+                item_copy=item_copy,
+                media_sources=media_sources,
+                include_videos=include_videos,
+                selected_video_ids=selected_video_ids,
             )
             rewritten_gallery.append(item_copy)
         persona_data["gallery"] = rewritten_gallery
@@ -264,45 +387,36 @@ def _serialize_persona_for_zcc(
     return persona_data
 
 
-def _stage_world_media_for_export(
-    repo: CantinaRepository,
-    world_id: str,
-    media_item: dict[str, Any],
-    media_entries: dict[str, bytes],
-) -> dict[str, Any]:
-    """Resolve a world media asset on disk, stage it into the ZIP bundle, and rewrite url."""
-    item_copy = dict(media_item)
-    url = str(item_copy.get("url") or "")
-    m = re.search(r"/api/media/worlds/(images|audio)/([^/?#]+)", url)
-    if not m:
-        return item_copy
-    cat_dir, filename = m.group(1), m.group(2)
-    try:
-        fpath = safe_resolve_world_media_path(cat_dir, filename, media_dir=repo.media_dir)
-        if fpath.is_file():
-            rel_zip_path = f"media/worlds/{world_id}/{cat_dir}/{filename}"
-            media_entries[rel_zip_path] = fpath.read_bytes()
-            item_copy["url"] = rel_zip_path
-    except Exception as exc:
-        logger.warning("Failed staging world media '%s' for export: %s", filename, exc)
-    return item_copy
-
-
 def _serialize_world_for_zcc(
     world: WorldRecord,
     *,
     repo: CantinaRepository | None = None,
-    media_entries: dict[str, bytes] | None = None,
+    media_sources: dict[str, Path] | None = None,
     include_media: bool = True,
+    include_videos: bool = False,
+    selected_video_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Serialize a WorldRecord for .zcc export, restoring extension keys and optionally staging media."""
     world_data = world.model_dump()
     world_data.pop("unsupported_fields", None)
-    if include_media and repo is not None and media_entries is not None:
-        world_data["media"] = [
-            _stage_world_media_for_export(repo, world.id, m_item, media_entries)
-            for m_item in (world_data.get("media") or [])
-        ]
+    if include_media and repo is not None and media_sources is not None:
+        staged_media: list[dict[str, Any]] = []
+        for m_item in (world_data.get("media") or []):
+            item_copy = dict(m_item)
+            cat_dir = "audio" if item_copy.get("media_type") == "audio" else "images"
+            item_copy["url"] = _stage_entity_image_and_optional_video(
+                repo,
+                entity_scope="world",
+                entity_id=world.id,
+                image_url=str(item_copy.get("url") or ""),
+                image_category=cat_dir,
+                item_copy=item_copy,
+                media_sources=media_sources,
+                include_videos=include_videos,
+                selected_video_ids=selected_video_ids,
+            )
+            staged_media.append(item_copy)
+        world_data["media"] = staged_media
     elif not include_media:
         world_data["media"] = []
         for cont in world_data.get("containers") or []:
@@ -310,11 +424,24 @@ def _serialize_world_for_zcc(
                 cont["image_media_id"] = None
                 cont["image_url"] = None
                 cont["image_label"] = None
+                cont.pop("video_url", None)
+                cont.pop("video_mime_type", None)
         for loc in world_data.get("locations") or []:
             if isinstance(loc, dict):
                 loc["image_media_id"] = None
                 loc["image_url"] = None
                 loc["image_label"] = None
+                loc.pop("video_url", None)
+                loc.pop("video_mime_type", None)
+    else:
+        for cont in world_data.get("containers") or []:
+            if isinstance(cont, dict) and not include_videos:
+                cont.pop("video_url", None)
+                cont.pop("video_mime_type", None)
+        for loc in world_data.get("locations") or []:
+            if isinstance(loc, dict) and not include_videos:
+                loc.pop("video_url", None)
+                loc.pop("video_mime_type", None)
     rules_dict = world_data.get("global_rules")
     if not isinstance(rules_dict, dict):
         rules_dict = {}
@@ -365,55 +492,7 @@ def _resolve_zip_member(rel_path: Any, zip_names: set[str]) -> str | None:
     return None
 
 
-def _stage_character_media_for_export(
-    repo: CantinaRepository,
-    char_id: str,
-    url: str,
-    category: str,
-    media_entries: dict[str, bytes],
-) -> str:
-    """Resolve a character media asset on disk (private or shared public), stage it into the ZIP, and return relative path."""
-    pub_m = re.search(
-        rf"/api/media/public/(v\d+)/characters/([^/]+)/{category}/([^/?#]+)",
-        url or "",
-    )
-    if pub_m:
-        ver_tag, seed_slug, filename = pub_m.group(1), pub_m.group(2), pub_m.group(3)
-        try:
-            fpath = safe_resolve_public_character_media_path(
-                ver_tag, seed_slug, category, filename, media_dir=repo.media_dir
-            )
-            if fpath.is_file():
-                rel_zip_path = f"media/characters/{char_id}/{category}/{filename}"
-                media_entries[rel_zip_path] = fpath.read_bytes()
-                return rel_zip_path
-        except Exception as exc:
-            logger.warning("Failed staging public %s asset for export: %s", category, exc)
-        return url
-
-    m = re.search(rf"/api/media/characters/([^/]+)/{category}/([^/?#]+)", url or "")
-    if not m:
-        return url
-    c_id, filename = m.group(1), m.group(2)
-    try:
-        fpath = safe_resolve_media_path(
-            c_id, category, filename, media_dir=repo.media_dir
-        )
-        if not fpath.is_file() and c_id != char_id:
-            fallback_path = safe_resolve_media_path(
-                char_id, category, filename, media_dir=repo.media_dir
-            )
-            if fallback_path.is_file():
-                fpath = fallback_path
-        if fpath.is_file():
-            rel_zip_path = f"media/characters/{char_id}/{category}/{filename}"
-            media_entries[rel_zip_path] = fpath.read_bytes()
-            return rel_zip_path
-    except Exception as exc:
-        logger.warning("Failed staging %s asset for export: %s", category, exc)
-    return url
-
-def build_zcc_export(
+def build_zcc_export_to_file(
     repo: CantinaRepository,
     character_ids: list[str],
     world_ids: list[str],
@@ -421,12 +500,14 @@ def build_zcc_export(
     owner_id: str,
     description: str = "",
     include_world_media: bool = True,
-) -> bytes:
-    """Bundle selected characters, worlds, personas, and media into a .zcc ZIP archive."""
+    include_videos: bool = False,
+    selected_video_ids: list[str] | None = None,
+) -> Path:
+    """Stream selected characters, worlds, personas, and media into a temporary .zcc ZIP file on disk."""
     worlds: list[WorldRecord] = []
     personas: list[PersonaRecord] = []
+    video_filter = set(selected_video_ids) if selected_video_ids is not None else None
 
-    # 1. Fetch worlds
     for wid in world_ids:
         try:
             worlds.append(repo.get_world(wid, owner_id=owner_id))
@@ -435,7 +516,6 @@ def build_zcc_export(
 
     exported_world_ids = {w.id for w in worlds}
 
-    # 2. Fetch personas
     for pid in persona_ids:
         try:
             p = repo.get_persona(pid, owner_id=owner_id)
@@ -444,8 +524,7 @@ def build_zcc_export(
         except Exception:
             continue
 
-    # 3. Fetch characters & process media
-    media_entries: dict[str, bytes] = {}  # zip_rel_path -> raw_bytes
+    media_sources: dict[str, Path] = {}
     exported_characters_json: list[dict[str, Any]] = []
 
     for cid in character_ids:
@@ -474,7 +553,6 @@ def build_zcc_export(
                 continue
             char_data[ext_k] = ext_v
 
-        # If the character's world is not included in the bundle, strip world and lore artifact links
         if char.world_id not in exported_world_ids:
             char_data["world_id"] = None
             for it in char_data.get("equipped", []):
@@ -484,20 +562,34 @@ def build_zcc_export(
                 if it.get("lore_id"):
                     it["lore_id"] = None
 
-        # Relativize portrait media
         char_data["portraits"] = {
-            emotion: _stage_character_media_for_export(
-                repo, char.id, url, "portraits", media_entries
+            emotion: _stage_entity_image_and_optional_video(
+                repo,
+                entity_scope="character",
+                entity_id=char.id,
+                image_url=url,
+                image_category="portraits",
+                item_copy=None,
+                media_sources=media_sources,
+                include_videos=False,
+                selected_video_ids=None,
             )
             for emotion, url in char.portraits.items()
         }
 
-        # Relativize gallery media
         rewritten_gallery: list[dict[str, Any]] = []
         for g_item in char_data.get("gallery", []):
             item_copy = dict(g_item)
-            item_copy["url"] = _stage_character_media_for_export(
-                repo, char.id, g_item.get("url", ""), "gallery", media_entries
+            item_copy["url"] = _stage_entity_image_and_optional_video(
+                repo,
+                entity_scope="character",
+                entity_id=char.id,
+                image_url=str(g_item.get("url") or ""),
+                image_category="gallery",
+                item_copy=item_copy,
+                media_sources=media_sources,
+                include_videos=include_videos,
+                selected_video_ids=video_filter,
             )
             rewritten_gallery.append(item_copy)
         char_data["gallery"] = rewritten_gallery
@@ -508,17 +600,26 @@ def build_zcc_export(
         _serialize_world_for_zcc(
             w,
             repo=repo,
-            media_entries=media_entries,
+            media_sources=media_sources,
             include_media=include_world_media,
+            include_videos=include_videos,
+            selected_video_ids=video_filter,
         )
         for w in worlds
     ]
     exported_personas_json = [
-        _serialize_persona_for_zcc(p, repo=repo, media_entries=media_entries)
+        _serialize_persona_for_zcc(
+            p,
+            repo=repo,
+            media_sources=media_sources,
+            include_videos=include_videos,
+            selected_video_ids=video_filter,
+        )
         for p in personas
     ]
 
-    # 4. Build Manifest
+    videos_count = sum(1 for p in media_sources if "/videos/" in p)
+    images_count = len(media_sources) - videos_count
     manifest = ZccManifest(
         format_version=1,
         generator="CyberCantina",
@@ -529,59 +630,157 @@ def build_zcc_export(
             characters_count=len(exported_characters_json),
             worlds_count=len(exported_worlds_json),
             personas_count=len(exported_personas_json),
-            media_files_count=len(media_entries),
+            media_files_count=len(media_sources),
+            images_count=images_count,
+            videos_count=videos_count,
         ),
         dependencies={
             "worlds": list(exported_world_ids),
         },
     )
 
-    # 5. Pack ZIP in-memory
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("manifest.json", manifest.model_dump_json(indent=2))
-        if exported_characters_json:
-            zf.writestr(
-                "characters.json",
-                json.dumps(exported_characters_json, indent=2, ensure_ascii=False),
-            )
-        if exported_worlds_json:
-            zf.writestr(
-                "worlds.json",
-                json.dumps(exported_worlds_json, indent=2, ensure_ascii=False),
-            )
-        if exported_personas_json:
-            zf.writestr(
-                "personas.json",
-                json.dumps(exported_personas_json, indent=2, ensure_ascii=False),
-            )
-        for rel_path, file_data in media_entries.items():
-            zf.writestr(rel_path, file_data)
+    out_path = safe_resolve_staging_file_path(
+        repo.media_dir, f"export_{uuid.uuid4().hex}.zcc"
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("manifest.json", manifest.model_dump_json(indent=2))
+            if exported_characters_json:
+                zf.writestr(
+                    "characters.json",
+                    json.dumps(exported_characters_json, indent=2, ensure_ascii=False),
+                )
+            if exported_worlds_json:
+                zf.writestr(
+                    "worlds.json",
+                    json.dumps(exported_worlds_json, indent=2, ensure_ascii=False),
+                )
+            if exported_personas_json:
+                zf.writestr(
+                    "personas.json",
+                    json.dumps(exported_personas_json, indent=2, ensure_ascii=False),
+                )
+            for rel_path, disk_path in media_sources.items():
+                if disk_path.is_file():
+                    zf.write(disk_path, arcname=rel_path, compress_type=zipfile.ZIP_STORED)
+        return out_path
+    except Exception:
+        cleanup_staging_paths(out_path)
+        raise
 
-    return buf.getvalue()
+
+def build_zcc_export(
+    repo: CantinaRepository,
+    character_ids: list[str],
+    world_ids: list[str],
+    persona_ids: list[str],
+    owner_id: str,
+    description: str = "",
+    include_world_media: bool = True,
+    include_videos: bool = False,
+    selected_video_ids: list[str] | None = None,
+) -> bytes:
+    """Bundle selected characters, worlds, personas, and media into .zcc bytes (for tests and callers)."""
+    tmp_path = build_zcc_export_to_file(
+        repo=repo,
+        character_ids=character_ids,
+        world_ids=world_ids,
+        persona_ids=persona_ids,
+        owner_id=owner_id,
+        description=description,
+        include_world_media=include_world_media,
+        include_videos=include_videos,
+        selected_video_ids=selected_video_ids,
+    )
+    try:
+        return tmp_path.read_bytes()
+    finally:
+        cleanup_staging_paths(tmp_path)
 
 
 # ---------------------------------------------------------------------------
 # INSPECT / AUTO-DETECT IMPLEMENTATION
 # ---------------------------------------------------------------------------
 
-def inspect_uploaded_file(
+def _count_zcc_media(
+    zf: zipfile.ZipFile,
+    characters_raw: list[dict[str, Any]],
+    worlds_raw: list[dict[str, Any]],
+    personas_raw: list[dict[str, Any]],
+) -> tuple[int, int, int, int]:
+    """Count unique image and video entries referenced in a .zcc archive and sum uncompressed sizes."""
+    zip_names = set(zf.namelist())
+    image_members: set[str] = set()
+    video_members: set[str] = set()
+
+    for w in worlds_raw:
+        if not isinstance(w, dict):
+            continue
+        for m in w.get("media") or []:
+            if not isinstance(m, dict):
+                continue
+            im = _resolve_zip_member(m.get("url", ""), zip_names)
+            if im:
+                image_members.add(im)
+            vm = _resolve_zip_member(m.get("video_url", ""), zip_names)
+            if vm:
+                video_members.add(vm)
+
+    for p in personas_raw:
+        if not isinstance(p, dict):
+            continue
+        pm = _resolve_zip_member(p.get("portrait_url", ""), zip_names)
+        if pm:
+            image_members.add(pm)
+        for g in p.get("gallery") or []:
+            if not isinstance(g, dict):
+                continue
+            gm = _resolve_zip_member(g.get("url", ""), zip_names)
+            if gm:
+                image_members.add(gm)
+            vm = _resolve_zip_member(g.get("video_url", ""), zip_names)
+            if vm:
+                video_members.add(vm)
+
+    for c in characters_raw:
+        if not isinstance(c, dict):
+            continue
+        for rel in (c.get("portraits") or {}).values():
+            pm = _resolve_zip_member(rel, zip_names)
+            if pm:
+                image_members.add(pm)
+        for g in c.get("gallery") or []:
+            if not isinstance(g, dict):
+                continue
+            gm = _resolve_zip_member(g.get("url", ""), zip_names)
+            if gm:
+                image_members.add(gm)
+            vm = _resolve_zip_member(g.get("video_url", ""), zip_names)
+            if vm:
+                video_members.add(vm)
+
+    def _sum_members(members: set[str]) -> int:
+        tot = 0
+        for name in members:
+            try:
+                tot += int(zf.getinfo(name).file_size or 0)
+            except KeyError:
+                pass
+        return tot
+
+    return len(image_members), _sum_members(image_members), len(video_members), _sum_members(video_members)
+
+
+def _inspect_zcc_archive(
     repo: CantinaRepository,
-    file_bytes: bytes,
-    filename: str,
+    *,
+    source: bytes | Path,
     user_id: str,
+    staged_token: str,
 ) -> ImportInspectResponse:
-    """Inspect and stage an uploaded file, detecting whether it is a .zcc archive or a SillyTavern card."""
-    _cleanup_expired_staged_imports()
-
-    if not file_bytes:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
-    staged_token = f"stg_{uuid.uuid4().hex[:12]}"
-
-    # A) Check ZIP signature (PK\x03\x04)
-    if file_bytes.startswith(b"PK\x03\x04"):
-        zf = _safe_zip_read(file_bytes)
+    zf = _open_safe_zip(source)
+    try:
         manifest: ZccManifest | None = None
         characters_raw: list[dict[str, Any]] = []
         worlds_raw: list[dict[str, Any]] = []
@@ -592,25 +791,25 @@ def inspect_uploaded_file(
                 manifest_data = json.loads(zf.read("manifest.json").decode("utf-8"))
                 manifest = ZccManifest.model_validate(manifest_data)
             except Exception as exc:
-                logger.warning("Manifest parse failure: %s", exc)
+                logger.warning("Manifest parse failure: %s", sanitize_log_value(exc))
 
         if "characters.json" in zf.namelist():
             try:
                 characters_raw = json.loads(zf.read("characters.json").decode("utf-8"))
             except Exception as exc:
-                logger.warning("characters.json parse failure: %s", exc)
+                logger.warning("characters.json parse failure: %s", sanitize_log_value(exc))
 
         if "worlds.json" in zf.namelist():
             try:
                 worlds_raw = json.loads(zf.read("worlds.json").decode("utf-8"))
             except Exception as exc:
-                logger.warning("worlds.json parse failure: %s", exc)
+                logger.warning("worlds.json parse failure: %s", sanitize_log_value(exc))
 
         if "personas.json" in zf.namelist():
             try:
                 personas_raw = json.loads(zf.read("personas.json").decode("utf-8"))
             except Exception as exc:
-                logger.warning("personas.json parse failure: %s", exc)
+                logger.warning("personas.json parse failure: %s", sanitize_log_value(exc))
 
         if not manifest and not characters_raw and not worlds_raw and not personas_raw:
             raise HTTPException(
@@ -618,7 +817,10 @@ def inspect_uploaded_file(
                 detail="Archive is not a valid CyberCantina package (no manifest or entity files found).",
             )
 
-        # Fallback manifest synthesis if missing
+        images_count, images_bytes, videos_count, videos_bytes = _count_zcc_media(
+            zf, characters_raw, worlds_raw, personas_raw
+        )
+
         if not manifest:
             manifest = ZccManifest(
                 format_version=1,
@@ -629,10 +831,12 @@ def inspect_uploaded_file(
                     characters_count=len(characters_raw),
                     worlds_count=len(worlds_raw),
                     personas_count=len(personas_raw),
+                    media_files_count=images_count + videos_count,
+                    images_count=images_count,
+                    videos_count=videos_count,
                 ),
             )
 
-        # Check conflicts against existing user entities
         conflicts: list[ImportEntityConflict] = []
         existing_chars = repo.list_characters(include_pending_deletion=False)
         user_chars = [c for c in existing_chars if getattr(c, "owner_id", None) == user_id or not getattr(c, "owner_id", None)]
@@ -680,8 +884,24 @@ def inspect_uploaded_file(
                     )
                 )
 
-        # Detect unsupported/future or deprecated fields across Characters, Worlds & Personas
         warnings: list[str] = []
+        try:
+            actor_user = repo.get_user_by_id(user_id)
+        except KeyError:
+            actor_user = None
+        is_admin = actor_user is not None and actor_user.role == "admin"
+        if not is_admin:
+            if images_count > 0 and not settings.allow_image_uploads:
+                warnings.append(
+                    "Image uploads are currently disabled by the server administrator. "
+                    "Allowed entities will import without images (and linked videos will be skipped)."
+                )
+            elif videos_count > 0 and not settings.allow_video_uploads:
+                warnings.append(
+                    "Video uploads are currently disabled by the server administrator. "
+                    "Entities and images can still import, but videos will be skipped."
+                )
+
         for c in characters_raw:
             if not isinstance(c, dict):
                 continue
@@ -720,7 +940,6 @@ def inspect_uploaded_file(
                     _format_unsupported_fields_warning("Persona", p_name, list(ext_fields.keys()))
                 )
 
-        # Summaries for UI
         char_summaries = [
             EntitySummary(
                 id=str(c.get("id") or ""),
@@ -760,13 +979,16 @@ def inspect_uploaded_file(
             user_id=user_id,
             format_type="zcc",
             is_native=True,
-            data_bytes=file_bytes,
+            data_bytes=source if isinstance(source, bytes) else None,
+            staged_file_path=source if isinstance(source, Path) else None,
             created_at_epoch=time.time(),
             parsed_payload={
                 "manifest": manifest.model_dump(),
                 "characters": characters_raw,
                 "worlds": worlds_raw,
                 "personas": personas_raw,
+                "images_count": images_count,
+                "videos_count": videos_count,
             },
         )
 
@@ -780,6 +1002,66 @@ def inspect_uploaded_file(
             personas=persona_summaries,
             conflicts=conflicts,
             warnings=warnings,
+            images_count=images_count,
+            images_bytes=images_bytes,
+            videos_count=videos_count,
+            videos_bytes=videos_bytes,
+        )
+    finally:
+        zf.close()
+
+
+def inspect_uploaded_path(
+    repo: CantinaRepository,
+    staged_path: Path,
+    filename: str,
+    user_id: str,
+) -> ImportInspectResponse:
+    """Inspect a streamed file stored in .staging/, keeping large .zcc archives on disk."""
+    _cleanup_expired_staged_imports()
+    if not staged_path.is_file() or staged_path.stat().st_size == 0:
+        cleanup_staging_paths(staged_path)
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    staged_token = f"stg_{uuid.uuid4().hex[:12]}"
+    with staged_path.open("rb") as f:
+        lead = f.read(4)
+
+    if lead.startswith(b"PK\x03\x04"):
+        try:
+            return _inspect_zcc_archive(
+                repo, source=staged_path, user_id=user_id, staged_token=staged_token
+            )
+        except Exception:
+            cleanup_staging_paths(staged_path)
+            raise
+
+    # SillyTavern PNG/JSON card: small payload, inspect in-memory and unlink staging file
+    try:
+        file_bytes = staged_path.read_bytes()
+    finally:
+        cleanup_staging_paths(staged_path)
+    return inspect_uploaded_file(repo, file_bytes, filename, user_id)
+
+
+def inspect_uploaded_file(
+    repo: CantinaRepository,
+    file_bytes: bytes,
+    filename: str,
+    user_id: str,
+) -> ImportInspectResponse:
+    """Inspect and stage an uploaded file, detecting whether it is a .zcc archive or a SillyTavern card."""
+    _cleanup_expired_staged_imports()
+
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    staged_token = f"stg_{uuid.uuid4().hex[:12]}"
+
+    # A) Check ZIP signature (PK\x03\x04)
+    if file_bytes.startswith(b"PK\x03\x04"):
+        return _inspect_zcc_archive(
+            repo, source=file_bytes, user_id=user_id, staged_token=staged_token
         )
 
     # B) Check PNG or JSON SillyTavern card
@@ -813,7 +1095,7 @@ def inspect_uploaded_file(
             manifest=None,
         )
     except Exception as exc:
-        logger.debug("Not a SillyTavern card: %s", exc)
+        logger.debug("Not a SillyTavern card: %s", sanitize_log_value(exc))
 
     raise HTTPException(
         status_code=400,
@@ -824,6 +1106,46 @@ def inspect_uploaded_file(
 # ---------------------------------------------------------------------------
 # COMMIT IMPORT IMPLEMENTATION
 # ---------------------------------------------------------------------------
+
+def _extract_zip_video_to_staging(
+    zf: zipfile.ZipFile,
+    member_name: str,
+    *,
+    media_dir: str | Path,
+    max_bytes: int,
+) -> tuple[Path, VideoProbeMetadata]:
+    """Stream a .zcc video entry in 64 KB chunks to .staging/, enforce max_bytes, and probe."""
+    info = zf.getinfo(member_name)
+    max_mb = max_bytes / (1024 * 1024)
+    if int(info.file_size or 0) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Imported video '{Path(member_name).name}' exceeds the maximum allowed upload size ({max_mb:.1f} MB).",
+        )
+    staged_path = safe_resolve_staging_file_path(
+        media_dir, f"zcc_vid_{uuid.uuid4().hex}.part"
+    )
+    staged_path.parent.mkdir(parents=True, exist_ok=True)
+    written = 0
+    try:
+        with zf.open(info, "r") as src_f, staged_path.open("wb") as dst_f:
+            while True:
+                chunk = src_f.read(65536)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Imported video '{Path(member_name).name}' exceeds the maximum allowed upload size ({max_mb:.1f} MB).",
+                    )
+                dst_f.write(chunk)
+        probe = probe_video_file(staged_path)
+        return staged_path, probe
+    except BaseException:
+        cleanup_staging_paths(staged_path)
+        raise
+
 
 async def commit_staged_import(
     repo: CantinaRepository,
@@ -846,7 +1168,10 @@ async def commit_staged_import(
             detail="Staged file is a SillyTavern card. SillyTavern cards must be committed via the Character Creation Wizard.",
         )
 
-    zf = _safe_zip_read(staged.data_bytes)
+    zip_source: bytes | Path = (
+        staged.staged_file_path if staged.staged_file_path is not None else (staged.data_bytes or b"")
+    )
+    zf = _open_safe_zip(zip_source)
     characters_data: list[dict[str, Any]] = staged.parsed_payload.get("characters", [])
     worlds_data: list[dict[str, Any]] = staged.parsed_payload.get("worlds", [])
     personas_data: list[dict[str, Any]] = staged.parsed_payload.get("personas", [])
@@ -855,89 +1180,141 @@ async def commit_staged_import(
         actor_user = repo.get_user_by_id(user_id)
     except KeyError:
         actor_user = None
+    is_admin = actor_user is not None and actor_user.role == "admin"
     quota_bytes = get_user_quota_bytes(actor_user) if actor_user is not None else None
+
+    eff_images = bool(req.import_images) and (is_admin or bool(settings.allow_image_uploads))
+    eff_videos = bool(req.import_videos) and eff_images and (is_admin or bool(settings.allow_video_uploads))
+
+    commit_warnings: list[str] = []
+    archive_images_count = int(staged.parsed_payload.get("images_count") or 0)
+    archive_videos_count = int(staged.parsed_payload.get("videos_count") or 0)
+    if req.import_images and not eff_images and archive_images_count > 0:
+        commit_warnings.append(
+            "Image uploads are disabled by the server administrator; archive images (and linked videos) were skipped."
+        )
+    elif req.import_videos and not eff_videos and archive_videos_count > 0:
+        if not eff_images:
+            commit_warnings.append(
+                "Videos require importing their parent images; archive videos were skipped."
+            )
+        else:
+            commit_warnings.append(
+                "Video uploads are disabled by the server administrator; archive videos were skipped."
+            )
+
     pre_rendered_media: dict[tuple[int, str, str], bytes] = {}
     pre_rendered_world_media: dict[tuple[int, int], bytes] = {}
     pre_rendered_persona_media: dict[tuple[int, str, str], bytes] = {}
+    staged_videos: dict[tuple[str, int, int], tuple[Path, VideoProbeMetadata]] = {}
+    temp_staging_files: list[Path] = []
     zip_names = set(zf.namelist())
+    max_video_bytes = int(round(float(settings.max_video_upload_mb) * 1024 * 1024))
 
-    if quota_bytes is not None and actor_user is not None:
+    try:
         total_media_bytes = 0
-        for p_idx, p in enumerate(personas_data):
-            old_p_id = str(p.get("id") or "")
-            p_name = str(p.get("name") or "Unnamed Persona").strip()
-            p_strategy = (
-                req.conflict_strategies.get(old_p_id)
-                or req.conflict_strategies.get(p_name)
-                or req.default_conflict_strategy
-            )
-            if p_strategy == "skip":
-                continue
-            raw_portrait = p.get("portrait_url")
-            if isinstance(raw_portrait, str) and raw_portrait.strip():
-                zip_member = _resolve_zip_member(raw_portrait, zip_names)
-                if zip_member:
-                    webp_bytes = render_webp_bytes(zf.read(zip_member), square_crop=True, max_size=512)
-                    pre_rendered_persona_media[(p_idx, "portrait", "default")] = webp_bytes
-                    total_media_bytes += len(webp_bytes)
-            for g_idx, g_item in enumerate(p.get("gallery") or []):
-                zip_member = _resolve_zip_member(
-                    g_item.get("url", "") if isinstance(g_item, dict) else "",
-                    zip_names,
+        if eff_images:
+            for p_idx, p in enumerate(personas_data):
+                old_p_id = str(p.get("id") or "")
+                p_name = str(p.get("name") or "Unnamed Persona").strip()
+                p_strategy = (
+                    req.conflict_strategies.get(old_p_id)
+                    or req.conflict_strategies.get(p_name)
+                    or req.default_conflict_strategy
                 )
-                if zip_member:
-                    webp_bytes = render_webp_bytes(zf.read(zip_member), square_crop=False, max_size=1920)
-                    pre_rendered_persona_media[(p_idx, "gallery", str(g_idx))] = webp_bytes
-                    total_media_bytes += len(webp_bytes)
-        for w_idx, w in enumerate(worlds_data):
-            old_world_id = str(w.get("id") or "")
-            w_name = str(w.get("name") or "Unnamed World").strip()
-            w_strategy = (
-                req.conflict_strategies.get(old_world_id)
-                or req.conflict_strategies.get(w_name)
-                or req.default_conflict_strategy
-            )
-            if w_strategy == "skip":
-                continue
-            for m_idx, m_item in enumerate(w.get("media") or []):
-                if not isinstance(m_item, dict):
+                if p_strategy == "skip":
                     continue
-                if str(m_item.get("media_type") or "image") != "image":
-                    continue
-                zip_member = _resolve_zip_member(m_item.get("url", ""), zip_names)
-                if zip_member:
-                    webp_bytes = render_webp_bytes(zf.read(zip_member), square_crop=False, max_size=1920)
-                    pre_rendered_world_media[(w_idx, m_idx)] = webp_bytes
-                    total_media_bytes += len(webp_bytes)
+                raw_portrait = p.get("portrait_url")
+                if isinstance(raw_portrait, str) and raw_portrait.strip():
+                    zip_member = _resolve_zip_member(raw_portrait, zip_names)
+                    if zip_member:
+                        webp_bytes = render_webp_bytes(zf.read(zip_member), square_crop=True, max_size=512)
+                        pre_rendered_persona_media[(p_idx, "portrait", "default")] = webp_bytes
+                        total_media_bytes += len(webp_bytes)
+                for g_idx, g_item in enumerate(p.get("gallery") or []):
+                    if not isinstance(g_item, dict):
+                        continue
+                    zip_member = _resolve_zip_member(g_item.get("url", ""), zip_names)
+                    if zip_member:
+                        webp_bytes = render_webp_bytes(zf.read(zip_member), square_crop=False, max_size=1920)
+                        pre_rendered_persona_media[(p_idx, "gallery", str(g_idx))] = webp_bytes
+                        total_media_bytes += len(webp_bytes)
+                        if eff_videos:
+                            v_member = _resolve_zip_member(g_item.get("video_url", ""), zip_names)
+                            if v_member:
+                                v_path, v_probe = _extract_zip_video_to_staging(
+                                    zf, v_member, media_dir=repo.media_dir, max_bytes=max_video_bytes
+                                )
+                                temp_staging_files.append(v_path)
+                                staged_videos[("persona", p_idx, g_idx)] = (v_path, v_probe)
+                                total_media_bytes += v_probe.byte_size
 
-        for c_idx, c in enumerate(characters_data):
-            old_c_id = str(c.get("id") or "")
-            c_name = str(c.get("name") or "Unnamed Character").strip()
-            strategy = (
-                req.conflict_strategies.get(old_c_id)
-                or req.conflict_strategies.get(c_name)
-                or req.default_conflict_strategy
-            )
-            if strategy == "skip":
-                continue
-            for emotion, rel_path in (c.get("portraits") or {}).items():
-                clean_emotion = str(emotion).strip().lower()
-                zip_member = _resolve_zip_member(rel_path, zip_names)
-                if zip_member and clean_emotion in VALID_EMOTIONS:
-                    webp_bytes = render_webp_bytes(zf.read(zip_member), square_crop=True, max_size=512)
-                    pre_rendered_media[(c_idx, "portrait", clean_emotion)] = webp_bytes
-                    total_media_bytes += len(webp_bytes)
-            for g_idx, g_item in enumerate(c.get("gallery") or []):
-                zip_member = _resolve_zip_member(
-                    g_item.get("url", "") if isinstance(g_item, dict) else "",
-                    zip_names,
+            for w_idx, w in enumerate(worlds_data):
+                old_world_id = str(w.get("id") or "")
+                w_name = str(w.get("name") or "Unnamed World").strip()
+                w_strategy = (
+                    req.conflict_strategies.get(old_world_id)
+                    or req.conflict_strategies.get(w_name)
+                    or req.default_conflict_strategy
                 )
-                if zip_member:
-                    webp_bytes = render_webp_bytes(zf.read(zip_member), square_crop=False, max_size=1920)
-                    pre_rendered_media[(c_idx, "gallery", str(g_idx))] = webp_bytes
-                    total_media_bytes += len(webp_bytes)
+                if w_strategy == "skip":
+                    continue
+                for m_idx, m_item in enumerate(w.get("media") or []):
+                    if not isinstance(m_item, dict):
+                        continue
+                    if str(m_item.get("media_type") or "image") != "image":
+                        continue
+                    zip_member = _resolve_zip_member(m_item.get("url", ""), zip_names)
+                    if zip_member:
+                        webp_bytes = render_webp_bytes(zf.read(zip_member), square_crop=False, max_size=1920)
+                        pre_rendered_world_media[(w_idx, m_idx)] = webp_bytes
+                        total_media_bytes += len(webp_bytes)
+                        if eff_videos:
+                            v_member = _resolve_zip_member(m_item.get("video_url", ""), zip_names)
+                            if v_member:
+                                v_path, v_probe = _extract_zip_video_to_staging(
+                                    zf, v_member, media_dir=repo.media_dir, max_bytes=max_video_bytes
+                                )
+                                temp_staging_files.append(v_path)
+                                staged_videos[("world", w_idx, m_idx)] = (v_path, v_probe)
+                                total_media_bytes += v_probe.byte_size
 
-        if total_media_bytes > 0:
+            for c_idx, c in enumerate(characters_data):
+                old_c_id = str(c.get("id") or "")
+                c_name = str(c.get("name") or "Unnamed Character").strip()
+                strategy = (
+                    req.conflict_strategies.get(old_c_id)
+                    or req.conflict_strategies.get(c_name)
+                    or req.default_conflict_strategy
+                )
+                if strategy == "skip":
+                    continue
+                for emotion, rel_path in (c.get("portraits") or {}).items():
+                    clean_emotion = str(emotion).strip().lower()
+                    zip_member = _resolve_zip_member(rel_path, zip_names)
+                    if zip_member and clean_emotion in VALID_EMOTIONS:
+                        webp_bytes = render_webp_bytes(zf.read(zip_member), square_crop=True, max_size=512)
+                        pre_rendered_media[(c_idx, "portrait", clean_emotion)] = webp_bytes
+                        total_media_bytes += len(webp_bytes)
+                for g_idx, g_item in enumerate(c.get("gallery") or []):
+                    if not isinstance(g_item, dict):
+                        continue
+                    zip_member = _resolve_zip_member(g_item.get("url", ""), zip_names)
+                    if zip_member:
+                        webp_bytes = render_webp_bytes(zf.read(zip_member), square_crop=False, max_size=1920)
+                        pre_rendered_media[(c_idx, "gallery", str(g_idx))] = webp_bytes
+                        total_media_bytes += len(webp_bytes)
+                        if eff_videos:
+                            v_member = _resolve_zip_member(g_item.get("video_url", ""), zip_names)
+                            if v_member:
+                                v_path, v_probe = _extract_zip_video_to_staging(
+                                    zf, v_member, media_dir=repo.media_dir, max_bytes=max_video_bytes
+                                )
+                                temp_staging_files.append(v_path)
+                                staged_videos[("character", c_idx, g_idx)] = (v_path, v_probe)
+                                total_media_bytes += v_probe.byte_size
+
+        if quota_bytes is not None and actor_user is not None and total_media_bytes > 0:
             with get_user_media_lock(actor_user.id):
                 used_bytes = get_user_media_usage_bytes(repo, actor_user.id)
                 if used_bytes + total_media_bytes > quota_bytes:
@@ -949,191 +1326,332 @@ async def commit_staged_import(
                         ),
                     )
 
-    imported_characters: list[str] = []
-    imported_worlds: list[str] = []
-    imported_personas: list[str] = []
-    skipped_entities: list[str] = []
-    errors: list[str] = []
+        imported_characters: list[str] = []
+        imported_worlds: list[str] = []
+        imported_personas: list[str] = []
+        skipped_entities: list[str] = []
+        errors: list[str] = []
 
-    # Map of old_id -> new_id across all entity types
-    id_remap: dict[str, str] = {}
+        id_remap: dict[str, str] = {}
 
-    # 1. Ingest Worlds
-    for w_idx, w in enumerate(worlds_data):
-        old_world_id = str(w.get("id") or "")
-        w_name = str(w.get("name") or "Unnamed World").strip()
-        strategy = (
-            req.conflict_strategies.get(old_world_id)
-            or req.conflict_strategies.get(w_name)
-            or req.default_conflict_strategy
-        )
+        # 1. Ingest Worlds
+        for w_idx, w in enumerate(worlds_data):
+            old_world_id = str(w.get("id") or "")
+            w_name = str(w.get("name") or "Unnamed World").strip()
+            strategy = (
+                req.conflict_strategies.get(old_world_id)
+                or req.conflict_strategies.get(w_name)
+                or req.default_conflict_strategy
+            )
 
-        if strategy == "skip":
-            skipped_entities.append(f"World: {w_name}")
-            continue
+            if strategy == "skip":
+                skipped_entities.append(f"World: {w_name}")
+                continue
 
-        written_world_files: list[Path] = []
-        try:
-            new_world_id = f"world_{uuid.uuid4().hex[:10]}"
-            id_remap[old_world_id] = new_world_id
-
-            final_name = w_name
-            if strategy == "copy":
-                # Check collision
-                existing = [ew for ew in repo.list_worlds(owner_id=user_id) if ew.name.strip().lower() == w_name.lower()]
-                if existing:
-                    final_name = f"{w_name} (Imported)"
-
+            written_world_files: list[Path] = []
             try:
-                world_unsupported = extract_world_unsupported_fields(w, strict=True)
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            canonical_rules = WorldGlobalRules.model_validate(w.get("global_rules") or {})
+                new_world_id = f"world_{uuid.uuid4().hex[:10]}"
+                id_remap[old_world_id] = new_world_id
 
-            # Prepare world media files & id_remap before inserting containers/locations
-            imported_world_media_rows: list[tuple[str, str, str, str, str, int, int, str]] = []
-            now = utc_now_iso()
-            for m_idx, m_item in enumerate(w.get("media") or []):
-                if not isinstance(m_item, dict):
-                    continue
-                if str(m_item.get("media_type") or "image") != "image":
-                    continue
-                zip_member = _resolve_zip_member(m_item.get("url", ""), zip_names)
-                if not zip_member:
-                    continue
-                old_media_id = str(m_item.get("id") or "")
-                new_media_id = f"wmed_{uuid.uuid4().hex[:10]}"
-                if old_media_id:
-                    id_remap[old_media_id] = new_media_id
-                filename = f"{new_media_id}.webp"
-                target_path = safe_resolve_world_media_path(
-                    "images", filename, media_dir=repo.media_dir
-                )
-                pre = pre_rendered_world_media.get((w_idx, m_idx))
-                if actor_user is not None:
-                    webp_bytes = (
-                        pre
-                        if pre is not None
-                        else render_webp_bytes(zf.read(zip_member), square_crop=False, max_size=1920)
-                    )
-                    enforce_quota_and_write_webp(repo, actor_user, webp_bytes, target_path)
-                    written_world_files.append(target_path)
-                    byte_sz = len(webp_bytes)
-                else:
-                    process_and_save_image(
-                        zf.read(zip_member), target_path, square_crop=False, max_size=1920
-                    )
-                    written_world_files.append(target_path)
-                    byte_sz = target_path.stat().st_size if target_path.is_file() else 0
+                final_name = w_name
+                if strategy == "copy":
+                    existing = [ew for ew in repo.list_worlds(owner_id=user_id) if ew.name.strip().lower() == w_name.lower()]
+                    if existing:
+                        final_name = f"{w_name} (Imported)"
 
-                sort_ord = int(m_item.get("sort_order") if m_item.get("sort_order") is not None else len(imported_world_media_rows))
-                imported_world_media_rows.append(
-                    (
-                        new_media_id,
-                        "image",
-                        filename,
-                        str(m_item.get("label") or "").strip(),
-                        "image/webp",
-                        byte_sz,
-                        sort_ord,
-                        str(m_item.get("created_at") or now),
-                    )
-                )
+                try:
+                    world_unsupported = extract_world_unsupported_fields(w, strict=True)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                canonical_rules = WorldGlobalRules.model_validate(w.get("global_rules") or {})
 
-            conn = repo._connect()
-            try:
-                conn.execute(
-                    "INSERT INTO worlds (id, owner_id, name, global_rules_json, unsupported_fields_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    (
-                        new_world_id,
-                        user_id,
-                        final_name,
-                        canonical_rules.model_dump_json(),
-                        json.dumps(world_unsupported),
-                        now,
-                    ),
-                )
-
-                valid_imported_media_ids: set[str] = set()
-                for (
-                    m_id,
-                    m_type,
-                    m_fname,
-                    m_label,
-                    m_mime,
-                    m_bytes,
-                    m_sort,
-                    m_created,
-                ) in imported_world_media_rows:
-                    valid_imported_media_ids.add(m_id)
-                    conn.execute(
-                        """
-                        INSERT INTO world_media (id, owner_id, media_type, filename, label, mime_type, byte_size, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (m_id, user_id, m_type, m_fname, m_label, m_mime, m_bytes, m_created),
-                    )
-                    conn.execute(
-                        """
-                        INSERT INTO world_media_links (world_id, media_id, sort_order, created_at)
-                        VALUES (?, ?, ?, ?)
-                        """,
-                        (new_world_id, m_id, m_sort, now),
-                    )
-
-                # Containers (topological order: depth 4 down to 1 so parent_container_id FK always exists)
-                raw_containers = sorted(
-                    w.get("containers", []),
-                    key=lambda c: int(c.get("depth", 1)),
-                    reverse=True,
-                )
-                for cont in raw_containers:
-                    old_cont_id = cont.get("id")
-                    new_cont_id = f"cont_{uuid.uuid4().hex[:10]}"
-                    if old_cont_id:
-                        id_remap[old_cont_id] = new_cont_id
-                    old_parent_id = cont.get("parent_container_id")
-                    mapped_parent_id = (
-                        id_remap.get(old_parent_id) if old_parent_id else None
-                    )
-                    old_cont_media = cont.get("image_media_id")
-                    mapped_cont_media = (
-                        id_remap.get(old_cont_media)
-                        if old_cont_media and id_remap.get(old_cont_media) in valid_imported_media_ids
-                        else None
-                    )
-                    c_depth = int(cont.get("depth", 1))
-                    conn.execute(
-                        """
-                        INSERT INTO location_containers (
-                            id, world_id, created_at_turn_id, parent_container_id, depth, name,
-                            description, environmental_tags_json, ui_x, ui_y, icon, image_media_id, created_at
+                imported_world_media_rows: list[tuple[str, str, str, str, str, int, int, str]] = []
+                imported_world_videos: list[tuple[str, str, str, str, int, int | None, int | None, int | None, str, str]] = []
+                now = utc_now_iso()
+                if eff_images:
+                    for m_idx, m_item in enumerate(w.get("media") or []):
+                        if not isinstance(m_item, dict):
+                            continue
+                        if str(m_item.get("media_type") or "image") != "image":
+                            continue
+                        zip_member = _resolve_zip_member(m_item.get("url", ""), zip_names)
+                        if not zip_member:
+                            continue
+                        old_media_id = str(m_item.get("id") or "")
+                        new_media_id = f"wmed_{uuid.uuid4().hex[:10]}"
+                        if old_media_id:
+                            id_remap[old_media_id] = new_media_id
+                        filename = f"{new_media_id}.webp"
+                        target_path = safe_resolve_asset_path(
+                            "images", filename, media_dir=repo.media_dir
                         )
-                        VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
+                        pre = pre_rendered_world_media.get((w_idx, m_idx))
+                        webp_bytes = (
+                            pre
+                            if pre is not None
+                            else render_webp_bytes(zf.read(zip_member), square_crop=False, max_size=1920)
+                        )
+                        if actor_user is not None:
+                            enforce_quota_and_write_webp(repo, actor_user, webp_bytes, target_path)
+                        else:
+                            target_path.parent.mkdir(parents=True, exist_ok=True)
+                            target_path.write_bytes(webp_bytes)
+                        written_world_files.append(target_path)
+                        byte_sz = len(webp_bytes)
+
+                        sort_ord = int(m_item.get("sort_order") if m_item.get("sort_order") is not None else len(imported_world_media_rows))
+                        imported_world_media_rows.append(
+                            (
+                                new_media_id,
+                                "image",
+                                filename,
+                                str(m_item.get("label") or "").strip(),
+                                "image/webp",
+                                byte_sz,
+                                sort_ord,
+                                str(m_item.get("created_at") or now),
+                            )
+                        )
+                        staged_v = staged_videos.get(("world", w_idx, m_idx))
+                        if staged_v is not None:
+                            v_src, v_probe = staged_v
+                            vid_id = f"vid_{uuid.uuid4().hex[:10]}"
+                            vid_fname = f"{vid_id}{v_probe.extension}"
+                            vid_dst = safe_resolve_asset_path(
+                                "videos", vid_fname, media_dir=repo.media_dir
+                            )
+                            if actor_user is not None:
+                                enforce_quota_and_commit_staged_files(repo, actor_user, [(v_src, vid_dst)])
+                            else:
+                                vid_dst.parent.mkdir(parents=True, exist_ok=True)
+                                os.replace(v_src, vid_dst)
+                            written_world_files.append(vid_dst)
+                            imported_world_videos.append(
+                                (
+                                    vid_id,
+                                    vid_fname,
+                                    v_probe.mime_type,
+                                    str(m_item.get("label") or "").strip(),
+                                    v_probe.byte_size,
+                                    v_probe.duration_ms,
+                                    v_probe.width,
+                                    v_probe.height,
+                                    new_media_id,
+                                    now,
+                                )
+                            )
+
+                conn = repo._connect()
+                try:
+                    conn.execute(
+                        "INSERT INTO worlds (id, owner_id, name, global_rules_json, unsupported_fields_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                         (
-                            new_cont_id,
                             new_world_id,
-                            mapped_parent_id,
-                            c_depth,
-                            cont.get("name", "Unnamed Container"),
-                            cont.get("description", ""),
-                            json.dumps(cont.get("environmental_tags", [])),
-                            cont.get("ui_x"),
-                            cont.get("ui_y"),
-                            cont.get("icon"),
-                            mapped_cont_media,
-                            cont.get("created_at") or now,
+                            user_id,
+                            final_name,
+                            canonical_rules.model_dump_json(),
+                            json.dumps(world_unsupported),
+                            now,
                         ),
                     )
-                    if c_depth == 1:
-                        for c_lore in cont.get("lore_nodes", []):
-                            old_cl_id = c_lore.get("id")
-                            new_cl_id = f"lore_{uuid.uuid4().hex[:10]}"
-                            if old_cl_id:
-                                id_remap[old_cl_id] = new_cl_id
-                            clean_c_cat = normalize_lore_category(
-                                c_lore.get("category", "history"),
+
+                    valid_imported_media_ids: set[str] = set()
+                    for (
+                        m_id,
+                        m_type,
+                        m_fname,
+                        m_label,
+                        m_mime,
+                        m_bytes,
+                        m_sort,
+                        m_created,
+                    ) in imported_world_media_rows:
+                        valid_imported_media_ids.add(m_id)
+                        conn.execute(
+                            """
+                            INSERT INTO media_assets (
+                                id, owner_id, entity_scope, media_type, role, filename, label,
+                                mime_type, byte_size, is_public, seed_key, parent_image_id, created_at
+                            )
+                            VALUES (?, ?, 'world', ?, 'world_scene', ?, ?, ?, ?, 0, NULL, NULL, ?)
+                            """,
+                            (m_id, user_id, m_type, m_fname, m_label, m_mime, m_bytes, m_created),
+                        )
+                        conn.execute(
+                            """
+                            INSERT INTO world_media_links (world_id, media_id, sort_order, created_at)
+                            VALUES (?, ?, ?, ?)
+                            """,
+                            (new_world_id, m_id, m_sort, now),
+                        )
+
+                    for (
+                        vid_id,
+                        vid_fname,
+                        vid_mime,
+                        vid_label,
+                        vid_bytes,
+                        vid_dur,
+                        vid_w,
+                        vid_h,
+                        parent_img_id,
+                        vid_created,
+                    ) in imported_world_videos:
+                        conn.execute(
+                            """
+                            INSERT INTO media_assets (
+                                id, owner_id, entity_scope, media_type, role, filename, label,
+                                mime_type, byte_size, is_public, seed_key, parent_image_id,
+                                duration_ms, width, height, created_at
+                            )
+                            VALUES (?, ?, 'world', 'video', 'linked_video', ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?)
+                            """,
+                            (vid_id, user_id, vid_fname, vid_label, vid_mime, vid_bytes, parent_img_id, vid_dur, vid_w, vid_h, vid_created),
+                        )
+
+                    raw_containers = sorted(
+                        w.get("containers", []),
+                        key=lambda c: int(c.get("depth", 1)),
+                        reverse=True,
+                    )
+                    for cont in raw_containers:
+                        old_cont_id = cont.get("id")
+                        new_cont_id = f"cont_{uuid.uuid4().hex[:10]}"
+                        if old_cont_id:
+                            id_remap[old_cont_id] = new_cont_id
+                        old_parent_id = cont.get("parent_container_id")
+                        mapped_parent_id = (
+                            id_remap.get(old_parent_id) if old_parent_id else None
+                        )
+                        old_cont_media = cont.get("image_media_id")
+                        mapped_cont_media = (
+                            id_remap.get(old_cont_media)
+                            if old_cont_media and id_remap.get(old_cont_media) in valid_imported_media_ids
+                            else None
+                        )
+                        c_depth = int(cont.get("depth", 1))
+                        conn.execute(
+                            """
+                            INSERT INTO location_containers (
+                                id, world_id, created_at_turn_id, parent_container_id, depth, name,
+                                description, environmental_tags_json, ui_x, ui_y, icon, image_media_id, created_at
+                            )
+                            VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                new_cont_id,
+                                new_world_id,
+                                mapped_parent_id,
+                                c_depth,
+                                cont.get("name", "Unnamed Container"),
+                                cont.get("description", ""),
+                                json.dumps(cont.get("environmental_tags", [])),
+                                cont.get("ui_x"),
+                                cont.get("ui_y"),
+                                cont.get("icon"),
+                                mapped_cont_media,
+                                cont.get("created_at") or now,
+                            ),
+                        )
+                        if c_depth == 1:
+                            for c_lore in cont.get("lore_nodes", []):
+                                old_cl_id = c_lore.get("id")
+                                new_cl_id = f"lore_{uuid.uuid4().hex[:10]}"
+                                if old_cl_id:
+                                    id_remap[old_cl_id] = new_cl_id
+                                clean_c_cat = normalize_lore_category(
+                                    c_lore.get("category", "history"),
+                                    allow_secret=True,
+                                    allow_artifact=False,
+                                    strict=False,
+                                )
+                                conn.execute(
+                                    """
+                                    INSERT INTO lore_nodes (
+                                        id, world_id, location_id, container_id, campaign_id,
+                                        title, category, content, entity_tags_json
+                                    )
+                                    VALUES (?, ?, NULL, ?, NULL, ?, ?, ?, ?)
+                                    """,
+                                    (
+                                        new_cl_id,
+                                        new_world_id,
+                                        new_cont_id,
+                                        c_lore.get("title", "Container Lore"),
+                                        clean_c_cat,
+                                        c_lore.get("content", ""),
+                                        json.dumps(c_lore.get("entity_tags", [])),
+                                    ),
+                                )
+                                if clean_c_cat != "secret":
+                                    vec_title, vec_kws = _location_lore_vector_fields(
+                                        cont.get("name", ""),
+                                        c_lore.get("title", ""),
+                                        c_lore.get("entity_tags", []),
+                                    )
+                                    repo.vector_store.upsert_entry(
+                                        entry_id=new_cl_id,
+                                        source_type="container_lore",
+                                        world_id=new_world_id,
+                                        container_id=new_cont_id,
+                                        title=vec_title,
+                                        content=c_lore.get("content", ""),
+                                        keywords=vec_kws,
+                                        embedding=None,
+                                        conn=conn,
+                                    )
+
+                    for loc in w.get("locations", []):
+                        old_loc_id = loc.get("id")
+                        new_loc_id = f"loc_{uuid.uuid4().hex[:10]}"
+                        if old_loc_id:
+                            id_remap[old_loc_id] = new_loc_id
+                        old_loc_cont_id = loc.get("container_id")
+                        mapped_loc_cont_id = (
+                            id_remap.get(old_loc_cont_id) if old_loc_cont_id else None
+                        )
+                        old_loc_media = loc.get("image_media_id")
+                        mapped_loc_media = (
+                            id_remap.get(old_loc_media)
+                            if old_loc_media and id_remap.get(old_loc_media) in valid_imported_media_ids
+                            else None
+                        )
+                        conn.execute(
+                            """
+                            INSERT INTO location_nodes (
+                                id, world_id, created_at_turn_id, superseded_at_turn_id, container_id,
+                                name, summary, description, environmental_tags_json,
+                                is_starting_location, is_hub, is_entry_exit, starting_message,
+                                ui_x, ui_y, icon, image_media_id
+                            )
+                            VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                new_loc_id,
+                                new_world_id,
+                                mapped_loc_cont_id,
+                                loc.get("name", "Unnamed Location"),
+                                loc.get("summary", ""),
+                                loc.get("description", ""),
+                                json.dumps(loc.get("environmental_tags", [])),
+                                1 if loc.get("is_starting_location") else 0,
+                                1 if loc.get("is_hub") else 0,
+                                1 if loc.get("is_entry_exit") else 0,
+                                loc.get("starting_message", "") or "",
+                                loc.get("ui_x"),
+                                loc.get("ui_y"),
+                                loc.get("icon"),
+                                mapped_loc_media,
+                            ),
+                        )
+
+                        for loc_lore in loc.get("lore_nodes", []):
+                            old_ll_id = loc_lore.get("id")
+                            new_ll_id = f"lore_{uuid.uuid4().hex[:10]}"
+                            if old_ll_id:
+                                id_remap[old_ll_id] = new_ll_id
+                            clean_ll_cat = normalize_lore_category(
+                                loc_lore.get("category", "history"),
                                 allow_secret=True,
                                 allow_artifact=False,
                                 strict=False,
@@ -1141,503 +1659,534 @@ async def commit_staged_import(
                             conn.execute(
                                 """
                                 INSERT INTO lore_nodes (
-                                    id, world_id, location_id, container_id, campaign_id,
-                                    title, category, content, entity_tags_json
+                                    id, world_id, location_id, campaign_id, title, category, content, entity_tags_json
                                 )
-                                VALUES (?, ?, NULL, ?, NULL, ?, ?, ?, ?)
+                                VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
                                 """,
                                 (
-                                    new_cl_id,
+                                    new_ll_id,
                                     new_world_id,
-                                    new_cont_id,
-                                    c_lore.get("title", "Container Lore"),
-                                    clean_c_cat,
-                                    c_lore.get("content", ""),
-                                    json.dumps(c_lore.get("entity_tags", [])),
+                                    new_loc_id,
+                                    loc_lore.get("title", "Lore"),
+                                    clean_ll_cat,
+                                    loc_lore.get("content", ""),
+                                    json.dumps(loc_lore.get("entity_tags", [])),
                                 ),
                             )
-                            if clean_c_cat != "secret":
+                            if clean_ll_cat != "secret":
                                 vec_title, vec_kws = _location_lore_vector_fields(
-                                    cont.get("name", ""),
-                                    c_lore.get("title", ""),
-                                    c_lore.get("entity_tags", []),
+                                    loc.get("name", ""),
+                                    loc_lore.get("title", ""),
+                                    loc_lore.get("entity_tags", []),
                                 )
                                 repo.vector_store.upsert_entry(
-                                    entry_id=new_cl_id,
-                                    source_type="container_lore",
+                                    entry_id=f"lore_{new_ll_id}",
+                                    source_type="location_lore",
                                     world_id=new_world_id,
-                                    container_id=new_cont_id,
+                                    location_id=new_loc_id,
                                     title=vec_title,
-                                    content=c_lore.get("content", ""),
+                                    content=loc_lore.get("content", ""),
                                     keywords=vec_kws,
                                     embedding=None,
                                     conn=conn,
                                 )
 
-                # Locations
-                for loc in w.get("locations", []):
-                    old_loc_id = loc.get("id")
-                    new_loc_id = f"loc_{uuid.uuid4().hex[:10]}"
-                    if old_loc_id:
-                        id_remap[old_loc_id] = new_loc_id
-                    old_loc_cont_id = loc.get("container_id")
-                    mapped_loc_cont_id = (
-                        id_remap.get(old_loc_cont_id) if old_loc_cont_id else None
-                    )
-
-                    old_loc_media = loc.get("image_media_id")
-                    mapped_loc_media = (
-                        id_remap.get(old_loc_media)
-                        if old_loc_media and id_remap.get(old_loc_media) in valid_imported_media_ids
-                        else None
-                    )
-                    conn.execute(
-                        """
-                        INSERT INTO location_nodes (
-                            id, world_id, created_at_turn_id, superseded_at_turn_id, container_id,
-                            name, summary, description, environmental_tags_json,
-                            is_starting_location, is_hub, is_entry_exit, starting_message,
-                            ui_x, ui_y, icon, image_media_id
-                        )
-                        VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            new_loc_id,
-                            new_world_id,
-                            mapped_loc_cont_id,
-                            loc.get("name", "Unnamed Location"),
-                            loc.get("summary", ""),
-                            loc.get("description", ""),
-                            json.dumps(loc.get("environmental_tags", [])),
-                            1 if loc.get("is_starting_location") else 0,
-                            1 if loc.get("is_hub") else 0,
-                            1 if loc.get("is_entry_exit") else 0,
-                            loc.get("starting_message", "") or "",
-                            loc.get("ui_x"),
-                            loc.get("ui_y"),
-                            loc.get("icon"),
-                            mapped_loc_media,
-                        ),
-                    )
-
-                    # Location Lore
-                    for loc_lore in loc.get("lore_nodes", []):
-                        old_ll_id = loc_lore.get("id")
-                        new_ll_id = f"lore_{uuid.uuid4().hex[:10]}"
-                        if old_ll_id:
-                            id_remap[old_ll_id] = new_ll_id
-                        clean_ll_cat = normalize_lore_category(
-                            loc_lore.get("category", "history"),
-                            allow_secret=True,
-                            allow_artifact=False,
+                    for w_lore in w.get("lore_nodes", []):
+                        old_wl_id = w_lore.get("id")
+                        new_wl_id = f"lore_{uuid.uuid4().hex[:10]}"
+                        if old_wl_id:
+                            id_remap[old_wl_id] = new_wl_id
+                        clean_wl_cat = normalize_lore_category(
+                            w_lore.get("category", "history"),
+                            allow_secret=False,
+                            allow_artifact=True,
                             strict=False,
                         )
-
                         conn.execute(
                             """
                             INSERT INTO lore_nodes (
                                 id, world_id, location_id, campaign_id, title, category, content, entity_tags_json
                             )
-                            VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
+                            VALUES (?, ?, NULL, NULL, ?, ?, ?, ?)
                             """,
                             (
-                                new_ll_id,
+                                new_wl_id,
                                 new_world_id,
-                                new_loc_id,
-                                loc_lore.get("title", "Lore"),
-                                clean_ll_cat,
-                                loc_lore.get("content", ""),
-                                json.dumps(loc_lore.get("entity_tags", [])),
+                                w_lore.get("title", "World Lore"),
+                                clean_wl_cat,
+                                w_lore.get("content", ""),
+                                json.dumps(w_lore.get("entity_tags", [])),
                             ),
                         )
-                        # Index in VectorStore
-                        if clean_ll_cat != "secret":
-                            vec_title, vec_kws = _location_lore_vector_fields(
-                                loc.get("name", ""),
-                                loc_lore.get("title", ""),
-                                loc_lore.get("entity_tags", []),
+                        repo.vector_store.upsert_entry(
+                            entry_id=f"lore_{new_wl_id}",
+                            source_type="lore",
+                            world_id=new_world_id,
+                            title=w_lore.get("title", "World Lore"),
+                            content=w_lore.get("content", ""),
+                            keywords=w_lore.get("entity_tags", []),
+                            embedding=None,
+                            conn=conn,
+                        )
+
+                    for edge in w.get("edges", []):
+                        new_edge_id = f"edge_{uuid.uuid4().hex[:10]}"
+                        from_id = id_remap.get(edge.get("from_location_id", ""), edge.get("from_location_id"))
+                        to_id = id_remap.get(edge.get("to_location_id", ""), edge.get("to_location_id"))
+                        conn.execute(
+                            """
+                            INSERT INTO location_edges (
+                                id, world_id, from_location_id, to_location_id,
+                                direction_label, compass_direction, travel_minutes, is_locked_or_hidden,
+                                created_at_turn_id, superseded_at_turn_id
                             )
-                            repo.vector_store.upsert_entry(
-                                entry_id=f"lore_{new_ll_id}",
-                                source_type="location_lore",
-                                world_id=new_world_id,
-                                location_id=new_loc_id,
-                                title=vec_title,
-                                content=loc_lore.get("content", ""),
-                                keywords=vec_kws,
-                                embedding=None,
-                                conn=conn,
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+                            """,
+                            (
+                                new_edge_id,
+                                new_world_id,
+                                from_id,
+                                to_id,
+                                edge.get("direction_label", "forward"),
+                                edge.get("compass_direction"),
+                                edge.get("travel_minutes", 1),
+                                1 if edge.get("is_locked_or_hidden") else 0,
+                            ),
+                        )
+
+                    conn.commit()
+                    imported_worlds.append(final_name)
+                finally:
+                    conn.close()
+
+            except HTTPException:
+                for wf in written_world_files:
+                    wf.unlink(missing_ok=True)
+                raise
+            except Exception as exc:
+                for wf in written_world_files:
+                    wf.unlink(missing_ok=True)
+                logger.exception("Failed importing world '%s': %s", sanitize_log_value(w_name), sanitize_log_value(exc))
+                errors.append(f"World '{w_name}': {exc}")
+
+        # 2. Ingest Personas
+        for p_idx, p in enumerate(personas_data):
+            old_p_id = str(p.get("id") or "")
+            p_name = str(p.get("name") or "Unnamed Persona").strip()
+            strategy = (
+                req.conflict_strategies.get(old_p_id)
+                or req.conflict_strategies.get(p_name)
+                or req.default_conflict_strategy
+            )
+
+            if strategy == "skip":
+                skipped_entities.append(f"Persona: {p_name}")
+                continue
+
+            registered_persona_asset_ids: list[str] = []
+            written_persona_files: list[Path] = []
+            try:
+                new_p_id = f"persona_{uuid.uuid4().hex[:10]}"
+                id_remap[old_p_id] = new_p_id
+                final_name = p_name
+                if strategy == "copy":
+                    existing = [ep for ep in repo.list_personas(owner_id=user_id) if ep.name.strip().lower() == p_name.lower()]
+                    if existing:
+                        final_name = f"{p_name} (Imported)"
+
+                try:
+                    persona_unsupported = _extract_persona_unsupported_fields(p, strict=True)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+                new_portrait_url: str | None = None
+                if eff_images:
+                    raw_portrait = p.get("portrait_url")
+                    if isinstance(raw_portrait, str) and raw_portrait.strip():
+                        zip_member = _resolve_zip_member(raw_portrait, zip_names)
+                        if zip_member:
+                            p_asset_id = f"por_{uuid.uuid4().hex[:10]}"
+                            filename = f"{p_asset_id}.webp"
+                            target_path = safe_resolve_asset_path(
+                                "images", filename, media_dir=repo.media_dir
                             )
+                            pre = pre_rendered_persona_media.get((p_idx, "portrait", "default"))
+                            webp_bytes = pre if pre is not None else render_webp_bytes(
+                                zf.read(zip_member), square_crop=True, max_size=512
+                            )
+                            if actor_user is not None:
+                                enforce_quota_and_write_webp(repo, actor_user, webp_bytes, target_path)
+                            else:
+                                target_path.parent.mkdir(parents=True, exist_ok=True)
+                                target_path.write_bytes(webp_bytes)
+                            written_persona_files.append(target_path)
+                            repo.register_media_asset(
+                                asset_id=p_asset_id,
+                                owner_id=user_id,
+                                entity_scope="persona",
+                                media_type="image",
+                                role="portrait",
+                                filename=filename,
+                                mime_type="image/webp",
+                                byte_size=len(webp_bytes),
+                            )
+                            registered_persona_asset_ids.append(p_asset_id)
+                            new_portrait_url = build_asset_url(p_asset_id)
+                        elif raw_portrait.strip().startswith(("http://", "https://")):
+                            new_portrait_url = raw_portrait.strip()
 
-                # World-level lore
-                for w_lore in w.get("lore_nodes", []):
-                    old_wl_id = w_lore.get("id")
-                    new_wl_id = f"lore_{uuid.uuid4().hex[:10]}"
-                    if old_wl_id:
-                        id_remap[old_wl_id] = new_wl_id
-                    clean_wl_cat = normalize_lore_category(
-                        w_lore.get("category", "history"),
-                        allow_secret=False,
-                        allow_artifact=True,
-                        strict=False,
-                    )
+                new_persona_gallery: list[GalleryImage] = []
+                if eff_images:
+                    for g_idx, g_item in enumerate(p.get("gallery") or []):
+                        if not isinstance(g_item, dict):
+                            continue
+                        rel_path = str(g_item.get("url") or "").strip()
+                        zip_member = _resolve_zip_member(rel_path, zip_names)
+                        if zip_member:
+                            g_id = f"img_{uuid.uuid4().hex[:10]}"
+                            filename = f"{g_id}.webp"
+                            target_path = safe_resolve_asset_path(
+                                "images", filename, media_dir=repo.media_dir
+                            )
+                            pre = pre_rendered_persona_media.get((p_idx, "gallery", str(g_idx)))
+                            webp_bytes = pre if pre is not None else render_webp_bytes(
+                                zf.read(zip_member), square_crop=False, max_size=1920
+                            )
+                            if actor_user is not None:
+                                enforce_quota_and_write_webp(repo, actor_user, webp_bytes, target_path)
+                            else:
+                                target_path.parent.mkdir(parents=True, exist_ok=True)
+                                target_path.write_bytes(webp_bytes)
+                            written_persona_files.append(target_path)
+                            caption_str = str(g_item.get("caption") or "")
+                            repo.register_media_asset(
+                                asset_id=g_id,
+                                owner_id=user_id,
+                                entity_scope="persona",
+                                media_type="image",
+                                role="album",
+                                filename=filename,
+                                mime_type="image/webp",
+                                byte_size=len(webp_bytes),
+                                label=caption_str,
+                            )
+                            registered_persona_asset_ids.append(g_id)
+                            staged_v = staged_videos.get(("persona", p_idx, g_idx))
+                            if staged_v is not None:
+                                v_src, v_probe = staged_v
+                                vid_id = f"vid_{uuid.uuid4().hex[:10]}"
+                                vid_fname = f"{vid_id}{v_probe.extension}"
+                                vid_dst = safe_resolve_asset_path(
+                                    "videos", vid_fname, media_dir=repo.media_dir
+                                )
+                                if actor_user is not None:
+                                    enforce_quota_and_commit_staged_files(repo, actor_user, [(v_src, vid_dst)])
+                                else:
+                                    vid_dst.parent.mkdir(parents=True, exist_ok=True)
+                                    os.replace(v_src, vid_dst)
+                                written_persona_files.append(vid_dst)
+                                repo.attach_or_replace_linked_video(
+                                    g_id,
+                                    video_id=vid_id,
+                                    owner_id=user_id,
+                                    entity_scope="persona",
+                                    filename=vid_fname,
+                                    mime_type=v_probe.mime_type,
+                                    byte_size=v_probe.byte_size,
+                                    duration_ms=v_probe.duration_ms,
+                                    width=v_probe.width,
+                                    height=v_probe.height,
+                                    label=caption_str,
+                                )
+                            new_persona_gallery.append(
+                                GalleryImage(
+                                    id=g_id,
+                                    url=build_asset_url(g_id),
+                                    caption=caption_str,
+                                    created_at=str(g_item.get("created_at") or utc_now_iso()),
+                                )
+                            )
+                        elif rel_path.startswith(("http://", "https://")):
+                            new_persona_gallery.append(GalleryImage.model_validate(g_item))
 
-                    conn.execute(
-                        """
-                        INSERT INTO lore_nodes (
-                            id, world_id, location_id, campaign_id, title, category, content, entity_tags_json
-                        )
-                        VALUES (?, ?, NULL, NULL, ?, ?, ?, ?)
-                        """,
-                        (
-                            new_wl_id,
-                            new_world_id,
-                            w_lore.get("title", "World Lore"),
-                            clean_wl_cat,
-                            w_lore.get("content", ""),
-                            json.dumps(w_lore.get("entity_tags", [])),
-                        ),
-                    )
-                    repo.vector_store.upsert_entry(
-                        entry_id=f"lore_{new_wl_id}",
-                        source_type="lore",
-                        world_id=new_world_id,
-                        title=w_lore.get("title", "World Lore"),
-                        content=w_lore.get("content", ""),
-                        keywords=w_lore.get("entity_tags", []),
-                        embedding=None,
-                        conn=conn,
-                    )
+                raw_age = p.get("age")
+                persona_payload = PersonaCreatePayload(
+                    name=final_name,
+                    tagline=str(p.get("tagline") or ""),
+                    species=p.get("species") or "Human",
+                    age=str(raw_age) if raw_age is not None else None,
+                    age_is_secret=True if p.get("age_is_secret") is None else bool(p.get("age_is_secret")),
+                    sex=p.get("sex") or "",
+                    pronouns=p.get("pronouns") or "",
+                    persona_bio=p.get("persona_bio") or "",
+                    tags=p.get("tags") or [],
+                    build_and_height=p.get("build_and_height") or "",
+                    distinctive_features=p.get("distinctive_features") or [],
+                    physical_appearance="",
+                    equipped=p.get("equipped") or [],
+                    inventory=p.get("inventory") or [],
+                    lore_entries=p.get("lore_entries") or [],
+                    portrait_url=new_portrait_url,
+                    gallery=new_persona_gallery,
+                    unsupported_fields=persona_unsupported,
+                )
+                repo.create_persona(persona_payload, owner_id=user_id, persona_id=new_p_id)
+                imported_personas.append(final_name)
+            except HTTPException:
+                for aid in registered_persona_asset_ids:
+                    repo.delete_media_asset(aid)
+                for pf in written_persona_files:
+                    pf.unlink(missing_ok=True)
+                raise
+            except Exception as exc:
+                for aid in registered_persona_asset_ids:
+                    repo.delete_media_asset(aid)
+                for pf in written_persona_files:
+                    pf.unlink(missing_ok=True)
+                logger.exception("Failed importing persona '%s': %s", sanitize_log_value(p_name), sanitize_log_value(exc))
+                errors.append(f"Persona '{p_name}': {exc}")
 
-                # Edges (remap from & to)
-                for edge in w.get("edges", []):
-                    new_edge_id = f"edge_{uuid.uuid4().hex[:10]}"
-                    from_id = id_remap.get(edge.get("from_location_id", ""), edge.get("from_location_id"))
-                    to_id = id_remap.get(edge.get("to_location_id", ""), edge.get("to_location_id"))
-                    conn.execute(
-                        """
-                        INSERT INTO location_edges (
-                            id, world_id, from_location_id, to_location_id,
-                            direction_label, compass_direction, travel_minutes, is_locked_or_hidden,
-                            created_at_turn_id, superseded_at_turn_id
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
-                        """,
-                        (
-                            new_edge_id,
-                            new_world_id,
-                            from_id,
-                            to_id,
-                            edge.get("direction_label", "forward"),
-                            edge.get("compass_direction"),
-                            edge.get("travel_minutes", 1),
-                            1 if edge.get("is_locked_or_hidden") else 0,
-                        ),
-                    )
+        # 3. Ingest Characters
+        for c_idx, c in enumerate(characters_data):
+            old_c_id = str(c.get("id") or "")
+            c_name = str(c.get("name") or "Unnamed Character").strip()
+            strategy = (
+                req.conflict_strategies.get(old_c_id)
+                or req.conflict_strategies.get(c_name)
+                or req.default_conflict_strategy
+            )
 
-                conn.commit()
-                imported_worlds.append(final_name)
-            finally:
-                conn.close()
+            if strategy == "skip":
+                skipped_entities.append(f"Character: {c_name}")
+                continue
 
-        except HTTPException:
-            for wf in written_world_files:
-                wf.unlink(missing_ok=True)
-            raise
-        except Exception as exc:
-            for wf in written_world_files:
-                wf.unlink(missing_ok=True)
-            logger.exception("Failed importing world '%s': %s", w_name, exc)
-            errors.append(f"World '{w_name}': {exc}")
-
-    # 2. Ingest Personas
-    for p_idx, p in enumerate(personas_data):
-        old_p_id = str(p.get("id") or "")
-        p_name = str(p.get("name") or "Unnamed Persona").strip()
-        strategy = (
-            req.conflict_strategies.get(old_p_id)
-            or req.conflict_strategies.get(p_name)
-            or req.default_conflict_strategy
-        )
-
-        if strategy == "skip":
-            skipped_entities.append(f"Persona: {p_name}")
-            continue
-
-        written_persona_files: list[Path] = []
-        try:
-            new_p_id = f"persona_{uuid.uuid4().hex[:10]}"
-            id_remap[old_p_id] = new_p_id
-            final_name = p_name
-            if strategy == "copy":
-                existing = [ep for ep in repo.list_personas(owner_id=user_id) if ep.name.strip().lower() == p_name.lower()]
-                if existing:
-                    final_name = f"{p_name} (Imported)"
-
+            new_c_id = f"char_{uuid.uuid4().hex[:10]}"
+            registered_char_asset_ids: list[str] = []
+            written_char_files: list[Path] = []
             try:
-                persona_unsupported = _extract_persona_unsupported_fields(p, strict=True)
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-            new_portrait_url: str | None = None
-            raw_portrait = p.get("portrait_url")
-            if isinstance(raw_portrait, str) and raw_portrait.strip():
-                zip_member = _resolve_zip_member(raw_portrait, zip_names)
-                if zip_member:
-                    filename = f"default_{uuid.uuid4().hex[:8]}.webp"
-                    target_path = safe_resolve_persona_media_path(
-                        new_p_id, "portraits", filename, media_dir=repo.media_dir
-                    )
-                    pre = pre_rendered_persona_media.get((p_idx, "portrait", "default"))
-                    if actor_user is not None:
-                        webp_bytes = pre if pre is not None else render_webp_bytes(
-                            zf.read(zip_member), square_crop=True, max_size=512
+                id_remap[old_c_id] = new_c_id
+                final_name = c_name
+                if strategy == "copy":
+                    existing = [
+                        ec
+                        for ec in repo.list_characters(
+                            include_pending_deletion=False, owner_id=user_id
                         )
-                        enforce_quota_and_write_webp(repo, actor_user, webp_bytes, target_path)
-                    else:
-                        process_and_save_image(zf.read(zip_member), target_path, square_crop=True, max_size=512)
-                    written_persona_files.append(target_path)
-                    new_portrait_url = f"/api/media/personas/{new_p_id}/portraits/{filename}"
-                elif raw_portrait.strip().startswith(("http://", "https://")):
-                    new_portrait_url = raw_portrait.strip()
+                        if ec.name.strip().lower() == c_name.lower()
+                    ]
+                    if existing:
+                        final_name = f"{c_name} (Imported)"
 
-            new_persona_gallery: list[GalleryImage] = []
-            for g_idx, g_item in enumerate(p.get("gallery") or []):
-                if not isinstance(g_item, dict):
-                    continue
-                rel_path = str(g_item.get("url") or "").strip()
-                zip_member = _resolve_zip_member(rel_path, zip_names)
-                if zip_member:
-                    g_id = f"img_{uuid.uuid4().hex[:10]}"
-                    filename = f"{g_id}.webp"
-                    target_path = safe_resolve_persona_media_path(
-                        new_p_id, "gallery", filename, media_dir=repo.media_dir
-                    )
-                    pre = pre_rendered_persona_media.get((p_idx, "gallery", str(g_idx)))
-                    if actor_user is not None:
-                        webp_bytes = pre if pre is not None else render_webp_bytes(
-                            zf.read(zip_member), square_crop=False, max_size=1920
-                        )
-                        enforce_quota_and_write_webp(repo, actor_user, webp_bytes, target_path)
-                    else:
-                        process_and_save_image(zf.read(zip_member), target_path, square_crop=False, max_size=1920)
-                    written_persona_files.append(target_path)
-                    new_persona_gallery.append(
-                        GalleryImage(
-                            id=g_id,
-                            url=f"/api/media/personas/{new_p_id}/gallery/{filename}",
-                            caption=str(g_item.get("caption") or ""),
-                            created_at=str(g_item.get("created_at") or utc_now_iso()),
-                        )
-                    )
-                elif rel_path.startswith(("http://", "https://")):
-                    new_persona_gallery.append(GalleryImage.model_validate(g_item))
+                raw_world_id = c.get("world_id")
+                new_world_id = id_remap.get(raw_world_id) if raw_world_id else None
 
-            raw_age = p.get("age")
-            persona_payload = PersonaCreatePayload(
-                name=final_name,
-                tagline=str(p.get("tagline") or ""),
-                species=p.get("species") or "Human",
-                age=str(raw_age) if raw_age is not None else None,
-                age_is_secret=True if p.get("age_is_secret") is None else bool(p.get("age_is_secret")),
-                sex=p.get("sex") or "",
-                pronouns=p.get("pronouns") or "",
-                persona_bio=p.get("persona_bio") or "",
-                tags=p.get("tags") or [],
-                build_and_height=p.get("build_and_height") or "",
-                distinctive_features=p.get("distinctive_features") or [],
-                physical_appearance="",
-                equipped=p.get("equipped") or [],
-                inventory=p.get("inventory") or [],
-                lore_entries=p.get("lore_entries") or [],
-                portrait_url=new_portrait_url,
-                gallery=new_persona_gallery,
-                unsupported_fields=persona_unsupported,
-            )
-            repo.create_persona(persona_payload, owner_id=user_id, persona_id=new_p_id)
-            imported_personas.append(final_name)
-        except HTTPException:
-            for pf in written_persona_files:
-                pf.unlink(missing_ok=True)
-            raise
-        except Exception as exc:
-            for pf in written_persona_files:
-                pf.unlink(missing_ok=True)
-            logger.exception("Failed importing persona '%s': %s", p_name, exc)
-            errors.append(f"Persona '{p_name}': {exc}")
+                new_portraits: dict[str, str] = {}
+                new_gallery: list[GalleryImage] = []
+                if eff_images:
+                    for emotion, rel_path in (c.get("portraits") or {}).items():
+                        clean_emotion = str(emotion).strip().lower()
+                        zip_member = _resolve_zip_member(rel_path, zip_names)
+                        if zip_member and clean_emotion in VALID_EMOTIONS:
+                            p_asset_id = f"por_{uuid.uuid4().hex[:10]}"
+                            filename = f"{p_asset_id}.webp"
+                            target_path = safe_resolve_asset_path(
+                                "images", filename, media_dir=repo.media_dir
+                            )
+                            pre = pre_rendered_media.get((c_idx, "portrait", clean_emotion))
+                            webp_bytes = pre if pre is not None else render_webp_bytes(
+                                zf.read(zip_member), square_crop=True, max_size=512
+                            )
+                            if actor_user is not None:
+                                enforce_quota_and_write_webp(repo, actor_user, webp_bytes, target_path)
+                            else:
+                                target_path.parent.mkdir(parents=True, exist_ok=True)
+                                target_path.write_bytes(webp_bytes)
+                            written_char_files.append(target_path)
+                            repo.register_media_asset(
+                                asset_id=p_asset_id,
+                                owner_id=user_id,
+                                entity_scope="character",
+                                media_type="image",
+                                role="portrait",
+                                filename=filename,
+                                mime_type="image/webp",
+                                byte_size=len(webp_bytes),
+                            )
+                            registered_char_asset_ids.append(p_asset_id)
+                            new_portraits[clean_emotion] = build_asset_url(p_asset_id)
+                        elif isinstance(rel_path, str) and rel_path.startswith(("http://", "https://")):
+                            new_portraits[clean_emotion] = rel_path
 
-    # 3. Ingest Characters
-    for c_idx, c in enumerate(characters_data):
-        old_c_id = str(c.get("id") or "")
-        c_name = str(c.get("name") or "Unnamed Character").strip()
-        strategy = (
-            req.conflict_strategies.get(old_c_id)
-            or req.conflict_strategies.get(c_name)
-            or req.default_conflict_strategy
+                    for g_idx, g_item in enumerate(c.get("gallery") or []):
+                        if not isinstance(g_item, dict):
+                            continue
+                        rel_path = str(g_item.get("url") or "").strip()
+                        zip_member = _resolve_zip_member(rel_path, zip_names)
+                        if zip_member:
+                            g_id = f"img_{uuid.uuid4().hex[:10]}"
+                            filename = f"{g_id}.webp"
+                            target_path = safe_resolve_asset_path(
+                                "images", filename, media_dir=repo.media_dir
+                            )
+                            pre = pre_rendered_media.get((c_idx, "gallery", str(g_idx)))
+                            webp_bytes = pre if pre is not None else render_webp_bytes(
+                                zf.read(zip_member), square_crop=False, max_size=1920
+                            )
+                            if actor_user is not None:
+                                enforce_quota_and_write_webp(repo, actor_user, webp_bytes, target_path)
+                            else:
+                                target_path.parent.mkdir(parents=True, exist_ok=True)
+                                target_path.write_bytes(webp_bytes)
+                            written_char_files.append(target_path)
+                            caption_str = str(g_item.get("caption") or "")
+                            repo.register_media_asset(
+                                asset_id=g_id,
+                                owner_id=user_id,
+                                entity_scope="character",
+                                media_type="image",
+                                role="album",
+                                filename=filename,
+                                mime_type="image/webp",
+                                byte_size=len(webp_bytes),
+                                label=caption_str,
+                            )
+                            registered_char_asset_ids.append(g_id)
+                            staged_v = staged_videos.get(("character", c_idx, g_idx))
+                            if staged_v is not None:
+                                v_src, v_probe = staged_v
+                                vid_id = f"vid_{uuid.uuid4().hex[:10]}"
+                                vid_fname = f"{vid_id}{v_probe.extension}"
+                                vid_dst = safe_resolve_asset_path(
+                                    "videos", vid_fname, media_dir=repo.media_dir
+                                )
+                                if actor_user is not None:
+                                    enforce_quota_and_commit_staged_files(repo, actor_user, [(v_src, vid_dst)])
+                                else:
+                                    vid_dst.parent.mkdir(parents=True, exist_ok=True)
+                                    os.replace(v_src, vid_dst)
+                                written_char_files.append(vid_dst)
+                                repo.attach_or_replace_linked_video(
+                                    g_id,
+                                    video_id=vid_id,
+                                    owner_id=user_id,
+                                    entity_scope="character",
+                                    filename=vid_fname,
+                                    mime_type=v_probe.mime_type,
+                                    byte_size=v_probe.byte_size,
+                                    duration_ms=v_probe.duration_ms,
+                                    width=v_probe.width,
+                                    height=v_probe.height,
+                                    label=caption_str,
+                                )
+                            new_gallery.append(
+                                GalleryImage(
+                                    id=g_id,
+                                    url=build_asset_url(g_id),
+                                    caption=caption_str,
+                                    created_at=str(g_item.get("created_at") or utc_now_iso()),
+                                )
+                            )
+                        elif rel_path.startswith(("http://", "https://")):
+                            new_gallery.append(GalleryImage.model_validate(g_item))
+
+                clean_equipped = []
+                for it in c.get("equipped", []):
+                    it_copy = dict(it) if isinstance(it, dict) else {"name": str(it)}
+                    if it_copy.get("lore_id"):
+                        it_copy["lore_id"] = id_remap.get(it_copy["lore_id"])
+                    clean_equipped.append(it_copy)
+
+                clean_inventory = []
+                for it in c.get("inventory", []):
+                    it_copy = dict(it) if isinstance(it, dict) else {"name": str(it)}
+                    if it_copy.get("lore_id"):
+                        it_copy["lore_id"] = id_remap.get(it_copy["lore_id"])
+                    clean_inventory.append(it_copy)
+
+                try:
+                    unsupported_fields = _extract_character_unsupported_fields(c, strict=True)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+                raw_char_age = c.get("age")
+                draft = CharacterWizardDraft(
+                    name=final_name,
+                    tagline=c.get("tagline") or "",
+                    character_bio=c.get("character_bio") or "",
+                    physical_appearance="",
+                    species=c.get("species") or "Human",
+                    sex=c.get("sex") or "",
+                    pronouns=c.get("pronouns") or "",
+                    age=str(raw_char_age) if raw_char_age is not None else "",
+                    build_and_height=c.get("build_and_height") or "",
+                    distinctive_features=c.get("distinctive_features") or [],
+                    posture=c.get("posture") or "",
+                    mannerisms=c.get("mannerisms") or [],
+                    modifications=[],
+                    visual_aesthetic=c.get("visual_aesthetic") or "",
+                    personality_traits=c.get("personality_traits") or [],
+                    core_persona=c.get("core_persona") or "",
+                    moral_code=c.get("moral_code") or [],
+                    quirks_flaws=c.get("quirks_flaws") or [],
+                    communication_style=c.get("communication_style") or [],
+                    initial_message=c.get("initial_message") or "",
+                    equipped=clean_equipped,
+                    inventory=clean_inventory,
+                    voice_anchors=c.get("voice_anchors") or [],
+                    baseline_psyche=c.get("baseline_psyche") or {},
+                    memory_shards=c.get("memory_shards") or [],
+                    tags=c.get("tags") or [],
+                    creator=c.get("creator") or "",
+                    creator_notes=c.get("creator_notes") or "",
+                    portraits=new_portraits,
+                    gallery=new_gallery,
+                    unsupported_fields=unsupported_fields,
+                )
+
+                repo.create_character_from_draft(
+                    draft=draft,
+                    world_id=new_world_id,
+                    character_id=new_c_id,
+                    owner_id=user_id,
+                )
+                imported_characters.append(final_name)
+
+            except HTTPException:
+                for aid in registered_char_asset_ids:
+                    repo.delete_media_asset(aid)
+                for cf in written_char_files:
+                    cf.unlink(missing_ok=True)
+                raise
+            except Exception as exc:
+                for aid in registered_char_asset_ids:
+                    repo.delete_media_asset(aid)
+                for cf in written_char_files:
+                    cf.unlink(missing_ok=True)
+                logger.exception("Failed importing character '%s': %s", sanitize_log_value(c_name), sanitize_log_value(exc))
+                errors.append(f"Character '{c_name}': {exc}")
+
+        popped = _staged_imports.pop(req.staged_token, None)
+        if popped and popped.staged_file_path:
+            cleanup_staging_paths(popped.staged_file_path)
+
+        msg = f"Import completed: {len(imported_characters)} characters, {len(imported_worlds)} worlds, {len(imported_personas)} personas."
+        if skipped_entities:
+            msg += f" Skipped {len(skipped_entities)} entities."
+        if commit_warnings:
+            msg += f" {len(commit_warnings)} media warning(s)."
+        if errors:
+            msg += f" Encountered {len(errors)} error(s)."
+
+        return ImportCommitResponse(
+            success=len(errors) == 0,
+            imported_characters=imported_characters,
+            imported_worlds=imported_worlds,
+            imported_personas=imported_personas,
+            skipped_entities=skipped_entities,
+            errors=errors,
+            warnings=commit_warnings,
+            message=msg,
         )
-
-        if strategy == "skip":
-            skipped_entities.append(f"Character: {c_name}")
-            continue
-
-        new_c_id = f"char_{uuid.uuid4().hex[:10]}"
-        try:
-            id_remap[old_c_id] = new_c_id
-            final_name = c_name
-            if strategy == "copy":
-                existing = [
-                    ec
-                    for ec in repo.list_characters(
-                        include_pending_deletion=False, owner_id=user_id
-                    )
-                    if ec.name.strip().lower() == c_name.lower()
-                ]
-                if existing:
-                    final_name = f"{c_name} (Imported)"
-
-            # Remap world_id
-            raw_world_id = c.get("world_id")
-            new_world_id = id_remap.get(raw_world_id) if raw_world_id else None
-
-            # Unpack media and rewrite URLs
-            new_portraits: dict[str, str] = {}
-            for emotion, rel_path in (c.get("portraits") or {}).items():
-                clean_emotion = str(emotion).strip().lower()
-                zip_member = _resolve_zip_member(rel_path, zip_names)
-                if zip_member and clean_emotion in VALID_EMOTIONS:
-                    filename = f"{clean_emotion}_{uuid.uuid4().hex[:8]}.webp"
-                    target_path = safe_resolve_media_path(
-                        new_c_id, "portraits", filename, media_dir=repo.media_dir
-                    )
-                    pre = pre_rendered_media.get((c_idx, "portrait", clean_emotion))
-                    if actor_user is not None:
-                        webp_bytes = pre if pre is not None else render_webp_bytes(
-                            zf.read(zip_member), square_crop=True, max_size=512
-                        )
-                        enforce_quota_and_write_webp(repo, actor_user, webp_bytes, target_path)
-                    else:
-                        process_and_save_image(zf.read(zip_member), target_path, square_crop=True, max_size=512)
-                    new_portraits[clean_emotion] = f"/api/media/characters/{new_c_id}/portraits/{filename}"
-                elif isinstance(rel_path, str):
-                    new_portraits[clean_emotion] = rel_path
-
-            new_gallery: list[GalleryImage] = []
-            for g_idx, g_item in enumerate(c.get("gallery") or []):
-                rel_path = g_item.get("url", "") if isinstance(g_item, dict) else ""
-                zip_member = _resolve_zip_member(rel_path, zip_names)
-                if zip_member:
-                    g_id = f"img_{uuid.uuid4().hex[:10]}"
-                    filename = f"{g_id}.webp"
-                    target_path = safe_resolve_media_path(
-                        new_c_id, "gallery", filename, media_dir=repo.media_dir
-                    )
-                    pre = pre_rendered_media.get((c_idx, "gallery", str(g_idx)))
-                    if actor_user is not None:
-                        webp_bytes = pre if pre is not None else render_webp_bytes(
-                            zf.read(zip_member), square_crop=False, max_size=1920
-                        )
-                        enforce_quota_and_write_webp(repo, actor_user, webp_bytes, target_path)
-                    else:
-                        process_and_save_image(zf.read(zip_member), target_path, square_crop=False, max_size=1920)
-                    new_gallery.append(
-                        GalleryImage(
-                            id=g_id,
-                            url=f"/api/media/characters/{new_c_id}/gallery/{filename}",
-                            caption=g_item.get("caption") or "",
-                            created_at=g_item.get("created_at") or utc_now_iso(),
-                        )
-                    )
-                else:
-                    new_gallery.append(GalleryImage.model_validate(g_item))
-
-            # Remap items lore_id
-            clean_equipped = []
-            for it in c.get("equipped", []):
-                it_copy = dict(it) if isinstance(it, dict) else {"name": str(it)}
-                if it_copy.get("lore_id"):
-                    it_copy["lore_id"] = id_remap.get(it_copy["lore_id"])
-                clean_equipped.append(it_copy)
-
-            clean_inventory = []
-            for it in c.get("inventory", []):
-                it_copy = dict(it) if isinstance(it, dict) else {"name": str(it)}
-                if it_copy.get("lore_id"):
-                    it_copy["lore_id"] = id_remap.get(it_copy["lore_id"])
-                clean_inventory.append(it_copy)
-
-            # Extract unknown/future keys and distinct deprecated legacy fields into unsupported_fields
-            try:
-                unsupported_fields = _extract_character_unsupported_fields(c, strict=True)
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-            # Build CharacterWizardDraft
-            raw_char_age = c.get("age")
-            draft = CharacterWizardDraft(
-                name=final_name,
-                tagline=c.get("tagline") or "",
-                character_bio=c.get("character_bio") or "",
-                physical_appearance="",
-                species=c.get("species") or "Human",
-                sex=c.get("sex") or "",
-                pronouns=c.get("pronouns") or "",
-                age=str(raw_char_age) if raw_char_age is not None else "",
-                build_and_height=c.get("build_and_height") or "",
-                distinctive_features=c.get("distinctive_features") or [],
-                posture=c.get("posture") or "",
-                mannerisms=c.get("mannerisms") or [],
-                modifications=[],
-                visual_aesthetic=c.get("visual_aesthetic") or "",
-                personality_traits=c.get("personality_traits") or [],
-                core_persona=c.get("core_persona") or "",
-                moral_code=c.get("moral_code") or [],
-                quirks_flaws=c.get("quirks_flaws") or [],
-                communication_style=c.get("communication_style") or [],
-                initial_message=c.get("initial_message") or "",
-                equipped=clean_equipped,
-                inventory=clean_inventory,
-                voice_anchors=c.get("voice_anchors") or [],
-                baseline_psyche=c.get("baseline_psyche") or {},
-                memory_shards=c.get("memory_shards") or [],
-                tags=c.get("tags") or [],
-                creator=c.get("creator") or "",
-                creator_notes=c.get("creator_notes") or "",
-                portraits=new_portraits,
-                gallery=new_gallery,
-                unsupported_fields=unsupported_fields,
-            )
-
-            repo.create_character_from_draft(
-                draft=draft,
-                world_id=new_world_id,
-                character_id=new_c_id,
-                owner_id=user_id,
-            )
-            imported_characters.append(final_name)
-
-        except HTTPException:
-            remove_character_media_dir(repo.media_dir, new_c_id)
-            raise
-        except Exception as exc:
-            remove_character_media_dir(repo.media_dir, new_c_id)
-            logger.exception("Failed importing character '%s': %s", c_name, exc)
-            errors.append(f"Character '{c_name}': {exc}")
-
-    # Clean up staged cache
-    _staged_imports.pop(req.staged_token, None)
-
-    msg = f"Import completed: {len(imported_characters)} characters, {len(imported_worlds)} worlds, {len(imported_personas)} personas."
-    if skipped_entities:
-        msg += f" Skipped {len(skipped_entities)} entities."
-    if errors:
-        msg += f" Encountered {len(errors)} error(s)."
-
-    return ImportCommitResponse(
-        success=len(errors) == 0,
-        imported_characters=imported_characters,
-        imported_worlds=imported_worlds,
-        imported_personas=imported_personas,
-        skipped_entities=skipped_entities,
-        errors=errors,
-        message=msg,
-    )
+    finally:
+        cleanup_staging_paths(*temp_staging_files)
+        zf.close()

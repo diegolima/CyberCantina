@@ -21,9 +21,13 @@ export const importExportApi = {
     return blob;
   },
 
-  exportCharacter: async (characterId: string, includeWorld: boolean = false) => {
+  exportCharacter: async (
+    characterId: string,
+    includeWorld: boolean = false,
+    includeVideos: boolean = false
+  ) => {
     const { blob, filename } = await fetchBlob(
-      `${API_BASE}/export/character/${encodeURIComponent(characterId)}?include_world=${includeWorld}`
+      `${API_BASE}/export/character/${encodeURIComponent(characterId)}?include_world=${includeWorld}&include_videos=${includeVideos}`
     );
     triggerDownload(blob, filename || `character_${characterId}.zcc`);
     return blob;
@@ -32,10 +36,11 @@ export const importExportApi = {
   exportWorld: async (
     worldId: string,
     includeCharacters: boolean = true,
-    includeMedia: boolean = true
+    includeMedia: boolean = true,
+    includeVideos: boolean = false
   ) => {
     const { blob, filename } = await fetchBlob(
-      `${API_BASE}/export/world/${encodeURIComponent(worldId)}?include_characters=${includeCharacters}&include_media=${includeMedia}`
+      `${API_BASE}/export/world/${encodeURIComponent(worldId)}?include_characters=${includeCharacters}&include_media=${includeMedia}&include_videos=${includeVideos}`
     );
     triggerDownload(blob, filename || `world_${worldId}.zcc`);
     return blob;

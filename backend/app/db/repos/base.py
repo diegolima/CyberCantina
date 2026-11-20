@@ -27,7 +27,6 @@ from app.security.log_sanitize import sanitize_log_value
 from app.security.media_path import (
     PathTraversalError,
     safe_resolve_character_media_dir,
-    safe_resolve_media_file_path,
     safe_resolve_world_media_file_path,
 )
 
@@ -402,22 +401,11 @@ class RepositoryBase:
         self.vector_store = VectorStore(db_path)
 
     def _copy_character_media(self, src_character_id: str, dst_character_id: str) -> None:
-        """Safely copy static character media directory when forking a character."""
-        try:
-            old_media = safe_resolve_character_media_dir(self.media_dir, src_character_id)
-            new_media = safe_resolve_character_media_dir(self.media_dir, dst_character_id)
-            if old_media.exists() and not new_media.exists():
-                shutil.copytree(old_media, new_media)
-        except Exception as exc:
-            logger.warning(
-                "Skipped copying character media from '%s' to '%s': %s",
-                sanitize_log_value(src_character_id),
-                sanitize_log_value(dst_character_id),
-                sanitize_log_value(exc),
-            )
+        """Deprecated no-op: unified media_assets shares assets without CoW file duplication."""
+        return
 
     def _delete_character_media(self, character_id: str) -> None:
-        """Safely remove a character's static media directory from disk."""
+        """Safely remove a character's legacy static media directory from disk if present."""
         try:
             c_media = safe_resolve_character_media_dir(self.media_dir, character_id)
             if c_media.exists():
@@ -430,29 +418,54 @@ class RepositoryBase:
             )
 
     def _world_media_file_exists(self, media_type: str, filename: str) -> bool:
-        """Return True when a world media asset file exists within the confined media directory."""
+        """Return True when a world media asset file exists within assets/ or legacy worlds/ dir."""
+        cat = "videos" if media_type == "video" else ("audio" if media_type == "audio" else "images")
         try:
-            fpath = safe_resolve_world_media_file_path(
-                self.media_dir, world_media_category_dir(media_type), filename
-            )
-            return fpath.is_file()
+            from app.security.media_path import safe_resolve_asset_file_path
+
+            asset_path = safe_resolve_asset_file_path(self.media_dir, cat, filename)
+            if asset_path.is_file():
+                return True
         except (PathTraversalError, ValueError):
-            return False
+            pass
+        if cat in ("images", "audio"):
+            try:
+                fpath = safe_resolve_world_media_file_path(
+                    self.media_dir, world_media_category_dir(media_type), filename
+                )
+                return fpath.is_file()
+            except (PathTraversalError, ValueError):
+                return False
+        return False
 
     def _delete_world_media_file(self, media_type: str, filename: str) -> None:
-        """Safely unlink a single world media asset file from disk."""
+        """Safely unlink a single world media asset file from assets/ or legacy worlds/ dir."""
+        cat = "videos" if media_type == "video" else ("audio" if media_type == "audio" else "images")
         try:
-            fpath = safe_resolve_world_media_file_path(
-                self.media_dir, world_media_category_dir(media_type), filename
-            )
-            if fpath.is_file():
-                fpath.unlink(missing_ok=True)
+            from app.security.media_path import safe_resolve_asset_file_path
+
+            asset_path = safe_resolve_asset_file_path(self.media_dir, cat, filename)
+            if asset_path.is_file():
+                asset_path.unlink(missing_ok=True)
         except Exception as exc:
             logger.warning(
-                "Skipped deleting world media '%s': %s",
+                "Skipped deleting asset media '%s': %s",
                 sanitize_log_value(filename),
                 sanitize_log_value(exc),
             )
+        if cat in ("images", "audio"):
+            try:
+                fpath = safe_resolve_world_media_file_path(
+                    self.media_dir, world_media_category_dir(media_type), filename
+                )
+                if fpath.is_file():
+                    fpath.unlink(missing_ok=True)
+            except Exception as exc:
+                logger.warning(
+                    "Skipped deleting world media '%s': %s",
+                    sanitize_log_value(filename),
+                    sanitize_log_value(exc),
+                )
 
     def _reconcile_media_url(
         self,
@@ -462,41 +475,7 @@ class RepositoryBase:
         source_char_id: str,
         target_char_id: str,
     ) -> str:
-        """Ensure a local character media URL points to target_char_id and exists in its folder when possible."""
-        match = _CHARACTER_MEDIA_URL_RE.search(url or "")
-        if not match:
-            return url
-        url_char_id, category, filename = match.group(1), match.group(2), match.group(3)
-        if category != expected_category or url_char_id == target_char_id:
-            return url
-        try:
-            dst_path = safe_resolve_media_file_path(
-                self.media_dir, target_char_id, category, filename
-            )
-            if not dst_path.is_file():
-                src_path = safe_resolve_media_file_path(
-                    self.media_dir, url_char_id, category, filename
-                )
-                if src_path.is_file():
-                    dst_path.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(src_path, dst_path)
-            if dst_path.is_file() or url_char_id == source_char_id:
-                return f"/api/media/characters/{target_char_id}/{category}/{filename}"
-        except (PathTraversalError, ValueError) as exc:
-            logger.warning(
-                "Skipped invalid character media URL '%s': %s",
-                sanitize_log_value(url),
-                sanitize_log_value(exc),
-            )
-        except OSError as exc:
-            logger.warning(
-                "Failed reconciling character media '%s' to '%s': %s",
-                sanitize_log_value(url),
-                sanitize_log_value(target_char_id),
-                sanitize_log_value(exc),
-            )
-            if url_char_id == source_char_id:
-                return f"/api/media/characters/{target_char_id}/{category}/{filename}"
+        """Preserve shared /api/media/assets/* and /api/media/public/* URLs without CoW copying."""
         return url
 
     def _reconcile_character_media_for_id(

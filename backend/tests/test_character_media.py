@@ -63,8 +63,7 @@ def test_portrait_upload_crop_and_retrieval(test_setup):
     data = res.json()
     assert "happy" in data["portraits"]
     media_url = data["portraits"]["happy"]
-    assert media_url.startswith(f"/api/media/characters/{char.id}/portraits/happy_")
-    assert media_url.endswith(".webp")
+    assert media_url.startswith("/api/media/assets/por_")
 
     # Fetch static media asset
     media_res = client.get(media_url)
@@ -136,7 +135,7 @@ def test_gallery_upload_and_delete(test_setup):
     assert len(gallery) == 1
     item = gallery[0]
     assert item["caption"] == "Sunset on Sector 7"
-    assert item["url"].startswith(f"/api/media/characters/{char.id}/gallery/img_")
+    assert item["url"].startswith("/api/media/assets/img_")
 
     # Fetch image
     get_res = client.get(item["url"])

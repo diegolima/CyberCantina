@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import logging
 import re
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
+import uuid
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 
 from app.auth import get_current_user
 from app.dependencies import get_repo
+from app.routers.media import safe_unlink_file
 from app.schemas.auth import UserProfile
 from app.schemas.import_export import (
     ExportBundleRequest,
@@ -15,11 +19,14 @@ from app.schemas.import_export import (
     ImportCommitResponse,
     ImportInspectResponse,
 )
+from app.security.media_path import safe_resolve_staging_file_path
 from app.services.import_export_service import (
-    build_zcc_export,
+    MAX_TOTAL_UNCOMPRESSED_BYTES,
+    build_zcc_export_to_file,
     commit_staged_import,
-    inspect_uploaded_file,
+    inspect_uploaded_path,
 )
+from app.services.video_processor import cleanup_staging_paths
 
 logger = logging.getLogger("cybercantina.routers.import_export")
 router = APIRouter(tags=["import_export"])
@@ -34,13 +41,13 @@ def _slugify_filename(name: str) -> str:
 async def export_bundle(
     req: ExportBundleRequest,
     current_user: UserProfile = Depends(get_current_user),
-) -> Response:
+) -> FileResponse:
     """Bundle selected characters, worlds, and personas into a .zcc archive."""
     repo = get_repo()
     if not req.character_ids and not req.world_ids and not req.persona_ids:
         raise HTTPException(status_code=400, detail="At least one entity must be selected for export.")
 
-    bundle_bytes = build_zcc_export(
+    tmp_path = build_zcc_export_to_file(
         repo=repo,
         character_ids=req.character_ids,
         world_ids=req.world_ids,
@@ -48,19 +55,19 @@ async def export_bundle(
         owner_id=current_user.id,
         description=f"Export bundle: {req.bundle_name}",
         include_world_media=req.include_world_media,
+        include_videos=req.include_videos,
+        selected_video_ids=req.selected_video_ids,
     )
 
     safe_name = _slugify_filename(req.bundle_name)
     if not safe_name.endswith(".zcc"):
         safe_name = f"{safe_name}.zcc"
 
-    return Response(
-        content=bundle_bytes,
+    return FileResponse(
+        tmp_path,
         media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": f'attachment; filename="{safe_name}"',
-            "Content-Type": "application/octet-stream",
-        },
+        filename=safe_name,
+        background=BackgroundTask(safe_unlink_file, tmp_path),
     )
 
 
@@ -68,8 +75,9 @@ async def export_bundle(
 async def export_single_character(
     character_id: str,
     include_world: bool = Query(default=False),
+    include_videos: bool = Query(default=False),
     current_user: UserProfile = Depends(get_current_user),
-) -> Response:
+) -> FileResponse:
     """Export a single character as a .zcc archive, optionally bundling their associated world."""
     repo = get_repo()
     try:
@@ -79,22 +87,22 @@ async def export_single_character(
 
     world_ids = [char.world_id] if (include_world and char.world_id) else []
 
-    bundle_bytes = build_zcc_export(
+    tmp_path = build_zcc_export_to_file(
         repo=repo,
         character_ids=[character_id],
         world_ids=world_ids,
         persona_ids=[],
         owner_id=current_user.id,
         description=f"Character export: {char.name}",
+        include_videos=include_videos,
     )
 
     safe_name = _slugify_filename(f"character_{char.name}")
-    return Response(
-        content=bundle_bytes,
+    return FileResponse(
+        tmp_path,
         media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": f'attachment; filename="{safe_name}.zcc"',
-        },
+        filename=f"{safe_name}.zcc",
+        background=BackgroundTask(safe_unlink_file, tmp_path),
     )
 
 
@@ -103,8 +111,9 @@ async def export_single_world(
     world_id: str,
     include_characters: bool = Query(default=True),
     include_media: bool = Query(default=True),
+    include_videos: bool = Query(default=False),
     current_user: UserProfile = Depends(get_current_user),
-) -> Response:
+) -> FileResponse:
     """Export a single world as a .zcc archive, optionally bundling resident characters and media."""
     repo = get_repo()
     try:
@@ -117,7 +126,7 @@ async def export_single_world(
         all_chars = repo.list_characters(include_pending_deletion=False)
         character_ids = [c.id for c in all_chars if c.world_id == world_id]
 
-    bundle_bytes = build_zcc_export(
+    tmp_path = build_zcc_export_to_file(
         repo=repo,
         character_ids=character_ids,
         world_ids=[world_id],
@@ -125,15 +134,15 @@ async def export_single_world(
         owner_id=current_user.id,
         description=f"World export: {world.name}",
         include_world_media=include_media,
+        include_videos=include_videos,
     )
 
     safe_name = _slugify_filename(f"world_{world.name}")
-    return Response(
-        content=bundle_bytes,
+    return FileResponse(
+        tmp_path,
         media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": f'attachment; filename="{safe_name}.zcc"',
-        },
+        filename=f"{safe_name}.zcc",
+        background=BackgroundTask(safe_unlink_file, tmp_path),
     )
 
 
@@ -142,18 +151,37 @@ async def inspect_import(
     file: UploadFile = File(...),
     current_user: UserProfile = Depends(get_current_user),
 ) -> ImportInspectResponse:
-    """Upload and inspect a file (.zcc, .zip, .png, .json) to auto-detect its format and check conflicts."""
-    file_bytes = await file.read()
-    if not file_bytes:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
+    """Stream-stage and inspect an uploaded file (.zcc, .zip, .png, .json) to auto-detect its format."""
     repo = get_repo()
-    return inspect_uploaded_file(
-        repo=repo,
-        file_bytes=file_bytes,
-        filename=file.filename or "",
-        user_id=current_user.id,
+    staged_path = safe_resolve_staging_file_path(
+        repo.media_dir, f"import_{uuid.uuid4().hex}.part"
     )
+    staged_path.parent.mkdir(parents=True, exist_ok=True)
+    total = 0
+    try:
+        with staged_path.open("wb") as out_f:
+            while True:
+                chunk = await file.read(65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_TOTAL_UNCOMPRESSED_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Uploaded import package exceeds maximum allowed size.",
+                    )
+                out_f.write(chunk)
+        if total == 0:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+        return inspect_uploaded_path(
+            repo=repo,
+            staged_path=staged_path,
+            filename=file.filename or "",
+            user_id=current_user.id,
+        )
+    except BaseException:
+        cleanup_staging_paths(staged_path)
+        raise
 
 
 @router.post("/api/import/commit", response_model=ImportCommitResponse)

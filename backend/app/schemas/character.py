@@ -354,6 +354,11 @@ class GalleryImage(BaseModel):
     url: str = Field(description="URL or endpoint path to retrieve the image.")
     caption: str = Field(default="", description="Optional caption or title for the image.")
     created_at: str = Field(description="ISO 8601 timestamp when the image was uploaded.")
+    is_public: bool = Field(default=False, description="True when backed by a shared built-in asset.")
+    video_asset_id: str | None = Field(default=None, description="Asset ID of the 1:1 linked video, if any.")
+    video_url: str | None = Field(default=None, description="Endpoint path to stream the linked video, if any.")
+    video_mime_type: str | None = Field(default=None, description="MIME type of the linked video (video/mp4 or video/webm).")
+    video_byte_size: int | None = Field(default=None, description="Size in bytes of the linked video file.")
 
 
 class CharacterWizardSeed(BaseModel):

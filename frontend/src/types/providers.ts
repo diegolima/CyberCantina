@@ -51,6 +51,9 @@ export interface AppSettings {
   allow_self_registration?: boolean;
   inactive_user_purge_days?: number | null;
   user_media_quota_mb?: number | null;
+  allow_image_uploads?: boolean;
+  allow_video_uploads?: boolean;
+  max_video_upload_mb?: number;
   chloromancer_interval_minutes?: number;
 }
 

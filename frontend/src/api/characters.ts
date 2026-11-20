@@ -3,6 +3,7 @@ import type {
   CharacterVersionSummary,
   CharacterWizardDraft,
   CharacterWizardSeed,
+  GalleryMediaImpactResponse,
   SillyTavernImportResponse,
 } from "../types";
 import { API_BASE, fetchJson } from "./client";
@@ -183,6 +184,42 @@ export const charactersApi = {
   deleteCharacterGalleryImage: (characterId: string, imageId: string) =>
     fetchJson<CharacterRecord>(
       `${API_BASE}/characters/${characterId}/gallery/${imageId}`,
+      {
+        method: "DELETE",
+      }
+    ),
+
+  getCharacterGalleryImpact: (characterId: string, imageId: string) =>
+    fetchJson<GalleryMediaImpactResponse>(
+      `${API_BASE}/characters/${characterId}/gallery/${encodeURIComponent(imageId)}/impact`
+    ),
+
+  uploadCharacterGalleryVideo: (
+    characterId: string,
+    file: File | Blob,
+    caption?: string,
+    linkedImageId?: string | null
+  ) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    if (caption && caption.trim()) {
+      formData.append("caption", caption.trim());
+    }
+    if (linkedImageId) {
+      formData.append("linked_image_id", linkedImageId);
+    }
+    return fetchJson<CharacterRecord>(
+      `${API_BASE}/characters/${characterId}/gallery/videos`,
+      {
+        method: "POST",
+        body: formData,
+      }
+    );
+  },
+
+  deleteCharacterGalleryVideo: (characterId: string, imageId: string) =>
+    fetchJson<CharacterRecord>(
+      `${API_BASE}/characters/${characterId}/gallery/${encodeURIComponent(imageId)}/video`,
       {
         method: "DELETE",
       }

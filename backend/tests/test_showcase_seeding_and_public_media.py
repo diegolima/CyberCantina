@@ -309,7 +309,7 @@ def test_public_media_quota_cow_and_cross_tenant_isolation(
     )
     assert up_p_res.status_code == 200
     c_after_p = up_p_res.json()
-    assert c_after_p["portraits"]["default"].startswith(f"/api/media/characters/{c_after_p['id']}/portraits/")
+    assert c_after_p["portraits"]["default"].startswith("/api/media/assets/por_")
     used_after_p = client.get("/api/profile", headers=headers_a).json()["media_bytes_used"]
     assert used_after_p > expected_world_bytes
     assert client.get(c_b["portraits"]["default"], headers=headers_b).status_code == 200

@@ -1,8 +1,16 @@
-import React, { useEffect, useState } from "react";
-import { Image as ImageIcon, Loader2, Maximize2, Trash2, Upload, User, X } from "lucide-react";
+import React, { useState } from "react";
+import { Film, Image as ImageIcon, Loader2, Maximize2, Trash2, Upload, User } from "lucide-react";
 import { api } from "../../api";
-import type { BasicEmotion, CharacterRecord, GalleryImage } from "../../types";
+import type { AppSettings, BasicEmotion, CharacterRecord, GalleryImage } from "../../types";
 import { BASIC_EMOTIONS, cropToSquareBlob } from "./characterMediaUtils";
+import { ImageLightboxModal } from "../shared/ImageLightboxModal";
+import {
+  CardMediaActionStrip,
+  MediaUploadFormatHint,
+  UnifiedMediaUploadButton,
+  buildImageDeleteConfirmMessage,
+  uploadUnifiedMediaBatch,
+} from "../shared/VideoUploadControls";
 
 export interface CharacterMediaTabProps {
   isActive: boolean;
@@ -15,6 +23,8 @@ export interface CharacterMediaTabProps {
   setPortraits: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   setGallery: React.Dispatch<React.SetStateAction<GalleryImage[]>>;
   viewingHistory: boolean;
+  appSettings?: AppSettings | null;
+  isAdmin?: boolean;
   onSaved: (updated: CharacterRecord, closeModal?: boolean) => void;
 }
 
@@ -29,25 +39,21 @@ export const CharacterMediaTab: React.FC<CharacterMediaTabProps> = ({
   setPortraits,
   setGallery,
   viewingHistory,
+  appSettings = null,
+  isAdmin = false,
   onSaved,
 }) => {
   const [activeMediaSubTab, setActiveMediaSubTab] = useState<"portraits" | "gallery">("portraits");
   const [uploadingEmotion, setUploadingEmotion] = useState<string | null>(null);
   const [isUploadingGallery, setIsUploadingGallery] = useState<boolean>(false);
+  const [busyGalleryId, setBusyGalleryId] = useState<string | null>(null);
   const [galleryCaptionInput, setGalleryCaptionInput] = useState<string>("");
-  const [lightboxImage, setLightboxImage] = useState<GalleryImage | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [mediaError, setMediaError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!lightboxImage) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setLightboxImage(null);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [lightboxImage]);
+  const allowImageUploads = isAdmin || (appSettings?.allow_image_uploads ?? true);
+  const allowVideoUploads = isAdmin || (appSettings?.allow_video_uploads ?? true);
+  const maxVideoUploadMb = appSettings?.max_video_upload_mb ?? 15;
 
   const handlePortraitUpload = async (emotion: BasicEmotion, file: File) => {
     setUploadingEmotion(emotion);
@@ -83,47 +89,117 @@ export const CharacterMediaTab: React.FC<CharacterMediaTabProps> = ({
     }
   };
 
-  const handleGalleryUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+  const syncCharacterMedia = (updated: CharacterRecord) => {
+    setLatestCharacter(updated);
+    setCharacterId(updated.id);
+    setGallery(updated.gallery ?? []);
+    onSaved(updated, false);
+  };
+
+  const handleUnifiedUpload = async (files: File[]) => {
+    if (files.length === 0) return;
     setIsUploadingGallery(true);
     setMediaError(null);
-    try {
-      let latestChar = latestCharacter;
-      for (let i = 0; i < files.length; i++) {
-        latestChar = await api.uploadCharacterGalleryImage(
-          characterId,
-          files[i],
-          galleryCaptionInput.trim() || undefined
+    let currentCharId = characterId;
+    const ok = await uploadUnifiedMediaBatch<CharacterRecord>({
+      files,
+      allowImageUploads,
+      allowVideoUploads,
+      label: galleryCaptionInput,
+      uploadImage: async (file, singleLabel) => {
+        const updated = await api.uploadCharacterGalleryImage(
+          currentCharId,
+          file,
+          singleLabel ?? (galleryCaptionInput.trim() || undefined)
         );
-      }
-      setLatestCharacter(latestChar);
-      setCharacterId(latestChar.id);
-      setGallery(latestChar.gallery ?? []);
+        currentCharId = updated.id;
+        return updated;
+      },
+      uploadVideo: async (file, singleLabel) => {
+        const updated = await api.uploadCharacterGalleryVideo(
+          currentCharId,
+          file,
+          singleLabel ?? (galleryCaptionInput.trim() || undefined),
+          null
+        );
+        currentCharId = updated.id;
+        return updated;
+      },
+      onSuccess: (latestChar) => {
+        syncCharacterMedia(latestChar);
+      },
+      onError: (msg) => setMediaError(msg),
+    });
+    if (ok) {
       setGalleryCaptionInput("");
-      onSaved(latestChar, false);
+    }
+    setIsUploadingGallery(false);
+  };
+
+  const handleGalleryDelete = async (img: GalleryImage) => {
+    setBusyGalleryId(img.id);
+    setMediaError(null);
+    try {
+      const impact = await api.getCharacterGalleryImpact(characterId, img.id);
+      const msg = buildImageDeleteConfirmMessage({
+        itemLabel: img.caption || "Photo Album Image",
+        isPublic: Boolean(img.is_public ?? impact.is_public),
+        campaignsUsing: impact.campaigns_using || 0,
+        hasLinkedVideo: Boolean(impact.has_linked_video ?? img.video_url),
+      });
+      if (!window.confirm(msg)) {
+        setBusyGalleryId(null);
+        return;
+      }
+      const updated = await api.deleteCharacterGalleryImage(characterId, img.id);
+      setLightboxIndex(null);
+      syncCharacterMedia(updated);
     } catch (err: any) {
-      setMediaError(err?.message || "Failed to upload photo to album");
+      setMediaError(err?.message || "Failed to delete photo");
     } finally {
-      setIsUploadingGallery(false);
-      e.target.value = "";
+      setBusyGalleryId(null);
     }
   };
 
-  const handleGalleryDelete = async (imageId: string) => {
-    if (!window.confirm("Delete this photo from the character's photo album?")) return;
+  const handleAttachOrReplaceVideo = async (img: GalleryImage, file: File) => {
+    setBusyGalleryId(img.id);
     setMediaError(null);
     try {
-      const updated = await api.deleteCharacterGalleryImage(characterId, imageId);
+      const updated = await api.uploadCharacterGalleryVideo(
+        characterId,
+        file,
+        img.caption || undefined,
+        img.id
+      );
+      syncCharacterMedia(updated);
+    } catch (err: any) {
+      setMediaError(err?.message || "Failed to upload video to album");
+    } finally {
+      setBusyGalleryId(null);
+    }
+  };
+
+  const handleVideoDelete = async (img: GalleryImage) => {
+    if (!img.video_url) return;
+    if (
+      !window.confirm(
+        `Remove the linked video from "${img.caption || "Character Photo"}"?\n\nThe still image will be preserved.`
+      )
+    ) {
+      return;
+    }
+    setBusyGalleryId(img.id);
+    setMediaError(null);
+    try {
+      const updated = await api.deleteCharacterGalleryVideo(characterId, img.id);
       setLatestCharacter(updated);
       setCharacterId(updated.id);
       setGallery(updated.gallery ?? []);
-      if (lightboxImage?.id === imageId) {
-        setLightboxImage(null);
-      }
       onSaved(updated, false);
     } catch (err: any) {
-      setMediaError(err?.message || "Failed to delete photo");
+      setMediaError(err?.message || "Failed to remove linked video");
+    } finally {
+      setBusyGalleryId(null);
     }
   };
 
@@ -265,7 +341,7 @@ export const CharacterMediaTab: React.FC<CharacterMediaTabProps> = ({
                             display: "flex",
                             alignItems: "center",
                             justifyContent: "center",
-                            cursor: viewingHistory ? "default" : "pointer",
+                            cursor: viewingHistory || !allowImageUploads ? "default" : "pointer",
                             boxShadow: portraitUrl
                               ? "0 0 12px rgba(245, 158, 11, 0.15)"
                               : "none",
@@ -307,7 +383,7 @@ export const CharacterMediaTab: React.FC<CharacterMediaTabProps> = ({
                             </div>
                           )}
 
-                          {!viewingHistory && !isUploading && (
+                          {!viewingHistory && !isUploading && allowImageUploads && (
                             <input
                               type="file"
                               accept="image/*"
@@ -333,19 +409,29 @@ export const CharacterMediaTab: React.FC<CharacterMediaTabProps> = ({
                             }}
                           >
                             <label
-                              className="btn btn-sm"
+                              className={`btn btn-sm ${!allowImageUploads ? "disabled" : ""}`}
                               style={{
                                 fontSize: "0.7rem",
                                 padding: "3px 8px",
-                                cursor: isUploading ? "wait" : "pointer",
+                                cursor: !allowImageUploads
+                                  ? "not-allowed"
+                                  : isUploading
+                                  ? "wait"
+                                  : "pointer",
+                                opacity: allowImageUploads ? 1 : 0.55,
                               }}
+                              title={
+                                allowImageUploads
+                                  ? undefined
+                                  : "Image uploads are disabled by administrator"
+                              }
                             >
                               <Upload size={11} />
                               <span>{portraitUrl ? "Replace" : "Upload"}</span>
                               <input
                                 type="file"
                                 accept="image/*"
-                                disabled={isUploading}
+                                disabled={isUploading || !allowImageUploads}
                                 style={{ display: "none" }}
                                 onChange={(e) => {
                                   const file = e.target.files?.[0];
@@ -413,28 +499,26 @@ export const CharacterMediaTab: React.FC<CharacterMediaTabProps> = ({
                         placeholder="Optional caption..."
                         style={{ width: 170, padding: "4px 8px", fontSize: "0.78rem" }}
                         value={galleryCaptionInput}
+                        disabled={isUploadingGallery}
                         onChange={(e) => setGalleryCaptionInput(e.target.value)}
                       />
-                      <label
-                        className="btn btn-sm btn-amber"
-                        style={{ cursor: isUploadingGallery ? "wait" : "pointer" }}
-                      >
-                        {isUploadingGallery ? (
-                          <Loader2 size={13} className="spin" />
-                        ) : (
-                          <Upload size={13} />
-                        )}
-                        <span>{isUploadingGallery ? "Uploading..." : "Upload Photos"}</span>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          multiple
-                          disabled={isUploadingGallery}
-                          style={{ display: "none" }}
-                          onChange={handleGalleryUpload}
-                        />
-                      </label>
+                      <UnifiedMediaUploadButton
+                        uploading={isUploadingGallery}
+                        allowImageUploads={allowImageUploads}
+                        allowVideoUploads={allowVideoUploads}
+                        maxVideoUploadMb={maxVideoUploadMb}
+                        btnClassName="btn btn-sm btn-amber"
+                        onUploadFiles={handleUnifiedUpload}
+                      />
                     </div>
+                  )}
+
+                  {!viewingHistory && (
+                    <MediaUploadFormatHint
+                      allowImageUploads={allowImageUploads}
+                      allowVideoUploads={allowVideoUploads}
+                      maxVideoUploadMb={maxVideoUploadMb}
+                    />
                   )}
                 </div>
 
@@ -465,67 +549,120 @@ export const CharacterMediaTab: React.FC<CharacterMediaTabProps> = ({
                       gap: 12,
                     }}
                   >
-                    {gallery.map((img) => (
+                    {gallery.map((img, idx) => (
                       <div
                         key={img.id}
                         style={{
-                          position: "relative",
-                          aspectRatio: "1 / 1",
+                          background: "var(--bg-card)",
                           borderRadius: 8,
                           overflow: "hidden",
-                          background: "rgba(0, 0, 0, 0.4)",
                           border: "1px solid var(--border-subtle)",
-                          cursor: "pointer",
+                          display: "flex",
+                          flexDirection: "column",
                         }}
-                        onClick={() => setLightboxImage(img)}
                       >
-                        <img
-                          src={img.url}
-                          alt={img.caption || "Character Photo"}
+                        <div
                           style={{
-                            width: "100%",
-                            height: "100%",
-                            objectFit: "cover",
+                            position: "relative",
+                            aspectRatio: "1 / 1",
+                            background: "rgba(0, 0, 0, 0.4)",
+                            cursor: "pointer",
                           }}
-                        />
+                          onClick={() => setLightboxIndex(idx)}
+                          title={img.video_url ? "Click to enlarge and play video" : "Click to enlarge"}
+                        >
+                          <img
+                            src={img.url}
+                            alt={img.caption || "Character Photo"}
+                            style={{
+                              width: "100%",
+                              height: "100%",
+                              objectFit: "cover",
+                            }}
+                          />
 
-                        {img.caption && (
+                          {img.video_url && (
+                            <span
+                              className="badge"
+                              title="Image-linked video"
+                              style={{
+                                position: "absolute",
+                                top: 6,
+                                left: 6,
+                                fontSize: "0.62rem",
+                                background: "rgba(15, 23, 42, 0.86)",
+                                color: "#e2e8f0",
+                                borderColor: "var(--border-subtle)",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 3,
+                              }}
+                            >
+                              <Film size={9} /> Video
+                            </span>
+                          )}
+
+                          {img.caption && (
+                            <div
+                              style={{
+                                position: "absolute",
+                                bottom: 0,
+                                left: 0,
+                                right: 0,
+                                background:
+                                  "linear-gradient(transparent, rgba(0, 0, 0, 0.85))",
+                                padding: "12px 6px 4px",
+                                fontSize: "0.7rem",
+                                color: "#fff",
+                                whiteSpace: "nowrap",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                              }}
+                            >
+                              {img.caption}
+                            </div>
+                          )}
+
                           <div
                             style={{
                               position: "absolute",
-                              bottom: 0,
-                              left: 0,
-                              right: 0,
-                              background:
-                                "linear-gradient(transparent, rgba(0, 0, 0, 0.85))",
-                              padding: "12px 6px 4px",
-                              fontSize: "0.7rem",
-                              color: "#fff",
-                              whiteSpace: "nowrap",
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
+                              top: 6,
+                              right: 6,
+                              background: "rgba(0,0,0,0.6)",
+                              borderRadius: 4,
+                              padding: 3,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              color: "rgba(255,255,255,0.8)",
                             }}
                           >
-                            {img.caption}
+                            <Maximize2 size={12} />
+                          </div>
+                        </div>
+
+                        {!viewingHistory && (
+                          <div
+                            style={{
+                              padding: "5px 6px",
+                              borderTop: "1px solid var(--border-subtle)",
+                            }}
+                          >
+                            <CardMediaActionStrip
+                              itemLabel={img.caption || `Photo #${idx + 1}`}
+                              isPublic={Boolean(img.is_public)}
+                              hasVideo={Boolean(img.video_url)}
+                              busy={busyGalleryId === img.id}
+                              allowVideoUploads={allowVideoUploads}
+                              maxVideoUploadMb={maxVideoUploadMb}
+                              onAttachOrReplaceVideo={(file) =>
+                                handleAttachOrReplaceVideo(img, file)
+                              }
+                              onRemoveVideo={() => handleVideoDelete(img)}
+                              onDeleteImage={() => handleGalleryDelete(img)}
+                            />
                           </div>
                         )}
-
-                        <div
-                          style={{
-                            position: "absolute",
-                            top: 6,
-                            right: 6,
-                            background: "rgba(0,0,0,0.6)",
-                            borderRadius: 4,
-                            padding: 3,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            color: "rgba(255,255,255,0.8)",
-                          }}
-                        >
-                          <Maximize2 size={12} />
-                        </div>
                       </div>
                     ))}
                   </div>
@@ -534,110 +671,35 @@ export const CharacterMediaTab: React.FC<CharacterMediaTabProps> = ({
             )}
           </div>
 
-        {lightboxImage && (
-          <div
-            style={{
-              position: "fixed",
-              inset: 0,
-              background: "rgba(0, 0, 0, 0.9)",
-              backdropFilter: "blur(6px)",
-              zIndex: 10000,
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: 24,
-            }}
-            onClick={() => setLightboxImage(null)}
-          >
-            <div
-              style={{
-                position: "relative",
-                maxWidth: "92vw",
-                maxHeight: "85vh",
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-              }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <button
-                type="button"
-                className="btn"
-                style={{
-                  position: "absolute",
-                  top: -42,
-                  right: 0,
-                  background: "rgba(0,0,0,0.6)",
-                  color: "#fff",
-                  border: "1px solid rgba(255,255,255,0.2)",
-                  borderRadius: "50%",
-                  width: 34,
-                  height: 34,
-                  padding: 0,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  cursor: "pointer",
-                }}
-                onClick={() => setLightboxImage(null)}
-              >
-                <X size={18} />
-              </button>
-
-              <img
-                src={lightboxImage.url}
-                alt={lightboxImage.caption || "Character Photo"}
-                style={{
-                  maxWidth: "100%",
-                  maxHeight: "75vh",
-                  objectFit: "contain",
-                  borderRadius: 8,
-                  border: "1px solid var(--border-subtle)",
-                  boxShadow: "0 10px 40px rgba(0,0,0,0.8)",
-                }}
-              />
-
-              <div
-                style={{
-                  marginTop: 12,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  width: "100%",
-                  color: "var(--text-secondary)",
-                  fontSize: "0.82rem",
-                }}
-              >
-                <span>
-                  {lightboxImage.caption || (
-                    <span style={{ fontStyle: "italic", opacity: 0.6 }}>
-                      No caption
-                    </span>
-                  )}
-                </span>
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <span style={{ fontSize: "0.75rem", opacity: 0.7 }}>
-                    {new Date(lightboxImage.created_at).toLocaleDateString()}
-                  </span>
-                  {!viewingHistory && (
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      style={{
-                        color: "#f87171",
-                        border: "1px solid rgba(239, 68, 68, 0.3)",
-                      }}
-                      onClick={() => handleGalleryDelete(lightboxImage.id)}
-                    >
-                      <Trash2 size={13} />
-                      <span>Delete</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
+        {lightboxIndex !== null && gallery[lightboxIndex] && (
+          <ImageLightboxModal
+            url={gallery[lightboxIndex].url}
+            videoUrl={gallery[lightboxIndex].video_url}
+            videoMimeType={gallery[lightboxIndex].video_mime_type}
+            autoPlayVideo={false}
+            label={gallery[lightboxIndex].caption || latestCharacter.name}
+            subtitle={gallery[lightboxIndex].caption ? latestCharacter.name : undefined}
+            counterText={
+              gallery.length > 1
+                ? `${lightboxIndex + 1} / ${gallery.length}`
+                : undefined
+            }
+            onPrev={
+              gallery.length > 1
+                ? () =>
+                    setLightboxIndex(
+                      (prev) => ((prev ?? 0) - 1 + gallery.length) % gallery.length
+                    )
+                : undefined
+            }
+            onNext={
+              gallery.length > 1
+                ? () =>
+                    setLightboxIndex((prev) => ((prev ?? 0) + 1) % gallery.length)
+                : undefined
+            }
+            onClose={() => setLightboxIndex(null)}
+          />
         )}
     </>
   );

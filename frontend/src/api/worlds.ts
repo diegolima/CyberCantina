@@ -137,6 +137,34 @@ export const worldsApi = {
     });
   },
 
+  uploadWorldMediaVideo: (
+    worldId: string,
+    file: File | Blob,
+    label?: string,
+    linkedImageId?: string | null
+  ) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    if (label && label.trim()) {
+      formData.append("label", label.trim());
+    }
+    if (linkedImageId) {
+      formData.append("linked_image_id", linkedImageId);
+    }
+    return fetchJson<WorldRecord>(`${API_BASE}/worlds/${worldId}/media/videos`, {
+      method: "POST",
+      body: formData,
+    });
+  },
+
+  deleteWorldMediaVideo: (worldId: string, mediaId: string) =>
+    fetchJson<WorldRecord>(
+      `${API_BASE}/worlds/${worldId}/media/${encodeURIComponent(mediaId)}/video`,
+      {
+        method: "DELETE",
+      }
+    ),
+
   updateWorldMediaLabel: (worldId: string, mediaId: string, label: string) =>
     fetchJson<WorldRecord>(
       `${API_BASE}/worlds/${worldId}/media/${encodeURIComponent(mediaId)}`,
@@ -158,6 +186,8 @@ export const worldsApi = {
       media_id: string;
       campaigns_using: number;
       is_public?: boolean;
+      has_linked_video?: boolean;
+      video_byte_size?: number;
     }>(
       `${API_BASE}/worlds/${worldId}/media/${encodeURIComponent(mediaId)}/impact`
     ),

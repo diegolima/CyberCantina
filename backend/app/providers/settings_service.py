@@ -93,6 +93,9 @@ def apply_settings(
             settings.allow_self_registration = updated.allow_self_registration
             settings.inactive_user_purge_days = updated.inactive_user_purge_days
             settings.user_media_quota_mb = updated.user_media_quota_mb
+            settings.allow_image_uploads = updated.allow_image_uploads
+            settings.allow_video_uploads = updated.allow_video_uploads
+            settings.max_video_upload_mb = updated.max_video_upload_mb
             settings.chloromancer_interval_minutes = updated.chloromancer_interval_minutes
             settings.settings_revision = settings.settings_revision + 1
             persist(settings)

@@ -2,22 +2,28 @@ import React, { useMemo, useState } from "react";
 import {
   AlertCircle,
   Check,
+  Film,
   Image as ImageIcon,
-  Loader2,
   Maximize2,
   Pencil,
   Star,
-  Trash2,
-  Upload,
 } from "lucide-react";
 import { api } from "../../api";
 import type {
+  AppSettings,
   LocationContainer,
   LocationNode,
   WorldMediaItem,
   WorldRecord,
 } from "../../types";
 import { ImageLightboxModal } from "../shared/ImageLightboxModal";
+import {
+  CardMediaActionStrip,
+  MediaUploadFormatHint,
+  UnifiedMediaUploadButton,
+  buildImageDeleteConfirmMessage,
+  uploadUnifiedMediaBatch,
+} from "../shared/VideoUploadControls";
 
 export interface WorldMediaTabProps {
   isActive: boolean;
@@ -27,6 +33,8 @@ export interface WorldMediaTabProps {
   containers: LocationContainer[];
   locations: LocationNode[];
   isDirty: boolean;
+  appSettings?: AppSettings | null;
+  isAdmin?: boolean;
   onWorldMutated: (updated: WorldRecord, deletedMediaId?: string) => void;
 }
 
@@ -44,6 +52,8 @@ export const WorldMediaTab: React.FC<WorldMediaTabProps> = ({
   containers,
   locations,
   isDirty,
+  appSettings = null,
+  isAdmin = false,
   onWorldMutated,
 }) => {
   const [uploading, setUploading] = useState(false);
@@ -52,8 +62,12 @@ export const WorldMediaTab: React.FC<WorldMediaTabProps> = ({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingLabel, setEditingLabel] = useState("");
   const [mediaError, setMediaError] = useState<string | null>(null);
-  const [lightbox, setLightbox] = useState<{ url: string; label: string } | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [brokenIds, setBrokenIds] = useState<Record<string, boolean>>({});
+
+  const allowImageUploads = isAdmin || (appSettings?.allow_image_uploads ?? true);
+  const allowVideoUploads = isAdmin || (appSettings?.allow_video_uploads ?? true);
+  const maxVideoUploadMb = appSettings?.max_video_upload_mb ?? 15;
 
   const imageItems = useMemo(
     () => media.filter((m) => m.media_type === "image" && !brokenIds[m.id]),
@@ -77,36 +91,48 @@ export const WorldMediaTab: React.FC<WorldMediaTabProps> = ({
 
   const isReadOnly = mode !== "inspector";
 
-  const handleUploadFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0 || isReadOnly) return;
+  const ensureNotDirtyForMediaMutation = (): boolean => {
     if (isDirty) {
       setMediaError("Please save or discard pending world edits before uploading new media.");
-      e.target.value = "";
-      return;
+      return false;
     }
+    return true;
+  };
+
+  const handleUploadFiles = async (files: File[]) => {
+    if (files.length === 0 || isReadOnly || !ensureNotDirtyForMediaMutation()) return;
     setUploading(true);
     setMediaError(null);
-    try {
-      let currentWorldId = worldId;
-      let latest: WorldRecord | null = null;
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const customLabel =
-          files.length === 1 && labelInput.trim() ? labelInput.trim() : undefined;
-        latest = await api.uploadWorldMedia(currentWorldId, file, customLabel);
-        currentWorldId = latest.id;
-      }
-      if (latest) {
-        setLabelInput("");
+    let currentWorldId = worldId;
+    const ok = await uploadUnifiedMediaBatch<WorldRecord>({
+      files,
+      allowImageUploads,
+      allowVideoUploads,
+      label: labelInput,
+      uploadImage: async (file, singleLabel) => {
+        const updated = await api.uploadWorldMedia(currentWorldId, file, singleLabel);
+        currentWorldId = updated.id;
+        return updated;
+      },
+      uploadVideo: async (file, singleLabel) => {
+        const updated = await api.uploadWorldMediaVideo(
+          currentWorldId,
+          file,
+          singleLabel,
+          null
+        );
+        currentWorldId = updated.id;
+        return updated;
+      },
+      onSuccess: (latest) => {
         onWorldMutated(latest);
-      }
-    } catch (err: any) {
-      setMediaError(err?.message || "Failed to upload world image.");
-    } finally {
-      setUploading(false);
-      e.target.value = "";
+      },
+      onError: (msg) => setMediaError(msg),
+    });
+    if (ok) {
+      setLabelInput("");
     }
+    setUploading(false);
   };
 
   const handleSaveLabel = async (mediaId: string) => {
@@ -156,40 +182,62 @@ export const WorldMediaTab: React.FC<WorldMediaTabProps> = ({
       const activeCamps = impact.campaigns_using || 0;
       const isPublic = Boolean(item.is_public ?? impact.is_public);
       const linkedCount = linkCountsByMediaId[item.id] ?? 0;
-      const warnLines = isPublic
-        ? [
-            `Remove shared default image "${item.label || "World Image"}" from this world?`,
-            "This detaches the image from your copy of the world without affecting storage quota or other users.",
-          ]
-        : [
-            `Delete "${item.label || "World Image"}" permanently?`,
-            "This immediately deletes the file from disk to free storage quota.",
-          ];
-      if (linkedCount > 0) {
-        warnLines.push(
-          `It is currently linked to ${linkedCount} location/container(s) in this world.`
-        );
-      }
-      if (activeCamps > 0 && !isPublic) {
-        warnLines.push(
-          `WARNING: ${activeCamps} active campaign(s) reference this image and will no longer display it.`
-        );
-      } else if (activeCamps > 0 && isPublic) {
-        warnLines.push(
-          `${activeCamps} active campaign(s) will keep using this image in their existing timelines.`
-        );
-      }
-      if (!window.confirm(warnLines.join("\n\n"))) {
+      const msg = buildImageDeleteConfirmMessage({
+        itemLabel: item.label || "World Image",
+        isPublic,
+        campaignsUsing: activeCamps,
+        hasLinkedVideo: Boolean(impact.has_linked_video ?? item.video_url),
+        linkedWorldCount: linkedCount,
+      });
+      if (!window.confirm(msg)) {
         setBusyMediaId(null);
         return;
       }
       const updated = await api.deleteWorldMedia(worldId, item.id);
-      if (lightbox?.url === item.url) {
-        setLightbox(null);
-      }
+      setLightboxIndex(null);
       onWorldMutated(updated, item.id);
     } catch (err: any) {
       setMediaError(err?.message || "Failed to delete world media.");
+    } finally {
+      setBusyMediaId(null);
+    }
+  };
+
+  const handleAttachOrReplaceVideo = async (item: WorldMediaItem, file: File) => {
+    if (isReadOnly || !ensureNotDirtyForMediaMutation()) return;
+    setBusyMediaId(item.id);
+    setMediaError(null);
+    try {
+      const updated = await api.uploadWorldMediaVideo(
+        worldId,
+        file,
+        item.label || undefined,
+        item.id
+      );
+      onWorldMutated(updated);
+    } catch (err: any) {
+      setMediaError(err?.message || "Failed to upload linked video.");
+    } finally {
+      setBusyMediaId(null);
+    }
+  };
+
+  const handleDeleteVideo = async (item: WorldMediaItem) => {
+    if (isReadOnly || !item.video_url) return;
+    if (
+      !window.confirm(
+        `Remove the linked video from "${item.label || "World Image"}"?\n\nThe still image will be preserved and freed video storage will be reclaimed immediately.`
+      )
+    ) {
+      return;
+    }
+    setBusyMediaId(item.id);
+    setMediaError(null);
+    try {
+      const updated = await api.deleteWorldMediaVideo(worldId, item.id);
+      onWorldMutated(updated);
+    } catch (err: any) {
+      setMediaError(err?.message || "Failed to remove linked video.");
     } finally {
       setBusyMediaId(null);
     }
@@ -250,31 +298,28 @@ export const WorldMediaTab: React.FC<WorldMediaTabProps> = ({
               <input
                 type="text"
                 className="field-input"
-                placeholder="Optional image label (defaults to filename)..."
+                placeholder="Optional label (defaults to filename)..."
                 value={labelInput}
                 disabled={uploading}
                 onChange={(e) => setLabelInput(e.target.value)}
                 style={{ fontSize: "0.8rem" }}
               />
-              <label
-                className={`btn btn-sm btn-cyan ${uploading ? "disabled" : ""}`}
-                style={{ cursor: uploading ? "wait" : "pointer", whiteSpace: "nowrap" }}
-              >
-                {uploading ? <Loader2 size={13} className="spin-slow" /> : <Upload size={13} />}
-                <span>{uploading ? "Uploading..." : "Upload Image(s)"}</span>
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  disabled={uploading}
-                  onChange={handleUploadFiles}
-                  style={{ display: "none" }}
-                />
-              </label>
+              <UnifiedMediaUploadButton
+                uploading={uploading}
+                allowImageUploads={allowImageUploads}
+                allowVideoUploads={allowVideoUploads}
+                maxVideoUploadMb={maxVideoUploadMb}
+                btnClassName="btn btn-sm btn-cyan"
+                onBeforePick={ensureNotDirtyForMediaMutation}
+                onUploadFiles={handleUploadFiles}
+              />
             </div>
-            <div style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
-              First image appears on the Home screen Worlds card.
-            </div>
+            <MediaUploadFormatHint
+              allowImageUploads={allowImageUploads}
+              allowVideoUploads={allowVideoUploads}
+              maxVideoUploadMb={maxVideoUploadMb}
+              extraNote="First image appears on the Home screen Worlds card."
+            />
           </div>
         )}
 
@@ -345,10 +390,8 @@ export const WorldMediaTab: React.FC<WorldMediaTabProps> = ({
                       background: "var(--bg-panel)",
                       cursor: "pointer",
                     }}
-                    onClick={() =>
-                      setLightbox({ url: item.url, label: item.label || "World Image" })
-                    }
-                    title="Click to enlarge"
+                    onClick={() => setLightboxIndex(idx)}
+                    title={item.video_url ? "Click to enlarge and play video" : "Click to enlarge"}
                   >
                     <img
                       src={item.url}
@@ -393,6 +436,26 @@ export const WorldMediaTab: React.FC<WorldMediaTabProps> = ({
                         }}
                       >
                         <Star size={9} style={{ marginRight: 3 }} /> Primary
+                      </span>
+                    )}
+                    {item.video_url && (
+                      <span
+                        className="badge"
+                        title="Image-linked video"
+                        style={{
+                          position: "absolute",
+                          bottom: 6,
+                          left: 6,
+                          fontSize: "0.62rem",
+                          background: "rgba(15, 23, 42, 0.86)",
+                          color: "#e2e8f0",
+                          borderColor: "var(--border-subtle)",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 3,
+                        }}
+                      >
+                        <Film size={9} /> Video
                       </span>
                     )}
                   </div>
@@ -479,7 +542,10 @@ export const WorldMediaTab: React.FC<WorldMediaTabProps> = ({
                         color: "var(--text-muted)",
                       }}
                     >
-                      <span>{formatByteSize(item.byte_size)}</span>
+                      <span>
+                        {formatByteSize(item.byte_size)}
+                        {item.video_byte_size ? ` + ${formatByteSize(item.video_byte_size)} vid` : ""}
+                      </span>
                       <span>
                         {linkedCount > 0
                           ? `Linked to ${linkedCount}`
@@ -488,33 +554,35 @@ export const WorldMediaTab: React.FC<WorldMediaTabProps> = ({
                     </div>
 
                     {!isReadOnly && (
-                      <div style={{ display: "flex", gap: 6, marginTop: "auto", paddingTop: 2 }}>
-                        {!isPrimary && (
-                          <button
-                            type="button"
-                            className="btn btn-sm"
-                            style={{ flex: 1, fontSize: "0.7rem", padding: "3px 6px" }}
-                            disabled={isBusy}
-                            onClick={() => handleSetPrimary(item.id)}
-                            title="Use as primary cover image on Home screen"
-                          >
-                            <Star size={11} /> Set Primary
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          className="btn btn-sm btn-danger"
-                          style={{ fontSize: "0.7rem", padding: "3px 8px", marginLeft: "auto" }}
-                          disabled={isBusy}
-                          onClick={() => handleDelete(item)}
-                          title="Delete image permanently"
-                        >
-                          {isBusy ? (
-                            <Loader2 size={11} className="spin-slow" />
-                          ) : (
-                            <Trash2 size={11} />
-                          )}
-                        </button>
+                      <div style={{ paddingTop: 2 }}>
+                        <CardMediaActionStrip
+                          itemLabel={item.label || "World Image"}
+                          isPublic={Boolean(item.is_public)}
+                          hasVideo={Boolean(item.video_url)}
+                          busy={isBusy}
+                          allowVideoUploads={allowVideoUploads}
+                          maxVideoUploadMb={maxVideoUploadMb}
+                          leadingSlot={
+                            !isPrimary ? (
+                              <button
+                                type="button"
+                                className="btn btn-sm"
+                                style={{ fontSize: "0.7rem", padding: "3px 6px" }}
+                                disabled={isBusy}
+                                onClick={() => handleSetPrimary(item.id)}
+                                title="Use as primary cover image on Home screen"
+                              >
+                                <Star size={11} /> Set Primary
+                              </button>
+                            ) : undefined
+                          }
+                          onBeforePickVideo={ensureNotDirtyForMediaMutation}
+                          onAttachOrReplaceVideo={(file) =>
+                            handleAttachOrReplaceVideo(item, file)
+                          }
+                          onRemoveVideo={() => handleDeleteVideo(item)}
+                          onDeleteImage={() => handleDelete(item)}
+                        />
                       </div>
                     )}
                   </div>
@@ -525,11 +593,33 @@ export const WorldMediaTab: React.FC<WorldMediaTabProps> = ({
         )}
       </div>
 
-      {lightbox && (
+      {lightboxIndex !== null && imageItems[lightboxIndex] && (
         <ImageLightboxModal
-          url={lightbox.url}
-          label={lightbox.label}
-          onClose={() => setLightbox(null)}
+          url={imageItems[lightboxIndex].url}
+          videoUrl={imageItems[lightboxIndex].video_url}
+          videoMimeType={imageItems[lightboxIndex].video_mime_type}
+          autoPlayVideo={false}
+          label={imageItems[lightboxIndex].label || "World Image"}
+          counterText={
+            imageItems.length > 1
+              ? `${lightboxIndex + 1} / ${imageItems.length}`
+              : undefined
+          }
+          onPrev={
+            imageItems.length > 1
+              ? () =>
+                  setLightboxIndex(
+                    (prev) => ((prev ?? 0) - 1 + imageItems.length) % imageItems.length
+                  )
+              : undefined
+          }
+          onNext={
+            imageItems.length > 1
+              ? () =>
+                  setLightboxIndex((prev) => ((prev ?? 0) + 1) % imageItems.length)
+              : undefined
+          }
+          onClose={() => setLightboxIndex(null)}
         />
       )}
     </>

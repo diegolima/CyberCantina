@@ -1,7 +1,8 @@
 import React, { useState } from "react";
-import { Image as ImageIcon, Maximize2, User, X } from "lucide-react";
-import { CharacterRecord, GalleryImage } from "../../../types";
+import { Film, Image as ImageIcon, Maximize2, User } from "lucide-react";
+import { CharacterRecord } from "../../../types";
 import { BASIC_EMOTIONS } from "../../EntityEditorModals";
+import { ImageLightboxModal } from "../../shared/ImageLightboxModal";
 
 export interface CampaignCharacterMediaTabProps {
   character: CharacterRecord;
@@ -13,7 +14,7 @@ export const CampaignCharacterMediaTab: React.FC<CampaignCharacterMediaTabProps>
   isActive,
 }) => {
   const [activeMediaSubTab, setActiveMediaSubTab] = useState<"portraits" | "gallery">("portraits");
-  const [lightboxImage, setLightboxImage] = useState<GalleryImage | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   return (
     <>
@@ -203,7 +204,7 @@ export const CampaignCharacterMediaTab: React.FC<CampaignCharacterMediaTabProps>
                       gap: 12,
                     }}
                   >
-                    {character.gallery.map((img) => (
+                    {character.gallery.map((img, idx) => (
                       <div
                         key={img.id}
                         style={{
@@ -215,7 +216,7 @@ export const CampaignCharacterMediaTab: React.FC<CampaignCharacterMediaTabProps>
                           border: "1px solid var(--border-subtle)",
                           cursor: "pointer",
                         }}
-                        onClick={() => setLightboxImage(img)}
+                        onClick={() => setLightboxIndex(idx)}
                       >
                         <img
                           src={img.url}
@@ -226,6 +227,27 @@ export const CampaignCharacterMediaTab: React.FC<CampaignCharacterMediaTabProps>
                             objectFit: "cover",
                           }}
                         />
+
+                        {img.video_url && (
+                          <div
+                            title="Linked video plays when expanded"
+                            style={{
+                              position: "absolute",
+                              top: 6,
+                              left: 6,
+                              background: "rgba(15, 23, 42, 0.82)",
+                              borderRadius: 4,
+                              padding: "2px 6px",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                              color: "#e2e8f0",
+                              fontSize: "0.66rem",
+                            }}
+                          >
+                            <Film size={11} /> Video
+                          </div>
+                        )}
 
                         {img.caption && (
                           <div
@@ -272,94 +294,39 @@ export const CampaignCharacterMediaTab: React.FC<CampaignCharacterMediaTabProps>
             )}
           </div>
 
-        {lightboxImage && (
-          <div
-            style={{
-              position: "fixed",
-              inset: 0,
-              background: "rgba(0, 0, 0, 0.9)",
-              backdropFilter: "blur(6px)",
-              zIndex: 10000,
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: 24,
-            }}
-            onClick={() => setLightboxImage(null)}
-          >
-            <div
-              style={{
-                position: "relative",
-                maxWidth: "92vw",
-                maxHeight: "85vh",
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-              }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <button
-                type="button"
-                className="btn"
-                style={{
-                  position: "absolute",
-                  top: -42,
-                  right: 0,
-                  background: "rgba(0,0,0,0.6)",
-                  color: "#fff",
-                  border: "1px solid rgba(255,255,255,0.2)",
-                  borderRadius: "50%",
-                  width: 34,
-                  height: 34,
-                  padding: 0,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  cursor: "pointer",
-                }}
-                onClick={() => setLightboxImage(null)}
-              >
-                <X size={18} />
-              </button>
-
-              <img
-                src={lightboxImage.url}
-                alt={lightboxImage.caption || "Character Photo"}
-                style={{
-                  maxWidth: "100%",
-                  maxHeight: "75vh",
-                  objectFit: "contain",
-                  borderRadius: 8,
-                  border: "1px solid var(--border-subtle)",
-                  boxShadow: "0 10px 40px rgba(0,0,0,0.8)",
-                }}
-              />
-
-              <div
-                style={{
-                  marginTop: 12,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  width: "100%",
-                  color: "var(--text-secondary)",
-                  fontSize: "0.82rem",
-                }}
-              >
-                <span>
-                  {lightboxImage.caption || (
-                    <span style={{ fontStyle: "italic", opacity: 0.6 }}>
-                      No caption
-                    </span>
-                  )}
-                </span>
-                <span style={{ fontSize: "0.75rem", opacity: 0.7 }}>
-                  {new Date(lightboxImage.created_at).toLocaleDateString()}
-                </span>
-              </div>
-            </div>
-          </div>
+        {lightboxIndex !== null && character.gallery[lightboxIndex] && (
+          <ImageLightboxModal
+            url={character.gallery[lightboxIndex].url}
+            videoUrl={character.gallery[lightboxIndex].video_url}
+            videoMimeType={character.gallery[lightboxIndex].video_mime_type}
+            autoPlayVideo={true}
+            label={character.gallery[lightboxIndex].caption || character.name}
+            subtitle={character.gallery[lightboxIndex].caption ? character.name : undefined}
+            counterText={
+              character.gallery.length > 1
+                ? `${lightboxIndex + 1} / ${character.gallery.length}`
+                : undefined
+            }
+            onPrev={
+              character.gallery.length > 1
+                ? () =>
+                    setLightboxIndex(
+                      (prev) =>
+                        ((prev ?? 0) - 1 + character.gallery.length) %
+                        character.gallery.length
+                    )
+                : undefined
+            }
+            onNext={
+              character.gallery.length > 1
+                ? () =>
+                    setLightboxIndex(
+                      (prev) => ((prev ?? 0) + 1) % character.gallery.length
+                    )
+                : undefined
+            }
+            onClose={() => setLightboxIndex(null)}
+          />
         )}
     </>
   );

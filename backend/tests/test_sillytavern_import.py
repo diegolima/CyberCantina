@@ -233,11 +233,11 @@ def test_import_png_card_stages_media_and_commits(import_client):
     # Verify portraits["default"] and gallery[0] were created
     assert "default" in draft["portraits"]
     default_portrait_url = draft["portraits"]["default"]
-    assert default_portrait_url.startswith(f"/api/media/characters/{pre_id}/portraits/")
+    assert default_portrait_url.startswith("/api/media/assets/por_")
 
     assert len(draft["gallery"]) == 1
     gallery_url = draft["gallery"][0]["url"]
-    assert gallery_url.startswith(f"/api/media/characters/{pre_id}/gallery/")
+    assert gallery_url.startswith("/api/media/assets/img_")
 
     # 2. Verify media preview works BEFORE commit (staged ownership)
     media_res = client.get(default_portrait_url)

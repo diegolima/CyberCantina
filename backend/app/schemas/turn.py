@@ -403,7 +403,7 @@ class FirstVisitDescriptionCard(BaseModel):
 
 
 class FirstVisitMediaItem(BaseModel):
-    """Cosmetic arrival image attached when entering an unvisited container or location."""
+    """Cosmetic arrival image (with optional linked video) attached when entering an unvisited container or location."""
 
     entity_type: Literal["container", "location"]
     entity_id: str
@@ -412,6 +412,8 @@ class FirstVisitMediaItem(BaseModel):
     media_id: str
     image_url: str
     label: str = ""
+    video_url: str | None = None
+    video_mime_type: str | None = None
 
 
 class ImprovisedLocationSpec(BaseModel):

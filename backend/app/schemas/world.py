@@ -675,10 +675,10 @@ class LoreNode(BaseModel):
 
 
 class WorldMediaItem(BaseModel):
-    """Deduplicated media asset attached to a world (images in v0.15.0; extensible to audio)."""
+    """Deduplicated media asset attached to a world (images with optional 1:1 linked videos)."""
 
     id: str
-    media_type: Literal["image", "audio"] = "image"
+    media_type: Literal["image", "video", "audio"] = "image"
     url: str
     label: str = ""
     mime_type: str = "image/webp"
@@ -686,6 +686,10 @@ class WorldMediaItem(BaseModel):
     sort_order: int = 0
     is_public: bool = False
     created_at: str = ""
+    video_asset_id: str | None = None
+    video_url: str | None = None
+    video_mime_type: str | None = None
+    video_byte_size: int | None = None
 
 
 class LocationContainer(BaseModel):
@@ -710,6 +714,8 @@ class LocationContainer(BaseModel):
     image_media_id: str | None = None
     image_url: str | None = None
     image_label: str | None = None
+    video_url: str | None = None
+    video_mime_type: str | None = None
     lore_nodes: list[LoreNode] = Field(
         default_factory=list,
         description="Scoped lore entries (strictly allowed only on depth=1 containers).",
@@ -782,6 +788,8 @@ class LocationNode(BaseModel):
     image_media_id: str | None = None
     image_url: str | None = None
     image_label: str | None = None
+    video_url: str | None = None
+    video_mime_type: str | None = None
     is_visited: bool = False
     lore_nodes: list[LoreNode] = Field(default_factory=list)
 
@@ -1031,6 +1039,8 @@ CANONICAL_CONTAINER_KEYS: frozenset[str] = frozenset(
         "image_media_id",
         "image_url",
         "image_label",
+        "video_url",
+        "video_mime_type",
         "lore_nodes",
         "created_at",
     }
@@ -1056,6 +1066,8 @@ CANONICAL_LOCATION_KEYS: frozenset[str] = frozenset(
         "image_media_id",
         "image_url",
         "image_label",
+        "video_url",
+        "video_mime_type",
         "is_visited",
         "lore_nodes",
     }

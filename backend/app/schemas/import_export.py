@@ -15,6 +15,8 @@ class ZccManifestContents(BaseModel):
     worlds_count: int = 0
     personas_count: int = 0
     media_files_count: int = 0
+    images_count: int = 0
+    videos_count: int = 0
 
 
 class ZccManifest(BaseModel):
@@ -37,12 +39,15 @@ class ExportBundleRequest(BaseModel):
     persona_ids: list[str] = Field(default_factory=list)
     bundle_name: str = Field(default="cybercantina_export", max_length=100)
     include_world_media: bool = True
+    include_videos: bool = False
+    selected_video_ids: list[str] | None = None
 
 
 class ExportCharacterOptions(BaseModel):
     """Options when exporting an individual character."""
 
     include_world: bool = False
+    include_videos: bool = False
 
 
 class ExportWorldOptions(BaseModel):
@@ -50,6 +55,7 @@ class ExportWorldOptions(BaseModel):
 
     include_characters: bool = True
     include_media: bool = True
+    include_videos: bool = False
 
 
 class ImportEntityConflict(BaseModel):
@@ -84,6 +90,10 @@ class ImportInspectResponse(BaseModel):
     conflicts: list[ImportEntityConflict] = Field(default_factory=list)
     sillytavern_draft: dict[str, Any] | None = None
     warnings: list[str] = Field(default_factory=list)
+    images_count: int = 0
+    images_bytes: int = 0
+    videos_count: int = 0
+    videos_bytes: int = 0
 
 
 class ImportCommitRequest(BaseModel):
@@ -92,6 +102,8 @@ class ImportCommitRequest(BaseModel):
     staged_token: str
     conflict_strategies: dict[str, ImportConflictStrategy] = Field(default_factory=dict)
     default_conflict_strategy: ImportConflictStrategy = "copy"
+    import_images: bool = True
+    import_videos: bool = True
 
 
 class ImportCommitResponse(BaseModel):
@@ -103,4 +115,5 @@ class ImportCommitResponse(BaseModel):
     imported_personas: list[str] = Field(default_factory=list)
     skipped_entities: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
     message: str = ""

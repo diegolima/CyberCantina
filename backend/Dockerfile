@@ -6,6 +6,7 @@ ENV PYTHONUNBUFFERED=1 \
 # Install runtime utilities
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Create unprivileged application user

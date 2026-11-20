@@ -89,6 +89,7 @@ export interface AppModalsProps {
     | "server"
     | "communication";
   inactiveUserPurgeDays?: number | null;
+  appSettings?: AppSettings | null;
   setAppSettings: React.Dispatch<React.SetStateAction<AppSettings | null>>;
   onMessagesUpdated?: () => Promise<void> | void;
   showNotesModal: boolean;
@@ -175,6 +176,7 @@ export const AppModals: React.FC<AppModalsProps> = ({
   setShowAdminModal,
   adminInitialTab,
   inactiveUserPurgeDays = null,
+  appSettings = null,
   setAppSettings,
   onMessagesUpdated,
   showNotesModal,
@@ -276,6 +278,8 @@ export const AppModals: React.FC<AppModalsProps> = ({
         <CharacterInspectorModal
           character={inspectingCharacter}
           worlds={worlds}
+          appSettings={appSettings}
+          isAdmin={currentUser.role === "admin"}
           onClose={() => setInspectingCharacter(null)}
           onSaved={async (updatedChar, closeModal = true) => {
             if (closeModal) {
@@ -297,6 +301,8 @@ export const AppModals: React.FC<AppModalsProps> = ({
       {inspectingWorld && (
         <WorldInspectorModal
           world={inspectingWorld}
+          appSettings={appSettings}
+          isAdmin={currentUser.role === "admin"}
           onClose={() => setInspectingWorld(null)}
           onSaved={async (updatedWorld, closeModal = true) => {
             if (closeModal) {
@@ -397,6 +403,8 @@ export const AppModals: React.FC<AppModalsProps> = ({
         <PersonaEditorModal
           persona={editingPersona}
           isDefault={Boolean(editingPersona && activePersona?.id === editingPersona.id)}
+          appSettings={appSettings}
+          isAdmin={currentUser.role === "admin"}
           onClose={() => {
             setShowPersonaModal(false);
             setEditingPersona(null);

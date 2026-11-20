@@ -96,6 +96,25 @@ export interface PurgePreviewResponse {
   total_media_bytes: number;
 }
 
+export interface AdminMediaPurgePreviewResponse {
+  purge_images: boolean;
+  purge_videos: boolean;
+  images_count: number;
+  images_bytes: number;
+  videos_count: number;
+  videos_bytes: number;
+  total_bytes: number;
+  cascade_videos_included: boolean;
+}
+
+export interface AdminMediaPurgeResponse {
+  purge_images: boolean;
+  purge_videos: boolean;
+  images_deleted: number;
+  videos_deleted: number;
+  bytes_reclaimed: number;
+}
+
 export interface AuthSessionResponse {
   token: string;
   user: UserProfile;

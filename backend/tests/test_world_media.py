@@ -27,7 +27,11 @@ from app.schemas.world import (
     WorldGlobalRules,
     WorldUpdatePayload,
 )
-from app.security.media_path import PathTraversalError, safe_resolve_world_media_file_path
+from app.security.media_path import (
+    PathTraversalError,
+    safe_resolve_asset_file_path,
+    safe_resolve_world_media_file_path,
+)
 from app.services.import_export_service import (
     build_zcc_export,
     commit_staged_import,
@@ -205,12 +209,12 @@ def test_world_media_upload_label_reorder_quota_and_access(
             assert len(w_data["media"]) == 1
             m1 = w_data["media"][0]
             assert m1["label"] == "harbor_dawn"
-            assert m1["url"].startswith("/api/media/worlds/images/")
+            assert m1["url"].startswith("/api/media/assets/")
             assert m1["byte_size"] > 0
 
             # Verify non-square dimensions preserved
-            disk_path = safe_resolve_world_media_file_path(
-                repo.media_dir, "images", Path(m1["url"]).name
+            disk_path = safe_resolve_asset_file_path(
+                repo.media_dir, "images", f"{m1['id']}.webp"
             )
             with Image.open(disk_path) as saved_img:
                 assert saved_img.size == (320, 180)
@@ -392,8 +396,8 @@ def test_world_media_cow_isolation_cross_fork_delete_and_cleanup(
             after_bytes = get_user_media_usage_bytes(repo, owner.id)
             assert after_bytes < before_bytes
 
-            disk_m1 = safe_resolve_world_media_file_path(
-                repo.media_dir, "images", Path(m_url).name
+            disk_m1 = safe_resolve_asset_file_path(
+                repo.media_dir, "images", f"{m_id}.webp"
             )
             assert not disk_m1.exists()
 
@@ -577,7 +581,8 @@ async def test_world_media_zcc_export_import_and_orphan_cleanup(
     assert bw_no.containers[0].image_media_id is None
 
     # 3. Orphan sweep removes stale unreferenced files; reset_user_data clears world media on disk
-    orphan_file = safe_resolve_world_media_file_path(repo.media_dir, "images", "wmed_orphan99.webp")
+    orphan_file = safe_resolve_asset_file_path(repo.media_dir, "images", "wmed_orphan99.webp")
+    orphan_file.parent.mkdir(parents=True, exist_ok=True)
     orphan_file.write_bytes(b"orphan")
     old_ts = time.time() - ORPHAN_MEDIA_GRACE_SECONDS - 120
     os.utime(orphan_file, (old_ts, old_ts))

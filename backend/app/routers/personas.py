@@ -10,13 +10,17 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from fastapi.responses import FileResponse
 
 from app.auth import get_current_user
+from app.db.repos.media_assets import build_asset_url, extract_asset_id_from_url
 from app.db.repository import CantinaRepository, utc_now_iso
 from app.dependencies import (
     enforce_quota_and_write_webp,
+    enforce_upload_policy,
     get_repo,
     render_webp_bytes,
+    safe_resolve_asset_path,
     safe_resolve_persona_media_path,
 )
+from app.routers.media import stage_and_commit_linked_video
 from app.schemas.auth import UserProfile
 from app.schemas.character import GalleryImage
 from app.schemas.persona import (
@@ -162,7 +166,8 @@ async def upload_persona_portrait(
     current_user: UserProfile = Depends(get_current_user),
     repo: CantinaRepository = Depends(get_repo),
 ) -> PersonaRecord:
-    """Upload and square-crop the primary portrait for a non-default persona."""
+    """Upload and square-crop the primary portrait for a non-default persona (immediate-delete replacement)."""
+    enforce_upload_policy(current_user, "image")
     if is_default_persona_id(persona_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -183,27 +188,14 @@ async def upload_persona_portrait(
         render_webp_bytes, file_bytes, square_crop=True, max_size=512
     )
 
-    filename = f"default_{uuid.uuid4().hex[:8]}.webp"
-    target_path = safe_resolve_persona_media_path(
-        persona_id, "portraits", filename, media_dir=repo.media_dir
-    )
-
     old_url = persona.portrait_url
-    old_path: Path | None = None
-    can_unlink_old = False
-    if (
-        old_url
-        and f"/api/media/personas/{persona_id}/portraits/" in old_url
-        and not repo.is_persona_media_url_referenced_by_campaigns(old_url)
-    ):
-        old_name = Path(old_url).name
-        try:
-            old_path = safe_resolve_persona_media_path(
-                persona_id, "portraits", old_name, media_dir=repo.media_dir
-            )
-            can_unlink_old = True
-        except HTTPException:
-            old_path = None
+    old_aid = extract_asset_id_from_url(old_url)
+    old_asset = repo.get_media_asset(old_aid) if old_aid else None
+    replaced_bytes = int(old_asset.get("byte_size") or 0) if old_asset else 0
+
+    asset_id = f"por_{uuid.uuid4().hex[:10]}"
+    filename = f"{asset_id}.webp"
+    target_path = safe_resolve_asset_path("images", filename, media_dir=repo.media_dir)
 
     await asyncio.to_thread(
         enforce_quota_and_write_webp,
@@ -211,17 +203,33 @@ async def upload_persona_portrait(
         current_user,
         webp_bytes,
         target_path,
-        replacing_path=old_path if can_unlink_old else None,
+        replaced_bytes=replaced_bytes,
     )
 
-    if can_unlink_old and old_path is not None and old_path != target_path and old_path.is_file():
-        try:
-            old_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+    try:
+        repo.register_media_asset(
+            asset_id=asset_id,
+            owner_id=current_user.id,
+            entity_scope="persona",
+            media_type="image",
+            role="portrait",
+            filename=filename,
+            mime_type="image/webp",
+            byte_size=len(webp_bytes),
+        )
+        updated = repo.update_persona_portrait(
+            persona_id, build_asset_url(asset_id), owner_id=current_user.id
+        )
+    except Exception:
+        target_path.unlink(missing_ok=True)
+        repo.delete_media_asset(asset_id)
+        raise
 
-    new_url = f"/api/media/personas/{persona_id}/portraits/{filename}"
-    return repo.update_persona_portrait(persona_id, new_url, owner_id=current_user.id)
+    if old_aid:
+        repo.delete_media_asset(old_aid, owner_id=current_user.id)
+    elif old_url:
+        repo.unlink_persona_media_if_unreferenced(old_url)
+    return updated
 
 
 @router.delete("/{persona_id}/portrait", response_model=PersonaRecord)
@@ -230,7 +238,7 @@ def delete_persona_portrait(
     current_user: UserProfile = Depends(get_current_user),
     repo: CantinaRepository = Depends(get_repo),
 ) -> PersonaRecord:
-    """Clear the persona's primary portrait, retaining the disk file if referenced by a campaign snapshot."""
+    """Clear the persona's primary portrait and immediately delete its private asset to reclaim quota."""
     if is_default_persona_id(persona_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -245,7 +253,10 @@ def delete_persona_portrait(
 
     old_url = persona.portrait_url
     updated = repo.update_persona_portrait(persona_id, None, owner_id=current_user.id)
-    if old_url:
+    old_aid = extract_asset_id_from_url(old_url)
+    if old_aid:
+        repo.delete_media_asset(old_aid, owner_id=current_user.id)
+    elif old_url:
         repo.unlink_persona_media_if_unreferenced(old_url)
     return updated
 
@@ -259,6 +270,7 @@ async def upload_persona_gallery_image(
     repo: CantinaRepository = Depends(get_repo),
 ) -> PersonaRecord:
     """Upload a photo album image for a non-default persona."""
+    enforce_upload_policy(current_user, "image")
     if is_default_persona_id(persona_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -281,9 +293,7 @@ async def upload_persona_gallery_image(
 
     img_id = f"img_{uuid.uuid4().hex[:10]}"
     filename = f"{img_id}.webp"
-    target_path = safe_resolve_persona_media_path(
-        persona_id, "gallery", filename, media_dir=repo.media_dir
-    )
+    target_path = safe_resolve_asset_path("images", filename, media_dir=repo.media_dir)
 
     await asyncio.to_thread(
         enforce_quota_and_write_webp,
@@ -293,14 +303,171 @@ async def upload_persona_gallery_image(
         target_path,
     )
 
-    item = GalleryImage(
-        id=img_id,
-        url=f"/api/media/personas/{persona_id}/gallery/{filename}",
-        caption=caption.strip(),
-        created_at=utc_now_iso(),
+    try:
+        repo.register_media_asset(
+            asset_id=img_id,
+            owner_id=current_user.id,
+            entity_scope="persona",
+            media_type="image",
+            role="album",
+            filename=filename,
+            mime_type="image/webp",
+            byte_size=len(webp_bytes),
+            label=caption.strip(),
+        )
+        item = GalleryImage(
+            id=img_id,
+            url=build_asset_url(img_id),
+            caption=caption.strip(),
+            created_at=utc_now_iso(),
+        )
+        new_gallery = list(persona.gallery) + [item]
+        return repo.update_persona_gallery(persona_id, new_gallery, owner_id=current_user.id)
+    except Exception:
+        target_path.unlink(missing_ok=True)
+        repo.delete_media_asset(img_id)
+        raise
+
+
+@router.get("/{persona_id}/gallery/{image_id}/impact")
+def get_persona_gallery_image_impact(
+    persona_id: str,
+    image_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+    repo: CantinaRepository = Depends(get_repo),
+) -> dict[str, str | int | bool]:
+    """Return active campaign snapshot count and linked video info before deleting a persona photo."""
+    if is_default_persona_id(persona_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The default 'User' persona is hard-coded and cannot be modified.",
+        )
+    persona = repo.get_persona(persona_id, owner_id=current_user.id)
+    if not persona:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Persona '{persona_id}' not found.",
+        )
+    matching_item = next((it for it in persona.gallery if it.id == image_id), None)
+    if not matching_item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Gallery image '{image_id}' not found.",
+        )
+    aid = extract_asset_id_from_url(matching_item.url) or image_id
+    return repo.get_asset_campaign_impact(aid, owner_id=current_user.id)
+
+
+@router.post("/{persona_id}/gallery/videos", response_model=PersonaRecord)
+async def upload_persona_gallery_video(
+    persona_id: str,
+    file: UploadFile = File(...),
+    caption: str = Form(""),
+    linked_image_id: str | None = Form(None),
+    current_user: UserProfile = Depends(get_current_user),
+    repo: CantinaRepository = Depends(get_repo),
+) -> PersonaRecord:
+    """Upload an MP4/WebM video linked to an existing persona photo or creating one from its first frame."""
+    enforce_upload_policy(current_user, "video")
+    if is_default_persona_id(persona_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The default 'User' persona is hard-coded and cannot be modified.",
+        )
+    persona = repo.get_persona(persona_id, owner_id=current_user.id)
+    if not persona:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Persona '{persona_id}' not found.",
+        )
+
+    clean_linked_id = (
+        linked_image_id.strip()
+        if isinstance(linked_image_id, str) and linked_image_id.strip()
+        else None
     )
-    new_gallery = list(persona.gallery) + [item]
-    return repo.update_persona_gallery(persona_id, new_gallery, owner_id=current_user.id)
+    if clean_linked_id is not None:
+        matching_item = next((it for it in persona.gallery if it.id == clean_linked_id), None)
+        if not matching_item:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Gallery image '{clean_linked_id}' not found.",
+            )
+        if matching_item.is_public:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot attach a private video to built-in artwork.",
+            )
+        target_asset_id = extract_asset_id_from_url(matching_item.url) or matching_item.id
+    else:
+        target_asset_id = None
+
+    stem = Path(file.filename or "").stem.strip()
+    _probe, _vid_id, image_id, created_new_image = await stage_and_commit_linked_video(
+        repo=repo,
+        user=current_user,
+        file=file,
+        entity_scope="persona",
+        target_owner_id=current_user.id,
+        linked_image_id=target_asset_id,
+        label_or_caption=caption,
+        default_image_label=stem or "Video Frame",
+    )
+    if created_new_image:
+        try:
+            latest = repo.get_persona(persona_id, owner_id=current_user.id)
+            assert latest is not None
+            item = GalleryImage(
+                id=image_id,
+                url=build_asset_url(image_id),
+                caption=caption.strip(),
+                created_at=utc_now_iso(),
+            )
+            new_gallery = list(latest.gallery) + [item]
+            return repo.update_persona_gallery(persona_id, new_gallery, owner_id=current_user.id)
+        except Exception:
+            repo.delete_media_asset(image_id)
+            raise
+    updated = repo.get_persona(persona_id, owner_id=current_user.id)
+    assert updated is not None
+    return updated
+
+
+@router.delete("/{persona_id}/gallery/{image_id}/video", response_model=PersonaRecord)
+def delete_persona_gallery_video(
+    persona_id: str,
+    image_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+    repo: CantinaRepository = Depends(get_repo),
+) -> PersonaRecord:
+    """Delete only the linked video on a persona photo while keeping the image itself."""
+    if is_default_persona_id(persona_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The default 'User' persona is hard-coded and cannot be modified.",
+        )
+    persona = repo.get_persona(persona_id, owner_id=current_user.id)
+    if not persona:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Persona '{persona_id}' not found.",
+        )
+    matching_item = next((it for it in persona.gallery if it.id == image_id), None)
+    if not matching_item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Gallery image '{image_id}' not found.",
+        )
+    aid = extract_asset_id_from_url(matching_item.url) or image_id
+    deleted = repo.delete_linked_video(aid, owner_id=current_user.id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No linked video found for image '{image_id}'.",
+        )
+    updated = repo.get_persona(persona_id, owner_id=current_user.id)
+    assert updated is not None
+    return updated
 
 
 @router.delete("/{persona_id}/gallery/{image_id}", response_model=PersonaRecord)
@@ -310,7 +477,7 @@ def delete_persona_gallery_image(
     current_user: UserProfile = Depends(get_current_user),
     repo: CantinaRepository = Depends(get_repo),
 ) -> PersonaRecord:
-    """Remove a photo from the persona's album, retaining the file if referenced by a campaign snapshot."""
+    """Remove a photo from the persona's album and immediately delete its private image (+ linked video) to free quota."""
     if is_default_persona_id(persona_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -332,5 +499,9 @@ def delete_persona_gallery_image(
 
     new_gallery = [it for it in persona.gallery if it.id != image_id]
     updated = repo.update_persona_gallery(persona_id, new_gallery, owner_id=current_user.id)
-    repo.unlink_persona_media_if_unreferenced(matching_item.url)
+    aid = extract_asset_id_from_url(matching_item.url)
+    if aid:
+        repo.delete_media_asset(aid, owner_id=current_user.id)
+    else:
+        repo.unlink_persona_media_if_unreferenced(matching_item.url)
     return updated

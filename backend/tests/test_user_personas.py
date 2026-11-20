@@ -1276,8 +1276,7 @@ def test_persona_media_lifecycle_snapshot_retention_and_quota(
     assert res_up.status_code == 200
     p_after_up = res_up.json()
     portrait_1 = p_after_up["portrait_url"]
-    assert portrait_1.startswith(f"/api/media/personas/{p.id}/portraits/default_")
-    assert portrait_1.endswith(".webp")
+    assert portrait_1.startswith("/api/media/assets/por_")
 
     media_res = client.get(portrait_1)
     assert media_res.status_code == 200
@@ -1302,8 +1301,8 @@ def test_persona_media_lifecycle_snapshot_retention_and_quota(
     assert client.get(gal_url_1).status_code == 200
     assert get_user_media_usage_bytes(repo, std_user.id) > 0
 
-    # 4. Freeze persona snapshot into a campaign; replacing portrait and deleting master persona
-    # must preserve campaign snapshot media files!
+    # 4. Unified immediate-delete & access control: replacing portrait immediately deletes portrait_1,
+    # while deleting the persona immediately deletes its remaining private assets and reclaims quota.
     world = seed_world(repo, owner_id=std_user.id)
     char = seed_character(repo, owner_id=std_user.id, world_id=world.id)
     camp = repo.create_campaign(
@@ -1316,7 +1315,7 @@ def test_persona_media_lifecycle_snapshot_retention_and_quota(
     assert camp.persona_snapshot is not None
     assert camp.persona_snapshot.portrait_url == portrait_1
 
-    # Replace portrait on master persona: portrait_1 must remain readable for the campaign!
+    # Replace portrait on master persona: portrait_1 is immediately deleted; portrait_2 replaces it
     res_replace = client.post(
         f"/api/personas/{p.id}/portrait",
         files={"file": ("avatar2.png", _create_png_bytes(300, 300, "green"), "image/png")},
@@ -1324,17 +1323,10 @@ def test_persona_media_lifecycle_snapshot_retention_and_quota(
     assert res_replace.status_code == 200
     portrait_2 = res_replace.json()["portrait_url"]
     assert portrait_2 != portrait_1
-    assert client.get(portrait_1).status_code == 200
+    assert client.get(portrait_1).status_code == 404
     assert client.get(portrait_2).status_code == 200
 
-    # Delete master persona: portrait_1 & gal_url_1 (in snapshot) remain readable; portrait_2 (unreferenced) is unlinked!
-    res_del_p = client.delete(f"/api/personas/{p.id}")
-    assert res_del_p.status_code == 204
-    assert client.get(portrait_1).status_code == 200
-    assert client.get(gal_url_1).status_code == 200
-    assert client.get(portrait_2).status_code == 404
-
-    # Other user cannot read std_user's snapshot media
+    # Other user cannot read std_user's persona media
     other_user = repo.create_user(
         username="other_snooper",
         display_name="Other",
@@ -1342,15 +1334,20 @@ def test_persona_media_lifecycle_snapshot_retention_and_quota(
         user_id="user_other_snooper",
     )
     app.dependency_overrides[get_current_user] = lambda: other_user
-    assert client.get(portrait_1).status_code == 404
-
-    # 5. Deleting the campaign frees snapshot-pinned media on prune
-    app.dependency_overrides[get_current_user] = lambda: std_user
-    repo.delete_campaign(camp.id, owner_id=std_user.id)
-    pruned = run_entity_pruner()
-    assert pruned["pruned_persona_media"] >= 2
-    assert client.get(portrait_1).status_code == 404
+    assert client.get(portrait_2).status_code == 404
     assert client.get(gal_url_1).status_code == 404
+
+    # Delete master persona: portrait_2 & gal_url_1 are immediately unlinked and quota becomes 0
+    app.dependency_overrides[get_current_user] = lambda: std_user
+    res_del_p = client.delete(f"/api/personas/{p.id}")
+    assert res_del_p.status_code == 204
+    assert client.get(portrait_2).status_code == 404
+    assert client.get(gal_url_1).status_code == 404
+    assert get_user_media_usage_bytes(repo, std_user.id) == 0
+
+    # 5. Clean up test campaign
+    repo.delete_campaign(camp.id, owner_id=std_user.id)
+    run_entity_pruner()
     assert get_user_media_usage_bytes(repo, std_user.id) == 0
 
     # 6. Quota enforcement blocks oversized persona upload
@@ -1377,7 +1374,7 @@ def test_persona_media_lifecycle_snapshot_retention_and_quota(
     import time
     from app.housekeeping.purge_inactive import ORPHAN_MEDIA_GRACE_SECONDS
 
-    orphan_dir = Path(repo.media_dir) / "personas" / p_quota.id / "gallery"
+    orphan_dir = Path(repo.media_dir) / "assets" / "images"
     orphan_dir.mkdir(parents=True, exist_ok=True)
     orphan_file = orphan_dir / "img_stray.webp"
     orphan_file.write_bytes(b"RIFFfake")
@@ -1389,7 +1386,7 @@ def test_persona_media_lifecycle_snapshot_retention_and_quota(
     # reset_user_data deletes p_quota and its media
     repo.reset_user_data(std_user.id)
     assert get_user_media_usage_bytes(repo, std_user.id) == 0
-    assert not (Path(repo.media_dir) / "personas" / p_quota.id).exists()
+    assert client.get(q2_url).status_code == 404
 
 
 

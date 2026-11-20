@@ -231,3 +231,154 @@ export function filterPersonas(
     return false;
   });
 }
+
+export interface ExportableVideoItem {
+  videoAssetId: string;
+  entityType: "world" | "character" | "persona";
+  entityId: string;
+  entityName: string;
+  imageLabel: string;
+  byteSize: number;
+  mimeType: string;
+}
+
+export interface ImportMediaSelection {
+  importImages: boolean;
+  importVideos: boolean;
+}
+
+export interface PurgeMediaSelection {
+  purgeImages: boolean;
+  purgeVideos: boolean;
+}
+
+/**
+ * Format a byte count into a human-readable KB / MB display string.
+ */
+export function formatMediaBytes(bytes: number): string {
+  if (!bytes || bytes <= 0) return "0 KB";
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/**
+ * Collect all selectable linked videos belonging to the currently checked entities for .zcc bundle export.
+ */
+export function collectExportableVideos(
+  worlds: readonly WorldRecord[],
+  characters: readonly CharacterRecord[],
+  personas: readonly PersonaRecord[],
+  selectedWorldIds: ReadonlySet<string>,
+  selectedCharIds: ReadonlySet<string>,
+  selectedPersonaIds: ReadonlySet<string>,
+  includeWorldMedia: boolean
+): ExportableVideoItem[] {
+  const items: ExportableVideoItem[] = [];
+
+  if (includeWorldMedia) {
+    for (const w of worlds) {
+      if (!selectedWorldIds.has(w.id)) continue;
+      for (const m of w.media ?? []) {
+        if (!m.video_asset_id || !m.video_url) continue;
+        items.push({
+          videoAssetId: m.video_asset_id,
+          entityType: "world",
+          entityId: w.id,
+          entityName: w.name,
+          imageLabel: m.label || "World scene",
+          byteSize: m.video_byte_size ?? 0,
+          mimeType: m.video_mime_type ?? "video/mp4",
+        });
+      }
+    }
+  }
+
+  for (const c of characters) {
+    if (!selectedCharIds.has(c.id)) continue;
+    for (const g of c.gallery ?? []) {
+      if (!g.video_asset_id || !g.video_url) continue;
+      items.push({
+        videoAssetId: g.video_asset_id,
+        entityType: "character",
+        entityId: c.id,
+        entityName: c.name,
+        imageLabel: g.caption || "Character photo",
+        byteSize: g.video_byte_size ?? 0,
+        mimeType: g.video_mime_type ?? "video/mp4",
+      });
+    }
+  }
+
+  for (const p of personas) {
+    if (!selectedPersonaIds.has(p.id)) continue;
+    for (const g of p.gallery ?? []) {
+      if (!g.video_asset_id || !g.video_url) continue;
+      items.push({
+        videoAssetId: g.video_asset_id,
+        entityType: "persona",
+        entityId: p.id,
+        entityName: p.name,
+        imageLabel: g.caption || "Persona photo",
+        byteSize: g.video_byte_size ?? 0,
+        mimeType: g.video_mime_type ?? "video/mp4",
+      });
+    }
+  }
+
+  return items;
+}
+
+/**
+ * Compute coupled checkbox state for "Import media" (parent), "Images", and "Videos":
+ * - Checking "Videos" automatically checks "Images" (videos cannot exist detached).
+ * - Unchecking "Images" automatically unchecks "Videos".
+ */
+export function computeImportMediaToggleState(
+  prev: ImportMediaSelection,
+  control: "parent" | "images" | "videos",
+  checked: boolean
+): ImportMediaSelection {
+  if (control === "parent") {
+    return {
+      importImages: checked,
+      importVideos: checked,
+    };
+  }
+  if (control === "images") {
+    return {
+      importImages: checked,
+      importVideos: checked ? prev.importVideos : false,
+    };
+  }
+  return {
+    importImages: checked ? true : prev.importImages,
+    importVideos: checked,
+  };
+}
+
+/**
+ * Compute coupled checkbox state for Admin Purge Non-Built-In Media:
+ * Checking "Images" automatically selects and locks "Videos" because deleting images cascades to linked videos.
+ */
+export function computePurgeToggleState(
+  prev: PurgeMediaSelection,
+  target: "images" | "videos",
+  checked: boolean
+): PurgeMediaSelection {
+  if (target === "images") {
+    return {
+      purgeImages: checked,
+      purgeVideos: checked ? true : prev.purgeVideos,
+    };
+  }
+  if (prev.purgeImages && !checked) {
+    return {
+      purgeImages: true,
+      purgeVideos: true,
+    };
+  }
+  return {
+    purgeImages: prev.purgeImages,
+    purgeVideos: checked,
+  };
+}

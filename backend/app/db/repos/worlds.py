@@ -29,7 +29,6 @@ from app.db.repos.base import (
     _remap_character_items_for_world_update,
     _compute_missing_embeddings,
     _location_lore_vector_fields,
-    build_world_media_url,
     utc_now_iso,
 )
 
@@ -805,8 +804,8 @@ class WorldsMixin:
                     """
                     SELECT wml.media_id
                     FROM world_media_links wml
-                    JOIN world_media wm ON wm.id = wml.media_id
-                    WHERE wml.world_id = ? AND wm.media_type = 'image'
+                    JOIN media_assets ma ON ma.id = wml.media_id
+                    WHERE wml.world_id = ? AND ma.media_type = 'image'
                     """,
                     (world_id,),
                 ).fetchall()
@@ -1384,60 +1383,55 @@ class WorldsMixin:
 
             orphan_media_rows = []
             if pruned_ids:
-                orphan_media_rows = conn.execute(
-                    """
-                    SELECT wm.id, wm.media_type, wm.filename
-                    FROM world_media wm
-                    WHERE wm.is_public = 0
-                      AND NOT EXISTS (
-                          SELECT 1 FROM world_media_links wml WHERE wml.media_id = wm.id
-                      )
-                    """
-                ).fetchall()
-                for mr in orphan_media_rows:
-                    conn.execute("DELETE FROM world_media WHERE id = ?", (mr["id"],))
+                orphan_media_rows = self.gc_unreferenced_world_assets(conn)
                 conn.commit()
         finally:
             conn.close()
 
         for mr in orphan_media_rows:
-            self._delete_world_media_file(mr["media_type"], mr["filename"])
+            self._unlink_asset_file(mr)
 
         return pruned_ids
 
     def _resolve_world_media_items(
         self, conn: sqlite3.Connection, world_id: str
     ) -> list[WorldMediaItem]:
-        """Return ordered WorldMediaItems linked to world_id whose files exist on disk."""
+        """Return ordered WorldMediaItems linked to world_id whose files exist on disk (with linked videos)."""
         rows = conn.execute(
             """
-            SELECT wm.id, wm.media_type, wm.filename,
-                   COALESCE(NULLIF(wml.label_override, ''), wm.label) AS effective_label,
-                   wm.mime_type, wm.byte_size, wm.is_public, wm.created_at, wml.sort_order
+            SELECT ma.*,
+                   COALESCE(NULLIF(wml.label_override, ''), ma.label) AS effective_label,
+                   wml.sort_order
             FROM world_media_links wml
-            JOIN world_media wm ON wm.id = wml.media_id
-            WHERE wml.world_id = ?
-            ORDER BY wml.sort_order ASC, wm.created_at ASC
+            JOIN media_assets ma ON ma.id = wml.media_id
+            WHERE wml.world_id = ? AND ma.media_type != 'video'
+            ORDER BY wml.sort_order ASC, ma.created_at ASC
             """,
             (world_id,),
         ).fetchall()
+        valid_rows = [r for r in rows if self._asset_file_exists(r)]
+        videos_by_parent = self.get_linked_videos_map(
+            conn, [str(r["id"]) for r in valid_rows]
+        )
         items: list[WorldMediaItem] = []
-        for r in rows:
-            m_type = r["media_type"]
-            fname = r["filename"]
-            if not self._world_media_file_exists(m_type, fname):
-                continue
+        for r in valid_rows:
+            m_type = str(r["media_type"])
+            vid = videos_by_parent.get(str(r["id"]))
             items.append(
                 WorldMediaItem(
                     id=r["id"],
                     media_type=m_type,
-                    url=build_world_media_url(m_type, fname),
+                    url=self.build_public_or_asset_url(r),
                     label=r["effective_label"] or "",
                     mime_type=r["mime_type"] or "image/webp",
                     byte_size=int(r["byte_size"] or 0),
                     sort_order=int(r["sort_order"] or 0),
                     is_public=bool(r["is_public"]) if "is_public" in r.keys() else False,
                     created_at=r["created_at"] or "",
+                    video_asset_id=vid["id"] if vid else None,
+                    video_url=f"/api/media/assets/{vid['id']}" if vid else None,
+                    video_mime_type=vid["mime_type"] if vid else None,
+                    video_byte_size=int(vid["byte_size"] or 0) if vid else None,
                 )
             )
         return items
@@ -1447,21 +1441,27 @@ class WorldsMixin:
         entities: list[Any],
         media_by_id: dict[str, WorldMediaItem],
     ) -> None:
-        """Populate image_url/image_label on containers or locations, clearing missing media refs."""
+        """Populate image_url/image_label/video_url/video_mime_type on containers or locations."""
         for ent in entities:
             mid = getattr(ent, "image_media_id", None)
             if not mid:
                 ent.image_url = None
                 ent.image_label = None
+                ent.video_url = None
+                ent.video_mime_type = None
                 continue
             item = media_by_id.get(mid)
             if item is None or item.media_type != "image":
                 ent.image_media_id = None
                 ent.image_url = None
                 ent.image_label = None
+                ent.video_url = None
+                ent.video_mime_type = None
                 continue
             ent.image_url = item.url
             ent.image_label = item.label
+            ent.video_url = item.video_url
+            ent.video_mime_type = item.video_mime_type
 
     def _ensure_writable_world_id(
         self, world_id: str, owner_id: str | None = None
@@ -1499,11 +1499,11 @@ class WorldsMixin:
         conn = self._connect()
         try:
             rows = conn.execute(
-                "SELECT media_type, filename FROM world_media WHERE owner_id = ? AND is_public = 0",
+                "SELECT media_type, filename FROM media_assets WHERE owner_id = ? AND entity_scope = 'world' AND is_public = 0",
                 (user_id,),
             ).fetchall()
             return [
-                ("audio" if r["media_type"] == "audio" else "images", r["filename"])
+                ("videos" if r["media_type"] == "video" else ("audio" if r["media_type"] == "audio" else "images"), r["filename"])
                 for r in rows
             ]
         finally:
@@ -1511,11 +1511,11 @@ class WorldsMixin:
 
     def list_active_world_media_filenames(self, category: str = "images") -> set[str]:
         """Return all persisted world media filenames for the given category directory."""
-        m_type = "audio" if category == "audio" else "image"
+        m_type = "video" if category == "videos" else ("audio" if category == "audio" else "image")
         conn = self._connect()
         try:
             rows = conn.execute(
-                "SELECT filename FROM world_media WHERE media_type = ?",
+                "SELECT filename FROM media_assets WHERE entity_scope = 'world' AND media_type = ?",
                 (m_type,),
             ).fetchall()
             return {r["filename"] for r in rows}
@@ -1526,30 +1526,30 @@ class WorldsMixin:
         self, user_id: str, category: str, filename: str
     ) -> bool:
         """Return True if the world media asset is public, owned by user_id, or linked to user_id's world/campaign."""
-        m_type = "audio" if category == "audio" else "image"
+        m_type = "video" if category == "videos" else ("audio" if category == "audio" else "image")
         conn = self._connect()
         try:
             row = conn.execute(
                 """
                 SELECT 1
-                FROM world_media wm
-                WHERE wm.media_type = ? AND wm.filename = ? AND wm.is_public = 1
+                FROM media_assets ma
+                WHERE ma.media_type = ? AND ma.filename = ? AND ma.is_public = 1
                 UNION
                 SELECT 1
-                FROM world_media wm
-                WHERE wm.media_type = ? AND wm.filename = ? AND wm.owner_id = ?
+                FROM media_assets ma
+                WHERE ma.media_type = ? AND ma.filename = ? AND ma.owner_id = ?
                 UNION
                 SELECT 1
-                FROM world_media wm
-                JOIN world_media_links wml ON wml.media_id = wm.id
+                FROM media_assets ma
+                JOIN world_media_links wml ON wml.media_id = COALESCE(ma.parent_image_id, ma.id)
                 JOIN worlds w ON w.id = wml.world_id
-                WHERE wm.media_type = ? AND wm.filename = ? AND w.owner_id = ?
+                WHERE ma.media_type = ? AND ma.filename = ? AND w.owner_id = ?
                 UNION
                 SELECT 1
-                FROM world_media wm
-                JOIN world_media_links wml ON wml.media_id = wm.id
+                FROM media_assets ma
+                JOIN world_media_links wml ON wml.media_id = COALESCE(ma.parent_image_id, ma.id)
                 JOIN campaigns c ON c.world_id = wml.world_id
-                WHERE wm.media_type = ? AND wm.filename = ? AND c.owner_id = ?
+                WHERE ma.media_type = ? AND ma.filename = ? AND c.owner_id = ?
                 LIMIT 1
                 """,
                 (
@@ -1593,8 +1593,11 @@ class WorldsMixin:
             next_sort = int(max_sort_row["max_s"]) + 1 if max_sort_row else 0
             conn.execute(
                 """
-                INSERT INTO world_media (id, owner_id, media_type, filename, label, mime_type, byte_size, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO media_assets (
+                    id, owner_id, entity_scope, media_type, role, filename, label,
+                    mime_type, byte_size, is_public, seed_key, parent_image_id, created_at
+                )
+                VALUES (?, ?, 'world', ?, 'world_scene', ?, ?, ?, ?, 0, NULL, NULL, ?)
                 """,
                 (
                     media_id,
@@ -1623,6 +1626,38 @@ class WorldsMixin:
             conn.close()
         return self.get_world(target_world_id, base_only=True, owner_id=owner_id)
 
+    def link_existing_world_media_asset(
+        self,
+        world_id: str,
+        media_id: str,
+        owner_id: str | None = None,
+    ) -> WorldRecord:
+        """Link an already-registered media_assets row to world_id (CoW-forking if campaigns exist)."""
+        target_world_id = self._ensure_writable_world_id(world_id, owner_id=owner_id)
+        now = utc_now_iso()
+        conn = self._connect()
+        try:
+            max_sort_row = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), -1) AS max_s FROM world_media_links WHERE world_id = ?",
+                (target_world_id,),
+            ).fetchone()
+            next_sort = int(max_sort_row["max_s"]) + 1 if max_sort_row else 0
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO world_media_links (world_id, media_id, sort_order, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (target_world_id, media_id, next_sort, now),
+            )
+            conn.execute(
+                "UPDATE worlds SET seed_modified = 1 WHERE id = ? AND seed_key IS NOT NULL",
+                (target_world_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return self.get_world(target_world_id, base_only=True, owner_id=owner_id)
+
     def update_world_media_label(
         self,
         world_id: str,
@@ -1636,9 +1671,9 @@ class WorldsMixin:
         try:
             link = conn.execute(
                 """
-                SELECT wm.is_public
+                SELECT ma.is_public
                 FROM world_media_links wml
-                JOIN world_media wm ON wm.id = wml.media_id
+                JOIN media_assets ma ON ma.id = wml.media_id
                 WHERE wml.world_id = ? AND wml.media_id = ?
                 """,
                 (target_world_id, media_id),
@@ -1653,7 +1688,7 @@ class WorldsMixin:
                 )
             else:
                 conn.execute(
-                    "UPDATE world_media SET label = ? WHERE id = ?",
+                    "UPDATE media_assets SET label = ? WHERE id = ?",
                     (clean_label, media_id),
                 )
             conn.execute(
@@ -1716,7 +1751,7 @@ class WorldsMixin:
         media_id: str,
         owner_id: str | None = None,
     ) -> dict[str, Any]:
-        """Count owner-scoped active campaigns referencing media_id (plus public-asset status)."""
+        """Count owner-scoped active campaigns referencing media_id (plus public-asset & linked-video status)."""
         self.get_world(world_id, base_only=True, owner_id=owner_id)
         conn = self._connect()
         try:
@@ -1727,9 +1762,9 @@ class WorldsMixin:
             effective_owner = w_row["owner_id"] if w_row else owner_id
             link = conn.execute(
                 """
-                SELECT wm.is_public
+                SELECT ma.is_public
                 FROM world_media_links wml
-                JOIN world_media wm ON wm.id = wml.media_id
+                JOIN media_assets ma ON ma.id = wml.media_id
                 WHERE wml.world_id = ? AND wml.media_id = ?
                 """,
                 (world_id, media_id),
@@ -1737,6 +1772,12 @@ class WorldsMixin:
             if not link:
                 raise KeyError(f"Media '{media_id}' not found on world '{world_id}'")
             is_public = bool(link["is_public"])
+            vid_row = conn.execute(
+                "SELECT * FROM media_assets WHERE parent_image_id = ? AND media_type = 'video'",
+                (media_id,),
+            ).fetchone()
+            has_linked_video = bool(vid_row and self._asset_file_exists(vid_row))
+            video_byte_size = int(vid_row["byte_size"] or 0) if has_linked_video and vid_row else 0
             if is_public:
                 if effective_owner is not None:
                     row = conn.execute(
@@ -1774,6 +1815,8 @@ class WorldsMixin:
                 "media_id": media_id,
                 "campaigns_using": campaigns_using,
                 "is_public": is_public,
+                "has_linked_video": has_linked_video,
+                "video_byte_size": video_byte_size,
             }
         finally:
             conn.close()
@@ -1801,11 +1844,11 @@ class WorldsMixin:
                     FROM campaigns camp
                     JOIN world_media_links wml_other ON wml_other.world_id = camp.world_id
                     JOIN world_media_links wml_self ON wml_self.media_id = wml_other.media_id
-                    JOIN world_media wm ON wm.id = wml_self.media_id
+                    JOIN media_assets ma ON ma.id = wml_self.media_id
                     WHERE wml_self.world_id = ?
                       AND camp.world_id != ?
                       AND camp.owner_id = ?
-                      AND wm.is_public = 0
+                      AND ma.is_public = 0
                     """,
                     (world_id, world_id, effective_owner),
                 ).fetchone()
@@ -1816,10 +1859,10 @@ class WorldsMixin:
                     FROM campaigns camp
                     JOIN world_media_links wml_other ON wml_other.world_id = camp.world_id
                     JOIN world_media_links wml_self ON wml_self.media_id = wml_other.media_id
-                    JOIN world_media wm ON wm.id = wml_self.media_id
+                    JOIN media_assets ma ON ma.id = wml_self.media_id
                     WHERE wml_self.world_id = ?
                       AND camp.world_id != ?
-                      AND wm.is_public = 0
+                      AND ma.is_public = 0
                     """,
                     (world_id, world_id),
                 ).fetchone()
@@ -1827,8 +1870,8 @@ class WorldsMixin:
                 """
                 SELECT COUNT(*) AS cnt
                 FROM world_media_links wml
-                JOIN world_media wm ON wm.id = wml.media_id
-                WHERE wml.world_id = ? AND wm.is_public = 0
+                JOIN media_assets ma ON ma.id = wml.media_id
+                WHERE wml.world_id = ? AND ma.is_public = 0
                 """,
                 (world_id,),
             ).fetchone()
@@ -1847,24 +1890,30 @@ class WorldsMixin:
         media_id: str,
         owner_id: str | None = None,
     ) -> WorldRecord:
-        """Detach public media (CoW-forking if campaigns exist) or hard-delete private world media to reclaim quota."""
+        """Detach public media (CoW-forking if campaigns exist) or hard-delete private world media (+ linked video) to reclaim quota."""
         self.get_world(world_id, base_only=True, owner_id=owner_id)
         conn = self._connect()
         try:
             row = conn.execute(
                 """
-                SELECT wm.media_type, wm.filename, wm.is_public
-                FROM world_media wm
-                JOIN world_media_links wml ON wml.media_id = wm.id
-                WHERE wml.world_id = ? AND wm.id = ?
+                SELECT ma.*
+                FROM world_media_links wml
+                JOIN media_assets ma ON ma.id = wml.media_id
+                WHERE wml.world_id = ? AND ma.id = ?
                 """,
                 (world_id, media_id),
             ).fetchone()
             if not row:
                 raise KeyError(f"Media '{media_id}' not found on world '{world_id}'")
-            media_type = row["media_type"]
-            filename = row["filename"]
             is_public = bool(row["is_public"])
+            deleted_rows: list[dict[str, Any]] = []
+            if not is_public:
+                deleted_rows.append(dict(row))
+                for vr in conn.execute(
+                    "SELECT * FROM media_assets WHERE parent_image_id = ?",
+                    (media_id,),
+                ).fetchall():
+                    deleted_rows.append(dict(vr))
         finally:
             conn.close()
 
@@ -1895,7 +1944,6 @@ class WorldsMixin:
 
         conn = self._connect()
         try:
-            # Clear explicit references on location_nodes / location_containers, then remove private world_media row
             conn.execute(
                 "UPDATE location_nodes SET image_media_id = NULL WHERE image_media_id = ?",
                 (media_id,),
@@ -1904,7 +1952,7 @@ class WorldsMixin:
                 "UPDATE location_containers SET image_media_id = NULL WHERE image_media_id = ?",
                 (media_id,),
             )
-            conn.execute("DELETE FROM world_media WHERE id = ? AND is_public = 0", (media_id,))
+            conn.execute("DELETE FROM media_assets WHERE id = ? AND is_public = 0", (media_id,))
             conn.execute(
                 "UPDATE worlds SET seed_modified = 1 WHERE id = ? AND seed_key IS NOT NULL",
                 (world_id,),
@@ -1913,7 +1961,7 @@ class WorldsMixin:
         finally:
             conn.close()
 
-        if filename:
-            self._delete_world_media_file(media_type, filename)
+        for dr in deleted_rows:
+            self._unlink_asset_file(dr)
 
         return self.get_world(world_id, base_only=True, owner_id=owner_id)

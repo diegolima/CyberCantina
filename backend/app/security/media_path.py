@@ -11,6 +11,7 @@ _SAFE_FILENAME_RE = re.compile(r"[a-zA-Z0-9_.-]+")
 _SAFE_PUBLIC_VERSION_RE = re.compile(r"v[0-9]+")
 _VALID_MEDIA_CATEGORIES = ("portraits", "gallery")
 _VALID_WORLD_MEDIA_CATEGORIES = ("images", "audio")
+_VALID_ASSET_CATEGORIES = ("images", "videos", "audio")
 
 
 class PathTraversalError(ValueError):
@@ -165,3 +166,54 @@ def safe_resolve_public_character_media_file_path(
     chars_dir = _resolve_within_base(ver_dir, "characters")
     slug_dir = _resolve_within_base(chars_dir, clean_slug)
     return _resolve_within_base(slug_dir, os.path.join(category, filename))
+
+
+def validate_safe_asset_id(asset_id: str) -> str:
+    """Validate that a unified media asset ID uses only safe identifier characters."""
+    if not isinstance(asset_id, str) or not _SAFE_ID_RE.fullmatch(asset_id):
+        raise ValueError("Invalid asset ID.")
+    return asset_id
+
+
+def safe_resolve_asset_category_root(
+    media_dir: str | Path,
+    category: str = "images",
+) -> Path:
+    """Resolve and verify the unified asset directory for a category within media_dir/assets."""
+    if category not in _VALID_ASSET_CATEGORIES:
+        raise ValueError("Invalid asset media category.")
+    assets_root = _resolve_within_base(media_dir, "assets")
+    return _resolve_within_base(assets_root, category)
+
+
+def safe_resolve_asset_file_path(
+    media_dir: str | Path,
+    category: str,
+    filename: str,
+) -> Path:
+    """Validate category and filename, and resolve safely within media_dir/assets/{category}."""
+    if (
+        not isinstance(filename, str)
+        or filename.startswith(".")
+        or not _SAFE_FILENAME_RE.fullmatch(filename)
+    ):
+        raise ValueError("Invalid filename.")
+    cat_dir = safe_resolve_asset_category_root(media_dir, category)
+    return _resolve_within_base(cat_dir, filename)
+
+
+def safe_resolve_staging_dir(media_dir: str | Path) -> Path:
+    """Resolve and verify the temporary staging directory inside media_dir/.staging."""
+    return _resolve_within_base(media_dir, ".staging")
+
+
+def safe_resolve_staging_file_path(media_dir: str | Path, filename: str) -> Path:
+    """Validate staging filename and resolve safely within media_dir/.staging."""
+    if (
+        not isinstance(filename, str)
+        or filename.startswith(".")
+        or not _SAFE_FILENAME_RE.fullmatch(filename)
+    ):
+        raise ValueError("Invalid staging filename.")
+    staging_dir = safe_resolve_staging_dir(media_dir)
+    return _resolve_within_base(staging_dir, filename)

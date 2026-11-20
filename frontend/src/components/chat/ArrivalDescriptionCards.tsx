@@ -153,6 +153,28 @@ export const ArrivalDescriptionCards: React.FC<ArrivalDescriptionCardsProps> = (
           >
             <Maximize2 size={12} />
           </button>
+          {slide.video_url && (
+            <span
+              title="Linked video plays when expanded"
+              style={{
+                position: "absolute",
+                top: 8,
+                left: 8,
+                background: "rgba(15, 23, 42, 0.82)",
+                color: "#e2e8f0",
+                borderRadius: 4,
+                padding: "2px 6px",
+                fontSize: "0.66rem",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                border: "1px solid var(--border-subtle)",
+                pointerEvents: "none",
+              }}
+            >
+              Video
+            </span>
+          )}
 
           {visibleMedia.length > 1 && (
             <>
@@ -306,6 +328,9 @@ export const ArrivalDescriptionCards: React.FC<ArrivalDescriptionCardsProps> = (
       {isLightboxOpen && activeSlide && (
         <ImageLightboxModal
           url={activeSlide.image_url}
+          videoUrl={activeSlide.video_url}
+          videoMimeType={activeSlide.video_mime_type}
+          autoPlayVideo={true}
           label={getArrivalMediaDisplayLabel(activeSlide)}
           subtitle={
             activeSlide.label.trim() &&

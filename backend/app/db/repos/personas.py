@@ -219,7 +219,8 @@ class PersonasMixin:
                 ).fetchone()
             if not r:
                 return None
-            return self._row_to_persona_record(r)
+            rec = self._row_to_persona_record(r)
+            return self._hydrate_persona_records_conn(conn, [rec])[0]
         finally:
             conn.close()
 
@@ -241,7 +242,8 @@ class PersonasMixin:
                 rows = conn.execute(
                     "SELECT * FROM personas ORDER BY (CASE WHEN id LIKE 'persona_default_%' THEN 1 ELSE 0 END), created_at DESC"
                 ).fetchall()
-            return [self._row_to_persona_record(r) for r in rows]
+            records = [self._row_to_persona_record(r) for r in rows]
+            return self._hydrate_persona_records_conn(conn, records)
         finally:
             conn.close()
 
@@ -384,10 +386,11 @@ class PersonasMixin:
         persona_id: str,
         owner_id: str | None = None,
     ) -> bool:
-        """Delete a persona from the master gallery while preserving snapshot-referenced media."""
+        """Delete a persona and immediately reclaim any private media_assets owned solely by it."""
         if is_default_persona_id(persona_id):
             raise ValueError("The default 'User' persona is hard-coded and cannot be deleted.")
         conn = self._connect()
+        orphan_assets: list[dict[str, Any]] = []
         try:
             if owner_id is not None:
                 res = conn.execute(
@@ -399,16 +402,19 @@ class PersonasMixin:
                     "DELETE FROM personas WHERE id = ?",
                     (persona_id,),
                 )
-            conn.commit()
             deleted = res.rowcount > 0
             if deleted:
+                orphan_assets = self.gc_unreferenced_persona_assets(conn)
                 active_refs = self._collect_all_active_persona_media_refs(conn)
             else:
                 active_refs = set()
+            conn.commit()
         finally:
             conn.close()
 
         if deleted:
+            for oa in orphan_assets:
+                self._unlink_asset_file(oa)
             self._cleanup_persona_dir_unreferenced(persona_id, active_refs)
         return deleted
 

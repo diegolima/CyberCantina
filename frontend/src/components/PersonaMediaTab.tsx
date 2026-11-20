@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import {
+  Film,
   Image as ImageIcon,
   Info,
   Loader2,
@@ -7,11 +8,18 @@ import {
   Trash2,
   Upload,
   UserCheck,
-  X,
 } from "lucide-react";
 import { api } from "../api";
-import type { GalleryImage, PersonaRecord } from "../types";
+import type { AppSettings, GalleryImage, PersonaRecord } from "../types";
 import { cropToSquareBlob } from "./character/characterMediaUtils";
+import { ImageLightboxModal } from "./shared/ImageLightboxModal";
+import {
+  CardMediaActionStrip,
+  MediaUploadFormatHint,
+  UnifiedMediaUploadButton,
+  buildImageDeleteConfirmMessage,
+  uploadUnifiedMediaBatch,
+} from "./shared/VideoUploadControls";
 
 export interface PersonaMediaTabProps {
   isActive: boolean;
@@ -20,6 +28,8 @@ export interface PersonaMediaTabProps {
   isUnsavedDraft: boolean;
   portraitUrl: string | null;
   gallery: GalleryImage[];
+  appSettings?: AppSettings | null;
+  isAdmin?: boolean;
   onMediaUpdated: (updated: PersonaRecord) => void;
 }
 
@@ -30,32 +40,23 @@ export const PersonaMediaTab: React.FC<PersonaMediaTabProps> = ({
   isUnsavedDraft,
   portraitUrl,
   gallery,
+  appSettings = null,
+  isAdmin = false,
   onMediaUpdated,
 }) => {
   const [isUploadingPortrait, setIsUploadingPortrait] = useState(false);
   const [isUploadingGallery, setIsUploadingGallery] = useState(false);
+  const [busyGalleryId, setBusyGalleryId] = useState<string | null>(null);
   const [galleryCaptionInput, setGalleryCaptionInput] = useState("");
-  const [lightboxImage, setLightboxImage] = useState<{
-    id?: string;
-    url: string;
-    caption?: string;
-    created_at?: string;
-    isPortrait?: boolean;
-  } | null>(null);
+  const [lightboxTarget, setLightboxTarget] = useState<
+    { kind: "portrait"; url: string } | { kind: "gallery"; index: number } | null
+  >(null);
   const [mediaError, setMediaError] = useState<string | null>(null);
 
   const canMutate = Boolean(personaId) && !isReadOnly && !isUnsavedDraft;
-
-  useEffect(() => {
-    if (!lightboxImage) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setLightboxImage(null);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [lightboxImage]);
+  const allowImageUploads = isAdmin || (appSettings?.allow_image_uploads ?? true);
+  const allowVideoUploads = isAdmin || (appSettings?.allow_video_uploads ?? true);
+  const maxVideoUploadMb = appSettings?.max_video_upload_mb ?? 15;
 
   const handlePortraitUpload = async (file: File) => {
     if (!personaId || !canMutate) return;
@@ -79,8 +80,8 @@ export const PersonaMediaTab: React.FC<PersonaMediaTabProps> = ({
     setMediaError(null);
     try {
       const updated = await api.deletePersonaPortrait(personaId);
-      if (lightboxImage?.isPortrait) {
-        setLightboxImage(null);
+      if (lightboxTarget?.kind === "portrait") {
+        setLightboxTarget(null);
       }
       onMediaUpdated(updated);
     } catch (err: any) {
@@ -90,44 +91,102 @@ export const PersonaMediaTab: React.FC<PersonaMediaTabProps> = ({
     }
   };
 
-  const handleGalleryUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!personaId || !canMutate || !files || files.length === 0) return;
+  const handleUnifiedUpload = async (files: File[]) => {
+    if (!personaId || !canMutate || files.length === 0) return;
     setIsUploadingGallery(true);
     setMediaError(null);
-    try {
-      let latest: PersonaRecord | null = null;
-      for (let i = 0; i < files.length; i++) {
-        latest = await api.uploadPersonaGalleryImage(
+    const ok = await uploadUnifiedMediaBatch<PersonaRecord>({
+      files,
+      allowImageUploads,
+      allowVideoUploads,
+      label: galleryCaptionInput,
+      uploadImage: (file, singleLabel) =>
+        api.uploadPersonaGalleryImage(
           personaId,
-          files[i],
-          galleryCaptionInput.trim() || undefined
-        );
-      }
-      if (latest) {
+          file,
+          singleLabel ?? (galleryCaptionInput.trim() || undefined)
+        ),
+      uploadVideo: (file, singleLabel) =>
+        api.uploadPersonaGalleryVideo(
+          personaId,
+          file,
+          singleLabel ?? (galleryCaptionInput.trim() || undefined),
+          null
+        ),
+      onSuccess: (latest) => {
         onMediaUpdated(latest);
-      }
+      },
+      onError: (msg) => setMediaError(msg),
+    });
+    if (ok) {
       setGalleryCaptionInput("");
-    } catch (err: any) {
-      setMediaError(err?.message || "Failed to upload photo to album.");
-    } finally {
-      setIsUploadingGallery(false);
-      e.target.value = "";
     }
+    setIsUploadingGallery(false);
   };
 
-  const handleGalleryDelete = async (imageId: string) => {
+  const handleGalleryDelete = async (img: GalleryImage) => {
     if (!personaId || !canMutate) return;
-    if (!window.confirm("Delete this photo from the persona's photo album?")) return;
+    setBusyGalleryId(img.id);
     setMediaError(null);
     try {
-      const updated = await api.deletePersonaGalleryImage(personaId, imageId);
-      if (lightboxImage?.id === imageId) {
-        setLightboxImage(null);
+      const impact = await api.getPersonaGalleryImpact(personaId, img.id);
+      const msg = buildImageDeleteConfirmMessage({
+        itemLabel: img.caption || "Persona Photo",
+        isPublic: Boolean(img.is_public ?? impact.is_public),
+        campaignsUsing: impact.campaigns_using || 0,
+        hasLinkedVideo: Boolean(impact.has_linked_video ?? img.video_url),
+      });
+      if (!window.confirm(msg)) {
+        setBusyGalleryId(null);
+        return;
       }
+      const updated = await api.deletePersonaGalleryImage(personaId, img.id);
+      setLightboxTarget(null);
       onMediaUpdated(updated);
     } catch (err: any) {
       setMediaError(err?.message || "Failed to delete photo.");
+    } finally {
+      setBusyGalleryId(null);
+    }
+  };
+
+  const handleAttachOrReplaceVideo = async (img: GalleryImage, file: File) => {
+    if (!personaId || !canMutate) return;
+    setBusyGalleryId(img.id);
+    setMediaError(null);
+    try {
+      const updated = await api.uploadPersonaGalleryVideo(
+        personaId,
+        file,
+        img.caption || undefined,
+        img.id
+      );
+      onMediaUpdated(updated);
+    } catch (err: any) {
+      setMediaError(err?.message || "Failed to upload video to album.");
+    } finally {
+      setBusyGalleryId(null);
+    }
+  };
+
+  const handleVideoDelete = async (img: GalleryImage) => {
+    if (!personaId || !canMutate || !img.video_url) return;
+    if (
+      !window.confirm(
+        `Remove the linked video from "${img.caption || "Persona Photo"}"?\n\nThe still image will be preserved.`
+      )
+    ) {
+      return;
+    }
+    setBusyGalleryId(img.id);
+    setMediaError(null);
+    try {
+      const updated = await api.deletePersonaGalleryVideo(personaId, img.id);
+      onMediaUpdated(updated);
+    } catch (err: any) {
+      setMediaError(err?.message || "Failed to remove linked video.");
+    } finally {
+      setBusyGalleryId(null);
     }
   };
 
@@ -223,11 +282,7 @@ export const PersonaMediaTab: React.FC<PersonaMediaTabProps> = ({
             }}
             onClick={() => {
               if (portraitUrl) {
-                setLightboxImage({
-                  url: portraitUrl,
-                  caption: "Primary Portrait",
-                  isPortrait: true,
-                });
+                setLightboxTarget({ kind: "portrait", url: portraitUrl });
               }
             }}
           >
@@ -267,15 +322,29 @@ export const PersonaMediaTab: React.FC<PersonaMediaTabProps> = ({
             {canMutate && (
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
                 <label
-                  className="btn btn-sm btn-emerald"
-                  style={{ cursor: isUploadingPortrait ? "wait" : "pointer" }}
+                  className={`btn btn-sm btn-emerald ${
+                    isUploadingPortrait || !allowImageUploads ? "disabled" : ""
+                  }`}
+                  style={{
+                    cursor: !allowImageUploads
+                      ? "not-allowed"
+                      : isUploadingPortrait
+                      ? "wait"
+                      : "pointer",
+                    opacity: allowImageUploads ? 1 : 0.55,
+                  }}
+                  title={
+                    allowImageUploads
+                      ? undefined
+                      : "Image uploads are disabled by administrator"
+                  }
                 >
                   <Upload size={12} />
                   <span>{portraitUrl ? "Replace Portrait" : "Upload Portrait"}</span>
                   <input
                     type="file"
                     accept="image/*"
-                    disabled={isUploadingPortrait}
+                    disabled={isUploadingPortrait || !allowImageUploads}
                     style={{ display: "none" }}
                     onChange={(e) => {
                       const file = e.target.files?.[0];
@@ -338,28 +407,26 @@ export const PersonaMediaTab: React.FC<PersonaMediaTabProps> = ({
                   placeholder="Optional caption..."
                   style={{ width: 170, padding: "4px 8px", fontSize: "0.78rem" }}
                   value={galleryCaptionInput}
+                  disabled={isUploadingGallery}
                   onChange={(e) => setGalleryCaptionInput(e.target.value)}
                 />
-                <label
-                  className="btn btn-sm btn-emerald"
-                  style={{ cursor: isUploadingGallery ? "wait" : "pointer" }}
-                >
-                  {isUploadingGallery ? (
-                    <Loader2 size={13} className="spin" />
-                  ) : (
-                    <Upload size={13} />
-                  )}
-                  <span>{isUploadingGallery ? "Uploading..." : "Upload Photos"}</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    disabled={isUploadingGallery}
-                    style={{ display: "none" }}
-                    onChange={handleGalleryUpload}
-                  />
-                </label>
+                <UnifiedMediaUploadButton
+                  uploading={isUploadingGallery}
+                  allowImageUploads={allowImageUploads}
+                  allowVideoUploads={allowVideoUploads}
+                  maxVideoUploadMb={maxVideoUploadMb}
+                  btnClassName="btn btn-sm btn-emerald"
+                  onUploadFiles={handleUnifiedUpload}
+                />
               </div>
+            )}
+
+            {canMutate && (
+              <MediaUploadFormatHint
+                allowImageUploads={allowImageUploads}
+                allowVideoUploads={allowVideoUploads}
+                maxVideoUploadMb={maxVideoUploadMb}
+              />
             )}
           </div>
 
@@ -385,60 +452,111 @@ export const PersonaMediaTab: React.FC<PersonaMediaTabProps> = ({
                 gap: 12,
               }}
             >
-              {gallery.map((img) => (
+              {gallery.map((img, idx) => (
                 <div
                   key={img.id}
                   style={{
-                    position: "relative",
-                    aspectRatio: "1 / 1",
+                    background: "var(--bg-card)",
                     borderRadius: 8,
                     overflow: "hidden",
-                    background: "rgba(0, 0, 0, 0.4)",
                     border: "1px solid var(--border-subtle)",
-                    cursor: "pointer",
+                    display: "flex",
+                    flexDirection: "column",
                   }}
-                  onClick={() => setLightboxImage(img)}
                 >
-                  <img
-                    src={img.url}
-                    alt={img.caption || "Persona Photo"}
-                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                  />
-                  {img.caption && (
+                  <div
+                    style={{
+                      position: "relative",
+                      aspectRatio: "1 / 1",
+                      background: "rgba(0, 0, 0, 0.4)",
+                      cursor: "pointer",
+                    }}
+                    onClick={() => setLightboxTarget({ kind: "gallery", index: idx })}
+                    title={img.video_url ? "Click to enlarge and play video" : "Click to enlarge"}
+                  >
+                    <img
+                      src={img.url}
+                      alt={img.caption || "Persona Photo"}
+                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                    />
+                    {img.video_url && (
+                      <span
+                        className="badge"
+                        title="Image-linked video"
+                        style={{
+                          position: "absolute",
+                          top: 6,
+                          left: 6,
+                          fontSize: "0.62rem",
+                          background: "rgba(15, 23, 42, 0.86)",
+                          color: "#e2e8f0",
+                          borderColor: "var(--border-subtle)",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 3,
+                        }}
+                      >
+                        <Film size={9} /> Video
+                      </span>
+                    )}
+                    {img.caption && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          bottom: 0,
+                          left: 0,
+                          right: 0,
+                          background: "linear-gradient(transparent, rgba(0, 0, 0, 0.85))",
+                          padding: "12px 6px 4px",
+                          fontSize: "0.7rem",
+                          color: "#fff",
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {img.caption}
+                      </div>
+                    )}
                     <div
                       style={{
                         position: "absolute",
-                        bottom: 0,
-                        left: 0,
-                        right: 0,
-                        background: "linear-gradient(transparent, rgba(0, 0, 0, 0.85))",
-                        padding: "12px 6px 4px",
-                        fontSize: "0.7rem",
-                        color: "#fff",
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
+                        top: 6,
+                        right: 6,
+                        background: "rgba(0,0,0,0.6)",
+                        borderRadius: 4,
+                        padding: 3,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: "rgba(255,255,255,0.8)",
                       }}
                     >
-                      {img.caption}
+                      <Maximize2 size={12} />
+                    </div>
+                  </div>
+                  {canMutate && (
+                    <div
+                      style={{
+                        padding: "5px 6px",
+                        borderTop: "1px solid var(--border-subtle)",
+                      }}
+                    >
+                      <CardMediaActionStrip
+                        itemLabel={img.caption || `Photo #${idx + 1}`}
+                        isPublic={Boolean(img.is_public)}
+                        hasVideo={Boolean(img.video_url)}
+                        busy={busyGalleryId === img.id}
+                        allowVideoUploads={allowVideoUploads}
+                        maxVideoUploadMb={maxVideoUploadMb}
+                        onAttachOrReplaceVideo={(file) =>
+                          handleAttachOrReplaceVideo(img, file)
+                        }
+                        onRemoveVideo={() => handleVideoDelete(img)}
+                        onDeleteImage={() => handleGalleryDelete(img)}
+                      />
                     </div>
                   )}
-                  <div
-                    style={{
-                      position: "absolute",
-                      top: 6,
-                      right: 6,
-                      background: "rgba(0,0,0,0.6)",
-                      borderRadius: 4,
-                      padding: 3,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      color: "rgba(255,255,255,0.8)",
-                    }}
-                  >
-                    <Maximize2 size={12} />
-                  </div>
                 </div>
               ))}
             </div>
@@ -446,116 +564,51 @@ export const PersonaMediaTab: React.FC<PersonaMediaTabProps> = ({
         </div>
       </div>
 
-      {lightboxImage && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0, 0, 0, 0.9)",
-            backdropFilter: "blur(6px)",
-            zIndex: 10000,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 24,
-          }}
-          onClick={() => setLightboxImage(null)}
-        >
-          <div
-            style={{
-              position: "relative",
-              maxWidth: "92vw",
-              maxHeight: "85vh",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button
-              type="button"
-              className="btn"
-              style={{
-                position: "absolute",
-                top: -42,
-                right: 0,
-                background: "rgba(0,0,0,0.6)",
-                color: "#fff",
-                border: "1px solid rgba(255,255,255,0.2)",
-                borderRadius: "50%",
-                width: 34,
-                height: 34,
-                padding: 0,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                cursor: "pointer",
-              }}
-              onClick={() => setLightboxImage(null)}
-            >
-              <X size={18} />
-            </button>
+      {lightboxTarget?.kind === "portrait" && (
+        <ImageLightboxModal
+          url={lightboxTarget.url}
+          label="Primary Portrait"
+          onClose={() => setLightboxTarget(null)}
+        />
+      )}
 
-            <img
-              src={lightboxImage.url}
-              alt={lightboxImage.caption || "Persona Photo"}
-              style={{
-                maxWidth: "100%",
-                maxHeight: "75vh",
-                objectFit: "contain",
-                borderRadius: 8,
-                border: "1px solid var(--border-subtle)",
-                boxShadow: "0 10px 40px rgba(0,0,0,0.8)",
-              }}
-            />
-
-            <div
-              style={{
-                marginTop: 12,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                width: "100%",
-                color: "var(--text-secondary)",
-                fontSize: "0.82rem",
-              }}
-            >
-              <span>
-                {lightboxImage.caption || (
-                  <span style={{ fontStyle: "italic", opacity: 0.6 }}>No caption</span>
-                )}
-              </span>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                {lightboxImage.created_at && (
-                  <span style={{ fontSize: "0.75rem", opacity: 0.7 }}>
-                    {new Date(lightboxImage.created_at).toLocaleDateString()}
-                  </span>
-                )}
-                {canMutate && (lightboxImage.isPortrait || lightboxImage.id) && (
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    style={{
-                      color: "#f87171",
-                      border: "1px solid rgba(239, 68, 68, 0.3)",
-                    }}
-                    onClick={() => {
-                      if (lightboxImage.isPortrait) {
-                        handlePortraitDelete();
-                      } else if (lightboxImage.id) {
-                        handleGalleryDelete(lightboxImage.id);
-                      }
-                    }}
-                  >
-                    <Trash2 size={13} />
-                    <span>Delete</span>
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
+      {lightboxTarget?.kind === "gallery" && gallery[lightboxTarget.index] && (
+        <ImageLightboxModal
+          url={gallery[lightboxTarget.index].url}
+          videoUrl={gallery[lightboxTarget.index].video_url}
+          videoMimeType={gallery[lightboxTarget.index].video_mime_type}
+          autoPlayVideo={false}
+          label={gallery[lightboxTarget.index].caption || "Persona Photo"}
+          counterText={
+            gallery.length > 1
+              ? `${lightboxTarget.index + 1} / ${gallery.length}`
+              : undefined
+          }
+          onPrev={
+            gallery.length > 1
+              ? () =>
+                  setLightboxTarget((prev) =>
+                    prev?.kind === "gallery"
+                      ? {
+                          kind: "gallery",
+                          index: (prev.index - 1 + gallery.length) % gallery.length,
+                        }
+                      : null
+                  )
+              : undefined
+          }
+          onNext={
+            gallery.length > 1
+              ? () =>
+                  setLightboxTarget((prev) =>
+                    prev?.kind === "gallery"
+                      ? { kind: "gallery", index: (prev.index + 1) % gallery.length }
+                      : null
+                  )
+              : undefined
+          }
+          onClose={() => setLightboxTarget(null)}
+        />
       )}
     </>
   );

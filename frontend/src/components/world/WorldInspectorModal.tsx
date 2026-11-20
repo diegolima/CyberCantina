@@ -20,6 +20,7 @@ import {
   WORLD_LORE_CATEGORIES,
 } from "../../types";
 import type {
+  AppSettings,
   CampaignWorldSettings,
   LocationContainer,
   LocationEdge,
@@ -81,6 +82,8 @@ interface WorldInspectorModalProps {
   campaignCharacters?: CodexCampaignCharacterEntry[];
   activeLocationId?: string;
   visitedContainerIds?: string[];
+  appSettings?: AppSettings | null;
+  isAdmin?: boolean;
 }
 
 export type WorldTab = "base" | "media" | "map" | "codex" | "settings" | "unsupported";
@@ -102,6 +105,8 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   campaignCharacters = [],
   activeLocationId,
   visitedContainerIds = [],
+  appSettings = null,
+  isAdmin = false,
 }) => {
   const isCampaignMode = mode === "campaign";
   const [activeTab, setActiveTab] = useState<WorldTab>(() =>
@@ -780,6 +785,8 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             containers={effectiveContainers}
             locations={effectiveLocations}
             isDirty={isDirty}
+            appSettings={appSettings}
+            isAdmin={isAdmin}
             onWorldMutated={handleWorldMediaMutated}
           />
 

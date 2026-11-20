@@ -16,7 +16,11 @@ from app.schemas.housekeeping import PurgeCandidatePreview, PurgePreviewResponse
 from app.security.log_sanitize import sanitize_log_value
 from app.security.media_path import (
     PathTraversalError,
+    safe_resolve_asset_category_root,
+    safe_resolve_asset_file_path,
     safe_resolve_character_media_dir,
+    safe_resolve_staging_dir,
+    safe_resolve_staging_file_path,
     safe_resolve_world_media_file_path,
     safe_resolve_world_media_root,
 )
@@ -75,14 +79,17 @@ def compute_purge_preview(
     total_media_bytes = 0
 
     for cand in raw_candidates:
-        media_bytes = sum(_dir_bytes(repo.media_dir, cid) for cid in cand["character_ids"])
-        for w_cat, w_fname in repo.list_user_world_media_files(cand["user_id"]):
+        seen_paths: set[Path] = set()
+        media_bytes = 0
+        for asset in repo.list_user_private_media_assets(cand["user_id"]):
             try:
-                wf = safe_resolve_world_media_file_path(repo.media_dir, w_cat, w_fname)
-                if wf.is_file():
-                    media_bytes += wf.stat().st_size
+                af = repo.resolve_asset_disk_path(asset)
+                if af.is_file() and af not in seen_paths:
+                    seen_paths.add(af)
+                    media_bytes += af.stat().st_size
             except (PathTraversalError, ValueError, OSError):
                 continue
+        media_bytes += sum(_dir_bytes(repo.media_dir, cid) for cid in cand["character_ids"])
         try:
             active_dt = _parse_utc_iso(cand["effective_last_active_at"])
             days_inactive = max(0, int((now_dt - active_dt).total_seconds() // 86400))
@@ -174,6 +181,53 @@ def _sweep_orphan_media_dirs(repo: CantinaRepository) -> int:
                 continue
             safe_file.unlink(missing_ok=True)
             removed += 1
+
+    for category in ("images", "videos", "audio"):
+        try:
+            asset_cat_dir = safe_resolve_asset_category_root(repo.media_dir, category)
+        except (PathTraversalError, ValueError):
+            continue
+        if not asset_cat_dir.is_dir():
+            continue
+        active_asset_files = repo.list_active_asset_filenames(category)
+        for entry in asset_cat_dir.iterdir():
+            if not entry.is_file() or entry.name in active_asset_files:
+                continue
+            try:
+                age_seconds = now_epoch - entry.stat().st_mtime
+            except OSError:
+                continue
+            if age_seconds < ORPHAN_MEDIA_GRACE_SECONDS:
+                continue
+            try:
+                safe_file = safe_resolve_asset_file_path(
+                    repo.media_dir, category, entry.name
+                )
+            except (PathTraversalError, ValueError):
+                continue
+            safe_file.unlink(missing_ok=True)
+            removed += 1
+
+    try:
+        staging_dir = safe_resolve_staging_dir(repo.media_dir)
+    except (PathTraversalError, ValueError):
+        staging_dir = None
+    if staging_dir is not None and staging_dir.is_dir():
+        for entry in staging_dir.iterdir():
+            if not entry.is_file():
+                continue
+            try:
+                age_seconds = now_epoch - entry.stat().st_mtime
+            except OSError:
+                continue
+            if age_seconds < ORPHAN_MEDIA_GRACE_SECONDS:
+                continue
+            try:
+                safe_file = safe_resolve_staging_file_path(repo.media_dir, entry.name)
+                safe_file.unlink(missing_ok=True)
+                removed += 1
+            except (PathTraversalError, ValueError, OSError):
+                continue
 
     removed += repo.prune_orphaned_persona_media(min_age_seconds=ORPHAN_MEDIA_GRACE_SECONDS)
     return removed

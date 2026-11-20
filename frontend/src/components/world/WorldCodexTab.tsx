@@ -136,6 +136,8 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   const [lightboxImage, setLightboxImage] = useState<{
     url: string;
     label: string;
+    videoUrl?: string | null;
+    videoMimeType?: string | null;
   } | null>(null);
   const [fetchedPersonaState, setFetchedPersonaState] =
     useState<PersonaTurnStateSnapshot | null>(null);
@@ -758,7 +760,9 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
             activeLocationId={activeLocationId}
             isCampaignMode={isCampaignMode}
             onOpenOnMap={onOpenOnMap}
-            onEnlargeImage={(url, label) => setLightboxImage({ url, label })}
+            onEnlargeImage={(url, label, videoUrl, videoMimeType) =>
+              setLightboxImage({ url, label, videoUrl, videoMimeType })
+            }
           />
         );
       }
@@ -773,7 +777,9 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
             activeLocationId={activeLocationId}
             isCampaignMode={isCampaignMode}
             onOpenOnMap={onOpenOnMap}
-            onEnlargeImage={(url, label) => setLightboxImage({ url, label })}
+            onEnlargeImage={(url, label, videoUrl, videoMimeType) =>
+              setLightboxImage({ url, label, videoUrl, videoMimeType })
+            }
           />
         );
       }
@@ -898,7 +904,9 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
           activeLocationId={activeLocationId}
           isCampaignMode={isCampaignMode}
           onOpenOnMap={onOpenOnMap}
-          onEnlargeImage={(url, label) => setLightboxImage({ url, label })}
+          onEnlargeImage={(url, label, videoUrl, videoMimeType) =>
+            setLightboxImage({ url, label, videoUrl, videoMimeType })
+          }
         />
       );
     }
@@ -1440,6 +1448,9 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
         <ImageLightboxModal
           url={lightboxImage.url}
           label={lightboxImage.label}
+          videoUrl={lightboxImage.videoUrl}
+          videoMimeType={lightboxImage.videoMimeType}
+          autoPlayVideo={isCampaignMode}
           onClose={() => setLightboxImage(null)}
         />
       )}

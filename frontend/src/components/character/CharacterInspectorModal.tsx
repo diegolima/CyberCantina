@@ -32,6 +32,7 @@ import {
   mergeUniqueDistinctiveFeatures,
 } from ".";
 import type {
+  AppSettings,
   CharacterRecord,
   CharacterVersionSummary,
   GalleryImage,
@@ -52,6 +53,8 @@ export { BASIC_EMOTIONS, cropToSquareBlob };
 interface CharacterInspectorModalProps {
   character: CharacterRecord;
   worlds: WorldRecord[];
+  appSettings?: AppSettings | null;
+  isAdmin?: boolean;
   onClose: () => void;
   onSaved: (updated: CharacterRecord, closeModal?: boolean) => void;
 }
@@ -68,7 +71,7 @@ type CharacterTab =
 
 export const CharacterInspectorModal: React.FC<
   CharacterInspectorModalProps
-> = ({ character, worlds, onClose, onSaved }) => {
+> = ({ character, worlds, appSettings = null, isAdmin = false, onClose, onSaved }) => {
   const [activeTab, setActiveTab] = useState<CharacterTab>("base");
   const [name, setName] = useState(character.name);
   const [tagline, setTagline] = useState(character.tagline);
@@ -902,6 +905,8 @@ export const CharacterInspectorModal: React.FC<
             setPortraits={setPortraits}
             setGallery={setGallery}
             viewingHistory={viewingHistory}
+            appSettings={appSettings}
+            isAdmin={isAdmin}
             onSaved={onSaved}
           />
 

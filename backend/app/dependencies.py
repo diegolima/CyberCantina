@@ -29,6 +29,7 @@ from app.providers.resolver import ProviderUnavailableError, attach_endpoint, re
 from app.schemas.auth import AuthSessionResponse, EffectiveWarning, UserProfile
 from app.security.media_path import (
     PathTraversalError,
+    safe_resolve_asset_file_path,
     safe_resolve_character_media_dir,
     safe_resolve_media_file_path,
     safe_resolve_persona_media_file_path,
@@ -380,6 +381,38 @@ def safe_resolve_world_media_path(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def safe_resolve_asset_path(
+    category: str,
+    filename: str,
+    *,
+    media_dir: str | Path | None = None,
+) -> Path:
+    """Safely validate and resolve an asset path within media_dir/assets/{category}."""
+    base_dir = media_dir if media_dir is not None else settings.media_dir
+    try:
+        return safe_resolve_asset_file_path(base_dir, category, filename)
+    except PathTraversalError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def enforce_upload_policy(user: UserProfile, category: str) -> None:
+    """Enforce admin-configured image/video upload toggles (administrator accounts are exempt)."""
+    if user.role == "admin":
+        return
+    if category == "image" and not settings.allow_image_uploads:
+        raise HTTPException(
+            status_code=403,
+            detail="Image uploads are currently disabled by the server administrator.",
+        )
+    if category == "video" and not settings.allow_video_uploads:
+        raise HTTPException(
+            status_code=403,
+            detail="Video uploads are currently disabled by the server administrator.",
+        )
+
+
 def safe_resolve_public_character_media_path(
     version_tag: str,
     seed_slug: str,
@@ -461,12 +494,37 @@ def get_persona_media_bytes(repo: CantinaRepository, user_id: str) -> int:
 
 
 def get_user_media_usage_bytes(repo: CantinaRepository, user_id: str) -> int:
-    """Compute total persisted media bytes across characters, personas, and worlds owned by ``user_id``."""
+    """Compute total persisted private media bytes across unified media_assets (and legacy dirs) without CoW double-counting."""
     total = 0
+    seen_paths: set[Path] = set()
+    for asset in repo.list_user_private_media_assets(user_id):
+        try:
+            fpath = repo.resolve_asset_disk_path(asset)
+            if fpath.is_file() and fpath not in seen_paths:
+                seen_paths.add(fpath)
+                total += fpath.stat().st_size
+        except (PathTraversalError, ValueError, OSError):
+            continue
     for cid in repo.list_user_media_character_ids(user_id):
-        total += get_character_media_bytes(repo.media_dir, cid)
-    total += get_persona_media_bytes(repo, user_id)
-    total += get_world_media_bytes(repo, user_id)
+        try:
+            c_dir = safe_resolve_character_media_dir(repo.media_dir, cid)
+            if c_dir.is_dir():
+                for item in c_dir.rglob("*"):
+                    if item.is_file() and item not in seen_paths:
+                        seen_paths.add(item)
+                        total += item.stat().st_size
+        except (PathTraversalError, ValueError, OSError):
+            continue
+    for persona_id, category, filename in repo.list_user_persona_media_files(user_id):
+        try:
+            fpath = safe_resolve_persona_media_file_path(
+                repo.media_dir, persona_id, category, filename
+            )
+            if fpath.is_file() and fpath not in seen_paths:
+                seen_paths.add(fpath)
+                total += fpath.stat().st_size
+        except (PathTraversalError, ValueError, OSError):
+            continue
     return total
 
 
@@ -545,6 +603,7 @@ def enforce_quota_and_write_webp(
     target_path: Path,
     *,
     replacing_path: Path | None = None,
+    replaced_bytes: int = 0,
 ) -> None:
     """Enforce per-user media storage quota atomically and write WebP bytes to ``target_path``."""
     with get_user_media_lock(user.id):
@@ -554,7 +613,7 @@ def enforce_quota_and_write_webp(
             replaced = (
                 replacing_path.stat().st_size
                 if (replacing_path is not None and replacing_path.is_file())
-                else 0
+                else max(0, int(replaced_bytes))
             )
             net_added = len(webp_bytes) - replaced
             if net_added > 0 and (used + net_added) > quota:
@@ -562,11 +621,50 @@ def enforce_quota_and_write_webp(
                     status_code=413,
                     detail=(
                         f"Media storage quota exceeded ({format_mb(used)} / {format_mb(quota)} used). "
-                        "Delete existing character or world media files to free space."
+                        "Delete existing character, persona, or world media files to free space."
                     ),
                 )
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_bytes(webp_bytes)
+
+
+def enforce_quota_and_commit_staged_files(
+    repo: CantinaRepository,
+    user: UserProfile,
+    staged_moves: list[tuple[Path, Path]],
+    *,
+    replaced_bytes: int = 0,
+) -> None:
+    """Atomically check per-user media quota (net of replaced_bytes) and move staged files into active storage."""
+    import os
+
+    with get_user_media_lock(user.id):
+        quota = get_user_quota_bytes(user)
+        added = sum(src.stat().st_size for src, _ in staged_moves)
+        if quota is not None:
+            used = get_user_media_usage_bytes(repo, user.id)
+            net_added = added - max(0, int(replaced_bytes))
+            if net_added > 0 and (used + net_added) > quota:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        f"Media storage quota exceeded ({format_mb(used)} / {format_mb(quota)} used). "
+                        "Delete existing character, persona, or world media files to free space."
+                    ),
+                )
+        moved_targets: list[Path] = []
+        try:
+            for src, dst in staged_moves:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(src, dst)
+                moved_targets.append(dst)
+        except Exception:
+            for dst in moved_targets:
+                try:
+                    dst.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise
 
 
 def process_and_save_image(

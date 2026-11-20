@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { api } from "../api";
 import {
+  AppSettings,
   GalleryImage,
   PersonaCreatePayload,
   PersonaItemInstance,
@@ -40,6 +41,8 @@ export type PersonaTab = "base" | "appearance" | "media" | "lore" | "inventory" 
 interface PersonaEditorModalProps {
   persona?: PersonaRecord | null;
   isDefault?: boolean;
+  appSettings?: AppSettings | null;
+  isAdmin?: boolean;
   onClose: () => void;
   onSaved: (persona: PersonaRecord, closeModal?: boolean) => void;
   onDeleted?: (personaId: string) => Promise<void> | void;
@@ -49,6 +52,8 @@ interface PersonaEditorModalProps {
 export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
   persona,
   isDefault = false,
+  appSettings = null,
+  isAdmin = false,
   onClose,
   onSaved,
   onDeleted,
@@ -735,6 +740,8 @@ export const PersonaEditorModal: React.FC<PersonaEditorModalProps> = ({
               isUnsavedDraft={!persona?.id || clonedMode}
               portraitUrl={portraitUrl}
               gallery={gallery}
+              appSettings={appSettings}
+              isAdmin={isAdmin}
               onMediaUpdated={(updated) => {
                 setPortraitUrl(updated.portrait_url ?? null);
                 setGallery(updated.gallery ?? []);

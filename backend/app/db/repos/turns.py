@@ -1053,7 +1053,7 @@ class TurnsBranchesMixin:
         )
 
     def _filter_deleted_turn_media(self, turns: list[TurnNodeRecord]) -> None:
-        """Strip first_visit_media items whose world_media row or disk file no longer exists."""
+        """Strip first_visit_media items whose media_assets row or file no longer exists, and hydrate linked videos."""
         referenced_ids: set[str] = set()
         for t in turns:
             if t.post_turn and t.post_turn.first_visit_media:
@@ -1067,28 +1067,40 @@ class TurnsBranchesMixin:
         conn = self._connect()
         try:
             rows = conn.execute(
-                f"SELECT id, media_type, filename FROM world_media WHERE id IN ({placeholders})",
+                f"SELECT * FROM media_assets WHERE id IN ({placeholders})",
                 list(referenced_ids),
             ).fetchall()
+            valid_assets = {
+                str(r["id"]): dict(r)
+                for r in rows
+                if self._asset_file_exists(r)
+            }
+            videos_by_parent = self.get_linked_videos_map(conn, list(valid_assets.keys()))
         finally:
             conn.close()
 
-        valid_media_ids = {
-            r["id"]
-            for r in rows
-            if self._world_media_file_exists(r["media_type"], r["filename"])
-        }
         seen_turns: set[int] = set()
         for t in turns:
             if id(t) in seen_turns:
                 continue
             seen_turns.add(id(t))
             if t.post_turn and t.post_turn.first_visit_media:
-                t.post_turn.first_visit_media = [
-                    item
-                    for item in t.post_turn.first_visit_media
-                    if item.media_id in valid_media_ids
-                ]
+                updated_items = []
+                for item in t.post_turn.first_visit_media:
+                    asset = valid_assets.get(item.media_id)
+                    if asset is None:
+                        continue
+                    vid = videos_by_parent.get(item.media_id)
+                    updated_items.append(
+                        item.model_copy(
+                            update={
+                                "image_url": self.build_public_or_asset_url(asset),
+                                "video_url": f"/api/media/assets/{vid['id']}" if vid else None,
+                                "video_mime_type": vid["mime_type"] if vid else None,
+                            }
+                        )
+                    )
+                t.post_turn.first_visit_media = updated_items
 
     @staticmethod
     def _row_to_turn_node(r: sqlite3.Row) -> TurnNodeRecord:

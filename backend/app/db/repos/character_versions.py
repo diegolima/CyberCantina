@@ -423,8 +423,6 @@ class CharacterVersionsMixin:
                     (character_id,),
                 )
                 target_char_id = f"char_{uuid.uuid4().hex[:10]}"
-                copied_media_for = target_char_id
-                self._copy_character_media(character_id, target_char_id)
                 reconciled_p, reconciled_g = self._reconcile_character_media_for_id(
                     character_id, target_char_id, clean_p, clean_g
                 )
@@ -811,8 +809,6 @@ class CharacterVersionsMixin:
                     (character_id,),
                 )
                 target_char_id = f"char_{uuid.uuid4().hex[:10]}"
-                copied_media_for = target_char_id
-                self._copy_character_media(character_id, target_char_id)
                 reconciled_p, reconciled_g = self._reconcile_character_media_for_id(
                     character_id, target_char_id, clean_p, clean_g
                 )

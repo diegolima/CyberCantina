@@ -13,10 +13,15 @@ import {
 } from "lucide-react";
 import { api } from "../../api";
 import {
+  AdminMediaPurgePreviewResponse,
   AppSettings,
   ChloromancerStatusResponse,
   PurgePreviewResponse,
 } from "../../types";
+import {
+  type PurgeMediaSelection,
+  computePurgeToggleState,
+} from "../../utils/importExportLogic";
 
 export interface AdminServerConfigTabProps {
   appSettingsForm: AppSettings | null;
@@ -60,6 +65,13 @@ export const AdminServerConfigTab: React.FC<AdminServerConfigTabProps> = ({
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [runningPurge, setRunningPurge] = useState(false);
   const [confirmManualPurge, setConfirmManualPurge] = useState(false);
+  const [mediaPurgeSelection, setMediaPurgeSelection] =
+    useState<PurgeMediaSelection>({ purgeImages: false, purgeVideos: false });
+  const [mediaPurgePreview, setMediaPurgePreview] =
+    useState<AdminMediaPurgePreviewResponse | null>(null);
+  const [loadingMediaPurgePreview, setLoadingMediaPurgePreview] = useState(false);
+  const [runningMediaPurge, setRunningMediaPurge] = useState(false);
+  const [confirmMediaPurge, setConfirmMediaPurge] = useState(false);
 
   const loadChloromancerStatus = async () => {
     setLoadingStatus(true);
@@ -310,6 +322,105 @@ export const AdminServerConfigTab: React.FC<AdminServerConfigTabProps> = ({
               />
             </div>
           )}
+
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+              paddingTop: 8,
+              borderTop: "1px dashed var(--border-subtle)",
+            }}
+          >
+            <label
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 10,
+                cursor: "pointer",
+                fontSize: "0.82rem",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={appSettingsForm.allow_image_uploads ?? true}
+                onChange={(e) =>
+                  setAppSettingsForm((prev) =>
+                    prev
+                      ? { ...prev, allow_image_uploads: e.target.checked }
+                      : prev
+                  )
+                }
+                style={{ marginTop: 2 }}
+              />
+              <div>
+                <div style={{ fontWeight: 600 }}>
+                  Allow image uploads for non-admin users
+                </div>
+                <div style={{ fontSize: "0.74rem", color: "var(--text-secondary)", marginTop: 2 }}>
+                  When disabled, standard accounts cannot upload portraits/album images or import image binaries from .zcc packages (administrators remain exempt).
+                </div>
+              </div>
+            </label>
+
+            <label
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 10,
+                cursor: "pointer",
+                fontSize: "0.82rem",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={appSettingsForm.allow_video_uploads ?? true}
+                onChange={(e) =>
+                  setAppSettingsForm((prev) =>
+                    prev
+                      ? { ...prev, allow_video_uploads: e.target.checked }
+                      : prev
+                  )
+                }
+                style={{ marginTop: 2 }}
+              />
+              <div>
+                <div style={{ fontWeight: 600 }}>
+                  Allow video uploads for non-admin users
+                </div>
+                <div style={{ fontSize: "0.74rem", color: "var(--text-secondary)", marginTop: 2 }}>
+                  When disabled, standard accounts cannot upload MP4/WebM videos or import videos from .zcc packages (administrators remain exempt).
+                </div>
+              </div>
+            </label>
+
+            <div className="form-group" style={{ maxWidth: 260, marginLeft: 24 }}>
+              <label className="form-label" htmlFor="max-video-upload-mb">
+                Max Video Upload Size (MB)
+              </label>
+              <input
+                id="max-video-upload-mb"
+                type="number"
+                className="form-input"
+                min={1}
+                max={500}
+                step={0.5}
+                value={appSettingsForm.max_video_upload_mb ?? 15}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  setAppSettingsForm((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          max_video_upload_mb:
+                            Number.isFinite(val) && val > 0 ? val : 15,
+                        }
+                      : prev
+                  );
+                }}
+              />
+            </div>
+          </div>
         </div>
 
         {/* Chloromancer Inactivity Purge Policy Card */}
@@ -479,6 +590,197 @@ export const AdminServerConfigTab: React.FC<AdminServerConfigTabProps> = ({
           </div>
         </div>
       </form>
+
+      {/* Purge Non-Built-In Media Card */}
+      <div
+        style={{
+          background: "var(--bg-card)",
+          border: "1px solid var(--border-subtle)",
+          borderRadius: 8,
+          padding: 14,
+          display: "flex",
+          flexDirection: "column",
+          gap: 12,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: 8,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Trash2 size={15} color="#fb7185" />
+            <span style={{ fontWeight: 600, fontSize: "0.86rem" }}>
+              Purge Non-Built-In Media
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              className="btn"
+              disabled={
+                loadingMediaPurgePreview ||
+                (!mediaPurgeSelection.purgeImages &&
+                  !mediaPurgeSelection.purgeVideos)
+              }
+              onClick={async () => {
+                setLoadingMediaPurgePreview(true);
+                setErrorMsg(null);
+                try {
+                  const preview = await api.getAdminMediaPurgePreview(
+                    mediaPurgeSelection.purgeImages,
+                    mediaPurgeSelection.purgeVideos
+                  );
+                  setMediaPurgePreview(preview);
+                } catch (err: any) {
+                  setErrorMsg(
+                    err?.message || "Failed to preview non-built-in media purge."
+                  );
+                } finally {
+                  setLoadingMediaPurgePreview(false);
+                }
+              }}
+            >
+              <RefreshCw size={13} />
+              <span>
+                {loadingMediaPurgePreview ? "Scanning..." : "Preview Eligible Media"}
+              </span>
+            </button>
+            {!confirmMediaPurge ? (
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={
+                  runningMediaPurge ||
+                  (!mediaPurgeSelection.purgeImages &&
+                    !mediaPurgeSelection.purgeVideos)
+                }
+                onClick={() => setConfirmMediaPurge(true)}
+              >
+                <Trash2 size={13} />
+                <span>Purge Selected Media</span>
+              </button>
+            ) : (
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={runningMediaPurge}
+                  onClick={() => setConfirmMediaPurge(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  disabled={runningMediaPurge}
+                  onClick={async () => {
+                    setRunningMediaPurge(true);
+                    setErrorMsg(null);
+                    setStatusMsg(null);
+                    try {
+                      const res = await api.purgeAdminMedia(
+                        mediaPurgeSelection.purgeImages,
+                        mediaPurgeSelection.purgeVideos
+                      );
+                      setConfirmMediaPurge(false);
+                      setMediaPurgePreview(null);
+                      setStatusMsg(
+                        `Purged ${res.images_deleted} image(s) and ${res.videos_deleted} video(s), reclaiming ${formatBytes(res.bytes_reclaimed)}.`
+                      );
+                      await onUsersChanged?.();
+                    } catch (err: any) {
+                      setErrorMsg(
+                        err?.message || "Failed to purge non-built-in media."
+                      );
+                    } finally {
+                      setRunningMediaPurge(false);
+                    }
+                  }}
+                >
+                  <Trash2 size={13} />
+                  <span>
+                    {runningMediaPurge ? "Purging..." : "Confirm Purge Media"}
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 18, fontSize: "0.82rem" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={mediaPurgeSelection.purgeImages}
+              onChange={(e) => {
+                setMediaPurgeSelection((prev) =>
+                  computePurgeToggleState(prev, "images", e.target.checked)
+                );
+                setMediaPurgePreview(null);
+                setConfirmMediaPurge(false);
+              }}
+            />
+            <span>Images (all non-built-in user images)</span>
+          </label>
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              cursor: mediaPurgeSelection.purgeImages ? "not-allowed" : "pointer",
+              opacity: mediaPurgeSelection.purgeImages ? 0.8 : 1,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={mediaPurgeSelection.purgeVideos}
+              disabled={mediaPurgeSelection.purgeImages}
+              onChange={(e) => {
+                setMediaPurgeSelection((prev) =>
+                  computePurgeToggleState(prev, "videos", e.target.checked)
+                );
+                setMediaPurgePreview(null);
+                setConfirmMediaPurge(false);
+              }}
+            />
+            <span>Videos (all non-built-in user videos)</span>
+          </label>
+        </div>
+
+        <div style={{ fontSize: "0.74rem", color: "var(--text-secondary)", lineHeight: 1.45 }}>
+          Permanently deletes all uploaded/imported user media in the chosen category while preserving built-in starter assets.{" "}
+          {mediaPurgeSelection.purgeImages && (
+            <strong style={{ color: "#fda4af" }}>
+              Selecting Images automatically includes Videos because user videos cannot exist without their linked parent image.
+            </strong>
+          )}
+        </div>
+
+        {mediaPurgePreview && (
+          <div
+            style={{
+              padding: "8px 10px",
+              borderRadius: 6,
+              background: "var(--bg-deep)",
+              border: "1px solid var(--border-subtle)",
+              fontSize: "0.78rem",
+              color: "var(--text-secondary)",
+            }}
+          >
+            Eligible for purge:{" "}
+            <strong>{mediaPurgePreview.images_count}</strong> image(s) (
+            {formatBytes(mediaPurgePreview.images_bytes)}) ·{" "}
+            <strong>{mediaPurgePreview.videos_count}</strong> video(s) (
+            {formatBytes(mediaPurgePreview.videos_bytes)}) · Total{" "}
+            <strong>{formatBytes(mediaPurgePreview.total_bytes)}</strong>
+          </div>
+        )}
+      </div>
 
       {/* Dry-run Preview & Manual Execution */}
       <div

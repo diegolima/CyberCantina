@@ -3,6 +3,7 @@
 import io
 import json
 import zipfile
+from pathlib import Path
 import pytest
 from PIL import Image
 from fastapi.testclient import TestClient
@@ -257,10 +258,10 @@ def test_bundle_export_and_import_roundtrip(client_and_repo, tmp_path):
     assert imported_persona.id != created_persona.id
     assert imported_persona.tagline == "Ghost in the orbital relay."
     assert imported_persona.portrait_url is not None
-    assert imported_persona.portrait_url.startswith(f"/api/media/personas/{imported_persona.id}/portraits/")
+    assert imported_persona.portrait_url.startswith("/api/media/assets/por_")
     assert len(imported_persona.gallery) == 1
     assert imported_persona.gallery[0].caption == "Safehouse Rig"
-    assert imported_persona.gallery[0].url.startswith(f"/api/media/personas/{imported_persona.id}/gallery/")
+    assert imported_persona.gallery[0].url.startswith("/api/media/assets/img_")
     assert client.get(imported_persona.portrait_url).status_code == 200
     assert client.get(imported_persona.gallery[0].url).status_code == 200
 
@@ -1079,7 +1080,7 @@ def test_zcc_import_edit_save_and_reexport_preserves_media(client_and_repo):
 
 
 def test_cow_fork_and_restore_rewrite_media_urls_and_recover_legacy_export(client_and_repo):
-    """CoW-forking or restoring a character rewrites media URLs to the new ID so pruning the old character never breaks media or exports."""
+    """CoW-forking or restoring a character shares unified media_assets without duplicating files; pruning unreferenced forks keeps shared assets alive."""
     client, repo, user = client_and_repo
 
     world = repo.create_world_from_draft(
@@ -1124,30 +1125,27 @@ def test_cow_fork_and_restore_rewrite_media_urls_and_recover_legacy_export(clien
         world_id=world.id,
         owner_id=user.id,
     )
-    p_path = safe_resolve_media_path(char_v1.id, "portraits", "default_v1.webp")
-    process_and_save_image(_create_test_image(200, 200, "purple"), p_path, square_crop=True)
-    repo.update_character_portraits(
-        char_v1.id,
-        {"default": f"/api/media/characters/{char_v1.id}/portraits/default_v1.webp"},
-        owner_id=user.id,
+    p_resp = client.post(
+        f"/api/characters/{char_v1.id}/portraits/default",
+        files={"file": ("default_v1.png", _create_test_image(200, 200, "purple"), "image/png")},
     )
-    g_path = safe_resolve_media_path(char_v1.id, "gallery", "img_v1.webp")
-    process_and_save_image(_create_test_image(300, 200, "teal"), g_path, square_crop=False)
-    from app.schemas.character import GalleryImage
-
-    repo.update_character_gallery(
-        char_v1.id,
-        [
-            GalleryImage(
-                id="img_v1",
-                url=f"/api/media/characters/{char_v1.id}/gallery/img_v1.webp",
-                caption="Alleyway",
-                created_at="2026-11-16T12:00:00Z",
-            )
-        ],
-        owner_id=user.id,
+    assert p_resp.status_code == 200
+    g_resp = client.post(
+        f"/api/characters/{char_v1.id}/gallery",
+        data={"caption": "Alleyway"},
+        files={"file": ("img_v1.png", _create_test_image(300, 200, "teal"), "image/png")},
     )
+    assert g_resp.status_code == 200
     char_v1 = repo.get_character(char_v1.id, owner_id=user.id)
+    shared_portrait_url = char_v1.portraits["default"]
+    shared_gallery_url = char_v1.gallery[0].url
+    assert shared_portrait_url.startswith("/api/media/assets/por_")
+    assert shared_gallery_url.startswith("/api/media/assets/img_")
+
+    from app.dependencies import get_user_media_usage_bytes
+
+    initial_usage = get_user_media_usage_bytes(repo, user.id)
+    assert initial_usage > 0
 
     # Start a campaign referencing char_v1 so editing triggers Copy-on-Write fork
     camp = repo.create_campaign(
@@ -1165,15 +1163,17 @@ def test_cow_fork_and_restore_rewrite_media_urls_and_recover_legacy_export(clien
     assert put_resp.status_code == 200
     forked_v2 = put_resp.json()
     assert forked_v2["id"] != char_v1.id
-    assert forked_v2["portraits"]["default"] == f"/api/media/characters/{forked_v2['id']}/portraits/default_v1.webp"
-    assert forked_v2["gallery"][0]["url"] == f"/api/media/characters/{forked_v2['id']}/gallery/img_v1.webp"
+    # Unified media: CoW fork shares exact same asset URLs with zero duplication in quota
+    assert forked_v2["portraits"]["default"] == shared_portrait_url
+    assert forked_v2["gallery"][0]["url"] == shared_gallery_url
+    assert get_user_media_usage_bytes(repo, user.id) == initial_usage
 
-    # Delete campaign and prune char_v1 -> deletes char_v1's media folder
+    # Delete campaign and prune char_v1 -> shared assets remain alive because forked_v2 references them!
     repo.delete_campaign(camp.id, owner_id=user.id)
     pruned = repo.prune_pending_deletion_characters()
     assert char_v1.id in pruned
 
-    # Export forked_v2 + world: both media files must still be served and exported
+    # Export forked_v2 + world: both shared media files must still be served and exported
     media_get = client.get(forked_v2["portraits"]["default"])
     assert media_get.status_code == 200
 
@@ -1191,7 +1191,7 @@ def test_cow_fork_and_restore_rewrite_media_urls_and_recover_legacy_export(clien
         media_entries = [n for n in zf.namelist() if n.startswith("media/")]
         assert len(media_entries) == 2
 
-    # Also verify CoW restore_character_version rewrites URLs to the new forked ID
+    # Also verify CoW restore_character_version preserves shared unified URLs without duplication
     camp2 = repo.create_campaign(
         name="Quay Run 2",
         world_id=world.id,
@@ -1200,47 +1200,20 @@ def test_cow_fork_and_restore_rewrite_media_urls_and_recover_legacy_export(clien
     )
     restored = repo.restore_character_version(forked_v2["id"], 1, owner_id=user.id)
     assert restored.id != forked_v2["id"]
-    assert restored.portraits["default"] == f"/api/media/characters/{restored.id}/portraits/default_v1.webp"
-    assert restored.gallery[0].url == f"/api/media/characters/{restored.id}/gallery/img_v1.webp"
+    assert restored.portraits["default"] == shared_portrait_url
+    assert restored.gallery[0].url == shared_gallery_url
+    assert get_user_media_usage_bytes(repo, user.id) == initial_usage
     repo.delete_campaign(camp2.id, owner_id=user.id)
     repo.prune_pending_deletion_characters()
+    assert client.get(shared_portrait_url).status_code == 200
+    assert client.get(shared_gallery_url).status_code == 200
 
-    # Legacy recovery: simulate a character forked before the fix whose DB URLs still cite a pruned ID
-    # while its copied files exist under restored.id
-    conn = repo._connect()
-    try:
-        conn.execute(
-            "UPDATE characters SET portraits_json = ?, gallery_json = ? WHERE id = ?",
-            (
-                json.dumps({"default": "/api/media/characters/char_pruned_legacy/portraits/default_v1.webp"}),
-                json.dumps([
-                    {
-                        "id": "img_v1",
-                        "url": "/api/media/characters/char_pruned_legacy/gallery/img_v1.webp",
-                        "caption": "Alleyway",
-                        "created_at": "2026-11-16T12:00:00Z",
-                    }
-                ]),
-                restored.id,
-            ),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    legacy_exp = client.post(
-        "/api/export/bundle",
-        json={
-            "character_ids": [restored.id],
-            "world_ids": [world.id],
-            "persona_ids": [],
-            "bundle_name": "vesper_legacy_recovery",
-        },
-    )
-    assert legacy_exp.status_code == 200
-    with zipfile.ZipFile(io.BytesIO(legacy_exp.content)) as zf:
-        media_entries = [n for n in zf.namelist() if n.startswith("media/")]
-        assert len(media_entries) == 2
+    # Deleting restored character with no remaining refs finally deletes shared assets from disk & DB
+    del_resp = client.delete(f"/api/characters/{restored.id}")
+    assert del_resp.status_code in (200, 204)
+    assert get_user_media_usage_bytes(repo, user.id) == 0
+    assert client.get(shared_portrait_url).status_code == 404
+    assert client.get(shared_gallery_url).status_code == 404
 
 
 def test_zcc_import_normalizes_codex_and_legacy_lore_categories(client_and_repo):
@@ -1361,6 +1334,215 @@ def test_zcc_import_normalizes_codex_and_legacy_lore_categories(client_and_repo)
     assert world_cats["Wandering Scribe"] == "figure"
     assert imported.containers[0].lore_nodes[0].category == "culture"
     assert imported.locations[0].lore_nodes[0].category == "rumor"
+
+
+def _make_sample_mp4(tmp_path: Path, name: str = "bundle_clip.mp4") -> bytes:
+    import subprocess
+
+    out = tmp_path / name
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=0x1188aa:s=128x72:d=0.3:r=10",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-an",
+            str(out),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return out.read_bytes()
+
+
+def test_zcc_selective_video_export_import_coupling_and_disabled_upload_policy(
+    empty_repo: CantinaRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Verify default video exclusion, selective selected_video_ids, import_images/import_videos coupling, and admin disabled-media warn+skip."""
+    from app.config import settings
+
+    owner = empty_repo.create_user(username="vid_exporter", display_name="Exporter", role="user")
+    importer = empty_repo.create_user(username="vid_importer", display_name="Importer", role="user")
+    admin = empty_repo.create_user(username="vid_admin", display_name="Admin", role="admin")
+
+    monkeypatch.setattr(main_module, "get_repo", lambda: empty_repo)
+    actor = [owner]
+    main_module.app.dependency_overrides[main_module.get_current_user] = lambda: actor[0]
+    try:
+        with TestClient(main_module.app) as client:
+            w = empty_repo.create_world_from_draft(
+                WorldWizardDraft(
+                    name="Cinema Harbor",
+                    global_rules=WorldGlobalRules(
+                        genre="Noir",
+                        tone="Moody",
+                        setting_overview="Wet cobbles.",
+                        tech_or_magic_rules="Analog.",
+                    ),
+                    locations=[
+                        LocationNodeDraft(
+                            key="loc_dock",
+                            name="East Dock",
+                            summary="S",
+                            description="D",
+                            is_starting_location=True,
+                        )
+                    ],
+                    edges=[],
+                    lore_nodes=[],
+                ),
+                owner_id=owner.id,
+            )
+            c = empty_repo.create_character_from_draft(
+                CharacterWizardDraft(
+                    name="Juno Hale",
+                    tagline="Projectionist",
+                    core_persona="Quiet.",
+                    baseline_psyche=BaselinePsyche(
+                        core_drive="Keep reels.",
+                        core_fear="Fire.",
+                        default_want="Run reel.",
+                        default_plan="Thread film.",
+                    ),
+                ),
+                world_id=w.id,
+                owner_id=owner.id,
+            )
+
+            mp4_bytes = _make_sample_mp4(tmp_path)
+            r_wv = client.post(
+                f"/api/worlds/{w.id}/media/videos",
+                files={"file": ("world_clip.mp4", mp4_bytes, "video/mp4")},
+                data={"label": "Rainy Neon"},
+            )
+            assert r_wv.status_code == 200
+            w_vid_id = r_wv.json()["media"][0]["video_asset_id"]
+
+            r_cv = client.post(
+                f"/api/characters/{c.id}/gallery/videos",
+                files={"file": ("char_clip.mp4", mp4_bytes, "video/mp4")},
+                data={"caption": "Booth"},
+            )
+            assert r_cv.status_code == 200
+            c_vid_id = r_cv.json()["gallery"][0]["video_asset_id"]
+
+            # 1. Default export excludes videos (images only)
+            zcc_default = client.post(
+                "/api/export/bundle",
+                json={"character_ids": [c.id], "world_ids": [w.id], "persona_ids": []},
+            )
+            assert zcc_default.status_code == 200
+            with zipfile.ZipFile(io.BytesIO(zcc_default.content)) as zf:
+                assert not any(n.endswith(".mp4") for n in zf.namelist())
+                m_def = json.loads(zf.read("manifest.json").decode("utf-8"))
+                assert m_def["contents"]["videos_count"] == 0
+                assert m_def["contents"]["images_count"] == 2
+
+            # 2. Export with include_videos=True & selected_video_ids=[c_vid_id] packs ONLY c_vid_id
+            zcc_sel = client.post(
+                "/api/export/bundle",
+                json={
+                    "character_ids": [c.id],
+                    "world_ids": [w.id],
+                    "persona_ids": [],
+                    "include_videos": True,
+                    "selected_video_ids": [c_vid_id],
+                },
+            )
+            assert zcc_sel.status_code == 200
+            with zipfile.ZipFile(io.BytesIO(zcc_sel.content)) as zf:
+                mp4s = [n for n in zf.namelist() if n.endswith(".mp4")]
+                assert len(mp4s) == 1
+                assert w_vid_id not in mp4s[0]
+
+            # 3. Export ALL videos for import inspect/commit tests
+            zcc_full = client.post(
+                "/api/export/bundle",
+                json={
+                    "character_ids": [c.id],
+                    "world_ids": [w.id],
+                    "persona_ids": [],
+                    "include_videos": True,
+                },
+            )
+            assert zcc_full.status_code == 200
+            zcc_bytes = zcc_full.content
+
+            actor[0] = importer
+            insp = client.post(
+                "/api/import/inspect",
+                files={"file": ("full.zcc", zcc_bytes, "application/octet-stream")},
+            ).json()
+            assert insp["images_count"] == 2
+            assert insp["videos_count"] == 2
+            assert insp["images_bytes"] > 0
+            assert insp["videos_bytes"] > 0
+
+            # import_images=False forces videos to be skipped too even if import_videos=True
+            com_no_img = client.post(
+                "/api/import/commit",
+                json={
+                    "staged_token": insp["staged_token"],
+                    "default_conflict_strategy": "copy",
+                    "import_images": False,
+                    "import_videos": True,
+                },
+            ).json()
+            assert com_no_img["success"] is True
+            imp_w0 = empty_repo.list_worlds(owner_id=importer.id)[0]
+            imp_c0 = empty_repo.list_characters(owner_id=importer.id)[0]
+            assert imp_w0.media == []
+            assert imp_c0.gallery == []
+
+            # 4. Admin disables video uploads -> standard user gets warning & images-only import; admin imports videos
+            monkeypatch.setattr(settings, "allow_video_uploads", False)
+            insp2 = client.post(
+                "/api/import/inspect",
+                files={"file": ("full2.zcc", zcc_bytes, "application/octet-stream")},
+            ).json()
+            com_novid = client.post(
+                "/api/import/commit",
+                json={
+                    "staged_token": insp2["staged_token"],
+                    "default_conflict_strategy": "copy",
+                    "import_images": True,
+                    "import_videos": True,
+                },
+            ).json()
+            assert any("video" in w_msg.lower() for w_msg in com_novid["warnings"])
+            imp_w1 = empty_repo.list_worlds(owner_id=importer.id)[-1]
+            assert len(imp_w1.media) == 1
+            assert imp_w1.media[0].video_url is None
+
+            # Admin exempt: imports both images and videos with no upload-policy skip warning
+            actor[0] = admin
+            insp3 = client.post(
+                "/api/import/inspect",
+                files={"file": ("full3.zcc", zcc_bytes, "application/octet-stream")},
+            ).json()
+            com_adm = client.post(
+                "/api/import/commit",
+                json={
+                    "staged_token": insp3["staged_token"],
+                    "default_conflict_strategy": "copy",
+                    "import_images": True,
+                    "import_videos": True,
+                },
+            ).json()
+            assert com_adm["warnings"] == []
+            adm_w = empty_repo.list_worlds(owner_id=admin.id)[0]
+            adm_c = empty_repo.list_characters(owner_id=admin.id)[0]
+            assert adm_w.media[0].video_url is not None
+            assert adm_c.gallery[0].video_url is not None
+    finally:
+        main_module.app.dependency_overrides.clear()
 
 
 

@@ -5,6 +5,8 @@ export interface ZccManifestContents {
   worlds_count: number;
   personas_count: number;
   media_files_count: number;
+  images_count?: number;
+  videos_count?: number;
 }
 
 export interface ZccManifest {
@@ -23,6 +25,8 @@ export interface ExportBundleRequest {
   persona_ids: string[];
   bundle_name?: string;
   include_world_media?: boolean;
+  include_videos?: boolean;
+  selected_video_ids?: string[] | null;
 }
 
 export interface ImportEntityConflict {
@@ -51,12 +55,18 @@ export interface ImportInspectResponse {
   conflicts: ImportEntityConflict[];
   sillytavern_draft?: any;
   warnings?: string[];
+  images_count?: number;
+  images_bytes?: number;
+  videos_count?: number;
+  videos_bytes?: number;
 }
 
 export interface ImportCommitRequest {
   staged_token: string;
   conflict_strategies?: Record<string, ImportConflictStrategy>;
   default_conflict_strategy?: ImportConflictStrategy;
+  import_images?: boolean;
+  import_videos?: boolean;
 }
 
 export interface ImportCommitResponse {
@@ -66,5 +76,6 @@ export interface ImportCommitResponse {
   imported_personas: string[];
   skipped_entities: string[];
   errors: string[];
+  warnings?: string[];
   message: string;
 }

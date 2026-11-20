@@ -9,6 +9,8 @@
 | `GET` | `/api/admin/chloromancer/status` | `app.routers.admin_housekeeping.admin_chloromancer_status` | `ChloromancerStatusResponse` | `frontend/src/api/auth.ts` |
 | `POST` | `/api/admin/embeddings/reindex` | `app.routers.settings.reindex_embeddings` | `dict` | `frontend/src/api/settings.ts` |
 | `GET` | `/api/admin/embeddings/status` | `app.routers.settings.embedding_status` | `dict` | `frontend/src/api/settings.ts` |
+| `POST` | `/api/admin/media/purge` | `app.routers.media.admin_media_purge` | `AdminMediaPurgeResponse` | `frontend/src/api/auth.ts` |
+| `GET` | `/api/admin/media/purge-preview` | `app.routers.media.admin_media_purge_preview` | `AdminMediaPurgePreviewResponse` | `frontend/src/api/auth.ts` |
 | `GET` | `/api/admin/messages` | `app.routers.admin_messages.admin_list_messages` | `AdminMessageListResponse` | `frontend/src/api/adminMessages.ts` |
 | `POST` | `/api/admin/messages` | `app.routers.admin_messages.admin_create_message` | `AdminMessageRecord` | `frontend/src/api/adminMessages.ts` |
 | `PUT` | `/api/admin/messages/reorder` | `app.routers.admin_messages.admin_reorder_messages` | `list` | `frontend/src/api/adminMessages.ts` |
@@ -57,7 +59,10 @@
 | `GET` | `/api/characters/{character_id}` | `app.routers.characters.get_character` | `CharacterRecord` | `frontend/src/api/characters.ts` |
 | `PUT` | `/api/characters/{character_id}` | `app.routers.characters.update_character` | `CharacterRecord` | `frontend/src/api/characters.ts` |
 | `POST` | `/api/characters/{character_id}/gallery` | `app.routers.characters.upload_character_gallery_image` | `CharacterRecord` | `frontend/src/api/characters.ts` |
+| `POST` | `/api/characters/{character_id}/gallery/videos` | `app.routers.characters.upload_character_gallery_video` | `CharacterRecord` | `frontend/src/api/characters.ts` |
 | `DELETE` | `/api/characters/{character_id}/gallery/{image_id}` | `app.routers.characters.delete_character_gallery_image` | `CharacterRecord` | `frontend/src/api/characters.ts` |
+| `GET` | `/api/characters/{character_id}/gallery/{image_id}/impact` | `app.routers.characters.get_character_gallery_image_impact` | `dict` | `frontend/src/api/characters.ts` |
+| `DELETE` | `/api/characters/{character_id}/gallery/{image_id}/video` | `app.routers.characters.delete_character_gallery_video` | `CharacterRecord` | `frontend/src/api/characters.ts` |
 | `DELETE` | `/api/characters/{character_id}/portraits/{emotion}` | `app.routers.characters.delete_character_portrait` | `CharacterRecord` | `frontend/src/api/characters.ts` |
 | `POST` | `/api/characters/{character_id}/portraits/{emotion}` | `app.routers.characters.upload_character_portrait` | `CharacterRecord` | `frontend/src/api/characters.ts` |
 | `GET` | `/api/characters/{character_id}/versions` | `app.routers.characters.list_character_versions` | `list` | `frontend/src/api/characters.ts` |
@@ -73,6 +78,7 @@
 | `GET` | `/api/local-relay/status` | `app.routers.local_relay.get_local_relay_status` | `dict` | `frontend/src/api/providers.ts` |
 | `WS` | `/api/local-relay/ws` | `app.routers.local_relay.local_relay_ws` | — | *(backend-only / test / SSE)* |
 | `POST` | `/api/mechanics/choice-preview` | `app.routers.mechanics.preview_choices` | `ChoicePreviewResponse` | `frontend/src/api/campaigns.ts` |
+| `GET` | `/api/media/assets/{asset_id}` | `app.routers.media.get_unified_media_asset` | — | *(backend-only / test / SSE)* |
 | `GET` | `/api/media/characters/{character_id}/{category}/{filename}` | `app.routers.characters.get_character_media` | — | *(backend-only / test / SSE)* |
 | `GET` | `/api/media/personas/{persona_id}/{category}/{filename}` | `app.routers.personas.get_persona_media` | — | *(backend-only / test / SSE)* |
 | `GET` | `/api/media/public/{version_tag}/characters/{seed_slug}/{category}/{filename}` | `app.routers.characters.get_public_character_media` | — | *(backend-only / test / SSE)* |
@@ -90,7 +96,10 @@
 | `GET` | `/api/personas/{persona_id}` | `app.routers.personas.get_persona` | `PersonaRecord` | `frontend/src/api/personas.ts` |
 | `PUT` | `/api/personas/{persona_id}` | `app.routers.personas.update_persona` | `PersonaRecord` | `frontend/src/api/personas.ts` |
 | `POST` | `/api/personas/{persona_id}/gallery` | `app.routers.personas.upload_persona_gallery_image` | `PersonaRecord` | `frontend/src/api/personas.ts` |
+| `POST` | `/api/personas/{persona_id}/gallery/videos` | `app.routers.personas.upload_persona_gallery_video` | `PersonaRecord` | `frontend/src/api/personas.ts` |
 | `DELETE` | `/api/personas/{persona_id}/gallery/{image_id}` | `app.routers.personas.delete_persona_gallery_image` | `PersonaRecord` | `frontend/src/api/personas.ts` |
+| `GET` | `/api/personas/{persona_id}/gallery/{image_id}/impact` | `app.routers.personas.get_persona_gallery_image_impact` | `dict` | `frontend/src/api/personas.ts` |
+| `DELETE` | `/api/personas/{persona_id}/gallery/{image_id}/video` | `app.routers.personas.delete_persona_gallery_video` | `PersonaRecord` | `frontend/src/api/personas.ts` |
 | `DELETE` | `/api/personas/{persona_id}/portrait` | `app.routers.personas.delete_persona_portrait` | `PersonaRecord` | `frontend/src/api/personas.ts` |
 | `POST` | `/api/personas/{persona_id}/portrait` | `app.routers.personas.upload_persona_portrait` | `PersonaRecord` | `frontend/src/api/personas.ts` |
 | `DELETE` | `/api/profile` | `app.routers.auth.delete_my_account` | `dict` | `frontend/src/api/auth.ts` |
@@ -142,9 +151,11 @@
 | `POST` | `/api/worlds/{world_id}/locations/{location_id}/convert-to-container` | `app.routers.worlds.convert_location_to_container` | `WorldRecord` | `frontend/src/api/worlds.ts` |
 | `POST` | `/api/worlds/{world_id}/media` | `app.routers.worlds.upload_world_media` | `WorldRecord` | `frontend/src/api/worlds.ts` |
 | `PUT` | `/api/worlds/{world_id}/media/reorder` | `app.routers.worlds.reorder_world_media` | `WorldRecord` | `frontend/src/api/worlds.ts` |
+| `POST` | `/api/worlds/{world_id}/media/videos` | `app.routers.worlds.upload_world_video` | `WorldRecord` | `frontend/src/api/worlds.ts` |
 | `DELETE` | `/api/worlds/{world_id}/media/{media_id}` | `app.routers.worlds.delete_world_media` | `WorldRecord` | `frontend/src/api/worlds.ts` |
 | `PATCH` | `/api/worlds/{world_id}/media/{media_id}` | `app.routers.worlds.update_world_media_label` | `WorldRecord` | `frontend/src/api/worlds.ts` |
 | `GET` | `/api/worlds/{world_id}/media/{media_id}/impact` | `app.routers.worlds.get_world_media_delete_impact` | `dict` | `frontend/src/api/worlds.ts` |
+| `DELETE` | `/api/worlds/{world_id}/media/{media_id}/video` | `app.routers.worlds.delete_world_media_video` | `WorldRecord` | `frontend/src/api/worlds.ts` |
 
 ## 2. SQLite Schema (`backend/app/db/schema.sql`)
 
@@ -174,17 +185,19 @@ erDiagram
     campaigns ||--o{ episodic_chunks : references
     turn_nodes ||--o{ episodic_chunks : references
     location_containers ||--o{ location_containers : references
-    world_media ||--o{ location_containers : references
+    media_assets ||--o{ location_containers : references
     worlds ||--o{ location_containers : references
     location_nodes ||--o{ location_edges : references
     worlds ||--o{ location_edges : references
     location_containers ||--o{ location_nodes : references
-    world_media ||--o{ location_nodes : references
+    media_assets ||--o{ location_nodes : references
     worlds ||--o{ location_nodes : references
     campaigns ||--o{ lore_nodes : references
     location_containers ||--o{ lore_nodes : references
     location_nodes ||--o{ lore_nodes : references
     worlds ||--o{ lore_nodes : references
+    media_assets ||--o{ media_assets : references
+    users ||--o{ media_assets : references
     turn_nodes ||--o{ persona_turn_states : references
     users ||--o{ personas : references
     users ||--o{ prompt_presets : references
@@ -198,8 +211,7 @@ erDiagram
     users ||--o{ user_passkeys : references
     users ||--o{ user_sessions : references
     users ||--o{ webauthn_challenges : references
-    users ||--o{ world_media : references
-    world_media ||--o{ world_media_links : references
+    media_assets ||--o{ world_media_links : references
     worlds ||--o{ world_media_links : references
     location_nodes ||--o{ world_state_snapshots : references
     turn_nodes ||--o{ world_state_snapshots : references
@@ -214,10 +226,10 @@ erDiagram
 | `prompt_presets` | `users` |
 | `user_model_settings` | `prompt_presets`, `users` |
 | `worlds` | `users` |
-| `world_media` | `users` |
-| `world_media_links` | `world_media`, `worlds` |
-| `location_containers` | `location_containers`, `world_media`, `worlds` |
-| `location_nodes` | `location_containers`, `world_media`, `worlds` |
+| `media_assets` | `media_assets`, `users` |
+| `world_media_links` | `media_assets`, `worlds` |
+| `location_containers` | `location_containers`, `media_assets`, `worlds` |
+| `location_nodes` | `location_containers`, `media_assets`, `worlds` |
 | `location_edges` | `location_nodes`, `worlds` |
 | `characters` | `users`, `worlds` |
 | `character_versions` | `characters` |
@@ -292,6 +304,7 @@ erDiagram
 | `backend/app/db/repos/character_versions.py` | Character updates, version history snapshots/restores, and campaign memory edits. |
 | `backend/app/db/repos/characters.py` | Character creation, access checks, media staging, portraits/gallery, and soft-deletion. |
 | `backend/app/db/repos/chloromancer.py` | Chloromancer housekeeping run-history persistence. |
+| `backend/app/db/repos/media_assets.py` | Unified media asset persistence, 1:1 linked-video lifecycle, hydration, and admin purge. |
 | `backend/app/db/repos/notes.py` | User notes persistence and row mapping. |
 | `backend/app/db/repos/personas.py` | Player personas and dynamic campaign persona turn state. |
 | `backend/app/db/repos/prompt_presets.py` | Prompt preset CRUD and effective prompt resolution. |
@@ -507,6 +520,7 @@ erDiagram
 | `backend/app/routers/import_export.py` | FastAPI router for native CyberCantina archive (.zcc) export, auto-detect inspect, and commit. |
 | `backend/app/routers/local_relay.py` | WebSocket endpoint and status API for the browser-local inference relay. |
 | `backend/app/routers/mechanics.py` | Mechanics and dice preview API router. |
+| `backend/app/routers/media.py` | Unified media asset serving, shared video upload staging helpers, and admin media purge routes. |
 | `backend/app/routers/notes.py` | Private user notes router. |
 | `backend/app/routers/personas.py` | User personas REST router. |
 | `backend/app/routers/prompts.py` | Prompt presets and template customization router. |
@@ -562,6 +576,7 @@ erDiagram
 | :--- | :--- |
 | `backend/app/services/__init__.py` | Application-layer services orchestrating domain workflows (`import_export_service`). |
 | `backend/app/services/import_export_service.py` | Service for packaging, inspecting, and ingesting CyberCantina archives (.zcc). |
+| `backend/app/services/video_processor.py` | Streaming upload staging, ffprobe container/codec validation, and ffmpeg first-frame extraction. |
 
 #### `app.wizards`
 
@@ -776,6 +791,7 @@ erDiagram
 | `frontend/src/components/shared/ClickToEditField.tsx` |
 | `frontend/src/components/shared/ImageLightboxModal.tsx` |
 | `frontend/src/components/shared/UnsupportedFieldsTab.tsx` |
+| `frontend/src/components/shared/VideoUploadControls.tsx` |
 
 #### `components/wizard`
 

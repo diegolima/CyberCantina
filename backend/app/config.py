@@ -274,9 +274,23 @@ class AppSettings(BaseModel):
         ge=0.5,
         le=10240.0,
         description=(
-            "Maximum persisted WebP media storage per standard user account in MB "
+            "Maximum persisted media storage (WebP images and MP4/WebM videos) per standard user account in MB "
             "(None = unlimited; admin accounts are exempt)."
         ),
+    )
+    allow_image_uploads: bool = Field(
+        default=True,
+        description="When False, standard users cannot upload or import private images (admin accounts are exempt).",
+    )
+    allow_video_uploads: bool = Field(
+        default=True,
+        description="When False, standard users cannot upload or import private videos (admin accounts are exempt).",
+    )
+    max_video_upload_mb: float = Field(
+        default=15.0,
+        ge=1.0,
+        le=500.0,
+        description="Maximum allowed file size per uploaded video file in MB.",
     )
     chloromancer_interval_minutes: int = Field(
         default=60,

@@ -137,13 +137,15 @@ def ensure_public_showcase_media(repo: CantinaRepository) -> dict[str, str]:
         for pub_id, pub_filename, label, mime_type, byte_size, created_at in media_rows:
             conn.execute(
                 """
-                INSERT INTO world_media (
-                    id, owner_id, media_type, filename, label, mime_type, byte_size,
-                    is_public, seed_key, created_at
+                INSERT INTO media_assets (
+                    id, owner_id, entity_scope, media_type, role, filename, label,
+                    mime_type, byte_size, is_public, seed_key, parent_image_id, created_at
                 )
-                VALUES (?, NULL, 'image', ?, ?, ?, ?, 1, ?, ?)
+                VALUES (?, NULL, 'world', 'image', 'world_scene', ?, ?, ?, ?, 1, ?, NULL, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     owner_id = NULL,
+                    entity_scope = 'world',
+                    role = 'world_scene',
                     filename = excluded.filename,
                     label = excluded.label,
                     mime_type = excluded.mime_type,

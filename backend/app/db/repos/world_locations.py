@@ -208,16 +208,19 @@ class WorldLocationsMixin:
             ).get(location_id, [])
             if loc.image_media_id:
                 m_row = conn.execute(
-                    "SELECT id, media_type, filename, label FROM world_media WHERE id = ?",
+                    "SELECT * FROM media_assets WHERE id = ?",
                     (loc.image_media_id,),
                 ).fetchone()
-                if m_row and m_row["media_type"] == "image" and self._world_media_file_exists(
-                    m_row["media_type"], m_row["filename"]
-                ):
-                    from app.db.repos.base import build_world_media_url
-
-                    loc.image_url = build_world_media_url(m_row["media_type"], m_row["filename"])
+                if m_row and m_row["media_type"] == "image" and self._asset_file_exists(m_row):
+                    loc.image_url = self.build_public_or_asset_url(m_row)
                     loc.image_label = m_row["label"] or ""
+                    vid_row = conn.execute(
+                        "SELECT * FROM media_assets WHERE parent_image_id = ? AND media_type = 'video'",
+                        (loc.image_media_id,),
+                    ).fetchone()
+                    if vid_row and self._asset_file_exists(vid_row):
+                        loc.video_url = f"/api/media/assets/{vid_row['id']}"
+                        loc.video_mime_type = vid_row["mime_type"]
                 else:
                     loc.image_media_id = None
             return loc

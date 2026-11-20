@@ -381,67 +381,68 @@ class CharactersMixin(CharacterVersionsMixin):
                     "SELECT memory_shards_json FROM campaign_character_memories WHERE campaign_id = ? AND character_id = ?",
                     (campaign_id, character_id),
                 ).fetchone()
+
+            row_keys = row.keys()
+            shards_json = (
+                camp_mem_row["memory_shards_json"]
+                if camp_mem_row
+                else (row["memory_shards_json"] if "memory_shards_json" in row_keys else "[]")
+            )
+            parsed_shards: list[MemoryShard] = []
+            for idx, m in enumerate(json.loads(shards_json or "[]")):
+                shard = MemoryShard.model_validate(m)
+                if not shard.id:
+                    shard.id = f"shard_{character_id}_{idx}"
+                if self._is_shard_active_on_branch(shard, valid_turn_ids):
+                    parsed_shards.append(shard)
+
+            rec = CharacterRecord(
+                id=row["id"],
+                world_id=row["world_id"],
+                name=row["name"],
+                tagline=row["tagline"],
+                species=row["species"] if "species" in row_keys and row["species"] else "Human",
+                sex=row["sex"] if "sex" in row_keys and row["sex"] else "",
+                pronouns=row["pronouns"] if "pronouns" in row_keys and row["pronouns"] else "",
+                age=row["age"] if "age" in row_keys and row["age"] else "",
+                character_bio=row["character_bio"] if "character_bio" in row_keys and row["character_bio"] else "",
+                physical_appearance=row["physical_appearance"] if "physical_appearance" in row_keys and row["physical_appearance"] else "",
+                build_and_height=row["build_and_height"] if "build_and_height" in row_keys and row["build_and_height"] else "",
+                distinctive_features=json.loads(row["distinctive_features_json"] or "[]") if "distinctive_features_json" in row_keys and row["distinctive_features_json"] else [],
+                posture=row["posture"] if "posture" in row_keys and row["posture"] else "",
+                mannerisms=json.loads(row["mannerisms_json"] or "[]") if "mannerisms_json" in row_keys and row["mannerisms_json"] else [],
+                modifications=json.loads(row["modifications_json"] or "[]") if "modifications_json" in row_keys and row["modifications_json"] else [],
+                visual_aesthetic=row["visual_aesthetic"] if "visual_aesthetic" in row_keys and row["visual_aesthetic"] else "",
+                personality_traits=json.loads(row["personality_traits_json"] or "[]") if "personality_traits_json" in row_keys and row["personality_traits_json"] else [],
+                core_persona=row["core_persona"],
+                moral_code=json.loads(row["moral_code_json"] or "[]") if "moral_code_json" in row_keys and row["moral_code_json"] else [],
+                quirks_flaws=json.loads(row["quirks_flaws_json"] or "[]") if "quirks_flaws_json" in row_keys and row["quirks_flaws_json"] else [],
+                communication_style=json.loads(row["communication_style_json"] or "[]") if "communication_style_json" in row_keys and row["communication_style_json"] else [],
+                initial_message=row["initial_message"] if "initial_message" in row_keys else "",
+                equipped=json.loads(row["equipped_json"] or "[]") if "equipped_json" in row_keys else [],
+                inventory=json.loads(row["inventory_json"] or "[]") if "inventory_json" in row_keys else [],
+                voice_anchors=[
+                    VoiceAnchor.model_validate(v)
+                    for v in json.loads(row["voice_anchors_json"] or "[]")
+                ],
+                baseline_psyche=BaselinePsyche.model_validate_json(row["baseline_psyche_json"]),
+                memory_shards=parsed_shards,
+                tags=json.loads(row["tags_json"] or "[]") if "tags_json" in row_keys and row["tags_json"] else [],
+                creator=row["creator"] if "creator" in row_keys and row["creator"] else "",
+                creator_notes=row["creator_notes"] if "creator_notes" in row_keys and row["creator_notes"] else "",
+                portraits=json.loads(row["portraits_json"] or "{}") if "portraits_json" in row_keys and row["portraits_json"] else {},
+                gallery=[
+                    GalleryImage.model_validate(img)
+                    for img in json.loads(row["gallery_json"] or "[]")
+                ] if "gallery_json" in row_keys and row["gallery_json"] else [],
+                unsupported_fields=json.loads(row["unsupported_fields_json"] or "{}") if "unsupported_fields_json" in row_keys and row["unsupported_fields_json"] else {},
+                version=row["version"] if "version" in row_keys and row["version"] is not None else 1,
+                pending_deletion=bool(row["pending_deletion"]) if "pending_deletion" in row_keys else False,
+                created_at=row["created_at"],
+            )
+            return self._hydrate_character_records_conn(conn, [rec])[0]
         finally:
             conn.close()
-
-        row_keys = row.keys()
-        shards_json = (
-            camp_mem_row["memory_shards_json"]
-            if camp_mem_row
-            else (row["memory_shards_json"] if "memory_shards_json" in row_keys else "[]")
-        )
-        parsed_shards: list[MemoryShard] = []
-        for idx, m in enumerate(json.loads(shards_json or "[]")):
-            shard = MemoryShard.model_validate(m)
-            if not shard.id:
-                shard.id = f"shard_{character_id}_{idx}"
-            if self._is_shard_active_on_branch(shard, valid_turn_ids):
-                parsed_shards.append(shard)
-
-        return CharacterRecord(
-            id=row["id"],
-            world_id=row["world_id"],
-            name=row["name"],
-            tagline=row["tagline"],
-            species=row["species"] if "species" in row_keys and row["species"] else "Human",
-            sex=row["sex"] if "sex" in row_keys and row["sex"] else "",
-            pronouns=row["pronouns"] if "pronouns" in row_keys and row["pronouns"] else "",
-            age=row["age"] if "age" in row_keys and row["age"] else "",
-            character_bio=row["character_bio"] if "character_bio" in row_keys and row["character_bio"] else "",
-            physical_appearance=row["physical_appearance"] if "physical_appearance" in row_keys and row["physical_appearance"] else "",
-            build_and_height=row["build_and_height"] if "build_and_height" in row_keys and row["build_and_height"] else "",
-            distinctive_features=json.loads(row["distinctive_features_json"] or "[]") if "distinctive_features_json" in row_keys and row["distinctive_features_json"] else [],
-            posture=row["posture"] if "posture" in row_keys and row["posture"] else "",
-            mannerisms=json.loads(row["mannerisms_json"] or "[]") if "mannerisms_json" in row_keys and row["mannerisms_json"] else [],
-            modifications=json.loads(row["modifications_json"] or "[]") if "modifications_json" in row_keys and row["modifications_json"] else [],
-            visual_aesthetic=row["visual_aesthetic"] if "visual_aesthetic" in row_keys and row["visual_aesthetic"] else "",
-            personality_traits=json.loads(row["personality_traits_json"] or "[]") if "personality_traits_json" in row_keys and row["personality_traits_json"] else [],
-            core_persona=row["core_persona"],
-            moral_code=json.loads(row["moral_code_json"] or "[]") if "moral_code_json" in row_keys and row["moral_code_json"] else [],
-            quirks_flaws=json.loads(row["quirks_flaws_json"] or "[]") if "quirks_flaws_json" in row_keys and row["quirks_flaws_json"] else [],
-            communication_style=json.loads(row["communication_style_json"] or "[]") if "communication_style_json" in row_keys and row["communication_style_json"] else [],
-            initial_message=row["initial_message"] if "initial_message" in row_keys else "",
-            equipped=json.loads(row["equipped_json"] or "[]") if "equipped_json" in row_keys else [],
-            inventory=json.loads(row["inventory_json"] or "[]") if "inventory_json" in row_keys else [],
-            voice_anchors=[
-                VoiceAnchor.model_validate(v)
-                for v in json.loads(row["voice_anchors_json"] or "[]")
-            ],
-            baseline_psyche=BaselinePsyche.model_validate_json(row["baseline_psyche_json"]),
-            memory_shards=parsed_shards,
-            tags=json.loads(row["tags_json"] or "[]") if "tags_json" in row_keys and row["tags_json"] else [],
-            creator=row["creator"] if "creator" in row_keys and row["creator"] else "",
-            creator_notes=row["creator_notes"] if "creator_notes" in row_keys and row["creator_notes"] else "",
-            portraits=json.loads(row["portraits_json"] or "{}") if "portraits_json" in row_keys and row["portraits_json"] else {},
-            gallery=[
-                GalleryImage.model_validate(img)
-                for img in json.loads(row["gallery_json"] or "[]")
-            ] if "gallery_json" in row_keys and row["gallery_json"] else [],
-            unsupported_fields=json.loads(row["unsupported_fields_json"] or "{}") if "unsupported_fields_json" in row_keys and row["unsupported_fields_json"] else {},
-            version=row["version"] if "version" in row_keys and row["version"] is not None else 1,
-            pending_deletion=bool(row["pending_deletion"]) if "pending_deletion" in row_keys else False,
-            created_at=row["created_at"],
-        )
 
     def _ensure_writable_character_id(
         self, character_id: str, owner_id: str | None = None
@@ -617,10 +618,15 @@ class CharactersMixin(CharacterVersionsMixin):
                 pruned_ids.append(c_id)
                 self._delete_character_media(c_id)
 
+            orphan_assets: list[dict[str, object]] = []
             if pruned_ids:
+                orphan_assets = self.gc_unreferenced_character_assets(conn)
                 conn.commit()
         finally:
             conn.close()
+
+        for oa in orphan_assets:
+            self._unlink_asset_file(oa)
 
         return pruned_ids
 

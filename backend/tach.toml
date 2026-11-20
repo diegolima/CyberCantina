@@ -300,6 +300,7 @@ depends_on = [
     "app.db",
     "app.dependencies",
     "app.schemas",
+    "app.security",
     "app.wizards",
 ]
 

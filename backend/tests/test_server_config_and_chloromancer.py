@@ -264,8 +264,10 @@ def test_chloromancer_purge_preview_execution_orphan_grace_and_vacuum(
         files={"file": ("avatar.png", _make_png_bytes(64, 64), "image/png")},
     )
     assert upload_res.status_code == 200
-    stale_media_dir = media_dir / "characters" / stale_char_id
-    assert stale_media_dir.is_dir()
+    stale_portrait_url = upload_res.json()["portraits"]["default"]
+    stale_asset_id = Path(stale_portrait_url).name
+    stale_media_file = media_dir / "assets" / "images" / f"{stale_asset_id}.webp"
+    assert stale_media_file.is_file()
 
     # Backdate BOTH admin (to prove admin exemption) and stale user by 20 days
     old_ts = (datetime.now(timezone.utc) - timedelta(days=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -334,7 +336,7 @@ def test_chloromancer_purge_preview_execution_orphan_grace_and_vacuum(
     # Stale user and media are gone; admin and active user intact; fresh orphan preserved
     with pytest.raises(KeyError):
         repo.get_user_by_id(stale_uid)
-    assert not stale_media_dir.exists()
+    assert not stale_media_file.exists()
     assert not old_orphan.exists()
     assert fresh_orphan.exists()
     assert repo.get_user_by_id(admin_uid).username == "AdminRoot"
@@ -380,8 +382,8 @@ def test_media_quota_enforcement_and_admin_exemption(
     )
     assert ok_upload.status_code == 200
     old_portrait_url = ok_upload.json()["portraits"]["default"]
-    old_filename = Path(old_portrait_url).name
-    old_file_path = media_dir / "characters" / cid / "portraits" / old_filename
+    old_asset_id = Path(old_portrait_url).name
+    old_file_path = media_dir / "assets" / "images" / f"{old_asset_id}.webp"
     assert old_file_path.is_file()
 
     # Fill most of the 0.5 MB quota with heavy 512x512 slots before replacing default

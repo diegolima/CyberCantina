@@ -22,9 +22,11 @@ from pydantic import BaseModel
 from app.auth import get_current_user
 from app.config import settings
 from app.db.repos.base import is_public_character_media_url
+from app.db.repos.media_assets import build_asset_url, extract_asset_id_from_url
 from app.db.repository import utc_now_iso
 from app.dependencies import (
     enforce_quota_and_write_webp,
+    enforce_upload_policy,
     format_mb,
     get_effective_user_model_settings,
     get_repo,
@@ -33,8 +35,10 @@ from app.dependencies import (
     get_user_quota_bytes,
     render_webp_bytes,
     run_entity_pruner,
+    safe_resolve_asset_path,
     safe_resolve_media_path,
 )
+from app.routers.media import stage_and_commit_linked_video
 from app.security.media_path import (
     PathTraversalError,
     safe_resolve_public_character_media_file_path,
@@ -227,63 +231,94 @@ async def wizard_import_sillytavern_card(
     media_warning: str | None = None
     # If raw PNG artwork is available, process and stage default portrait and gallery image
     if pkg.image_bytes:
-        try:
-            portrait_webp = await asyncio.to_thread(
-                render_webp_bytes,
-                pkg.image_bytes,
-                square_crop=True,
-                max_size=512,
+        if current_user.role != "admin" and not settings.allow_image_uploads:
+            media_warning = (
+                "Card artwork was omitted because image uploads are currently disabled by the server administrator. "
+                "Character text fields were imported successfully."
             )
-            gallery_webp = await asyncio.to_thread(
-                render_webp_bytes,
-                pkg.image_bytes,
-                square_crop=False,
-                max_size=1920,
-            )
+        else:
+            try:
+                portrait_webp = await asyncio.to_thread(
+                    render_webp_bytes,
+                    pkg.image_bytes,
+                    square_crop=True,
+                    max_size=512,
+                )
+                gallery_webp = await asyncio.to_thread(
+                    render_webp_bytes,
+                    pkg.image_bytes,
+                    square_crop=False,
+                    max_size=1920,
+                )
 
-            def _stage_card_media() -> str | None:
-                portrait_suffix = uuid.uuid4().hex[:8]
-                portrait_filename = f"default_{portrait_suffix}.webp"
-                portrait_path = safe_resolve_media_path(
-                    preassigned_id, "portraits", portrait_filename
-                )
-                gallery_id = f"img_{uuid.uuid4().hex[:10]}"
-                gallery_filename = f"{gallery_id}.webp"
-                gallery_path = safe_resolve_media_path(
-                    preassigned_id, "gallery", gallery_filename
-                )
-                needed_bytes = len(portrait_webp) + len(gallery_webp)
-                with get_user_media_lock(current_user.id):
-                    quota = get_user_quota_bytes(current_user)
-                    if quota is not None:
-                        used = get_user_media_usage_bytes(repo, current_user.id)
-                        if used + needed_bytes > quota:
-                            return (
-                                f"Card artwork was omitted because staging its media ({format_mb(needed_bytes)}) "
-                                f"exceeds your storage quota ({format_mb(used)} / {format_mb(quota)} used). "
-                                "Character text fields were imported successfully."
-                            )
-                    portrait_path.parent.mkdir(parents=True, exist_ok=True)
-                    portrait_path.write_bytes(portrait_webp)
-                    gallery_path.parent.mkdir(parents=True, exist_ok=True)
-                    gallery_path.write_bytes(gallery_webp)
-
-                draft.portraits["default"] = (
-                    f"/api/media/characters/{preassigned_id}/portraits/{portrait_filename}"
-                )
-                draft.gallery = [
-                    GalleryImage(
-                        id=gallery_id,
-                        url=f"/api/media/characters/{preassigned_id}/gallery/{gallery_filename}",
-                        caption="Original Card Artwork",
-                        created_at=utc_now_iso(),
+                def _stage_card_media() -> str | None:
+                    portrait_id = f"por_{uuid.uuid4().hex[:10]}"
+                    portrait_filename = f"{portrait_id}.webp"
+                    portrait_path = safe_resolve_asset_path(
+                        "images", portrait_filename, media_dir=repo.media_dir
                     )
-                ]
-                return None
+                    gallery_id = f"img_{uuid.uuid4().hex[:10]}"
+                    gallery_filename = f"{gallery_id}.webp"
+                    gallery_path = safe_resolve_asset_path(
+                        "images", gallery_filename, media_dir=repo.media_dir
+                    )
+                    needed_bytes = len(portrait_webp) + len(gallery_webp)
+                    with get_user_media_lock(current_user.id):
+                        quota = get_user_quota_bytes(current_user)
+                        if quota is not None:
+                            used = get_user_media_usage_bytes(repo, current_user.id)
+                            if used + needed_bytes > quota:
+                                return (
+                                    f"Card artwork was omitted because staging its media ({format_mb(needed_bytes)}) "
+                                    f"exceeds your storage quota ({format_mb(used)} / {format_mb(quota)} used). "
+                                    "Character text fields were imported successfully."
+                                )
+                        portrait_path.parent.mkdir(parents=True, exist_ok=True)
+                        portrait_path.write_bytes(portrait_webp)
+                        gallery_path.parent.mkdir(parents=True, exist_ok=True)
+                        gallery_path.write_bytes(gallery_webp)
 
-            media_warning = await asyncio.to_thread(_stage_card_media)
-        except Exception as exc:
-            logger.warning("Failed staging card media artwork: %s", exc)
+                    try:
+                        repo.register_media_asset(
+                            asset_id=portrait_id,
+                            owner_id=current_user.id,
+                            entity_scope="character",
+                            media_type="image",
+                            role="portrait",
+                            filename=portrait_filename,
+                            mime_type="image/webp",
+                            byte_size=len(portrait_webp),
+                        )
+                        repo.register_media_asset(
+                            asset_id=gallery_id,
+                            owner_id=current_user.id,
+                            entity_scope="character",
+                            media_type="image",
+                            role="album",
+                            filename=gallery_filename,
+                            mime_type="image/webp",
+                            byte_size=len(gallery_webp),
+                            label="Original Card Artwork",
+                        )
+                    except Exception:
+                        portrait_path.unlink(missing_ok=True)
+                        gallery_path.unlink(missing_ok=True)
+                        raise
+
+                    draft.portraits["default"] = build_asset_url(portrait_id)
+                    draft.gallery = [
+                        GalleryImage(
+                            id=gallery_id,
+                            url=build_asset_url(gallery_id),
+                            caption="Original Card Artwork",
+                            created_at=utc_now_iso(),
+                        )
+                    ]
+                    return None
+
+                media_warning = await asyncio.to_thread(_stage_card_media)
+            except Exception as exc:
+                logger.warning("Failed staging card media artwork: %s", exc)
 
     auto_world_draft: WorldWizardDraft | None = None
     if auto_generate_world:
@@ -505,7 +540,8 @@ async def upload_character_portrait(
     file: UploadFile = File(...),
     current_user: UserProfile = Depends(get_current_user),
 ) -> CharacterRecord:
-    """Upload and square-crop a character portrait (CoW-forking if campaigns exist)."""
+    """Upload and square-crop a character portrait (shared non-duplicated asset, CoW-forking metadata if campaigns exist)."""
+    enforce_upload_policy(current_user, "image")
     clean_emotion = emotion.strip().lower()
     if clean_emotion not in VALID_EMOTIONS:
         raise HTTPException(
@@ -532,23 +568,18 @@ async def upload_character_portrait(
     )
     char = repo.get_character(target_char_id, owner_id=current_user.id)
 
-    file_suffix = uuid.uuid4().hex[:8]
-    filename = f"{clean_emotion}_{file_suffix}.webp"
-    target_path = safe_resolve_media_path(target_char_id, "portraits", filename)
-
-    old_path: Path | None = None
     old_url = char.portraits.get(clean_emotion)
-    if (
-        old_url
-        and target_char_id == character_id
-        and not is_public_character_media_url(old_url)
-        and f"/api/media/characters/{target_char_id}/" in old_url
-    ):
-        old_name = Path(old_url).name
-        try:
-            old_path = safe_resolve_media_path(target_char_id, "portraits", old_name)
-        except Exception:
-            old_path = None
+    old_aid = (
+        extract_asset_id_from_url(old_url)
+        if (old_url and not is_public_character_media_url(old_url))
+        else None
+    )
+    old_asset = repo.get_media_asset(old_aid) if old_aid else None
+    replaced_bytes = int(old_asset.get("byte_size") or 0) if (old_asset and not old_asset.get("is_public")) else 0
+
+    asset_id = f"por_{uuid.uuid4().hex[:10]}"
+    filename = f"{asset_id}.webp"
+    target_path = safe_resolve_asset_path("images", filename, media_dir=repo.media_dir)
 
     await asyncio.to_thread(
         enforce_quota_and_write_webp,
@@ -556,18 +587,39 @@ async def upload_character_portrait(
         current_user,
         webp_bytes,
         target_path,
-        replacing_path=old_path,
+        replaced_bytes=replaced_bytes,
     )
 
-    if old_path is not None and old_path != target_path and old_path.is_file():
+    try:
+        repo.register_media_asset(
+            asset_id=asset_id,
+            owner_id=current_user.id,
+            entity_scope="character",
+            media_type="image",
+            role="portrait",
+            filename=filename,
+            mime_type="image/webp",
+            byte_size=len(webp_bytes),
+        )
+        new_portraits = dict(char.portraits)
+        new_portraits[clean_emotion] = build_asset_url(asset_id)
+        updated = repo.update_character_portraits(target_char_id, new_portraits, owner_id=current_user.id)
+    except Exception:
+        target_path.unlink(missing_ok=True)
+        repo.delete_media_asset(asset_id)
+        raise
+
+    if old_aid and old_asset and not old_asset.get("is_public"):
+        repo.delete_media_asset(old_aid, owner_id=current_user.id)
+    elif old_url and target_char_id == character_id and not is_public_character_media_url(old_url) and f"/api/media/characters/{target_char_id}/" in old_url:
         try:
-            old_path.unlink(missing_ok=True)
+            old_path = safe_resolve_media_path(target_char_id, "portraits", Path(old_url).name)
+            if old_path.is_file():
+                old_path.unlink(missing_ok=True)
         except Exception:
             pass
 
-    new_portraits = dict(char.portraits)
-    new_portraits[clean_emotion] = f"/api/media/characters/{target_char_id}/portraits/{filename}"
-    return repo.update_character_portraits(target_char_id, new_portraits, owner_id=current_user.id)
+    return updated
 
 
 @router.delete("/api/characters/{character_id}/portraits/{emotion}", response_model=CharacterRecord)
@@ -576,7 +628,7 @@ def delete_character_portrait(
     emotion: str,
     current_user: UserProfile = Depends(get_current_user),
 ) -> CharacterRecord:
-    """Delete a character portrait slot (CoW-forking if campaigns exist; never unlinking shared public media)."""
+    """Delete a character portrait slot (immediately freeing private asset quota; never unlinking public files)."""
     clean_emotion = emotion.strip().lower()
     if clean_emotion not in VALID_EMOTIONS:
         raise HTTPException(
@@ -591,26 +643,24 @@ def delete_character_portrait(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     if clean_emotion in char.portraits:
+        old_url = char.portraits.get(clean_emotion)
         target_char_id = repo._ensure_writable_character_id(
             character_id, owner_id=current_user.id
         )
         char = repo.get_character(target_char_id, owner_id=current_user.id)
-        old_url = char.portraits.get(clean_emotion)
-        if (
-            old_url
-            and target_char_id == character_id
-            and not is_public_character_media_url(old_url)
-            and f"/api/media/characters/{target_char_id}/" in old_url
-        ):
-            old_name = Path(old_url).name
+        new_portraits = {k: v for k, v in char.portraits.items() if k != clean_emotion}
+        updated = repo.update_character_portraits(target_char_id, new_portraits, owner_id=current_user.id)
+        old_aid = extract_asset_id_from_url(old_url)
+        if old_aid:
+            repo.delete_media_asset(old_aid, owner_id=current_user.id)
+        elif old_url and target_char_id == character_id and not is_public_character_media_url(old_url) and f"/api/media/characters/{target_char_id}/" in old_url:
             try:
-                old_path = safe_resolve_media_path(target_char_id, "portraits", old_name)
+                old_path = safe_resolve_media_path(target_char_id, "portraits", Path(old_url).name)
                 if old_path.is_file():
                     old_path.unlink(missing_ok=True)
             except Exception:
                 pass
-        new_portraits = {k: v for k, v in char.portraits.items() if k != clean_emotion}
-        return repo.update_character_portraits(target_char_id, new_portraits, owner_id=current_user.id)
+        return updated
 
     return char
 
@@ -622,7 +672,8 @@ async def upload_character_gallery_image(
     caption: str = Form(""),
     current_user: UserProfile = Depends(get_current_user),
 ) -> CharacterRecord:
-    """Upload an image to the character's photo album (CoW-forking if campaigns exist)."""
+    """Upload an image to the character's photo album."""
+    enforce_upload_policy(current_user, "image")
     repo = get_repo()
     try:
         char = repo.get_character(character_id, owner_id=current_user.id)
@@ -644,7 +695,7 @@ async def upload_character_gallery_image(
 
     img_id = f"img_{uuid.uuid4().hex[:10]}"
     filename = f"{img_id}.webp"
-    target_path = safe_resolve_media_path(target_char_id, "gallery", filename)
+    target_path = safe_resolve_asset_path("images", filename, media_dir=repo.media_dir)
 
     await asyncio.to_thread(
         enforce_quota_and_write_webp,
@@ -654,14 +705,143 @@ async def upload_character_gallery_image(
         target_path,
     )
 
-    item = GalleryImage(
-        id=img_id,
-        url=f"/api/media/characters/{target_char_id}/gallery/{filename}",
-        caption=caption.strip(),
-        created_at=utc_now_iso(),
+    try:
+        repo.register_media_asset(
+            asset_id=img_id,
+            owner_id=current_user.id,
+            entity_scope="character",
+            media_type="image",
+            role="album",
+            filename=filename,
+            mime_type="image/webp",
+            byte_size=len(webp_bytes),
+            label=caption.strip(),
+        )
+        item = GalleryImage(
+            id=img_id,
+            url=build_asset_url(img_id),
+            caption=caption.strip(),
+            created_at=utc_now_iso(),
+        )
+        new_gallery = list(char.gallery) + [item]
+        return repo.update_character_gallery(target_char_id, new_gallery, owner_id=current_user.id)
+    except Exception:
+        target_path.unlink(missing_ok=True)
+        repo.delete_media_asset(img_id)
+        raise
+
+
+@router.get("/api/characters/{character_id}/gallery/{image_id}/impact")
+def get_character_gallery_image_impact(
+    character_id: str,
+    image_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> dict[str, str | int | bool]:
+    """Return active campaign count and linked video info before deleting a character gallery image."""
+    repo = get_repo()
+    try:
+        char = repo.get_character(character_id, owner_id=current_user.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    matching_item = next((it for it in char.gallery if it.id == image_id), None)
+    if not matching_item:
+        raise HTTPException(status_code=404, detail=f"Gallery image '{image_id}' not found.")
+
+    aid = extract_asset_id_from_url(matching_item.url) or image_id
+    impact = repo.get_asset_campaign_impact(aid, owner_id=current_user.id)
+    if is_public_character_media_url(matching_item.url):
+        impact["is_public"] = True
+    return impact
+
+
+@router.post("/api/characters/{character_id}/gallery/videos", response_model=CharacterRecord)
+async def upload_character_gallery_video(
+    character_id: str,
+    file: UploadFile = File(...),
+    caption: str = Form(""),
+    linked_image_id: str | None = Form(None),
+    current_user: UserProfile = Depends(get_current_user),
+) -> CharacterRecord:
+    """Upload an MP4/WebM video linked to an existing album image or creating one from its first frame."""
+    enforce_upload_policy(current_user, "video")
+    repo = get_repo()
+    try:
+        char = repo.get_character(character_id, owner_id=current_user.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    clean_linked_id = (
+        linked_image_id.strip()
+        if isinstance(linked_image_id, str) and linked_image_id.strip()
+        else None
     )
-    new_gallery = list(char.gallery) + [item]
-    return repo.update_character_gallery(target_char_id, new_gallery, owner_id=current_user.id)
+    if clean_linked_id is not None:
+        matching_item = next((it for it in char.gallery if it.id == clean_linked_id), None)
+        if not matching_item:
+            raise HTTPException(status_code=404, detail=f"Gallery image '{clean_linked_id}' not found.")
+        if matching_item.is_public or is_public_character_media_url(matching_item.url):
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot attach a private video to shared built-in artwork; upload the video standalone to create a new album photo.",
+            )
+        target_asset_id = extract_asset_id_from_url(matching_item.url) or matching_item.id
+    else:
+        target_asset_id = None
+
+    stem = Path(file.filename or "").stem.strip()
+    _probe, _vid_id, image_id, created_new_image = await stage_and_commit_linked_video(
+        repo=repo,
+        user=current_user,
+        file=file,
+        entity_scope="character",
+        target_owner_id=current_user.id,
+        linked_image_id=target_asset_id,
+        label_or_caption=caption,
+        default_image_label=stem or "Video Frame",
+    )
+    if created_new_image:
+        try:
+            target_char_id = repo._ensure_writable_character_id(
+                character_id, owner_id=current_user.id
+            )
+            writable_char = repo.get_character(target_char_id, owner_id=current_user.id)
+            item = GalleryImage(
+                id=image_id,
+                url=build_asset_url(image_id),
+                caption=caption.strip(),
+                created_at=utc_now_iso(),
+            )
+            new_gallery = list(writable_char.gallery) + [item]
+            return repo.update_character_gallery(target_char_id, new_gallery, owner_id=current_user.id)
+        except Exception:
+            repo.delete_media_asset(image_id)
+            raise
+    return repo.get_character(character_id, owner_id=current_user.id)
+
+
+@router.delete("/api/characters/{character_id}/gallery/{image_id}/video", response_model=CharacterRecord)
+def delete_character_gallery_video(
+    character_id: str,
+    image_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CharacterRecord:
+    """Delete only the linked video on a character gallery image while keeping the image itself."""
+    repo = get_repo()
+    try:
+        char = repo.get_character(character_id, owner_id=current_user.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    matching_item = next((it for it in char.gallery if it.id == image_id), None)
+    if not matching_item:
+        raise HTTPException(status_code=404, detail=f"Gallery image '{image_id}' not found.")
+
+    aid = extract_asset_id_from_url(matching_item.url) or image_id
+    deleted = repo.delete_linked_video(aid, owner_id=current_user.id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"No linked video found for image '{image_id}'.")
+    return repo.get_character(character_id, owner_id=current_user.id)
 
 
 @router.delete("/api/characters/{character_id}/gallery/{image_id}", response_model=CharacterRecord)
@@ -670,7 +850,7 @@ def delete_character_gallery_image(
     image_id: str,
     current_user: UserProfile = Depends(get_current_user),
 ) -> CharacterRecord:
-    """Remove a photo from the character's album (CoW-forking if campaigns exist; never unlinking public media)."""
+    """Remove a photo from the character's album (immediately deleting private image + linked video to free quota)."""
     repo = get_repo()
     try:
         char = repo.get_character(character_id, owner_id=current_user.id)
@@ -686,18 +866,22 @@ def delete_character_gallery_image(
     )
     char = repo.get_character(target_char_id, owner_id=current_user.id)
 
-    if (
+    new_gallery = [it for it in char.gallery if it.id != image_id]
+    updated = repo.update_character_gallery(target_char_id, new_gallery, owner_id=current_user.id)
+
+    aid = extract_asset_id_from_url(matching_item.url)
+    if aid and not is_public_character_media_url(matching_item.url):
+        repo.delete_media_asset(aid, owner_id=current_user.id)
+    elif (
         target_char_id == character_id
         and not is_public_character_media_url(matching_item.url)
         and f"/api/media/characters/{target_char_id}/" in matching_item.url
     ):
-        old_name = Path(matching_item.url).name
         try:
-            old_path = safe_resolve_media_path(target_char_id, "gallery", old_name)
+            old_path = safe_resolve_media_path(target_char_id, "gallery", Path(matching_item.url).name)
             if old_path.is_file():
                 old_path.unlink(missing_ok=True)
         except Exception:
             pass
 
-    new_gallery = [it for it in char.gallery if it.id != image_id]
-    return repo.update_character_gallery(target_char_id, new_gallery, owner_id=current_user.id)
+    return updated

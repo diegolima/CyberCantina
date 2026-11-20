@@ -61,6 +61,10 @@ export interface WorldMediaItem {
   byte_size: number;
   sort_order: number;
   is_public?: boolean;
+  video_asset_id?: string | null;
+  video_url?: string | null;
+  video_mime_type?: string | null;
+  video_byte_size?: number | null;
   created_at: string;
 }
 
@@ -79,6 +83,8 @@ export interface LocationContainer {
   image_media_id?: string | null;
   image_url?: string | null;
   image_label?: string | null;
+  video_url?: string | null;
+  video_mime_type?: string | null;
   lore_nodes?: LoreNode[];
 }
 
@@ -102,6 +108,8 @@ export interface LocationNode {
   image_media_id?: string | null;
   image_url?: string | null;
   image_label?: string | null;
+  video_url?: string | null;
+  video_mime_type?: string | null;
   is_visited?: boolean;
   lore_nodes?: LoreNode[];
 }

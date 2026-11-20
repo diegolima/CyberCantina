@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   CheckSquare,
+  Film,
   Globe,
   Package,
   Search,
@@ -14,12 +15,14 @@ import {
 import { api } from "../api";
 import { CharacterRecord, PersonaRecord, WorldRecord } from "../types";
 import {
+  collectExportableVideos,
   computeSuggestedBundleName,
   filterCharacters,
   filterPersonas,
   filterWorlds,
   findMissingResidentCharacters,
   findMissingWorldDependencies,
+  formatMediaBytes,
 } from "../utils/importExportLogic";
 
 export interface ExportBundleModalProps {
@@ -54,6 +57,11 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
   // Track user-typed bundle name (null means auto-naming is active)
   const [customName, setCustomName] = useState<string | null>(null);
   const [includeWorldMedia, setIncludeWorldMedia] = useState(true);
+  const [includeVideos, setIncludeVideos] = useState(false);
+  const [selectedVideoIds, setSelectedVideoIds] = useState<Set<string>>(
+    () => new Set()
+  );
+  const knownVideoIdsRef = useRef<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
 
@@ -89,6 +97,67 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
     () => computeSuggestedBundleName(selectedWorlds, selectedChars, selectedPersonas),
     [selectedWorlds, selectedChars, selectedPersonas]
   );
+
+  const availableVideos = useMemo(
+    () =>
+      collectExportableVideos(
+        worlds,
+        characters,
+        personas,
+        selectedWorldIds,
+        selectedCharIds,
+        selectedPersonaIds,
+        includeWorldMedia
+      ),
+    [
+      worlds,
+      characters,
+      personas,
+      selectedWorldIds,
+      selectedCharIds,
+      selectedPersonaIds,
+      includeWorldMedia,
+    ]
+  );
+
+  // Sync per-video selections whenever availableVideos shifts while "Include videos" is enabled
+  useEffect(() => {
+    const currentSet = new Set(availableVideos.map((v) => v.videoAssetId));
+    if (!includeVideos) {
+      knownVideoIdsRef.current = currentSet;
+      return;
+    }
+    setSelectedVideoIds((prev) => {
+      const next = new Set<string>();
+      for (const vid of currentSet) {
+        if (prev.has(vid) || !knownVideoIdsRef.current.has(vid)) {
+          next.add(vid);
+        }
+      }
+      return next;
+    });
+    knownVideoIdsRef.current = currentSet;
+  }, [availableVideos, includeVideos]);
+
+  const handleToggleIncludeVideos = (checked: boolean) => {
+    setIncludeVideos(checked);
+    if (checked) {
+      const allIds = new Set(availableVideos.map((v) => v.videoAssetId));
+      setSelectedVideoIds(allIds);
+      knownVideoIdsRef.current = allIds;
+    } else {
+      setSelectedVideoIds(new Set());
+    }
+  };
+
+  const toggleVideoId = (videoAssetId: string) => {
+    setSelectedVideoIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(videoAssetId)) next.delete(videoAssetId);
+      else next.add(videoAssetId);
+      return next;
+    });
+  };
 
   const displayBundleName = customName !== null ? customName : suggestedName;
 
@@ -218,6 +287,8 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
         persona_ids: Array.from(selectedPersonaIds),
         bundle_name: finalBundleName,
         include_world_media: includeWorldMedia,
+        include_videos: includeVideos,
+        selected_video_ids: includeVideos ? Array.from(selectedVideoIds) : undefined,
       });
       onClose();
     } catch (err: any) {
@@ -672,6 +743,17 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
                   <span>Include world media</span>
                 </label>
               )}
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", color: "var(--text-secondary)" }}>
+                <input
+                  type="checkbox"
+                  checked={includeVideos}
+                  onChange={(e) => handleToggleIncludeVideos(e.target.checked)}
+                />
+                <span>
+                  Include videos
+                  {availableVideos.length > 0 ? ` (${availableVideos.length})` : ""}
+                </span>
+              </label>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button
@@ -693,6 +775,107 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
               </button>
             </div>
           </div>
+
+          {includeVideos && (
+            <div
+              style={{
+                border: "1px solid var(--border-color)",
+                borderRadius: 6,
+                padding: 10,
+                background: "var(--bg-card)",
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  fontSize: "0.78rem",
+                  color: "var(--text-secondary)",
+                }}
+              >
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 600 }}>
+                  <Film size={13} color="var(--accent-cyan)" />
+                  Included Videos ({selectedVideoIds.size}/{availableVideos.length})
+                </span>
+                {availableVideos.length > 0 && (
+                  <div style={{ display: "flex", gap: 8, fontSize: "0.72rem" }}>
+                    <button
+                      type="button"
+                      className="btn-link"
+                      onClick={() =>
+                        setSelectedVideoIds(new Set(availableVideos.map((v) => v.videoAssetId)))
+                      }
+                    >
+                      All
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-link"
+                      onClick={() => setSelectedVideoIds(new Set())}
+                    >
+                      None
+                    </button>
+                  </div>
+                )}
+              </div>
+              {availableVideos.length === 0 ? (
+                <div style={{ fontSize: "0.76rem", color: "var(--text-muted)" }}>
+                  No linked videos found on the selected entities.
+                </div>
+              ) : (
+                <div
+                  style={{
+                    maxHeight: 130,
+                    overflowY: "auto",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                  }}
+                >
+                  {availableVideos.map((v) => (
+                    <label
+                      key={v.videoAssetId}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 8,
+                        fontSize: "0.77rem",
+                        cursor: "pointer",
+                        padding: "3px 6px",
+                        borderRadius: 4,
+                        background: selectedVideoIds.has(v.videoAssetId)
+                          ? "rgba(56, 189, 248, 0.08)"
+                          : "transparent",
+                      }}
+                    >
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedVideoIds.has(v.videoAssetId)}
+                          onChange={() => toggleVideoId(v.videoAssetId)}
+                        />
+                        <span style={{ color: "var(--text-muted)", textTransform: "capitalize" }}>
+                          [{v.entityType}]
+                        </span>
+                        <span style={{ fontWeight: 500 }}>{v.entityName}</span>
+                        <span style={{ color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          — {v.imageLabel}
+                        </span>
+                      </span>
+                      <span style={{ color: "var(--text-muted)", flexShrink: 0 }}>
+                        {formatMediaBytes(v.byteSize)}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </form>
       </div>
     </div>

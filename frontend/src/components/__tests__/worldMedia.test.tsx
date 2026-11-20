@@ -449,7 +449,7 @@ describe("World Media UI & Helpers", () => {
         onSaved={() => {}}
       />
     );
-    expect(inspectorHtml).toContain("Upload Image(s)");
+    expect(inspectorHtml).toContain("Upload Media");
     expect(inspectorHtml).toContain("Neon Waterfront");
 
     const wizardHtml = renderToStaticMarkup(
@@ -462,7 +462,7 @@ describe("World Media UI & Helpers", () => {
       />
     );
     expect(wizardHtml).toContain("Save this world first");
-    expect(wizardHtml).not.toContain("Upload Image(s)");
+    expect(wizardHtml).not.toContain("Upload Media");
 
     const campaignHtml = renderToStaticMarkup(
       <WorldInspectorModal

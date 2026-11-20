@@ -843,6 +843,8 @@ export const App: React.FC = () => {
             bundle.current_world_snapshot.visited_container_ids ?? []
           }
           campaignWorldSettings={bundle.campaign.world_settings}
+          appSettings={appSettings}
+          isAdmin={currentUser.role === "admin"}
           isMutatingLocked={isStreaming || isPhase4Running}
           onSaveCampaignWorldSettings={handleUpdateCampaignWorldSettings}
           onClose={() => setCampaignWorldSheetTab(null)}
@@ -948,6 +950,7 @@ export const App: React.FC = () => {
         setShowAdminModal={setShowAdminModal}
         adminInitialTab={adminInitialTab}
         inactiveUserPurgeDays={inactiveUserPurgeDays}
+        appSettings={appSettings}
         setAppSettings={setAppSettings}
         onMessagesUpdated={async () => {
           await Promise.all([refreshAuthStatus(), refreshHomeMessages()]);

@@ -4,6 +4,7 @@ import {
   ChevronRight,
   DoorOpen,
   Expand,
+  Film,
   GitBranch,
   Image as ImageIcon,
   Layers,
@@ -574,17 +575,26 @@ const MapEntityImageSection: React.FC<{
   imageMediaId?: string | null;
   imageUrl?: string | null;
   imageLabel?: string | null;
+  videoUrl?: string | null;
+  videoMimeType?: string | null;
   isVisited: boolean;
   isDisabled: boolean;
   worldMedia: WorldMediaItem[];
   onSelectMedia: (item: WorldMediaItem | null) => void;
-  onEnlarge: (url: string, label: string) => void;
+  onEnlarge: (
+    url: string,
+    label: string,
+    videoUrl?: string | null,
+    videoMimeType?: string | null
+  ) => void;
 }> = ({
   mode,
   entityName,
   imageMediaId,
   imageUrl,
   imageLabel,
+  videoUrl,
+  videoMimeType,
   isVisited,
   isDisabled,
   worldMedia,
@@ -603,6 +613,9 @@ const MapEntityImageSection: React.FC<{
   const resolvedUrl = selectedItem?.url ?? imageUrl ?? null;
   const resolvedLabel =
     (selectedItem?.label || imageLabel || "").trim() || entityName;
+  const resolvedVideoUrl = selectedItem?.video_url ?? videoUrl ?? null;
+  const resolvedVideoMimeType =
+    selectedItem?.video_mime_type ?? videoMimeType ?? null;
 
   if (mode === "campaign") {
     if (!isVisited || !resolvedUrl || brokenUrls[resolvedUrl]) {
@@ -620,8 +633,19 @@ const MapEntityImageSection: React.FC<{
             background: "var(--bg-panel)",
             cursor: "pointer",
           }}
-          onClick={() => onEnlarge(resolvedUrl, resolvedLabel)}
-          title="Click to enlarge"
+          onClick={() =>
+            onEnlarge(
+              resolvedUrl,
+              resolvedLabel,
+              resolvedVideoUrl,
+              resolvedVideoMimeType
+            )
+          }
+          title={
+            resolvedVideoUrl
+              ? "Click to enlarge and play video"
+              : "Click to enlarge"
+          }
         >
           <img
             src={resolvedUrl}
@@ -636,6 +660,25 @@ const MapEntityImageSection: React.FC<{
               display: "block",
             }}
           />
+          {resolvedVideoUrl && (
+            <span
+              style={{
+                position: "absolute",
+                top: 6,
+                left: 6,
+                background: "rgba(15, 23, 42, 0.82)",
+                color: "#e2e8f0",
+                borderRadius: 4,
+                padding: "2px 6px",
+                fontSize: "0.66rem",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+              }}
+            >
+              <Film size={10} /> Video
+            </span>
+          )}
           <span
             style={{
               position: "absolute",
@@ -707,7 +750,14 @@ const MapEntityImageSection: React.FC<{
             onError={() =>
               setBrokenUrls((prev) => ({ ...prev, [visiblePreviewUrl]: true }))
             }
-            onClick={() => onEnlarge(visiblePreviewUrl, resolvedLabel)}
+            onClick={() =>
+              onEnlarge(
+                visiblePreviewUrl,
+                resolvedLabel,
+                resolvedVideoUrl,
+                resolvedVideoMimeType
+              )
+            }
             style={{
               width: "100%",
               maxHeight: 130,
@@ -716,6 +766,25 @@ const MapEntityImageSection: React.FC<{
               cursor: "pointer",
             }}
           />
+          {resolvedVideoUrl && (
+            <span
+              style={{
+                position: "absolute",
+                top: 6,
+                left: 6,
+                background: "rgba(15, 23, 42, 0.82)",
+                color: "#e2e8f0",
+                borderRadius: 4,
+                padding: "2px 6px",
+                fontSize: "0.66rem",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+              }}
+            >
+              <Film size={10} /> Video
+            </span>
+          )}
           <div
             style={{
               display: "flex",
@@ -742,7 +811,14 @@ const MapEntityImageSection: React.FC<{
                 type="button"
                 className="btn"
                 style={{ padding: "1px 6px", fontSize: "0.65rem" }}
-                onClick={() => onEnlarge(visiblePreviewUrl, resolvedLabel)}
+                onClick={() =>
+                  onEnlarge(
+                    visiblePreviewUrl,
+                    resolvedLabel,
+                    resolvedVideoUrl,
+                    resolvedVideoMimeType
+                  )
+                }
               >
                 <Maximize2 size={10} />
               </button>
@@ -875,7 +951,12 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
   visitedContainerIds = [],
   onOpenIconBrowser,
 }) => {
-  const [lightboxImage, setLightboxImage] = useState<{ url: string; label: string } | null>(null);
+  const [lightboxImage, setLightboxImage] = useState<{
+    url: string;
+    label: string;
+    videoUrl?: string | null;
+    videoMimeType?: string | null;
+  } | null>(null);
   const selectedLocIdRef = useRef<string | null>(selectedLocation?.id ?? null);
   selectedLocIdRef.current = selectedLocation?.id ?? null;
   const selectedContIdRef = useRef<string | null>(selectedContainer?.id ?? null);
@@ -1463,6 +1544,8 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
           imageMediaId={selectedContainer.image_media_id}
           imageUrl={selectedContainer.image_url}
           imageLabel={selectedContainer.image_label}
+          videoUrl={selectedContainer.video_url}
+          videoMimeType={selectedContainer.video_mime_type}
           isVisited={isContVisited}
           isDisabled={Boolean(isMutatingLocked)}
           worldMedia={worldMedia}
@@ -1471,9 +1554,13 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
               image_media_id: item ? item.id : null,
               image_url: item ? item.url : null,
               image_label: item ? item.label : null,
+              video_url: item ? item.video_url ?? null : null,
+              video_mime_type: item ? item.video_mime_type ?? null : null,
             })
           }
-          onEnlarge={(url, label) => setLightboxImage({ url, label })}
+          onEnlarge={(url, label, videoUrl, videoMimeType) =>
+            setLightboxImage({ url, label, videoUrl, videoMimeType })
+          }
         />
 
         <div className="field-group" style={{ gap: 4 }}>
@@ -1572,6 +1659,9 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
           <ImageLightboxModal
             url={lightboxImage.url}
             label={lightboxImage.label}
+            videoUrl={lightboxImage.videoUrl}
+            videoMimeType={lightboxImage.videoMimeType}
+            autoPlayVideo={mode === "campaign"}
             onClose={() => setLightboxImage(null)}
           />
         )}
@@ -1759,6 +1849,8 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
         imageMediaId={selectedLocation.image_media_id}
         imageUrl={selectedLocation.image_url}
         imageLabel={selectedLocation.image_label}
+        videoUrl={selectedLocation.video_url}
+        videoMimeType={selectedLocation.video_mime_type}
         isVisited={Boolean(selectedLocation.is_visited)}
         isDisabled={Boolean(isMutatingLocked)}
         worldMedia={worldMedia}
@@ -1767,9 +1859,13 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
             image_media_id: item ? item.id : null,
             image_url: item ? item.url : null,
             image_label: item ? item.label : null,
+            video_url: item ? item.video_url ?? null : null,
+            video_mime_type: item ? item.video_mime_type ?? null : null,
           })
         }
-        onEnlarge={(url, label) => setLightboxImage({ url, label })}
+        onEnlarge={(url, label, videoUrl, videoMimeType) =>
+          setLightboxImage({ url, label, videoUrl, videoMimeType })
+        }
       />
 
       <div
@@ -2102,6 +2198,9 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
         <ImageLightboxModal
           url={lightboxImage.url}
           label={lightboxImage.label}
+          videoUrl={lightboxImage.videoUrl}
+          videoMimeType={lightboxImage.videoMimeType}
+          autoPlayVideo={mode === "campaign"}
           onClose={() => setLightboxImage(null)}
         />
       )}

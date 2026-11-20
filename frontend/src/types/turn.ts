@@ -72,6 +72,8 @@ export interface FirstVisitMediaItem {
   entity_name: string;
   media_id: string;
   image_url: string;
+  video_url?: string | null;
+  video_mime_type?: string | null;
   label: string;
 }
 

@@ -38,7 +38,7 @@ Source of truth: [backend/tach.toml](../../backend/tach.toml) validated by `tach
 | `app.routers` | `app.auth`, `app.config`, `app.db`, `app.dependencies`, `app.engine.affective_engine`, `app.engine.choices`, `app.engine.clerk_placement`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.parties`, `app.engine.phase1_pre`, `app.engine.phase2_context`, `app.engine.phase3_actor`, `app.engine.phase3_cognition`, `app.engine.phase4_clerk`, `app.engine.phase4_prose`, `app.engine.phase5_clerk`, `app.housekeeping`, `app.prompts`, `app.providers`, `app.schemas`, `app.security`, `app.services`, `app.wizards` |
 | `app.schemas` | `app.config` |
 | `app.security` | *(leaf / none)* |
-| `app.services` | `app.config`, `app.db`, `app.dependencies`, `app.schemas`, `app.wizards` |
+| `app.services` | `app.config`, `app.db`, `app.dependencies`, `app.schemas`, `app.security`, `app.wizards` |
 | `app.wizards` | `app.config`, `app.db`, `app.engine.llm_client`, `app.prompts`, `app.schemas` |
 
 ## Full Module Graph (`tach show --mermaid`)
@@ -220,6 +220,7 @@ graph TD
     app.services --> app.db
     app.services --> app.dependencies
     app.services --> app.schemas
+    app.services --> app.security
     app.services --> app.wizards
     app.wizards --> app.config
     app.wizards --> app.db

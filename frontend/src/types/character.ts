@@ -77,6 +77,19 @@ export interface GalleryImage {
   url: string;
   caption?: string;
   created_at: string;
+  is_public?: boolean;
+  video_asset_id?: string | null;
+  video_url?: string | null;
+  video_mime_type?: string | null;
+  video_byte_size?: number | null;
+}
+
+export interface GalleryMediaImpactResponse {
+  asset_id: string;
+  campaigns_using: number;
+  is_public: boolean;
+  has_linked_video: boolean;
+  video_byte_size: number;
 }
 
 export type ItemFlag = "permanent" | "artifact";

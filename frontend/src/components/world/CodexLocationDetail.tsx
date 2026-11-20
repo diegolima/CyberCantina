@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Compass, Layers, MapPin, Maximize2 } from "lucide-react";
+import { Compass, Film, Layers, MapPin, Maximize2 } from "lucide-react";
 import type { LocationContainer, LocationNode } from "../../types";
 import {
   CONTAINER_DEPTH_LABELS,
@@ -22,7 +22,12 @@ interface CodexLocationDetailProps {
   activeLocationId?: string;
   isCampaignMode: boolean;
   onOpenOnMap: (kind: "location" | "container", id: string) => void;
-  onEnlargeImage: (url: string, label: string) => void;
+  onEnlargeImage: (
+    url: string,
+    label: string,
+    videoUrl?: string | null,
+    videoMimeType?: string | null
+  ) => void;
 }
 
 export const CodexLocationDetail: React.FC<CodexLocationDetailProps> = ({
@@ -108,10 +113,12 @@ export const CodexLocationDetail: React.FC<CodexLocationDetailProps> = ({
             onClick={() =>
               onEnlargeImage(
                 location.image_url!,
-                (location.image_label || "").trim() || location.name
+                (location.image_label || "").trim() || location.name,
+                location.video_url,
+                location.video_mime_type
               )
             }
-            title="Click to enlarge"
+            title={location.video_url ? "Click to enlarge and play video" : "Click to enlarge"}
           >
             <img
               src={location.image_url}
@@ -120,6 +127,25 @@ export const CodexLocationDetail: React.FC<CodexLocationDetailProps> = ({
                 setBrokenUrls((prev) => ({ ...prev, [location.image_url!]: true }))
               }
             />
+            {location.video_url && (
+              <span
+                style={{
+                  position: "absolute",
+                  top: 8,
+                  left: 8,
+                  background: "rgba(15, 23, 42, 0.85)",
+                  color: "#e2e8f0",
+                  borderRadius: 4,
+                  padding: "2px 6px",
+                  fontSize: "0.68rem",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                <Film size={11} /> Video
+              </span>
+            )}
             <span className="codex-media-zoom-pill">
               <Maximize2 size={11} /> Enlarge
             </span>
@@ -260,10 +286,12 @@ export const CodexLocationDetail: React.FC<CodexLocationDetailProps> = ({
             onClick={() =>
               onEnlargeImage(
                 container.image_url!,
-                (container.image_label || "").trim() || container.name
+                (container.image_label || "").trim() || container.name,
+                container.video_url,
+                container.video_mime_type
               )
             }
-            title="Click to enlarge"
+            title={container.video_url ? "Click to enlarge and play video" : "Click to enlarge"}
           >
             <img
               src={container.image_url}
@@ -272,6 +300,25 @@ export const CodexLocationDetail: React.FC<CodexLocationDetailProps> = ({
                 setBrokenUrls((prev) => ({ ...prev, [container.image_url!]: true }))
               }
             />
+            {container.video_url && (
+              <span
+                style={{
+                  position: "absolute",
+                  top: 8,
+                  left: 8,
+                  background: "rgba(15, 23, 42, 0.85)",
+                  color: "#e2e8f0",
+                  borderRadius: 4,
+                  padding: "2px 6px",
+                  fontSize: "0.68rem",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                <Film size={11} /> Video
+              </span>
+            )}
             <span className="codex-media-zoom-pill">
               <Maximize2 size={11} /> Enlarge
             </span>

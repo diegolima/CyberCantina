@@ -173,6 +173,8 @@ def build_first_visit_arrival_bundle(
                         media_id=cont.image_media_id,
                         image_url=cont.image_url,
                         label=(cont.image_label or "").strip() or cont.name,
+                        video_url=getattr(cont, "video_url", None),
+                        video_mime_type=getattr(cont, "video_mime_type", None),
                     )
                 )
         if (
@@ -189,6 +191,8 @@ def build_first_visit_arrival_bundle(
                     media_id=target_location.image_media_id,
                     image_url=target_location.image_url,
                     label=(target_location.image_label or "").strip() or target_location.name,
+                    video_url=getattr(target_location, "video_url", None),
+                    video_mime_type=getattr(target_location, "video_mime_type", None),
                 )
             )
 

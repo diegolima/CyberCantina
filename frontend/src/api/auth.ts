@@ -1,4 +1,6 @@
 import type {
+  AdminMediaPurgePreviewResponse,
+  AdminMediaPurgeResponse,
   AdminResetPasswordResponse,
   AuthSessionResponse,
   AuthStatusResponse,
@@ -323,4 +325,18 @@ export const authApi = {
       `${API_BASE}/admin/chloromancer/run/${encodeURIComponent(jobId)}`,
       { method: "POST" }
     ),
+
+  getAdminMediaPurgePreview: (images: boolean, videos: boolean) =>
+    fetchJson<AdminMediaPurgePreviewResponse>(
+      `${API_BASE}/admin/media/purge-preview?images=${images}&videos=${videos}`
+    ),
+
+  purgeAdminMedia: (purgeImages: boolean, purgeVideos: boolean) =>
+    fetchJson<AdminMediaPurgeResponse>(`${API_BASE}/admin/media/purge`, {
+      method: "POST",
+      body: JSON.stringify({
+        purge_images: purgeImages,
+        purge_videos: purgeVideos,
+      }),
+    }),
 };

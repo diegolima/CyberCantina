@@ -91,24 +91,33 @@ CREATE TABLE IF NOT EXISTS worlds (
     created_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS world_media (
+CREATE TABLE IF NOT EXISTS media_assets (
     id TEXT PRIMARY KEY,
     owner_id TEXT NULL REFERENCES users(id) ON DELETE CASCADE,
-    media_type TEXT NOT NULL DEFAULT 'image' CHECK (media_type IN ('image', 'audio')),
+    entity_scope TEXT NOT NULL CHECK (entity_scope IN ('character', 'persona', 'world')),
+    media_type TEXT NOT NULL CHECK (media_type IN ('image', 'video', 'audio')),
+    role TEXT NOT NULL CHECK (role IN ('portrait', 'album', 'world_scene', 'linked_video')),
     filename TEXT NOT NULL,
     label TEXT NOT NULL DEFAULT '',
-    mime_type TEXT NOT NULL DEFAULT 'image/webp',
+    mime_type TEXT NOT NULL,
     byte_size INTEGER NOT NULL DEFAULT 0,
     is_public INTEGER NOT NULL DEFAULT 0,
     seed_key TEXT NULL,
+    parent_image_id TEXT NULL REFERENCES media_assets(id) ON DELETE CASCADE,
+    duration_ms INTEGER NULL,
+    width INTEGER NULL,
+    height INTEGER NULL,
     created_at TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_world_media_owner ON world_media(owner_id);
+CREATE INDEX IF NOT EXISTS idx_media_assets_owner ON media_assets(owner_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_media_assets_parent_image
+    ON media_assets(parent_image_id)
+    WHERE parent_image_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS world_media_links (
     world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
-    media_id TEXT NOT NULL REFERENCES world_media(id) ON DELETE CASCADE,
+    media_id TEXT NOT NULL REFERENCES media_assets(id) ON DELETE CASCADE,
     sort_order INTEGER NOT NULL DEFAULT 0,
     label_override TEXT NULL,
     created_at TEXT NOT NULL,
@@ -129,7 +138,7 @@ CREATE TABLE IF NOT EXISTS location_containers (
     ui_x REAL NULL,
     ui_y REAL NULL,
     icon TEXT NULL,
-    image_media_id TEXT NULL REFERENCES world_media(id) ON DELETE SET NULL,
+    image_media_id TEXT NULL REFERENCES media_assets(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL
 );
 
@@ -153,7 +162,7 @@ CREATE TABLE IF NOT EXISTS location_nodes (
     ui_x REAL NULL,
     ui_y REAL NULL,
     icon TEXT NULL,
-    image_media_id TEXT NULL REFERENCES world_media(id) ON DELETE SET NULL
+    image_media_id TEXT NULL REFERENCES media_assets(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_location_nodes_world ON location_nodes(world_id);

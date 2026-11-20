@@ -23,12 +23,15 @@ from pydantic import BaseModel
 from app.auth import get_current_user
 from app.dependencies import (
     enforce_quota_and_write_webp,
+    enforce_upload_policy,
     get_effective_user_model_settings,
     get_repo,
     render_webp_bytes,
     run_entity_pruner,
+    safe_resolve_asset_path,
     safe_resolve_world_media_path,
 )
+from app.routers.media import stage_and_commit_linked_video
 from app.schemas.auth import UserProfile
 from app.schemas.world import (
     WorldMapDraft,
@@ -222,8 +225,12 @@ def get_world_media(
     filename: str,
     current_user: UserProfile = Depends(get_current_user),
 ) -> FileResponse:
-    """Serve a static world media asset when the user has access."""
+    """Serve a static world media asset (public showcase or legacy world path) when authorized."""
     target = safe_resolve_world_media_path(category, filename)
+    if not target.is_file():
+        asset_fallback = safe_resolve_asset_path(category, filename)
+        if asset_fallback.is_file():
+            target = asset_fallback
     if not target.is_file():
         raise HTTPException(status_code=404, detail="Media asset not found.")
 
@@ -247,6 +254,7 @@ async def upload_world_media(
     current_user: UserProfile = Depends(get_current_user),
 ) -> WorldRecord:
     """Upload a landscape/scene image to a saved world (CoW-forking if campaigns exist)."""
+    enforce_upload_policy(current_user, "image")
     repo = get_repo()
     try:
         repo.get_world(world_id, base_only=True, owner_id=current_user.id)
@@ -259,7 +267,7 @@ async def upload_world_media(
 
     media_id = f"wmed_{uuid.uuid4().hex[:10]}"
     filename = f"{media_id}.webp"
-    target_path = safe_resolve_world_media_path("images", filename)
+    target_path = safe_resolve_asset_path("images", filename, media_dir=repo.media_dir)
 
     webp_bytes = await asyncio.to_thread(
         render_webp_bytes, file_bytes, square_crop=False, max_size=1920
@@ -288,6 +296,86 @@ async def upload_world_media(
     except Exception:
         target_path.unlink(missing_ok=True)
         raise
+
+
+@router.post("/api/worlds/{world_id}/media/videos", response_model=WorldRecord)
+async def upload_world_video(
+    world_id: str,
+    file: UploadFile = File(...),
+    label: str = Form(""),
+    linked_image_id: str | None = Form(None),
+    current_user: UserProfile = Depends(get_current_user),
+) -> WorldRecord:
+    """Upload an MP4/WebM video linked to an existing world image or extracting a first-frame poster."""
+    enforce_upload_policy(current_user, "video")
+    repo = get_repo()
+    try:
+        world = repo.get_world(world_id, base_only=True, owner_id=current_user.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    clean_linked_id = (
+        linked_image_id.strip()
+        if isinstance(linked_image_id, str) and linked_image_id.strip()
+        else None
+    )
+    if clean_linked_id is not None:
+        target_media = next((m for m in world.media if m.id == clean_linked_id), None)
+        if target_media is None or target_media.media_type != "image":
+            raise HTTPException(
+                status_code=404,
+                detail=f"World image '{clean_linked_id}' not found on world '{world_id}'.",
+            )
+        if target_media.is_public:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot attach a private video to shared built-in artwork; upload the video standalone to create a new album image.",
+            )
+
+    stem = Path(file.filename or "").stem.strip()
+    default_label = stem or "World Video"
+    _probe, _vid_id, image_id, created_new_image = await stage_and_commit_linked_video(
+        repo=repo,
+        user=current_user,
+        file=file,
+        entity_scope="world",
+        target_owner_id=current_user.id,
+        linked_image_id=clean_linked_id,
+        label_or_caption=label,
+        default_image_label=default_label,
+    )
+    if created_new_image:
+        try:
+            return repo.link_existing_world_media_asset(
+                world_id, image_id, owner_id=current_user.id
+            )
+        except Exception:
+            repo.delete_media_asset(image_id)
+            raise
+    return repo.get_world(world_id, base_only=True, owner_id=current_user.id)
+
+
+@router.delete("/api/worlds/{world_id}/media/{media_id}/video", response_model=WorldRecord)
+def delete_world_media_video(
+    world_id: str,
+    media_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> WorldRecord:
+    """Delete only the linked video on a world image while keeping the image itself."""
+    repo = get_repo()
+    try:
+        world = repo.get_world(world_id, base_only=True, owner_id=current_user.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    target_media = next((m for m in world.media if m.id == media_id), None)
+    if target_media is None:
+        raise HTTPException(status_code=404, detail=f"Media '{media_id}' not found on world '{world_id}'.")
+
+    deleted = repo.delete_linked_video(media_id, owner_id=current_user.id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"No linked video found for media '{media_id}'.")
+    return repo.get_world(world_id, base_only=True, owner_id=current_user.id)
 
 
 @router.patch("/api/worlds/{world_id}/media/{media_id}", response_model=WorldRecord)

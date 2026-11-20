@@ -442,6 +442,8 @@ class CampaignsMixin:
                     persona_snapshot = PersonaRecord.model_validate_json(r["persona_snapshot_json"])
                 except Exception:
                     pass
+            if persona_snapshot is not None:
+                persona_snapshot = self._hydrate_persona_records_conn(conn, [persona_snapshot])[0]
             if persona_snapshot is None:
                 default_p = get_default_persona(owner_id=r["owner_id"] if "owner_id" in r.keys() and r["owner_id"] else "default_user")
                 persona_snapshot = default_p

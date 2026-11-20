@@ -355,13 +355,14 @@ class AuthUsersMixin:
                 conn.execute("DELETE FROM lore_nodes WHERE world_id = ?", (w_id,))
                 conn.execute("DELETE FROM worlds WHERE id = ?", (w_id,))
 
-            world_media_rows = conn.execute(
-                "SELECT id, media_type, filename FROM world_media WHERE owner_id = ? AND is_public = 0",
+            private_media_rows = conn.execute(
+                "SELECT * FROM media_assets WHERE owner_id = ? AND is_public = 0",
                 (user_id,),
             ).fetchall()
-            conn.execute("DELETE FROM world_media WHERE owner_id = ? AND is_public = 0", (user_id,))
+            private_assets = [dict(r) for r in private_media_rows]
+            conn.execute("DELETE FROM media_assets WHERE owner_id = ? AND is_public = 0", (user_id,))
 
-            # 4. Delete user private notes and personas (collecting persona media refs first)
+            # 4. Delete user private notes and personas (collecting legacy persona media refs first)
             persona_media_refs = self.list_user_persona_media_files(user_id)
             conn.execute("DELETE FROM user_notes WHERE owner_id = ?", (user_id,))
             conn.execute("DELETE FROM personas WHERE owner_id = ?", (user_id,))
@@ -370,8 +371,8 @@ class AuthUsersMixin:
         finally:
             conn.close()
 
-        for wmr in world_media_rows:
-            self._delete_world_media_file(wmr["media_type"], wmr["filename"])
+        for pa in private_assets:
+            self._unlink_asset_file(pa)
         if persona_media_refs:
             self.prune_orphaned_persona_media()
 

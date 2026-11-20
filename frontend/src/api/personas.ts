@@ -1,4 +1,9 @@
-import type { PersonaCreatePayload, PersonaRecord, PersonaUpdatePayload } from "../types";
+import type {
+  GalleryMediaImpactResponse,
+  PersonaCreatePayload,
+  PersonaRecord,
+  PersonaUpdatePayload,
+} from "../types";
 import { API_BASE, fetchJson } from "./client";
 
 export const personasApi = {
@@ -57,4 +62,40 @@ export const personasApi = {
     fetchJson<PersonaRecord>(`${API_BASE}/personas/${personaId}/gallery/${imageId}`, {
       method: "DELETE",
     }),
+
+  getPersonaGalleryImpact: (personaId: string, imageId: string) =>
+    fetchJson<GalleryMediaImpactResponse>(
+      `${API_BASE}/personas/${personaId}/gallery/${encodeURIComponent(imageId)}/impact`
+    ),
+
+  uploadPersonaGalleryVideo: (
+    personaId: string,
+    file: File | Blob,
+    caption?: string,
+    linkedImageId?: string | null
+  ) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    if (caption && caption.trim()) {
+      formData.append("caption", caption.trim());
+    }
+    if (linkedImageId) {
+      formData.append("linked_image_id", linkedImageId);
+    }
+    return fetchJson<PersonaRecord>(
+      `${API_BASE}/personas/${personaId}/gallery/videos`,
+      {
+        method: "POST",
+        body: formData,
+      }
+    );
+  },
+
+  deletePersonaGalleryVideo: (personaId: string, imageId: string) =>
+    fetchJson<PersonaRecord>(
+      `${API_BASE}/personas/${personaId}/gallery/${encodeURIComponent(imageId)}/video`,
+      {
+        method: "DELETE",
+      }
+    ),
 };
