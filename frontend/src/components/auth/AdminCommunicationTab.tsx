@@ -550,10 +550,10 @@ export const AdminCommunicationTab: React.FC<AdminCommunicationTabProps> = ({
       )}
 
       {loading && activeMessages.length === 0 && archivedMessages.length === 0 ? (
-        <div className="admin-comm-empty">Loading communication messages...</div>
+        <div className="ui-empty-state ui-empty-state--dashed">Loading communication messages...</div>
       ) : subTab === "active" ? (
         activeMessages.length === 0 ? (
-          <div className="admin-comm-empty">
+          <div className="ui-empty-state ui-empty-state--dashed">
             No active or scheduled messages. Click <strong>New Message</strong> to
             post an announcement to Login or Home.
           </div>
@@ -718,7 +718,7 @@ export const AdminCommunicationTab: React.FC<AdminCommunicationTabProps> = ({
           </div>
         )
       ) : archivedMessages.length === 0 ? (
-        <div className="admin-comm-empty">
+        <div className="ui-empty-state ui-empty-state--dashed">
           No archived messages. Deleted or expired messages stay here for 7 days
           before Chloromancer removes them permanently.
         </div>

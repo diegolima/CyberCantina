@@ -54,7 +54,7 @@ export const CharacterMentionPicker: React.FC<CharacterMentionPickerProps> = ({
   }
 
   return (
-    <div className="mention-picker-popover" ref={containerRef}>
+    <div className="ui-popover mention-picker-popover" ref={containerRef}>
       <div className="mention-picker-header">
         <span className="mention-picker-title">
           {mode === "party_invite"

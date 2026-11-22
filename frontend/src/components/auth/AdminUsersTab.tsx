@@ -325,11 +325,11 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
                 }}
               >
                 <div style={{ display: "flex", gap: 6 }}>
-                  <div className="sidebar-search-wrap" style={{ flex: 1 }}>
-                    <Search size={13} className="sidebar-search-icon" />
+                  <div className="ui-search-wrap" style={{ flex: 1 }}>
+                    <Search size={13} className="ui-search-icon" />
                     <input
                       type="text"
-                      className="sidebar-search-input"
+                      className="ui-search-input"
                       placeholder="Filter usernames..."
                       value={filterQuery}
                       onChange={(e) => setFilterQuery(e.target.value)}
@@ -371,7 +371,7 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
                     filteredUsers.map((u) => (
                       <div
                         key={u.id}
-                        className={`campaign-item ${
+                        className={`ui-list-row ${
                           selectedUser?.id === u.id && !showCreateUser
                             ? "active"
                             : ""
@@ -403,7 +403,7 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
                               {u.username}
                             </span>
                             <span
-                              className="role-pill"
+                              className="ui-pill ui-pill--xs ui-pill--upper"
                               style={{
                                 fontSize: "0.62rem",
                                 padding: "1px 5px",
@@ -656,7 +656,7 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
                         </div>
                       </div>
                       <span
-                        className="role-pill"
+                        className="ui-pill ui-pill--xs ui-pill--upper"
                         style={{
                           borderColor:
                             selectedUser.role === "admin"

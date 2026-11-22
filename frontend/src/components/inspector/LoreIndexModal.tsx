@@ -273,11 +273,11 @@ export const LoreIndexModal: React.FC<LoreIndexModalProps> = ({
         </div>
 
         <div className="lore-index-toolbar">
-          <div className="sidebar-search-wrap" style={{ flex: 1 }}>
-            <Search size={13} className="sidebar-search-icon" />
+          <div className="ui-search-wrap" style={{ flex: 1 }}>
+            <Search size={13} className="ui-search-icon" />
             <input
               autoFocus
-              className="sidebar-search-input"
+              className="ui-search-input"
               placeholder="Search titles, content, keywords, or locations..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}

@@ -1,0 +1,139 @@
+/* Design Tokens & Canonical Keyframes */
+
+:root {
+  /* Base Palette */
+  --bg-deep: #0b0e14;
+  --bg-panel: #111621;
+  --bg-card: #171e2c;
+  --bg-card-hover: #1e2738;
+  --border-subtle: #252f42;
+  --border-accent: #f59e0b;
+  --text-primary: #f1f5f9;
+  --text-bright: #e2e8f0;
+  --text-soft: #cbd5e1;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+
+  /* Brand & Semantic Accents */
+  --accent-amber: #f59e0b;
+  --accent-cyan: #06b6d4;
+  --accent-emerald: #10b981;
+  --accent-rose: #f43f5e;
+  --accent-violet: #8b5cf6;
+  --accent-purple: #a855f7;
+
+  /* Translucent Glass Surfaces, Dark Overlays & Borders */
+  --surface-glass-1: rgba(255, 255, 255, 0.03);
+  --surface-glass-2: rgba(255, 255, 255, 0.05);
+  --surface-glass-3: rgba(255, 255, 255, 0.06);
+  --surface-glass-4: rgba(255, 255, 255, 0.08);
+  --border-glass-subtle: rgba(255, 255, 255, 0.08);
+  --border-glass-strong: rgba(255, 255, 255, 0.14);
+  --surface-dark-soft: rgba(15, 23, 42, 0.55);
+  --surface-dark-med: rgba(15, 23, 42, 0.72);
+  --surface-dark-deep: rgba(15, 23, 42, 0.88);
+  --slate-bg-subtle: rgba(148, 163, 184, 0.12);
+  --slate-border-muted: rgba(148, 163, 184, 0.35);
+
+  /* Accent Semantic Triplets (bg / hover / border / fg) */
+  --amber-bg-subtle: rgba(245, 158, 11, 0.08);
+  --amber-bg: rgba(245, 158, 11, 0.14);
+  --amber-bg-hover: rgba(245, 158, 11, 0.24);
+  --amber-border-subtle: rgba(245, 158, 11, 0.28);
+  --amber-border: rgba(245, 158, 11, 0.42);
+  --amber-fg: #fbbf24;
+  --amber-fg-soft: #fde68a;
+
+  --cyan-bg-subtle: rgba(6, 182, 212, 0.08);
+  --cyan-bg: rgba(6, 182, 212, 0.14);
+  --cyan-bg-hover: rgba(6, 182, 212, 0.24);
+  --cyan-border-subtle: rgba(6, 182, 212, 0.28);
+  --cyan-border: rgba(6, 182, 212, 0.42);
+  --cyan-fg: #67e8f9;
+  --cyan-fg-bright: #22d3ee;
+
+  --violet-bg-subtle: rgba(139, 92, 246, 0.09);
+  --violet-bg: rgba(139, 92, 246, 0.14);
+  --violet-bg-hover: rgba(139, 92, 246, 0.24);
+  --violet-border-subtle: rgba(139, 92, 246, 0.28);
+  --violet-border: rgba(139, 92, 246, 0.4);
+  --violet-fg: #c4b5fd;
+  --violet-fg-soft: #ddd6fe;
+
+  --purple-bg-subtle: rgba(168, 85, 247, 0.09);
+  --purple-bg: rgba(168, 85, 247, 0.15);
+  --purple-bg-hover: rgba(168, 85, 247, 0.26);
+  --purple-border: rgba(168, 85, 247, 0.45);
+  --purple-fg: #d8b4fe;
+  --purple-fg-soft: #e9d5ff;
+
+  --rose-bg-subtle: rgba(244, 63, 94, 0.1);
+  --rose-bg: rgba(244, 63, 94, 0.15);
+  --rose-bg-hover: rgba(244, 63, 94, 0.26);
+  --rose-border: rgba(244, 63, 94, 0.45);
+  --rose-fg: #fda4af;
+  --rose-fg-soft: #fecdd3;
+
+  --emerald-bg-subtle: rgba(16, 185, 129, 0.09);
+  --emerald-bg: rgba(16, 185, 129, 0.14);
+  --emerald-bg-hover: rgba(16, 185, 129, 0.24);
+  --emerald-border: rgba(16, 185, 129, 0.4);
+  --emerald-fg: #6ee7b7;
+
+  /* Provider colours: none of these collide with the green/red/yellow status indicators. */
+  --provider-cyan-bg: rgba(6, 182, 212, 0.14);
+  --provider-cyan-border: rgba(6, 182, 212, 0.45);
+  --provider-cyan-fg: #67e8f9;
+  --provider-purple-bg: rgba(168, 85, 247, 0.14);
+  --provider-purple-border: rgba(168, 85, 247, 0.45);
+  --provider-purple-fg: #d8b4fe;
+  --provider-indigo-bg: rgba(99, 102, 241, 0.16);
+  --provider-indigo-border: rgba(99, 102, 241, 0.5);
+  --provider-indigo-fg: #a5b4fc;
+  --provider-bronze-bg: rgba(184, 118, 74, 0.16);
+  --provider-bronze-border: rgba(184, 118, 74, 0.5);
+  --provider-bronze-fg: #e0a982;
+
+  /* Typography, Radii, Elevation & Stacking */
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-pill: 9999px;
+  --shadow-popover: 0 12px 32px rgba(0, 0, 0, 0.55);
+  --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.65);
+  --z-drawer-backdrop: 35;
+  --z-drawer: 40;
+  --z-popover: 60;
+  --z-card-popover-host: 100;
+  --z-modal: 1000;
+
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color-scheme: dark;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pulseOpacity {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}

@@ -173,15 +173,7 @@ export const AdminServerConfigTab: React.FC<AdminServerConfigTabProps> = ({
       >
         {/* Self-Registration Card */}
         <div
-          style={{
-            background: "var(--bg-card)",
-            border: "1px solid var(--border-subtle)",
-            borderRadius: 8,
-            padding: 14,
-            display: "flex",
-            flexDirection: "column",
-            gap: 10,
-          }}
+          className="ui-section-card ui-section-card--compact"
         >
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <Shield size={15} color="var(--accent-cyan)" />
@@ -230,15 +222,7 @@ export const AdminServerConfigTab: React.FC<AdminServerConfigTabProps> = ({
 
         {/* Global User Media Quota Card */}
         <div
-          style={{
-            background: "var(--bg-card)",
-            border: "1px solid var(--border-subtle)",
-            borderRadius: 8,
-            padding: 14,
-            display: "flex",
-            flexDirection: "column",
-            gap: 10,
-          }}
+          className="ui-section-card ui-section-card--compact"
         >
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <HardDrive size={15} color="var(--accent-amber)" />
@@ -425,15 +409,7 @@ export const AdminServerConfigTab: React.FC<AdminServerConfigTabProps> = ({
 
         {/* Chloromancer Inactivity Purge Policy Card */}
         <div
-          style={{
-            background: "var(--bg-card)",
-            border: "1px solid var(--border-subtle)",
-            borderRadius: 8,
-            padding: 14,
-            display: "flex",
-            flexDirection: "column",
-            gap: 12,
-          }}
+          className="ui-section-card"
         >
           <div
             style={{
@@ -451,7 +427,7 @@ export const AdminServerConfigTab: React.FC<AdminServerConfigTabProps> = ({
             </div>
             {chloromancerStatus && (
               <span
-                className="role-pill"
+                className="ui-pill ui-pill--xs ui-pill--upper"
                 style={{
                   fontSize: "0.66rem",
                   borderColor: chloromancerStatus.scheduler_active
@@ -593,15 +569,7 @@ export const AdminServerConfigTab: React.FC<AdminServerConfigTabProps> = ({
 
       {/* Purge Non-Built-In Media Card */}
       <div
-        style={{
-          background: "var(--bg-card)",
-          border: "1px solid var(--border-subtle)",
-          borderRadius: 8,
-          padding: 14,
-          display: "flex",
-          flexDirection: "column",
-          gap: 12,
-        }}
+        className="ui-section-card"
       >
         <div
           style={{
@@ -784,15 +752,7 @@ export const AdminServerConfigTab: React.FC<AdminServerConfigTabProps> = ({
 
       {/* Dry-run Preview & Manual Execution */}
       <div
-        style={{
-          background: "var(--bg-card)",
-          border: "1px solid var(--border-subtle)",
-          borderRadius: 8,
-          padding: 14,
-          display: "flex",
-          flexDirection: "column",
-          gap: 12,
-        }}
+        className="ui-section-card"
       >
         <div
           style={{

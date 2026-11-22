@@ -1,0 +1,326 @@
+/* Shared UI Primitives */
+
+/* ==========================================================================
+   Search Field Primitives (.ui-search-* & .ui-search-bar*)
+   ========================================================================== */
+.ui-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.ui-search-wrap--export {
+  flex: 1;
+  max-width: 220px;
+}
+
+.ui-search-wrap--notes-flyout {
+  margin: 8px 12px 6px;
+  flex-shrink: 0;
+}
+
+.ui-search-wrap--codex {
+  flex: 1;
+  max-width: 360px;
+  min-width: 160px;
+}
+
+.ui-search-wrap--map {
+  width: clamp(165px, 20vw, 230px);
+  flex: 0 1 220px;
+  min-width: 150px;
+}
+
+.ui-search-icon {
+  position: absolute;
+  left: 9px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.ui-search-input {
+  width: 100%;
+  background: var(--bg-deep);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 6px 28px 6px 28px;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  outline: none;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.ui-search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.ui-search-input:focus {
+  border-color: var(--accent-amber);
+}
+
+.ui-search-input--cyan:focus {
+  border-color: var(--accent-cyan);
+}
+
+.ui-search-input--compact {
+  height: 26px;
+  padding: 3px 24px 3px 26px;
+  border-radius: var(--radius-sm);
+}
+
+.ui-search-input--compact:focus {
+  background: var(--bg-card);
+}
+
+.ui-search-input--panel {
+  font-size: 0.76rem;
+  background: var(--bg-panel);
+}
+
+.ui-search-input--card {
+  font-size: 0.74rem;
+  line-height: 1.2;
+  padding: 5px 24px 5px 26px;
+  background: var(--bg-card);
+}
+
+.ui-search-input--card:focus {
+  background: var(--bg-panel);
+}
+
+.ui-search-clear {
+  position: absolute;
+  right: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+}
+
+.ui-search-clear:hover {
+  color: var(--text-primary);
+}
+
+.ui-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-glass-1);
+}
+
+.ui-search-bar--purple {
+  gap: 8px;
+  padding: 7px 12px;
+  border: 1px solid var(--purple-border);
+  border-radius: 9px;
+  background: var(--surface-dark-med);
+}
+
+.ui-search-bar-icon {
+  color: var(--text-muted);
+}
+
+.ui-search-bar-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 0.76rem;
+}
+
+.ui-search-bar--purple .ui-search-bar-input {
+  font-size: 0.84rem;
+}
+
+.ui-search-bar-clear {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ui-search-bar-clear:hover {
+  color: var(--text-primary);
+}
+
+/* ==========================================================================
+   Pill & Badge Primitives (.ui-pill*)
+   ========================================================================== */
+.ui-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-glass-2);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.ui-pill--xs {
+  padding: 1px 7px;
+  font-size: 0.68rem;
+}
+
+.ui-pill--square {
+  border-radius: var(--radius-sm);
+}
+
+.ui-pill--upper {
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ui-pill--fade {
+  animation: fadeIn 0.2s ease-out;
+}
+
+.ui-pill--amber {
+  background: var(--amber-bg);
+  border-color: var(--amber-border);
+  color: var(--accent-amber);
+}
+
+.ui-pill--cyan {
+  background: var(--cyan-bg);
+  border-color: var(--cyan-border);
+  color: var(--cyan-fg);
+}
+
+.ui-pill--emerald {
+  background: var(--emerald-bg);
+  border-color: var(--emerald-border);
+  color: var(--emerald-fg);
+}
+
+.ui-pill--purple {
+  background: var(--purple-bg);
+  border-color: var(--purple-border);
+  color: var(--purple-fg-soft);
+}
+
+.ui-pill--rose {
+  background: var(--rose-bg);
+  border-color: var(--rose-border);
+  color: var(--rose-fg);
+}
+
+/* ==========================================================================
+   Popover Surface Primitive (.ui-popover)
+   ========================================================================== */
+.ui-popover {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-popover);
+  overflow: hidden;
+  z-index: var(--z-popover);
+}
+
+/* ==========================================================================
+   Empty State Primitives (.ui-empty-state*)
+   ========================================================================== */
+.ui-empty-state {
+  padding: 20px 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.ui-empty-state--compact {
+  padding: 12px 10px;
+  font-size: 0.74rem;
+}
+
+.ui-empty-state--left {
+  padding: 10px 2px;
+  text-align: left;
+  font-size: 0.8rem;
+}
+
+.ui-empty-state--dashed {
+  border-radius: 10px;
+  border: 1px dashed var(--border-glass-strong);
+  background: var(--surface-glass-1);
+}
+
+.ui-empty-state--dashed-dark {
+  border-radius: 10px;
+  border: 1px dashed var(--border-subtle);
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.ui-empty-state--fill {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  font-size: 0.82rem;
+}
+
+/* ==========================================================================
+   Selectable List Row Primitive (.ui-list-row)
+   ========================================================================== */
+.ui-list-row {
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.ui-list-row:hover {
+  background: var(--bg-card-hover);
+}
+
+.ui-list-row.active {
+  border-color: var(--accent-amber);
+  background: var(--amber-bg-subtle);
+}
+
+/* ==========================================================================
+   Section Card Primitive (.ui-section-card*)
+   ========================================================================== */
+.ui-section-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ui-section-card--compact {
+  gap: 10px;
+}
+
+.ui-section-card--danger {
+  border-color: var(--rose-border);
+}

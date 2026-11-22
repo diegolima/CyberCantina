@@ -1,0 +1,177 @@
+/* Global Reset, Scrollbars, App Shell & Base Buttons */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg-deep);
+  color: var(--text-primary);
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+/* Custom Scrollbars (Vertical & Horizontal) */
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.25);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:vertical {
+  min-height: 28px;
+}
+
+*::-webkit-scrollbar-thumb:horizontal {
+  min-width: 28px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(148, 163, 184, 0.45);
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background-color: rgba(245, 158, 11, 0.72);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+  }
+}
+
+.studio-shell {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) 370px;
+  height: 100vh;
+  height: 100dvh;
+  width: 100vw;
+  position: relative;
+}
+
+.studio-shell.no-campaign {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 500;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--bg-card-hover);
+  border-color: var(--text-muted);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--accent-amber);
+  outline-offset: 2px;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-amber {
+  background: var(--amber-bg);
+  border-color: var(--amber-border);
+  color: var(--amber-fg);
+}
+
+.btn-amber:hover:not(:disabled) {
+  background: var(--amber-bg-hover);
+  border-color: var(--accent-amber);
+}
+
+.btn-cyan {
+  background: var(--cyan-bg);
+  border-color: var(--cyan-border);
+  color: var(--cyan-fg-bright);
+}
+
+.btn-cyan:hover:not(:disabled) {
+  background: var(--cyan-bg-hover);
+  border-color: var(--accent-cyan);
+}
+
+.btn-cyan:focus-visible {
+  outline-color: var(--accent-cyan);
+}
+
+.btn-danger {
+  background: var(--rose-bg);
+  border-color: var(--rose-border);
+  color: var(--rose-fg);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--rose-bg-hover);
+  border-color: var(--accent-rose);
+}
+
+.btn-purple {
+  background: var(--purple-bg);
+  border-color: var(--purple-border);
+  color: var(--purple-fg);
+}
+
+.btn-purple:hover:not(:disabled) {
+  background: var(--purple-bg-hover);
+  border-color: var(--accent-purple);
+}
+
+.item-remove-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.item-remove-btn:hover {
+  background: var(--rose-bg);
+  border-color: var(--rose-border);
+  color: var(--rose-fg);
+}

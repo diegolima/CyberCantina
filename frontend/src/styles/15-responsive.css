@@ -1,0 +1,389 @@
+/* Responsive Campaign Layout, Rail, Overlay Drawers & Reduced Motion
+ *
+ * Canonical Responsive Tiers (synchronized with frontend/src/utils/campaignLayout.ts):
+ *   - Compact Phone: @media (max-width: 620px)
+ *   - Mobile:        @media (max-width: 820px)                         [MOBILE_MAX_WIDTH = 820]
+ *   - Tablet:        @media (min-width: 821px) and (max-width: 1100px) [TABLET_MAX_WIDTH = 1100]
+ *                    @media (max-width: 1100px)
+ *   - Motion:        @media (prefers-reduced-motion: reduce)
+ */
+
+/* =========================================================================
+   Responsive Campaign Layout, Collapsible Rail & Mobile Overlay Drawers
+   ========================================================================= */
+
+.studio-shell--sidebar-rail {
+  grid-template-columns: 52px minmax(0, 1fr) 370px;
+}
+
+.studio-shell--inspector-hidden {
+  grid-template-columns: 280px minmax(0, 1fr) 0px;
+}
+
+.studio-shell--sidebar-rail.studio-shell--inspector-hidden {
+  grid-template-columns: 52px minmax(0, 1fr) 0px;
+}
+
+.studio-shell--sidebar-rail .notes-flyout-popover {
+  left: 60px;
+}
+
+.inspector--hidden {
+  border-left: none;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.sidebar-collapse-btn,
+.inspector-collapse-btn {
+  padding: 4px 6px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.sidebar-collapse-btn:hover,
+.inspector-collapse-btn:hover {
+  color: var(--text-primary);
+}
+
+/* Left Sidebar Collapsed Icon Rail */
+.sidebar--rail {
+  align-items: center;
+  overflow-x: hidden;
+}
+
+.brand-header--rail {
+  width: 100%;
+  padding: 10px 6px;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: center;
+}
+
+.rail-categories {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 6px;
+  width: 100%;
+  flex: 1;
+}
+
+.rail-icon-btn {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--text-secondary);
+}
+
+.rail-icon-btn:hover {
+  background: var(--surface-glass-3);
+  color: var(--text-primary);
+}
+
+.rail-icon-btn.active {
+  background: var(--amber-bg);
+  border-color: var(--amber-border);
+  color: var(--accent-amber);
+}
+
+.rail-badge-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--accent-amber);
+  box-shadow: 0 0 0 2px var(--bg-panel);
+}
+
+.sidebar-bottom-area--rail {
+  width: 100%;
+  padding: 10px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.relay-status-pill--compact {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  justify-content: center;
+}
+
+/* Stage Header Responsive Layout & Panel Toggles */
+.stage-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.stage-header-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.stage-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.stage-campaign-title {
+  font-weight: 700;
+  font-size: 1.02rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stage-actor-line {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stage-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.stage-header-badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stage-panel-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 6px 8px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.stage-panel-toggle.active {
+  border-color: var(--amber-border);
+  color: var(--accent-amber);
+  background: var(--amber-bg-subtle);
+}
+
+.stage-attention-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--accent-amber);
+  box-shadow: 0 0 0 2px var(--bg-panel);
+}
+
+/* Shared Overlay Drawer Backdrop */
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 15, 0.68);
+  backdrop-filter: blur(2px);
+  z-index: 39;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.sidebar--overlay,
+.inspector--overlay {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  z-index: 40;
+  height: 100vh;
+  height: 100dvh;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.72);
+  overflow-x: hidden;
+}
+
+.sidebar--overlay {
+  left: 0;
+  width: 280px;
+  max-width: 85vw;
+  animation: slideInLeft 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.inspector--overlay {
+  right: 0;
+  width: min(370px, 92vw);
+  max-width: 100vw;
+  animation: slideInRight 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideInLeft {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+/* Tablet Breakpoint (821px - 1100px): 52px Rail + Overlay Drawers */
+@media (min-width: 821px) and (max-width: 1100px) {
+  .studio-shell:not(.no-campaign) {
+    grid-template-columns: 52px minmax(0, 1fr);
+  }
+
+  .studio-shell:not(.no-campaign) .chat-stage {
+    grid-column: 2;
+  }
+
+  .studio-shell:not(.no-campaign) .notes-flyout-popover {
+    left: 60px;
+  }
+
+  .inspector--hidden {
+    position: fixed;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: min(370px, 92vw);
+    transform: translateX(100%);
+  }
+}
+
+/* Mobile Breakpoint (<= 820px): Full-Width Stage + Fixed Overlay Drawers */
+@media (max-width: 820px) {
+  .studio-shell:not(.no-campaign) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .studio-shell:not(.no-campaign) .chat-stage {
+    grid-column: 1;
+  }
+
+  .sidebar--hidden {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: min(300px, 85vw);
+    transform: translateX(-100%);
+    visibility: hidden;
+    pointer-events: none;
+    border-right: none;
+  }
+
+  .sidebar--overlay {
+    width: min(300px, 85vw);
+  }
+
+  .inspector--hidden {
+    position: fixed;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: min(370px, 92vw);
+    transform: translateX(100%);
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  .stage-header {
+    padding: 10px 14px;
+    gap: 10px;
+  }
+
+  .studio-shell .notes-flyout-popover {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    width: auto;
+    max-height: 75dvh;
+  }
+}
+
+/* Narrow Phone Polish (<= 620px) */
+@media (max-width: 620px) {
+  .stage-header {
+    padding: 9px 10px;
+    gap: 8px;
+  }
+
+  .stage-header-badges,
+  .stage-actor-tagline {
+    display: none;
+  }
+
+  .turn-feed {
+    padding: 14px 12px;
+    gap: 14px;
+  }
+
+  .user-bubble {
+    max-width: 92%;
+  }
+
+  .composer-bar {
+    padding: 10px 12px;
+  }
+
+  .composer-footer {
+    flex-wrap: wrap;
+  }
+
+  .composer-flyout-menu {
+    min-width: 220px;
+    max-width: calc(100vw - 24px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar--overlay,
+  .inspector--overlay,
+  .drawer-backdrop,
+  .turn-editing-banner-pill,
+  .narrator-duration-picker,
+  .choices-drawer-box,
+  .composer-editing-banner,
+  .magic-wand-active-bar,
+  .magic-wand-revert-bar,
+  .composer-flyout-menu,
+  .slash-help-tray,
+  .ui-pill--fade,
+  .change-dot,
+  .provider-dot--probing,
+  .spin,
+  .spin-slow {
+    animation: none;
+    transition: none;
+  }
+}

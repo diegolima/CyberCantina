@@ -197,7 +197,7 @@ export const StoryModal: React.FC<StoryModalProps> = ({
                 {bundle.active_branch_turns.length === 1 ? "turn" : "turns"}).
               </div>
               {bundle.episodic_chunks.length === 0 ? (
-                <div className="inspector-empty story-summary-empty">
+                <div className="inspector-empty ui-empty-state ui-empty-state--dashed-dark">
                   No summaries yet.
                   {memoryConfig &&
                     ` Once the story exceeds ${memoryConfig.working_memory_turns} turns, the oldest ${memoryConfig.episodic_chunk_size} are condensed into a summary here.`}
@@ -221,11 +221,11 @@ export const StoryModal: React.FC<StoryModalProps> = ({
               role="tabpanel"
               aria-label="Bookmarked Turns"
             >
-              <div className="story-bookmarks-search-row">
+              <div className="ui-search-bar ui-search-bar--purple">
                 <Search size={14} color="var(--accent-purple, #c084fc)" />
                 <input
                   type="text"
-                  className="story-bookmarks-search-input"
+                  className="ui-search-bar-input"
                   value={bookmarkQuery}
                   onChange={(e) => setBookmarkQuery(e.target.value)}
                   placeholder="Filter bookmarks by note keywords..."
@@ -246,12 +246,12 @@ export const StoryModal: React.FC<StoryModalProps> = ({
               </div>
 
               {bookmarkItems.length === 0 ? (
-                <div className="inspector-empty story-summary-empty">
+                <div className="inspector-empty ui-empty-state ui-empty-state--dashed-dark">
                   No bookmarked turns yet. Click the bookmark icon on the top-left corner
                   of any turn card after Turn #0 to save key moments and add personal notes.
                 </div>
               ) : filteredBookmarks.length === 0 ? (
-                <div className="inspector-empty story-summary-empty">
+                <div className="inspector-empty ui-empty-state ui-empty-state--dashed-dark">
                   No bookmarked notes match &ldquo;{bookmarkQuery.trim()}&rdquo;.
                 </div>
               ) : (

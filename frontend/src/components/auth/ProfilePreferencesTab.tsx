@@ -448,7 +448,7 @@ export const ProfilePreferencesTab: React.FC<ProfilePreferencesTabProps> = ({
   const renderSavePill = () => {
     if (saveState === "saving") {
       return (
-        <span className="pref-save-pill saving" role="status">
+        <span className="ui-pill ui-pill--cyan" role="status">
           <Loader2 size={12} className="spin" />
           Saving…
         </span>
@@ -456,7 +456,7 @@ export const ProfilePreferencesTab: React.FC<ProfilePreferencesTabProps> = ({
     }
     if (saveState === "saved") {
       return (
-        <span className="pref-save-pill saved" role="status">
+        <span className="ui-pill ui-pill--emerald" role="status">
           <Check size={12} />
           Saved
         </span>
@@ -468,7 +468,7 @@ export const ProfilePreferencesTab: React.FC<ProfilePreferencesTabProps> = ({
           ? "Save paused: fix invalid Model settings"
           : "Save paused: fix invalid input";
       return (
-        <span className="pref-save-pill paused" role="status">
+        <span className="ui-pill ui-pill--amber" role="status">
           <AlertTriangle size={12} />
           {label}
         </span>
@@ -476,7 +476,7 @@ export const ProfilePreferencesTab: React.FC<ProfilePreferencesTabProps> = ({
     }
     if (saveState === "error") {
       return (
-        <span className="pref-save-pill error" role="alert">
+        <span className="ui-pill ui-pill--rose" role="alert">
           <AlertTriangle size={12} />
           Save failed
         </span>

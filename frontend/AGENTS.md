@@ -15,3 +15,10 @@ When designing card-based configuration decks (such as model or provider selecto
 
 ## 4. Admin and User Profile Parity
 - Shared configuration surfaces (e.g., Models selection, Provider management) must use the exact same deck components for both Admin global settings and User Profile personal overrides. Handle admin locks and read-only scopes (e.g. Semantic Vectors) via props and subtle scope badges (`Monitor`, `User`, `Lock`) to eliminate design and behavioral drift.
+
+
+## 5. Stylesheet Organization, Tokens & CSS Audit (`v0.29.1+`)
+- **Modular Stylesheets (`frontend/src/styles/`)**: `frontend/src/styles.css` is an ordered `@import` manifest loading domain stylesheets (`00-tokens.css` → `15-responsive.css`). Add new styles to the matching domain file rather than appending to `styles.css`, and always keep `15-responsive.css` imported last.
+- **Design Tokens (`00-tokens.css`)**: Prefer semantic CSS custom properties (`--surface-glass-1..4`, `--border-glass-*`, `--amber-bg`/`--amber-border`/`--amber-fg`, `--cyan-*`, `--violet-*`, `--purple-*`, `--rose-*`, `--emerald-*`, `--font-mono`, `--radius-*`, `--z-*`) over raw hex/`rgba()` color literals.
+- **Shared Primitives (`02-primitives.css`)**: Reuse `.ui-search-*` / `.ui-search-bar*`, `.ui-pill` (+ tone/size modifiers), `.ui-popover`, `.ui-empty-state`, `.ui-list-row`, and `.ui-section-card` before introducing new feature-prefixed duplicates. Never merge `.model-config-flyout` into `.ui-popover`.
+- **Canonical Breakpoints & Specificity**: Align responsive rules to the 3 tiers synchronized with `frontend/src/utils/campaignLayout.ts` (`@media (max-width: 620px)`, `@media (max-width: 820px)`, `@media (max-width: 1100px)` / `(min-width: 821px) and (max-width: 1100px)`), avoid `!important`, and run `npm --prefix frontend run css:audit` (enforced in CI) to catch orphan classes, undefined `@keyframes`, and unguarded `var(--*)` references.

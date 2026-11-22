@@ -64,7 +64,7 @@ export const ProvidersManager: React.FC<ProvidersManagerProps> = ({
       </div>
 
       {store.loadError && <div className="auth-alert auth-alert-error">{store.loadError}</div>}
-      {store.loading && store.providers.length === 0 && <div className="providers-empty">Loading providers…</div>}
+      {store.loading && store.providers.length === 0 && <div className="ui-empty-state ui-empty-state--left">Loading providers…</div>}
 
       <section>
         <div className="providers-section-title">
@@ -86,7 +86,7 @@ export const ProvidersManager: React.FC<ProvidersManagerProps> = ({
             </div>
           )}
         {system.length === 0 && !store.loading && (
-          <div className="providers-empty">No system providers are configured yet.</div>
+          <div className="ui-empty-state ui-empty-state--left">No system providers are configured yet.</div>
         )}
         {isAdminArea
           ? system.map((p) => renderCard(p, true))
@@ -126,7 +126,7 @@ export const ProvidersManager: React.FC<ProvidersManagerProps> = ({
             </div>
           )}
           {allowUserProviders && personal.length === 0 && !adding && (
-            <div className="providers-empty">
+            <div className="ui-empty-state ui-empty-state--left">
               You have no personal providers. Add OpenRouter, AI Horde, your own Local Ollama (via
               browser), or In-Browser WebGPU (zero install).
             </div>

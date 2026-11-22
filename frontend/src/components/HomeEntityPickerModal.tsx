@@ -202,11 +202,11 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
 
         {/* Search Bar */}
         <div style={{ padding: "12px 18px 4px 18px", flexShrink: 0 }}>
-          <div className="sidebar-search-wrap" style={{ margin: 0 }}>
-            <Search size={14} className="sidebar-search-icon" />
+          <div className="ui-search-wrap" style={{ margin: 0 }}>
+            <Search size={14} className="ui-search-icon" />
             <input
               type="text"
-              className="sidebar-search-input"
+              className="ui-search-input"
               placeholder={`Search ${categoryMeta.title.toLowerCase()}...`}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}

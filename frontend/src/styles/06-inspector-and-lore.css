@@ -1,0 +1,633 @@
+/* Right Inspector, Lore Index, TagChipsInput & Location Lore Badges */
+
+/* Right Inspector Panel */
+.inspector {
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.inspector-card {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.clock-display {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--accent-amber);
+  background: var(--bg-deep);
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--amber-border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.meter-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.meter-track {
+  height: 7px;
+  background: var(--bg-deep);
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+}
+
+.meter-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.exit-pill {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.exit-pill:hover {
+  border-color: var(--accent-cyan);
+}
+
+/* Inspector: collapsible sections */
+.inspector-collapsible {
+  padding: 0;
+}
+
+.inspector-section-header,
+.char-row-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 16px;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s ease;
+}
+
+.inspector-section-header:hover,
+.char-row-header:hover {
+  background: var(--surface-glass-1);
+}
+
+.inspector-section-header:focus-visible,
+.char-row-header:focus-visible,
+.exits-toggle:focus-visible,
+.memory-item-clickable:focus-visible {
+  outline: 1px solid var(--accent-amber);
+  outline-offset: -1px;
+}
+
+.inspector-section-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+
+.inspector-section-meta {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.inspector-section-body {
+  padding: 0 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inspector-empty {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  font-style: italic;
+  line-height: 1.45;
+}
+
+.change-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-amber);
+  box-shadow: 0 0 6px var(--accent-amber);
+  flex-shrink: 0;
+  animation: pulseOpacity 1.8s ease-in-out infinite;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Inspector: adjacent map exits */
+.selected-exit-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.exits-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.exits-toggle:hover {
+  color: var(--accent-cyan);
+}
+
+/* Inspector: character rows */
+.char-row + .char-row {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.char-row-identity {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-secondary);
+}
+
+.char-row-chevron {
+  display: flex;
+  padding-top: 2px;
+  flex-shrink: 0;
+}
+
+.char-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.char-row-name-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.char-row-name {
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.char-row-mood {
+  font-size: 0.74rem;
+  font-weight: 500;
+  color: var(--violet-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.char-row-absent .char-row-header {
+  opacity: 0.6;
+}
+
+.char-row-elsewhere {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+.char-row-body {
+  padding: 0 16px 14px;
+}
+
+.char-row-body > .meter-row:first-child {
+  margin-top: 0;
+}
+
+.mini-mood {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.mini-mood-track {
+  position: relative;
+  display: block;
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border-subtle);
+  overflow: hidden;
+}
+
+.mini-mood-diverging::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--text-muted);
+}
+
+.mini-mood-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  transition: width 0.3s ease, left 0.3s ease;
+}
+
+/* Inspector: story & internals */
+.story-chunk {
+  font-size: 0.75rem;
+  line-height: 1.5;
+  background: var(--bg-card);
+  padding: 8px 10px;
+  border-radius: 6px;
+  border-left: 2px solid var(--accent-amber);
+}
+
+.story-chunk-range {
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent-amber);
+  margin-bottom: 3px;
+}
+
+.internals-stats {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+.internals-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.internals-group-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.memory-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 0.73rem;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  padding: 6px 8px;
+  border: none;
+  border-radius: 5px;
+  border-left: 2px solid var(--border-subtle);
+}
+
+.memory-item-clickable {
+  cursor: pointer;
+}
+
+.memory-item-clickable:hover {
+  background: var(--bg-card-hover);
+}
+
+.memory-item-shard,
+.memory-item-character_shard {
+  border-left-color: var(--accent-violet);
+}
+
+.memory-item-lore {
+  border-left-color: var(--accent-emerald);
+}
+
+.memory-item-location_lore {
+  border-left-color: var(--accent-cyan);
+}
+
+.memory-item-container_lore {
+  border-left-color: #fb923c;
+}
+
+.memory-item-episodic_chunk {
+  border-left-color: var(--accent-amber);
+}
+
+.memory-item-item_lore {
+  border-left-color: #f472b6;
+}
+
+.memory-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.memory-item-score {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.64rem;
+  color: var(--text-muted);
+}
+
+.memory-item-content {
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.memory-item-content.clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Lore index modal */
+.lore-index-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.lore-index-filters {
+  display: flex;
+  gap: 4px;
+}
+
+.lore-index-chip {
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-deep);
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.lore-index-chip:hover {
+  border-color: var(--accent-emerald);
+}
+
+.lore-index-chip.active {
+  background: var(--emerald-bg);
+  border-color: var(--emerald-border);
+  color: var(--emerald-fg);
+}
+
+/* Interactive Lore Trigger Keyword Chips (TagChipsInput) */
+.tag-chips-field-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.tag-chips-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border-subtle);
+  cursor: text;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.tag-chips-box--focused {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.15);
+}
+
+.tag-chips-box--amber.tag-chips-box--focused {
+  border-color: var(--accent-amber);
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.15);
+}
+
+.tag-chips-box--violet.tag-chips-box--focused {
+  border-color: var(--accent-violet);
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.18);
+}
+
+.tag-chips-box--invalid {
+  border-color: rgba(244, 63, 94, 0.65);
+  background: var(--rose-bg-subtle);
+}
+
+.tag-chips-box--disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.tag-chip-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 7px 2px 9px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.35;
+  background: var(--cyan-bg);
+  border: 1px solid var(--cyan-border);
+  color: #a5f3fc;
+}
+
+.tag-chip-pill--amber {
+  background: var(--amber-bg);
+  border-color: var(--amber-border);
+  color: var(--amber-fg-soft);
+}
+
+.tag-chip-pill--violet {
+  background: var(--violet-bg);
+  border-color: var(--violet-border);
+  color: var(--violet-fg-soft);
+}
+
+.tag-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 190px;
+}
+
+.tag-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.72;
+  cursor: pointer;
+  transition: background 0.12s ease, opacity 0.12s ease, color 0.12s ease;
+}
+
+.tag-chip-remove:hover {
+  opacity: 1;
+  background: var(--rose-bg-hover);
+  color: var(--rose-fg-soft);
+}
+
+.tag-chips-box input.tag-chips-inline-input {
+  flex: 1 1 120px;
+  min-width: 90px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  padding: 2px 2px;
+  box-shadow: none;
+}
+
+.tag-chips-inline-input::placeholder {
+  color: var(--text-muted);
+}
+
+.tag-chips-validation-hint {
+  font-size: 0.69rem;
+  color: var(--rose-fg);
+}
+
+.tag-chips-helper-hint {
+  font-size: 0.69rem;
+  color: var(--text-muted);
+}
+
+/* Location Lore Badges & Cards */
+.lore-cat-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border: 1px solid var(--cyan-border-subtle);
+  background: var(--cyan-bg);
+  color: var(--cyan-fg);
+}
+
+.lore-cat-badge--secret {
+  border-color: var(--rose-border);
+  background: var(--rose-bg);
+  color: var(--rose-fg);
+}
+
+.lore-cat-badge--rumor {
+  border-color: var(--amber-border);
+  background: var(--amber-bg);
+  color: var(--amber-fg);
+}
+
+.lore-cat-badge--faction {
+  border-color: var(--violet-border);
+  background: var(--violet-bg);
+  color: var(--violet-fg);
+}
+
+.lore-cat-badge--history {
+  border-color: var(--emerald-border);
+  background: var(--emerald-bg);
+  color: var(--emerald-fg);
+}
+
+.lore-cat-badge--culture {
+  border-color: rgba(56, 189, 248, 0.38);
+  background: rgba(56, 189, 248, 0.12);
+  color: #7dd3fc;
+}
+
+.lore-cat-badge--figure {
+  border-color: rgba(99, 102, 241, 0.42);
+  background: rgba(99, 102, 241, 0.14);
+  color: #a5b4fc;
+}
+
+.lore-cat-badge--threat {
+  border-color: rgba(249, 115, 22, 0.44);
+  background: rgba(249, 115, 22, 0.14);
+  color: #fdba74;
+}
+
+.lore-cat-badge--artifact {
+  border-color: rgba(251, 191, 36, 0.44);
+  background: rgba(251, 191, 36, 0.14);
+  color: var(--amber-fg-soft);
+}

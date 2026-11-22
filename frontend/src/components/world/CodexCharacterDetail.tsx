@@ -621,7 +621,7 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
   }
 
   return (
-    <div className="codex-empty-detail">
+    <div className="ui-empty-state ui-empty-state--fill">
       Select a character or persona on the left to inspect their dossier.
     </div>
   );

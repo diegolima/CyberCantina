@@ -13,7 +13,8 @@
     "test:e2e:ui": "playwright test --ui",
     "typecheck:e2e": "tsc -p tsconfig.e2e.json --noEmit",
     "arch:check": "depcruise src --config .dependency-cruiser.cjs",
-    "arch:graph": "depcruise src --config .dependency-cruiser.cjs --output-type mermaid"
+    "arch:graph": "depcruise src --config .dependency-cruiser.cjs --output-type mermaid",
+    "css:audit": "node scripts/audit-css.mjs"
   },
   "dependencies": {
     "@mlc-ai/web-llm": "^0.2.88",

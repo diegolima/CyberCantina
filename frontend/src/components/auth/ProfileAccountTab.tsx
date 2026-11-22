@@ -387,15 +387,7 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
               {/* Account Identity & Display Name Card */}
               <form
                 onSubmit={handleSaveName}
-                style={{
-                  background: "var(--bg-card)",
-                  border: "1px solid var(--border-subtle)",
-                  borderRadius: 8,
-                  padding: 14,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 12,
-                }}
+                className="ui-section-card"
               >
                 <div
                   style={{
@@ -417,7 +409,7 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
                     Account Identity
                   </span>
                   <span
-                    className="role-pill"
+                    className="ui-pill ui-pill--xs ui-pill--upper"
                     style={{
                       borderColor:
                         user.role === "admin"
@@ -478,15 +470,7 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
 
               {/* Media Storage Quota & Activity Retention Card */}
               <div
-                style={{
-                  background: "var(--bg-card)",
-                  border: "1px solid var(--border-subtle)",
-                  borderRadius: 8,
-                  padding: 14,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 10,
-                }}
+                className="ui-section-card ui-section-card--compact"
               >
                 <div
                   style={{
@@ -592,15 +576,7 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
 
               <form
                 onSubmit={(e) => handleChangePassword(e, false)}
-            style={{
-              background: "var(--bg-card)",
-              border: "1px solid var(--border-subtle)",
-              borderRadius: 8,
-              padding: 14,
-              display: "flex",
-              flexDirection: "column",
-              gap: 12,
-            }}
+            className="ui-section-card"
           >
             <div
               style={{
@@ -754,15 +730,7 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
 
           {/* 3. Passkeys Management (Multiple Passkeys Supported) */}
           <div
-            style={{
-              background: "var(--bg-card)",
-              border: "1px solid var(--border-subtle)",
-              borderRadius: 8,
-              padding: 14,
-              display: "flex",
-              flexDirection: "column",
-              gap: 12,
-            }}
+            className="ui-section-card"
           >
             <div
               style={{
@@ -1024,15 +992,7 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
 
           {/* 3.5. Starter Assets: Restore Default Showcase World & Character */}
           <div
-            style={{
-              background: "var(--bg-card)",
-              border: "1px solid var(--border-subtle)",
-              borderRadius: 8,
-              padding: 14,
-              display: "flex",
-              flexDirection: "column",
-              gap: 10,
-            }}
+            className="ui-section-card ui-section-card--compact"
           >
             <div
               style={{
@@ -1105,15 +1065,7 @@ export const ProfileAccountTab: React.FC<ProfileAccountTabProps> = ({
 
           {/* 4. Danger Zone: Reset Data & Delete Account */}
           <div
-            style={{
-              background: "var(--bg-card)",
-              border: "1px solid rgba(244, 63, 94, 0.35)",
-              borderRadius: 8,
-              padding: 14,
-              display: "flex",
-              flexDirection: "column",
-              gap: 12,
-            }}
+            className="ui-section-card ui-section-card--danger"
           >
             <div
               style={{

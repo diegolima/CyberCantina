@@ -445,14 +445,14 @@ export const PromptPresetsManager: React.FC<PromptPresetsManagerProps> = ({
 
                       {/* Dirty State / Unsaved Edits Badge */}
                       {isDirty && (
-                        <span className="prompt-unsaved-badge" title="This prompt has unsaved changes">
+                        <span className="ui-pill ui-pill--xs ui-pill--square ui-pill--amber" title="This prompt has unsaved changes">
                           Unsaved edits
                         </span>
                       )}
 
                       {/* Just Saved Success Indicator */}
                       {justSavedThis && (
-                        <span className="prompt-saved-badge" title="Changes saved successfully">
+                        <span className="ui-pill ui-pill--xs ui-pill--square ui-pill--emerald ui-pill--fade" title="Changes saved successfully">
                           <Check size={12} /> Saved
                         </span>
                       )}

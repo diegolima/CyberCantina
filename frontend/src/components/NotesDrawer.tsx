@@ -155,11 +155,11 @@ export const NotesFlyout: React.FC<NotesFlyoutProps> = ({
       </div>
 
       {/* Search Input */}
-      <div className="notes-flyout-search-wrap">
-        <Search size={13} className="notes-search-icon" />
+      <div className="ui-search-wrap ui-search-wrap--notes-flyout">
+        <Search size={13} className="ui-search-icon" />
         <input
           type="text"
-          className="notes-search-input"
+          className="ui-search-input"
           placeholder="Search by tag (#combat) or keyword..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
@@ -168,7 +168,7 @@ export const NotesFlyout: React.FC<NotesFlyoutProps> = ({
         {searchQuery && (
           <button
             type="button"
-            className="notes-search-clear"
+            className="ui-search-clear"
             onClick={() => setSearchQuery("")}
             title="Clear search"
           >
@@ -306,7 +306,7 @@ export const NotesFlyout: React.FC<NotesFlyoutProps> = ({
             );
           })
         ) : (
-          <div className="notes-empty-state">
+          <div className="ui-empty-state">
             {searchQuery ? (
               <>No notes matching "{searchQuery}"</>
             ) : activeTab === "starred" && starredCount === 0 ? (
@@ -576,11 +576,11 @@ export const NotesModal: React.FC<NotesModalProps> = ({
             </div>
 
             {/* Search */}
-            <div className="notes-flyout-search-wrap" style={{ margin: "10px 0" }}>
-              <Search size={13} className="notes-search-icon" />
+            <div className="ui-search-wrap ui-search-wrap--notes-flyout" style={{ margin: "10px 0" }}>
+              <Search size={13} className="ui-search-icon" />
               <input
                 type="text"
-                className="notes-search-input"
+                className="ui-search-input"
                 placeholder="Search tags & keywords..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -588,7 +588,7 @@ export const NotesModal: React.FC<NotesModalProps> = ({
               {searchQuery && (
                 <button
                   type="button"
-                  className="notes-search-clear"
+                  className="ui-search-clear"
                   onClick={() => setSearchQuery("")}
                 >
                   <X size={12} />
@@ -687,7 +687,7 @@ export const NotesModal: React.FC<NotesModalProps> = ({
                   );
                 })
               ) : (
-                <div className="notes-empty-state" style={{ padding: "20px 10px" }}>
+                <div className="ui-empty-state" style={{ padding: "20px 10px" }}>
                   No matching notes
                 </div>
               )}

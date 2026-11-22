@@ -710,7 +710,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
       );
       if (!hit) {
         return (
-          <div className="codex-empty-detail">
+          <div className="ui-empty-state ui-empty-state--fill">
             {globalSearchHits.length === 0
               ? `No entries match "${globalQuery.trim()}".`
               : "Select a search result on the left to inspect its details."}
@@ -815,7 +815,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
       if (!selectedLore) {
         const meta = getCodexSectionMeta(activeSection);
         return (
-          <div className="codex-empty-detail">
+          <div className="ui-empty-state ui-empty-state--fill">
             {artifactUnlinkNotice && (
               <div className="codex-inline-notice codex-inline-notice--amber" style={{ marginBottom: 8 }}>
                 <Info size={13} color="var(--accent-amber)" />
@@ -886,7 +886,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
       );
       if (!selectedNode) {
         return (
-          <div className="codex-empty-detail">
+          <div className="ui-empty-state ui-empty-state--fill">
             {categoryQuery.trim()
               ? `No locations or areas match "${categoryQuery.trim()}".`
               : "No locations defined on this world map yet."}
@@ -917,7 +917,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
       );
       if (!selectedChar) {
         return (
-          <div className="codex-empty-detail">
+          <div className="ui-empty-state ui-empty-state--fill">
             {categoryQuery.trim()
               ? `No persona or characters match "${categoryQuery.trim()}".`
               : "No active persona or campaign characters in this session."}
@@ -979,12 +979,12 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
         <div className="codex-topbar-actions">
           {/* Global Quick Search: mounted ONLY on Hub View & Global Search 2-Pane View */}
           {activeSection === null && (
-            <div className="codex-search-wrap">
-              <Search size={13} className="codex-search-icon" />
+            <div className="ui-search-wrap ui-search-wrap--codex">
+              <Search size={13} className="ui-search-icon" />
               <input
                 ref={globalSearchInputRef}
                 type="text"
-                className="codex-search-input"
+                className="ui-search-input ui-search-input--panel ui-search-input--cyan"
                 placeholder="Search Codex titles, keywords, or content..."
                 aria-label="Search Codex titles, keywords, or content"
                 value={globalQuery}
@@ -999,7 +999,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
               {globalQuery.length > 0 && (
                 <button
                   type="button"
-                  className="codex-search-clear"
+                  className="ui-search-clear"
                   aria-label="Clear search"
                   onClick={() => {
                     setFrozenOrderIds(null);
@@ -1119,11 +1119,11 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
             {/* Category-Scoped Filter Input (mounted ONLY inside Category 2-Pane View) */}
             {activeSection !== null && (
               <div className="codex-left-filter-row">
-                <div className="codex-search-wrap" style={{ flex: 1 }}>
-                  <Search size={12} className="codex-search-icon" />
+                <div className="ui-search-wrap ui-search-wrap--codex" style={{ flex: 1 }}>
+                  <Search size={12} className="ui-search-icon" />
                   <input
                     type="text"
-                    className="codex-search-input"
+                    className="ui-search-input ui-search-input--panel ui-search-input--cyan"
                     placeholder={`Filter ${activeSectionMeta?.label ?? "entries"}...`}
                     aria-label={`Filter ${activeSectionMeta?.label ?? "entries"}`}
                     value={categoryQuery}
@@ -1140,7 +1140,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
                   {categoryQuery.length > 0 && (
                     <button
                       type="button"
-                      className="codex-search-clear"
+                      className="ui-search-clear"
                       aria-label="Clear filter"
                       onClick={() => {
                         setFrozenOrderIds(null);
@@ -1208,7 +1208,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
             >
               {isGlobalSearchMode ? (
                 globalSearchHits.length === 0 ? (
-                  <div className="codex-list-empty">
+                  <div className="ui-empty-state ui-empty-state--fill">
                     <span>No entries match &ldquo;{globalQuery.trim()}&rdquo;.</span>
                     <button
                       type="button"
@@ -1269,7 +1269,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
                 )
               ) : activeSection && isEditableCodexSection(activeSection) ? (
                 editableLoreItems.length === 0 ? (
-                  <div className="codex-list-empty">
+                  <div className="ui-empty-state ui-empty-state--fill">
                     {categoryQuery.trim() ? (
                       <>
                         <span>
@@ -1336,7 +1336,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
                 )
               ) : activeSection === "locations" ? (
                 locationTree.roots.length === 0 ? (
-                  <div className="codex-list-empty">
+                  <div className="ui-empty-state ui-empty-state--fill">
                     {categoryQuery.trim() ? (
                       <>
                         <span>
@@ -1359,7 +1359,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
                 )
               ) : activeSection === "major_characters" ? (
                 majorCharacterItems.length === 0 ? (
-                  <div className="codex-list-empty">
+                  <div className="ui-empty-state ui-empty-state--fill">
                     {categoryQuery.trim() ? (
                       <>
                         <span>

@@ -385,7 +385,7 @@ export const CodexLocationDetail: React.FC<CodexLocationDetailProps> = ({
   }
 
   return (
-    <div className="codex-empty-detail">
+    <div className="ui-empty-state ui-empty-state--fill">
       Select a region, area, or location on the left to inspect its details.
     </div>
   );

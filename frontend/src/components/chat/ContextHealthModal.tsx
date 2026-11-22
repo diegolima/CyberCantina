@@ -144,7 +144,7 @@ export const ContextHealthModal: React.FC<ContextHealthModalProps> = ({
 
         <div className="modal-body context-health-modal-body">
           {!telemetry || overallStatus === "idle" ? (
-            <div className="context-health-empty">
+            <div className="ui-empty-state ui-empty-state--dashed">
               <p style={{ margin: 0, fontWeight: 600 }}>No turn telemetry recorded yet.</p>
               <p style={{ margin: "6px 0 0", color: "var(--text-muted)", fontSize: "0.84rem" }}>
                 Send a message in this campaign to capture exact per-phase token usage, working-memory

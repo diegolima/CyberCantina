@@ -241,16 +241,16 @@ export const TopologyHeaderToolbar: React.FC<TopologyHeaderToolbarProps> = ({
           }}
         >
           {onFocusSearchResult && (
-            <div className="map-search-wrap" ref={searchWrapRef}>
+            <div className="ui-search-wrap ui-search-wrap--map" ref={searchWrapRef}>
               <Search
                 size={13}
-                className="map-search-icon"
+                className="ui-search-icon"
                 aria-hidden="true"
               />
               <input
                 ref={searchInputRef}
                 type="text"
-                className="map-search-input"
+                className="ui-search-input ui-search-input--card ui-search-input--cyan"
                 role="combobox"
                 aria-expanded={showDropdown}
                 aria-controls={showDropdown ? listboxId : undefined}
@@ -285,7 +285,7 @@ export const TopologyHeaderToolbar: React.FC<TopologyHeaderToolbarProps> = ({
               {searchQuery.length > 0 && (
                 <button
                   type="button"
-                  className="map-search-clear"
+                  className="ui-search-clear"
                   aria-label="Clear map search"
                   title="Clear search"
                   onMouseDown={(e) => e.preventDefault()}
@@ -305,10 +305,10 @@ export const TopologyHeaderToolbar: React.FC<TopologyHeaderToolbarProps> = ({
                   id={listboxId}
                   role="listbox"
                   aria-label="Matching locations and containers"
-                  className="map-search-dropdown"
+                  className="ui-popover map-search-dropdown"
                 >
                   {searchMatches.length === 0 ? (
-                    <div className="map-search-empty">
+                    <div className="ui-empty-state ui-empty-state--compact">
                       No matching locations or containers
                     </div>
                   ) : (

@@ -552,7 +552,7 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
 
   if (model.nodes.length === 0) {
     return (
-      <div className="branch-graph-empty">
+      <div className="ui-empty-state ui-empty-state--fill">
         No turns in this campaign yet.
       </div>
     );
@@ -1638,7 +1638,7 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
                 </span>
               )}
               {selectedEpisodeGroup.bookmarkCount > 0 && (
-                <span className="branch-graph-bookmark-pill">
+                <span className="ui-pill ui-pill--xs ui-pill--purple">
                   <Bookmark size={11} fill="currentColor" />
                   {selectedEpisodeGroup.bookmarkCount} bookmarked
                 </span>
@@ -1765,13 +1765,13 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
                 {selectedNode.turn.world_snapshot.world_timestamp}
               </span>
               {selectedNode.episodicChunkLabel && (
-                <span className="branch-graph-chunk-badge">
+                <span className="ui-pill ui-pill--xs ui-pill--amber">
                   <Sparkles size={10} />
                   Summary: {selectedNode.episodicChunkLabel}
                 </span>
               )}
               {selectedNode.isBookmarked && (
-                <span className="branch-graph-bookmark-pill">
+                <span className="ui-pill ui-pill--xs ui-pill--purple">
                   <Bookmark size={10} fill="currentColor" />
                   Bookmarked
                 </span>

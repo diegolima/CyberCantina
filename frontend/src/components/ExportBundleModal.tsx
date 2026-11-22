@@ -424,11 +424,11 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
                 Characters ({selectedCharIds.size} / {characters.length})
               </span>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, justifyContent: "flex-end", minWidth: 260 }}>
-                <div className="export-category-search-wrapper">
-                  <Search size={13} className="export-category-search-icon" />
+                <div className="ui-search-wrap ui-search-wrap--export">
+                  <Search size={13} className="ui-search-icon" />
                   <input
                     type="text"
-                    className="export-category-search-input"
+                    className="ui-search-input ui-search-input--compact ui-search-input--cyan"
                     placeholder="Search name or tag..."
                     value={charSearch}
                     onChange={(e) => setCharSearch(e.target.value)}
@@ -436,7 +436,7 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
                   {charSearch && (
                     <button
                       type="button"
-                      className="export-category-search-clear"
+                      className="ui-search-clear"
                       onClick={() => setCharSearch("")}
                       title="Clear search"
                     >
@@ -529,11 +529,11 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
                 Worlds ({selectedWorldIds.size} / {worlds.length})
               </span>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, justifyContent: "flex-end", minWidth: 260 }}>
-                <div className="export-category-search-wrapper">
-                  <Search size={13} className="export-category-search-icon" />
+                <div className="ui-search-wrap ui-search-wrap--export">
+                  <Search size={13} className="ui-search-icon" />
                   <input
                     type="text"
-                    className="export-category-search-input"
+                    className="ui-search-input ui-search-input--compact ui-search-input--cyan"
                     placeholder="Search name, genre, tag..."
                     value={worldSearch}
                     onChange={(e) => setWorldSearch(e.target.value)}
@@ -541,7 +541,7 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
                   {worldSearch && (
                     <button
                       type="button"
-                      className="export-category-search-clear"
+                      className="ui-search-clear"
                       onClick={() => setWorldSearch("")}
                       title="Clear search"
                     >
@@ -628,11 +628,11 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
                 Personas ({selectedPersonaIds.size} / {personas.length})
               </span>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, justifyContent: "flex-end", minWidth: 260 }}>
-                <div className="export-category-search-wrapper">
-                  <Search size={13} className="export-category-search-icon" />
+                <div className="ui-search-wrap ui-search-wrap--export">
+                  <Search size={13} className="ui-search-icon" />
                   <input
                     type="text"
-                    className="export-category-search-input"
+                    className="ui-search-input ui-search-input--compact ui-search-input--cyan"
                     placeholder="Search name, tag..."
                     value={personaSearch}
                     onChange={(e) => setPersonaSearch(e.target.value)}
@@ -640,7 +640,7 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
                   {personaSearch && (
                     <button
                       type="button"
-                      className="export-category-search-clear"
+                      className="ui-search-clear"
                       onClick={() => setPersonaSearch("")}
                       title="Clear search"
                     >

@@ -84,7 +84,7 @@ export const SlashCommandPicker: React.FC<SlashCommandPickerProps> = ({
 
   return (
     <div
-      className="mention-picker-popover slash-picker-popover"
+      className="ui-popover mention-picker-popover slash-picker-popover"
       ref={containerRef}
     >
       <div className="mention-picker-header">

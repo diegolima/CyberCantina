@@ -395,7 +395,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 >
                   {currentUser.display_name || currentUser.username}
                 </span>
-                <span className={`role-pill role-${currentUser.role}`}>
+                <span className={`ui-pill ui-pill--xs ui-pill--upper role-${currentUser.role}`}>
                   {currentUser.role}
                 </span>
               </div>

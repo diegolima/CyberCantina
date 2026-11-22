@@ -155,16 +155,16 @@ export const ThemedPickerDropdown: React.FC<ThemedPickerDropdownProps> = ({
 
       {/* Dropdown Menu Popover */}
       {isOpen && (
-        <div className={`themed-picker-popover align-${align}`} onClick={(e) => e.stopPropagation()}>
+        <div className={`ui-popover themed-picker-popover align-${align}`} onClick={(e) => e.stopPropagation()}>
           {label && <div className="themed-picker-popover-title">{label}</div>}
 
           {searchable && (
-            <div className="themed-picker-search-bar">
-              <Search size={13} className="themed-picker-search-icon" />
+            <div className="ui-search-bar">
+              <Search size={13} className="ui-search-bar-icon" />
               <input
                 ref={searchInputRef}
                 type="text"
-                className="themed-picker-search-input"
+                className="ui-search-bar-input"
                 placeholder={searchPlaceholder}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -172,7 +172,7 @@ export const ThemedPickerDropdown: React.FC<ThemedPickerDropdownProps> = ({
               {searchQuery && (
                 <button
                   type="button"
-                  className="themed-picker-search-clear"
+                  className="ui-search-bar-clear"
                   onClick={() => setSearchQuery("")}
                 >
                   <X size={12} />
@@ -185,7 +185,7 @@ export const ThemedPickerDropdown: React.FC<ThemedPickerDropdownProps> = ({
 
           <div className="themed-picker-options-list">
             {totalFilteredCount === 0 ? (
-              <div className="themed-picker-empty">{emptyMessage}</div>
+              <div className="ui-empty-state ui-empty-state--compact">{emptyMessage}</div>
             ) : (
               filteredGroups.map((group, gIdx) => (
                 <div key={gIdx} className="themed-picker-group">
