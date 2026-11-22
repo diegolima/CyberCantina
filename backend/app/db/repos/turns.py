@@ -571,12 +571,48 @@ class TurnsBranchesMixin:
             embedding=vec,
         )
 
-    def get_branch_episodic_chunks(
+    @staticmethod
+    def _hydrate_episodic_chunk_row(r: sqlite3.Row) -> EpisodicChunkRecord:
+        rkeys = r.keys()
+        raw_kw = r["keywords_json"] if "keywords_json" in rkeys and r["keywords_json"] else "[]"
+        raw_wit = (
+            r["witness_character_ids_json"]
+            if "witness_character_ids_json" in rkeys and r["witness_character_ids_json"]
+            else "[]"
+        )
+        try:
+            kw_list = [str(k) for k in json.loads(raw_kw) if k]
+        except Exception:
+            kw_list = []
+        try:
+            wit_list = [str(w) for w in json.loads(raw_wit) if w]
+        except Exception:
+            wit_list = []
+        raw_salience = (
+            r["salience_score"]
+            if "salience_score" in rkeys and r["salience_score"] is not None
+            else 5
+        )
+        return EpisodicChunkRecord(
+            id=r["id"],
+            campaign_id=r["campaign_id"],
+            start_turn_depth=r["start_turn_depth"],
+            end_turn_depth=r["end_turn_depth"],
+            leaf_turn_id=r["leaf_turn_id"],
+            title=r["title"] if "title" in rkeys and r["title"] else "",
+            synopsis_text=r["synopsis_text"] if "synopsis_text" in rkeys and r["synopsis_text"] else "",
+            summary_text=r["summary_text"],
+            keywords=kw_list,
+            witness_character_ids=wit_list,
+            salience_score=max(1, min(10, int(raw_salience))),
+            created_at=r["created_at"],
+        )
+
+    def list_campaign_episodic_chunks(
         self,
         campaign_id: str,
-        valid_turn_ids: set[str],
     ) -> list[EpisodicChunkRecord]:
-        """Return all episodic chunks anchored to turns in the active branch ancestor chain."""
+        """Return all episodic chunks across every timeline branch of a campaign."""
         conn = self._connect()
         try:
             rows = conn.execute(
@@ -590,42 +626,19 @@ class TurnsBranchesMixin:
         finally:
             conn.close()
 
-        chunks: list[EpisodicChunkRecord] = []
-        for r in rows:
-            if r["leaf_turn_id"] in valid_turn_ids:
-                rkeys = r.keys()
-                raw_kw = r["keywords_json"] if "keywords_json" in rkeys and r["keywords_json"] else "[]"
-                raw_wit = (
-                    r["witness_character_ids_json"]
-                    if "witness_character_ids_json" in rkeys and r["witness_character_ids_json"]
-                    else "[]"
-                )
-                try:
-                    kw_list = [str(k) for k in json.loads(raw_kw) if k]
-                except Exception:
-                    kw_list = []
-                try:
-                    wit_list = [str(w) for w in json.loads(raw_wit) if w]
-                except Exception:
-                    wit_list = []
-                raw_salience = r["salience_score"] if "salience_score" in rkeys and r["salience_score"] is not None else 5
-                chunks.append(
-                    EpisodicChunkRecord(
-                        id=r["id"],
-                        campaign_id=r["campaign_id"],
-                        start_turn_depth=r["start_turn_depth"],
-                        end_turn_depth=r["end_turn_depth"],
-                        leaf_turn_id=r["leaf_turn_id"],
-                        title=r["title"] if "title" in rkeys and r["title"] else "",
-                        synopsis_text=r["synopsis_text"] if "synopsis_text" in rkeys and r["synopsis_text"] else "",
-                        summary_text=r["summary_text"],
-                        keywords=kw_list,
-                        witness_character_ids=wit_list,
-                        salience_score=max(1, min(10, int(raw_salience))),
-                        created_at=r["created_at"],
-                    )
-                )
-        return chunks
+        return [self._hydrate_episodic_chunk_row(r) for r in rows]
+
+    def get_branch_episodic_chunks(
+        self,
+        campaign_id: str,
+        valid_turn_ids: set[str],
+    ) -> list[EpisodicChunkRecord]:
+        """Return all episodic chunks anchored to turns in the active branch ancestor chain."""
+        return [
+            chunk
+            for chunk in self.list_campaign_episodic_chunks(campaign_id)
+            if chunk.leaf_turn_id in valid_turn_ids
+        ]
 
     def _populate_turn_character_states(
         self,
@@ -1052,7 +1065,12 @@ class TurnsBranchesMixin:
                 )
             else:
                 nb.destination.is_visited = nb.destination.id in visited_set
-        episodic_chunks = self.get_branch_episodic_chunks(campaign_id, valid_turn_ids)
+        all_episodic_chunks = self.list_campaign_episodic_chunks(campaign_id)
+        episodic_chunks = [
+            chunk
+            for chunk in all_episodic_chunks
+            if chunk.leaf_turn_id in valid_turn_ids
+        ]
 
         present_ids = [
             cid
@@ -1094,6 +1112,7 @@ class TurnsBranchesMixin:
             visible_locations=world_filtered.locations,
             visible_edges=world_filtered.edges,
             episodic_chunks=episodic_chunks,
+            all_episodic_chunks=all_episodic_chunks,
         )
 
     def _filter_deleted_turn_media(self, turns: list[TurnNodeRecord]) -> None:

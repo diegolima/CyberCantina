@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ChevronLeft,
+  ChevronRight,
   Compass,
   Crosshair,
   Eye,
@@ -8,7 +10,9 @@ import {
   Layers,
   MapPin,
   Maximize2,
+  Minimize2,
   Navigation,
+  ScrollText,
   Sparkles,
   ZoomIn,
   ZoomOut,
@@ -21,9 +25,11 @@ import {
   buildBranchGraphModel,
   clampGraphZoom,
   computeAncestorPath,
+  computeBranchEdgeLabelPoint,
   computeCenterNodeViewport,
   computeFitGraphViewport,
   type BranchGraphNode,
+  type EpisodeGroupMeta,
 } from "./branchGraphLayout";
 
 export interface BranchGraphCanvasProps {
@@ -31,6 +37,8 @@ export interface BranchGraphCanvasProps {
   isMutatingLocked?: boolean;
   /** Optional initial selected node ID (defaults to active leaf; useful for SSR tests). */
   initialSelectedNodeId?: string | null;
+  /** Optional initial episode expand/collapse overrides (helpful in SSR tests). */
+  initialEpisodeExpandOverrides?: Record<string, boolean>;
   onZoomToTurn: (turnId: string) => void;
   onSwitchTimeline: (tipTurnId: string) => Promise<void> | void;
   onBranchFromTurn: (turnId: string) => Promise<void> | void;
@@ -76,10 +84,17 @@ function truncateInline(text: string, maxChars: number): string {
   return `${clean.slice(0, Math.max(1, maxChars - 1))}…`;
 }
 
+function formatEpisodeRange(ep: EpisodeGroupMeta): string {
+  return ep.startDepth === ep.endDepth
+    ? `Turn ${ep.startDepth}`
+    : `Turns ${ep.startDepth}–${ep.endDepth}`;
+}
+
 export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
   bundle,
   isMutatingLocked = false,
   initialSelectedNodeId,
+  initialEpisodeExpandOverrides,
   onZoomToTurn,
   onSwitchTimeline,
   onBranchFromTurn,
@@ -93,6 +108,10 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
     initialSelectedNodeId ?? activeLeafId
   );
   const [expandedAnchors, setExpandedAnchors] = useState<Set<string>>(() => new Set());
+  const [episodeExpandOverrides, setEpisodeExpandOverrides] = useState<Record<string, boolean>>(
+    () => ({ ...(initialEpisodeExpandOverrides ?? {}) })
+  );
+  const [variantIndexByEpisode, setVariantIndexByEpisode] = useState<Record<string, number>>({});
   const [showAllSwipes, setShowAllSwipes] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 40, y: 40 });
@@ -101,6 +120,12 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
 
   const stageRef = useRef<HTMLDivElement | null>(null);
   const hasInitializedViewportRef = useRef(false);
+  const prevActiveLeafRef = useRef<string | null>(activeLeafId);
+  const pendingPanAnchorRef = useRef<{
+    targetNodeId: string;
+    oldWorldX: number;
+    oldWorldY: number;
+  } | null>(null);
   const panDragRef = useRef<{
     active: boolean;
     moved: boolean;
@@ -116,6 +141,15 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
     origPanX: 0,
     origPanY: 0,
   });
+
+  // Reset per-episode overrides when the active timeline leaf changes so active-tip auto-expansion applies cleanly
+  useEffect(() => {
+    if (prevActiveLeafRef.current !== activeLeafId) {
+      prevActiveLeafRef.current = activeLeafId;
+      setEpisodeExpandOverrides({});
+      setVariantIndexByEpisode({});
+    }
+  }, [activeLeafId]);
 
   const locationNamesById = useMemo(() => {
     const map: Record<string, string> = {};
@@ -135,8 +169,10 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
         activeBranchTurns: bundle.active_branch_turns,
         activeLeafId,
         episodicChunks: bundle.episodic_chunks,
+        allEpisodicChunks: bundle.all_episodic_chunks,
         locationNamesById,
         expandedSwipeAnchorIds: expandedAnchors,
+        episodeExpandOverrides,
         showAllSwipes,
       }),
     [
@@ -144,19 +180,40 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
       bundle.active_branch_turns,
       activeLeafId,
       bundle.episodic_chunks,
+      bundle.all_episodic_chunks,
       locationNamesById,
       expandedAnchors,
+      episodeExpandOverrides,
       showAllSwipes,
     ]
   );
 
-  // Keep selectedNodeId valid if swipes collapse or turns change
+  // Apply pan anchoring after episode expand/collapse so the toggled episode stays pinned on screen
+  useEffect(() => {
+    const anchor = pendingPanAnchorRef.current;
+    if (!anchor) return;
+    pendingPanAnchorRef.current = null;
+    const nextNode = model.nodeById[anchor.targetNodeId];
+    if (!nextNode) return;
+    const dx = (nextNode.x - anchor.oldWorldX) * zoom;
+    const dy = (nextNode.y - anchor.oldWorldY) * zoom;
+    if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+      setPan((prev) => ({ x: prev.x - dx, y: prev.y - dy }));
+    }
+  }, [model, zoom]);
+
+  // Keep selectedNodeId valid across swipe/episode collapse or turn changes
+  const activeLeafContainingEpisodeId = useMemo(
+    () => model.episodes.find((ep) => ep.containsActiveLeaf && model.nodeById[ep.id])?.id ?? null,
+    [model.episodes, model.nodeById]
+  );
+
   const effectiveSelectedId =
     selectedNodeId && model.nodeById[selectedNodeId]
       ? selectedNodeId
       : activeLeafId && model.nodeById[activeLeafId]
       ? activeLeafId
-      : model.nodes[0]?.id ?? null;
+      : activeLeafContainingEpisodeId ?? model.nodes[0]?.id ?? null;
 
   const selectedNode: BranchGraphNode | null = effectiveSelectedId
     ? model.nodeById[effectiveSelectedId] ?? null
@@ -184,27 +241,37 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
 
   const handleCenterOnActive = useCallback(() => {
     const target =
-      (activeLeafId ? model.nodeById[activeLeafId] : null) ?? model.nodes[0];
+      (activeLeafId ? model.nodeById[activeLeafId] : null) ??
+      (activeLeafContainingEpisodeId ? model.nodeById[activeLeafContainingEpisodeId] : null) ??
+      model.nodes[0];
     if (!target) return;
     const { width, height } = getStageSize();
     const next = computeCenterNodeViewport(target, width, height, Math.max(zoom, 0.85));
     setZoom(next.zoom);
     setPan(next.pan);
-  }, [activeLeafId, getStageSize, model.nodeById, model.nodes, zoom]);
+  }, [
+    activeLeafContainingEpisodeId,
+    activeLeafId,
+    getStageSize,
+    model.nodeById,
+    model.nodes,
+    zoom,
+  ]);
 
   // Initial viewport alignment once mounted
   useEffect(() => {
     if (hasInitializedViewportRef.current || model.nodes.length === 0) return;
     hasInitializedViewportRef.current = true;
     const { width, height } = getStageSize();
-    // If graph fits comfortably at >= 0.72 zoom, fit whole graph; otherwise center active leaf at 0.9x
     const fit = computeFitGraphViewport(model.bounds, width, height, 48);
     if (fit.zoom >= 0.72) {
       setZoom(fit.zoom);
       setPan(fit.pan);
     } else {
       const target =
-        (activeLeafId ? model.nodeById[activeLeafId] : null) ?? model.nodes[0];
+        (activeLeafId ? model.nodeById[activeLeafId] : null) ??
+        (activeLeafContainingEpisodeId ? model.nodeById[activeLeafContainingEpisodeId] : null) ??
+        model.nodes[0];
       if (target) {
         const centered = computeCenterNodeViewport(target, width, height, 0.9);
         setZoom(centered.zoom);
@@ -214,7 +281,14 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
         setPan(fit.pan);
       }
     }
-  }, [activeLeafId, getStageSize, model.bounds, model.nodeById, model.nodes]);
+  }, [
+    activeLeafContainingEpisodeId,
+    activeLeafId,
+    getStageSize,
+    model.bounds,
+    model.nodeById,
+    model.nodes,
+  ]);
 
   const toggleExpandedAnchor = useCallback((anchorId: string) => {
     setExpandedAnchors((prev) => {
@@ -224,6 +298,97 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
       return next;
     });
   }, []);
+
+  const toggleEpisodeExpanded = useCallback(
+    (episodeId: string, expand: boolean) => {
+      const ep = model.episodeById[episodeId];
+      if (!ep) return;
+
+      if (expand) {
+        const epNode = model.nodeById[episodeId];
+        const firstTurnId = ep.turnIds[0];
+        if (epNode && firstTurnId) {
+          pendingPanAnchorRef.current = {
+            targetNodeId: firstTurnId,
+            oldWorldX: epNode.x,
+            oldWorldY: epNode.y,
+          };
+        }
+        if (effectiveSelectedId === episodeId) {
+          setSelectedNodeId(
+            ep.containsActiveLeaf && activeLeafId ? activeLeafId : firstTurnId ?? null
+          );
+        }
+      } else {
+        const firstTurnNode = model.nodeById[ep.turnIds[0]];
+        if (firstTurnNode) {
+          pendingPanAnchorRef.current = {
+            targetNodeId: episodeId,
+            oldWorldX: firstTurnNode.x,
+            oldWorldY: firstTurnNode.y,
+          };
+        }
+        if (effectiveSelectedId && ep.turnIds.includes(effectiveSelectedId)) {
+          setSelectedNodeId(episodeId);
+        }
+      }
+
+      setEpisodeExpandOverrides((prev) => ({
+        ...prev,
+        [episodeId]: expand,
+      }));
+    },
+    [activeLeafId, effectiveSelectedId, model.episodeById, model.nodeById]
+  );
+
+  const handleToggleAllEpisodes = useCallback(() => {
+    if (model.episodes.length === 0) return;
+    const shouldExpandAll = model.collapsedEpisodeCount > 0;
+    const next: Record<string, boolean> = {};
+    for (const ep of model.episodes) {
+      next[ep.id] = shouldExpandAll;
+    }
+    setEpisodeExpandOverrides(next);
+  }, [model.collapsedEpisodeCount, model.episodes]);
+
+  const stepEpisodeVariant = useCallback(
+    (episodeId: string, delta: number) => {
+      const ep = model.episodeById[episodeId];
+      if (!ep || ep.summaryVariants.length <= 1) return;
+      const total = ep.summaryVariants.length;
+      setVariantIndexByEpisode((prev) => {
+        const curr = prev[episodeId] ?? 0;
+        const nextIdx = (((curr + delta) % total) + total) % total;
+        return { ...prev, [episodeId]: nextIdx };
+      });
+    },
+    [model.episodeById]
+  );
+
+  const getActiveVariant = useCallback(
+    (ep: EpisodeGroupMeta) => {
+      const total = ep.summaryVariants.length;
+      if (total === 0) {
+        return {
+          index: 0,
+          variant: {
+            kind: "in_progress" as const,
+            chunkId: null,
+            title: "Episode in Progress",
+            synopsis: formatEpisodeRange(ep),
+            summaryText: "",
+            rangeLabel: formatEpisodeRange(ep),
+            sourceLabel: null,
+            leafTurnId: null,
+          },
+        };
+      }
+      const raw = variantIndexByEpisode[ep.id] ?? 0;
+      const index = ((raw % total) + total) % total;
+      return { index, variant: ep.summaryVariants[index] };
+    },
+    [variantIndexByEpisode]
+  );
 
   const applyZoomAroundPoint = useCallback(
     (nextZoomRaw: number, clientX?: number, clientY?: number) => {
@@ -327,7 +492,11 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
     );
   }
 
-  const nonSwipeNodeCount = model.nodes.filter((n) => !n.isExpandedSwipe).length;
+  const selectedEpisodeGroup =
+    selectedNode?.kind === "episode" ? selectedNode.episodeGroup : null;
+  const selectedEpisodeVariantInfo = selectedEpisodeGroup
+    ? getActiveVariant(selectedEpisodeGroup)
+    : null;
 
   return (
     <div className="branch-graph-shell">
@@ -337,8 +506,12 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
           <GitBranch size={15} color="var(--accent-violet)" />
           <span>Branch Graph</span>
           <span className="branch-graph-stats">
-            {nonSwipeNodeCount} {nonSwipeNodeCount === 1 ? "turn" : "turns"} ·{" "}
-            {model.branchTipCount} {model.branchTipCount === 1 ? "timeline" : "timelines"}
+            {model.totalTurnCount} {model.totalTurnCount === 1 ? "turn" : "turns"}
+            {model.collapsedEpisodeCount > 0 &&
+              ` (${model.collapsedEpisodeCount} ${
+                model.collapsedEpisodeCount === 1 ? "episode" : "episodes"
+              } collapsed)`}{" "}
+            · {model.branchTipCount} {model.branchTipCount === 1 ? "timeline" : "timelines"}
             {model.totalHiddenSwipes > 0 &&
               ` · ${model.totalHiddenSwipes} unfollowed ${
                 model.totalHiddenSwipes === 1 ? "swipe" : "swipes"
@@ -346,6 +519,29 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
           </span>
         </div>
         <div className="branch-graph-toolbar-actions">
+          {model.episodes.length > 0 && (
+            <button
+              type="button"
+              className={`btn btn-ghost branch-graph-tool-btn ${
+                model.collapsedEpisodeCount === 0 ? "active" : ""
+              }`}
+              onClick={handleToggleAllEpisodes}
+              title={
+                model.collapsedEpisodeCount > 0
+                  ? "Expand all summarized episodes into individual turns"
+                  : "Collapse all summarized episodes into summary nodes"
+              }
+            >
+              {model.collapsedEpisodeCount > 0 ? (
+                <ScrollText size={13} />
+              ) : (
+                <Minimize2 size={13} />
+              )}
+              <span>
+                {model.collapsedEpisodeCount > 0 ? "Expand episodes" : "Collapse episodes"}
+              </span>
+            </button>
+          )}
           {model.totalHiddenSwipes > 0 && (
             <button
               type="button"
@@ -471,6 +667,88 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
           <rect width="100%" height="100%" fill="url(#branch-graph-dot-grid)" />
 
           <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
+            {/* 0. Expanded Episode Group Frames & Collapse Pills (behind edges and nodes) */}
+            {model.expandedEpisodeFrames.map((frame) => {
+              const ep = frame.episode;
+              const isEpActive = ep.intersectsActiveBranch;
+              const pillW = 74;
+              const pillX = Math.max(frame.headerX + 8, frame.headerX + frame.headerWidth - pillW - 8);
+              return (
+                <g key={frame.episodeId} data-expanded-episode-frame={frame.episodeId}>
+                  {frame.segments.map((seg, segIdx) => (
+                    <rect
+                      key={segIdx}
+                      x={seg.minX}
+                      y={seg.minY}
+                      width={Math.max(1, seg.maxX - seg.minX)}
+                      height={Math.max(1, seg.maxY - seg.minY)}
+                      rx={12}
+                      fill={
+                        isEpActive
+                          ? "rgba(245, 158, 11, 0.045)"
+                          : "rgba(148, 163, 184, 0.04)"
+                      }
+                      stroke={
+                        isEpActive
+                          ? "rgba(245, 158, 11, 0.34)"
+                          : "rgba(148, 163, 184, 0.28)"
+                      }
+                      strokeWidth={1.1}
+                      strokeDasharray="6 4"
+                    />
+                  ))}
+                  <text
+                    x={frame.headerX + 10}
+                    y={frame.headerY + 15}
+                    fill={isEpActive ? "#fcd34d" : "#94a3b8"}
+                    fontSize="9.8"
+                    fontWeight="700"
+                    letterSpacing="0.03em"
+                  >
+                    {`EPISODE ${ep.episodeIndex} · ${formatEpisodeRange(ep).toUpperCase()}`}
+                  </text>
+                  <g
+                    data-graph-interactive="true"
+                    data-episode-collapse-id={ep.id}
+                    transform={`translate(${pillX}, ${frame.headerY + 3})`}
+                    style={{ cursor: "pointer" }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleEpisodeExpanded(ep.id, false);
+                    }}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                  >
+                    <rect x={-4} y={-4} width={pillW + 8} height={24} fill="transparent" />
+                    <rect
+                      x={0}
+                      y={0}
+                      width={pillW}
+                      height={16}
+                      rx={8}
+                      fill="rgba(15, 23, 42, 0.92)"
+                      stroke={
+                        isEpActive
+                          ? "rgba(245, 158, 11, 0.55)"
+                          : "rgba(148, 163, 184, 0.45)"
+                      }
+                      strokeWidth={1}
+                    />
+                    <text
+                      x={pillW / 2}
+                      y={11}
+                      textAnchor="middle"
+                      fill={isEpActive ? "#fde68a" : "#cbd5e1"}
+                      fontSize="9"
+                      fontWeight="600"
+                    >
+                      Collapse
+                    </text>
+                    <title>{`Collapse Episode ${ep.episodeIndex} (${formatEpisodeRange(ep)})`}</title>
+                  </g>
+                </g>
+              );
+            })}
+
             {/* 1. Directed Edges (draw inactive first, active/selected on top) */}
             {model.edges.map((edge) => {
               const fromNode = model.nodeById[edge.fromId];
@@ -492,23 +770,74 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
                 ? "url(#branch-arrow-active)"
                 : "url(#branch-arrow-default)";
 
+              const showOriginLabel =
+                fromNode.kind === "episode" &&
+                fromNode.episodeGroup !== null &&
+                edge.originTurnDepth !== null &&
+                (fromNode.episodeGroup.outgoingBranchCount >= 2 ||
+                  edge.originTurnDepth !== fromNode.episodeGroup.endDepth);
+              const labelPos = showOriginLabel
+                ? computeBranchEdgeLabelPoint(fromNode, toNode, 0.46)
+                : null;
+
               return (
-                <path
-                  key={edge.id}
-                  d={d}
-                  fill="none"
-                  stroke={stroke}
-                  strokeWidth={strokeWidth}
-                  strokeDasharray={edge.isExpandedSwipe ? "5 4" : undefined}
-                  markerEnd={markerEnd}
-                  className={
-                    isSelectedEdge
-                      ? "branch-edge branch-edge--selected"
-                      : edge.isActiveBranch
-                      ? "branch-edge branch-edge--active"
-                      : "branch-edge"
-                  }
-                />
+                <g key={edge.id}>
+                  <path
+                    d={d}
+                    fill="none"
+                    stroke={stroke}
+                    strokeWidth={strokeWidth}
+                    strokeDasharray={edge.isExpandedSwipe ? "5 4" : undefined}
+                    markerEnd={markerEnd}
+                    className={
+                      isSelectedEdge
+                        ? "branch-edge branch-edge--selected"
+                        : edge.isActiveBranch
+                        ? "branch-edge branch-edge--active"
+                        : "branch-edge"
+                    }
+                  />
+                  {showOriginLabel && labelPos && edge.originTurnDepth !== null && (
+                    <g
+                      transform={`translate(${labelPos.x - 24}, ${labelPos.y - 8})`}
+                      data-edge-origin-turn={edge.originTurnDepth}
+                    >
+                      <rect
+                        x={0}
+                        y={0}
+                        width={48}
+                        height={15}
+                        rx={7.5}
+                        fill="rgba(15, 23, 42, 0.94)"
+                        stroke={
+                          isSelectedEdge
+                            ? "#22d3ee"
+                            : edge.isActiveBranch
+                            ? "rgba(245, 158, 11, 0.7)"
+                            : "rgba(148, 163, 184, 0.45)"
+                        }
+                        strokeWidth={0.9}
+                      />
+                      <text
+                        x={24}
+                        y={10.5}
+                        textAnchor="middle"
+                        fill={
+                          isSelectedEdge
+                            ? "#67e8f9"
+                            : edge.isActiveBranch
+                            ? "#fde68a"
+                            : "#cbd5e1"
+                        }
+                        fontSize="8.5"
+                        fontWeight="600"
+                      >
+                        {`from #${edge.originTurnDepth}`}
+                      </text>
+                      <title>{`Branched from Turn #${edge.originTurnDepth}`}</title>
+                    </g>
+                  )}
+                </g>
               );
             })}
 
@@ -552,10 +881,310 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
 
               const handleNodeDoubleClick = (e: React.MouseEvent) => {
                 e.stopPropagation();
+                if (node.kind === "episode" && node.episodeGroup) {
+                  toggleEpisodeExpanded(node.episodeGroup.id, true);
+                  return;
+                }
                 if (!node.isActiveBranch && node.isBranchTip && !isMutatingLocked) {
                   void handleTriggerSwitchTimeline(node.id);
                 }
               };
+
+              // Summary Pseudo-Node (Collapsed Summarized Episode)
+              if (node.kind === "episode" && node.episodeGroup) {
+                const ep = node.episodeGroup;
+                const { index: variantIdx, variant } = getActiveVariant(ep);
+                const hasMultipleVariants = ep.summaryVariants.length > 1;
+                const rangeStr = formatEpisodeRange(ep);
+                const titleLine = truncateInline(variant.title, 31);
+                const synopsisLines = clampLines(variant.synopsis, 35, 2);
+
+                const epBadgeText = node.isActiveLeaf
+                  ? "ACTIVE"
+                  : variant.kind === "in_progress"
+                  ? "IN PROGRESS"
+                  : variant.kind === "alternate"
+                  ? "ALT"
+                  : "SUMMARY";
+                const epBadgeColor = node.isActiveLeaf
+                  ? "#f59e0b"
+                  : variant.kind === "in_progress"
+                  ? "#94a3b8"
+                  : variant.kind === "alternate"
+                  ? "#a78bfa"
+                  : "#fbbf24";
+
+                const switcherText =
+                  variant.kind === "in_progress"
+                    ? `Alt summary (${ep.summaryVariants.length - 1})`
+                    : variant.kind === "active"
+                    ? `Active · 1/${ep.summaryVariants.length}`
+                    : `Alt ${variantIdx}/${ep.summaryVariants.length - 1}`;
+
+                const expandPillLabel = `+${ep.turnIds.length} ${
+                  ep.turnIds.length === 1 ? "turn" : "turns"
+                }`;
+                const expandPillW = Math.max(66, expandPillLabel.length * 6.2 + 16);
+
+                return (
+                  <g
+                    key={node.id}
+                    data-graph-interactive="true"
+                    data-graph-node-id={node.id}
+                    data-graph-node-kind="episode"
+                    data-episode-id={ep.id}
+                    transform={`translate(${node.x}, ${topY})`}
+                    style={{ cursor: "pointer" }}
+                    onClick={handleNodeClick}
+                    onDoubleClick={handleNodeDoubleClick}
+                  >
+                    {/* Stacked card backing layers to distinguish episode groups from single turns */}
+                    <rect
+                      x={5}
+                      y={5}
+                      width={node.width}
+                      height={node.height}
+                      rx={10}
+                      fill="rgba(15, 23, 42, 0.55)"
+                      stroke={strokeColor}
+                      strokeWidth={0.9}
+                      opacity={0.45}
+                    />
+                    <rect
+                      x={0}
+                      y={0}
+                      width={node.width}
+                      height={node.height}
+                      rx={10}
+                      fill={
+                        isSelected
+                          ? "rgba(14, 116, 144, 0.3)"
+                          : variant.kind === "in_progress"
+                          ? "rgba(30, 41, 59, 0.92)"
+                          : node.isActiveBranch
+                          ? "rgba(38, 32, 22, 0.94)"
+                          : "rgba(24, 24, 44, 0.92)"
+                      }
+                      stroke={strokeColor}
+                      strokeWidth={isSelected ? 2.4 : node.isActiveLeaf ? 2.1 : 1.5}
+                    />
+
+                    {/* Top Row: Range + Badge */}
+                    <text
+                      x={12}
+                      y={19}
+                      fill={
+                        isSelected
+                          ? "#67e8f9"
+                          : variant.kind === "in_progress"
+                          ? "#cbd5e1"
+                          : "#fbbf24"
+                      }
+                      fontSize="11"
+                      fontWeight="700"
+                    >
+                      {rangeStr}
+                    </text>
+
+                    <g transform={`translate(${node.width - (epBadgeText.length * 6 + 20)}, 8)`}>
+                      <rect
+                        x={0}
+                        y={0}
+                        width={epBadgeText.length * 6 + 10}
+                        height={15}
+                        rx={4}
+                        fill="rgba(15, 23, 42, 0.78)"
+                        stroke={epBadgeColor}
+                        strokeWidth={0.9}
+                      />
+                      <text
+                        x={5}
+                        y={10.5}
+                        fill={epBadgeColor}
+                        fontSize="8.2"
+                        fontWeight="700"
+                        letterSpacing="0.04em"
+                      >
+                        {epBadgeText}
+                      </text>
+                    </g>
+
+                    {/* Title Row */}
+                    <text
+                      x={12}
+                      y={37}
+                      fill={
+                        variant.kind === "in_progress"
+                          ? "#e2e8f0"
+                          : variant.kind === "alternate"
+                          ? "#ddd6fe"
+                          : "#fde68a"
+                      }
+                      fontSize="11.2"
+                      fontWeight="700"
+                    >
+                      {titleLine}
+                    </text>
+
+                    {/* Synopsis Lines */}
+                    {synopsisLines.map((line, lineIdx) => (
+                      <text
+                        key={lineIdx}
+                        x={12}
+                        y={53 + lineIdx * 13.5}
+                        fill={variant.kind === "in_progress" ? "#94a3b8" : "#cbd5e1"}
+                        fontSize="10"
+                        fontWeight="400"
+                      >
+                        {line}
+                      </text>
+                    ))}
+
+                    {/* Bottom-Left: Inline Alternate-Summary Chevron Switcher */}
+                    {hasMultipleVariants && (
+                      <g
+                        data-graph-interactive="true"
+                        data-episode-variant-switcher={ep.id}
+                        transform={`translate(8, ${node.height - 13})`}
+                      >
+                        <rect
+                          x={0}
+                          y={0}
+                          width={142}
+                          height={20}
+                          rx={10}
+                          fill="rgba(15, 23, 42, 0.96)"
+                          stroke="rgba(167, 139, 250, 0.55)"
+                          strokeWidth={1}
+                        />
+                        {/* Prev Chevron */}
+                        <g
+                          data-graph-interactive="true"
+                          data-episode-variant-prev={ep.id}
+                          style={{ cursor: "pointer" }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            stepEpisodeVariant(ep.id, -1);
+                          }}
+                          onDoubleClick={(e) => e.stopPropagation()}
+                        >
+                          <rect x={-4} y={-4} width={24} height={28} fill="transparent" />
+                          <text
+                            x={10}
+                            y={13.5}
+                            textAnchor="middle"
+                            fill="#c4b5fd"
+                            fontSize="12"
+                            fontWeight="700"
+                          >
+                            ‹
+                          </text>
+                          <title>View previous timeline summary</title>
+                        </g>
+                        {/* Center Label (cycles forward on click too) */}
+                        <g
+                          data-graph-interactive="true"
+                          style={{ cursor: "pointer" }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            stepEpisodeVariant(ep.id, 1);
+                          }}
+                          onDoubleClick={(e) => e.stopPropagation()}
+                        >
+                          <rect x={20} y={-2} width={102} height={24} fill="transparent" />
+                          <text
+                            x={71}
+                            y={13}
+                            textAnchor="middle"
+                            fill="#ddd6fe"
+                            fontSize="8.8"
+                            fontWeight="600"
+                          >
+                            {truncateInline(switcherText, 18)}
+                          </text>
+                          <title>View alternate timeline summary</title>
+                        </g>
+                        {/* Next Chevron */}
+                        <g
+                          data-graph-interactive="true"
+                          data-episode-variant-next={ep.id}
+                          style={{ cursor: "pointer" }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            stepEpisodeVariant(ep.id, 1);
+                          }}
+                          onDoubleClick={(e) => e.stopPropagation()}
+                        >
+                          <rect x={122} y={-4} width={24} height={28} fill="transparent" />
+                          <text
+                            x={132}
+                            y={13.5}
+                            textAnchor="middle"
+                            fill="#c4b5fd"
+                            fontSize="12"
+                            fontWeight="700"
+                          >
+                            ›
+                          </text>
+                          <title>View alternate timeline summary</title>
+                        </g>
+                      </g>
+                    )}
+
+                    {/* Bottom-Right: Dedicated Expand Pill */}
+                    <g
+                      data-graph-interactive="true"
+                      data-episode-expand-id={ep.id}
+                      transform={`translate(${node.width - expandPillW - 6}, ${node.height - 13})`}
+                      style={{ cursor: "pointer" }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleEpisodeExpanded(ep.id, true);
+                      }}
+                      onDoubleClick={(e) => e.stopPropagation()}
+                    >
+                      <rect
+                        x={-6}
+                        y={-6}
+                        width={expandPillW + 12}
+                        height={32}
+                        fill="transparent"
+                      />
+                      <rect
+                        x={0}
+                        y={0}
+                        width={expandPillW}
+                        height={20}
+                        rx={10}
+                        fill="rgba(30, 41, 59, 0.98)"
+                        stroke="#22d3ee"
+                        strokeWidth={1.05}
+                      />
+                      <text
+                        x={expandPillW / 2}
+                        y={13.2}
+                        textAnchor="middle"
+                        fill="#67e8f9"
+                        fontSize="9.2"
+                        fontWeight="700"
+                      >
+                        {expandPillLabel}
+                      </text>
+                      <title>
+                        {`Expand ${ep.turnIds.length} grouped ${
+                          ep.turnIds.length === 1 ? "node" : "nodes"
+                        }${
+                          ep.hiddenSwipeCount > 0
+                            ? ` (${ep.hiddenSwipeCount} hidden ${
+                                ep.hiddenSwipeCount === 1 ? "swipe" : "swipes"
+                              } inside)`
+                            : ""
+                        }`}
+                      </title>
+                    </g>
+                  </g>
+                );
+              }
 
               if (node.kind === "waypoint") {
                 const label = truncateInline(node.locationName || "Map Move", 18);
@@ -746,7 +1375,6 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
                       }}
                       onDoubleClick={(e) => e.stopPropagation()}
                     >
-                      {/* Wide transparent hit target */}
                       <rect
                         x={-6}
                         y={-6}
@@ -794,7 +1422,142 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
       </div>
 
       {/* Screen-Space HTML Node Detail & Action Bar (outside <svg>) */}
-      {selectedNode && (
+      {selectedNode && selectedEpisodeGroup && selectedEpisodeVariantInfo ? (
+        <div
+          className="branch-graph-detail-bar"
+          data-selected-episode-id={selectedEpisodeGroup.id}
+        >
+          <div className="branch-graph-detail-info">
+            <div className="branch-graph-detail-head">
+              <strong className="branch-graph-detail-turn">
+                Episode {selectedEpisodeGroup.episodeIndex} ·{" "}
+                {formatEpisodeRange(selectedEpisodeGroup)}
+              </strong>
+              <span
+                className={`branch-graph-status-pill ${
+                  selectedNode.isActiveLeaf
+                    ? "status-active-leaf"
+                    : selectedEpisodeVariantInfo.variant.kind === "in_progress"
+                    ? "status-in-progress"
+                    : selectedEpisodeVariantInfo.variant.kind === "alternate"
+                    ? "status-tip"
+                    : "status-episode"
+                }`}
+              >
+                {selectedNode.isActiveLeaf
+                  ? "Contains Active Tip"
+                  : selectedEpisodeVariantInfo.variant.kind === "in_progress"
+                  ? "Episode in Progress"
+                  : selectedEpisodeVariantInfo.variant.kind === "alternate"
+                  ? "Alternate Timeline Summary"
+                  : "Summarized Episode"}
+              </span>
+              <span className="branch-graph-detail-meta">
+                {selectedEpisodeGroup.narrativeTurnCount}{" "}
+                {selectedEpisodeGroup.narrativeTurnCount === 1 ? "turn" : "turns"}
+                {selectedEpisodeGroup.waypointCount > 0 &&
+                  ` + ${selectedEpisodeGroup.waypointCount} map ${
+                    selectedEpisodeGroup.waypointCount === 1 ? "move" : "moves"
+                  }`}
+              </span>
+              {selectedEpisodeGroup.outgoingBranchCount > 1 && (
+                <span className="branch-graph-detail-meta">
+                  <GitBranch size={11} />
+                  {selectedEpisodeGroup.outgoingBranchCount} outgoing timelines
+                </span>
+              )}
+              {selectedEpisodeGroup.hiddenSwipeCount > 0 && (
+                <span className="branch-graph-detail-meta">
+                  <Layers size={11} />
+                  {selectedEpisodeGroup.hiddenSwipeCount} unfollowed{" "}
+                  {selectedEpisodeGroup.hiddenSwipeCount === 1 ? "swipe" : "swipes"} inside
+                </span>
+              )}
+            </div>
+
+            {selectedEpisodeGroup.summaryVariants.length > 1 && (
+              <div className="branch-graph-variant-switcher">
+                <button
+                  type="button"
+                  className="btn btn-ghost branch-graph-icon-btn"
+                  onClick={() => stepEpisodeVariant(selectedEpisodeGroup.id, -1)}
+                  aria-label="View previous timeline summary"
+                  title="View previous timeline summary"
+                >
+                  <ChevronLeft size={13} />
+                </button>
+                <span className="branch-graph-variant-label">
+                  {selectedEpisodeVariantInfo.variant.kind === "in_progress"
+                    ? `Active timeline: Episode in Progress (${
+                        selectedEpisodeGroup.summaryVariants.length - 1
+                      } alternate ${
+                        selectedEpisodeGroup.summaryVariants.length - 1 === 1
+                          ? "summary"
+                          : "summaries"
+                      } available)`
+                    : selectedEpisodeVariantInfo.variant.kind === "active"
+                    ? `Active Timeline Summary (1 / ${selectedEpisodeGroup.summaryVariants.length})`
+                    : `${
+                        selectedEpisodeVariantInfo.variant.sourceLabel ?? "Alternate timeline"
+                      } (${selectedEpisodeVariantInfo.index + 1} / ${
+                        selectedEpisodeGroup.summaryVariants.length
+                      })`}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost branch-graph-icon-btn"
+                  onClick={() => stepEpisodeVariant(selectedEpisodeGroup.id, 1)}
+                  aria-label="View alternate timeline summary"
+                  title="View alternate timeline summary"
+                >
+                  <ChevronRight size={13} />
+                </button>
+              </div>
+            )}
+
+            <div className="branch-graph-detail-summary">
+              {selectedEpisodeVariantInfo.variant.title}
+            </div>
+
+            {selectedEpisodeVariantInfo.variant.summaryText && (
+              <div className="branch-graph-detail-prose">
+                {selectedEpisodeVariantInfo.variant.summaryText}
+              </div>
+            )}
+          </div>
+
+          <div className="branch-graph-detail-actions">
+            <button
+              type="button"
+              className="btn btn-cyan"
+              onClick={() => toggleEpisodeExpanded(selectedEpisodeGroup.id, true)}
+              title="Expand this episode to inspect individual turns, zoom, or branch"
+            >
+              <ScrollText size={13} />
+              <span>
+                Expand {selectedEpisodeGroup.turnIds.length}{" "}
+                {selectedEpisodeGroup.turnIds.length === 1 ? "turn" : "turns"}
+              </span>
+            </button>
+
+            {!selectedNode.isActiveBranch &&
+              selectedNode.uniqueDescendantTipId !== null && (
+                <button
+                  type="button"
+                  className="btn btn-amber"
+                  disabled={isMutatingLocked || isSwitching}
+                  onClick={() =>
+                    void handleTriggerSwitchTimeline(selectedNode.uniqueDescendantTipId!)
+                  }
+                  title="Load this alternate timeline and continue from its latest turn"
+                >
+                  <GitBranch size={13} />
+                  <span>Switch to this timeline</span>
+                </button>
+              )}
+          </div>
+        </div>
+      ) : selectedNode ? (
         <div className="branch-graph-detail-bar" data-selected-turn-id={selectedNode.id}>
           <div className="branch-graph-detail-info">
             <div className="branch-graph-detail-head">
@@ -913,6 +1676,19 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
               </button>
             )}
 
+            {/* Collapse parent episode when viewing an expanded member turn */}
+            {selectedNode.memberEpisodeId && (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => toggleEpisodeExpanded(selectedNode.memberEpisodeId!, false)}
+                title="Collapse this summarized episode back into a summary node"
+              >
+                <Minimize2 size={13} />
+                <span>Collapse Episode</span>
+              </button>
+            )}
+
             {/* Per-node unfollowed swipe toggle */}
             {selectedNode.hiddenSwipes.length > 0 && (
               <button
@@ -934,7 +1710,7 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
             )}
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 };

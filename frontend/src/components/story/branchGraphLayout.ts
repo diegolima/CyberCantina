@@ -6,12 +6,78 @@ export const WAYPOINT_W = 152;
 export const WAYPOINT_H = 38;
 export const SWIPE_CARD_W = 192;
 export const SWIPE_CARD_H = 56;
+export const EPISODE_CARD_W = 252;
+export const EPISODE_CARD_H = 98;
 export const COL_GAP = 56;
 export const ROW_GAP = 22;
 export const MIN_GRAPH_ZOOM = 0.25;
 export const MAX_GRAPH_ZOOM = 2.0;
 
-export type BranchGraphNodeKind = "opening" | "standard" | "waypoint" | "swipe";
+export type BranchGraphNodeKind = "opening" | "standard" | "waypoint" | "swipe" | "episode";
+
+export interface EpisodeSummaryVariant {
+  /**
+   * - `"active"`: summary chunk belonging to the currently active timeline.
+   * - `"in_progress"`: spoiler-safe placeholder when the episode intersects the active
+   *   timeline, but the active timeline has not created a matching summary yet.
+   * - `"alternate"`: summary chunk created on another timeline.
+   */
+  kind: "active" | "in_progress" | "alternate";
+  chunkId: string | null;
+  title: string;
+  synopsis: string;
+  summaryText: string;
+  rangeLabel: string;
+  /** Source hint for alternate summaries (e.g. "via Turn #17"). */
+  sourceLabel: string | null;
+  leafTurnId: string | null;
+}
+
+export interface EpisodeGroupMeta {
+  /** Stable pseudo-node ID (e.g. `episode:<primaryChunkId>`). */
+  id: string;
+  /** 1-based ordinal index in layout order. */
+  episodeIndex: number;
+  primaryChunkId: string;
+  startDepth: number;
+  endDepth: number;
+  /** Ordered root-to-leaf turn IDs grouped by this episode (including absorbed interior waypoints). */
+  turnIds: string[];
+  /** Number of non-waypoint turns inside `turnIds`. */
+  narrativeTurnCount: number;
+  /** Number of absorbed `__arrival__` waypoints inside `turnIds`. */
+  waypointCount: number;
+  /** True when at least one turn in `turnIds` lies on `activeBranchTurns`. */
+  intersectsActiveBranch: boolean;
+  /** True when `activeLeafId` is one of `turnIds`. */
+  containsActiveLeaf: boolean;
+  /** Aggregate hidden unfollowed swipes anchored to turns inside `turnIds`. */
+  hiddenSwipeCount: number;
+  /** Number of visible outgoing edges exiting this episode to turns outside `turnIds`. */
+  outgoingBranchCount: number;
+  /** Ordered summary variants (index 0 is default: active summary, "Episode in Progress", or alternate summary). */
+  summaryVariants: EpisodeSummaryVariant[];
+  /** True when index 0 is the `"Episode in Progress"` placeholder. */
+  isInProgressOnActive: boolean;
+}
+
+export interface ExpandedEpisodeSegment {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+export interface ExpandedEpisodeFrame {
+  episodeId: string;
+  episode: EpisodeGroupMeta;
+  /** Contiguous same-row bounding boxes enclosing member turns without overlapping foreign branches. */
+  segments: ExpandedEpisodeSegment[];
+  /** Anchor point for the Collapse pill (top-right of the primary segment). */
+  headerX: number;
+  headerY: number;
+  headerWidth: number;
+}
 
 export interface BranchGraphNode {
   id: string;
@@ -38,6 +104,10 @@ export interface BranchGraphNode {
   swipeAnchorId: string | null;
   /** Non-null when an episodic summary chunk ends at this turn (`chunk.leaf_turn_id === turn.id`). */
   episodicChunkLabel: string | null;
+  /** Non-null when `kind === "episode"`. */
+  episodeGroup: EpisodeGroupMeta | null;
+  /** Non-null on normal/waypoint turns currently rendered inside an expanded episode. */
+  memberEpisodeId: string | null;
   /** Primary display text: `notable_event_summary` when present, else prompt/opening/location fallback. */
   description: string;
   hasNotableSummary: boolean;
@@ -56,6 +126,8 @@ export interface BranchGraphEdge {
   toId: string;
   isActiveBranch: boolean;
   isExpandedSwipe: boolean;
+  /** Real turn depth inside a collapsed episode from which this outgoing edge originated. */
+  originTurnDepth: number | null;
 }
 
 export interface BranchGraphBounds {
@@ -71,6 +143,13 @@ export interface BranchGraphModel {
   nodes: BranchGraphNode[];
   nodeById: Record<string, BranchGraphNode>;
   edges: BranchGraphEdge[];
+  episodes: EpisodeGroupMeta[];
+  episodeById: Record<string, EpisodeGroupMeta>;
+  expandedEpisodeFrames: ExpandedEpisodeFrame[];
+  /** Episodes that contain `activeLeafId` and should open pre-expanded by default. */
+  defaultExpandedEpisodeIds: string[];
+  totalTurnCount: number;
+  collapsedEpisodeCount: number;
   totalHiddenSwipes: number;
   branchTipCount: number;
   bounds: BranchGraphBounds;
@@ -80,9 +159,23 @@ export interface BuildBranchGraphParams {
   allTurns: TurnNodeRecord[];
   activeBranchTurns: TurnNodeRecord[];
   activeLeafId?: string | null;
+  /** Active-branch episodic chunks (from `bundle.episodic_chunks`). */
   episodicChunks?: EpisodicChunkRecord[];
+  /** All campaign episodic chunks across every timeline (from `bundle.all_episodic_chunks`). */
+  allEpisodicChunks?: EpisodicChunkRecord[];
   locationNamesById?: Record<string, string>;
   expandedSwipeAnchorIds?: ReadonlySet<string>;
+  /**
+   * Episode IDs currently expanded into individual turns.
+   * When omitted (`undefined`), defaults to auto-expanding episodes containing `activeLeafId`,
+   * modulated by `episodeExpandOverrides`.
+   */
+  expandedEpisodeIds?: ReadonlySet<string>;
+  /**
+   * Per-episode user expand/collapse overrides layered on top of `defaultExpandedEpisodeIds`
+   * (active-tip auto-expansion). Ignored when `expandedEpisodeIds` is explicitly provided.
+   */
+  episodeExpandOverrides?: Record<string, boolean>;
   showAllSwipes?: boolean;
 }
 
@@ -137,6 +230,9 @@ function resolveNodeDescription(
 }
 
 function getNodeDimensions(kind: BranchGraphNodeKind): { width: number; height: number } {
+  if (kind === "episode") {
+    return { width: EPISODE_CARD_W, height: EPISODE_CARD_H };
+  }
   if (kind === "waypoint") {
     return { width: WAYPOINT_W, height: WAYPOINT_H };
   }
@@ -146,23 +242,123 @@ function getNodeDimensions(kind: BranchGraphNodeKind): { width: number; height: 
   return { width: TURN_CARD_W, height: TURN_CARD_H };
 }
 
+function extractFirstSentence(text: string): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (!clean) return "";
+  const dotIdx = clean.indexOf(". ");
+  if (dotIdx > 0 && dotIdx < 200) {
+    return clean.slice(0, dotIdx + 1);
+  }
+  return clean.length > 200 ? `${clean.slice(0, 199)}…` : clean;
+}
+
+function formatDepthRange(startDepth: number, endDepth: number): string {
+  return startDepth === endDepth ? `Turn ${startDepth}` : `Turns ${startDepth}–${endDepth}`;
+}
+
+function buildChunkSummaryVariant(
+  chunk: EpisodicChunkRecord,
+  kind: "active" | "alternate",
+  turnById: Map<string, TurnNodeRecord>
+): EpisodeSummaryVariant {
+  const rangeLabel = formatDepthRange(chunk.start_turn_depth, chunk.end_turn_depth);
+  const title = (chunk.title || "").trim() || `Episode (${rangeLabel})`;
+  const summaryText = (chunk.summary_text || "").trim();
+  const synopsis =
+    (chunk.synopsis_text || "").trim() || extractFirstSentence(summaryText) || rangeLabel;
+  const leafTurn = turnById.get(chunk.leaf_turn_id);
+  const sourceLabel =
+    kind === "alternate"
+      ? leafTurn
+        ? `Alternate timeline (via Turn #${leafTurn.depth_index})`
+        : "Alternate timeline"
+      : null;
+
+  return {
+    kind,
+    chunkId: chunk.id,
+    title,
+    synopsis,
+    summaryText: summaryText || synopsis,
+    rangeLabel,
+    sourceLabel,
+    leafTurnId: chunk.leaf_turn_id,
+  };
+}
+
+function buildInProgressVariant(startDepth: number, endDepth: number): EpisodeSummaryVariant {
+  const rangeLabel = formatDepthRange(startDepth, endDepth);
+  return {
+    kind: "in_progress",
+    chunkId: null,
+    title: "Episode in Progress",
+    synopsis: `${rangeLabel} · Summarized on another timeline`,
+    summaryText: `The active timeline has not created a summary for ${rangeLabel} yet. Use the alternate summary switcher to preview summaries from other timelines.`,
+    rangeLabel,
+    sourceLabel: null,
+    leafTurnId: null,
+  };
+}
+
 /**
- * Build a deterministic, pan/zoom-ready SVG branch tree from campaign turn nodes.
+ * Walk backward via `parent_turn_id` from `chunk.leaf_turn_id` to resolve the exact
+ * root-to-leaf turn chain covered by `[chunk.start_turn_depth, chunk.end_turn_depth]`.
+ * Interior `__arrival__` waypoints along that chain are naturally included; Turn #0 is excluded.
+ */
+function resolveChunkTurnChain(
+  chunk: EpisodicChunkRecord,
+  turnById: Map<string, TurnNodeRecord>,
+  visibleTurnSet: Set<string>
+): TurnNodeRecord[] {
+  const startNode = turnById.get(chunk.leaf_turn_id);
+  if (!startNode) return [];
+
+  const collected: TurnNodeRecord[] = [];
+  const seen = new Set<string>();
+  let curr: TurnNodeRecord | undefined = startNode;
+
+  while (curr && !seen.has(curr.id)) {
+    seen.add(curr.id);
+    if (
+      curr.depth_index > 0 &&
+      curr.depth_index >= chunk.start_turn_depth &&
+      curr.depth_index <= chunk.end_turn_depth &&
+      visibleTurnSet.has(curr.id)
+    ) {
+      collected.push(curr);
+    }
+    if (curr.depth_index <= chunk.start_turn_depth) {
+      break;
+    }
+    curr = curr.parent_turn_id ? turnById.get(curr.parent_turn_id) : undefined;
+  }
+
+  collected.reverse();
+  return collected;
+}
+
+/**
+ * Build a deterministic, pan/zoom-ready SVG branch tree from campaign turn nodes,
+ * collapsing summarized episodic spans into interactive Summary Pseudo-Nodes.
  *
- * Implements the zero-migration same-`user_message` swipe hiding rule:
- * - Every node on `activeBranchTurns` is always visible.
- * - Every node with at least 1 child is always visible.
- * - Childless non-active siblings sharing `parent_turn_id` + `user_message` with a visible
- *   sibling are visually collapsed into that sibling's `hiddenSwipes` (expandable on click).
- * - Distinct-prompt childless alternate branches stay visible (never hidden by swipe filtering).
+ * Implements:
+ * - Zero-migration same-`user_message` unfollowed swipe hiding.
+ * - Cross-timeline exact turn-ID chain episode grouping with interior `__arrival__`
+ *   waypoint absorption and active-first disjoint ownership precedence.
+ * - Spoiler-safe `"Episode in Progress"` default + alternate-timeline summary variants.
+ * - Single/multi-branch re-parenting onto collapsed pseudo-nodes with exact origin depths.
+ * - Active-tip auto-expansion (`defaultExpandedEpisodeIds`).
  */
 export function buildBranchGraphModel({
   allTurns,
   activeBranchTurns,
   activeLeafId,
   episodicChunks = [],
+  allEpisodicChunks,
   locationNamesById = {},
   expandedSwipeAnchorIds = new Set<string>(),
+  expandedEpisodeIds,
+  episodeExpandOverrides,
   showAllSwipes = false,
 }: BuildBranchGraphParams): BranchGraphModel {
   if (!allTurns || allTurns.length === 0) {
@@ -170,6 +366,12 @@ export function buildBranchGraphModel({
       nodes: [],
       nodeById: {},
       edges: [],
+      episodes: [],
+      episodeById: {},
+      expandedEpisodeFrames: [],
+      defaultExpandedEpisodeIds: [],
+      totalTurnCount: 0,
+      collapsedEpisodeCount: 0,
       totalHiddenSwipes: 0,
       branchTipCount: 0,
       bounds: { minX: 0, maxX: 0, minY: 0, maxY: 0, width: 0, height: 0 },
@@ -183,15 +385,13 @@ export function buildBranchGraphModel({
 
   const activeBranchSet = new Set(activeBranchTurns.map((t) => t.id));
   const effectiveActiveLeafId =
-    activeLeafId ??
-    activeBranchTurns[activeBranchTurns.length - 1]?.id ??
-    null;
+    activeLeafId ?? activeBranchTurns[activeBranchTurns.length - 1]?.id ?? null;
 
   const chunkLabelByTurnId = new Map<string, string>();
   for (const chunk of episodicChunks) {
     chunkLabelByTurnId.set(
       chunk.leaf_turn_id,
-      `Turns ${chunk.start_turn_depth}–${chunk.end_turn_depth}`
+      formatDepthRange(chunk.start_turn_depth, chunk.end_turn_depth)
     );
   }
 
@@ -226,7 +426,6 @@ export function buildBranchGraphModel({
       }
     }
 
-    // Group remaining childless non-active siblings by user_message
     const promptOrder: string[] = [];
     const promptGroups = new Map<string, TurnNodeRecord[]>();
     for (const child of childlessInactive) {
@@ -246,8 +445,6 @@ export function buildBranchGraphModel({
       const group = promptGroups.get(promptKey) ?? [];
       if (group.length === 0) continue;
 
-      // Prefer anchoring to an active-branch primary sibling with matching prompt,
-      // otherwise the first followed primary sibling with matching prompt.
       const activePrimaryMatch = primary.find(
         (p) => p.user_message === promptKey && activeBranchSet.has(p.id)
       );
@@ -259,7 +456,6 @@ export function buildBranchGraphModel({
         hiddenSwipesByAnchorId.set(anyPrimaryMatch.id, [...existing, ...group]);
         totalHiddenSwipes += group.length;
       } else {
-        // Distinct-prompt 1-turn alternate branch: keep newest turn visible, collapse older same-prompt swipes
         const anchor = group[group.length - 1];
         visibleForParent.push(anchor);
         if (group.length > 1) {
@@ -270,7 +466,6 @@ export function buildBranchGraphModel({
       }
     }
 
-    // Order: active-branch child first (keeps active spine straight), then chronological order
     const originalIndex = new Map(rawChildren.map((c, idx) => [c.id, idx]));
     visibleForParent.sort((a, b) => {
       const aActive = activeBranchSet.has(a.id) ? 0 : 1;
@@ -282,18 +477,23 @@ export function buildBranchGraphModel({
     visibleChildrenByParent.set(parentKey, visibleForParent);
   }
 
-  // 3. Compute reachable visible non-swipe branch tips bottom-up
+  // 3. Walk underlying visible tree to compute invariant visibleTurnSet, totalTurnCount, and reachable tips
+  const visibleTurnSet = new Set<string>();
   const reachableTipsById = new Map<string, string[]>();
+  let underlyingBranchTipCount = 0;
+
   const computeTips = (nodeId: string, stack: Set<string>): string[] => {
     const cached = reachableTipsById.get(nodeId);
     if (cached) return cached;
     if (stack.has(nodeId)) return [];
     stack.add(nodeId);
+    visibleTurnSet.add(nodeId);
 
     const children = visibleChildrenByParent.get(nodeId) ?? [];
     let tips: string[];
     if (children.length === 0) {
       tips = [nodeId];
+      underlyingBranchTipCount += 1;
     } else {
       const acc: string[] = [];
       for (const child of children) {
@@ -313,8 +513,183 @@ export function buildBranchGraphModel({
   for (const r of rootTurns) {
     computeTips(r.id, new Set());
   }
+  const totalTurnCount = visibleTurnSet.size;
 
-  // 4. Deterministic primary-spine horizontal tree layout + optional inline swipe expansion
+  // 4. Resolve cross-timeline summarized episodes with active-first disjoint turn ownership
+  const activeChunkIdSet = new Set(episodicChunks.map((c) => c.id));
+  const mergedChunksById = new Map<string, EpisodicChunkRecord>();
+  for (const c of allEpisodicChunks ?? episodicChunks) {
+    mergedChunksById.set(c.id, c);
+  }
+  for (const c of episodicChunks) {
+    if (!mergedChunksById.has(c.id)) {
+      mergedChunksById.set(c.id, c);
+    }
+  }
+
+  const isActiveChunk = (c: EpisodicChunkRecord): boolean =>
+    activeChunkIdSet.has(c.id) || activeBranchSet.has(c.leaf_turn_id);
+
+  const sortedChunks = Array.from(mergedChunksById.values()).sort((a, b) => {
+    const aActive = isActiveChunk(a) ? 0 : 1;
+    const bActive = isActiveChunk(b) ? 0 : 1;
+    if (aActive !== bActive) return aActive - bActive;
+    if (a.start_turn_depth !== b.start_turn_depth) {
+      return a.start_turn_depth - b.start_turn_depth;
+    }
+    if (a.end_turn_depth !== b.end_turn_depth) {
+      return a.end_turn_depth - b.end_turn_depth;
+    }
+    return a.created_at.localeCompare(b.created_at);
+  });
+
+  const claimedTurnIds = new Set<string>();
+  const ownerEpisodeByTurnId = new Map<string, EpisodeGroupMeta>();
+  const episodes: EpisodeGroupMeta[] = [];
+  const episodeById: Record<string, EpisodeGroupMeta> = {};
+
+  for (const chunk of sortedChunks) {
+    const chain = resolveChunkTurnChain(chunk, turnById, visibleTurnSet);
+    if (chain.length === 0) continue;
+
+    const chunkIsActive = isActiveChunk(chunk);
+
+    // Register overlapping alternate summary variants on already-claimed owner episodes
+    const touchedOwners = new Set<EpisodeGroupMeta>();
+    for (const t of chain) {
+      const owner = ownerEpisodeByTurnId.get(t.id);
+      if (owner) touchedOwners.add(owner);
+    }
+    for (const owner of touchedOwners) {
+      if (
+        !owner.summaryVariants.some((v) => v.chunkId === chunk.id) &&
+        chunk.id !== owner.primaryChunkId
+      ) {
+        owner.summaryVariants.push(
+          buildChunkSummaryVariant(chunk, chunkIsActive ? "active" : "alternate", turnById)
+        );
+      }
+    }
+
+    // Group remaining unclaimed turns into contiguous parent-linked runs
+    const unclaimed = chain.filter((t) => !claimedTurnIds.has(t.id));
+    if (unclaimed.length === 0) continue;
+
+    const runs: TurnNodeRecord[][] = [];
+    let currentRun: TurnNodeRecord[] = [];
+    for (const t of unclaimed) {
+      if (
+        currentRun.length === 0 ||
+        t.parent_turn_id === currentRun[currentRun.length - 1].id
+      ) {
+        currentRun.push(t);
+      } else {
+        runs.push(currentRun);
+        currentRun = [t];
+      }
+    }
+    if (currentRun.length > 0) {
+      runs.push(currentRun);
+    }
+
+    runs.forEach((run, runIdx) => {
+      if (run.length === 0) return;
+      const epId = runIdx === 0 ? `episode:${chunk.id}` : `episode:${chunk.id}:${runIdx}`;
+      const turnIds = run.map((t) => t.id);
+      const turnIdSet = new Set(turnIds);
+      const startDepth = run[0].depth_index;
+      const endDepth = run[run.length - 1].depth_index;
+      const narrativeTurnCount = run.filter((t) => t.actor_id !== "__arrival__").length;
+      const waypointCount = run.length - narrativeTurnCount;
+      const intersectsActiveBranch = run.some((t) => activeBranchSet.has(t.id));
+      const containsActiveLeaf =
+        effectiveActiveLeafId !== null && turnIdSet.has(effectiveActiveLeafId);
+
+      let hiddenSwipeCount = 0;
+      let outgoingBranchCount = 0;
+      for (const tid of turnIds) {
+        hiddenSwipeCount += hiddenSwipesByAnchorId.get(tid)?.length ?? 0;
+        const kids = visibleChildrenByParent.get(tid) ?? [];
+        for (const kid of kids) {
+          if (!turnIdSet.has(kid.id)) {
+            outgoingBranchCount += 1;
+          }
+        }
+      }
+
+      let summaryVariants: EpisodeSummaryVariant[];
+      let isInProgressOnActive = false;
+
+      if (chunkIsActive) {
+        summaryVariants = [buildChunkSummaryVariant(chunk, "active", turnById)];
+      } else if (intersectsActiveBranch) {
+        isInProgressOnActive = true;
+        summaryVariants = [
+          buildInProgressVariant(startDepth, endDepth),
+          buildChunkSummaryVariant(chunk, "alternate", turnById),
+        ];
+      } else {
+        summaryVariants = [buildChunkSummaryVariant(chunk, "alternate", turnById)];
+      }
+
+      const ep: EpisodeGroupMeta = {
+        id: epId,
+        episodeIndex: episodes.length + 1,
+        primaryChunkId: chunk.id,
+        startDepth,
+        endDepth,
+        turnIds,
+        narrativeTurnCount,
+        waypointCount,
+        intersectsActiveBranch,
+        containsActiveLeaf,
+        hiddenSwipeCount,
+        outgoingBranchCount,
+        summaryVariants,
+        isInProgressOnActive,
+      };
+
+      episodes.push(ep);
+      episodeById[ep.id] = ep;
+      for (const tid of turnIds) {
+        claimedTurnIds.add(tid);
+        ownerEpisodeByTurnId.set(tid, ep);
+      }
+    });
+  }
+
+  const defaultExpandedEpisodeIds = episodes
+    .filter((ep) => ep.containsActiveLeaf)
+    .map((ep) => ep.id);
+
+  const effectiveExpandedEpisodes = new Set<string>();
+  if (expandedEpisodeIds !== undefined) {
+    for (const id of expandedEpisodeIds) {
+      effectiveExpandedEpisodes.add(id);
+    }
+  } else {
+    for (const ep of episodes) {
+      const override = episodeExpandOverrides?.[ep.id];
+      const shouldExpand = override !== undefined ? override : ep.containsActiveLeaf;
+      if (shouldExpand) {
+        effectiveExpandedEpisodes.add(ep.id);
+      }
+    }
+  }
+  // If user enabled global "Show swipes", expand any episode containing hidden swipes so they are visible
+  if (showAllSwipes) {
+    for (const ep of episodes) {
+      if (ep.hiddenSwipeCount > 0) {
+        effectiveExpandedEpisodes.add(ep.id);
+      }
+    }
+  }
+
+  const collapsedEpisodeCount = episodes.filter(
+    (ep) => !effectiveExpandedEpisodes.has(ep.id)
+  ).length;
+
+  // 5. Deterministic primary-spine horizontal tree layout with episode collapsing + inline swipe expansion
   const nodes: BranchGraphNode[] = [];
   const nodeById: Record<string, BranchGraphNode> = {};
   const edges: BranchGraphEdge[] = [];
@@ -326,7 +701,8 @@ export function buildBranchGraphModel({
     parentId: string | null,
     x: number,
     isExpandedSwipe: boolean,
-    swipeAnchorId: string | null
+    swipeAnchorId: string | null,
+    memberEpisodeId: string | null
   ): BranchGraphNode => {
     const isActiveBranch = !isExpandedSwipe && activeBranchSet.has(turn.id);
     const isActiveLeaf = !isExpandedSwipe && turn.id === effectiveActiveLeafId;
@@ -366,8 +742,51 @@ export function buildBranchGraphModel({
       isExpandedSwipe,
       swipeAnchorId,
       episodicChunkLabel: chunkLabelByTurnId.get(turn.id) ?? null,
+      episodeGroup: null,
+      memberEpisodeId,
       description,
       hasNotableSummary,
+      locationName,
+      x,
+      y: 0,
+      width,
+      height,
+    };
+  };
+
+  const createEpisodeNode = (
+    ep: EpisodeGroupMeta,
+    parentId: string | null,
+    x: number,
+    outgoingCount: number
+  ): BranchGraphNode => {
+    const firstTurn = turnById.get(ep.turnIds[0])!;
+    const lastTurn = turnById.get(ep.turnIds[ep.turnIds.length - 1])!;
+    const { width, height } = getNodeDimensions("episode");
+    const locationName = resolveTurnLocationName(lastTurn, locationNamesById);
+    const defaultVariant = ep.summaryVariants[0];
+    const tips = reachableTipsById.get(firstTurn.id) ?? [lastTurn.id];
+    const uniqueDescendantTipId =
+      !ep.intersectsActiveBranch && tips.length === 1 ? tips[0] : null;
+
+    return {
+      id: ep.id,
+      turn: lastTurn,
+      parentId,
+      depth: ep.startDepth,
+      kind: "episode",
+      isActiveBranch: ep.intersectsActiveBranch,
+      isActiveLeaf: ep.containsActiveLeaf,
+      isBranchTip: outgoingCount === 0,
+      uniqueDescendantTipId,
+      hiddenSwipes: [],
+      isExpandedSwipe: false,
+      swipeAnchorId: null,
+      episodicChunkLabel: formatDepthRange(ep.startDepth, ep.endDepth),
+      episodeGroup: ep,
+      memberEpisodeId: null,
+      description: defaultVariant?.synopsis || defaultVariant?.title || "Episode Summary",
+      hasNotableSummary: !ep.isInProgressOnActive,
       locationName,
       x,
       y: 0,
@@ -379,12 +798,92 @@ export function buildBranchGraphModel({
   const layoutSubtree = (
     turn: TurnNodeRecord,
     parentId: string | null,
-    x: number
+    x: number,
+    edgeOriginTurnDepth: number | null = null
   ): BranchGraphNode | null => {
     if (visitedLayout.has(turn.id)) return null;
-    visitedLayout.add(turn.id);
 
-    const node = createGraphNode(turn, parentId, x, false, null);
+    const ownerEp = ownerEpisodeByTurnId.get(turn.id);
+    if (ownerEp && !effectiveExpandedEpisodes.has(ownerEp.id) && ownerEp.turnIds[0] === turn.id) {
+      // Render collapsed Summary Pseudo-Node absorbing all turns in `ownerEp.turnIds`
+      const epTurnSet = new Set(ownerEp.turnIds);
+      for (const tid of ownerEp.turnIds) {
+        visitedLayout.add(tid);
+      }
+
+      const outgoingEntries: Array<{ child: TurnNodeRecord; originDepth: number }> = [];
+      for (const tid of ownerEp.turnIds) {
+        const originTurn = turnById.get(tid);
+        const kids = visibleChildrenByParent.get(tid) ?? [];
+        for (const kid of kids) {
+          if (!epTurnSet.has(kid.id)) {
+            outgoingEntries.push({
+              child: kid,
+              originDepth: originTurn?.depth_index ?? ownerEp.endDepth,
+            });
+          }
+        }
+      }
+
+      // Keep active-branch continuation first so the active spine stays horizontally aligned
+      outgoingEntries.sort((a, b) => {
+        const aActive = activeBranchSet.has(a.child.id) ? 0 : 1;
+        const bActive = activeBranchSet.has(b.child.id) ? 0 : 1;
+        if (aActive !== bActive) return aActive - bActive;
+        return a.originDepth - b.originDepth;
+      });
+
+      const epNode = createEpisodeNode(ownerEp, parentId, x, outgoingEntries.length);
+      nodes.push(epNode);
+      nodeById[epNode.id] = epNode;
+
+      if (parentId !== null) {
+        edges.push({
+          id: `${parentId}->${epNode.id}`,
+          fromId: parentId,
+          toId: epNode.id,
+          isActiveBranch: (nodeById[parentId]?.isActiveBranch ?? false) && epNode.isActiveBranch,
+          isExpandedSwipe: false,
+          originTurnDepth: edgeOriginTurnDepth,
+        });
+      }
+
+      const childX = x + epNode.width + COL_GAP;
+      let firstChildNode: BranchGraphNode | null = null;
+
+      if (outgoingEntries.length === 0) {
+        const bandH = Math.max(epNode.height, TURN_CARD_H);
+        epNode.y = nextY + bandH / 2;
+        nextY += bandH + ROW_GAP;
+      } else {
+        for (const entry of outgoingEntries) {
+          const childNode = layoutSubtree(entry.child, epNode.id, childX, entry.originDepth);
+          if (!firstChildNode && childNode) {
+            firstChildNode = childNode;
+          }
+        }
+        if (firstChildNode) {
+          // Ensure episode card doesn't overlap vertically above previous lane when taller than child
+          const minCenterY = epNode.height / 2;
+          epNode.y = Math.max(firstChildNode.y, minCenterY);
+          const epBottom = epNode.y + epNode.height / 2 + ROW_GAP;
+          if (epBottom > nextY) {
+            nextY = epBottom;
+          }
+        } else {
+          const bandH = Math.max(epNode.height, TURN_CARD_H);
+          epNode.y = nextY + bandH / 2;
+          nextY += bandH + ROW_GAP;
+        }
+      }
+
+      return epNode;
+    }
+
+    visitedLayout.add(turn.id);
+    const memberEpisodeId =
+      ownerEp && effectiveExpandedEpisodes.has(ownerEp.id) ? ownerEp.id : null;
+    const node = createGraphNode(turn, parentId, x, false, null, memberEpisodeId);
     nodes.push(node);
     nodeById[node.id] = node;
 
@@ -393,8 +892,9 @@ export function buildBranchGraphModel({
         id: `${parentId}->${node.id}`,
         fromId: parentId,
         toId: node.id,
-        isActiveBranch: activeBranchSet.has(parentId) && activeBranchSet.has(node.id),
+        isActiveBranch: (nodeById[parentId]?.isActiveBranch ?? false) && node.isActiveBranch,
         isExpandedSwipe: false,
+        originTurnDepth: edgeOriginTurnDepth,
       });
     }
 
@@ -408,7 +908,7 @@ export function buildBranchGraphModel({
       nextY += bandH + ROW_GAP;
     } else {
       for (const childTurn of visibleKids) {
-        const childNode = layoutSubtree(childTurn, node.id, childX);
+        const childNode = layoutSubtree(childTurn, node.id, childX, null);
         if (!firstChildNode && childNode) {
           firstChildNode = childNode;
         }
@@ -422,13 +922,12 @@ export function buildBranchGraphModel({
       }
     }
 
-    // If this node has hidden unfollowed swipes AND is expanded, place them directly below this subtree
     const hiddenSwipes = hiddenSwipesByAnchorId.get(turn.id) ?? [];
     if (hiddenSwipes.length > 0 && (showAllSwipes || expandedSwipeAnchorIds.has(turn.id))) {
       for (const swipeTurn of hiddenSwipes) {
         if (visitedLayout.has(swipeTurn.id)) continue;
         visitedLayout.add(swipeTurn.id);
-        const swipeNode = createGraphNode(swipeTurn, parentId, x, true, node.id);
+        const swipeNode = createGraphNode(swipeTurn, parentId, x, true, node.id, null);
         swipeNode.y = nextY + swipeNode.height / 2;
         nextY += swipeNode.height + ROW_GAP;
         nodes.push(swipeNode);
@@ -440,6 +939,7 @@ export function buildBranchGraphModel({
             toId: swipeNode.id,
             isActiveBranch: false,
             isExpandedSwipe: true,
+            originTurnDepth: null,
           });
         }
       }
@@ -449,25 +949,83 @@ export function buildBranchGraphModel({
   };
 
   for (const rootTurn of rootTurns) {
-    layoutSubtree(rootTurn, null, 0);
+    layoutSubtree(rootTurn, null, 0, null);
+  }
+
+  // 6. Compute row-segmented bounding frames for expanded episodes (prevents overlapping foreign branches)
+  const expandedEpisodeFrames: ExpandedEpisodeFrame[] = [];
+  for (const ep of episodes) {
+    if (!effectiveExpandedEpisodes.has(ep.id)) continue;
+    const memberNodes = ep.turnIds
+      .map((tid) => nodeById[tid])
+      .filter((n): n is BranchGraphNode => Boolean(n));
+    if (memberNodes.length === 0) continue;
+
+    // Group contiguous turns that share the same horizontal row `y` (within 2px tolerance)
+    const segments: ExpandedEpisodeSegment[] = [];
+    const padX = 12;
+    const padTop = 26;
+    const padBottom = 12;
+
+    let segNodes: BranchGraphNode[] = [];
+    const flushSegment = () => {
+      if (segNodes.length === 0) return;
+      let sMinX = Infinity;
+      let sMaxX = -Infinity;
+      let sMinY = Infinity;
+      let sMaxY = -Infinity;
+      for (const n of segNodes) {
+        sMinX = Math.min(sMinX, n.x - padX);
+        sMaxX = Math.max(sMaxX, n.x + n.width + padX);
+        sMinY = Math.min(sMinY, n.y - n.height / 2 - padTop);
+        sMaxY = Math.max(sMaxY, n.y + n.height / 2 + padBottom);
+      }
+      segments.push({ minX: sMinX, maxX: sMaxX, minY: sMinY, maxY: sMaxY });
+      segNodes = [];
+    };
+
+    for (const n of memberNodes) {
+      if (segNodes.length === 0 || Math.abs(n.y - segNodes[segNodes.length - 1].y) <= 2) {
+        segNodes.push(n);
+      } else {
+        flushSegment();
+        segNodes.push(n);
+      }
+    }
+    flushSegment();
+
+    const primary = segments[0];
+    expandedEpisodeFrames.push({
+      episodeId: ep.id,
+      episode: ep,
+      segments,
+      headerX: primary.minX,
+      headerY: primary.minY,
+      headerWidth: primary.maxX - primary.minX,
+    });
   }
 
   let minX = Infinity;
   let maxX = -Infinity;
   let minY = Infinity;
   let maxY = -Infinity;
-  let branchTipCount = 0;
 
   for (const n of nodes) {
-    if (!n.isExpandedSwipe && n.isBranchTip) {
-      branchTipCount += 1;
-    }
     const top = n.y - n.height / 2;
     const bottom = n.y + n.height / 2;
     if (n.x < minX) minX = n.x;
     if (n.x + n.width > maxX) maxX = n.x + n.width;
     if (top < minY) minY = top;
     if (bottom > maxY) maxY = bottom;
+  }
+
+  for (const frame of expandedEpisodeFrames) {
+    for (const seg of frame.segments) {
+      if (seg.minX < minX) minX = seg.minX;
+      if (seg.maxX > maxX) maxX = seg.maxX;
+      if (seg.minY < minY) minY = seg.minY;
+      if (seg.maxY > maxY) maxY = seg.maxY;
+    }
   }
 
   const bounds: BranchGraphBounds =
@@ -486,8 +1044,14 @@ export function buildBranchGraphModel({
     nodes,
     nodeById,
     edges,
+    episodes,
+    episodeById,
+    expandedEpisodeFrames,
+    defaultExpandedEpisodeIds,
+    totalTurnCount,
+    collapsedEpisodeCount,
     totalHiddenSwipes,
-    branchTipCount,
+    branchTipCount: underlyingBranchTipCount,
     bounds,
   };
 }
@@ -574,6 +1138,37 @@ export function buildBranchEdgePath(
   const y2 = toNode.y;
   const dx = Math.max(24, (x2 - x1) * 0.5);
   return `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+}
+
+/**
+ * Compute a point along the cubic Bézier edge (at parameter `t`, default 0.45) for origin labels.
+ */
+export function computeBranchEdgeLabelPoint(
+  fromNode: Pick<BranchGraphNode, "x" | "y" | "width">,
+  toNode: Pick<BranchGraphNode, "x" | "y">,
+  t = 0.45
+): { x: number; y: number } {
+  const x1 = fromNode.x + fromNode.width;
+  const y1 = fromNode.y;
+  const x2 = toNode.x;
+  const y2 = toNode.y;
+  const dx = Math.max(24, (x2 - x1) * 0.5);
+  const cx1 = x1 + dx;
+  const cy1 = y1;
+  const cx2 = x2 - dx;
+  const cy2 = y2;
+  const mt = 1 - t;
+  const x =
+    mt * mt * mt * x1 +
+    3 * mt * mt * t * cx1 +
+    3 * mt * t * t * cx2 +
+    t * t * t * x2;
+  const y =
+    mt * mt * mt * y1 +
+    3 * mt * mt * t * cy1 +
+    3 * mt * t * t * cy2 +
+    t * t * t * y2;
+  return { x, y };
 }
 
 /**

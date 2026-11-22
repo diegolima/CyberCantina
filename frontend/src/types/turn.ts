@@ -437,7 +437,12 @@ export interface EpisodicChunkRecord {
   start_turn_depth: number;
   end_turn_depth: number;
   leaf_turn_id: string;
+  title?: string;
+  synopsis_text?: string;
   summary_text: string;
+  keywords?: string[];
+  witness_character_ids?: string[];
+  salience_score?: number;
   created_at: string;
 }
 
@@ -505,6 +510,7 @@ export interface CampaignStateBundle {
   visible_edges?: LocationEdge[];
   containers?: LocationContainer[];
   episodic_chunks: EpisodicChunkRecord[];
+  all_episodic_chunks?: EpisodicChunkRecord[];
 }
 
 export interface LiveStreamState {

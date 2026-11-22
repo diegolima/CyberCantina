@@ -2584,4 +2584,77 @@ async def test_reset_user_data_with_active_improvised_location(
         conn.close()
 
 
+async def test_campaign_state_bundle_exposes_all_episodic_chunks_across_branches(
+    empty_repo: CantinaRepository,
+) -> None:
+    """CampaignStateBundle.all_episodic_chunks includes chunks from all timelines while episodic_chunks stays active-branch-scoped."""
+    world_id, char_id, camp_id = _seed_engine_scenario(empty_repo)
+    bundle_0 = empty_repo.get_campaign_state_bundle(camp_id)
+    t0_id = bundle_0.active_branch_turns[-1].id
+
+    # Branch A: T0 -> T1A -> T2A
+    async for _ev in _execute_turn_stream_events(
+        camp_id, TurnSubmitRequest(user_message="Head into the neon rain.", parent_turn_id=t0_id)
+    ):
+        pass
+    t1a_id = empty_repo.get_campaign_state_bundle(camp_id).active_branch_turns[-1].id
+    async for _ev in _execute_turn_stream_events(
+        camp_id, TurnSubmitRequest(user_message="Negotiate with the broker.", parent_turn_id=t1a_id)
+    ):
+        pass
+    t2a_id = empty_repo.get_campaign_state_bundle(camp_id).active_branch_turns[-1].id
+
+    chunk_a = empty_repo.save_episodic_chunk(
+        campaign_id=camp_id,
+        world_id=world_id,
+        character_id=char_id,
+        start_turn_depth=1,
+        end_turn_depth=2,
+        leaf_turn_id=t2a_id,
+        title="Broker Parley",
+        synopsis_text="Negotiated a tense deal in the neon rain.",
+        summary_text="The crew stepped into the neon rain and negotiated with the broker.",
+    )
+
+    # Branch B from T1A: T0 -> T1A -> T2B (has its own chunk)
+    empty_repo.checkout_turn_branch(camp_id, t1a_id)
+    async for _ev in _execute_turn_stream_events(
+        camp_id, TurnSubmitRequest(user_message="Slip into the shadows instead.", parent_turn_id=t1a_id)
+    ):
+        pass
+    t2b_id = empty_repo.get_campaign_state_bundle(camp_id).active_branch_turns[-1].id
+
+    # Before Branch B summarizes: active episodic_chunks is empty, all_episodic_chunks has chunk_a
+    bundle_b_before = empty_repo.get_campaign_state_bundle(camp_id)
+    assert bundle_b_before.episodic_chunks == []
+    assert [c.id for c in bundle_b_before.all_episodic_chunks] == [chunk_a.id]
+    assert bundle_b_before.all_episodic_chunks[0].title == "Broker Parley"
+    assert bundle_b_before.all_episodic_chunks[0].synopsis_text == "Negotiated a tense deal in the neon rain."
+
+    # Save Branch B's own chunk anchored at t2b_id
+    chunk_b = empty_repo.save_episodic_chunk(
+        campaign_id=camp_id,
+        world_id=world_id,
+        character_id=char_id,
+        start_turn_depth=1,
+        end_turn_depth=2,
+        leaf_turn_id=t2b_id,
+        title="Shadow Escape",
+        synopsis_text="Vanished into the side alleys.",
+        summary_text="Rather than meeting the broker, the crew slipped into the shadows.",
+    )
+
+    # Active branch is Branch B -> episodic_chunks only has chunk_b, all_episodic_chunks has both
+    bundle_b_after = empty_repo.get_campaign_state_bundle(camp_id)
+    assert [c.id for c in bundle_b_after.episodic_chunks] == [chunk_b.id]
+    assert {c.id for c in bundle_b_after.all_episodic_chunks} == {chunk_a.id, chunk_b.id}
+
+    # Switching back to Branch A swaps active episodic_chunks to chunk_a while keeping both in all_episodic_chunks
+    empty_repo.checkout_turn_branch(camp_id, t2a_id)
+    bundle_a = empty_repo.get_campaign_state_bundle(camp_id)
+    assert [c.id for c in bundle_a.episodic_chunks] == [chunk_a.id]
+    assert {c.id for c in bundle_a.all_episodic_chunks} == {chunk_a.id, chunk_b.id}
+
+
+
 

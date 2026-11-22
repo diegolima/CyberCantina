@@ -18,6 +18,7 @@ import {
   computeFitGraphViewport,
 } from "../story/branchGraphLayout";
 import { StoryModal } from "../story/StoryModal";
+import { BranchGraphCanvas } from "../story/BranchGraphCanvas";
 import { AppSidebar } from "../AppSidebar";
 import { LiveInspector } from "../LiveInspector";
 import { ChatStage } from "../ChatStage";
@@ -658,5 +659,354 @@ describe("Story Modal, Branch Buttons, Sidebar & Inspector UI (SSR markup)", () 
     expect(altSplitHtml).toContain("Branch from here");
     expect(altSplitHtml).not.toContain("Zoom to moment");
     expect(altSplitHtml).not.toContain("Switch to this timeline");
+  });
+});
+
+describe("Branch Graph Summarized Episode Grouping (v0.28.1)", () => {
+  it("groups only summarized episode turns (absorbing interior __arrival__ waypoints) and keeps Turn #0 + unsummarized turns visible", () => {
+    const t0 = makeTurn({ id: "t0", parentId: null, depth: 0 });
+    const t1 = makeTurn({ id: "t1", parentId: "t0", depth: 1, userMessage: "Enter bar." });
+    const t2Arr = makeTurn({
+      id: "t2",
+      parentId: "t1",
+      depth: 2,
+      actorId: "__arrival__",
+      locationId: LOC_ALLEY.id,
+      userMessage: "",
+    });
+    const t3 = makeTurn({ id: "t3", parentId: "t2", depth: 3, userMessage: "Meet fixer." });
+    const t4 = makeTurn({ id: "t4", parentId: "t3", depth: 4, userMessage: "Seal deal." });
+    const t5 = makeTurn({ id: "t5", parentId: "t4", depth: 5, userMessage: "Walk away." });
+    const t6 = makeTurn({ id: "t6", parentId: "t5", depth: 6, userMessage: "Check datapad." });
+
+    const chunk: EpisodicChunkRecord = {
+      id: "ep-1",
+      campaign_id: "camp-1",
+      start_turn_depth: 1,
+      end_turn_depth: 4,
+      leaf_turn_id: "t6",
+      title: "The Alley Deal",
+      synopsis_text: "Met the fixer in Cargo Alley and sealed the contract.",
+      summary_text: "Entered the bar, moved to Cargo Alley, met the fixer, and sealed the deal.",
+      created_at: "2026-01-01T00:10:00Z",
+    };
+
+    const allTurns = [t0, t1, t2Arr, t3, t4, t5, t6];
+    const model = buildBranchGraphModel({
+      allTurns,
+      activeBranchTurns: allTurns,
+      activeLeafId: "t6",
+      episodicChunks: [chunk],
+      allEpisodicChunks: [chunk],
+      locationNamesById: { [LOC_BAR.id]: LOC_BAR.name, [LOC_ALLEY.id]: LOC_ALLEY.name },
+    });
+
+    // t0, episode:ep-1 (absorbing t1, t2 waypoint, t3, t4), t5, t6
+    expect(model.nodes.map((n) => n.id)).toEqual(["t0", "episode:ep-1", "t5", "t6"]);
+    expect(model.totalTurnCount).toBe(7);
+    expect(model.collapsedEpisodeCount).toBe(1);
+    expect(model.branchTipCount).toBe(1);
+    expect(model.defaultExpandedEpisodeIds).toEqual([]);
+
+    const epNode = model.nodeById["episode:ep-1"];
+    expect(epNode.kind).toBe("episode");
+    expect(epNode.isActiveBranch).toBe(true);
+    expect(epNode.episodeGroup?.turnIds).toEqual(["t1", "t2", "t3", "t4"]);
+    expect(epNode.episodeGroup?.narrativeTurnCount).toBe(3);
+    expect(epNode.episodeGroup?.waypointCount).toBe(1);
+    expect(epNode.episodeGroup?.summaryVariants[0].kind).toBe("active");
+    expect(epNode.episodeGroup?.summaryVariants[0].title).toBe("The Alley Deal");
+
+    // Ancestor path from t6 walks smoothly through collapsed pseudo-node back to t0
+    const path = computeAncestorPath(model.nodeById, "t6");
+    expect([...path.nodeIds]).toEqual(["t6", "t5", "episode:ep-1", "t0"]);
+    expect(model.edges.find((e) => e.id === "episode:ep-1->t5")?.isActiveBranch).toBe(true);
+  });
+
+  it("re-parents single and multiple interior branches onto collapsed pseudo-node with origin depths and re-anchors on expand", () => {
+    const t0 = makeTurn({ id: "t0", parentId: null, depth: 0 });
+    const t1 = makeTurn({ id: "t1", parentId: "t0", depth: 1 });
+    const t2 = makeTurn({ id: "t2", parentId: "t1", depth: 2 });
+    const t3 = makeTurn({ id: "t3", parentId: "t2", depth: 3 });
+    const t4 = makeTurn({ id: "t4", parentId: "t3", depth: 4 });
+    const t5 = makeTurn({ id: "t5", parentId: "t4", depth: 5 });
+
+    // Branch B originates at t2; Branch C originates at t3
+    const b3 = makeTurn({ id: "b3", parentId: "t2", depth: 3, userMessage: "Branch B action" });
+    const c4 = makeTurn({ id: "c4", parentId: "t3", depth: 4, userMessage: "Branch C action" });
+
+    const chunk: EpisodicChunkRecord = {
+      id: "ep-trunk",
+      campaign_id: "camp-1",
+      start_turn_depth: 1,
+      end_turn_depth: 4,
+      leaf_turn_id: "t5",
+      title: "Trunk Episode",
+      synopsis_text: "Main spine turns 1 to 4.",
+      summary_text: "Main spine summary.",
+      created_at: "2026-01-01T00:10:00Z",
+    };
+
+    const allTurns = [t0, t1, t2, t3, t4, t5, b3, c4];
+    const activeBranch = [t0, t1, t2, t3, t4, t5];
+
+    // Collapsed view: t5, b3, c4 all originate from episode:ep-trunk with exact originTurnDepth
+    const collapsed = buildBranchGraphModel({
+      allTurns,
+      activeBranchTurns: activeBranch,
+      activeLeafId: "t5",
+      episodicChunks: [chunk],
+      allEpisodicChunks: [chunk],
+    });
+    expect(collapsed.branchTipCount).toBe(3);
+    expect(collapsed.edges.find((e) => e.toId === "t5")).toMatchObject({
+      fromId: "episode:ep-trunk",
+      originTurnDepth: 4,
+    });
+    expect(collapsed.edges.find((e) => e.toId === "b3")).toMatchObject({
+      fromId: "episode:ep-trunk",
+      originTurnDepth: 2,
+    });
+    expect(collapsed.edges.find((e) => e.toId === "c4")).toMatchObject({
+      fromId: "episode:ep-trunk",
+      originTurnDepth: 3,
+    });
+
+    // Expanded view: each branch re-anchors to its exact branching turn
+    const expanded = buildBranchGraphModel({
+      allTurns,
+      activeBranchTurns: activeBranch,
+      activeLeafId: "t5",
+      episodicChunks: [chunk],
+      allEpisodicChunks: [chunk],
+      expandedEpisodeIds: new Set(["episode:ep-trunk"]),
+    });
+    expect(expanded.branchTipCount).toBe(3);
+    expect(expanded.edges.find((e) => e.toId === "t5")?.fromId).toBe("t4");
+    expect(expanded.edges.find((e) => e.toId === "b3")?.fromId).toBe("t2");
+    expect(expanded.edges.find((e) => e.toId === "c4")?.fromId).toBe("t3");
+    expect(expanded.expandedEpisodeFrames).toHaveLength(1);
+    expect(expanded.nodeById["t2"].memberEpisodeId).toBe("episode:ep-trunk");
+  });
+
+  it("shows Episode in Progress with alternate summary switcher when active timeline has not summarized yet and does not swallow short divergent turns", () => {
+    const t0 = makeTurn({ id: "t0", parentId: null, depth: 0 });
+    const t1 = makeTurn({ id: "t1", parentId: "t0", depth: 1 });
+    const t2 = makeTurn({ id: "t2", parentId: "t1", depth: 2 });
+    const t3a = makeTurn({ id: "t3a", parentId: "t2", depth: 3, userMessage: "Go left." });
+    const t4a = makeTurn({ id: "t4a", parentId: "t3a", depth: 4, userMessage: "Open vault." });
+    const t5a = makeTurn({ id: "t5a", parentId: "t4a", depth: 5, userMessage: "Grab chip." });
+
+    // Short active timeline B branched at t2 -> t3b -> t4b (has NOT summarized yet)
+    const t3b = makeTurn({ id: "t3b", parentId: "t2", depth: 3, userMessage: "Go right." });
+    const t4b = makeTurn({ id: "t4b", parentId: "t3b", depth: 4, userMessage: "Climb roof." });
+
+    const chunkA: EpisodicChunkRecord = {
+      id: "ep-a",
+      campaign_id: "camp-1",
+      start_turn_depth: 1,
+      end_turn_depth: 4,
+      leaf_turn_id: "t5a",
+      title: "Vault Heist",
+      synopsis_text: "Broke into the left-wing vault.",
+      summary_text: "Timeline A stole the chip from the vault.",
+      created_at: "2026-01-01T00:10:00Z",
+    };
+
+    const allTurns = [t0, t1, t2, t3a, t4a, t5a, t3b, t4b];
+    const activeBranch = [t0, t1, t2, t3b, t4b];
+
+    const model = buildBranchGraphModel({
+      allTurns,
+      activeBranchTurns: activeBranch,
+      activeLeafId: "t4b",
+      episodicChunks: [],
+      allEpisodicChunks: [chunkA],
+    });
+
+    // t3b and t4b are NOT swallowed into episode:ep-a even though their depth <= 4!
+    expect(model.nodes.map((n) => n.id)).toEqual(["t0", "episode:ep-a", "t3b", "t4b", "t5a"]);
+    const ep = model.episodeById["episode:ep-a"];
+    expect(ep.turnIds).toEqual(["t1", "t2", "t3a", "t4a"]);
+    expect(ep.isInProgressOnActive).toBe(true);
+    expect(ep.summaryVariants).toHaveLength(2);
+    expect(ep.summaryVariants[0]).toMatchObject({
+      kind: "in_progress",
+      title: "Episode in Progress",
+    });
+    expect(ep.summaryVariants[1]).toMatchObject({
+      kind: "alternate",
+      chunkId: "ep-a",
+      title: "Vault Heist",
+    });
+    // t3b branches from t2 inside episode:ep-a; t5a continues from t4a
+    expect(model.edges.find((e) => e.toId === "t3b")).toMatchObject({
+      fromId: "episode:ep-a",
+      originTurnDepth: 2,
+      isActiveBranch: true,
+    });
+  });
+
+  it("enforces active-first disjoint ownership when two divergent timelines both summarize overlapping trunk turns", () => {
+    const t0 = makeTurn({ id: "t0", parentId: null, depth: 0 });
+    const t1 = makeTurn({ id: "t1", parentId: "t0", depth: 1 });
+    const t2 = makeTurn({ id: "t2", parentId: "t1", depth: 2 });
+    const t3a = makeTurn({ id: "t3a", parentId: "t2", depth: 3, userMessage: "Path A3" });
+    const t4a = makeTurn({ id: "t4a", parentId: "t3a", depth: 4, userMessage: "Path A4" });
+    const t5a = makeTurn({ id: "t5a", parentId: "t4a", depth: 5, userMessage: "Path A5" });
+    const t3b = makeTurn({ id: "t3b", parentId: "t2", depth: 3, userMessage: "Path B3" });
+    const t4b = makeTurn({ id: "t4b", parentId: "t3b", depth: 4, userMessage: "Path B4" });
+    const t5b = makeTurn({ id: "t5b", parentId: "t4b", depth: 5, userMessage: "Path B5" });
+
+    const chunkA: EpisodicChunkRecord = {
+      id: "ep-a",
+      campaign_id: "camp-1",
+      start_turn_depth: 1,
+      end_turn_depth: 4,
+      leaf_turn_id: "t5a",
+      title: "Active Trunk",
+      synopsis_text: "Active A summary.",
+      summary_text: "Active A full summary.",
+      created_at: "2026-01-01T00:10:00Z",
+    };
+    const chunkB: EpisodicChunkRecord = {
+      id: "ep-b",
+      campaign_id: "camp-1",
+      start_turn_depth: 1,
+      end_turn_depth: 4,
+      leaf_turn_id: "t5b",
+      title: "Alternate Path B",
+      synopsis_text: "Alternate B summary.",
+      summary_text: "Alternate B full summary.",
+      created_at: "2026-01-01T00:11:00Z",
+    };
+
+    const allTurns = [t0, t1, t2, t3a, t4a, t5a, t3b, t4b, t5b];
+    const activeBranch = [t0, t1, t2, t3a, t4a, t5a];
+
+    const model = buildBranchGraphModel({
+      allTurns,
+      activeBranchTurns: activeBranch,
+      activeLeafId: "t5a",
+      episodicChunks: [chunkA],
+      allEpisodicChunks: [chunkA, chunkB],
+    });
+
+    // Active chunk A owns shared trunk t1..t2 + t3a..t4a; alternate chunk B owns only unclaimed post-divergence t3b..t4b
+    const epA = model.episodeById["episode:ep-a"];
+    const epB = model.episodeById["episode:ep-b"];
+    expect(epA.turnIds).toEqual(["t1", "t2", "t3a", "t4a"]);
+    expect(epB.turnIds).toEqual(["t3b", "t4b"]);
+    // Overlapping chunk B is also registered as an alternate summary variant on epA
+    expect(epA.summaryVariants.map((v) => v.chunkId)).toEqual(["ep-a", "ep-b"]);
+    // Purely off-branch epB displays its own alternate summary directly
+    expect(epB.isInProgressOnActive).toBe(false);
+    expect(epB.summaryVariants[0]).toMatchObject({ kind: "alternate", title: "Alternate Path B" });
+    expect(model.edges.find((e) => e.toId === "episode:ep-b")).toMatchObject({
+      fromId: "episode:ep-a",
+      originTurnDepth: 2,
+    });
+  });
+
+  it("auto-expands an episode when activeLeafId is inside it and auto-expands episodes with hidden swipes when showAllSwipes is enabled", () => {
+    const t0 = makeTurn({ id: "t0", parentId: null, depth: 0 });
+    const t1 = makeTurn({ id: "t1", parentId: "t0", depth: 1, userMessage: "Ask Kira." });
+    const t2 = makeTurn({ id: "t2", parentId: "t1", depth: 2, userMessage: "Inspect badge." });
+    const t2Swipe = makeTurn({ id: "t2-s", parentId: "t1", depth: 2, userMessage: "Inspect badge." });
+    const t3 = makeTurn({ id: "t3", parentId: "t2", depth: 3, userMessage: "Follow Kira." });
+    const t4 = makeTurn({ id: "t4", parentId: "t3", depth: 4, userMessage: "Leave bar." });
+
+    const chunk: EpisodicChunkRecord = {
+      id: "ep-1",
+      campaign_id: "camp-1",
+      start_turn_depth: 1,
+      end_turn_depth: 3,
+      leaf_turn_id: "t4",
+      title: "Badge Check",
+      synopsis_text: "Inspected Kira's badge.",
+      summary_text: "Full summary.",
+      created_at: "2026-01-01T00:10:00Z",
+    };
+
+    const allTurns = [t0, t1, t2, t2Swipe, t3, t4];
+
+    // 1. Active leaf is t2 (inside ep-1) -> auto-expanded by default!
+    const rewoundModel = buildBranchGraphModel({
+      allTurns,
+      activeBranchTurns: [t0, t1, t2],
+      activeLeafId: "t2",
+      episodicChunks: [],
+      allEpisodicChunks: [chunk],
+    });
+    expect(rewoundModel.defaultExpandedEpisodeIds).toEqual(["episode:ep-1"]);
+    expect(rewoundModel.collapsedEpisodeCount).toBe(0);
+    expect(rewoundModel.nodeById["t2"].isActiveLeaf).toBe(true);
+
+    // 2. Active leaf is t4 (outside ep-1) -> collapsed by default, hides swipe count inside ep-1
+    const collapsedModel = buildBranchGraphModel({
+      allTurns,
+      activeBranchTurns: [t0, t1, t2, t3, t4],
+      activeLeafId: "t4",
+      episodicChunks: [chunk],
+      allEpisodicChunks: [chunk],
+    });
+    expect(collapsedModel.collapsedEpisodeCount).toBe(1);
+    expect(collapsedModel.episodeById["episode:ep-1"].hiddenSwipeCount).toBe(1);
+
+    // 3. Turning showAllSwipes ON auto-expands ep-1 so the hidden swipe becomes visible
+    const swipeShownModel = buildBranchGraphModel({
+      allTurns,
+      activeBranchTurns: [t0, t1, t2, t3, t4],
+      activeLeafId: "t4",
+      episodicChunks: [chunk],
+      allEpisodicChunks: [chunk],
+      showAllSwipes: true,
+    });
+    expect(swipeShownModel.collapsedEpisodeCount).toBe(0);
+    expect(swipeShownModel.nodeById["t2-s"].isExpandedSwipe).toBe(true);
+  });
+
+  it("renders collapsed Summary Pseudo-Nodes with +N turns expand pill, Episode in Progress, chevron switcher, and origin edge labels in BranchGraphCanvas", () => {
+    const t0 = makeTurn({ id: "t0", parentId: null, depth: 0 });
+    const t1 = makeTurn({ id: "t1", parentId: "t0", depth: 1 });
+    const t2 = makeTurn({ id: "t2", parentId: "t1", depth: 2 });
+    const t3a = makeTurn({ id: "t3a", parentId: "t2", depth: 3, userMessage: "Left door." });
+    const t4a = makeTurn({ id: "t4a", parentId: "t3a", depth: 4, userMessage: "Continue left." });
+    const t3b = makeTurn({ id: "t3b", parentId: "t2", depth: 3, userMessage: "Right door." });
+
+    const chunkA: EpisodicChunkRecord = {
+      id: "ep-a",
+      campaign_id: "camp-1",
+      start_turn_depth: 1,
+      end_turn_depth: 3,
+      leaf_turn_id: "t4a",
+      title: "Left Corridor",
+      synopsis_text: "Explored the left corridor.",
+      summary_text: "Explored the left corridor in Timeline A.",
+      created_at: "2026-01-01T00:10:00Z",
+    };
+
+    const bundle = makeBundle([t0, t1, t2, t3a, t4a, t3b], [t0, t1, t2, t3b], []);
+    bundle.all_episodic_chunks = [chunkA];
+    const noop = vi.fn();
+
+    const html = renderToStaticMarkup(
+      <BranchGraphCanvas
+        bundle={bundle}
+        initialSelectedNodeId="episode:ep-a"
+        onZoomToTurn={noop}
+        onSwitchTimeline={noop}
+        onBranchFromTurn={noop}
+      />
+    );
+
+    expect(html).toContain('data-graph-node-kind="episode"');
+    expect(html).toContain('data-episode-expand-id="episode:ep-a"');
+    expect(html).toContain('data-episode-variant-switcher="episode:ep-a"');
+    expect(html).toContain("+3 turns");
+    expect(html).toContain("Episode in Progress");
+    expect(html).toContain("View alternate timeline summary");
+    expect(html).toContain("from #2");
+    expect(html).toContain("Expand 3 turns");
   });
 });

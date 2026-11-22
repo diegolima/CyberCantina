@@ -9301,10 +9301,35 @@ body {
 }
 
 .branch-graph-status-pill.status-alt,
-.branch-graph-status-pill.status-swipe {
+.branch-graph-status-pill.status-swipe,
+.branch-graph-status-pill.status-in-progress {
   background: rgba(148, 163, 184, 0.14);
   border-color: rgba(148, 163, 184, 0.3);
   color: var(--text-secondary);
+}
+
+.branch-graph-status-pill.status-episode {
+  background: rgba(245, 158, 11, 0.16);
+  border-color: rgba(245, 158, 11, 0.42);
+  color: #fde68a;
+}
+
+.branch-graph-variant-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(167, 139, 250, 0.38);
+  background: rgba(167, 139, 250, 0.1);
+}
+
+.branch-graph-variant-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #ddd6fe;
+  line-height: 1.2;
 }
 
 .branch-graph-detail-meta {

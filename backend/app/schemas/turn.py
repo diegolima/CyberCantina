@@ -1068,6 +1068,7 @@ class CampaignStateBundle(BaseModel):
     visible_locations: list[LocationNode]
     visible_edges: list[LocationEdge] = Field(default_factory=list)
     episodic_chunks: list[EpisodicChunkRecord]
+    all_episodic_chunks: list[EpisodicChunkRecord] = Field(default_factory=list)
 
 
 class CampaignMapUpdatePayload(BaseModel):
