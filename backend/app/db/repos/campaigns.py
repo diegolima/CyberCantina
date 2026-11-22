@@ -68,7 +68,15 @@ class CampaignsMixin:
         camp_id = campaign_id or f"camp_{uuid.uuid4().hex[:10]}"
         now = utc_now_iso()
         world = self.get_world(world_id, base_only=True, owner_id=owner_id)
+        if world.pending_deletion:
+            raise ValueError(
+                f"World '{world_id}' is archived or deleted and cannot be used to start a new campaign."
+            )
         character = self.get_character(character_id, owner_id=owner_id)
+        if character.pending_deletion:
+            raise ValueError(
+                f"Character '{character_id}' is archived or deleted and cannot be used to start a new campaign."
+            )
 
         persona: PersonaRecord | None = None
         persona_snapshot_json: str | None = None
@@ -102,6 +110,11 @@ class CampaignsMixin:
             for cid in all_char_ids
             if cid != character_id
         ]
+        for extra_char in extra_characters:
+            if extra_char.pending_deletion:
+                raise ValueError(
+                    f"Character '{extra_char.id}' is archived or deleted and cannot be used to start a new campaign."
+                )
 
         start_loc = next(
             (loc for loc in world.locations if loc.is_starting_location),
@@ -344,6 +357,10 @@ class CampaignsMixin:
         if not campaign.active_leaf_turn_id:
             raise RuntimeError(f"Campaign '{campaign_id}' has no active leaf turn")
         char = self.get_character(character_id, owner_id=owner_id)
+        if char.pending_deletion:
+            raise ValueError(
+                f"Character '{character_id}' is archived or deleted and cannot be added to a campaign."
+            )
         leaf_turn = self.get_turn_node(campaign.active_leaf_turn_id)
         target_loc_id = location_id or leaf_turn.world_snapshot.active_location_id
         # Validate location exists

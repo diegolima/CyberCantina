@@ -235,7 +235,11 @@ export const App: React.FC = () => {
     } catch {}
   };
 
-  const loadCampaignBundle = async (campaignId: string) => {
+  const loadCampaignBundle = async (
+    campaignId: string,
+    catalogWorlds?: WorldRecord[],
+    catalogCharacters?: CharacterRecord[]
+  ) => {
     setPendingLocationOverrideId(null);
     setCampaignWorldSheetTab(null);
     setIsPartyModalOpen(false);
@@ -251,8 +255,16 @@ export const App: React.FC = () => {
     ]);
     setCampaignWorld(w);
     setCampaignCharacter(c);
-    setActiveWorld(w);
-    setActiveCharacter(c);
+    const liveWorlds = (catalogWorlds ?? worlds).filter((item) => !item.pending_deletion);
+    const liveChars = (catalogCharacters ?? characters).filter((item) => !item.pending_deletion);
+    const nextActiveWorld = !w.pending_deletion
+      ? w
+      : liveWorlds.find((item) => item.name === w.name) ?? liveWorlds[0] ?? null;
+    const nextActiveCharacter = !c.pending_deletion
+      ? c
+      : liveChars.find((item) => item.name === c.name) ?? liveChars[0] ?? null;
+    setActiveWorld(nextActiveWorld);
+    setActiveCharacter(nextActiveCharacter);
   };
 
   const handleCloseCampaign = () => {
@@ -302,7 +314,7 @@ export const App: React.FC = () => {
     const storedCampaignId = localStorage.getItem(ACTIVE_CAMPAIGN_STORAGE_KEY);
     const activeCamp = storedCampaignId ? camps.find((c) => c.id === storedCampaignId) : null;
     if (activeCamp) {
-      await loadCampaignBundle(activeCamp.id);
+      await loadCampaignBundle(activeCamp.id, wList, cList);
     } else {
       setBundle(null);
       setCampaignWorld(null);
@@ -471,10 +483,16 @@ export const App: React.FC = () => {
         await api.deleteCharacter(deleteTarget.character.id);
         const updatedChars = await api.listCharacters();
         setCharacters(updatedChars);
+        if (activeCharacter?.id === deleteTarget.character.id) {
+          setActiveCharacter(updatedChars[0] ?? null);
+        }
       } else if (deleteTarget.kind === "world") {
         await api.deleteWorld(deleteTarget.world.id);
         const updatedWorlds = await api.listWorlds();
         setWorlds(updatedWorlds);
+        if (activeWorld?.id === deleteTarget.world.id) {
+          setActiveWorld(updatedWorlds[0] ?? null);
+        }
       } else if (deleteTarget.kind === "persona") {
         await api.deletePersona(deleteTarget.persona.id);
         const updatedPersonas = await api.listPersonas();

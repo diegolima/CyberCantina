@@ -743,6 +743,112 @@ async def test_character_and_world_silent_versioning(
     assert inplace_char.name == "Kira Vance (Final)"
 
 
+async def test_pending_deletion_world_and_character_rejected_for_new_campaigns(
+    empty_repo: CantinaRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify pending_deletion (archived/soft-deleted) worlds and characters cannot be bound to new campaigns."""
+    from fastapi.testclient import TestClient
+
+    from app import dependencies as dep_module
+    from app import main as main_module
+    from app.auth import get_current_user
+
+    old_world_id, old_char_id, camp_id = _seed_engine_scenario(empty_repo)
+    owner = empty_repo.list_users()[0]
+
+    # Create fresh active world & character for comparison
+    active_world = seed_world(empty_repo, owner_id=owner.id, name="Active World")
+    active_char = seed_character(
+        empty_repo, owner_id=owner.id, world_id=active_world.id, name="Active Char"
+    )
+
+    # Soft-delete the old world and old character (kept alive by orig_camp)
+    empty_repo.mark_world_pending_deletion(old_world_id, owner_id=owner.id)
+    empty_repo.mark_character_pending_deletion(old_char_id, owner_id=owner.id)
+
+    # 1. Repository layer rejects pending_deletion world, primary char, extra char, and add_character
+    with pytest.raises(ValueError, match="archived or deleted"):
+        empty_repo.create_campaign(
+            name="Bad World Camp",
+            world_id=old_world_id,
+            character_id=active_char.id,
+            owner_id=owner.id,
+        )
+    with pytest.raises(ValueError, match="archived or deleted"):
+        empty_repo.create_campaign(
+            name="Bad Primary Char Camp",
+            world_id=active_world.id,
+            character_id=old_char_id,
+            owner_id=owner.id,
+        )
+    with pytest.raises(ValueError, match="archived or deleted"):
+        empty_repo.create_campaign(
+            name="Bad Extra Char Camp",
+            world_id=active_world.id,
+            character_id=active_char.id,
+            character_ids=[active_char.id, old_char_id],
+            owner_id=owner.id,
+        )
+    with pytest.raises(ValueError, match="archived or deleted"):
+        empty_repo.add_character_to_campaign(
+            campaign_id=camp_id,
+            character_id=old_char_id,
+            owner_id=owner.id,
+        )
+
+    # 2. HTTP routes return 400 for pending_deletion world / character, and succeed for active entities
+    monkeypatch.setattr(dep_module, "get_repo", lambda: empty_repo)
+    monkeypatch.setattr(main_module, "get_repo", lambda: empty_repo)
+    from app.routers import campaigns as campaigns_router_mod
+
+    monkeypatch.setattr(campaigns_router_mod, "get_repo", lambda: empty_repo)
+    monkeypatch.setattr(main_module, "ensure_public_showcase_media", lambda _r: {})
+    monkeypatch.setattr(main_module, "run_entity_pruner", lambda: None)
+
+    main_module.app.dependency_overrides[get_current_user] = lambda: owner
+    try:
+        with TestClient(main_module.app) as client:
+            r_bad_world = client.post(
+                "/api/campaigns",
+                json={
+                    "name": "Stale World Attempt",
+                    "world_id": old_world_id,
+                    "character_id": active_char.id,
+                },
+            )
+            assert r_bad_world.status_code == 400
+
+            r_bad_char = client.post(
+                "/api/campaigns",
+                json={
+                    "name": "Stale Char Attempt",
+                    "world_id": active_world.id,
+                    "character_id": old_char_id,
+                },
+            )
+            assert r_bad_char.status_code == 400
+
+            r_bad_add = client.post(
+                f"/api/campaigns/{camp_id}/characters",
+                json={"character_id": old_char_id},
+            )
+            assert r_bad_add.status_code == 400
+
+            r_ok = client.post(
+                "/api/campaigns",
+                json={
+                    "name": "Valid Active Campaign",
+                    "world_id": active_world.id,
+                    "character_id": active_char.id,
+                },
+            )
+            assert r_ok.status_code == 200, r_ok.text
+            assert r_ok.json()["campaign"]["world_id"] == active_world.id
+    finally:
+        main_module.app.dependency_overrides.pop(get_current_user, None)
+
+
 async def test_scene_flags_merge_and_zone4_rendering(
     empty_repo: CantinaRepository,
 ) -> None:

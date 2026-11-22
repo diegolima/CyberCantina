@@ -446,9 +446,17 @@ export const AppModals: React.FC<AppModalsProps> = ({
           worlds={worlds}
           characters={characters}
           personas={personas}
-          initialWorldId={activeWorld?.id}
-          initialCharacterId={activeCharacter?.id}
-          initialPersonaId={activePersona?.id}
+          initialWorldId={
+            worlds.find((w) => w.id === activeWorld?.id && !w.pending_deletion)?.id ??
+            worlds.find((w) => !w.pending_deletion)?.id
+          }
+          initialCharacterId={
+            characters.find((c) => c.id === activeCharacter?.id && !c.pending_deletion)?.id ??
+            characters.find((c) => !c.pending_deletion)?.id
+          }
+          initialPersonaId={
+            personas.find((p) => p.id === activePersona?.id)?.id ?? personas[0]?.id
+          }
           onClose={() => setShowNewCampaignModal(false)}
           onOpenPersonaModal={() => {
             setEditingPersona(null);

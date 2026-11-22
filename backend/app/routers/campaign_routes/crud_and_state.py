@@ -67,7 +67,12 @@ async def create_campaign(
     try:
         world = repo.get_world(req.world_id, owner_id=current_user.id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"World not found: {exc}") from exc
+        raise HTTPException(status_code=404, detail="World not found.") from exc
+    if world.pending_deletion:
+        raise HTTPException(
+            status_code=400,
+            detail="The selected world is archived or deleted and cannot be used to start a new campaign.",
+        )
 
     start_loc = next(
         (loc for loc in world.locations if loc.is_starting_location),
@@ -75,6 +80,19 @@ async def create_campaign(
     )
     if not start_loc:
         raise HTTPException(status_code=400, detail="The selected world has no locations.")
+
+    loaded_chars: dict[str, CharacterRecord] = {}
+    for cid in all_char_ids:
+        try:
+            char_rec = repo.get_character(cid, owner_id=current_user.id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Character not found.") from exc
+        if char_rec.pending_deletion:
+            raise HTTPException(
+                status_code=400,
+                detail="Archived or deleted characters cannot be used to start a new campaign.",
+            )
+        loaded_chars[cid] = char_rec
 
     loc_map = dict(req.character_locations or {})
     start_party_ids = [
@@ -96,12 +114,7 @@ async def create_campaign(
             cid for cid in all_char_ids
             if loc_map.get(cid, start_loc.id) == start_loc.id
         ]
-        present_npcs: list[CharacterRecord] = []
-        for cid in present_char_ids:
-            try:
-                present_npcs.append(repo.get_character(cid, owner_id=current_user.id))
-            except KeyError:
-                continue
+        present_npcs = [loaded_chars[cid] for cid in present_char_ids if cid in loaded_chars]
 
         if present_npcs:
             eff_actor, eff_clerk, _, _, _ = get_effective_user_model_settings(current_user.id)
@@ -160,7 +173,12 @@ def add_campaign_character(
             owner_id=current_user.id,
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail="Campaign, character, or location not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Archived or deleted characters cannot be added to a campaign.",
+        ) from exc
 
 
 @router.get("/api/campaigns/{campaign_id}/persona-state", response_model=PersonaTurnStateSnapshot | None)

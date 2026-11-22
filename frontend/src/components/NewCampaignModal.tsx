@@ -55,6 +55,38 @@ function getRandomPrefix(): string {
   return CAMPAIGN_PREFIXES[idx];
 }
 
+export function resolveInitialWorldId(
+  worlds: readonly WorldRecord[],
+  initialWorldId?: string
+): string {
+  const selectable = worlds.filter((w) => !w.pending_deletion);
+  if (initialWorldId && selectable.some((w) => w.id === initialWorldId)) {
+    return initialWorldId;
+  }
+  return selectable[0]?.id ?? "";
+}
+
+export function resolveInitialPersonaId(
+  personas: readonly PersonaRecord[],
+  initialPersonaId?: string
+): string {
+  if (initialPersonaId && personas.some((p) => p.id === initialPersonaId)) {
+    return initialPersonaId;
+  }
+  return personas[0]?.id ?? "";
+}
+
+export function resolveInitialCharacterIds(
+  characters: readonly CharacterRecord[],
+  initialCharacterId?: string
+): string[] {
+  const selectable = characters.filter((c) => !c.pending_deletion);
+  if (initialCharacterId && selectable.some((c) => c.id === initialCharacterId)) {
+    return [initialCharacterId];
+  }
+  return selectable.length > 0 ? [selectable[0].id] : [];
+}
+
 export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
   worlds,
   characters,
@@ -66,14 +98,17 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
   onCreate,
   onOpenPersonaModal,
 }) => {
+  const selectableWorlds = worlds.filter((w) => !w.pending_deletion);
+  const selectableCharacters = characters.filter((c) => !c.pending_deletion);
+
   const [step, setStep] = useState<CampaignWizardStep>(1);
 
   // --- Step 1 State: World, Persona, Name ---
-  const [selectedWorldId, setSelectedWorldId] = useState(
-    initialWorldId || worlds[0]?.id || ""
+  const [selectedWorldId, setSelectedWorldId] = useState(() =>
+    resolveInitialWorldId(selectableWorlds, initialWorldId)
   );
   const selectedWorld =
-    worlds.find((w) => w.id === selectedWorldId) || worlds[0];
+    selectableWorlds.find((w) => w.id === selectedWorldId) || selectableWorlds[0];
 
   const [activePrefix, setActivePrefix] = useState<string>(() => getRandomPrefix());
   const [hasUserEditedName, setHasUserEditedName] = useState(false);
@@ -82,19 +117,16 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
     return `${activePrefix} ${wName}`;
   });
 
-  const [selectedPersonaId, setSelectedPersonaId] = useState(
-    initialPersonaId || (personas.length > 0 ? personas[0].id : "")
+  const [selectedPersonaId, setSelectedPersonaId] = useState(() =>
+    resolveInitialPersonaId(personas, initialPersonaId)
   );
   const selectedPersona =
     personas.find((p) => p.id === selectedPersonaId) || null;
 
   // --- Step 2 State: Characters ---
-  const [selectedCharIds, setSelectedCharIds] = useState<string[]>(() => {
-    if (initialCharacterId && characters.some((c) => c.id === initialCharacterId)) {
-      return [initialCharacterId];
-    }
-    return characters.length > 0 ? [characters[0].id] : [];
-  });
+  const [selectedCharIds, setSelectedCharIds] = useState<string[]>(() =>
+    resolveInitialCharacterIds(selectableCharacters, initialCharacterId)
+  );
   const [startInPartyIds, setStartInPartyIds] = useState<string[]>([]);
 
   // --- Step 3 State: Focus & Preview ---
@@ -107,7 +139,7 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
     hasWorldStartMsg ? "world" : "character"
   );
   const [focusCharId, setFocusCharId] = useState<string>(() =>
-    selectedCharIds[0] || (characters[0]?.id ?? "")
+    selectedCharIds[0] || (selectableCharacters[0]?.id ?? "")
   );
   const [showProsePreview, setShowProsePreview] = useState(false);
 
@@ -117,7 +149,7 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
 
   const handleWorldChange = (worldId: string) => {
     setSelectedWorldId(worldId);
-    const w = worlds.find((item) => item.id === worldId);
+    const w = selectableWorlds.find((item) => item.id === worldId);
     if (w) {
       if (!hasUserEditedName) {
         const nextPrefix = getRandomPrefix();
@@ -149,19 +181,25 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
     });
   };
 
-  const selectedCharacters = characters.filter((c) =>
+  const selectedCharacters = selectableCharacters.filter((c) =>
     selectedCharIds.includes(c.id)
   );
   const focusedCharacter =
-    characters.find((c) => c.id === focusCharId) || selectedCharacters[0] || characters[0];
+    selectableCharacters.find((c) => c.id === focusCharId) ||
+    selectedCharacters[0] ||
+    selectableCharacters[0];
 
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!selectedWorldId) {
+    const effectiveWorldId = selectedWorld?.id || "";
+    if (!effectiveWorldId) {
       setErrorMsg("Please select a world.");
       return;
     }
-    if (selectedCharIds.length === 0) {
+    const effectiveCharIds = selectedCharIds.filter((cid) =>
+      selectableCharacters.some((c) => c.id === cid)
+    );
+    if (effectiveCharIds.length === 0) {
       setErrorMsg("Please select at least one character in Step 2.");
       return;
     }
@@ -169,22 +207,24 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
     const finalName =
       campaignName.trim() || `${activePrefix} ${selectedWorld?.name ?? "World"}`;
     const effectiveFocusCharId =
-      startFocus === "character"
-        ? focusCharId || selectedCharIds[0]
-        : selectedCharIds[0];
+      startFocus === "character" && effectiveCharIds.includes(focusCharId)
+        ? focusCharId
+        : effectiveCharIds[0];
 
     setIsSubmitting(true);
     setErrorMsg(null);
     try {
       await onCreate({
         name: finalName,
-        world_id: selectedWorldId,
+        world_id: effectiveWorldId,
         character_id: effectiveFocusCharId,
-        character_ids: selectedCharIds,
+        character_ids: effectiveCharIds,
         start_focus: startFocus,
         focus_character_id: effectiveFocusCharId,
-        persona_id: selectedPersonaId ? selectedPersonaId : undefined,
-        start_in_party_character_ids: startInPartyIds,
+        persona_id: selectedPersona ? selectedPersona.id : undefined,
+        start_in_party_character_ids: startInPartyIds.filter((cid) =>
+          effectiveCharIds.includes(cid)
+        ),
       });
       onClose();
     } catch (err: any) {
@@ -385,7 +425,7 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
                   onChange={(e) => handleWorldChange(e.target.value)}
                   required
                 >
-                  {worlds.map((w) => (
+                  {selectableWorlds.map((w) => (
                     <option key={w.id} value={w.id}>
                       {w.name} ({w.locations.length} locations)
                     </option>
@@ -545,7 +585,7 @@ export const NewCampaignModal: React.FC<NewCampaignModalProps> = ({
                   paddingRight: 4,
                 }}
               >
-                {characters.map((char) => {
+                {selectableCharacters.map((char) => {
                   const isSelected = selectedCharIds.includes(char.id);
                   return (
                     <div
