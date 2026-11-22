@@ -1009,4 +1009,84 @@ describe("Branch Graph Summarized Episode Grouping (v0.28.1)", () => {
     expect(html).toContain("from #2");
     expect(html).toContain("Expand 3 turns");
   });
+
+  it("highlights all turns and internal arrows of an expanded summary episode in orange (including the first turn when selected) while keeping outside active nodes and arrows blue", () => {
+    const t0 = makeTurn({ id: "t0", parentId: null, depth: 0 });
+    const t1 = makeTurn({ id: "t1", parentId: "t0", depth: 1, userMessage: "First summary turn." });
+    const t2 = makeTurn({ id: "t2", parentId: "t1", depth: 2, userMessage: "Second summary turn." });
+    const t3 = makeTurn({ id: "t3", parentId: "t2", depth: 3, userMessage: "Third summary turn." });
+    const t4 = makeTurn({ id: "t4", parentId: "t3", depth: 4, userMessage: "Outside turn 4." });
+    const t5 = makeTurn({ id: "t5", parentId: "t4", depth: 5, userMessage: "Outside active tip." });
+
+    const chunk: EpisodicChunkRecord = {
+      id: "ep-1",
+      campaign_id: "camp-1",
+      start_turn_depth: 1,
+      end_turn_depth: 3,
+      leaf_turn_id: "t5",
+      title: "Opening Chapter",
+      synopsis_text: "Turns 1 to 3.",
+      summary_text: "Full summary of turns 1 to 3.",
+      created_at: "2026-01-01T00:10:00Z",
+    };
+
+    const allTurns = [t0, t1, t2, t3, t4, t5];
+    const bundle = makeBundle(allTurns, allTurns, [chunk]);
+    bundle.all_episodic_chunks = [chunk];
+    const noop = vi.fn();
+
+    // Expand episode:ep-1 with the FIRST turn (t1) selected
+    const html = renderToStaticMarkup(
+      <BranchGraphCanvas
+        bundle={bundle}
+        initialSelectedNodeId="t1"
+        initialEpisodeExpandOverrides={{ "episode:ep-1": true }}
+        onZoomToTurn={noop}
+        onSwitchTimeline={noop}
+        onBranchFromTurn={noop}
+      />
+    );
+
+    // Helper to extract opening <path ...> for a specific edge
+    const getEdgeTag = (edgeId: string) => {
+      const m = html.match(new RegExp(`<path[^>]*data-edge-id="${edgeId}"[^>]*>`));
+      return m?.[0] ?? "";
+    };
+    // Helper to extract <g ... data-graph-node-id="X">...first <rect ...>
+    const getNodeChunk = (nodeId: string) => {
+      const m = html.match(
+        new RegExp(`<g[^>]*data-graph-node-id="${nodeId}"[^>]*><rect[^>]*>`)
+      );
+      return m?.[0] ?? "";
+    };
+
+    // 1. Inside expanded summary: ALL turns (including first turn t1 when selected) use amber/orange
+    expect(getNodeChunk("t1")).toContain('data-in-expanded-episode="true"');
+    expect(getNodeChunk("t1")).toContain('stroke="#fbbf24"');
+    expect(getNodeChunk("t2")).toContain('data-in-expanded-episode="true"');
+    expect(getNodeChunk("t2")).toContain('stroke="#f59e0b"');
+    expect(getNodeChunk("t3")).toContain('data-in-expanded-episode="true"');
+    expect(getNodeChunk("t3")).toContain('stroke="#f59e0b"');
+
+    // 2. Arrows INSIDE expanded summary use orange stroke + orange arrowhead
+    expect(getEdgeTag("t1-&gt;t2") || getEdgeTag("t1->t2")).toContain('stroke="#f59e0b"');
+    expect(getEdgeTag("t1-&gt;t2") || getEdgeTag("t1->t2")).toContain('marker-end="url(#branch-arrow-active)"');
+    expect(getEdgeTag("t2-&gt;t3") || getEdgeTag("t2->t3")).toContain('stroke="#f59e0b"');
+
+    // 3. Nodes OUTSIDE expanded summary on active timeline maintain blue/cyan coloring
+    expect(getNodeChunk("t0")).not.toContain("data-in-expanded-episode");
+    expect(getNodeChunk("t0")).toContain("rgba(34, 211, 238");
+    expect(getNodeChunk("t4")).not.toContain("data-in-expanded-episode");
+    expect(getNodeChunk("t4")).toContain("rgba(34, 211, 238");
+    expect(getNodeChunk("t5")).not.toContain("data-in-expanded-episode");
+    expect(getNodeChunk("t5")).toContain('stroke="#22d3ee"');
+
+    // 4. Arrows OUTSIDE expanded summary (entering t0->t1, exiting t3->t4, and t4->t5) maintain blue/cyan coloring
+    expect(getEdgeTag("t0-&gt;t1") || getEdgeTag("t0->t1")).toContain('stroke="#22d3ee"');
+    expect(getEdgeTag("t0-&gt;t1") || getEdgeTag("t0->t1")).toContain('marker-end="url(#branch-arrow-selected)"');
+    expect(getEdgeTag("t3-&gt;t4") || getEdgeTag("t3->t4")).toContain("rgba(34, 211, 238");
+    expect(getEdgeTag("t3-&gt;t4") || getEdgeTag("t3->t4")).toContain('marker-end="url(#branch-arrow-selected)"');
+    expect(getEdgeTag("t4-&gt;t5") || getEdgeTag("t4->t5")).toContain("rgba(34, 211, 238");
+    expect(getEdgeTag("t4-&gt;t5") || getEdgeTag("t4->t5")).toContain('marker-end="url(#branch-arrow-selected)"');
+  });
 });

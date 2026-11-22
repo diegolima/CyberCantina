@@ -755,19 +755,30 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
               const toNode = model.nodeById[edge.toId];
               if (!fromNode || !toNode) return null;
               const isSelectedEdge = selectedPath.edgeIds.has(edge.id);
+              const isInsideExpandedEpisode =
+                fromNode.memberEpisodeId !== null &&
+                fromNode.memberEpisodeId === toNode.memberEpisodeId;
               const d = buildBranchEdgePath(fromNode, toNode);
-              const stroke = isSelectedEdge
+              const stroke = isInsideExpandedEpisode
+                ? isSelectedEdge || edge.isActiveBranch
+                  ? "#f59e0b"
+                  : "rgba(245, 158, 11, 0.72)"
+                : isSelectedEdge
                 ? "#22d3ee"
                 : edge.isActiveBranch
-                ? "#f59e0b"
+                ? "rgba(34, 211, 238, 0.78)"
                 : edge.isExpandedSwipe
                 ? "rgba(148, 163, 184, 0.35)"
                 : "rgba(148, 163, 184, 0.45)";
-              const strokeWidth = isSelectedEdge ? 2.75 : edge.isActiveBranch ? 2.25 : 1.5;
-              const markerEnd = isSelectedEdge
-                ? "url(#branch-arrow-selected)"
-                : edge.isActiveBranch
+              const strokeWidth = isSelectedEdge
+                ? 2.75
+                : edge.isActiveBranch || isInsideExpandedEpisode
+                ? 2.25
+                : 1.5;
+              const markerEnd = isInsideExpandedEpisode
                 ? "url(#branch-arrow-active)"
+                : isSelectedEdge || edge.isActiveBranch
+                ? "url(#branch-arrow-selected)"
                 : "url(#branch-arrow-default)";
 
               const showOriginLabel =
@@ -783,6 +794,7 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
               return (
                 <g key={edge.id}>
                   <path
+                    data-edge-id={edge.id}
                     d={d}
                     fill="none"
                     stroke={stroke}
@@ -790,7 +802,9 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
                     strokeDasharray={edge.isExpandedSwipe ? "5 4" : undefined}
                     markerEnd={markerEnd}
                     className={
-                      isSelectedEdge
+                      isInsideExpandedEpisode
+                        ? "branch-edge branch-edge--episode"
+                        : isSelectedEdge
                         ? "branch-edge branch-edge--selected"
                         : edge.isActiveBranch
                         ? "branch-edge branch-edge--active"
@@ -810,10 +824,8 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
                         rx={7.5}
                         fill="rgba(15, 23, 42, 0.94)"
                         stroke={
-                          isSelectedEdge
-                            ? "#22d3ee"
-                            : edge.isActiveBranch
-                            ? "rgba(245, 158, 11, 0.7)"
+                          isSelectedEdge || edge.isActiveBranch
+                            ? "rgba(34, 211, 238, 0.7)"
                             : "rgba(148, 163, 184, 0.45)"
                         }
                         strokeWidth={0.9}
@@ -823,11 +835,7 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
                         y={10.5}
                         textAnchor="middle"
                         fill={
-                          isSelectedEdge
-                            ? "#67e8f9"
-                            : edge.isActiveBranch
-                            ? "#fde68a"
-                            : "#cbd5e1"
+                          isSelectedEdge || edge.isActiveBranch ? "#67e8f9" : "#cbd5e1"
                         }
                         fontSize="8.5"
                         fontWeight="600"
@@ -845,29 +853,52 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
             {model.nodes.map((node) => {
               const isSelected = node.id === effectiveSelectedId;
               const inSelectedPath = selectedPath.nodeIds.has(node.id);
+              const isInExpandedEpisode = node.memberEpisodeId !== null;
               const topY = node.y - node.height / 2;
               const isSwipeAnchorExpanded =
                 showAllSwipes || expandedAnchors.has(node.id);
               const swipeCount = node.hiddenSwipes.length;
 
-              const strokeColor = isSelected
+              const strokeColor = isInExpandedEpisode
+                ? isSelected
+                  ? "#fbbf24"
+                  : inSelectedPath || node.isActiveBranch
+                  ? "#f59e0b"
+                  : "rgba(245, 158, 11, 0.65)"
+                : node.kind === "episode"
+                ? isSelected
+                  ? "#22d3ee"
+                  : inSelectedPath
+                  ? "rgba(34, 211, 238, 0.78)"
+                  : node.isActiveLeaf
+                  ? "#f59e0b"
+                  : node.isActiveBranch
+                  ? "rgba(245, 158, 11, 0.75)"
+                  : "rgba(167, 139, 250, 0.55)"
+                : isSelected
                 ? "#22d3ee"
                 : inSelectedPath
-                ? "rgba(34, 211, 238, 0.72)"
+                ? "rgba(34, 211, 238, 0.78)"
                 : node.isActiveLeaf
-                ? "#f59e0b"
+                ? "#22d3ee"
                 : node.isActiveBranch
-                ? "rgba(245, 158, 11, 0.65)"
+                ? "rgba(34, 211, 238, 0.65)"
                 : node.isExpandedSwipe
                 ? "rgba(148, 163, 184, 0.38)"
                 : node.isBranchTip
                 ? "rgba(167, 139, 250, 0.65)"
                 : "rgba(148, 163, 184, 0.28)";
 
-              const fillColor = isSelected
+              const fillColor = isInExpandedEpisode
+                ? isSelected
+                  ? "rgba(245, 158, 11, 0.24)"
+                  : node.isActiveLeaf
+                  ? "rgba(245, 158, 11, 0.18)"
+                  : "rgba(38, 28, 16, 0.94)"
+                : isSelected
                 ? "rgba(14, 116, 144, 0.28)"
                 : node.isActiveLeaf
-                ? "rgba(245, 158, 11, 0.14)"
+                ? "rgba(14, 116, 144, 0.22)"
                 : node.isActiveBranch
                 ? "rgba(30, 41, 59, 0.94)"
                 : node.isExpandedSwipe
@@ -1257,6 +1288,7 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
                   data-graph-interactive="true"
                   data-graph-node-id={node.id}
                   data-graph-node-kind={node.kind}
+                  data-in-expanded-episode={isInExpandedEpisode ? "true" : undefined}
                   transform={`translate(${node.x}, ${topY})`}
                   style={{ cursor: "pointer" }}
                   onClick={handleNodeClick}
@@ -1280,10 +1312,14 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
                     x={12}
                     y={20}
                     fill={
-                      isSelected
+                      isInExpandedEpisode
+                        ? isSelected
+                          ? "#fde68a"
+                          : "#fbbf24"
+                        : isSelected
                         ? "#67e8f9"
                         : node.isActiveLeaf
-                        ? "#fbbf24"
+                        ? "#67e8f9"
                         : node.isActiveBranch
                         ? "#f8fafc"
                         : "#cbd5e1"
