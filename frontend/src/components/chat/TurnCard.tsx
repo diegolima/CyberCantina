@@ -53,6 +53,8 @@ export interface TurnCardProps {
   isEditingThisTurn: boolean;
   hasActiveEditingTurn: boolean;
   hasDeleteLastHandler: boolean;
+  hasDescendants?: boolean;
+  isHighlighted?: boolean;
   cogOpen: boolean;
   memOpen: boolean;
   phase4ProgressByTurn: Record<string, Phase4TurnProgress>;
@@ -61,7 +63,8 @@ export interface TurnCardProps {
   onToggleArrivalCard?: (cardKey: string, currentlyExpanded: boolean) => void;
   onToggleCognition: (turnId: string) => void;
   onToggleMemories: (turnId: string) => void;
-  onCheckoutTurn: (turnId: string) => void;
+  onCheckoutTurn: (turnId: string) => Promise<void> | void;
+  onBranchFromTurn?: (turn: TurnNodeRecord) => Promise<void> | void;
   onStartEdit: (turn: TurnNodeRecord) => void;
   onCancelEdit: () => void;
   onSwipeRegenerate: (turn: TurnNodeRecord) => void;
@@ -82,6 +85,8 @@ export const TurnCard: React.FC<TurnCardProps> = ({
   isEditingThisTurn,
   hasActiveEditingTurn,
   hasDeleteLastHandler,
+  hasDescendants = false,
+  isHighlighted = false,
   cogOpen,
   memOpen,
   phase4ProgressByTurn,
@@ -91,6 +96,7 @@ export const TurnCard: React.FC<TurnCardProps> = ({
   onToggleCognition,
   onToggleMemories,
   onCheckoutTurn,
+  onBranchFromTurn,
   onStartEdit,
   onCancelEdit,
   onSwipeRegenerate,
@@ -129,8 +135,14 @@ export const TurnCard: React.FC<TurnCardProps> = ({
         mediaItems={firstVisitMedia}
         manualOverrides={arrivalManualOverrides}
         onToggleCard={onToggleArrivalCard}
+        isHighlighted={isHighlighted}
         showDelete={isLastTurn && hasDeleteLastHandler}
-        deleteDisabled={isBusy || isDeletingTurn}
+        deleteDisabled={isBusy || isDeletingTurn || hasDescendants}
+        deleteDisabledTitle={
+          hasDescendants
+            ? "Cannot undo a map move that has descendant branches"
+            : undefined
+        }
         onDelete={onDeleteLast}
       />
     );
@@ -277,7 +289,13 @@ export const TurnCard: React.FC<TurnCardProps> = ({
   return (
     <>
       {isRoot && arrivalNode}
-      <div key="turn-body" className={`turn-card ${isNarratorTurn ? "narrator-turn-card" : ""} ${isEditingThisTurn ? "turn-card--editing" : ""}`}>
+      <div
+        key="turn-body"
+        data-turn-id={turn.id}
+        className={`turn-card ${isNarratorTurn ? "narrator-turn-card" : ""} ${
+          isEditingThisTurn ? "turn-card--editing" : ""
+        } ${isHighlighted ? "turn-card--highlighted" : ""}`}
+      >
               {!isRoot && (
                 <>
                   {isEditingThisTurn && (
@@ -1132,6 +1150,27 @@ export const TurnCard: React.FC<TurnCardProps> = ({
                       </div>
                     )}
 
+                    {!isLastTurn && bundle.active_branch_turns.length > 1 && (
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{ padding: "3px 8px", fontSize: "0.72rem" }}
+                        disabled={isBusy || isDeletingTurn}
+                        onClick={() => {
+                          if (editingTurn) handleCancelEdit();
+                          if (onBranchFromTurn) {
+                            void onBranchFromTurn(turn);
+                          } else {
+                            void onCheckoutTurn(turn.id);
+                          }
+                        }}
+                        title={`Branch from here — rewind to Turn #${turn.depth_index} without deleting the current timeline`}
+                      >
+                        <GitBranch size={12} />
+                        Branch
+                      </button>
+                    )}
+
                     {isLastTurn && (
                       <button
                         type="button"
@@ -1175,9 +1214,13 @@ export const TurnCard: React.FC<TurnCardProps> = ({
                         type="button"
                         className="btn btn-danger"
                         style={{ padding: "3px 8px", fontSize: "0.72rem" }}
-                        disabled={isBusy || isDeletingTurn}
+                        disabled={isBusy || isDeletingTurn || hasDescendants}
                         onClick={handleDeleteLast}
-                        title="Delete last message and all generated swipes"
+                        title={
+                          hasDescendants
+                            ? "Cannot delete a turn that has descendant branches"
+                            : "Delete last message and its unfollowed swipes"
+                        }
                       >
                         <Trash2 size={12} />
                         Delete

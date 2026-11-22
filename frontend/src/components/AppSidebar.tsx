@@ -7,6 +7,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
+  ScrollText,
   StickyNote,
   User,
   UserCog,
@@ -31,6 +32,10 @@ export interface AppSidebarProps {
   codexCount?: number;
   isCodexOpen?: boolean;
   onOpenCodex?: () => void;
+  storyCount?: number;
+  hasStoryAttention?: boolean;
+  isStoryOpen?: boolean;
+  onOpenStory?: () => void;
   partyCount?: number;
   isPartyOpen?: boolean;
   onOpenParty?: () => void;
@@ -67,6 +72,10 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   codexCount,
   isCodexOpen = false,
   onOpenCodex,
+  storyCount,
+  hasStoryAttention = false,
+  isStoryOpen = false,
+  onOpenStory,
   partyCount,
   isPartyOpen = false,
   onOpenParty,
@@ -96,6 +105,11 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   const openCodexAction = () => {
     onCloseOverlay?.();
     onOpenCodex?.();
+  };
+
+  const openStoryAction = () => {
+    onCloseOverlay?.();
+    onOpenStory?.();
   };
 
   const openPartyAction = () => {
@@ -143,6 +157,19 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
             aria-pressed={isCodexOpen}
           >
             <BookOpen size={17} color="var(--accent-violet)" />
+          </button>
+          <button
+            type="button"
+            className={`btn btn-ghost rail-icon-btn rail-category-btn ${
+              isStoryOpen ? "active" : ""
+            }`}
+            onClick={openStoryAction}
+            title="Story & Timelines"
+            aria-label="Open Campaign Story & Timelines"
+            aria-pressed={isStoryOpen}
+          >
+            <ScrollText size={17} color="var(--accent-amber)" />
+            {hasStoryAttention && <span className="rail-badge-dot" />}
           </button>
           <button
             type="button"
@@ -310,6 +337,29 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
             {typeof codexCount === "number" && (
               <span className="sidebar-nav-count">{codexCount}</span>
             )}
+          </button>
+          <button
+            type="button"
+            className={`sidebar-nav-item ${isStoryOpen ? "active" : ""}`}
+            onClick={openStoryAction}
+            title="Open Story Summary & Branch Graph"
+            aria-pressed={isStoryOpen}
+          >
+            <span className="sidebar-nav-item-main">
+              <ScrollText size={15} color="var(--accent-amber)" />
+              <span>Story</span>
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+              {hasStoryAttention && (
+                <span
+                  className="sidebar-story-attention-dot"
+                  title="New story summary generated this turn"
+                />
+              )}
+              {typeof storyCount === "number" && storyCount > 0 && (
+                <span className="sidebar-nav-count">{storyCount}</span>
+              )}
+            </span>
           </button>
           <button
             type="button"

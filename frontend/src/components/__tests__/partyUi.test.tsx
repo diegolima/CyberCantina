@@ -157,16 +157,18 @@ const BUNDLE: CampaignStateBundle = {
 };
 
 describe("Parties UI components (SSR markup)", () => {
-  it("renders always-clickable Party button directly below Codex in expanded and rail modes", () => {
+  it("renders always-clickable Story and Party buttons below Codex in expanded and rail modes", () => {
     const expanded = renderToStaticMarkup(
       <AppSidebar
         mode="expanded"
         bundle={BUNDLE}
         worldName="Night Sector"
         codexCount={3}
+        storyCount={2}
         partyCount={2}
         isPartyOpen={false}
         onOpenCodex={() => {}}
+        onOpenStory={() => {}}
         onOpenParty={() => {}}
         notes={[]}
         showNotesFlyout={false}
@@ -184,8 +186,10 @@ describe("Parties UI components (SSR markup)", () => {
       />
     );
     expect(expanded).toContain("Codex");
+    expect(expanded).toContain("Story");
     expect(expanded).toContain("Party");
-    expect(expanded.indexOf("Codex")).toBeLessThan(expanded.indexOf("Party"));
+    expect(expanded.indexOf("Codex")).toBeLessThan(expanded.indexOf("Story"));
+    expect(expanded.indexOf("Story")).toBeLessThan(expanded.indexOf("Party"));
     expect(expanded).toContain("Manage Parties");
 
     const rail = renderToStaticMarkup(
@@ -194,6 +198,7 @@ describe("Parties UI components (SSR markup)", () => {
         bundle={BUNDLE}
         codexCount={3}
         partyCount={0}
+        onOpenStory={() => {}}
         onOpenParty={() => {}}
         notes={[]}
         showNotesFlyout={false}
@@ -211,8 +216,12 @@ describe("Parties UI components (SSR markup)", () => {
       />
     );
     expect(rail).toContain('aria-label="Open Campaign Codex"');
+    expect(rail).toContain('aria-label="Open Campaign Story &amp; Timelines"');
     expect(rail).toContain('aria-label="Manage Parties"');
     expect(rail.indexOf("Open Campaign Codex")).toBeLessThan(
+      rail.indexOf("Open Campaign Story &amp; Timelines")
+    );
+    expect(rail.indexOf("Open Campaign Story &amp; Timelines")).toBeLessThan(
       rail.indexOf("Manage Parties")
     );
   });

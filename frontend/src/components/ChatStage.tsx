@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Clock,
+  GitBranch,
   MapPin,
   Menu,
   PanelRightClose,
@@ -83,6 +84,9 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   onSendTurn,
   onCheckoutTurn,
   onDeleteLastTurn,
+  scrollTargetTurn = null,
+  focusComposerNonce = 0,
+  onOpenStoryTimelines,
   showSidebarToggle = false,
   isSidebarOpen = false,
   onToggleSidebar,
@@ -115,6 +119,8 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const [customDirectiveText, setCustomDirectiveText] = useState("");
   const [activeAgentModal, setActiveAgentModal] = useState<ActiveAgentModalTarget | null>(null);
   const [isContextHealthOpen, setIsContextHealthOpen] = useState(false);
+  const [highlightedTurnId, setHighlightedTurnId] = useState<string | null>(null);
+  const turnFeedRef = useRef<HTMLDivElement | null>(null);
 
   const activeTelemetryTurn = useMemo(() => getActiveTurnForTelemetry(bundle), [bundle]);
   const activeTurnTelemetry = activeTelemetryTurn?.telemetry ?? null;
@@ -144,6 +150,38 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   useEffect(() => {
     setArrivalManualOverrides({});
   }, [lastTurnId]);
+
+  // Scroll to a targeted turn card (from Story -> Branch Graph Zoom / Timeline Switch)
+  useEffect(() => {
+    if (!scrollTargetTurn) return;
+    const targetId = scrollTargetTurn.turnId;
+    const feed = turnFeedRef.current;
+    if (!feed) return;
+    const cards = Array.from(feed.querySelectorAll<HTMLElement>("[data-turn-id]"));
+    const el = cards.find((node) => node.getAttribute("data-turn-id") === targetId);
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    if (scrollTargetTurn.highlight !== false) {
+      setHighlightedTurnId(targetId);
+      const timer = window.setTimeout(() => {
+        setHighlightedTurnId((curr) => (curr === targetId ? null : curr));
+      }, 1700);
+      return () => window.clearTimeout(timer);
+    }
+    return undefined;
+  }, [scrollTargetTurn]);
+
+  // Focus composer after branching from Story -> Branch Graph
+  useEffect(() => {
+    if (!focusComposerNonce) return;
+    handleCancelEditRef.current();
+    const timer = window.setTimeout(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [focusComposerNonce]);
 
   const handleToggleArrivalCard = (cardKey: string, currentlyExpanded: boolean) => {
     setArrivalManualOverrides((prev) => ({
@@ -1407,13 +1445,31 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     }
   };
 
-  // Count sibling branches per parent_turn_id so user can see alternate swipes
+  const handleBranchFromTurn = async (turn: TurnNodeRecord) => {
+    if (isBusy || isDeletingTurn) return;
+    if (editingTurn) handleCancelEdit();
+    await onCheckoutTurn(turn.id);
+    window.setTimeout(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 0);
+  };
+
+  // Count sibling branches & children per parent_turn_id
   const siblingsByParent: Record<string, TurnNodeRecord[]> = {};
+  const childCountByParent: Record<string, number> = {};
   for (const node of bundle.all_turn_nodes) {
     const key = node.parent_turn_id ?? "ROOT";
     if (!siblingsByParent[key]) siblingsByParent[key] = [];
     siblingsByParent[key].push(node);
+    if (node.parent_turn_id) {
+      childCountByParent[node.parent_turn_id] =
+        (childCountByParent[node.parent_turn_id] ?? 0) + 1;
+    }
   }
+  const activeLeafContinuationCount = lastBranchTurn
+    ? childCountByParent[lastBranchTurn.id] ?? 0
+    : 0;
 
   return (
     <main className="chat-stage">
@@ -1511,7 +1567,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         </div>
       </header>
 
-      <div className="turn-feed">
+      <div className="turn-feed" ref={turnFeedRef}>
         {bundle.active_branch_turns.map((turn, turnIdx) => {
           const isRoot = turn.depth_index === 0;
           const isLastTurn =
@@ -1520,6 +1576,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
           const cogOpen = openCognitionIds[turn.id] ?? (turn.depth_index === bundle.active_branch_turns.length - 1);
           const memOpen = openMemoryIds[turn.id] ?? false;
           const siblings = siblingsByParent[turn.parent_turn_id ?? "ROOT"] || [];
+          const hasDescendants = (childCountByParent[turn.id] ?? 0) > 0;
 
           return (
             <TurnCard
@@ -1536,6 +1593,8 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               isEditingThisTurn={isEditingThisTurn}
               hasActiveEditingTurn={Boolean(editingTurn)}
               hasDeleteLastHandler={Boolean(onDeleteLastTurn)}
+              hasDescendants={hasDescendants}
+              isHighlighted={highlightedTurnId === turn.id}
               cogOpen={cogOpen}
               memOpen={memOpen}
               phase4ProgressByTurn={phase4ProgressByTurn}
@@ -1545,6 +1604,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               onToggleCognition={toggleCognition}
               onToggleMemories={toggleMemories}
               onCheckoutTurn={onCheckoutTurn}
+              onBranchFromTurn={handleBranchFromTurn}
               onStartEdit={handleStartEdit}
               onCancelEdit={handleCancelEdit}
               onSwipeRegenerate={handleSwipeRegenerate}
@@ -1553,6 +1613,32 @@ export const ChatStage: React.FC<ChatStageProps> = ({
             />
           );
         })}
+
+        {/* In-Stage Rewind Continuity Banner when active leaf has preserved future continuations */}
+        {!liveStream && lastBranchTurn && activeLeafContinuationCount > 0 && (
+          <div className="branch-rewind-banner" role="status">
+            <div className="branch-rewind-banner-text">
+              <GitBranch size={14} color="var(--accent-violet)" />
+              <span>
+                <strong>Branched at Turn #{lastBranchTurn.depth_index}</strong> ·{" "}
+                {activeLeafContinuationCount === 1
+                  ? "Existing continuation preserved"
+                  : `${activeLeafContinuationCount} existing continuations preserved`}{" "}
+                — prompt below to start a new branch.
+              </span>
+            </div>
+            {onOpenStoryTimelines && (
+              <button
+                type="button"
+                className="btn btn-ghost branch-rewind-banner-btn"
+                onClick={onOpenStoryTimelines}
+              >
+                <GitBranch size={12} />
+                <span>Open Branch Graph</span>
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Active Streaming Turn Preview */}
         {liveStream && (

@@ -57,8 +57,11 @@ export interface ChatStageProps {
     characterChoices?: Record<string, CharacterChoiceSet>;
     partyAction?: PartyActionSpec | null;
   }) => void;
-  onCheckoutTurn: (turnId: string) => void;
+  onCheckoutTurn: (turnId: string) => Promise<void> | void;
   onDeleteLastTurn?: () => Promise<void> | void;
+  scrollTargetTurn?: { turnId: string; nonce: number; highlight?: boolean } | null;
+  focusComposerNonce?: number;
+  onOpenStoryTimelines?: () => void;
   showSidebarToggle?: boolean;
   isSidebarOpen?: boolean;
   onToggleSidebar?: () => void;

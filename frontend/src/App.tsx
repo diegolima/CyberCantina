@@ -20,6 +20,8 @@ import {
   type WorldTab,
 } from "./components/world/WorldInspectorModal";
 import { PartyManagementModal } from "./components/party/PartyManagementModal";
+import { StoryModal, type StoryModalTab } from "./components/story/StoryModal";
+import { countVisibleTimelines } from "./components/story/branchGraphLayout";
 import { buildCampaignCharacterEntries } from "./components/world/codexHelpers";
 import { LocalRelayProvider } from "./providers/LocalRelayContext";
 import { useCampaignTurnActions } from "./hooks/useCampaignTurnActions";
@@ -85,6 +87,13 @@ export const App: React.FC = () => {
   );
   const [campaignWorldSheetTab, setCampaignWorldSheetTab] =
     useState<WorldTab | null>(null);
+  const [storyModalTab, setStoryModalTab] = useState<StoryModalTab | null>(null);
+  const [scrollTargetTurn, setScrollTargetTurn] = useState<{
+    turnId: string;
+    nonce: number;
+    highlight?: boolean;
+  } | null>(null);
+  const [focusComposerNonce, setFocusComposerNonce] = useState(0);
   const [isPartyModalOpen, setIsPartyModalOpen] = useState(false);
   const [showPersonaModal, setShowPersonaModal] = useState(false);
   const [editingPersona, setEditingPersona] = useState<PersonaRecord | null>(null);
@@ -242,6 +251,8 @@ export const App: React.FC = () => {
   ) => {
     setPendingLocationOverrideId(null);
     setCampaignWorldSheetTab(null);
+    setStoryModalTab(null);
+    setScrollTargetTurn(null);
     setIsPartyModalOpen(false);
     layout.closeOverlays();
     const stateBundle = await api.getCampaignState(campaignId);
@@ -267,6 +278,47 @@ export const App: React.FC = () => {
     setActiveCharacter(nextActiveCharacter);
   };
 
+  const storyMetrics = useMemo(() => {
+    if (!bundle) {
+      return { timelineCount: 0, storyAttention: false };
+    }
+    const lastTurn =
+      bundle.active_branch_turns[bundle.active_branch_turns.length - 1];
+    const storyAttention = Boolean(
+      lastTurn &&
+        bundle.episodic_chunks.some((c) => c.leaf_turn_id === lastTurn.id)
+    );
+    const timelineCount = countVisibleTimelines(
+      bundle.all_turn_nodes,
+      bundle.active_branch_turns,
+      bundle.campaign.active_leaf_turn_id
+    );
+    return { timelineCount, storyAttention };
+  }, [bundle]);
+
+  const handleZoomToStoryTurn = useCallback((turnId: string) => {
+    setStoryModalTab(null);
+    setScrollTargetTurn({ turnId, nonce: Date.now(), highlight: true });
+  }, []);
+
+  const handleSwitchStoryTimeline = useCallback(
+    async (tipTurnId: string) => {
+      await handleCheckoutTurn(tipTurnId);
+      setStoryModalTab(null);
+      setScrollTargetTurn({ turnId: tipTurnId, nonce: Date.now(), highlight: false });
+    },
+    [handleCheckoutTurn]
+  );
+
+  const handleBranchFromStoryTurn = useCallback(
+    async (turnId: string) => {
+      await handleCheckoutTurn(turnId);
+      setStoryModalTab(null);
+      setFocusComposerNonce((n) => n + 1);
+    },
+    [handleCheckoutTurn]
+  );
+
   const handleCloseCampaign = () => {
     try {
       localStorage.removeItem(ACTIVE_CAMPAIGN_STORAGE_KEY);
@@ -275,6 +327,8 @@ export const App: React.FC = () => {
     setCampaignWorld(null);
     setCampaignCharacter(null);
     setCampaignWorldSheetTab(null);
+    setStoryModalTab(null);
+    setScrollTargetTurn(null);
     setIsPartyModalOpen(false);
   };
 
@@ -650,6 +704,17 @@ export const App: React.FC = () => {
           layout.closeOverlays();
           setCampaignWorldSheetTab("codex");
         }}
+        storyCount={
+          storyMetrics.timelineCount > 1
+            ? storyMetrics.timelineCount
+            : bundle?.episodic_chunks.length ?? 0
+        }
+        hasStoryAttention={storyMetrics.storyAttention}
+        isStoryOpen={storyModalTab !== null}
+        onOpenStory={() => {
+          layout.closeOverlays();
+          setStoryModalTab("summary");
+        }}
         partyCount={getActiveParties(bundle).length}
         isPartyOpen={isPartyModalOpen}
         onOpenParty={() => {
@@ -707,6 +772,12 @@ export const App: React.FC = () => {
           onSendTurn={handleSendTurn}
           onCheckoutTurn={handleCheckoutTurn}
           onDeleteLastTurn={handleDeleteLastTurn}
+          scrollTargetTurn={scrollTargetTurn}
+          focusComposerNonce={focusComposerNonce}
+          onOpenStoryTimelines={() => {
+            layout.closeOverlays();
+            setStoryModalTab("timelines");
+          }}
           showSidebarToggle={layout.showMobileMenuButton}
           isSidebarOpen={layout.isSidebarOpen}
           onToggleSidebar={layout.toggleSidebar}
@@ -825,7 +896,6 @@ export const App: React.FC = () => {
           world={campaignWorld}
           character={campaignCharacter}
           participants={campaignParticipants}
-          memoryConfig={appSettings?.memory_config}
           pendingLocationOverrideId={pendingLocationOverrideId}
           onOverrideLocation={handleOverrideLocation}
           onOverrideCharacterLocation={handleOverrideCharacterLocation}
@@ -835,9 +905,23 @@ export const App: React.FC = () => {
           onUpdateCampaignMemories={handleUpdateCampaignMemories}
           onSaveCampaignLocationLore={handleSaveCampaignLocationLore}
           onSaveCampaignContainerLore={handleSaveCampaignContainerLore}
-          onCheckoutTurn={handleCheckoutTurn}
           isMutatingLocked={isStreaming || isPhase4Running}
           worlds={worlds}
+        />
+      )}
+
+      {/* Lifted Campaign Story & Branch Graph Modal */}
+      {bundle && storyModalTab !== null && (
+        <StoryModal
+          isOpen={storyModalTab !== null}
+          initialTab={storyModalTab}
+          onClose={() => setStoryModalTab(null)}
+          bundle={bundle}
+          memoryConfig={appSettings?.memory_config}
+          isMutatingLocked={isStreaming || isPhase4Running}
+          onZoomToTurn={handleZoomToStoryTurn}
+          onSwitchTimeline={handleSwitchStoryTimeline}
+          onBranchFromTurn={handleBranchFromStoryTurn}
         />
       )}
 

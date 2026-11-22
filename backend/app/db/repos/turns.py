@@ -849,12 +849,13 @@ class TurnsBranchesMixin:
         turn_id: str | None = None,
         owner_id: str | None = None,
     ) -> CampaignStateBundle:
-        """Delete the last user message turn on the active branch, including all generated swipes and their subtrees."""
+        """Delete the active leaf turn (and its childless same-prompt swipes) without touching sibling or descendant branches."""
         campaign = self.get_campaign(campaign_id, owner_id=owner_id)
         if not campaign.active_leaf_turn_id:
             raise ValueError(f"Campaign '{campaign_id}' has no active turn")
 
         leaf_turn = self.get_turn_node(campaign.active_leaf_turn_id)
+        anchor_turn = leaf_turn
         if turn_id is not None and turn_id != leaf_turn.id:
             target_turn = self.get_turn_node(turn_id)
             if target_turn.campaign_id != campaign_id:
@@ -865,25 +866,46 @@ class TurnsBranchesMixin:
                 raise ValueError(
                     f"Turn '{turn_id}' is not the active last message turn of campaign '{campaign_id}'"
                 )
+            anchor_turn = target_turn
 
-        if leaf_turn.parent_turn_id is None or leaf_turn.depth_index == 0:
+        if anchor_turn.parent_turn_id is None or anchor_turn.depth_index == 0:
             raise ValueError("Cannot delete the root opening scene turn")
 
-        parent_id = leaf_turn.parent_turn_id
+        parent_id = anchor_turn.parent_turn_id
         conn = self._connect()
         try:
+            has_descendants = conn.execute(
+                "SELECT 1 FROM turn_nodes WHERE campaign_id = ? AND parent_turn_id = ? LIMIT 1",
+                (campaign_id, anchor_turn.id),
+            ).fetchone()
+            if has_descendants is not None:
+                raise ValueError("Cannot delete a turn that has descendant branches")
+
             rows = conn.execute(
                 """
-                WITH RECURSIVE to_delete AS (
-                    SELECT id FROM turn_nodes
-                    WHERE campaign_id = ? AND parent_turn_id = ?
-                    UNION ALL
-                    SELECT t.id FROM turn_nodes t
-                    JOIN to_delete td ON t.parent_turn_id = td.id
-                )
-                SELECT id FROM to_delete
+                SELECT t.id
+                FROM turn_nodes t
+                WHERE t.campaign_id = ?
+                  AND (
+                    t.id = ?
+                    OR (
+                      t.parent_turn_id = ?
+                      AND t.user_message = ?
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM turn_nodes child
+                        WHERE child.campaign_id = ? AND child.parent_turn_id = t.id
+                      )
+                    )
+                  )
                 """,
-                (campaign_id, parent_id),
+                (
+                    campaign_id,
+                    anchor_turn.id,
+                    parent_id,
+                    anchor_turn.user_message,
+                    campaign_id,
+                ),
             ).fetchall()
             deleted_ids = [r["id"] for r in rows]
             if not deleted_ids:
@@ -891,11 +913,12 @@ class TurnsBranchesMixin:
 
             placeholders = ",".join("?" for _ in deleted_ids)
 
-            # 1. Roll back active_leaf_turn_id to parent_id
-            conn.execute(
-                "UPDATE campaigns SET active_leaf_turn_id = ? WHERE id = ?",
-                (parent_id, campaign_id),
-            )
+            # 1. Roll back active_leaf_turn_id to parent_id if the active leaf is being deleted
+            if leaf_turn.id in deleted_ids:
+                conn.execute(
+                    "UPDATE campaigns SET active_leaf_turn_id = ? WHERE id = ?",
+                    (parent_id, campaign_id),
+                )
 
             # 2. Delete vector entries anchored to any of the deleted turns
             conn.execute(

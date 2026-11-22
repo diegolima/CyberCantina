@@ -808,6 +808,14 @@ erDiagram
 | `frontend/src/components/shared/UnsupportedFieldsTab.tsx` |
 | `frontend/src/components/shared/VideoUploadControls.tsx` |
 
+#### `components/story`
+
+| File |
+| :--- |
+| `frontend/src/components/story/BranchGraphCanvas.tsx` |
+| `frontend/src/components/story/StoryModal.tsx` |
+| `frontend/src/components/story/branchGraphLayout.ts` |
+
 #### `components/wizard`
 
 | File |

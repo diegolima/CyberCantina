@@ -1,10 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Clock,
-  GitBranch,
   PanelRightClose,
-  ScrollText,
-  Search,
   X,
 } from "lucide-react";
 import type { RightPanelMode } from "../utils/campaignLayout";
@@ -29,7 +26,7 @@ import {
   getCoLocatedPlayerPartyNpcs,
 } from "../utils/partyHelpers";
 import { USER_PARTY_MEMBER_ID } from "../types";
-import { InspectorSection, usePersistentState } from "./inspector/InspectorPrimitives";
+import { usePersistentState } from "./inspector/InspectorPrimitives";
 import { CharacterRow } from "./inspector/CharacterRow";
 import { CampaignCharacterModal } from "./inspector/CampaignCharacterModal";
 import { InspectorLocationCard } from "./inspector/InspectorLocationCard";
@@ -71,8 +68,6 @@ interface LiveInspectorProps {
   character: CharacterRecord;
   /** All campaign participant records (primary character included). */
   participants?: CharacterRecord[];
-  /** Memory settings used for the Story empty-state hint. */
-  memoryConfig?: { working_memory_turns: number; episodic_chunk_size: number };
   pendingLocationOverrideId?: string | null;
   onOverrideLocation?: (
     locationId: string,
@@ -100,7 +95,6 @@ interface LiveInspectorProps {
     containerId: string,
     loreNodes: LocationLoreNodeDraft[]
   ) => Promise<void> | void;
-  onCheckoutTurn?: (turnId: string) => Promise<void> | void;
   onOpenWorldSheet?: () => void;
   isMutatingLocked?: boolean;
   worlds?: WorldRecord[];
@@ -114,7 +108,6 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   world,
   character,
   participants,
-  memoryConfig,
   pendingLocationOverrideId,
   onOverrideLocation,
   onOverrideCharacterLocation,
@@ -123,7 +116,6 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   onUpdateCampaignMemories,
   onSaveCampaignLocationLore,
   onSaveCampaignContainerLore,
-  onCheckoutTurn,
   onOpenWorldSheet,
   isMutatingLocked = false,
   worlds = [],
@@ -154,31 +146,6 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
       prev.size !== sceneFlags.length || sceneFlags.some((f) => !prev.has(f))
     );
   }, [prevTurn, sceneFlags]);
-
-  const storyChanged = useMemo(
-    () =>
-      Boolean(lastTurn) &&
-      bundle.episodic_chunks.some((c) => c.leaf_turn_id === lastTurn.id),
-    [bundle.episodic_chunks, lastTurn]
-  );
-
-  const [turnFilter, setTurnFilter] = useState("");
-  const activeBranchSet = useMemo(
-    () => new Set(bundle.active_branch_turns.map((t) => t.id)),
-    [bundle.active_branch_turns]
-  );
-
-  const filteredTurnNodes = useMemo(() => {
-    const q = turnFilter.trim().toLowerCase();
-    if (!q) return bundle.all_turn_nodes;
-    return bundle.all_turn_nodes.filter(
-      (node) =>
-        `turn #${node.depth_index}`.toLowerCase().includes(q) ||
-        node.user_message.toLowerCase().includes(q) ||
-        node.raw_prose.toLowerCase().includes(q) ||
-        node.world_snapshot.world_timestamp.toLowerCase().includes(q)
-    );
-  }, [bundle.all_turn_nodes, turnFilter]);
 
   // Participant roster: primary character first, then present, then elsewhere
   const characterRows = useMemo(() => {
@@ -559,174 +526,6 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
           />
         );
       })()}
-
-      {/* 4. Story (Zone 2 Episodic Summaries) */}
-      <InspectorSection
-        storageKey="story"
-        title="Story"
-        icon={<ScrollText size={13} color="var(--accent-amber)" />}
-        meta={bundle.episodic_chunks.length || undefined}
-        changed={storyChanged}
-        changedTitle="New summary this turn"
-      >
-        {bundle.episodic_chunks.length === 0 ? (
-          <div className="inspector-empty">
-            No summaries yet.
-            {memoryConfig &&
-              ` Once the story exceeds ${memoryConfig.working_memory_turns} turns, the oldest ${memoryConfig.episodic_chunk_size} are condensed into a summary here.`}
-          </div>
-        ) : (
-          bundle.episodic_chunks.map((chunk) => (
-            <div key={chunk.id} className="story-chunk">
-              <div className="story-chunk-range">
-                Turns {chunk.start_turn_depth}–{chunk.end_turn_depth}
-              </div>
-              {chunk.summary_text}
-            </div>
-          ))
-        )}
-      </InspectorSection>
-
-      {/* 5. Timeline Branches */}
-      <InspectorSection
-        storageKey="timeline"
-        title="Timeline Branches"
-        icon={<GitBranch size={13} color="var(--accent-violet)" />}
-        meta={
-          bundle.all_turn_nodes.length > 0
-            ? `${turns.length} on branch · ${bundle.all_turn_nodes.length} total`
-            : undefined
-        }
-      >
-        {bundle.all_turn_nodes.length === 0 ? (
-          <div className="inspector-empty">No turns in this timeline yet.</div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {bundle.all_turn_nodes.length > 4 && (
-              <div style={{ position: "relative" }}>
-                <Search
-                  size={12}
-                  style={{
-                    position: "absolute",
-                    left: 7,
-                    top: "50%",
-                    transform: "translateY(-50%)",
-                    color: "var(--text-muted)",
-                    pointerEvents: "none",
-                  }}
-                />
-                <input
-                  type="text"
-                  placeholder="Search turns..."
-                  value={turnFilter}
-                  onChange={(e) => setTurnFilter(e.target.value)}
-                  style={{
-                    width: "100%",
-                    fontSize: "0.72rem",
-                    padding: "4px 8px 4px 24px",
-                    background: "var(--bg-card)",
-                    border: "1px solid var(--border-subtle)",
-                    borderRadius: 5,
-                    color: "var(--text-primary)",
-                    outline: "none",
-                  }}
-                />
-              </div>
-            )}
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 5,
-                maxHeight: 280,
-                overflowY: "auto",
-                paddingRight: 2,
-              }}
-            >
-              {filteredTurnNodes.map((node) => {
-                const inActive = activeBranchSet.has(node.id);
-                const isLeaf = node.id === bundle.campaign.active_leaf_turn_id;
-                return (
-                  <div
-                    key={node.id}
-                    className={`branch-node-item ${
-                      inActive ? "in-active-branch" : ""
-                    } ${isLeaf ? "is-leaf" : ""}`}
-                    style={{
-                      marginLeft: Math.min(node.depth_index * 6, 32),
-                      cursor: isMutatingLocked || isLeaf ? "default" : "pointer",
-                      opacity: isMutatingLocked ? 0.65 : 1,
-                    }}
-                    onClick={() => {
-                      if (!isMutatingLocked && !isLeaf && onCheckoutTurn) {
-                        onCheckoutTurn(node.id);
-                      }
-                    }}
-                    title={
-                      isLeaf
-                        ? "Current active timeline turn"
-                        : inActive
-                        ? "Click to checkout this earlier turn on the active branch"
-                        : "Click to checkout this branch and switch timelines"
-                    }
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        fontWeight: 600,
-                        fontSize: "0.75rem",
-                        color: isLeaf
-                          ? "var(--accent-amber)"
-                          : inActive
-                          ? "#e2e8f0"
-                          : "var(--text-muted)",
-                      }}
-                    >
-                      <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                        Turn #{node.depth_index}
-                        {isLeaf && (
-                          <span
-                            style={{
-                              fontSize: "0.58rem",
-                              padding: "1px 4px",
-                              borderRadius: 3,
-                              background: "rgba(245, 158, 11, 0.2)",
-                              color: "var(--accent-amber)",
-                              fontWeight: 700,
-                              textTransform: "uppercase",
-                            }}
-                          >
-                            Active Leaf
-                          </span>
-                        )}
-                      </span>
-                      <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>
-                        {node.world_snapshot.world_timestamp.split(" ")[1] ?? ""}
-                      </span>
-                    </div>
-                    <div
-                      style={{
-                        color: "var(--text-secondary)",
-                        fontSize: "0.72rem",
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                      }}
-                    >
-                      {node.depth_index === 0
-                        ? "[Opening Scene]"
-                        : node.user_message}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </InspectorSection>
-
 
       <InspectorInternalsSection
         bundle={bundle}

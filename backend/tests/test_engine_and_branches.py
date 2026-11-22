@@ -1299,9 +1299,10 @@ async def test_edit_last_message_swipe_and_delete_last_turn_with_swipes(
     checked_v2 = empty_repo.checkout_turn_branch(camp_id, turn_v2.id)
     assert checked_v2.active_branch_turns[-1].user_message == edited_msg
 
-    # 3. Advance to Turn 2 from v2, generate a swipe on Turn 2, then delete Turn 2 (and its swipes)
+    # 3. Advance to Turn 2 from v2, generate a same-prompt swipe on Turn 2 and a distinct-prompt alternate branch, then delete Turn 2
+    t2_msg_a = "I inspect the surgical tray in the bay."
     req_t2_a = TurnSubmitRequest(
-        user_message="I inspect the surgical tray in the bay.",
+        user_message=t2_msg_a,
         parent_turn_id=turn_v2.id,
     )
     async for _ev in _execute_turn_stream_events(camp_id, req_t2_a):
@@ -1309,32 +1310,115 @@ async def test_edit_last_message_swipe_and_delete_last_turn_with_swipes(
     bundle_t2_a = empty_repo.get_campaign_state_bundle(camp_id)
     turn_2a = bundle_t2_a.active_branch_turns[-1]
 
+    t2_msg_b = "I open the concealed storage locker inside the bay."
     req_t2_b = TurnSubmitRequest(
-        user_message="I open the concealed storage locker inside the bay.",
+        user_message=t2_msg_b,
         parent_turn_id=turn_2a.parent_turn_id,
     )
     async for _ev in _execute_turn_stream_events(camp_id, req_t2_b):
         pass
     bundle_t2_b = empty_repo.get_campaign_state_bundle(camp_id)
     turn_2b = bundle_t2_b.active_branch_turns[-1]
-    assert len([t for t in bundle_t2_b.all_turn_nodes if t.parent_turn_id == turn_v2.id]) == 2
 
-    # Delete last message (Turn 2): removes both turn_2a and turn_2b, rolling active leaf back to turn_v2
-    after_del_t2 = empty_repo.delete_last_turn(camp_id)
-    assert after_del_t2.campaign.active_leaf_turn_id == turn_v2.id
-    assert len(after_del_t2.active_branch_turns) == 2
-    assert all(t.id not in {turn_2a.id, turn_2b.id} for t in after_del_t2.all_turn_nodes)
-    # Turn 1 swipes (v1 and v2) are still intact
-    assert [t.id for t in after_del_t2.all_turn_nodes if t.parent_turn_id == root_turn_id] == [
-        turn_v1.id,
-        turn_v2.id,
+    # Same-prompt swipe of turn_2b
+    req_t2_b_swipe = TurnSubmitRequest(
+        user_message=t2_msg_b,
+        parent_turn_id=turn_2a.parent_turn_id,
+    )
+    async for _ev in _execute_turn_stream_events(camp_id, req_t2_b_swipe):
+        pass
+    bundle_t2_b2 = empty_repo.get_campaign_state_bundle(camp_id)
+    turn_2b_swipe = bundle_t2_b2.active_branch_turns[-1]
+    assert len([t for t in bundle_t2_b2.all_turn_nodes if t.parent_turn_id == turn_v2.id]) == 3
+
+    # Delete last message (turn_2b_swipe): removes both same-prompt swipes (turn_2b + turn_2b_swipe),
+    # preserves distinct-prompt sibling turn_2a, and rolls active leaf back to turn_v2.
+    after_del_t2b = empty_repo.delete_last_turn(camp_id)
+    assert after_del_t2b.campaign.active_leaf_turn_id == turn_v2.id
+    assert len(after_del_t2b.active_branch_turns) == 2
+    assert all(t.id not in {turn_2b.id, turn_2b_swipe.id} for t in after_del_t2b.all_turn_nodes)
+    assert [t.id for t in after_del_t2b.all_turn_nodes if t.parent_turn_id == turn_v2.id] == [
+        turn_2a.id
     ]
 
-    # 4. Now delete last message again (at Turn 1): removes both turn_v1 and turn_v2, rolling back to Turn 0
-    after_del_t1 = empty_repo.delete_last_turn(camp_id)
-    assert after_del_t1.campaign.active_leaf_turn_id == root_turn_id
-    assert [t.id for t in after_del_t1.active_branch_turns] == [root_turn_id]
-    assert [t.id for t in after_del_t1.all_turn_nodes] == [root_turn_id]
+    # Interior node guard: turn_v2 still has child turn_2a so deleting turn_v2 is blocked
+    with pytest.raises(ValueError, match="Cannot delete a turn that has descendant branches"):
+        empty_repo.delete_last_turn(camp_id)
+
+    # Checkout and delete turn_2a, then turn_v2 (preserving turn_v1), then turn_v1 -> back to Turn 0
+    empty_repo.checkout_turn_branch(camp_id, turn_2a.id)
+    after_del_t2a = empty_repo.delete_last_turn(camp_id)
+    assert after_del_t2a.campaign.active_leaf_turn_id == turn_v2.id
+    assert [t.id for t in after_del_t2a.all_turn_nodes if t.parent_turn_id == turn_v2.id] == []
+
+    after_del_v2 = empty_repo.delete_last_turn(camp_id)
+    assert after_del_v2.campaign.active_leaf_turn_id == root_turn_id
+    assert [t.id for t in after_del_v2.all_turn_nodes if t.parent_turn_id == root_turn_id] == [
+        turn_v1.id
+    ]
+
+    empty_repo.checkout_turn_branch(camp_id, turn_v1.id)
+    after_del_v1 = empty_repo.delete_last_turn(camp_id)
+    assert after_del_v1.campaign.active_leaf_turn_id == root_turn_id
+    assert [t.id for t in after_del_v1.active_branch_turns] == [root_turn_id]
+    assert [t.id for t in after_del_v1.all_turn_nodes] == [root_turn_id]
+
+
+async def test_branch_safe_delete_preserves_developed_sibling_and_blocks_interior(
+    empty_repo: CantinaRepository,
+) -> None:
+    """Deleting a leaf on Branch B never deletes developed sibling Branch A (even with identical prompt), and rewound interior nodes cannot be deleted."""
+    _seed_world_id, _seed_char_id, camp_id = _seed_engine_scenario(empty_repo)
+    root_turn_id = empty_repo.get_campaign_state_bundle(camp_id).active_branch_turns[-1].id
+
+    # Turn 1
+    async for _ev in _execute_turn_stream_events(
+        camp_id, TurnSubmitRequest(user_message="I scan the room.", parent_turn_id=root_turn_id)
+    ):
+        pass
+    t1 = empty_repo.get_campaign_state_bundle(camp_id).active_branch_turns[-1]
+
+    # Branch A: Turn 2a -> Turn 3a
+    shared_prompt = "I confront the fixer."
+    async for _ev in _execute_turn_stream_events(
+        camp_id, TurnSubmitRequest(user_message=shared_prompt, parent_turn_id=t1.id)
+    ):
+        pass
+    t2a = empty_repo.get_campaign_state_bundle(camp_id).active_branch_turns[-1]
+
+    async for _ev in _execute_turn_stream_events(
+        camp_id, TurnSubmitRequest(user_message="I demand the datashard.", parent_turn_id=t2a.id)
+    ):
+        pass
+    t3a = empty_repo.get_campaign_state_bundle(camp_id).active_branch_turns[-1]
+
+    # Rewind to Turn 0 (root) and Turn 1 (interior): both must refuse delete
+    empty_repo.checkout_turn_branch(camp_id, root_turn_id)
+    with pytest.raises(ValueError, match="Cannot delete the root opening scene turn"):
+        empty_repo.delete_last_turn(camp_id)
+
+    empty_repo.checkout_turn_branch(camp_id, t1.id)
+    with pytest.raises(ValueError, match="Cannot delete a turn that has descendant branches"):
+        empty_repo.delete_last_turn(camp_id)
+
+    # Branch B off Turn 1 using the EXACT same prompt as Turn 2a
+    async for _ev in _execute_turn_stream_events(
+        camp_id, TurnSubmitRequest(user_message=shared_prompt, parent_turn_id=t1.id)
+    ):
+        pass
+    t2b = empty_repo.get_campaign_state_bundle(camp_id).active_branch_turns[-1]
+    assert t2b.id != t2a.id
+
+    # Deleting t2b must remove ONLY t2b and leave developed Branch A (t2a -> t3a) untouched!
+    after = empty_repo.delete_last_turn(camp_id)
+    assert after.campaign.active_leaf_turn_id == t1.id
+    remaining_ids = {t.id for t in after.all_turn_nodes}
+    assert t2b.id not in remaining_ids
+    assert {root_turn_id, t1.id, t2a.id, t3a.id}.issubset(remaining_ids)
+
+    # Switching back to Branch A tip succeeds cleanly
+    restored_a = empty_repo.checkout_turn_branch(camp_id, t3a.id)
+    assert [t.id for t in restored_a.active_branch_turns] == [root_turn_id, t1.id, t2a.id, t3a.id]
 
 
 async def test_max_eight_neighbors_and_passage_hub_reconnection(

@@ -429,7 +429,7 @@ async def delete_campaign_last_turn(
     campaign_id: str,
     current_user: UserProfile = Depends(get_current_user),
 ) -> CampaignStateBundle:
-    """Delete the last user message turn on the active branch, including all generated swipes."""
+    """Delete the active leaf turn (and its childless same-prompt swipes) without affecting sibling or descendant branches."""
     async with campaign_turn_gate.lock_for(campaign_id):
         try:
             return await asyncio.to_thread(
@@ -449,7 +449,7 @@ async def delete_campaign_turn(
     turn_id: str,
     current_user: UserProfile = Depends(get_current_user),
 ) -> CampaignStateBundle:
-    """Delete the specified last user message turn (and its sibling swipes) from the campaign."""
+    """Delete the specified leaf turn (and its childless same-prompt swipes) without affecting sibling or descendant branches."""
     async with campaign_turn_gate.lock_for(campaign_id):
         try:
             return await asyncio.to_thread(

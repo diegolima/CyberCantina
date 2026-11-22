@@ -29,8 +29,10 @@ export interface StandaloneArrivalCardProps {
   mediaItems?: FirstVisitMediaItem[];
   manualOverrides: Record<string, boolean>;
   onToggleCard: (cardKey: string, currentlyExpanded: boolean) => void;
+  isHighlighted?: boolean;
   showDelete?: boolean;
   deleteDisabled?: boolean;
+  deleteDisabledTitle?: string;
   onDelete?: () => void;
 }
 
@@ -48,8 +50,10 @@ export const StandaloneArrivalCard: React.FC<StandaloneArrivalCardProps> = ({
   mediaItems = [],
   manualOverrides,
   onToggleCard,
+  isHighlighted = false,
   showDelete = false,
   deleteDisabled = false,
+  deleteDisabledTitle,
   onDelete,
 }) => {
   const [failedUrls, setFailedUrls] = useState<Record<string, boolean>>({});
@@ -111,9 +115,10 @@ export const StandaloneArrivalCard: React.FC<StandaloneArrivalCardProps> = ({
 
   return (
     <div
+      data-turn-id={source === "map" ? turnId : undefined}
       className={`turn-card arrival-turn-card ${
         groupExpanded ? "arrival-turn-card--open" : "arrival-turn-card--collapsed"
-      }`}
+      } ${isHighlighted ? "turn-card--highlighted" : ""}`}
     >
       <div className="arrival-turn-header">
         <button
@@ -146,7 +151,10 @@ export const StandaloneArrivalCard: React.FC<StandaloneArrivalCardProps> = ({
               style={{ padding: "2px 7px", fontSize: "0.69rem" }}
               disabled={deleteDisabled}
               onClick={onDelete}
-              title="Undo map move & remove arrival description"
+              title={
+                deleteDisabledTitle ||
+                "Undo map move & remove arrival description"
+              }
             >
               <Undo2 size={11} />
               Undo
