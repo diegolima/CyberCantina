@@ -9,6 +9,7 @@ PROMPT_KEY_NARRATOR_ZONE1 = "narrator_zone1_system"
 PROMPT_KEY_CLERK_PRE_TURN = "clerk_pre_turn_system"
 PROMPT_KEY_CHARACTER_COGNITION = "character_cognition_system"
 PROMPT_KEY_CLERK_SUMMARY = "clerk_episodic_summary_system"
+PROMPT_KEY_CLERK_BOOKMARK_SUMMARY = "clerk_turn_bookmark_summary_system"
 PROMPT_KEY_CLERK_POST_TURN = "clerk_post_turn_system"
 PROMPT_KEY_CHARACTER_POST_TURN = "character_post_turn_system"
 PROMPT_KEY_CLERK_ARBITRATION = "clerk_arbitration_system"
@@ -27,6 +28,7 @@ ALL_PROMPT_KEYS = [
     PROMPT_KEY_CLERK_PRE_TURN,
     PROMPT_KEY_CHARACTER_COGNITION,
     PROMPT_KEY_CLERK_SUMMARY,
+    PROMPT_KEY_CLERK_BOOKMARK_SUMMARY,
     PROMPT_KEY_CLERK_POST_TURN,
     PROMPT_KEY_CHARACTER_POST_TURN,
     PROMPT_KEY_CLERK_ARBITRATION,
@@ -189,6 +191,18 @@ DEFAULT_CLERK_EPISODIC_SUMMARY_SYSTEM = (
     "- synopsis_text: Strictly 1 compact sentence (15-25 words) capturing the core outcome of the episode.\n"
     "- summary_text: Cohesive 2-4 sentence episodic summary paragraph.\n"
     "- keywords: 3-6 concrete entity, location, or event keywords from this episode."
+)
+
+DEFAULT_CLERK_TURN_BOOKMARK_SUMMARY_SYSTEM = (
+    "You are the Bookmark Summarizer Clerk for an interactive roleplay engine.\n"
+    "Write a single concise, objective 1-sentence summary (under 25 words) capturing what transpired "
+    "in <target_turn>—including meaningful dialogue beats, character revelations, decisions, discoveries, "
+    "or emotional turns, even if no macro plot flag changed.\n"
+    "Rules:\n"
+    "- If <previous_turn_context> is provided, use it ONLY to disambiguate pronouns, objects, or prior "
+    "questions; NEVER summarize the previous turn.\n"
+    "- Always produce a concrete 1-sentence summary (never return null, empty text, or 'nothing happened').\n"
+    "- Output plain text only: no quotes wrapping the sentence, no bullet prefixes, and no commentary."
 )
 
 DEFAULT_CLERK_MEMORY_COMPACTION_SYSTEM = (
@@ -524,6 +538,7 @@ FACTORY_DEFAULT_PROMPTS: dict[str, str] = {
     PROMPT_KEY_CLERK_PRE_TURN: DEFAULT_CLERK_PRE_TURN_SYSTEM,
     PROMPT_KEY_CHARACTER_COGNITION: DEFAULT_CHARACTER_COGNITION_SYSTEM,
     PROMPT_KEY_CLERK_SUMMARY: DEFAULT_CLERK_EPISODIC_SUMMARY_SYSTEM,
+    PROMPT_KEY_CLERK_BOOKMARK_SUMMARY: DEFAULT_CLERK_TURN_BOOKMARK_SUMMARY_SYSTEM,
     PROMPT_KEY_CLERK_POST_TURN: DEFAULT_CLERK_POST_TURN_SYSTEM,
     PROMPT_KEY_CHARACTER_POST_TURN: DEFAULT_CHARACTER_POST_TURN_SYSTEM,
     PROMPT_KEY_CLERK_ARBITRATION: DEFAULT_CLERK_ARBITRATION_SYSTEM,
@@ -762,6 +777,16 @@ PROMPTS_METADATA = [
         "description": (
             "Compresses slices of verbatim working memory turns into permanent episodic memory "
             "paragraphs (Zone 2)."
+        ),
+        "available_variables": [],
+        "required_tags": [],
+    },
+    {
+        "key": PROMPT_KEY_CLERK_BOOKMARK_SUMMARY,
+        "title": "Bookmark Turn Summarizer",
+        "description": (
+            "Generates an objective 1-sentence bookmark note summarizing a single bookmarked turn "
+            "when triggered via the note Magic Wand, using the immediate previous turn for context."
         ),
         "available_variables": [],
         "required_tags": [],

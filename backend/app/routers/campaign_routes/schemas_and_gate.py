@@ -106,6 +106,15 @@ class CampaignWorldSettingsPatchRequest(BaseModel):
     describe_on_first_visit: bool = True
 
 
+class TurnBookmarkUpdateRequest(BaseModel):
+    is_bookmarked: bool | None = None
+    user_note: str | None = Field(default=None, max_length=500)
+
+
+class TurnBookmarkSummaryResponse(BaseModel):
+    summary: str
+
+
 class CampaignTurnGate:
     """Keyed per-campaign asyncio.Lock registry serializing turn streams, swipes, and deletes."""
 

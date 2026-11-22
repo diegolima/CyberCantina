@@ -53,6 +53,8 @@
 | `DELETE` | `/api/campaigns/{campaign_id}/turns/last` | `app.routers.campaign_routes.crud_and_state.delete_campaign_last_turn` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/turns/stream` | `app.routers.campaign_routes.turn_streaming.stream_campaign_turn` | — | `frontend/src/api/stream.ts` |
 | `DELETE` | `/api/campaigns/{campaign_id}/turns/{turn_id}` | `app.routers.campaign_routes.crud_and_state.delete_campaign_turn` | `CampaignStateBundle` | *(backend-only / test / SSE)* |
+| `PATCH` | `/api/campaigns/{campaign_id}/turns/{turn_id}/bookmark` | `app.routers.campaign_routes.crud_and_state.update_campaign_turn_bookmark` | `TurnNodeRecord` | `frontend/src/api/campaigns.ts` |
+| `POST` | `/api/campaigns/{campaign_id}/turns/{turn_id}/bookmark-summary` | `app.routers.campaign_routes.crud_and_state.summarize_campaign_turn_for_bookmark` | `TurnBookmarkSummaryResponse` | `frontend/src/api/campaigns.ts` |
 | `PATCH` | `/api/campaigns/{campaign_id}/world-settings` | `app.routers.campaign_routes.crud_and_state.update_campaign_world_settings` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `GET` | `/api/characters` | `app.routers.characters.list_characters` | `list` | `frontend/src/api/characters.ts` |
 | `DELETE` | `/api/characters/{character_id}` | `app.routers.characters.delete_character` | `dict` | `frontend/src/api/characters.ts` |
@@ -713,6 +715,7 @@ erDiagram
 | `frontend/src/components/chat/SlashCommandPicker.tsx` |
 | `frontend/src/components/chat/SlashHelpTray.tsx` |
 | `frontend/src/components/chat/StandaloneArrivalCard.tsx` |
+| `frontend/src/components/chat/TurnBookmarkNoteRow.tsx` |
 | `frontend/src/components/chat/TurnCard.tsx` |
 | `frontend/src/components/chat/arrivalHelpers.ts` |
 | `frontend/src/components/chat/arrivalMediaHelpers.ts` |
@@ -815,6 +818,7 @@ erDiagram
 | `frontend/src/components/story/BranchGraphCanvas.tsx` |
 | `frontend/src/components/story/StoryModal.tsx` |
 | `frontend/src/components/story/branchGraphLayout.ts` |
+| `frontend/src/components/story/storyBookmarks.ts` |
 
 #### `components/wizard`
 

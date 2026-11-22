@@ -12,6 +12,9 @@ import type {
   LocationOverrideOptions,
   MemoryShard,
   PersonaTurnStateSnapshot,
+  TurnBookmarkSummaryResponse,
+  TurnBookmarkUpdatePayload,
+  TurnNodeRecord,
 } from "../types";
 import { API_BASE, fetchJson } from "./client";
 
@@ -215,6 +218,32 @@ export const campaignsApi = {
       `${API_BASE}/campaigns/${campaignId}/turns/last`,
       {
         method: "DELETE",
+      }
+    ),
+
+  updateTurnBookmark: (
+    campaignId: string,
+    turnId: string,
+    payload: TurnBookmarkUpdatePayload
+  ) =>
+    fetchJson<TurnNodeRecord>(
+      `${API_BASE}/campaigns/${campaignId}/turns/${turnId}/bookmark`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      }
+    ),
+
+  summarizeTurnForBookmark: (
+    campaignId: string,
+    turnId: string,
+    signal?: AbortSignal
+  ) =>
+    fetchJson<TurnBookmarkSummaryResponse>(
+      `${API_BASE}/campaigns/${campaignId}/turns/${turnId}/bookmark-summary`,
+      {
+        method: "POST",
+        signal,
       }
     ),
 

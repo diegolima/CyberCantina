@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from typing import Any
 import uuid
 import numpy as np
 from app.db.vector_store import combine_entry_text, embed_text
@@ -28,6 +29,7 @@ from app.schemas.turn import (
     WorldStateSnapshot,
 )
 from app.db.repos.base import (
+    UNSET,
     _parse_care_state_json,
     _dump_care_state_json,
     _dump_provenance_json,
@@ -904,6 +906,7 @@ class TurnsBranchesMixin:
                     OR (
                       t.parent_turn_id = ?
                       AND t.user_message = ?
+                      AND COALESCE(t.is_bookmarked, 0) = 0
                       AND NOT EXISTS (
                         SELECT 1
                         FROM turn_nodes child
@@ -1177,6 +1180,56 @@ class TurnsBranchesMixin:
         finally:
             conn.close()
 
+    def update_turn_bookmark(
+        self,
+        campaign_id: str,
+        turn_id: str,
+        *,
+        is_bookmarked: bool | Any = UNSET,
+        user_note: str | None | Any = UNSET,
+        owner_id: str | None = None,
+    ) -> TurnNodeRecord:
+        """Toggle turn bookmark state and/or update personal note without modifying post_turn_json."""
+        self.get_campaign(campaign_id, owner_id=owner_id)
+        turn = self.get_turn_node(turn_id)
+        if turn.campaign_id != campaign_id:
+            raise KeyError(
+                f"Turn node '{turn_id}' not found in campaign '{campaign_id}'"
+            )
+        if turn.depth_index == 0:
+            raise ValueError("Turn #0 cannot be bookmarked.")
+        if turn.actor_id == "__arrival__":
+            raise ValueError("Map-move turns cannot be bookmarked.")
+
+        updates: list[str] = []
+        params: list[Any] = []
+        if is_bookmarked is not UNSET:
+            updates.append("is_bookmarked = ?")
+            params.append(1 if bool(is_bookmarked) else 0)
+        if user_note is not UNSET:
+            if user_note is None:
+                cleaned_note: str | None = None
+            else:
+                normalized = " ".join(
+                    str(user_note).replace("\r", " ").replace("\n", " ").split()
+                ).strip()
+                cleaned_note = normalized[:500] if normalized else None
+            updates.append("user_note = ?")
+            params.append(cleaned_note)
+
+        if updates:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    f"UPDATE turn_nodes SET {', '.join(updates)} WHERE id = ? AND campaign_id = ?",
+                    [*params, turn_id, campaign_id],
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+        return self.get_turn_node(turn_id)
+
     @staticmethod
     def _row_to_turn_node(r: sqlite3.Row) -> TurnNodeRecord:
         post_json = r["post_turn_json"]
@@ -1302,5 +1355,15 @@ class TurnsBranchesMixin:
                 for item in json.loads(r["recalled_items_json"] or "[]")
             ],
             telemetry=telemetry_obj,
+            is_bookmarked=(
+                bool(r["is_bookmarked"])
+                if "is_bookmarked" in r.keys() and r["is_bookmarked"]
+                else False
+            ),
+            user_note=(
+                r["user_note"]
+                if "user_note" in r.keys() and r["user_note"]
+                else None
+            ),
             created_at=r["created_at"],
         )

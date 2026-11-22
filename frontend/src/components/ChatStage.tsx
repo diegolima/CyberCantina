@@ -93,6 +93,8 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   isInspectorOpen = true,
   onToggleInspector,
   hasInspectorAttention = false,
+  onUpdateTurnBookmark,
+  onSummarizeTurnForBookmark,
 }) => {
   const isBusy = isStreaming || isPhase4Running;
   const [inputText, setInputText] = useState("");
@@ -1610,6 +1612,8 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               onSwipeRegenerate={handleSwipeRegenerate}
               onDeleteLast={handleDeleteLast}
               onOpenAgentModal={setActiveAgentModal}
+              onUpdateTurnBookmark={onUpdateTurnBookmark}
+              onSummarizeTurnForBookmark={onSummarizeTurnForBookmark}
             />
           );
         })}

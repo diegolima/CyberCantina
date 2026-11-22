@@ -465,7 +465,18 @@ export interface TurnNodeRecord {
   whispers?: CharacterWhisper[];
   recalled_items: RecalledMemoryItem[];
   telemetry?: TurnTelemetry | null;
+  is_bookmarked?: boolean;
+  user_note?: string | null;
   created_at: string;
+}
+
+export interface TurnBookmarkUpdatePayload {
+  is_bookmarked?: boolean;
+  user_note?: string | null;
+}
+
+export interface TurnBookmarkSummaryResponse {
+  summary: string;
 }
 
 export interface CampaignRecord {

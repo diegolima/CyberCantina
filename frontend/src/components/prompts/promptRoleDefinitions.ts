@@ -48,6 +48,7 @@ export const PROMPT_ROLES: PromptRoleMeta[] = [
       "clerk_pre_turn_system",
       "clerk_post_turn_system",
       "clerk_episodic_summary_system",
+      "clerk_turn_bookmark_summary_system",
       "clerk_arbitration_system",
       "clerk_world_start_placement_system",
     ],

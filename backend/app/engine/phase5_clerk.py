@@ -125,6 +125,7 @@ from app.engine.clerk.episodic import (  # noqa: F401
     summarize_turn_chunk,
     _ORIGINAL_SUMMARIZE_TURN_CHUNK,
     summarize_turn_chunk_structured,
+    summarize_turn_for_bookmark,
 )
 from app.engine.clerk.heuristics import (  # noqa: F401
     heuristic_post_turn_delta,

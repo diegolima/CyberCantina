@@ -35,8 +35,12 @@ from app.engine.phase3_cognition import run_phase3_multi_cognition  # noqa: F401
 from app.engine.phase4_prose import stream_phase4_prose  # noqa: F401
 from app.engine.phase5_clerk import run_phase5_post_turn_clerk  # noqa: F401
 from app.engine.phase4_clerk import run_phase4_post_turn_clerk  # noqa: F401
+from app.engine.phase5_clerk import summarize_turn_for_bookmark  # noqa: F401
 from app.engine.clerk_placement import generate_clerk_starting_placement  # noqa: F401
-from app.prompts.defaults import PROMPT_KEY_CLERK_WORLD_START_PLACEMENT  # noqa: F401
+from app.prompts.defaults import (  # noqa: F401
+    PROMPT_KEY_CLERK_BOOKMARK_SUMMARY,
+    PROMPT_KEY_CLERK_WORLD_START_PLACEMENT,
+)
 from app.providers.local_relay import RelayRemoteError, RelayUnavailableError  # noqa: F401
 from app.schemas.auth import UserProfile  # noqa: F401
 from app.schemas.persona import PersonaRecord, PersonaTurnStateSnapshot  # noqa: F401
@@ -82,6 +86,8 @@ from app.routers.campaign_routes.schemas_and_gate import (  # noqa: F401
     CampaignEdgeCreateRequest,
     CampaignEdgeDistanceUpdateRequest,
     CampaignWorldSettingsPatchRequest,
+    TurnBookmarkUpdateRequest,
+    TurnBookmarkSummaryResponse,
     CampaignTurnGate,
     campaign_turn_gate,
 )
@@ -102,6 +108,8 @@ from app.routers.campaign_routes.crud_and_state import (  # noqa: F401
     update_campaign_character_memories,
     delete_campaign_last_turn,
     delete_campaign_turn,
+    update_campaign_turn_bookmark,
+    summarize_campaign_turn_for_bookmark,
 )
 from app.routers.campaign_routes.spatial_routes import (  # noqa: F401
     create_campaign_linked_location,

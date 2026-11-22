@@ -211,6 +211,8 @@ export const App: React.FC = () => {
     handleSaveCampaignMap,
     handleCheckoutTurn,
     handleDeleteLastTurn,
+    handleUpdateTurnBookmark,
+    handleSummarizeTurnForBookmark,
   } = useCampaignTurnActions({
     bundle,
     setBundle,
@@ -784,6 +786,8 @@ export const App: React.FC = () => {
           isInspectorOpen={layout.isInspectorOpen}
           onToggleInspector={layout.toggleInspector}
           hasInspectorAttention={Boolean(pendingLocationOverrideId)}
+          onUpdateTurnBookmark={handleUpdateTurnBookmark}
+          onSummarizeTurnForBookmark={handleSummarizeTurnForBookmark}
         />
       ) : (
         <HomeScreen

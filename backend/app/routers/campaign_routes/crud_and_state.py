@@ -12,7 +12,11 @@ from app.dependencies import (
     run_entity_pruner,
 )
 from app.engine.clerk_placement import generate_clerk_starting_placement
-from app.prompts.defaults import PROMPT_KEY_CLERK_WORLD_START_PLACEMENT
+from app.engine.phase5_clerk import summarize_turn_for_bookmark
+from app.prompts.defaults import (
+    PROMPT_KEY_CLERK_BOOKMARK_SUMMARY,
+    PROMPT_KEY_CLERK_WORLD_START_PLACEMENT,
+)
 from app.schemas.auth import UserProfile
 from app.schemas.character import CharacterRecord
 from app.schemas.persona import PersonaTurnStateSnapshot
@@ -21,14 +25,14 @@ from app.schemas.turn import (
     CampaignRecord,
     CampaignStateBundle,
     CampaignWorldSettings,
+    TurnNodeRecord,
 )
+from app.security.log_sanitize import sanitize_log_value
 from fastapi import (
     BackgroundTasks,
     Depends,
     HTTPException,
 )
-from app.routers.campaign_routes.schemas_and_gate import _resolve_facade_attr
-
 from app.routers.campaign_routes.schemas_and_gate import (
     BranchCheckoutRequest,
     CampaignAddCharacterRequest,
@@ -38,7 +42,11 @@ from app.routers.campaign_routes.schemas_and_gate import (
     ItemEquipToggleRequest,
     LocationOverrideRequest,
     PartyCreateRequest,
+    TurnBookmarkSummaryResponse,
+    TurnBookmarkUpdateRequest,
+    _resolve_facade_attr,
     campaign_turn_gate,
+    logger,
     router,
 )
 
@@ -462,3 +470,152 @@ async def delete_campaign_turn(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch(
+    "/api/campaigns/{campaign_id}/turns/{turn_id}/bookmark",
+    response_model=TurnNodeRecord,
+)
+def update_campaign_turn_bookmark(
+    campaign_id: str,
+    turn_id: str,
+    req: TurnBookmarkUpdateRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> TurnNodeRecord:
+    """Toggle bookmark state and/or update a non-context-injected note on an eligible turn."""
+    repo = _resolve_facade_attr("get_repo", get_repo)()
+    fields_set = req.model_fields_set
+    try:
+        return repo.update_turn_bookmark(
+            campaign_id,
+            turn_id,
+            is_bookmarked=(
+                req.is_bookmarked
+                if "is_bookmarked" in fields_set and req.is_bookmarked is not None
+                else UNSET
+            ),
+            user_note=req.user_note if "user_note" in fields_set else UNSET,
+            owner_id=current_user.id,
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail="Campaign or turn not found."
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/api/campaigns/{campaign_id}/turns/{turn_id}/bookmark-summary",
+    response_model=TurnBookmarkSummaryResponse,
+)
+async def summarize_campaign_turn_for_bookmark(
+    campaign_id: str,
+    turn_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> TurnBookmarkSummaryResponse:
+    """Use the Clerk model to produce a 1-sentence bookmark summary with parent-turn context."""
+    repo = _resolve_facade_attr("get_repo", get_repo)()
+    try:
+        campaign = repo.get_campaign(campaign_id, owner_id=current_user.id)
+        turn = repo.get_turn_node(turn_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail="Campaign or turn not found."
+        ) from exc
+
+    if turn.campaign_id != campaign.id:
+        raise HTTPException(
+            status_code=404, detail="Campaign or turn not found."
+        )
+    if turn.depth_index == 0:
+        raise HTTPException(status_code=400, detail="Turn #0 cannot be bookmarked.")
+    if turn.actor_id == "__arrival__":
+        raise HTTPException(
+            status_code=400, detail="Map-move turns cannot be bookmarked."
+        )
+
+    previous_turn: TurnNodeRecord | None = None
+    if turn.parent_turn_id:
+        try:
+            candidate_prev = repo.get_turn_node(turn.parent_turn_id)
+            if candidate_prev.campaign_id == campaign.id:
+                previous_turn = candidate_prev
+        except KeyError:
+            previous_turn = None
+
+    participant_ids = list(
+        dict.fromkeys(
+            [
+                campaign.character_id,
+                *(campaign.participant_character_ids or []),
+                *(
+                    [turn.actor_id]
+                    if turn.actor_id
+                    not in ("__narrator__", "__arrival__", "__solo__")
+                    else []
+                ),
+            ]
+        )
+    )
+    characters: list[CharacterRecord] = []
+    character_name_map: dict[str, str] = {}
+    for cid in participant_ids:
+        try:
+            char_rec = repo.get_character(cid, campaign_id=campaign.id)
+            characters.append(char_rec)
+            character_name_map[cid] = char_rec.name
+        except KeyError:
+            continue
+
+    location_name: str | None = None
+    try:
+        location_name = repo.get_location(
+            turn.world_snapshot.active_location_id, campaign_id=campaign.id
+        ).name
+    except KeyError:
+        location_name = None
+
+    previous_location_name: str | None = None
+    if previous_turn is not None:
+        try:
+            previous_location_name = repo.get_location(
+                previous_turn.world_snapshot.active_location_id,
+                campaign_id=campaign.id,
+            ).name
+        except KeyError:
+            previous_location_name = None
+
+    _, eff_clerk, _, _, _ = _resolve_facade_attr(
+        "get_effective_user_model_settings", get_effective_user_model_settings
+    )(current_user.id)
+    effective_prompts = repo.resolve_effective_prompts(
+        user_id=current_user.id, campaign_id=campaign.id
+    )
+    prompt_tpl = effective_prompts.get(PROMPT_KEY_CLERK_BOOKMARK_SUMMARY)
+
+    try:
+        summary = await _resolve_facade_attr(
+            "summarize_turn_for_bookmark", summarize_turn_for_bookmark
+        )(
+            turn,
+            previous_turn=previous_turn,
+            characters=characters,
+            character_name_map=character_name_map,
+            location_name=location_name,
+            previous_location_name=previous_location_name,
+            profile=eff_clerk,
+            prompt_template=prompt_tpl,
+        )
+    except Exception as exc:
+        logger.exception(
+            "Failed to generate Clerk bookmark summary for campaign=%s turn=%s",
+            sanitize_log_value(campaign_id),
+            sanitize_log_value(turn_id),
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to summarize turn with Clerk model.",
+        ) from exc
+
+    return TurnBookmarkSummaryResponse(summary=summary)

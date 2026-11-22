@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from app.config import (
     ModelProfile,
     settings,
@@ -313,3 +315,184 @@ async def summarize_turn_chunk_structured(
         character_name_map=character_name_map,
     )
     return _derive_fallback_episodic_fields(turns, raw_summary)
+
+
+_THOUGHT_TAG_NAMES = ("think", "thought", "reasoning", "scratchpad")
+_STRICT_HTML_TAG_RE = re.compile(
+    r"</?[a-zA-Z][a-zA-Z0-9:-]{0,32}(?:\s[^<>\r\n]{0,200})?/?>"
+)
+
+
+def _strip_thought_blocks_linear(text: str) -> str:
+    """Remove leaked chain-of-thought XML blocks using linear scanning (ReDoS-safe)."""
+    out = text
+    for tag in _THOUGHT_TAG_NAMES:
+        open_tok = f"<{tag}>"
+        close_tok = f"</{tag}>"
+        while True:
+            low = out.lower()
+            start = low.find(open_tok)
+            if start == -1:
+                break
+            end = low.find(close_tok, start + len(open_tok))
+            if end == -1:
+                out = out[:start].rstrip()
+                break
+            out = (out[:start] + out[end + len(close_tok) :]).strip()
+    return out
+
+
+def _sanitize_bookmark_summary(text: str) -> str:
+    """Normalize LLM single-turn summary into clean 1-line plain text without quotes/bullets."""
+    cleaned = _strip_thought_blocks_linear(text or "")
+    cleaned = _STRICT_HTML_TAG_RE.sub("", cleaned)
+    cleaned = " ".join(cleaned.replace("\r", " ").replace("\n", " ").split()).strip()
+    while cleaned and cleaned[0] in "-•*★":
+        cleaned = cleaned[1:].strip()
+    if len(cleaned) >= 2 and (
+        (cleaned[0] == '"' and cleaned[-1] == '"')
+        or (cleaned[0] == "'" and cleaned[-1] == "'")
+    ):
+        cleaned = cleaned[1:-1].strip()
+    return cleaned[:400]
+
+
+def _format_turn_speaker_label(
+    turn: TurnNodeRecord,
+    character_name_map: dict[str, str] | None = None,
+) -> str:
+    if turn.actor_id == "__narrator__":
+        return "Narrator"
+    if turn.actor_id == "__solo__":
+        return "Solo Scene"
+    if turn.actor_id == "__arrival__":
+        return "Scene Arrival"
+    if character_name_map and turn.actor_id in character_name_map:
+        return character_name_map[turn.actor_id]
+    return "Character"
+
+
+def _fallback_turn_bookmark_summary(
+    turn: TurnNodeRecord,
+    *,
+    character_name_map: dict[str, str] | None = None,
+    location_name: str | None = None,
+) -> str:
+    """Deterministic 1-sentence turn summary fallback when offline fallback is enabled."""
+    if turn.post_turn and turn.post_turn.notable_event_summary:
+        cleaned = _sanitize_bookmark_summary(turn.post_turn.notable_event_summary)
+        if cleaned:
+            return cleaned
+
+    prose_clean = " ".join(
+        (turn.raw_prose or "").replace("*", "").replace("\r", " ").replace("\n", " ").split()
+    ).strip()
+    if prose_clean:
+        dot_idx = prose_clean.find(". ")
+        sentence = prose_clean[: dot_idx + 1] if 0 < dot_idx < 180 else prose_clean[:160]
+        if sentence and sentence[-1] not in ".!?":
+            sentence += "."
+        return _sanitize_bookmark_summary(sentence)
+
+    speaker = _format_turn_speaker_label(turn, character_name_map)
+    plan = " ".join((turn.cognition.plan or "").split()).strip()
+    if plan:
+        text = f"{speaker} acted ({plan[:140]})."
+        return _sanitize_bookmark_summary(text)
+
+    msg = " ".join((turn.user_message or "").split()).strip()
+    if msg:
+        loc_suffix = f" at {location_name}" if location_name else ""
+        return _sanitize_bookmark_summary(f"Exchange{loc_suffix}: {msg[:140]}.")
+
+    return f"Turn #{turn.depth_index} scene beat."
+
+
+async def summarize_turn_for_bookmark(
+    turn: TurnNodeRecord,
+    *,
+    previous_turn: TurnNodeRecord | None = None,
+    characters: Sequence[CharacterRecord] | None = None,
+    character_name_map: dict[str, str] | None = None,
+    location_name: str | None = None,
+    previous_location_name: str | None = None,
+    profile: ModelProfile | None = None,
+    prompt_template: str | None = None,
+) -> str:
+    """Summarize a single turn in 1 concise sentence for bookmark notes, with parent-turn context."""
+    char_list = list(characters or [])
+    sections: list[str] = []
+
+    if previous_turn is not None:
+        prev_speaker = _format_turn_speaker_label(previous_turn, character_name_map)
+        prev_loc = (
+            previous_location_name
+            or previous_turn.world_snapshot.active_location_id
+            or "Unknown Location"
+        )
+        if previous_turn.depth_index == 0:
+            prev_prompt = "[Opening Scene]"
+        elif previous_turn.actor_id == "__arrival__":
+            prev_prompt = "[Map Move]"
+        else:
+            prev_prompt = sanitize_history_for_episodic_summary(
+                previous_turn.user_message, char_list
+            ).strip() or "[Narrator Cue]"
+        prev_prose = " ".join((previous_turn.raw_prose or "").split()).strip()
+        if len(prev_prose) > 700:
+            prev_prose = prev_prose[:697] + "..."
+        sections.append(
+            "<previous_turn_context>\n"
+            f"Note: Read-only context from Turn #{previous_turn.depth_index} ({prev_loc}) "
+            "to disambiguate names, pronouns, and objects. Do NOT summarize this turn.\n"
+            f"User: {prev_prompt}\n"
+            f"{prev_speaker}: {prev_prose}\n"
+            "</previous_turn_context>"
+        )
+
+    target_speaker = _format_turn_speaker_label(turn, character_name_map)
+    target_loc = location_name or turn.world_snapshot.active_location_id or "Unknown Location"
+    target_user = sanitize_history_for_episodic_summary(
+        turn.user_message, char_list
+    ).strip() or "[Narrator Cue]"
+    target_prose = " ".join((turn.raw_prose or "").split()).strip()
+    if len(target_prose) > 2500:
+        target_prose = target_prose[:2497] + "..."
+
+    sections.append(
+        "<target_turn>\n"
+        f"Turn #{turn.depth_index} | Location: {target_loc}\n"
+        f"User: {target_user}\n"
+        f"{target_speaker}: {target_prose}\n"
+        "</target_turn>"
+    )
+
+    user_content = "\n\n".join(sections)
+    system_prompt = render_template(
+        prompt_template or get_default_prompt("clerk_turn_bookmark_summary_system")
+    )
+    clerk_prof = profile or settings.clerk_profile
+
+    try:
+        with telemetry_phase_scope("phase5_clerk", "Turn Bookmark Summary"):
+            raw = await llm_client.complete_text(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                profile=clerk_prof,
+                temperature=0.2,
+                max_tokens=120,
+            )
+        cleaned = _sanitize_bookmark_summary(raw)
+        if cleaned:
+            return cleaned
+    except Exception:
+        if not settings.allow_offline_fallback:
+            raise
+
+    return _fallback_turn_bookmark_summary(
+        turn,
+        character_name_map=character_name_map,
+        location_name=location_name,
+    )

@@ -14,6 +14,7 @@ export const MIN_GRAPH_ZOOM = 0.25;
 export const MAX_GRAPH_ZOOM = 2.0;
 
 export type BranchGraphNodeKind = "opening" | "standard" | "waypoint" | "swipe" | "episode";
+export type BranchNodeDescriptionSource = "user_note" | "notable_event" | "fallback";
 
 export interface EpisodeSummaryVariant {
   /**
@@ -59,6 +60,10 @@ export interface EpisodeGroupMeta {
   summaryVariants: EpisodeSummaryVariant[];
   /** True when index 0 is the `"Episode in Progress"` placeholder. */
   isInProgressOnActive: boolean;
+  /** Number of eligible bookmarked turns inside `turnIds`. */
+  bookmarkCount: number;
+  /** IDs of bookmarked turns inside `turnIds`. */
+  bookmarkedTurnIds: string[];
 }
 
 export interface ExpandedEpisodeSegment {
@@ -108,9 +113,12 @@ export interface BranchGraphNode {
   episodeGroup: EpisodeGroupMeta | null;
   /** Non-null on normal/waypoint turns currently rendered inside an expanded episode. */
   memberEpisodeId: string | null;
-  /** Primary display text: `notable_event_summary` when present, else prompt/opening/location fallback. */
+  /** Primary display text: `user_note` (when bookmarked) -> `notable_event_summary` -> prompt/opening/location fallback. */
   description: string;
   hasNotableSummary: boolean;
+  isBookmarked: boolean;
+  hasUserNote: boolean;
+  descriptionSource: BranchNodeDescriptionSource;
   locationName: string;
   /** Left X coordinate in SVG graph space. */
   x: number;
@@ -202,31 +210,76 @@ function resolveTurnLocationName(
   return locId || "Unknown Location";
 }
 
+function isTurnBookmarkEligible(turn: TurnNodeRecord): boolean {
+  return Boolean(turn.is_bookmarked) && turn.depth_index > 0 && turn.actor_id !== "__arrival__";
+}
+
 function resolveNodeDescription(
   turn: TurnNodeRecord,
   locationName: string
-): { description: string; hasNotableSummary: boolean } {
-  const summary = turn.post_turn?.notable_event_summary?.trim();
-  if (summary) {
-    return { description: summary, hasNotableSummary: true };
+): {
+  description: string;
+  hasNotableSummary: boolean;
+  hasUserNote: boolean;
+  descriptionSource: BranchNodeDescriptionSource;
+} {
+  const notable = turn.post_turn?.notable_event_summary?.trim() || "";
+  const userNote = isTurnBookmarkEligible(turn) ? (turn.user_note?.trim() || "") : "";
+  if (userNote) {
+    return {
+      description: userNote,
+      hasNotableSummary: Boolean(notable),
+      hasUserNote: true,
+      descriptionSource: "user_note",
+    };
+  }
+  if (notable) {
+    return {
+      description: notable,
+      hasNotableSummary: true,
+      hasUserNote: false,
+      descriptionSource: "notable_event",
+    };
   }
   if (turn.depth_index === 0) {
-    return { description: "[Opening Scene]", hasNotableSummary: false };
+    return {
+      description: "[Opening Scene]",
+      hasNotableSummary: false,
+      hasUserNote: false,
+      descriptionSource: "fallback",
+    };
   }
   if (turn.actor_id === "__arrival__") {
     return {
       description: locationName ? `Arrived: ${locationName}` : "Map Move",
       hasNotableSummary: false,
+      hasUserNote: false,
+      descriptionSource: "fallback",
     };
   }
   const msg = (turn.user_message || "").trim();
   if (msg) {
-    return { description: msg, hasNotableSummary: false };
+    return {
+      description: msg,
+      hasNotableSummary: false,
+      hasUserNote: false,
+      descriptionSource: "fallback",
+    };
   }
   if (turn.actor_id === "__narrator__") {
-    return { description: "[Scene Narration]", hasNotableSummary: false };
+    return {
+      description: "[Scene Narration]",
+      hasNotableSummary: false,
+      hasUserNote: false,
+      descriptionSource: "fallback",
+    };
   }
-  return { description: `Turn #${turn.depth_index}`, hasNotableSummary: false };
+  return {
+    description: `Turn #${turn.depth_index}`,
+    hasNotableSummary: false,
+    hasUserNote: false,
+    descriptionSource: "fallback",
+  };
 }
 
 function getNodeDimensions(kind: BranchGraphNodeKind): { width: number; height: number } {
@@ -419,7 +472,7 @@ export function buildBranchGraphModel({
 
     for (const child of rawChildren) {
       const hasKids = (rawChildrenByParent.get(child.id)?.length ?? 0) > 0;
-      if (activeBranchSet.has(child.id) || hasKids) {
+      if (activeBranchSet.has(child.id) || hasKids || isTurnBookmarkEligible(child)) {
         primary.push(child);
       } else {
         childlessInactive.push(child);
@@ -632,6 +685,10 @@ export function buildBranchGraphModel({
         summaryVariants = [buildChunkSummaryVariant(chunk, "alternate", turnById)];
       }
 
+      const bookmarkedTurnIds = run
+        .filter((t) => isTurnBookmarkEligible(t))
+        .map((t) => t.id);
+
       const ep: EpisodeGroupMeta = {
         id: epId,
         episodeIndex: episodes.length + 1,
@@ -647,6 +704,8 @@ export function buildBranchGraphModel({
         outgoingBranchCount,
         summaryVariants,
         isInProgressOnActive,
+        bookmarkCount: bookmarkedTurnIds.length,
+        bookmarkedTurnIds,
       };
 
       episodes.push(ep);
@@ -725,7 +784,8 @@ export function buildBranchGraphModel({
 
     const { width, height } = getNodeDimensions(kind);
     const locationName = resolveTurnLocationName(turn, locationNamesById);
-    const { description, hasNotableSummary } = resolveNodeDescription(turn, locationName);
+    const { description, hasNotableSummary, hasUserNote, descriptionSource } =
+      resolveNodeDescription(turn, locationName);
     const hiddenSwipes = isExpandedSwipe ? [] : hiddenSwipesByAnchorId.get(turn.id) ?? [];
 
     return {
@@ -746,6 +806,9 @@ export function buildBranchGraphModel({
       memberEpisodeId,
       description,
       hasNotableSummary,
+      isBookmarked: isTurnBookmarkEligible(turn),
+      hasUserNote,
+      descriptionSource,
       locationName,
       x,
       y: 0,
@@ -787,6 +850,9 @@ export function buildBranchGraphModel({
       memberEpisodeId: null,
       description: defaultVariant?.synopsis || defaultVariant?.title || "Episode Summary",
       hasNotableSummary: !ep.isInProgressOnActive,
+      isBookmarked: ep.bookmarkCount > 0,
+      hasUserNote: false,
+      descriptionSource: "fallback",
       locationName,
       x,
       y: 0,
@@ -1184,4 +1250,20 @@ export function countVisibleTimelines(
     activeBranchTurns,
     activeLeafId,
   }).branchTipCount;
+}
+
+/**
+ * Resolve the EpisodeGroup ID that owns `targetTurnId`, or null if the turn is ungrouped.
+ */
+export function findContainingEpisodeId(
+  params: Omit<BuildBranchGraphParams, "expandedEpisodeIds" | "episodeExpandOverrides">,
+  targetTurnId: string | null | undefined
+): string | null {
+  if (!targetTurnId) return null;
+  const model = buildBranchGraphModel({
+    ...params,
+    expandedEpisodeIds: new Set<string>(),
+  });
+  const found = model.episodes.find((ep) => ep.turnIds.includes(targetTurnId));
+  return found?.id ?? null;
 }

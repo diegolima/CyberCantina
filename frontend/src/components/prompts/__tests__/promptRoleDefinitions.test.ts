@@ -6,7 +6,7 @@ import {
 } from "../promptRoleDefinitions";
 
 describe("promptRoleDefinitions", () => {
-  const ALL_13_PROMPTS = [
+  const ALL_14_PROMPTS = [
     "actor_zone1_system",
     "narrator_zone1_system",
     "character_cognition_system",
@@ -14,6 +14,7 @@ describe("promptRoleDefinitions", () => {
     "clerk_pre_turn_system",
     "clerk_post_turn_system",
     "clerk_episodic_summary_system",
+    "clerk_turn_bookmark_summary_system",
     "clerk_arbitration_system",
     "clerk_world_start_placement_system",
     "wizard_world_system",
@@ -27,18 +28,18 @@ describe("promptRoleDefinitions", () => {
     expect(roleIds).toEqual(["storytelling", "cognition", "auxiliary", "wizard"]);
   });
 
-  it("maps every one of the 13 system prompt keys to exactly one role without duplicates", () => {
+  it("maps every one of the 14 system prompt keys to exactly one role without duplicates", () => {
     const mappedKeys: string[] = [];
     for (const role of PROMPT_ROLES) {
       for (const key of role.promptKeys) {
-        expect(ALL_13_PROMPTS).toContain(key);
+        expect(ALL_14_PROMPTS).toContain(key);
         expect(mappedKeys).not.toContain(key);
         mappedKeys.push(key);
       }
     }
 
-    expect(mappedKeys.length).toBe(13);
-    for (const key of ALL_13_PROMPTS) {
+    expect(mappedKeys.length).toBe(14);
+    for (const key of ALL_14_PROMPTS) {
       expect(mappedKeys).toContain(key);
     }
   });
@@ -51,7 +52,7 @@ describe("promptRoleDefinitions", () => {
 
     expect(storytelling.promptKeys).toHaveLength(2);
     expect(cognition.promptKeys).toHaveLength(2);
-    expect(auxiliary.promptKeys).toHaveLength(5);
+    expect(auxiliary.promptKeys).toHaveLength(6);
     expect(wizard.promptKeys).toHaveLength(4);
   });
 
@@ -63,6 +64,7 @@ describe("promptRoleDefinitions", () => {
     expect(getRoleForPromptKey("character_post_turn_system")).toBe("cognition");
 
     expect(getRoleForPromptKey("clerk_pre_turn_system")).toBe("auxiliary");
+    expect(getRoleForPromptKey("clerk_turn_bookmark_summary_system")).toBe("auxiliary");
     expect(getRoleForPromptKey("clerk_world_start_placement_system")).toBe("auxiliary");
 
     expect(getRoleForPromptKey("wizard_world_system")).toBe("wizard");

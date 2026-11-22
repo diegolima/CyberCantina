@@ -1032,6 +1032,8 @@ class TurnNodeRecord(BaseModel):
     )
     recalled_items: list[RecalledMemoryItem] = Field(default_factory=list)
     telemetry: TurnTelemetry | None = None
+    is_bookmarked: bool = False
+    user_note: str | None = None
     created_at: str
 
 

@@ -128,7 +128,7 @@ flowchart TD
 | `components (root)` | 24 | `api`, `components/auth`, `components/character`, `components/chat`, `components/inspector`, `components/map`, `components/prompts`, `components/shared`, `components/wizard`, `components/world`, `hooks`, `providers`, `types`, `utils` |
 | `components/auth` | 14 | `api`, `components (root)`, `components/models`, `components/providers`, `components/shared`, `types`, `utils` |
 | `components/character` | 12 | `api`, `components (root)`, `components/shared`, `types`, `utils` |
-| `components/chat` | 14 | `components (root)`, `components/inspector`, `components/shared`, `hooks`, `types`, `utils` |
+| `components/chat` | 15 | `components (root)`, `components/inspector`, `components/shared`, `hooks`, `types`, `utils` |
 | `components/inspector` | 13 | `components (root)`, `components/map`, `components/shared`, `types`, `utils` |
 | `components/map` | 15 | `components (root)`, `components/inspector`, `components/shared`, `hooks`, `types` |
 | `components/models` | 12 | `components/providers`, `local`, `types` |
@@ -136,7 +136,7 @@ flowchart TD
 | `components/prompts` | 3 | *(leaf)* |
 | `components/providers` | 5 | `api`, `local`, `providers`, `types` |
 | `components/shared` | 5 | `types`, `utils` |
-| `components/story` | 3 | `types` |
+| `components/story` | 4 | `types` |
 | `components/wizard` | 2 | `api`, `components (root)`, `types` |
 | `components/world` | 8 | `api`, `components (root)`, `components/map`, `components/shared`, `types`, `utils` |
 | `hooks` | 3 | `api`, `types`, `utils` |

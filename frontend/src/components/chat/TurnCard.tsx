@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import {
   AlertTriangle,
+  Bookmark,
   Bot,
   Brain,
   ChevronDown,
@@ -23,6 +24,7 @@ import type {
   CharacterRecord,
   DiceRollResult,
   Phase4TurnProgress,
+  TurnBookmarkUpdatePayload,
   TurnNodeRecord,
 } from "../../types";
 import { getCharacterEmotionPortrait } from "../../utils/entityImages";
@@ -34,6 +36,7 @@ import {
 } from "../../utils/narratorCognition";
 import type { ActiveAgentModalTarget } from "../inspector/AgentChangesModal";
 import { StandaloneArrivalCard } from "./StandaloneArrivalCard";
+import { TurnBookmarkNoteRow } from "./TurnBookmarkNoteRow";
 import {
   getTierBadgeClass,
   renderFormattedProse,
@@ -70,6 +73,14 @@ export interface TurnCardProps {
   onSwipeRegenerate: (turn: TurnNodeRecord) => void;
   onDeleteLast: () => void;
   onOpenAgentModal: (target: ActiveAgentModalTarget) => void;
+  onUpdateTurnBookmark?: (
+    turnId: string,
+    payload: TurnBookmarkUpdatePayload
+  ) => Promise<TurnNodeRecord | null | void>;
+  onSummarizeTurnForBookmark?: (
+    turnId: string,
+    signal?: AbortSignal
+  ) => Promise<string>;
 }
 
 export const TurnCard: React.FC<TurnCardProps> = ({
@@ -102,10 +113,13 @@ export const TurnCard: React.FC<TurnCardProps> = ({
   onSwipeRegenerate,
   onDeleteLast,
   onOpenAgentModal,
+  onUpdateTurnBookmark,
+  onSummarizeTurnForBookmark,
 }) => {
   const [selectedCognitionCharIdByTurn, setSelectedCognitionCharIdByTurn] = useState<Record<string, string>>({});
   const [showRetainedIds, setShowRetainedIds] = useState<Record<string, boolean>>({});
   const [brokenPersonaPortraitUrl, setBrokenPersonaPortraitUrl] = useState<string | null>(null);
+  const [isTogglingBookmark, setIsTogglingBookmark] = useState(false);
   const toggleRetained = (id: string) =>
     setShowRetainedIds((prev) => ({ ...prev, [id]: !prev[id] }));
   const personaPortraitUrl = bundle.campaign.persona_snapshot?.portrait_url || null;
@@ -172,6 +186,18 @@ export const TurnCard: React.FC<TurnCardProps> = ({
   const handleSwipeRegenerate = onSwipeRegenerate;
   const handleDeleteLast = onDeleteLast;
   const setActiveAgentModal = onOpenAgentModal;
+
+  const handleToggleBookmark = async () => {
+    if (isRoot || isArrivalTurn || isTogglingBookmark || !onUpdateTurnBookmark) return;
+    setIsTogglingBookmark(true);
+    try {
+      await onUpdateTurnBookmark(turn.id, {
+        is_bookmarked: !Boolean(turn.is_bookmarked),
+      });
+    } finally {
+      setIsTogglingBookmark(false);
+    }
+  };
 
   const renderAgentPills = (t: TurnNodeRecord) => {
     const progress = phase4ProgressByTurn[t.id];
@@ -297,52 +323,81 @@ export const TurnCard: React.FC<TurnCardProps> = ({
         } ${isHighlighted ? "turn-card--highlighted" : ""}`}
       >
               {!isRoot && (
-                <>
-                  {isEditingThisTurn && (
-                    <div className="turn-editing-banner-pill">
-                      <Edit3 size={11} color="var(--accent-amber)" />
-                      <span>Editing in composer...</span>
-                    </div>
-                  )}
-                  {isCueMessage ? (
-                    turn.user_message.toLowerCase().includes("advance the story") ||
-                    turn.user_message.toLowerCase().includes("wait for") ||
-                    turn.user_message.toLowerCase().includes("minutes elapse") ? (
-                      <div className="user-bubble user-bubble-narrator-time">
-                        <Clock size={12} color="var(--accent-amber)" />
-                        <span>{turn.user_message.replace(/^\[|\]$/g, "")}</span>
+                <div className="turn-card-top-row">
+                  <div className="turn-bookmark-slot">
+                    <button
+                      type="button"
+                      className={`turn-bookmark-btn ${
+                        turn.is_bookmarked ? "turn-bookmark-btn--active" : ""
+                      }`}
+                      data-turn-bookmark-toggle={turn.id}
+                      aria-pressed={Boolean(turn.is_bookmarked)}
+                      aria-label={
+                        turn.is_bookmarked
+                          ? "Remove bookmark from this turn"
+                          : "Bookmark this turn"
+                      }
+                      title={
+                        turn.is_bookmarked
+                          ? "Bookmarked — click to remove bookmark (any saved note is retained)"
+                          : "Bookmark this turn"
+                      }
+                      disabled={isTogglingBookmark || !onUpdateTurnBookmark}
+                      onClick={() => void handleToggleBookmark()}
+                    >
+                      <Bookmark
+                        size={14}
+                        fill={turn.is_bookmarked ? "currentColor" : "none"}
+                      />
+                    </button>
+                  </div>
+                  <div className="turn-prompt-slot">
+                    {isEditingThisTurn && (
+                      <div className="turn-editing-banner-pill">
+                        <Edit3 size={11} color="var(--accent-amber)" />
+                        <span>Editing in composer...</span>
                       </div>
-                    ) : turn.user_message.toLowerCase().includes("complication") ? (
-                      <div className="user-bubble user-bubble-narrator-complication">
-                        <AlertTriangle size={12} color="var(--accent-rose)" />
-                        <span>{turn.user_message.replace(/^\[|\]$/g, "")}</span>
+                    )}
+                    {isCueMessage ? (
+                      turn.user_message.toLowerCase().includes("advance the story") ||
+                      turn.user_message.toLowerCase().includes("wait for") ||
+                      turn.user_message.toLowerCase().includes("minutes elapse") ? (
+                        <div className="user-bubble user-bubble-narrator-time">
+                          <Clock size={12} color="var(--accent-amber)" />
+                          <span>{turn.user_message.replace(/^\[|\]$/g, "")}</span>
+                        </div>
+                      ) : turn.user_message.toLowerCase().includes("complication") ? (
+                        <div className="user-bubble user-bubble-narrator-complication">
+                          <AlertTriangle size={12} color="var(--accent-rose)" />
+                          <span>{turn.user_message.replace(/^\[|\]$/g, "")}</span>
+                        </div>
+                      ) : (
+                        <div className="user-bubble user-bubble-narrator-cue">
+                          <Sparkles size={12} color="var(--accent-cyan)" />
+                          <span>{turn.user_message}</span>
+                        </div>
+                      )
+                    ) : showPersonaPortrait ? (
+                      <div className="user-prompt-row">
+                        {renderUserMessageBubble(
+                          turn.user_message,
+                          allCampaignCharacters,
+                          presentCharacterIds,
+                          turn.whispers
+                        )}
+                        <img
+                          src={personaPortraitUrl!}
+                          alt={bundle.campaign.persona_snapshot?.name || "Protagonist"}
+                          title={bundle.campaign.persona_snapshot?.name || "Protagonist"}
+                          className="user-prompt-avatar"
+                          onError={() => setBrokenPersonaPortraitUrl(personaPortraitUrl)}
+                        />
                       </div>
                     ) : (
-                      <div className="user-bubble user-bubble-narrator-cue">
-                        <Sparkles size={12} color="var(--accent-cyan)" />
-                        <span>{turn.user_message}</span>
-                      </div>
-                    )
-                  ) : showPersonaPortrait ? (
-                    <div className="user-prompt-row">
-                      {renderUserMessageBubble(
-                        turn.user_message,
-                        allCampaignCharacters,
-                        presentCharacterIds,
-                        turn.whispers
-                      )}
-                      <img
-                        src={personaPortraitUrl!}
-                        alt={bundle.campaign.persona_snapshot?.name || "Protagonist"}
-                        title={bundle.campaign.persona_snapshot?.name || "Protagonist"}
-                        className="user-prompt-avatar"
-                        onError={() => setBrokenPersonaPortraitUrl(personaPortraitUrl)}
-                      />
-                    </div>
-                  ) : (
-                    renderUserMessageBubble(turn.user_message, allCampaignCharacters, presentCharacterIds, turn.whispers)
-                  )}
-                </>
+                      renderUserMessageBubble(turn.user_message, allCampaignCharacters, presentCharacterIds, turn.whispers)
+                    )}
+                  </div>
+                </div>
               )}
 
               {/* Staged Director Choices Badge Strip */}
@@ -1228,6 +1283,17 @@ export const TurnCard: React.FC<TurnCardProps> = ({
                     )}
                   </div>
                 </div>
+
+                {/* Bookmark Note Display / Inline Editor (strictly below notable_event_summary) */}
+                {!isRoot && turn.is_bookmarked && (
+                  <TurnBookmarkNoteRow
+                    turn={turn}
+                    onSaveNote={async (tid, note) => {
+                      await onUpdateTurnBookmark?.(tid, { user_note: note });
+                    }}
+                    onSummarizeTurn={onSummarizeTurnForBookmark}
+                  />
+                )}
               </div>
             </div>
       {!isRoot && arrivalNode}

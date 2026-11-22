@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Bookmark,
   ChevronLeft,
   ChevronRight,
   Compass,
@@ -28,6 +29,7 @@ import {
   computeBranchEdgeLabelPoint,
   computeCenterNodeViewport,
   computeFitGraphViewport,
+  findContainingEpisodeId,
   type BranchGraphNode,
   type EpisodeGroupMeta,
 } from "./branchGraphLayout";
@@ -39,6 +41,8 @@ export interface BranchGraphCanvasProps {
   initialSelectedNodeId?: string | null;
   /** Optional initial episode expand/collapse overrides (helpful in SSR tests). */
   initialEpisodeExpandOverrides?: Record<string, boolean>;
+  /** When true, center the initial viewport directly on `initialSelectedNodeId`. */
+  focusSelectedOnMount?: boolean;
   onZoomToTurn: (turnId: string) => void;
   onSwitchTimeline: (tipTurnId: string) => Promise<void> | void;
   onBranchFromTurn: (turnId: string) => Promise<void> | void;
@@ -95,6 +99,7 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
   isMutatingLocked = false,
   initialSelectedNodeId,
   initialEpisodeExpandOverrides,
+  focusSelectedOnMount = false,
   onZoomToTurn,
   onSwitchTimeline,
   onBranchFromTurn,
@@ -109,7 +114,25 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
   );
   const [expandedAnchors, setExpandedAnchors] = useState<Set<string>>(() => new Set());
   const [episodeExpandOverrides, setEpisodeExpandOverrides] = useState<Record<string, boolean>>(
-    () => ({ ...(initialEpisodeExpandOverrides ?? {}) })
+    () => {
+      const next: Record<string, boolean> = { ...(initialEpisodeExpandOverrides ?? {}) };
+      if (initialSelectedNodeId) {
+        const epId = findContainingEpisodeId(
+          {
+            allTurns: bundle.all_turn_nodes,
+            activeBranchTurns: bundle.active_branch_turns,
+            activeLeafId,
+            episodicChunks: bundle.episodic_chunks,
+            allEpisodicChunks: bundle.all_episodic_chunks,
+          },
+          initialSelectedNodeId
+        );
+        if (epId && next[epId] === undefined) {
+          next[epId] = true;
+        }
+      }
+      return next;
+    }
   );
   const [variantIndexByEpisode, setVariantIndexByEpisode] = useState<Record<string, number>>({});
   const [showAllSwipes, setShowAllSwipes] = useState(false);
@@ -258,17 +281,58 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
     zoom,
   ]);
 
+  // Keep selectedNodeId and enclosing episode expansion synced if initialSelectedNodeId changes while mounted
+  const prevInitialSelectedRef = useRef<string | null | undefined>(initialSelectedNodeId);
+  useEffect(() => {
+    if (prevInitialSelectedRef.current === initialSelectedNodeId) return;
+    prevInitialSelectedRef.current = initialSelectedNodeId;
+    if (!initialSelectedNodeId) return;
+    setSelectedNodeId(initialSelectedNodeId);
+    const epId = findContainingEpisodeId(
+      {
+        allTurns: bundle.all_turn_nodes,
+        activeBranchTurns: bundle.active_branch_turns,
+        activeLeafId,
+        episodicChunks: bundle.episodic_chunks,
+        allEpisodicChunks: bundle.all_episodic_chunks,
+      },
+      initialSelectedNodeId
+    );
+    if (epId) {
+      setEpisodeExpandOverrides((prev) => (prev[epId] ? prev : { ...prev, [epId]: true }));
+    }
+  }, [
+    activeLeafId,
+    bundle.active_branch_turns,
+    bundle.all_episodic_chunks,
+    bundle.all_turn_nodes,
+    bundle.episodic_chunks,
+    initialSelectedNodeId,
+  ]);
+
   // Initial viewport alignment once mounted
   useEffect(() => {
     if (hasInitializedViewportRef.current || model.nodes.length === 0) return;
     hasInitializedViewportRef.current = true;
     const { width, height } = getStageSize();
+    const explicitTarget = initialSelectedNodeId
+      ? model.nodeById[initialSelectedNodeId] ?? null
+      : null;
+
+    if (focusSelectedOnMount && explicitTarget) {
+      const centered = computeCenterNodeViewport(explicitTarget, width, height, 0.92);
+      setZoom(centered.zoom);
+      setPan(centered.pan);
+      return;
+    }
+
     const fit = computeFitGraphViewport(model.bounds, width, height, 48);
     if (fit.zoom >= 0.72) {
       setZoom(fit.zoom);
       setPan(fit.pan);
     } else {
       const target =
+        explicitTarget ??
         (activeLeafId ? model.nodeById[activeLeafId] : null) ??
         (activeLeafContainingEpisodeId ? model.nodeById[activeLeafContainingEpisodeId] : null) ??
         model.nodes[0];
@@ -284,7 +348,9 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
   }, [
     activeLeafContainingEpisodeId,
     activeLeafId,
+    focusSelectedOnMount,
     getStageSize,
+    initialSelectedNodeId,
     model.bounds,
     model.nodeById,
     model.nodes,
@@ -957,6 +1023,11 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
                 }`;
                 const expandPillW = Math.max(66, expandPillLabel.length * 6.2 + 16);
 
+                const epBadgeWidth = epBadgeText.length * 6 + 10;
+                const epBadgeX = node.width - (epBadgeWidth + 10);
+                const epBookmarkPillWidth =
+                  ep.bookmarkCount > 0 ? 18 + String(ep.bookmarkCount).length * 6 : 0;
+
                 return (
                   <g
                     key={node.id}
@@ -964,6 +1035,7 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
                     data-graph-node-id={node.id}
                     data-graph-node-kind="episode"
                     data-episode-id={ep.id}
+                    data-episode-bookmarks={ep.bookmarkCount > 0 ? ep.bookmarkCount : undefined}
                     transform={`translate(${node.x}, ${topY})`}
                     style={{ cursor: "pointer" }}
                     onClick={handleNodeClick}
@@ -1017,11 +1089,47 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
                       {rangeStr}
                     </text>
 
-                    <g transform={`translate(${node.width - (epBadgeText.length * 6 + 20)}, 8)`}>
+                    {ep.bookmarkCount > 0 && (
+                      <g
+                        transform={`translate(${epBadgeX - epBookmarkPillWidth - 5}, 8)`}
+                        data-episode-bookmark-badge={ep.id}
+                      >
+                        <rect
+                          x={0}
+                          y={0}
+                          width={epBookmarkPillWidth}
+                          height={15}
+                          rx={4}
+                          fill="rgba(88, 28, 135, 0.55)"
+                          stroke="rgba(192, 132, 252, 0.85)"
+                          strokeWidth={0.9}
+                        />
+                        <path
+                          d="M5 3.2h5.5a.6.6 0 0 1 .6.6v7.7L7.75 9.6 4.4 11.5V3.8a.6.6 0 0 1 .6-.6z"
+                          fill="#c084fc"
+                          stroke="#f3e8ff"
+                          strokeWidth={0.6}
+                        />
+                        <text
+                          x={14}
+                          y={10.5}
+                          fill="#f3e8ff"
+                          fontSize="8.5"
+                          fontWeight="700"
+                        >
+                          {ep.bookmarkCount}
+                        </text>
+                        <title>{`Contains ${ep.bookmarkCount} bookmarked ${
+                          ep.bookmarkCount === 1 ? "turn" : "turns"
+                        }`}</title>
+                      </g>
+                    )}
+
+                    <g transform={`translate(${epBadgeX}, 8)`}>
                       <rect
                         x={0}
                         y={0}
-                        width={epBadgeText.length * 6 + 10}
+                        width={epBadgeWidth}
                         height={15}
                         rx={4}
                         fill="rgba(15, 23, 42, 0.78)"
@@ -1261,7 +1369,7 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
 
               const maxLines = node.kind === "swipe" ? 1 : 2;
               const maxChars = node.kind === "swipe" ? 24 : 30;
-              const descPrefix = node.hasNotableSummary ? "★ " : "";
+              const descPrefix = node.descriptionSource === "notable_event" ? "★ " : "";
               const descLines = clampLines(
                 `${descPrefix}${node.description}`,
                 maxChars,
@@ -1281,6 +1389,10 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
                 : "#a78bfa";
               const timeStr =
                 node.turn.world_snapshot?.world_timestamp?.split(" ")[1] ?? "";
+              const turnLabel = `Turn #${node.depth}`;
+              const turnLabelX = node.isBookmarked ? 24 : 12;
+              const statusBadgeX =
+                turnLabelX + Math.max(54, turnLabel.length * 6.8 + 8);
 
               return (
                 <g
@@ -1288,6 +1400,7 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
                   data-graph-interactive="true"
                   data-graph-node-id={node.id}
                   data-graph-node-kind={node.kind}
+                  data-bookmarked={node.isBookmarked ? "true" : undefined}
                   data-in-expanded-episode={isInExpandedEpisode ? "true" : undefined}
                   transform={`translate(${node.x}, ${topY})`}
                   style={{ cursor: "pointer" }}
@@ -1307,9 +1420,22 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
                     opacity={node.isExpandedSwipe && !isSelected ? 0.82 : 1}
                   />
 
+                  {/* Bookmark Indicator (Top-Left of Node Header) */}
+                  {node.isBookmarked && (
+                    <g transform="translate(10, 9)" data-node-bookmark-icon={node.id}>
+                      <path
+                        d="M1.5 1h6.5a.9.9 0 0 1 .9.9v9.6l-4.15-2.4L.6 11.5V1.9A.9.9 0 0 1 1.5 1z"
+                        fill="#a855f7"
+                        stroke="#f3e8ff"
+                        strokeWidth={0.9}
+                      />
+                      <title>Bookmarked turn</title>
+                    </g>
+                  )}
+
                   {/* Top Row: Turn #N, Badge, Time */}
                   <text
-                    x={12}
+                    x={turnLabelX}
                     y={20}
                     fill={
                       isInExpandedEpisode
@@ -1327,11 +1453,11 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
                     fontSize="11.5"
                     fontWeight="700"
                   >
-                    Turn #{node.depth}
+                    {turnLabel}
                   </text>
 
                   {badgeText && (
-                    <g transform="translate(68, 9)">
+                    <g transform={`translate(${statusBadgeX}, 9)`}>
                       <rect
                         x={0}
                         y={0}
@@ -1378,21 +1504,23 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
                     </text>
                   )}
 
-                  {/* Description lines (Notable Summary or Prompt Fallback) */}
+                  {/* Description lines (User Bookmark Note, Notable Summary, or Prompt Fallback) */}
                   {descLines.map((line, lineIdx) => (
                     <text
                       key={lineIdx}
                       x={12}
                       y={39 + lineIdx * 15}
                       fill={
-                        node.hasNotableSummary
+                        node.descriptionSource === "user_note"
+                          ? "#d8b4fe"
+                          : node.descriptionSource === "notable_event"
                           ? "#fde68a"
                           : node.isExpandedSwipe
                           ? "#94a3b8"
                           : "#cbd5e1"
                       }
                       fontSize="10.8"
-                      fontWeight={node.hasNotableSummary ? "600" : "400"}
+                      fontWeight={node.descriptionSource !== "fallback" ? "600" : "400"}
                     >
                       {line}
                     </text>
@@ -1507,6 +1635,12 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
                   <Layers size={11} />
                   {selectedEpisodeGroup.hiddenSwipeCount} unfollowed{" "}
                   {selectedEpisodeGroup.hiddenSwipeCount === 1 ? "swipe" : "swipes"} inside
+                </span>
+              )}
+              {selectedEpisodeGroup.bookmarkCount > 0 && (
+                <span className="branch-graph-bookmark-pill">
+                  <Bookmark size={11} fill="currentColor" />
+                  {selectedEpisodeGroup.bookmarkCount} bookmarked
                 </span>
               )}
             </div>
@@ -1636,11 +1770,24 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
                   Summary: {selectedNode.episodicChunkLabel}
                 </span>
               )}
+              {selectedNode.isBookmarked && (
+                <span className="branch-graph-bookmark-pill">
+                  <Bookmark size={10} fill="currentColor" />
+                  Bookmarked
+                </span>
+              )}
             </div>
 
-            {selectedNode.hasNotableSummary && (
+            {selectedNode.turn.post_turn?.notable_event_summary?.trim() && (
               <div className="branch-graph-detail-summary">
-                ★ {selectedNode.description}
+                ★ {selectedNode.turn.post_turn.notable_event_summary.trim()}
+              </div>
+            )}
+
+            {selectedNode.hasUserNote && selectedNode.turn.user_note?.trim() && (
+              <div className="branch-graph-detail-bookmark-note">
+                <Bookmark size={12} fill="currentColor" style={{ flexShrink: 0 }} />
+                <span>{selectedNode.turn.user_note.trim()}</span>
               </div>
             )}
 

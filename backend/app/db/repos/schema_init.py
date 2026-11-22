@@ -804,6 +804,14 @@ class SchemaInitMixin:
                 conn.execute(
                     "ALTER TABLE turn_nodes ADD COLUMN telemetry_json TEXT NULL"
                 )
+            if "is_bookmarked" not in tn_cols:
+                conn.execute(
+                    "ALTER TABLE turn_nodes ADD COLUMN is_bookmarked INTEGER NOT NULL DEFAULT 0"
+                )
+            if "user_note" not in tn_cols:
+                conn.execute(
+                    "ALTER TABLE turn_nodes ADD COLUMN user_note TEXT NULL"
+                )
 
             ws_cols = {
                 r["name"]

@@ -20,6 +20,8 @@ import type {
   Phase3TurnProgress,
   Phase4AgentProgressItem,
   Phase4TurnProgress,
+  TurnBookmarkUpdatePayload,
+  TurnNodeRecord,
   WorldRecord,
 } from "../types";
 
@@ -601,6 +603,50 @@ export function useCampaignTurnActions({
     setCampaignWorld(updatedWorld);
   };
 
+  const handleUpdateTurnBookmark = async (
+    turnId: string,
+    payload: TurnBookmarkUpdatePayload
+  ): Promise<TurnNodeRecord | null> => {
+    if (!bundle) return null;
+    const updated = await api.updateTurnBookmark(
+      bundle.campaign.id,
+      turnId,
+      payload
+    );
+    setBundle((prev) => {
+      if (!prev || prev.campaign.id !== updated.campaign_id) return prev;
+      const patchTurn = (t: TurnNodeRecord): TurnNodeRecord =>
+        t.id === updated.id
+          ? {
+              ...t,
+              is_bookmarked: updated.is_bookmarked,
+              user_note: updated.user_note,
+            }
+          : t;
+      return {
+        ...prev,
+        active_branch_turns: prev.active_branch_turns.map(patchTurn),
+        all_turn_nodes: prev.all_turn_nodes.map(patchTurn),
+      };
+    });
+    return updated;
+  };
+
+  const handleSummarizeTurnForBookmark = async (
+    turnId: string,
+    signal?: AbortSignal
+  ): Promise<string> => {
+    if (!bundle) {
+      throw new Error("No active campaign");
+    }
+    const res = await api.summarizeTurnForBookmark(
+      bundle.campaign.id,
+      turnId,
+      signal
+    );
+    return res.summary;
+  };
+
   return {
     isStreaming,
     phase3Progress,
@@ -624,5 +670,7 @@ export function useCampaignTurnActions({
     handleSaveCampaignMap,
     handleCheckoutTurn,
     handleDeleteLastTurn,
+    handleUpdateTurnBookmark,
+    handleSummarizeTurnForBookmark,
   };
 }

@@ -11,6 +11,8 @@ import type {
   PartyActionSpec,
   Phase3TurnProgress,
   Phase4TurnProgress,
+  TurnBookmarkUpdatePayload,
+  TurnNodeRecord,
 } from "../../types";
 import { decomposeClientUserMessage } from "../../utils/mentions";
 
@@ -68,6 +70,14 @@ export interface ChatStageProps {
   isInspectorOpen?: boolean;
   onToggleInspector?: () => void;
   hasInspectorAttention?: boolean;
+  onUpdateTurnBookmark?: (
+    turnId: string,
+    payload: TurnBookmarkUpdatePayload
+  ) => Promise<TurnNodeRecord | null | void>;
+  onSummarizeTurnForBookmark?: (
+    turnId: string,
+    signal?: AbortSignal
+  ) => Promise<string>;
 }
 
 export function renderFormattedProse(text: string): React.ReactNode {
