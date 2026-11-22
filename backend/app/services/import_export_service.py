@@ -13,7 +13,7 @@ import uuid
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import HTTPException
 
@@ -69,10 +69,22 @@ from app.schemas.world import (
 )
 from app.security.log_sanitize import sanitize_log_value
 from app.security.media_path import safe_resolve_staging_file_path
+from app.security.zcc_crypto import (
+    ZccCryptoFormatError,
+    ZccDecryptionError,
+    decrypt_zcc_enc_to_file,
+    encrypt_file_to_zcc_enc,
+    is_encrypted_zcc_bytes,
+    is_encrypted_zcc_file,
+)
 from app.services.video_processor import (
     VideoProbeMetadata,
     cleanup_staging_paths,
     probe_video_file,
+)
+from app.services.zcc_campaign_io import (
+    extract_campaign_export_bundle,
+    ingest_campaigns_atomic,
 )
 from app.wizards.sillytavern_parser import extract_card_from_bytes
 
@@ -114,6 +126,8 @@ class StagedImport:
     created_at_epoch: float
     parsed_payload: dict[str, Any]
     staged_file_path: Path | None = None
+    requires_password: bool = False
+    decrypted_file_path: Path | None = None
 
 
 _staged_imports: dict[str, StagedImport] = {}
@@ -121,14 +135,24 @@ _staged_imports_lock = threading.Lock()
 
 
 def _staged_entry_disk_bytes(entry: StagedImport) -> int:
-    if entry.staged_file_path is None:
-        return 0
-    try:
-        if entry.staged_file_path.is_file():
-            return entry.staged_file_path.stat().st_size
-    except OSError:
-        return 0
-    return 0
+    total = 0
+    for p in (entry.staged_file_path, entry.decrypted_file_path):
+        if p is None:
+            continue
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def _cleanup_staged_entry_paths(entry: StagedImport | None) -> None:
+    if entry is None:
+        return
+    paths = [p for p in (entry.staged_file_path, entry.decrypted_file_path) if p is not None]
+    if paths:
+        cleanup_staging_paths(*paths)
 
 
 def _staged_entry_ram_bytes(entry: StagedImport) -> int:
@@ -142,8 +166,7 @@ def _cleanup_expired_staged_imports_locked(now: float | None = None) -> None:
     ]
     for k in expired:
         entry = _staged_imports.pop(k, None)
-        if entry and entry.staged_file_path:
-            cleanup_staging_paths(entry.staged_file_path)
+        _cleanup_staged_entry_paths(entry)
 
 
 def _cleanup_expired_staged_imports() -> None:
@@ -165,8 +188,7 @@ def _register_staged_import(entry: StagedImport) -> None:
         while len(user_entries) >= MAX_STAGED_IMPORTS_PER_USER:
             oldest = user_entries.pop(0)
             popped = _staged_imports.pop(oldest.token, None)
-            if popped and popped.staged_file_path:
-                cleanup_staging_paths(popped.staged_file_path)
+            _cleanup_staged_entry_paths(popped)
 
         total_disk = sum(_staged_entry_disk_bytes(v) for v in _staged_imports.values()) + incoming_disk
         total_ram = sum(_staged_entry_ram_bytes(v) for v in _staged_imports.values()) + incoming_ram
@@ -175,8 +197,7 @@ def _register_staged_import(entry: StagedImport) -> None:
             or total_disk > MAX_STAGED_DISK_BYTES_GLOBAL
             or total_ram > MAX_STAGED_RAM_BYTES_GLOBAL
         ):
-            if entry.staged_file_path:
-                cleanup_staging_paths(entry.staged_file_path)
+            _cleanup_staged_entry_paths(entry)
             raise HTTPException(
                 status_code=503,
                 detail="Too many pending import sessions are currently active. Please retry shortly.",
@@ -641,15 +662,18 @@ def build_zcc_export_to_file(
     include_world_media: bool = True,
     include_videos: bool = False,
     selected_video_ids: list[str] | None = None,
+    campaigns_json: list[dict[str, Any]] | None = None,
+    base_only_worlds: bool = False,
+    password: str | None = None,
 ) -> Path:
-    """Stream selected characters, worlds, personas, and media into a temporary .zcc ZIP file on disk."""
+    """Stream selected characters, worlds, personas, optional campaigns, and media into a .zcc file on disk."""
     worlds: list[WorldRecord] = []
     personas: list[PersonaRecord] = []
     video_filter = set(selected_video_ids) if selected_video_ids is not None else None
 
     for wid in world_ids:
         try:
-            worlds.append(repo.get_world(wid, owner_id=owner_id))
+            worlds.append(repo.get_world(wid, base_only=base_only_worlds, owner_id=owner_id))
         except KeyError:
             continue
 
@@ -761,18 +785,20 @@ def build_zcc_export_to_file(
         for p in personas
     ]
 
+    exported_campaigns_json = list(campaigns_json or [])
     videos_count = sum(1 for p in media_sources if "/videos/" in p)
     images_count = len(media_sources) - videos_count
     manifest = ZccManifest(
-        format_version=1,
+        format_version=2 if exported_campaigns_json else 1,
         generator="CyberCantina",
-        generator_version="0.5.0",
+        generator_version="0.30.0" if exported_campaigns_json else "0.5.0",
         exported_at=utc_now_iso(),
         description=description or f"CyberCantina bundle exported by {owner_id}",
         contents=ZccManifestContents(
             characters_count=len(exported_characters_json),
             worlds_count=len(exported_worlds_json),
             personas_count=len(exported_personas_json),
+            campaigns_count=len(exported_campaigns_json),
             media_files_count=len(media_sources),
             images_count=images_count,
             videos_count=videos_count,
@@ -804,13 +830,66 @@ def build_zcc_export_to_file(
                     "personas.json",
                     json.dumps(exported_personas_json, indent=2, ensure_ascii=False),
                 )
+            if exported_campaigns_json:
+                zf.writestr(
+                    "campaigns.json",
+                    json.dumps(exported_campaigns_json, indent=2, ensure_ascii=False),
+                )
             for rel_path, disk_path in media_sources.items():
                 if disk_path.is_file():
                     zf.write(disk_path, arcname=rel_path, compress_type=zipfile.ZIP_STORED)
+
+        if password:
+            enc_path = safe_resolve_staging_file_path(
+                repo.media_dir, f"export_{uuid.uuid4().hex}.zcc"
+            )
+            try:
+                encrypt_file_to_zcc_enc(out_path, enc_path, password)
+            finally:
+                cleanup_staging_paths(out_path)
+            return enc_path
         return out_path
     except Exception:
         cleanup_staging_paths(out_path)
         raise
+
+
+def build_campaign_zcc_export_to_file(
+    repo: CantinaRepository,
+    campaign_id: str,
+    owner_id: str,
+    *,
+    timeline_scope: Literal["full", "active"] = "full",
+    strip_bookmark_comments: bool = False,
+    include_world_media: bool = True,
+    include_videos: bool = False,
+    selected_video_ids: list[str] | None = None,
+    password: str | None = None,
+) -> tuple[Path, str]:
+    """Export a running campaign (and its base world, characters, persona, and state) into a .zcc v2 file."""
+    extracted = extract_campaign_export_bundle(
+        repo=repo,
+        campaign_id=campaign_id,
+        owner_id=owner_id,
+        timeline_scope=timeline_scope,
+        strip_bookmark_comments=strip_bookmark_comments,
+    )
+    camp_name = str(extracted.campaign_payload.get("name") or "campaign")
+    out_path = build_zcc_export_to_file(
+        repo=repo,
+        character_ids=extracted.character_ids,
+        world_ids=[extracted.world_id],
+        persona_ids=[extracted.persona_id] if extracted.persona_id else [],
+        owner_id=owner_id,
+        description=f"Campaign export ({timeline_scope} timeline): {camp_name}",
+        include_world_media=include_world_media,
+        include_videos=include_videos,
+        selected_video_ids=selected_video_ids,
+        campaigns_json=[extracted.campaign_payload],
+        base_only_worlds=True,
+        password=password,
+    )
+    return out_path, camp_name
 
 
 def build_zcc_export(
@@ -823,6 +902,7 @@ def build_zcc_export(
     include_world_media: bool = True,
     include_videos: bool = False,
     selected_video_ids: list[str] | None = None,
+    password: str | None = None,
 ) -> bytes:
     """Bundle selected characters, worlds, personas, and media into .zcc bytes (for tests and callers)."""
     tmp_path = build_zcc_export_to_file(
@@ -835,6 +915,7 @@ def build_zcc_export(
         include_world_media=include_world_media,
         include_videos=include_videos,
         selected_video_ids=selected_video_ids,
+        password=password,
     )
     try:
         return tmp_path.read_bytes()
@@ -921,6 +1002,8 @@ def _inspect_zcc_archive(
     source: bytes | Path,
     user_id: str,
     staged_token: str,
+    register_entry: bool = True,
+    existing_encrypted_path: Path | None = None,
 ) -> ImportInspectResponse:
     zf = _open_safe_zip(source)
     try:
@@ -928,6 +1011,7 @@ def _inspect_zcc_archive(
         characters_raw: list[dict[str, Any]] = []
         worlds_raw: list[dict[str, Any]] = []
         personas_raw: list[dict[str, Any]] = []
+        campaigns_raw: list[dict[str, Any]] = []
 
         if "manifest.json" in zf.namelist():
             try:
@@ -954,7 +1038,19 @@ def _inspect_zcc_archive(
             except Exception as exc:
                 logger.warning("personas.json parse failure: %s", sanitize_log_value(exc))
 
-        if not manifest and not characters_raw and not worlds_raw and not personas_raw:
+        if "campaigns.json" in zf.namelist():
+            try:
+                campaigns_raw = json.loads(zf.read("campaigns.json").decode("utf-8"))
+            except Exception as exc:
+                logger.warning("campaigns.json parse failure: %s", sanitize_log_value(exc))
+
+        if (
+            not manifest
+            and not characters_raw
+            and not worlds_raw
+            and not personas_raw
+            and not campaigns_raw
+        ):
             raise HTTPException(
                 status_code=400,
                 detail="Archive is not a valid CyberCantina package (no manifest or entity files found).",
@@ -966,14 +1062,15 @@ def _inspect_zcc_archive(
 
         if not manifest:
             manifest = ZccManifest(
-                format_version=1,
+                format_version=2 if campaigns_raw else 1,
                 generator="CyberCantina (Synthesized)",
-                generator_version="0.5.0",
+                generator_version="0.30.0" if campaigns_raw else "0.5.0",
                 exported_at=utc_now_iso(),
                 contents=ZccManifestContents(
                     characters_count=len(characters_raw),
                     worlds_count=len(worlds_raw),
                     personas_count=len(personas_raw),
+                    campaigns_count=len(campaigns_raw),
                     media_files_count=images_count + videos_count,
                     images_count=images_count,
                     videos_count=videos_count,
@@ -1115,35 +1212,73 @@ def _inspect_zcc_archive(
             )
             for p in personas_raw
         ]
-
-        _register_staged_import(
-            StagedImport(
-                token=staged_token,
-                user_id=user_id,
-                format_type="zcc",
-                is_native=True,
-                data_bytes=source if isinstance(source, bytes) else None,
-                staged_file_path=source if isinstance(source, Path) else None,
-                created_at_epoch=time.time(),
-                parsed_payload={
-                    "manifest": manifest.model_dump(),
-                    "characters": characters_raw,
-                    "worlds": worlds_raw,
-                    "personas": personas_raw,
-                    "images_count": images_count,
-                    "videos_count": videos_count,
-                },
+        campaign_summaries: list[EntitySummary] = []
+        for camp in campaigns_raw:
+            if not isinstance(camp, dict):
+                continue
+            camp_turns = camp.get("turns") or []
+            camp_chunks = camp.get("episodic_chunks") or []
+            bookmarked_count = sum(1 for t in camp_turns if isinstance(t, dict) and t.get("is_bookmarked"))
+            campaign_summaries.append(
+                EntitySummary(
+                    id=str(camp.get("id") or ""),
+                    name=str(camp.get("name") or "Imported Campaign"),
+                    tagline=f"{camp.get('world_name') or 'World'} • {camp.get('character_name') or 'Companion'}",
+                    category="campaign",
+                    extra_info={
+                        "turns_count": len(camp_turns),
+                        "summaries_count": len(camp_chunks),
+                        "bookmarks_count": bookmarked_count,
+                        "timeline_scope": str(camp.get("timeline_scope") or "full"),
+                        "world_name": camp.get("world_name"),
+                        "character_name": camp.get("character_name"),
+                    },
+                )
             )
-        )
+
+        parsed_payload = {
+            "manifest": manifest.model_dump(),
+            "characters": characters_raw,
+            "worlds": worlds_raw,
+            "personas": personas_raw,
+            "campaigns": campaigns_raw,
+            "images_count": images_count,
+            "videos_count": videos_count,
+        }
+
+        if register_entry:
+            _register_staged_import(
+                StagedImport(
+                    token=staged_token,
+                    user_id=user_id,
+                    format_type="zcc",
+                    is_native=True,
+                    data_bytes=source if isinstance(source, bytes) else None,
+                    staged_file_path=existing_encrypted_path or (source if isinstance(source, Path) else None),
+                    decrypted_file_path=(source if (existing_encrypted_path and isinstance(source, Path)) else None),
+                    requires_password=False,
+                    created_at_epoch=time.time(),
+                    parsed_payload=parsed_payload,
+                )
+            )
+        else:
+            with _staged_imports_lock:
+                existing = _staged_imports.get(staged_token)
+                if existing is not None:
+                    existing.requires_password = False
+                    existing.decrypted_file_path = source if isinstance(source, Path) else None
+                    existing.parsed_payload = parsed_payload
 
         return ImportInspectResponse(
             is_native=True,
             format_type="zcc",
             staged_token=staged_token,
+            requires_password=False,
             manifest=manifest,
             characters=char_summaries,
             worlds=world_summaries,
             personas=persona_summaries,
+            campaigns=campaign_summaries,
             conflicts=conflicts,
             warnings=warnings,
             images_count=images_count,
@@ -1168,6 +1303,27 @@ def inspect_uploaded_path(
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
     staged_token = f"stg_{uuid.uuid4().hex[:12]}"
+    if is_encrypted_zcc_file(staged_path):
+        _register_staged_import(
+            StagedImport(
+                token=staged_token,
+                user_id=user_id,
+                format_type="zcc",
+                is_native=True,
+                data_bytes=None,
+                staged_file_path=staged_path,
+                requires_password=True,
+                created_at_epoch=time.time(),
+                parsed_payload={},
+            )
+        )
+        return ImportInspectResponse(
+            is_native=True,
+            format_type="zcc",
+            staged_token=staged_token,
+            requires_password=True,
+        )
+
     with staged_path.open("rb") as f:
         lead = f.read(4)
 
@@ -1195,6 +1351,73 @@ def inspect_uploaded_path(
     return inspect_uploaded_file(repo, file_bytes, filename, user_id)
 
 
+def unlock_staged_import(
+    repo: CantinaRepository,
+    *,
+    staged_token: str,
+    password: str,
+    user_id: str,
+) -> ImportInspectResponse:
+    """Decrypt a password-protected staged .zcc archive and inspect its contents."""
+    with _staged_imports_lock:
+        _cleanup_expired_staged_imports_locked()
+        staged = _staged_imports.get(staged_token)
+    if not staged:
+        raise HTTPException(status_code=404, detail="Staged import session expired or not found.")
+    if staged.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Unauthorized access to staged import session.")
+    if not staged.requires_password:
+        raise HTTPException(status_code=400, detail="Staged import is not password-protected or is already unlocked.")
+
+    src_path = staged.staged_file_path
+    temp_enc_path: Path | None = None
+    if src_path is None:
+        if staged.data_bytes is None:
+            raise HTTPException(status_code=404, detail="Encrypted archive payload is no longer available.")
+        temp_enc_path = safe_resolve_staging_file_path(
+            repo.media_dir, f"import_{uuid.uuid4().hex}.part"
+        )
+        temp_enc_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_enc_path.write_bytes(staged.data_bytes)
+        src_path = temp_enc_path
+
+    decrypted_path = safe_resolve_staging_file_path(
+        repo.media_dir, f"unlock_{uuid.uuid4().hex}.zcc"
+    )
+    try:
+        try:
+            decrypt_zcc_enc_to_file(
+                src_path,
+                decrypted_path,
+                password,
+                max_output_bytes=MAX_TOTAL_UNCOMPRESSED_BYTES,
+            )
+        except ZccDecryptionError:
+            cleanup_staging_paths(decrypted_path)
+            raise HTTPException(
+                status_code=401,
+                detail="Incorrect password or corrupted encrypted archive.",
+            ) from None
+        except ZccCryptoFormatError as exc:
+            cleanup_staging_paths(decrypted_path)
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+
+        try:
+            return _inspect_zcc_archive(
+                repo,
+                source=decrypted_path,
+                user_id=user_id,
+                staged_token=staged_token,
+                register_entry=False,
+            )
+        except Exception:
+            cleanup_staging_paths(decrypted_path)
+            raise
+    finally:
+        if temp_enc_path is not None:
+            cleanup_staging_paths(temp_enc_path)
+
+
 def inspect_uploaded_file(
     repo: CantinaRepository,
     file_bytes: bytes,
@@ -1208,6 +1431,33 @@ def inspect_uploaded_file(
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
     staged_token = f"stg_{uuid.uuid4().hex[:12]}"
+
+    # A0) Check ZCCENC01 encrypted archive header
+    if is_encrypted_zcc_bytes(file_bytes):
+        staged_path = safe_resolve_staging_file_path(
+            repo.media_dir, f"import_{uuid.uuid4().hex}.part"
+        )
+        staged_path.parent.mkdir(parents=True, exist_ok=True)
+        staged_path.write_bytes(file_bytes)
+        _register_staged_import(
+            StagedImport(
+                token=staged_token,
+                user_id=user_id,
+                format_type="zcc",
+                is_native=True,
+                data_bytes=None,
+                staged_file_path=staged_path,
+                requires_password=True,
+                created_at_epoch=time.time(),
+                parsed_payload={},
+            )
+        )
+        return ImportInspectResponse(
+            is_native=True,
+            format_type="zcc",
+            staged_token=staged_token,
+            requires_password=True,
+        )
 
     # A) Check ZIP signature (PK\x03\x04)
     if file_bytes.startswith(b"PK\x03\x04"):
@@ -1330,13 +1580,44 @@ async def commit_staged_import(
             detail="Staged file is a SillyTavern card. SillyTavern cards must be committed via the Character Creation Wizard.",
         )
 
+    if staged.requires_password:
+        raise HTTPException(
+            status_code=400,
+            detail="Archive is password-protected and must be unlocked before importing.",
+        )
+
     zip_source: bytes | Path = (
-        staged.staged_file_path if staged.staged_file_path is not None else (staged.data_bytes or b"")
+        staged.decrypted_file_path
+        if staged.decrypted_file_path is not None
+        else (
+            staged.staged_file_path
+            if staged.staged_file_path is not None
+            else (staged.data_bytes or b"")
+        )
     )
     zf = _open_safe_zip(zip_source)
     characters_data: list[dict[str, Any]] = staged.parsed_payload.get("characters", [])
     worlds_data: list[dict[str, Any]] = staged.parsed_payload.get("worlds", [])
     personas_data: list[dict[str, Any]] = staged.parsed_payload.get("personas", [])
+    campaigns_data: list[dict[str, Any]] = staged.parsed_payload.get("campaigns", [])
+
+    has_campaigns = len(campaigns_data) > 0
+    standalone_campaign_assets = bool(req.import_campaign_assets_as_standalone)
+    campaign_world_ids: set[str] = {
+        str(c.get("world_id") or "") for c in campaigns_data if isinstance(c, dict) and c.get("world_id")
+    }
+    campaign_char_ids: set[str] = set()
+    campaign_persona_ids: set[str] = set()
+    for camp_item in campaigns_data:
+        if not isinstance(camp_item, dict):
+            continue
+        if camp_item.get("character_id"):
+            campaign_char_ids.add(str(camp_item["character_id"]))
+        for cc in camp_item.get("campaign_characters") or []:
+            if isinstance(cc, dict) and cc.get("character_id"):
+                campaign_char_ids.add(str(cc["character_id"]))
+        if camp_item.get("persona_id"):
+            campaign_persona_ids.add(str(camp_item["persona_id"]))
 
     try:
         actor_user = repo.get_user_by_id(user_id)
@@ -1419,7 +1700,7 @@ async def commit_staged_import(
                     or req.conflict_strategies.get(w_name)
                     or req.default_conflict_strategy
                 )
-                if w_strategy == "skip":
+                if w_strategy == "skip" and old_world_id not in campaign_world_ids:
                     continue
                 for m_idx, m_item in enumerate(w.get("media") or []):
                     if not isinstance(m_item, dict):
@@ -1449,7 +1730,7 @@ async def commit_staged_import(
                     or req.conflict_strategies.get(c_name)
                     or req.default_conflict_strategy
                 )
-                if strategy == "skip":
+                if strategy == "skip" and old_c_id not in campaign_char_ids:
                     continue
                 for emotion, rel_path in (c.get("portraits") or {}).items():
                     clean_emotion = str(emotion).strip().lower()
@@ -1491,10 +1772,13 @@ async def commit_staged_import(
         imported_characters: list[str] = []
         imported_worlds: list[str] = []
         imported_personas: list[str] = []
+        imported_campaigns: list[str] = []
         skipped_entities: list[str] = []
         errors: list[str] = []
 
         id_remap: dict[str, str] = {}
+        campaign_private_world_ids: set[str] = set()
+        campaign_private_char_ids: set[str] = set()
 
         # 1. Ingest Worlds
         for w_idx, w in enumerate(worlds_data):
@@ -1506,9 +1790,17 @@ async def commit_staged_import(
                 or req.default_conflict_strategy
             )
 
-            if strategy == "skip":
+            is_camp_world = has_campaigns and old_world_id in campaign_world_ids
+            is_campaign_private_world = False
+            if is_camp_world and not standalone_campaign_assets:
+                is_campaign_private_world = True
+            elif strategy == "skip":
                 skipped_entities.append(f"World: {w_name}")
-                continue
+                if is_camp_world:
+                    # Keep a campaign-private snapshot so the imported campaign still runs intact
+                    is_campaign_private_world = True
+                else:
+                    continue
 
             written_world_files: list[Path] = []
             try:
@@ -1516,7 +1808,7 @@ async def commit_staged_import(
                 id_remap[old_world_id] = new_world_id
 
                 final_name = w_name
-                if strategy == "copy":
+                if not is_campaign_private_world and strategy == "copy":
                     existing = [ew for ew in repo.list_worlds(owner_id=user_id) if ew.name.strip().lower() == w_name.lower()]
                     if existing:
                         final_name = f"{w_name} (Imported)"
@@ -1892,7 +2184,10 @@ async def commit_staged_import(
                         )
 
                     for edge in w.get("edges", []):
+                        old_edge_id = edge.get("id")
                         new_edge_id = f"edge_{uuid.uuid4().hex[:10]}"
+                        if old_edge_id:
+                            id_remap[str(old_edge_id)] = new_edge_id
                         from_id = id_remap.get(edge.get("from_location_id", ""), edge.get("from_location_id"))
                         to_id = id_remap.get(edge.get("to_location_id", ""), edge.get("to_location_id"))
                         conn.execute(
@@ -1917,7 +2212,10 @@ async def commit_staged_import(
                         )
 
                     conn.commit()
-                    imported_worlds.append(final_name)
+                    if is_campaign_private_world:
+                        campaign_private_world_ids.add(new_world_id)
+                    else:
+                        imported_worlds.append(final_name)
                 finally:
                     conn.close()
 
@@ -1935,6 +2233,9 @@ async def commit_staged_import(
         for p_idx, p in enumerate(personas_data):
             old_p_id = str(p.get("id") or "")
             p_name = str(p.get("name") or "Unnamed Persona").strip()
+            if has_campaigns and old_p_id in campaign_persona_ids and not standalone_campaign_assets:
+                # Campaign runs from persona_snapshot_json with persona_id = NULL
+                continue
             strategy = (
                 req.conflict_strategies.get(old_p_id)
                 or req.conflict_strategies.get(p_name)
@@ -2118,9 +2419,16 @@ async def commit_staged_import(
                 or req.default_conflict_strategy
             )
 
-            if strategy == "skip":
+            is_camp_char = has_campaigns and old_c_id in campaign_char_ids
+            is_campaign_private_char = False
+            if is_camp_char and not standalone_campaign_assets:
+                is_campaign_private_char = True
+            elif strategy == "skip":
                 skipped_entities.append(f"Character: {c_name}")
-                continue
+                if is_camp_char:
+                    is_campaign_private_char = True
+                else:
+                    continue
 
             new_c_id = f"char_{uuid.uuid4().hex[:10]}"
             registered_char_asset_ids: list[str] = []
@@ -2128,7 +2436,7 @@ async def commit_staged_import(
             try:
                 id_remap[old_c_id] = new_c_id
                 final_name = c_name
-                if strategy == "copy":
+                if not is_campaign_private_char and strategy == "copy":
                     existing = [
                         ec
                         for ec in repo.list_characters(
@@ -2311,7 +2619,10 @@ async def commit_staged_import(
                     character_id=new_c_id,
                     owner_id=user_id,
                 )
-                imported_characters.append(final_name)
+                if is_campaign_private_char:
+                    campaign_private_char_ids.add(new_c_id)
+                else:
+                    imported_characters.append(final_name)
 
             except HTTPException:
                 for aid in registered_char_asset_ids:
@@ -2327,12 +2638,32 @@ async def commit_staged_import(
                 logger.exception("Failed importing character '%s': %s", sanitize_log_value(c_name), sanitize_log_value(exc))
                 errors.append(f"Character '{c_name}': {exc}")
 
+        # 4. Ingest Campaigns (atomic SQLite commit + pending_deletion flags)
+        if campaigns_data:
+            camp_names, camp_errors = ingest_campaigns_atomic(
+                repo,
+                campaigns_data=campaigns_data,
+                user_id=user_id,
+                id_remap=id_remap,
+                import_as_standalone=standalone_campaign_assets,
+                campaign_private_world_ids=campaign_private_world_ids,
+                campaign_private_char_ids=campaign_private_char_ids,
+            )
+            imported_campaigns.extend(camp_names)
+            errors.extend(camp_errors)
+
         with _staged_imports_lock:
             popped = _staged_imports.pop(req.staged_token, None)
-        if popped and popped.staged_file_path:
-            cleanup_staging_paths(popped.staged_file_path)
+        _cleanup_staged_entry_paths(popped)
 
-        msg = f"Import completed: {len(imported_characters)} characters, {len(imported_worlds)} worlds, {len(imported_personas)} personas."
+        parts = [
+            f"{len(imported_characters)} characters",
+            f"{len(imported_worlds)} worlds",
+            f"{len(imported_personas)} personas",
+        ]
+        if imported_campaigns:
+            parts.append(f"{len(imported_campaigns)} campaign(s)")
+        msg = f"Import completed: {', '.join(parts)}."
         if skipped_entities:
             msg += f" Skipped {len(skipped_entities)} entities."
         if commit_warnings:
@@ -2345,6 +2676,7 @@ async def commit_staged_import(
             imported_characters=imported_characters,
             imported_worlds=imported_worlds,
             imported_personas=imported_personas,
+            imported_campaigns=imported_campaigns,
             skipped_entities=skipped_entities,
             errors=errors,
             warnings=commit_warnings,

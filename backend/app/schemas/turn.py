@@ -1044,6 +1044,9 @@ class CampaignRecord(BaseModel):
     name: str
     world_id: str
     character_id: str
+    world_name: str | None = None
+    character_name: str | None = None
+    character_portrait_url: str | None = None
     persona_id: str | None = None
     persona_snapshot: PersonaRecord | None = None
     participant_character_ids: list[str] = Field(default_factory=list)

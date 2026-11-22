@@ -2,8 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   CheckSquare,
+  Eye,
+  EyeOff,
   Film,
   Globe,
+  Lock,
   Package,
   Search,
   Square,
@@ -23,6 +26,7 @@ import {
   findMissingResidentCharacters,
   findMissingWorldDependencies,
   formatMediaBytes,
+  validateExportPassword,
 } from "../utils/importExportLogic";
 
 export interface ExportBundleModalProps {
@@ -62,6 +66,10 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
     () => new Set()
   );
   const knownVideoIdsRef = useRef<Set<string>>(new Set());
+  const [passwordEnabled, setPasswordEnabled] = useState(false);
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
 
@@ -271,6 +279,11 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
       setError("Please select at least one character, world, or persona to export.");
       return;
     }
+    const pwErr = validateExportPassword(passwordEnabled, password, confirmPassword);
+    if (pwErr) {
+      setError(pwErr);
+      return;
+    }
 
     setExporting(true);
     setError("");
@@ -289,6 +302,7 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
         include_world_media: includeWorldMedia,
         include_videos: includeVideos,
         selected_video_ids: includeVideos ? Array.from(selectedVideoIds) : undefined,
+        password: passwordEnabled ? password : null,
       });
       onClose();
     } catch (err: any) {
@@ -876,6 +890,78 @@ export const ExportBundleModal: React.FC<ExportBundleModalProps> = ({
               )}
             </div>
           )}
+
+          {/* Optional Password Protection */}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+              padding: "10px 12px",
+              borderRadius: 8,
+              background: "var(--bg-card)",
+              border: passwordEnabled
+                ? "1px solid rgba(245, 158, 11, 0.4)"
+                : "1px solid var(--border-subtle)",
+            }}
+          >
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                cursor: "pointer",
+                fontSize: "0.82rem",
+                fontWeight: 500,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={passwordEnabled}
+                onChange={(e) => {
+                  setPasswordEnabled(e.target.checked);
+                  if (!e.target.checked) {
+                    setPassword("");
+                    setConfirmPassword("");
+                  }
+                }}
+              />
+              <Lock size={13} color="var(--accent-amber)" />
+              <span>Password-protect .zcc archive (Argon2id + AES-256-GCM)</span>
+            </label>
+            {passwordEnabled && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                <div style={{ display: "flex", gap: 6, flex: "1 1 200px" }}>
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    className="input"
+                    placeholder="Archive password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    autoComplete="new-password"
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => setShowPassword((v) => !v)}
+                    title={showPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
+                <input
+                  type={showPassword ? "text" : "password"}
+                  className="input"
+                  placeholder="Confirm password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  autoComplete="new-password"
+                  style={{ flex: "1 1 180px" }}
+                />
+              </div>
+            )}
+          </div>
         </form>
       </div>
     </div>

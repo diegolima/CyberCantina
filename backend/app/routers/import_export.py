@@ -15,17 +15,23 @@ from app.routers.media import safe_unlink_file
 from app.schemas.auth import UserProfile
 from app.schemas.import_export import (
     ExportBundleRequest,
+    ExportCampaignRequest,
+    ExportCharacterOptions,
+    ExportWorldOptions,
     ImportCommitRequest,
     ImportCommitResponse,
     ImportInspectResponse,
+    ImportUnlockRequest,
 )
 from app.security.media_path import safe_resolve_staging_file_path
 from app.security.rate_limit import enforce_rate_limit
 from app.services.import_export_service import (
+    build_campaign_zcc_export_to_file,
     build_zcc_export_to_file,
     commit_staged_import,
     get_max_import_upload_bytes,
     inspect_uploaded_path,
+    unlock_staged_import,
 )
 from app.services.video_processor import cleanup_staging_paths
 
@@ -58,6 +64,7 @@ async def export_bundle(
         include_world_media=req.include_world_media,
         include_videos=req.include_videos,
         selected_video_ids=req.selected_video_ids,
+        password=req.password,
     )
 
     safe_name = _slugify_filename(req.bundle_name)
@@ -149,6 +156,113 @@ async def export_single_world(
     )
 
 
+@router.post("/api/export/character/{character_id}")
+async def export_single_character_post(
+    character_id: str,
+    req: ExportCharacterOptions,
+    current_user: UserProfile = Depends(get_current_user),
+) -> FileResponse:
+    """Export a single character as a .zcc archive (supports optional password encryption in JSON body)."""
+    repo = get_repo()
+    try:
+        char = repo.get_character(character_id, owner_id=current_user.id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Character '{character_id}' not found.") from None
+
+    world_ids = [char.world_id] if (req.include_world and char.world_id) else []
+    tmp_path = build_zcc_export_to_file(
+        repo=repo,
+        character_ids=[character_id],
+        world_ids=world_ids,
+        persona_ids=[],
+        owner_id=current_user.id,
+        description=f"Character export: {char.name}",
+        include_videos=req.include_videos,
+        password=req.password,
+    )
+
+    safe_name = _slugify_filename(f"character_{char.name}")
+    return FileResponse(
+        tmp_path,
+        media_type="application/octet-stream",
+        filename=f"{safe_name}.zcc",
+        background=BackgroundTask(safe_unlink_file, tmp_path),
+    )
+
+
+@router.post("/api/export/world/{world_id}")
+async def export_single_world_post(
+    world_id: str,
+    req: ExportWorldOptions,
+    current_user: UserProfile = Depends(get_current_user),
+) -> FileResponse:
+    """Export a single world as a .zcc archive (supports optional password encryption in JSON body)."""
+    repo = get_repo()
+    try:
+        world = repo.get_world(world_id, owner_id=current_user.id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"World '{world_id}' not found.") from None
+
+    character_ids: list[str] = []
+    if req.include_characters:
+        all_chars = repo.list_characters(
+            include_pending_deletion=False, owner_id=current_user.id
+        )
+        character_ids = [c.id for c in all_chars if c.world_id == world_id]
+
+    tmp_path = build_zcc_export_to_file(
+        repo=repo,
+        character_ids=character_ids,
+        world_ids=[world_id],
+        persona_ids=[],
+        owner_id=current_user.id,
+        description=f"World export: {world.name}",
+        include_world_media=req.include_media,
+        include_videos=req.include_videos,
+        password=req.password,
+    )
+
+    safe_name = _slugify_filename(f"world_{world.name}")
+    return FileResponse(
+        tmp_path,
+        media_type="application/octet-stream",
+        filename=f"{safe_name}.zcc",
+        background=BackgroundTask(safe_unlink_file, tmp_path),
+    )
+
+
+@router.post("/api/export/campaign/{campaign_id}")
+async def export_campaign(
+    campaign_id: str,
+    req: ExportCampaignRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> FileResponse:
+    """Export a running campaign (with base world, cast, persona, timelines, CARE, memories) as .zcc v2."""
+    repo = get_repo()
+    try:
+        tmp_path, camp_name = build_campaign_zcc_export_to_file(
+            repo=repo,
+            campaign_id=campaign_id,
+            owner_id=current_user.id,
+            timeline_scope=req.timeline_scope,
+            strip_bookmark_comments=req.strip_bookmark_comments,
+            include_world_media=req.include_world_media,
+            include_videos=req.include_videos,
+            selected_video_ids=req.selected_video_ids,
+            password=req.password,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Campaign '{campaign_id}' not found.") from None
+
+    safe_name = _slugify_filename(f"campaign_{camp_name}")
+    return FileResponse(
+        tmp_path,
+        media_type="application/octet-stream",
+        filename=f"{safe_name}.zcc",
+        background=BackgroundTask(safe_unlink_file, tmp_path),
+    )
+
+
 @router.post("/api/import/inspect", response_model=ImportInspectResponse)
 async def inspect_import(
     file: UploadFile = File(...),
@@ -191,6 +305,31 @@ async def inspect_import(
     except BaseException:
         cleanup_staging_paths(staged_path)
         raise
+
+
+@router.post("/api/import/unlock", response_model=ImportInspectResponse)
+async def unlock_import(
+    req: ImportUnlockRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> ImportInspectResponse:
+    """Decrypt and inspect a password-protected staged .zcc archive."""
+    enforce_rate_limit(
+        "import_unlock_user",
+        current_user.id,
+        detail="Too many archive unlock attempts. Please wait and try again.",
+    )
+    enforce_rate_limit(
+        "import_unlock_token",
+        f"{current_user.id}:{req.staged_token}",
+        detail="Too many unlock attempts for this archive. Please wait and try again.",
+    )
+    repo = get_repo()
+    return unlock_staged_import(
+        repo=repo,
+        staged_token=req.staged_token,
+        password=req.password,
+        user_id=current_user.id,
+    )
 
 
 @router.post("/api/import/commit", response_model=ImportCommitResponse)

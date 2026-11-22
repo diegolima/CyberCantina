@@ -72,11 +72,15 @@
 | `POST` | `/api/characters/{character_id}/versions/{version}/restore` | `app.routers.characters.restore_character_version` | `CharacterRecord` | `frontend/src/api/characters.ts` |
 | `POST` | `/api/enrich` | `app.routers.enrich.enrich_text` | `PromptEnrichResponse` | `frontend/src/api/settings.ts` |
 | `POST` | `/api/export/bundle` | `app.routers.import_export.export_bundle` | — | `frontend/src/api/importExport.ts` |
+| `POST` | `/api/export/campaign/{campaign_id}` | `app.routers.import_export.export_campaign` | — | `frontend/src/api/importExport.ts` |
 | `GET` | `/api/export/character/{character_id}` | `app.routers.import_export.export_single_character` | — | `frontend/src/api/importExport.ts` |
+| `POST` | `/api/export/character/{character_id}` | `app.routers.import_export.export_single_character_post` | — | `frontend/src/api/importExport.ts` |
 | `GET` | `/api/export/world/{world_id}` | `app.routers.import_export.export_single_world` | — | `frontend/src/api/importExport.ts` |
+| `POST` | `/api/export/world/{world_id}` | `app.routers.import_export.export_single_world_post` | — | `frontend/src/api/importExport.ts` |
 | `GET` | `/api/health` | `app.routers.settings.health_check` | `dict` | *(backend-only / test / SSE)* |
 | `POST` | `/api/import/commit` | `app.routers.import_export.commit_import` | `ImportCommitResponse` | `frontend/src/api/importExport.ts` |
 | `POST` | `/api/import/inspect` | `app.routers.import_export.inspect_import` | `ImportInspectResponse` | `frontend/src/api/importExport.ts` |
+| `POST` | `/api/import/unlock` | `app.routers.import_export.unlock_import` | `ImportInspectResponse` | `frontend/src/api/importExport.ts` |
 | `GET` | `/api/local-relay/status` | `app.routers.local_relay.get_local_relay_status` | `dict` | `frontend/src/api/providers.ts` |
 | `WS` | `/api/local-relay/ws` | `app.routers.local_relay.local_relay_ws` | — | *(backend-only / test / SSE)* |
 | `POST` | `/api/mechanics/choice-preview` | `app.routers.mechanics.preview_choices` | `ChoicePreviewResponse` | `frontend/src/api/campaigns.ts` |
@@ -581,6 +585,7 @@ erDiagram
 | `backend/app/security/secret_box.py` | Encryption at rest for provider credentials (Fernet, auto-generated key file). |
 | `backend/app/security/transport.py` | Trusted-proxy transport inspection, client IP extraction, and cookie/HSTS security helpers. |
 | `backend/app/security/url_policy.py` | Outbound URL normalization and SSRF policy for provider endpoints. |
+| `backend/app/security/zcc_crypto.py` | Streaming authenticated encryption envelope (ZCCENC01) for password-protected .zcc archives. |
 
 #### `app.services`
 
@@ -589,6 +594,7 @@ erDiagram
 | `backend/app/services/__init__.py` | Application-layer services orchestrating domain workflows (`import_export_service`). |
 | `backend/app/services/import_export_service.py` | Service for packaging, inspecting, and ingesting CyberCantina archives (.zcc). |
 | `backend/app/services/video_processor.py` | Streaming upload staging, ffprobe container/codec validation, and ffmpeg first-frame extraction. |
+| `backend/app/services/zcc_campaign_io.py` | Campaign export extraction, active-timeline pruning, and atomic import for .zcc v2 archives. |
 
 #### `app.wizards`
 
@@ -650,6 +656,7 @@ erDiagram
 | `frontend/src/components/DeleteConfirmationModal.tsx` |
 | `frontend/src/components/EntityEditorModals.tsx` |
 | `frontend/src/components/ExportBundleModal.tsx` |
+| `frontend/src/components/ExportCampaignModal.tsx` |
 | `frontend/src/components/HomeEntityPickerModal.tsx` |
 | `frontend/src/components/HomeScreen.tsx` |
 | `frontend/src/components/ImportPreviewModal.tsx` |

@@ -382,3 +382,38 @@ export function computePurgeToggleState(
     purgeVideos: checked,
   };
 }
+
+/**
+ * Validate optional .zcc password-protection fields before triggering export.
+ * Returns an error message string if invalid, or null if valid.
+ */
+export function validateExportPassword(
+  enabled: boolean,
+  password: string,
+  confirmPassword: string
+): string | null {
+  if (!enabled) return null;
+  if (!password) {
+    return "Enter a password to encrypt this .zcc archive.";
+  }
+  if (password.length > 256) {
+    return "Password must be 256 characters or fewer.";
+  }
+  if (password !== confirmPassword) {
+    return "Passwords do not match.";
+  }
+  return null;
+}
+
+/**
+ * Return true when library entity conflict selectors should be displayed in ImportPreviewModal.
+ * When importing a campaign with standalone disabled, base entities are campaign-private
+ * (pending_deletion = 1 / snapshot-only) so standalone library conflicts do not apply.
+ */
+export function shouldShowEntityConflictControls(
+  hasCampaigns: boolean,
+  importCampaignAssetsAsStandalone: boolean
+): boolean {
+  if (!hasCampaigns) return true;
+  return importCampaignAssetsAsStandalone;
+}

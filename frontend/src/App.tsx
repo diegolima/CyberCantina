@@ -21,6 +21,7 @@ import {
 } from "./components/world/WorldInspectorModal";
 import { PartyManagementModal } from "./components/party/PartyManagementModal";
 import { StoryModal, type StoryModalTab } from "./components/story/StoryModal";
+import { ExportCampaignModal } from "./components/ExportCampaignModal";
 import { countVisibleTimelines } from "./components/story/branchGraphLayout";
 import { buildCampaignCharacterEntries } from "./components/world/codexHelpers";
 import { LocalRelayProvider } from "./providers/LocalRelayContext";
@@ -95,6 +96,8 @@ export const App: React.FC = () => {
   } | null>(null);
   const [focusComposerNonce, setFocusComposerNonce] = useState(0);
   const [isPartyModalOpen, setIsPartyModalOpen] = useState(false);
+  const [exportingCampaign, setExportingCampaign] =
+    useState<CampaignRecord | null>(null);
   const [showPersonaModal, setShowPersonaModal] = useState(false);
   const [editingPersona, setEditingPersona] = useState<PersonaRecord | null>(null);
   const [showNewCampaignModal, setShowNewCampaignModal] = useState(false);
@@ -723,6 +726,9 @@ export const App: React.FC = () => {
           layout.closeOverlays();
           setIsPartyModalOpen(true);
         }}
+        onExportCampaign={
+          bundle ? () => setExportingCampaign(bundle.campaign) : undefined
+        }
         notes={notes}
         showNotesFlyout={showNotesFlyout}
         setShowNotesFlyout={setShowNotesFlyout}
@@ -865,6 +871,7 @@ export const App: React.FC = () => {
             setShowNotesModal(true);
           }}
           onLogout={handleLogout}
+          onExportCampaign={(camp) => setExportingCampaign(camp)}
           onDeleteCampaign={(camp) => handleRequestDeleteCampaign(undefined, camp)}
           onDeleteCharacter={(char) => handleRequestDeleteCharacter(undefined, char)}
           onDeleteWorld={(w) => handleRequestDeleteWorld(undefined, w)}
@@ -926,6 +933,14 @@ export const App: React.FC = () => {
           onZoomToTurn={handleZoomToStoryTurn}
           onSwitchTimeline={handleSwitchStoryTimeline}
           onBranchFromTurn={handleBranchFromStoryTurn}
+        />
+      )}
+
+      {/* Running Campaign Export Modal */}
+      {exportingCampaign && (
+        <ExportCampaignModal
+          campaign={exportingCampaign}
+          onClose={() => setExportingCampaign(null)}
         />
       )}
 

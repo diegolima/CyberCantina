@@ -484,6 +484,9 @@ export interface CampaignRecord {
   name: string;
   world_id: string;
   character_id: string;
+  world_name?: string | null;
+  character_name?: string | null;
+  character_portrait_url?: string | null;
   participant_character_ids?: string[];
   active_leaf_turn_id?: string | null;
   prompt_preset_id?: string | null;

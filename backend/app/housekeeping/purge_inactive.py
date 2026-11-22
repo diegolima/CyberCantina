@@ -151,6 +151,7 @@ def cleanup_stale_staging_files(
         is_import_export_temp = (
             (entry.name.startswith("import_") and entry.name.endswith(".part"))
             or (entry.name.startswith("export_") and entry.name.endswith(".zcc"))
+            or (entry.name.startswith("unlock_") and entry.name.endswith(".zcc"))
         )
         if not is_import_export_temp and other_grace_seconds is None:
             continue

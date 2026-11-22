@@ -435,12 +435,31 @@ class CampaignsMixin:
         try:
             if owner_id is not None:
                 r = conn.execute(
-                    "SELECT * FROM campaigns WHERE id = ? AND owner_id = ?",
+                    """
+                    SELECT c.*,
+                           w.name AS joined_world_name,
+                           ch.name AS joined_character_name,
+                           ch.portraits_json AS joined_character_portraits_json
+                    FROM campaigns c
+                    LEFT JOIN worlds w ON w.id = c.world_id
+                    LEFT JOIN characters ch ON ch.id = c.character_id
+                    WHERE c.id = ? AND c.owner_id = ?
+                    """,
                     (campaign_id, owner_id),
                 ).fetchone()
             else:
                 r = conn.execute(
-                    "SELECT * FROM campaigns WHERE id = ?", (campaign_id,)
+                    """
+                    SELECT c.*,
+                           w.name AS joined_world_name,
+                           ch.name AS joined_character_name,
+                           ch.portraits_json AS joined_character_portraits_json
+                    FROM campaigns c
+                    LEFT JOIN worlds w ON w.id = c.world_id
+                    LEFT JOIN characters ch ON ch.id = c.character_id
+                    WHERE c.id = ?
+                    """,
+                    (campaign_id,),
                 ).fetchone()
             if not r:
                 raise KeyError(f"Campaign '{campaign_id}' not found")
@@ -474,11 +493,34 @@ class CampaignsMixin:
                     )
                 except Exception:
                     pass
+            joined_portrait_url: str | None = None
+            raw_portraits_json = (
+                r["joined_character_portraits_json"]
+                if "joined_character_portraits_json" in r.keys()
+                else None
+            )
+            if raw_portraits_json:
+                try:
+                    parsed_portraits = json.loads(raw_portraits_json)
+                    if isinstance(parsed_portraits, dict):
+                        neutral_url = parsed_portraits.get("neutral")
+                        if isinstance(neutral_url, str) and neutral_url.strip():
+                            joined_portrait_url = neutral_url.strip()
+                        else:
+                            for val in parsed_portraits.values():
+                                if isinstance(val, str) and val.strip():
+                                    joined_portrait_url = val.strip()
+                                    break
+                except Exception:
+                    pass
             return CampaignRecord(
                 id=r["id"],
                 name=r["name"],
                 world_id=r["world_id"],
                 character_id=r["character_id"],
+                world_name=r["joined_world_name"] if "joined_world_name" in r.keys() else None,
+                character_name=r["joined_character_name"] if "joined_character_name" in r.keys() else None,
+                character_portrait_url=joined_portrait_url,
                 persona_id=persona_id,
                 persona_snapshot=persona_snapshot,
                 participant_character_ids=participant_ids,

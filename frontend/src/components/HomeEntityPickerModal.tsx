@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import {
   Check,
+  Download,
   FolderKanban,
   Globe,
   Plus,
@@ -31,6 +32,7 @@ export interface HomeEntityPickerModalProps {
   onSelectWorld: (world: WorldRecord) => void;
   onSelectPersona: (persona: PersonaRecord) => void;
   onNewClick: (category: EntityCategory) => void;
+  onExportCampaign?: (campaign: CampaignRecord) => void;
   onDeleteCampaign?: (campaign: CampaignRecord) => void;
   onDeleteCharacter?: (character: CharacterRecord) => void;
   onDeleteWorld?: (world: WorldRecord) => void;
@@ -50,6 +52,7 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
   onSelectWorld,
   onSelectPersona,
   onNewClick,
+  onExportCampaign,
   onDeleteCampaign,
   onDeleteCharacter,
   onDeleteWorld,
@@ -265,7 +268,12 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
                 const camp = item as CampaignRecord;
                 const world = worldMap.get(camp.world_id);
                 const char = charMap.get(camp.character_id);
-                const charImg = char ? getEntityPrimaryImage("characters", char) : null;
+                const charName = char?.name ?? camp.character_name ?? "Unknown";
+                const worldName = world?.name ?? camp.world_name ?? "Unknown";
+                const charImg =
+                  (char ? getEntityPrimaryImage("characters", char) : null) ??
+                  camp.character_portrait_url ??
+                  null;
 
                 return (
                   <div
@@ -278,7 +286,7 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
                   >
                     <div className="home-picker-thumb">
                       {charImg ? (
-                        <img src={charImg} alt={char?.name || ""} />
+                        <img src={charImg} alt={charName} />
                       ) : (
                         <FolderKanban size={20} color="var(--accent-violet)" />
                       )}
@@ -286,9 +294,9 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div className="home-picker-item-title">{camp.name}</div>
                       <div className="home-picker-item-sub">
-                        <span>Companion: <strong style={{ color: "var(--accent-amber)" }}>{char?.name ?? "Unknown"}</strong></span>
+                        <span>Companion: <strong style={{ color: "var(--accent-amber)" }}>{charName}</strong></span>
                         <span>•</span>
-                        <span>World: <strong style={{ color: "var(--accent-cyan)" }}>{world?.name ?? "Unknown"}</strong></span>
+                        <span>World: <strong style={{ color: "var(--accent-cyan)" }}>{worldName}</strong></span>
                       </div>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -303,6 +311,20 @@ export const HomeEntityPickerModal: React.FC<HomeEntityPickerModalProps> = ({
                       >
                         Launch
                       </button>
+                      {onExportCampaign && (
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onClose();
+                            onExportCampaign(camp);
+                          }}
+                          title={`Export campaign ${camp.name} (.zcc)`}
+                        >
+                          <Download size={13} />
+                        </button>
+                      )}
                       {onDeleteCampaign && (
                         <button
                           type="button"

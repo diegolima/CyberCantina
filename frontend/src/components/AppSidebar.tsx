@@ -2,6 +2,7 @@ import React from "react";
 import {
   ArrowLeft,
   BookOpen,
+  Download,
   Flame,
   LogOut,
   PanelLeftClose,
@@ -39,6 +40,7 @@ export interface AppSidebarProps {
   partyCount?: number;
   isPartyOpen?: boolean;
   onOpenParty?: () => void;
+  onExportCampaign?: () => void;
   notes: UserNote[];
   showNotesFlyout: boolean;
   setShowNotesFlyout: React.Dispatch<React.SetStateAction<boolean>>;
@@ -79,6 +81,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   partyCount,
   isPartyOpen = false,
   onOpenParty,
+  onExportCampaign,
   notes,
   showNotesFlyout,
   setShowNotesFlyout,
@@ -376,6 +379,22 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
               <span className="sidebar-nav-count">{partyCount}</span>
             )}
           </button>
+          {onExportCampaign && (
+            <button
+              type="button"
+              className="sidebar-nav-item"
+              onClick={() => {
+                onCloseOverlay?.();
+                onExportCampaign();
+              }}
+              title="Export running campaign (.zcc)"
+            >
+              <span className="sidebar-nav-item-main">
+                <Download size={15} color="var(--accent-emerald)" />
+                <span>Export Campaign</span>
+              </span>
+            </button>
+          )}
         </nav>
       </div>
 

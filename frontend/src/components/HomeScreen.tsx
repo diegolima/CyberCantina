@@ -67,6 +67,7 @@ export interface HomeScreenProps {
   allowUserProviders?: boolean;
   onLogout: () => void;
   onDeleteCampaign?: (campaign: CampaignRecord) => void;
+  onExportCampaign?: (campaign: CampaignRecord) => void;
   onDeleteCharacter?: (character: CharacterRecord) => void;
   onDeleteWorld?: (world: WorldRecord) => void;
   onDeletePersona?: (persona: PersonaRecord) => void;
@@ -238,6 +239,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   allowUserProviders = false,
   onLogout,
   onDeleteCampaign,
+  onExportCampaign,
   onDeleteCharacter,
   onDeleteWorld,
   onDeletePersona,
@@ -713,6 +715,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             setActivePickerCategory(null);
             handlePickerNewClick(cat);
           }}
+          onExportCampaign={onExportCampaign}
           onDeleteCampaign={onDeleteCampaign}
           onDeleteCharacter={onDeleteCharacter}
           onDeleteWorld={onDeleteWorld}

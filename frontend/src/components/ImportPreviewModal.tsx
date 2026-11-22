@@ -5,9 +5,14 @@ import {
   Check,
   CheckCircle2,
   Download,
+  Eye,
+  EyeOff,
   FileArchive,
+  FolderKanban,
   Loader2,
+  Lock,
   Sparkles,
+  Unlock,
   X,
 } from "lucide-react";
 import { api } from "../api";
@@ -20,10 +25,12 @@ import {
   type ImportMediaSelection,
   computeImportMediaToggleState,
   formatMediaBytes,
+  shouldShowEntityConflictControls,
 } from "../utils/importExportLogic";
 
 export interface ImportPreviewModalProps {
   initialFile?: File | null;
+  initialInspectResult?: ImportInspectResponse | null;
   onClose: () => void;
   onImportSuccess: () => void;
   onOpenCharacterWizardWithDraft?: (
@@ -36,16 +43,20 @@ export interface ImportPreviewModalProps {
 
 export const ImportPreviewModal: React.FC<ImportPreviewModalProps> = ({
   initialFile,
+  initialInspectResult = null,
   onClose,
   onImportSuccess,
   onOpenCharacterWizardWithDraft,
 }) => {
   const [file, setFile] = useState<File | null>(initialFile || null);
   const [inspecting, setInspecting] = useState(false);
+  const [unlocking, setUnlocking] = useState(false);
+  const [unlockPassword, setUnlockPassword] = useState("");
+  const [showUnlockPassword, setShowUnlockPassword] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [error, setError] = useState("");
   const [inspectResult, setInspectResult] =
-    useState<ImportInspectResponse | null>(null);
+    useState<ImportInspectResponse | null>(initialInspectResult);
 
   const [conflictStrategies, setConflictStrategies] = useState<
     Record<string, ImportConflictStrategy>
@@ -53,6 +64,8 @@ export const ImportPreviewModal: React.FC<ImportPreviewModalProps> = ({
   const defaultStrategy: ImportConflictStrategy = "copy";
   const [importMediaSelection, setImportMediaSelection] =
     useState<ImportMediaSelection>({ importImages: true, importVideos: true });
+  const [importCampaignAssetsAsStandalone, setImportCampaignAssetsAsStandalone] =
+    useState(false);
   const [commitResult, setCommitResult] =
     useState<ImportCommitResponse | null>(null);
 
@@ -73,6 +86,8 @@ export const ImportPreviewModal: React.FC<ImportPreviewModalProps> = ({
     try {
       const res = await api.inspectImport(targetFile);
       setInspectResult(res);
+      setUnlockPassword("");
+      setImportCampaignAssetsAsStandalone(false);
       setImportMediaSelection({
         importImages: true,
         importVideos: (res.videos_count ?? 0) > 0,
@@ -88,6 +103,38 @@ export const ImportPreviewModal: React.FC<ImportPreviewModalProps> = ({
       setError(err?.message || String(err));
     } finally {
       setInspecting(false);
+    }
+  };
+
+  const handleUnlock = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inspectResult?.staged_token) return;
+    if (!unlockPassword) {
+      setError("Enter the archive password to unlock.");
+      return;
+    }
+    setUnlocking(true);
+    setError("");
+    try {
+      const res = await api.unlockImport({
+        staged_token: inspectResult.staged_token,
+        password: unlockPassword,
+      });
+      setInspectResult(res);
+      setUnlockPassword("");
+      setImportMediaSelection({
+        importImages: true,
+        importVideos: (res.videos_count ?? 0) > 0,
+      });
+      const initStrategies: Record<string, ImportConflictStrategy> = {};
+      res.conflicts.forEach((c) => {
+        initStrategies[c.incoming_id] = "copy";
+      });
+      setConflictStrategies(initStrategies);
+    } catch (err: any) {
+      setError(err?.message || String(err));
+    } finally {
+      setUnlocking(false);
     }
   };
 
@@ -140,6 +187,7 @@ export const ImportPreviewModal: React.FC<ImportPreviewModalProps> = ({
         default_conflict_strategy: defaultStrategy,
         import_images: importMediaSelection.importImages,
         import_videos: importMediaSelection.importVideos,
+        import_campaign_assets_as_standalone: importCampaignAssetsAsStandalone,
       });
       setCommitResult(res);
       if (res.success) {
@@ -275,6 +323,11 @@ export const ImportPreviewModal: React.FC<ImportPreviewModalProps> = ({
                 {commitResult.message}
               </div>
               <div style={{ fontSize: "0.82rem", color: "var(--text-secondary)" }}>
+                {commitResult.imported_campaigns && commitResult.imported_campaigns.length > 0 && (
+                  <div>
+                    <strong>Campaigns:</strong> {commitResult.imported_campaigns.join(", ")}
+                  </div>
+                )}
                 {commitResult.imported_characters.length > 0 && (
                   <div>
                     <strong>Characters:</strong> {commitResult.imported_characters.join(", ")}
@@ -411,9 +464,151 @@ export const ImportPreviewModal: React.FC<ImportPreviewModalProps> = ({
                 </div>
               )}
 
+              {/* Case A0: Password-Protected .zcc Archive */}
+              {inspectResult.is_native && inspectResult.requires_password && (
+                <form
+                  onSubmit={handleUnlock}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 12,
+                    padding: 14,
+                    borderRadius: 8,
+                    background: "rgba(245, 158, 11, 0.08)",
+                    border: "1px solid rgba(245, 158, 11, 0.35)",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      fontWeight: 600,
+                      color: "var(--accent-amber)",
+                      fontSize: "0.9rem",
+                    }}
+                  >
+                    <Lock size={16} />
+                    Password-Protected Archive
+                  </div>
+                  <div style={{ fontSize: "0.82rem", color: "var(--text-secondary)" }}>
+                    This .zcc archive is encrypted. Enter its password to inspect and import its contents.
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <input
+                      type={showUnlockPassword ? "text" : "password"}
+                      className="input"
+                      placeholder="Enter archive password"
+                      value={unlockPassword}
+                      onChange={(e) => setUnlockPassword(e.target.value)}
+                      autoComplete="current-password"
+                      style={{ flex: 1 }}
+                    />
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => setShowUnlockPassword((v) => !v)}
+                      title={showUnlockPassword ? "Hide password" : "Show password"}
+                    >
+                      {showUnlockPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                    </button>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                    <button type="button" className="btn" onClick={onClose} disabled={unlocking}>
+                      Cancel
+                    </button>
+                    <button type="submit" className="btn btn-amber" disabled={unlocking}>
+                      <Unlock size={14} />
+                      {unlocking ? "Unlocking..." : "Unlock Archive"}
+                    </button>
+                  </div>
+                </form>
+              )}
+
               {/* Case B: Native CyberCantina Package */}
-              {inspectResult.is_native && (
+              {inspectResult.is_native && !inspectResult.requires_password && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  {/* Campaign Summary & Standalone Toggle */}
+                  {inspectResult.campaigns && inspectResult.campaigns.length > 0 && (
+                    <div
+                      style={{
+                        border: "1px solid rgba(167, 139, 250, 0.35)",
+                        background: "rgba(167, 139, 250, 0.08)",
+                        borderRadius: 8,
+                        padding: 12,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 10,
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          fontWeight: 600,
+                          color: "var(--accent-violet)",
+                          fontSize: "0.88rem",
+                        }}
+                      >
+                        <FolderKanban size={15} />
+                        Running Campaign ({inspectResult.campaigns.length})
+                      </div>
+                      {inspectResult.campaigns.map((camp) => (
+                        <div
+                          key={camp.id || camp.name}
+                          style={{
+                            padding: "8px 10px",
+                            borderRadius: 6,
+                            background: "var(--bg-card)",
+                            border: "1px solid var(--border-subtle)",
+                            fontSize: "0.82rem",
+                          }}
+                        >
+                          <div style={{ fontWeight: 600 }}>{camp.name}</div>
+                          {camp.tagline && (
+                            <div style={{ fontSize: "0.76rem", color: "var(--text-secondary)", marginTop: 2 }}>
+                              {camp.tagline}
+                            </div>
+                          )}
+                          <div style={{ fontSize: "0.74rem", color: "var(--text-muted)", marginTop: 4 }}>
+                            {camp.extra_info?.timeline_scope === "active"
+                              ? "Active timeline only"
+                              : "Full timelines (all branches & swipes)"}{" "}
+                            • {camp.extra_info?.turns_count ?? 0} turn(s) •{" "}
+                            {camp.extra_info?.summaries_count ?? 0} summary(s) •{" "}
+                            {camp.extra_info?.bookmarks_count ?? 0} bookmark(s)
+                          </div>
+                        </div>
+                      ))}
+                      <label
+                        style={{
+                          display: "flex",
+                          alignItems: "flex-start",
+                          gap: 8,
+                          cursor: "pointer",
+                          fontSize: "0.82rem",
+                          paddingTop: 2,
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={importCampaignAssetsAsStandalone}
+                          onChange={(e) => setImportCampaignAssetsAsStandalone(e.target.checked)}
+                          style={{ marginTop: 2 }}
+                        />
+                        <span>
+                          <strong style={{ color: "var(--text-primary)" }}>
+                            Import base world, characters &amp; persona as standalone library items
+                          </strong>
+                          <span style={{ display: "block", fontSize: "0.74rem", color: "var(--text-muted)" }}>
+                            Unchecked by default: base world &amp; characters stay private to this campaign (auto-cleaned when the campaign is deleted) and persona runs from its campaign snapshot.
+                          </span>
+                        </span>
+                      </label>
+                    </div>
+                  )}
+
                   {/* Entity Breakdown */}
                   <div
                     style={{
@@ -617,7 +812,11 @@ export const ImportPreviewModal: React.FC<ImportPreviewModalProps> = ({
                   )}
 
                   {/* Conflict Resolution Section if names collide */}
-                  {inspectResult.conflicts.length > 0 && (
+                  {inspectResult.conflicts.length > 0 &&
+                    shouldShowEntityConflictControls(
+                      Boolean(inspectResult.campaigns && inspectResult.campaigns.length > 0),
+                      importCampaignAssetsAsStandalone
+                    ) && (
                     <div
                       style={{
                         border: "1px solid rgba(245, 158, 11, 0.3)",

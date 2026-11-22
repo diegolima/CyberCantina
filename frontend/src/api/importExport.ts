@@ -1,8 +1,10 @@
 import type {
   ExportBundleRequest,
+  ExportCampaignRequest,
   ImportCommitRequest,
   ImportCommitResponse,
   ImportInspectResponse,
+  ImportUnlockRequest,
 } from "../types";
 import {
   API_BASE,
@@ -21,14 +23,37 @@ export const importExportApi = {
     return blob;
   },
 
+  exportCampaign: async (campaignId: string, payload: ExportCampaignRequest) => {
+    const { blob, filename } = await fetchBlob(
+      `${API_BASE}/export/campaign/${encodeURIComponent(campaignId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    );
+    triggerDownload(blob, filename || `campaign_${campaignId}.zcc`);
+    return blob;
+  },
+
   exportCharacter: async (
     characterId: string,
     includeWorld: boolean = false,
-    includeVideos: boolean = false
+    includeVideos: boolean = false,
+    password?: string | null
   ) => {
-    const { blob, filename } = await fetchBlob(
-      `${API_BASE}/export/character/${encodeURIComponent(characterId)}?include_world=${includeWorld}&include_videos=${includeVideos}`
-    );
+    const url = `${API_BASE}/export/character/${encodeURIComponent(characterId)}`;
+    const { blob, filename } = password
+      ? await fetchBlob(url, {
+          method: "POST",
+          body: JSON.stringify({
+            include_world: includeWorld,
+            include_videos: includeVideos,
+            password,
+          }),
+        })
+      : await fetchBlob(
+          `${url}?include_world=${includeWorld}&include_videos=${includeVideos}`
+        );
     triggerDownload(blob, filename || `character_${characterId}.zcc`);
     return blob;
   },
@@ -37,11 +62,23 @@ export const importExportApi = {
     worldId: string,
     includeCharacters: boolean = true,
     includeMedia: boolean = true,
-    includeVideos: boolean = false
+    includeVideos: boolean = false,
+    password?: string | null
   ) => {
-    const { blob, filename } = await fetchBlob(
-      `${API_BASE}/export/world/${encodeURIComponent(worldId)}?include_characters=${includeCharacters}&include_media=${includeMedia}&include_videos=${includeVideos}`
-    );
+    const url = `${API_BASE}/export/world/${encodeURIComponent(worldId)}`;
+    const { blob, filename } = password
+      ? await fetchBlob(url, {
+          method: "POST",
+          body: JSON.stringify({
+            include_characters: includeCharacters,
+            include_media: includeMedia,
+            include_videos: includeVideos,
+            password,
+          }),
+        })
+      : await fetchBlob(
+          `${url}?include_characters=${includeCharacters}&include_media=${includeMedia}&include_videos=${includeVideos}`
+        );
     triggerDownload(blob, filename || `world_${worldId}.zcc`);
     return blob;
   },
@@ -52,6 +89,13 @@ export const importExportApi = {
     return fetchJson<ImportInspectResponse>(`${API_BASE}/import/inspect`, {
       method: "POST",
       body: formData,
+    });
+  },
+
+  unlockImport: (payload: ImportUnlockRequest) => {
+    return fetchJson<ImportInspectResponse>(`${API_BASE}/import/unlock`, {
+      method: "POST",
+      body: JSON.stringify(payload),
     });
   },
 

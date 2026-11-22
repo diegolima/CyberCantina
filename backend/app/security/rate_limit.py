@@ -111,6 +111,8 @@ _LIMITERS: dict[str, SlidingWindowRateLimiter] = {
     "auth_passkey_ip": SlidingWindowRateLimiter(limit=20, window_seconds=300.0),
     "profile_sensitive_user": SlidingWindowRateLimiter(limit=10, window_seconds=900.0),
     "import_inspect_user": SlidingWindowRateLimiter(limit=15, window_seconds=300.0),
+    "import_unlock_user": SlidingWindowRateLimiter(limit=10, window_seconds=300.0),
+    "import_unlock_token": SlidingWindowRateLimiter(limit=5, window_seconds=300.0),
 }
 
 
