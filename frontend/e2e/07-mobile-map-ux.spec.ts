@@ -91,6 +91,91 @@ test.describe("07 - Mobile Spatial Topology Map UX & Touch Ergonomics", () => {
     const afterPanTransform = await viewportG.getAttribute("transform");
     expect(afterPanTransform).not.toEqual(beforeTransform);
 
+    // 4b. Pinch-zoom with two touch pointers, lift both, then drag with 1 finger:
+    // zoom scale must NOT change during the subsequent 1-finger pan.
+    await svg.evaluate(async (el, box) => {
+      const cx = box.x + box.width * 0.5;
+      const cy = box.y + box.height * 0.4;
+      const nextFrame = () =>
+        new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const fire = (
+        target: EventTarget,
+        type: string,
+        pointerId: number,
+        isPrimary: boolean,
+        clientX: number,
+        clientY: number
+      ) => {
+        target.dispatchEvent(
+          new PointerEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            pointerId,
+            pointerType: "touch",
+            isPrimary,
+            button: 0,
+            buttons: type === "pointerup" ? 0 : 1,
+            clientX,
+            clientY,
+          })
+        );
+      };
+      // Two fingers down -> wait for React effect -> pinch out -> lift finger 1 then finger 2
+      fire(el, "pointerdown", 101, true, cx - 30, cy);
+      fire(el, "pointerdown", 102, false, cx + 30, cy);
+      await nextFrame();
+      fire(window, "pointermove", 101, true, cx - 60, cy);
+      fire(window, "pointermove", 102, false, cx + 60, cy);
+      await nextFrame();
+      fire(window, "pointerup", 101, true, cx - 60, cy);
+      await nextFrame();
+      fire(window, "pointerup", 102, false, cx + 60, cy);
+    }, svgBox!);
+
+    const afterPinchTransform = await viewportG.getAttribute("transform");
+    const pinchScaleMatch = afterPinchTransform?.match(/scale\(([^)]+)\)/);
+    expect(pinchScaleMatch).not.toBeNull();
+    const pinchScale = Number(pinchScaleMatch![1]);
+    expect(pinchScale).toBeGreaterThan(1);
+
+    // Subsequent single-finger touch drag must pan (translate changes) without changing scale
+    await svg.evaluate(async (el, box) => {
+      const cx = box.x + box.width * 0.5;
+      const cy = box.y + box.height * 0.4;
+      const nextFrame = () =>
+        new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const fire = (
+        target: EventTarget,
+        type: string,
+        clientX: number,
+        clientY: number
+      ) => {
+        target.dispatchEvent(
+          new PointerEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            pointerId: 103,
+            pointerType: "touch",
+            isPrimary: true,
+            button: 0,
+            buttons: type === "pointerup" ? 0 : 1,
+            clientX,
+            clientY,
+          })
+        );
+      };
+      fire(el, "pointerdown", cx, cy);
+      await nextFrame();
+      fire(window, "pointermove", cx + 45, cy + 30);
+      await nextFrame();
+      fire(window, "pointerup", cx + 45, cy + 30);
+    }, svgBox!);
+
+    const afterSingleDragTransform = await viewportG.getAttribute("transform");
+    expect(afterSingleDragTransform).not.toEqual(afterPinchTransform);
+    const postDragScaleMatch = afterSingleDragTransform?.match(/scale\(([^)]+)\)/);
+    expect(Number(postDragScaleMatch![1])).toBeCloseTo(pinchScale, 4);
+
     // 5. Tap Center icon and verify transform recenters
     await centerBtn.click();
     const afterCenterTransform = await viewportG.getAttribute("transform");

@@ -281,6 +281,27 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
     input.select();
   }, [inlineEdgeEdit?.edgeId]);
 
+  // Always clean up active touch pointers even after pinch/pan transitions to idle
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const removeTouchPointer = (e: PointerEvent) => {
+      if (e.pointerType === "touch") {
+        activeTouchPointersRef.current.delete(e.pointerId);
+      }
+    };
+    const clearAllTouchPointers = () => {
+      activeTouchPointersRef.current.clear();
+    };
+    window.addEventListener("pointerup", removeTouchPointer);
+    window.addEventListener("pointercancel", removeTouchPointer);
+    window.addEventListener("blur", clearAllTouchPointers);
+    return () => {
+      window.removeEventListener("pointerup", removeTouchPointer);
+      window.removeEventListener("pointercancel", removeTouchPointer);
+      window.removeEventListener("blur", clearAllTouchPointers);
+    };
+  }, []);
+
   // Unified pointer-event panning + two-finger pinch-to-zoom + tap/double-tap resolution
   useEffect(() => {
     if (!isPanning && !isPinching) return;
@@ -786,6 +807,10 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
     panPointerTypeRef.current = e.pointerType;
 
     if (e.pointerType === "touch") {
+      if (e.isPrimary) {
+        activeTouchPointersRef.current.clear();
+        pinchStateRef.current = null;
+      }
       activeTouchPointersRef.current.set(e.pointerId, {
         clientX: e.clientX,
         clientY: e.clientY,
