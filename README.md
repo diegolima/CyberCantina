@@ -19,12 +19,23 @@ CyberCantina takes a different approach by giving your models a persistent world
 * **Real State Outside the Prose:** Equipped items, carried inventory, connected rooms, travel times, and an advancing in-world clock stay tracked independently of the narrative text.
 * **Branch-Safe Timelines:** Rewind, edit, or swipe any turn to explore *"what if"* paths without corrupting character memories, inventories, or relationships across branches.
 * **Tabletop Directing Tools:** Let `d20` checks decide risky actions (`Auto`, `Forced`, or `Disabled`), steer character decisions with gated **Director Choices** (`/choice`), or pace scenes neutrally with **Narrator** commands (`/look`, `/wait`, `/complication`).
+* **Spoiler-Gated AI GM with Tool Use:** Step out of character to ask **Neuromancer (GM Talk)** for recaps, lore checks, or `@`-referenced entity details without polluting character memory. The GM searches past turns, Codex entries, and discovered entities on demand—strictly gated to your active branch and visited locations—and can draft new World Codex entries via editable confirmation cards.
 
 | Interactive Spatial Topology & Nested Containers | Live CARE Psychology & Relational Dossier |
 | :---: | :---: |
 | ![Interactive Spatial Topology Map](docs/assets/spatial-topology-map.png)<br><sub>35-location starter world (*The Green Lie*) with nested areas, travel times, portals, and live room inspection.</sub> | ![Character CARE Dossier](docs/assets/character-care-dossier.png)<br><sub>Multi-layer CARE affective state tracking valence, tension, composure mask, active tactical plans, and dyadic trust bonds.</sub> |
 | **Subconscious Inner Cognition & `d20` Checks** | **Structured Character Sheets & `.zcc` Bundles** |
 | ![Inner Cognition and d20 Roll](docs/assets/inner-cognition-d20.png)<br><sub>4-step inner cognition (`Recall → Feel → Want → Plan`) reacting to a `d20` persuasion roll and party invitation.</sub> | ![Character Sheet and ZCC Export](docs/assets/character-sheet.png)<br><sub>Deep character sheets with voice anchors, memory shards, persistent inventory, and lossless `.zcc` archive export.</sub> |
+
+<div align="center">
+
+**Spoiler-Safe AI GM (`GM Talk`) with Tool Use & Codex Drafting**
+
+<img src="docs/assets/gm-talk-codex.png" alt="Neuromancer GM Talk and Proposed World Codex Entry" width="49%" />
+
+<sub>Out-of-character GM queries using branch-scoped lookup tools, cited turn sources, and editable World Codex proposal cards.</sub>
+
+</div>
 
 ---
 
