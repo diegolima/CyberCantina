@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Clock,
   PanelRightClose,
@@ -325,6 +326,15 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
     setShowFullMap(true);
   };
 
+  useEffect(() => {
+    if (!showFullMap || typeof document === "undefined") return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [showFullMap]);
+
   const inspectorClassName = [
     "inspector",
     mode === "overlay" ? "inspector--overlay" : "",
@@ -396,59 +406,53 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
         onOpenWorldSheet={onOpenWorldSheet}
       />
 
-      {/* Full Zoomable Map Modal */}
-      {showFullMap && (
-        <div
-          className="modal-backdrop"
-          onClick={() => setShowFullMap(false)}
-          style={{ zIndex: 70 }}
-        >
+      {/* Full Zoomable Map Modal (portaled to document.body to escape .inspector--overlay stacking context) */}
+      {showFullMap && (() => {
+        const fullMapModal = (
           <div
-            className="modal-panel"
-            style={{
-              width: "min(1100px, 95vw)",
-              height: "min(900px, 92vh)",
-              maxHeight: "92vh",
-              display: "flex",
-              flexDirection: "column",
-              padding: "16px",
-              boxSizing: "border-box",
-              overflow: "auto",
-            }}
-            onClick={(e) => e.stopPropagation()}
+            className="modal-backdrop map-fullscreen-modal-backdrop"
+            onClick={() => setShowFullMap(false)}
           >
-            <SpatialTopologyView
-              title={`${world.name} — Full Spatial Topology (${bundle.visible_locations.length} Locations)`}
-              containers={effectiveContainers}
-              locations={bundle.visible_locations}
-              edges={activeEdges}
-              activeLocationId={activeLoc.id}
-              defaultSelectedLocationId={selectedLocId}
-              presentCharacterLocations={presentCharacterLocations}
-              mode="campaign"
-              worldContext={{
-                worldId: world.id,
-                worldName: world.name,
-                genre: world.global_rules.genre,
-                tone: world.global_rules.tone,
-                settingOverview: world.global_rules.setting_overview,
-              }}
-              onSaveMap={onSaveCampaignMap}
-              onClose={() => setShowFullMap(false)}
-              onOverrideLocation={handleOverrideClick}
-              coLocatedPartyNpcs={coLocatedPartyNpcs}
-              isOverriding={isOverriding}
-              onSaveCampaignLocationLore={onSaveCampaignLocationLore}
-              onSaveCampaignContainerLore={onSaveCampaignContainerLore}
-              unlockLore={Boolean(bundle.campaign.world_settings?.unlock_lore)}
-              revealedLoreIds={bundle.current_world_snapshot.revealed_lore_ids ?? []}
-              onToggleLoreReveal={onToggleCampaignLoreReveal}
-              isMutatingLocked={isMutatingLocked}
-              visitedContainerIds={bundle.current_world_snapshot.visited_container_ids ?? []}
-            />
+            <div
+              className="modal-panel map-fullscreen-modal-panel"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <SpatialTopologyView
+                title={`${world.name} — Full Spatial Topology (${bundle.visible_locations.length} Locations)`}
+                containers={effectiveContainers}
+                locations={bundle.visible_locations}
+                edges={activeEdges}
+                activeLocationId={activeLoc.id}
+                defaultSelectedLocationId={selectedLocId}
+                presentCharacterLocations={presentCharacterLocations}
+                mode="campaign"
+                worldContext={{
+                  worldId: world.id,
+                  worldName: world.name,
+                  genre: world.global_rules.genre,
+                  tone: world.global_rules.tone,
+                  settingOverview: world.global_rules.setting_overview,
+                }}
+                onSaveMap={onSaveCampaignMap}
+                onClose={() => setShowFullMap(false)}
+                onOverrideLocation={handleOverrideClick}
+                coLocatedPartyNpcs={coLocatedPartyNpcs}
+                isOverriding={isOverriding}
+                onSaveCampaignLocationLore={onSaveCampaignLocationLore}
+                onSaveCampaignContainerLore={onSaveCampaignContainerLore}
+                unlockLore={Boolean(bundle.campaign.world_settings?.unlock_lore)}
+                revealedLoreIds={bundle.current_world_snapshot.revealed_lore_ids ?? []}
+                onToggleLoreReveal={onToggleCampaignLoreReveal}
+                isMutatingLocked={isMutatingLocked}
+                visitedContainerIds={bundle.current_world_snapshot.visited_container_ids ?? []}
+              />
+            </div>
           </div>
-        </div>
-      )}
+        );
+        return typeof document !== "undefined"
+          ? createPortal(fullMapModal, document.body)
+          : fullMapModal;
+      })()}
 
       {/* 3. Characters (collapsed "Name · Mood" rows, expandable to meters & gear) */}
       {characterRows.length > 0 && (

@@ -51,6 +51,7 @@ export const PortalPromotionModal: React.FC<PortalPromotionModalProps> = ({
 
   return (
             <div
+              className="map-inner-dialog-backdrop"
               role="dialog"
               aria-modal="true"
               aria-label="Container Connection & Portal Setup"

@@ -9,6 +9,8 @@ import {
   CONTAINER_HIT_HALF_W,
   LOCATION_PORT_RADIUS,
   PORT_HIT_RADIUS,
+  PORT_TOUCH_HIT_RADIUS,
+  TAP_MOVE_THRESHOLD_PX,
   getContainerPortPoint,
 } from "./mapGeometry";
 import type { EmptyCanvasLinkState, GroupIntoContainerState } from "./MapDialogs";
@@ -70,9 +72,10 @@ export function hitTestTopologyPortAt(
   projectedTopology: Pick<ProjectedDepthTopology, "visibleSupernodes" | "visibleLocations">,
   fullMapCoords: Record<string, { x: number; y: number }>,
   excludeKind: "location" | "container",
-  excludeId: string
+  excludeId: string,
+  portHitRadius: number = PORT_HIT_RADIUS
 ): { kind: "location" | "container"; id: string; slot?: CompassDirection } | null {
-  const hitRadius = PORT_HIT_RADIUS + 1;
+  const hitRadius = portHitRadius + 1;
   for (const loc of projectedTopology.visibleLocations) {
     if (excludeKind === "location" && loc.id === excludeId) continue;
     const pt = fullMapCoords[loc.id];
@@ -199,7 +202,8 @@ export function useTopologyPointerDrag({
       wx: number,
       wy: number,
       excludeKind: "location" | "container",
-      excludeId: string
+      excludeId: string,
+      portHitRadius?: number
     ): { kind: "location" | "container"; id: string; slot?: CompassDirection } | null =>
       hitTestTopologyPortAt(
         wx,
@@ -207,12 +211,13 @@ export function useTopologyPointerDrag({
         projectedTopology,
         fullMapCoords,
         excludeKind,
-        excludeId
+        excludeId,
+        portHitRadius
       ),
     [projectedTopology, fullMapCoords]
   );
 
-  // Global window pointer move / up listeners for nodeDrag & linkDrag
+  // Global window pointer move / up / cancel listeners for nodeDrag & linkDrag
   useEffect(() => {
     if (!nodeDrag && !linkDrag) return;
 
@@ -226,12 +231,15 @@ export function useTopologyPointerDrag({
         zoom
       );
 
-      if (nodeDrag) {
+      if (
+        nodeDrag &&
+        (nodeDrag.pointerId === undefined || ev.pointerId === nodeDrag.pointerId)
+      ) {
         const distPx = Math.hypot(
           ev.clientX - nodeDrag.startClientX,
           ev.clientY - nodeDrag.startClientY
         );
-        const hasMoved = nodeDrag.hasMoved || distPx > 5;
+        const hasMoved = nodeDrag.hasMoved || distPx > TAP_MOVE_THRESHOLD_PX;
         const currX = Math.round(wpt.x - nodeDrag.pointerOffsetX);
         const currY = Math.round(wpt.y - nodeDrag.pointerOffsetY);
 
@@ -267,12 +275,20 @@ export function useTopologyPointerDrag({
         );
       }
 
-      if (linkDrag) {
+      if (
+        linkDrag &&
+        (linkDrag.pointerId === undefined || ev.pointerId === linkDrag.pointerId)
+      ) {
+        const hitRadius =
+          linkDrag.pointerType === "touch"
+            ? PORT_TOUCH_HIT_RADIUS
+            : PORT_HIT_RADIUS;
         const portHit = hitTestPortAt(
           wpt.x,
           wpt.y,
           linkDrag.sourceKind,
-          linkDrag.sourceId
+          linkDrag.sourceId,
+          hitRadius
         );
         setLinkDrag((prev) =>
           prev
@@ -288,7 +304,10 @@ export function useTopologyPointerDrag({
     };
 
     const handleUp = (ev: PointerEvent) => {
-      if (nodeDrag) {
+      if (
+        nodeDrag &&
+        (nodeDrag.pointerId === undefined || ev.pointerId === nodeDrag.pointerId)
+      ) {
         if (!nodeDrag.hasMoved) {
           // Treat as Left Click -> select & inspect
           if (nodeDrag.kind === "location") {
@@ -397,7 +416,10 @@ export function useTopologyPointerDrag({
         setNodeDrag(null);
       }
 
-      if (linkDrag) {
+      if (
+        linkDrag &&
+        (linkDrag.pointerId === undefined || ev.pointerId === linkDrag.pointerId)
+      ) {
         const wpt = clientToWorldPoint(
           ev.clientX,
           ev.clientY,
@@ -406,11 +428,16 @@ export function useTopologyPointerDrag({
           pan,
           zoom
         );
+        const hitRadius =
+          linkDrag.pointerType === "touch"
+            ? PORT_TOUCH_HIT_RADIUS
+            : PORT_HIT_RADIUS;
         const dropTarget = hitTestPortAt(
           wpt.x,
           wpt.y,
           linkDrag.sourceKind,
-          linkDrag.sourceId
+          linkDrag.sourceId,
+          hitRadius
         );
         if (dropTarget) {
           initiateConnection({
@@ -444,11 +471,32 @@ export function useTopologyPointerDrag({
       }
     };
 
+    const handleCancel = (ev?: PointerEvent) => {
+      if (
+        nodeDrag &&
+        (!ev || nodeDrag.pointerId === undefined || ev.pointerId === nodeDrag.pointerId)
+      ) {
+        setNodeDrag(null);
+      }
+      if (
+        linkDrag &&
+        (!ev || linkDrag.pointerId === undefined || ev.pointerId === linkDrag.pointerId)
+      ) {
+        setLinkDrag(null);
+      }
+    };
+
+    const handleBlur = () => handleCancel();
+
     window.addEventListener("pointermove", handleMove);
     window.addEventListener("pointerup", handleUp);
+    window.addEventListener("pointercancel", handleCancel);
+    window.addEventListener("blur", handleBlur);
     return () => {
       window.removeEventListener("pointermove", handleMove);
       window.removeEventListener("pointerup", handleUp);
+      window.removeEventListener("pointercancel", handleCancel);
+      window.removeEventListener("blur", handleBlur);
     };
   }, [
     nodeDrag,

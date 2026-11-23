@@ -164,6 +164,7 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
+            flexWrap: "wrap",
             gap: 6,
           }}
         >

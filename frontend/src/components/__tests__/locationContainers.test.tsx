@@ -757,9 +757,7 @@ describe("Location Containers Frontend Architecture", () => {
         mode="editor"
       />
     );
-    expect(unselectedRootHtml).toContain(
-      "grid-template-columns:minmax(460px, 1.85fr) minmax(300px, 1fr)"
-    );
+    expect(unselectedRootHtml).toContain('class="map-topology-split"');
     expect(unselectedRootHtml).toContain("No Map Element Selected");
 
     // Drilled into Afterlife Club in editor mode renders dashed ghost link & shared ghost node

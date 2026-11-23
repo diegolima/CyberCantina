@@ -72,22 +72,13 @@ export const MapPaletteBar: React.FC<MapPaletteBarProps> = ({
   validationMessage,
   onFocusInvalid,
 }) => {
+  const hasValidationError = Boolean(validationMessage) || unreachableCount > 0;
+  if (isMutatingLocked && !hasValidationError) {
+    return null;
+  }
+
   return (
-    <div
-      className="map-palette-bar"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        flexWrap: "wrap",
-        gap: 8,
-        background: "var(--bg-card)",
-        border: "1px solid var(--border-subtle)",
-        borderRadius: 6,
-        padding: "5px 10px",
-        flexShrink: 0,
-      }}
-    >
+    <div className="map-palette-bar">
       <div
         style={{
           display: "flex",
@@ -96,65 +87,68 @@ export const MapPaletteBar: React.FC<MapPaletteBarProps> = ({
           flexWrap: "wrap",
         }}
       >
-        <span
-          style={{
-            fontSize: "0.68rem",
-            color: "var(--text-muted)",
-            textTransform: "uppercase",
-            letterSpacing: "0.05em",
-            fontWeight: 600,
-            marginRight: 2,
-          }}
-        >
-          Palette (Drag or Click):
-        </span>
-
-        {PALETTE_ITEMS.map(({ kind, label, title, accent, bg, border, Icon }) => {
-          const disabled =
-            isMutatingLocked || (kind === "container" && !canAddContainerHere);
-          const effectiveTitle =
-            kind === "container" && !canAddContainerHere
-              ? "Level 1 containers cannot hold nested containers"
-              : title;
-          return (
-            <button
-              key={kind}
-              type="button"
-              draggable={!disabled}
-              disabled={disabled}
-              title={effectiveTitle}
-              data-palette-kind={kind}
-              onDragStart={(e) => {
-                if (disabled) {
-                  e.preventDefault();
-                  return;
-                }
-                e.dataTransfer.setData(PALETTE_DRAG_MIME, kind);
-                e.dataTransfer.effectAllowed = "copy";
-              }}
-              onClick={() => {
-                if (!disabled) onQuickAdd(kind);
-              }}
+        {!isMutatingLocked && (
+          <>
+            <span
               style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 5,
-                padding: "3px 9px",
-                borderRadius: 5,
-                fontSize: "0.72rem",
+                fontSize: "0.68rem",
+                color: "var(--text-muted)",
+                textTransform: "uppercase",
+                letterSpacing: "0.05em",
                 fontWeight: 600,
-                cursor: disabled ? "not-allowed" : "grab",
-                opacity: disabled ? 0.45 : 1,
-                background: bg,
-                border: `1px solid ${border}`,
-                color: accent,
+                marginRight: 2,
               }}
             >
-              <Icon size={12} color={accent} />
-              <span>{label}</span>
-            </button>
-          );
-        })}
+              Palette (Drag or Click):
+            </span>
+
+            {PALETTE_ITEMS.map(({ kind, label, title, accent, bg, border, Icon }) => {
+              const disabled = kind === "container" && !canAddContainerHere;
+              const effectiveTitle =
+                kind === "container" && !canAddContainerHere
+                  ? "Level 1 containers cannot hold nested containers"
+                  : title;
+              return (
+                <button
+                  key={kind}
+                  type="button"
+                  draggable={!disabled}
+                  disabled={disabled}
+                  title={effectiveTitle}
+                  data-palette-kind={kind}
+                  onDragStart={(e) => {
+                    if (disabled) {
+                      e.preventDefault();
+                      return;
+                    }
+                    e.dataTransfer.setData(PALETTE_DRAG_MIME, kind);
+                    e.dataTransfer.effectAllowed = "copy";
+                  }}
+                  onClick={() => {
+                    if (!disabled) onQuickAdd(kind);
+                  }}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 5,
+                    padding: "3px 9px",
+                    borderRadius: 5,
+                    fontSize: "0.72rem",
+                    fontWeight: 600,
+                    cursor: disabled ? "not-allowed" : "grab",
+                    opacity: disabled ? 0.45 : 1,
+                    background: bg,
+                    border: `1px solid ${border}`,
+                    color: accent,
+                  }}
+                >
+                  <Icon size={12} color={accent} />
+                  <span>{label}</span>
+                </button>
+              );
+            })}
+          </>
+        )}
 
         {undoCount > 0 && (
           <button

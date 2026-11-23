@@ -1139,9 +1139,9 @@ describe("Interactive Map Editor & Mini-Map", () => {
     // Hover buffer around location
     expect(html).toContain('r="34"');
 
-    // Decoupled zoom indicator & Center button
-    expect(html).toContain("Current zoom 100%, click to reset");
+    // Consolidated bottom-right canvas zoom indicator & floating Center icon button
     expect(html).toContain('data-testid="canvas-zoom-indicator"');
+    expect(html).toContain('aria-label="Center on Selected / Active Location"');
     expect(html).not.toContain("Center (100%)");
 
     // Standalone container depth prompt shows Lore (L1) and Higher-Level Macro options

@@ -85,6 +85,7 @@ export const PassageHubCollisionModal: React.FC<PassageHubCollisionModalProps> =
 
   return (
     <div
+      className="map-inner-dialog-backdrop"
       role="dialog"
       aria-modal="true"
       aria-label="Passage Hub Collision"
@@ -311,6 +312,7 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
 
   return (
     <div
+      className="map-inner-dialog-backdrop"
       role="dialog"
       aria-modal="true"
       aria-label="Create or Link Connected Element"
@@ -367,13 +369,7 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
           </button>
         </div>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-            gap: 6,
-          }}
-        >
+        <div className="map-create-kind-grid">
           <button
             type="button"
             className="btn"
@@ -765,6 +761,7 @@ export const GroupIntoContainerModal: React.FC<GroupIntoContainerModalProps> = (
 
   return (
     <div
+      className="map-inner-dialog-backdrop"
       role="dialog"
       aria-modal="true"
       aria-label="Group Locations into Container"
@@ -918,6 +915,7 @@ export const StandaloneContainerCreateModal: React.FC<StandaloneContainerCreateM
 
   return (
     <div
+      className="map-inner-dialog-backdrop"
       role="dialog"
       aria-modal="true"
       aria-label="Create Container"
@@ -1721,6 +1719,7 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
 
   return (
     <div
+      className="map-inner-dialog-backdrop"
       role="dialog"
       aria-modal="true"
       aria-label="Edit Boundary Passages"
@@ -2042,6 +2041,7 @@ export const MapIconBrowserModal: React.FC<MapIconBrowserModalProps> = ({
 
   return (
     <div
+      className="map-inner-dialog-backdrop"
       role="dialog"
       aria-modal="true"
       aria-label="Browse Map Icons"

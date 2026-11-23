@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, ChevronUp, LogIn, X } from "lucide-react";
 import {
   CompassDirection,
   LocationContainer,
@@ -9,6 +9,9 @@ import {
   LocationOverrideOptions,
   WorldMediaItem,
 } from "../types";
+import { getViewportTier } from "../utils/campaignLayout";
+import { LocationOverrideButton } from "./inspector/LocationOverrideButton";
+import { resolveMapIconComponent } from "./map/mapIcons";
 import {
   MapDetailsDrawer,
   WorldPromptContext,
@@ -305,6 +308,25 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     initialFocus.currentContainerId
   );
   const [hoveredNodeKey, setHoveredNodeKey] = useState<string | null>(null);
+  const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() =>
+    typeof window !== "undefined"
+      ? getViewportTier(window.innerWidth) === "mobile"
+      : false
+  );
+  const [isMobileSheetExpanded, setIsMobileSheetExpanded] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleResize = () => {
+      const mobile = getViewportTier(window.innerWidth) === "mobile";
+      setIsMobileViewport(mobile);
+      if (!mobile) {
+        setIsMobileSheetExpanded(false);
+      }
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   // Viewport transform
   const [zoom, setZoom] = useState(1);
@@ -717,15 +739,54 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   );
 
   const handleCenter = useCallback(() => {
-    const targetId =
-      selectedContainer?.id || selectedLocation?.id || activeLoc?.id;
-    if (!targetId) {
-      setPan({ x: 0, y: 0 });
+    if (zoom < 0.6 || zoom > 2.2) {
+      setZoom(1);
+    }
+
+    if (selectedGhostLocId && ghostCoords[selectedGhostLocId]) {
+      const pt = ghostCoords[selectedGhostLocId];
+      setPan({ x: -pt.x, y: -pt.y });
       return;
     }
-    const pt = fullMapCoords[targetId] ?? { x: 0, y: 0 };
-    setPan({ x: -pt.x, y: -pt.y });
-  }, [selectedContainer, selectedLocation, activeLoc, fullMapCoords]);
+
+    const directTargetId =
+      selectedContainer?.id || selectedLocation?.id || activeLoc?.id;
+    if (directTargetId && fullMapCoords[directTargetId]) {
+      const pt = fullMapCoords[directTargetId];
+      setPan({ x: -pt.x, y: -pt.y });
+      return;
+    }
+
+    // Walk activeLoc's ancestor containers to see if a supernode is visible in the current view
+    if (activeLoc) {
+      let ancId = activeLoc.container_id ?? null;
+      const seen = new Set<string>();
+      while (ancId && !seen.has(ancId)) {
+        seen.add(ancId);
+        if (fullMapCoords[ancId]) {
+          const pt = fullMapCoords[ancId];
+          setPan({ x: -pt.x, y: -pt.y });
+          return;
+        }
+        ancId = containerMap.get(ancId)?.parent_container_id ?? null;
+      }
+      // Active location is in another container branch -> jump to it
+      handleJumpToContainer(activeLoc.container_id ?? null, activeLoc.id);
+      return;
+    }
+
+    setPan({ x: 0, y: 0 });
+  }, [
+    zoom,
+    selectedGhostLocId,
+    ghostCoords,
+    selectedContainer,
+    selectedLocation,
+    activeLoc,
+    fullMapCoords,
+    containerMap,
+    handleJumpToContainer,
+  ]);
 
   const handleFocusInvalid = useCallback(() => {
     const firstId = reachabilityReport.unreachableIds[0];
@@ -1092,6 +1153,34 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     selectedLocation || selectedContainer || selectedGhost
   );
 
+  useEffect(() => {
+    if (!hasDetailsOpen) {
+      setIsMobileSheetExpanded(false);
+    }
+  }, [hasDetailsOpen]);
+
+  const handleMoveOutToParent = useCallback(
+    (kind: "location" | "container", id: string) => {
+      const parentId =
+        kind === "location"
+          ? locationMap.get(id)?.container_id
+          : containerMap.get(id)?.parent_container_id;
+      const grandParentId = parentId
+        ? containerMap.get(parentId)?.parent_container_id ?? null
+        : null;
+      executeImmediateContainerMove(kind, id, grandParentId);
+    },
+    [locationMap, containerMap, executeImmediateContainerMove]
+  );
+
+  const handleQuickAddElement = useCallback(
+    (kind: PaletteItemKind) => createStandaloneAt(kind, -pan.x + 55, -pan.y + 35),
+    [createStandaloneAt, pan.x, pan.y]
+  );
+
+  const paletteValidationMessage =
+    reachabilityReport.starterError || containerValidationErrors[0] || null;
+
   const validationSummary =
     reachabilityReport.starterError ||
     containerValidationErrors[0] ||
@@ -1118,9 +1207,6 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         locationsCount={workingLocations.length}
         edgesCount={workingEdges.length}
         containersCount={workingContainers.length}
-        zoom={zoom}
-        setZoom={setZoom}
-        handleCenter={handleCenter}
         onReimagineMap={onReimagineMap}
         hasSaveMap={Boolean(onSaveMap)}
         effectiveDirty={effectiveDirty}
@@ -1138,6 +1224,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         searchContainers={workingContainers}
         activeLocationId={activeLoc?.id}
         onFocusSearchResult={handleFocusSearchResult}
+        isMobileViewport={isMobileViewport}
       />
 
       {/* Draggable Node Palette Bar + Undo + Validation Status */}
@@ -1146,11 +1233,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         isMutatingLocked={isMutatingLocked}
         undoCount={undoStack.length}
         onUndo={handleUndo}
-        onQuickAdd={(kind) => createStandaloneAt(kind, -pan.x + 55, -pan.y + 35)}
+        onQuickAdd={handleQuickAddElement}
         unreachableCount={reachabilityReport.unreachableIds.length}
-        validationMessage={
-          reachabilityReport.starterError || containerValidationErrors[0] || null
-        }
+        validationMessage={paletteValidationMessage}
         onFocusInvalid={handleFocusInvalid}
       />
 
@@ -1185,30 +1270,12 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         </div>
       )}
 
-      {/* Main Split Body: Canvas + Contextual Right Details Drawer (fixed split prevents SVG jump on click) */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(460px, 1.85fr) minmax(300px, 1fr)",
-          gap: 14,
-          flex: 1,
-          minHeight: 0,
-          overflow: "hidden",
-        }}
-      >
+      {/* Main Split Body: Canvas + Contextual Right Details Drawer (or Mobile Peek Bar + Bottom Sheet) */}
+      <div className="map-topology-split">
         {/* Left Interactive SVG Canvas Container */}
         <div
           ref={canvasWrapRef}
-          style={{
-            position: "relative",
-            background: "var(--bg-deep)",
-            borderRadius: 8,
-            border: "1px solid var(--border-subtle)",
-            overflow: "hidden",
-            display: "flex",
-            flexDirection: "column",
-            minHeight: 0,
-          }}
+          className="map-canvas-wrap"
           onDragOver={(e) => {
             if (e.dataTransfer.types.includes(PALETTE_DRAG_MIME)) {
               e.preventDefault();
@@ -1274,6 +1341,15 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             handleDeleteEdgeGroup={handleDeleteEdgeGroup}
             drillIntoContainer={drillIntoContainer}
             onJumpToContainer={handleJumpToContainer}
+            handleCenter={handleCenter}
+            isMobileViewport={isMobileViewport}
+            undoCount={undoStack.length}
+            onUndo={handleUndo}
+            validationMessage={paletteValidationMessage}
+            unreachableCount={reachabilityReport.unreachableIds.length}
+            onFocusInvalid={handleFocusInvalid}
+            canAddContainerHere={canAddContainerHere}
+            onQuickAdd={handleQuickAddElement}
           />
 
           {/* Context Menu & Dialogs */}
@@ -1439,92 +1515,255 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
 
         </div>
 
-        {/* Right Details Drawer or Stable Empty Placeholder */}
-        {hasDetailsOpen ? (
-          <MapDetailsDrawer
-            mode={mode}
-            selectedLocation={selectedLocation}
-            selectedContainer={selectedContainer}
-            selectedGhost={selectedGhost}
-            selectedGhostEdges={selectedGhostEdges}
-            hasGhostOverride={Boolean(
-              selectedGhostLocId && currentGhostOverrides?.[selectedGhostLocId]
-            )}
-            containers={workingContainers}
-            allLocations={workingLocations}
-            dynamicPortalIds={projectedTopology.dynamicPortalIds}
-            externalPortals={selectedExternalPortals}
-            containerStats={selectedContainerStats}
-            activeLocId={activeLoc?.id}
-            worldContext={worldContext}
-            isMutatingLocked={isMutatingLocked}
-            isLocationSavedInDb={
-              selectedLocation
-                ? baselineLocationIds.has(selectedLocation.id)
-                : false
-            }
-            isContainerSavedInDb={
-              selectedContainer
-                ? baselineContainerIds.has(selectedContainer.id)
-                : false
-            }
-            depthLabels={CONTAINER_DEPTH_LABELS}
-            onClose={() => {
-              setSelectedLocId(null);
-              setSelectedContainerId(null);
-              setSelectedGhostLocId(null);
-            }}
-            onPatchLocation={patchLocation}
-            onPatchContainer={patchContainer}
-            onResetCoordinates={resetCoordinates}
-            onResetGhostCoords={handleResetGhostCoords}
-            onDeleteEdge={handleDeleteEdge}
-            onInspectEdgePair={openEdgeDetailsPopover}
-            onJumpToContainer={handleJumpToContainer}
-            onDrillIntoContainer={drillIntoContainer}
-            coLocatedPartyNpcs={coLocatedPartyNpcs}
-            onOverrideLocation={onOverrideLocation}
-            isOverriding={isOverriding}
-            onSaveCampaignLocationLore={onSaveCampaignLocationLore}
-            onSaveCampaignContainerLore={onSaveCampaignContainerLore}
-            unlockLore={unlockLore}
-            revealedLoreIds={revealedLoreIds}
-            onToggleLoreReveal={onToggleLoreReveal}
-            usedIconKeys={usedMapIconKeys}
-            onOpenIconBrowser={setIconBrowserTarget}
-            worldMedia={worldMedia}
-            visitedContainerIds={visitedContainerIds}
-          />
-        ) : (
-          <div
-            aria-label="Map Element Details Placeholder"
-            style={{
-              background: "var(--bg-card)",
-              borderRadius: 8,
-              border: "1px dashed var(--border-subtle)",
-              padding: 18,
-              display: "flex",
-              flexDirection: "column",
-              justifyContent: "center",
-              alignItems: "center",
-              textAlign: "center",
-              gap: 8,
-              color: "var(--text-muted)",
-              fontSize: "0.75rem",
-              lineHeight: 1.5,
-            }}
-          >
-            <strong style={{ color: "var(--text-secondary)", fontSize: "0.8rem" }}>
-              No Map Element Selected
-            </strong>
-            <span>
-              Click any location, container, or external ghost destination to inspect its details.
-            </span>
-            <span style={{ fontSize: "0.7rem" }}>
-              Double-click a container card to enter it, or double-click a distance badge to edit travel time.
-            </span>
-          </div>
-        )}
+        {/* Right Details Drawer (Desktop) OR Docked Peek Bar + Expandable Bottom Sheet (Mobile) */}
+        {(() => {
+          const detailsDrawerEl = hasDetailsOpen ? (
+            <MapDetailsDrawer
+              mode={mode}
+              selectedLocation={selectedLocation}
+              selectedContainer={selectedContainer}
+              selectedGhost={selectedGhost}
+              selectedGhostEdges={selectedGhostEdges}
+              hasGhostOverride={Boolean(
+                selectedGhostLocId && currentGhostOverrides?.[selectedGhostLocId]
+              )}
+              containers={workingContainers}
+              allLocations={workingLocations}
+              dynamicPortalIds={projectedTopology.dynamicPortalIds}
+              externalPortals={selectedExternalPortals}
+              containerStats={selectedContainerStats}
+              activeLocId={activeLoc?.id}
+              worldContext={worldContext}
+              isMutatingLocked={isMutatingLocked}
+              isLocationSavedInDb={
+                selectedLocation
+                  ? baselineLocationIds.has(selectedLocation.id)
+                  : false
+              }
+              isContainerSavedInDb={
+                selectedContainer
+                  ? baselineContainerIds.has(selectedContainer.id)
+                  : false
+              }
+              depthLabels={CONTAINER_DEPTH_LABELS}
+              onClose={() => {
+                if (isMobileViewport) {
+                  setIsMobileSheetExpanded(false);
+                } else {
+                  setSelectedLocId(null);
+                  setSelectedContainerId(null);
+                  setSelectedGhostLocId(null);
+                }
+              }}
+              onPatchLocation={patchLocation}
+              onPatchContainer={patchContainer}
+              onResetCoordinates={resetCoordinates}
+              onResetGhostCoords={handleResetGhostCoords}
+              onDeleteEdge={handleDeleteEdge}
+              onInspectEdgePair={openEdgeDetailsPopover}
+              onJumpToContainer={handleJumpToContainer}
+              onDrillIntoContainer={(cid) => {
+                setIsMobileSheetExpanded(false);
+                drillIntoContainer(cid);
+              }}
+              coLocatedPartyNpcs={coLocatedPartyNpcs}
+              onOverrideLocation={onOverrideLocation}
+              isOverriding={isOverriding}
+              onSaveCampaignLocationLore={onSaveCampaignLocationLore}
+              onSaveCampaignContainerLore={onSaveCampaignContainerLore}
+              unlockLore={unlockLore}
+              revealedLoreIds={revealedLoreIds}
+              onToggleLoreReveal={onToggleLoreReveal}
+              usedIconKeys={usedMapIconKeys}
+              onOpenIconBrowser={setIconBrowserTarget}
+              worldMedia={worldMedia}
+              visitedContainerIds={visitedContainerIds}
+              canDeleteLocation={canDeleteLocation}
+              canDeleteContainer={canDeleteContainer}
+              canConvertLocation={canConvertLocation}
+              canMoveOutToParent={canMoveOutToParent}
+              onDeleteLocation={handleDeleteLocation}
+              onDeleteContainer={handleDeleteContainer}
+              onSetStartingLocation={handleSetStartingLocation}
+              onConvertToContainer={handleConvertLocationToContainer}
+              onMoveOutToParent={handleMoveOutToParent}
+            />
+          ) : null;
+
+          if (isMobileViewport) {
+            if (!hasDetailsOpen) return null;
+
+            const peekName = selectedContainer
+              ? selectedContainer.name
+              : selectedGhost
+              ? selectedGhost.destination.name
+              : selectedLocation?.name ?? "";
+            const peekBadge = selectedContainer
+              ? `L${selectedContainer.depth}`
+              : selectedGhost
+              ? "Portal"
+              : selectedLocation?.id === activeLoc?.id
+              ? mode === "campaign"
+                ? "Current"
+                : "Start"
+              : selectedLocation?.is_hub
+              ? "Hub"
+              : "Location";
+            const PeekIcon = selectedContainer
+              ? resolveMapIconComponent(
+                  selectedContainer.icon,
+                  "container",
+                  selectedContainer.depth
+                )
+              : selectedGhost
+              ? resolveMapIconComponent(
+                  selectedGhost.destination.icon,
+                  selectedGhost.destination.is_hub ? "hub" : "location"
+                )
+              : resolveMapIconComponent(
+                  selectedLocation?.icon,
+                  selectedLocation?.is_hub ? "hub" : "location"
+                );
+
+            return (
+              <>
+                {!isMobileSheetExpanded && (
+                  <div
+                    className="map-mobile-peek-bar"
+                    role="region"
+                    aria-label="Selected map element"
+                  >
+                    <button
+                      type="button"
+                      className="map-mobile-peek-main"
+                      onClick={() => setIsMobileSheetExpanded(true)}
+                      aria-label={`Inspect ${peekName}`}
+                    >
+                      <PeekIcon
+                        size={15}
+                        color={
+                          selectedContainer ||
+                          selectedLocation?.id === activeLoc?.id
+                            ? "#fbbf24"
+                            : "#22d3ee"
+                        }
+                        style={{ flexShrink: 0 }}
+                      />
+                      <span className="map-mobile-peek-name">{peekName}</span>
+                      <span className="badge map-mobile-peek-badge">
+                        {peekBadge}
+                      </span>
+                    </button>
+
+                    <div className="map-mobile-peek-actions">
+                      {selectedContainer && (
+                        <button
+                          type="button"
+                          className="btn btn-cyan map-mobile-peek-cta"
+                          onClick={() => drillIntoContainer(selectedContainer.id)}
+                        >
+                          <LogIn size={13} />
+                          <span>Enter</span>
+                        </button>
+                      )}
+                      {selectedGhost && (
+                        <button
+                          type="button"
+                          className="btn btn-cyan map-mobile-peek-cta"
+                          onClick={() =>
+                            handleJumpToContainer(
+                              selectedGhost.destination.container_id ?? null,
+                              selectedGhost.destination.id
+                            )
+                          }
+                        >
+                          <LogIn size={13} />
+                          <span>Jump</span>
+                        </button>
+                      )}
+                      {selectedLocation &&
+                        !selectedContainer &&
+                        !selectedGhost &&
+                        mode === "campaign" &&
+                        selectedLocation.id !== activeLoc?.id &&
+                        onOverrideLocation && (
+                          <div className="map-mobile-peek-override">
+                            <LocationOverrideButton
+                              targetLocationId={selectedLocation.id}
+                              targetLocationName={selectedLocation.name}
+                              coLocatedPartyNpcs={coLocatedPartyNpcs}
+                              disabled={isOverriding}
+                              isPending={isOverriding}
+                              compact
+                              onOverride={onOverrideLocation}
+                            />
+                          </div>
+                        )}
+                      <button
+                        type="button"
+                        className="btn map-mobile-peek-btn"
+                        onClick={() => setIsMobileSheetExpanded(true)}
+                        aria-label="Open details"
+                        title="Open details"
+                      >
+                        <ChevronUp size={15} />
+                        <span>Details</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn map-mobile-peek-dismiss"
+                        onClick={() => {
+                          setSelectedLocId(null);
+                          setSelectedContainerId(null);
+                          setSelectedGhostLocId(null);
+                        }}
+                        aria-label="Clear selection"
+                        title="Clear selection"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {isMobileSheetExpanded && (
+                  <>
+                    <div
+                      className="map-mobile-sheet-backdrop"
+                      onClick={() => setIsMobileSheetExpanded(false)}
+                    />
+                    <div
+                      className="map-mobile-details-sheet"
+                      role="dialog"
+                      aria-label="Map Element Details Sheet"
+                    >
+                      {detailsDrawerEl}
+                    </div>
+                  </>
+                )}
+              </>
+            );
+          }
+
+          return hasDetailsOpen ? (
+            detailsDrawerEl
+          ) : (
+            <div
+              aria-label="Map Element Details Placeholder"
+              className="map-details-placeholder"
+            >
+              <strong style={{ color: "var(--text-secondary)", fontSize: "0.8rem" }}>
+                No Map Element Selected
+              </strong>
+              <span>
+                Click any location, container, or external ghost destination to inspect its details.
+              </span>
+              <span style={{ fontSize: "0.7rem" }}>
+                Double-click a container card to enter it, or double-click a distance badge to edit travel time.
+              </span>
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

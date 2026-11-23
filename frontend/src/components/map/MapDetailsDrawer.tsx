@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowUpRight,
   ChevronDown,
   ChevronRight,
   DoorOpen,
@@ -16,6 +17,8 @@ import {
   RotateCcw,
   Search,
   Sparkles,
+  Star,
+  Trash2,
   X,
 } from "lucide-react";
 import {
@@ -134,6 +137,18 @@ export interface MapDetailsDrawerProps {
     name?: string;
     tags?: string[];
   }) => void;
+  canDeleteLocation?: (locId: string) => { allowed: boolean; reason?: string };
+  canDeleteContainer?: (contId: string) => { allowed: boolean; reason?: string };
+  canConvertLocation?: (locId: string) => { allowed: boolean; reason?: string };
+  canMoveOutToParent?: (
+    kind: "location" | "container",
+    id: string
+  ) => { allowed: boolean; reason?: string; parentLabel?: string };
+  onDeleteLocation?: (locId: string) => void;
+  onDeleteContainer?: (contId: string) => void;
+  onSetStartingLocation?: (locId: string) => void;
+  onConvertToContainer?: (locId: string) => void;
+  onMoveOutToParent?: (kind: "location" | "container", id: string) => void;
 }
 
 const MapIconPicker: React.FC<{
@@ -959,6 +974,15 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
   worldMedia = [],
   visitedContainerIds = [],
   onOpenIconBrowser,
+  canDeleteLocation,
+  canDeleteContainer,
+  canConvertLocation,
+  canMoveOutToParent,
+  onDeleteLocation,
+  onDeleteContainer,
+  onSetStartingLocation,
+  onConvertToContainer,
+  onMoveOutToParent,
 }) => {
   const [lightboxImage, setLightboxImage] = useState<{
     url: string;
@@ -1126,6 +1150,7 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
     return (
       <div
         aria-label="Map Element Details"
+        className="map-details-drawer"
         style={{
           background: "var(--bg-card)",
           borderRadius: 8,
@@ -1370,6 +1395,7 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
     return (
       <div
         aria-label="Map Element Details"
+        className="map-details-drawer"
         style={{
           background: "var(--bg-card)",
           borderRadius: 8,
@@ -1670,6 +1696,61 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
             Only Level 1 landmarks hold scoped container lore.
           </div>
         )}
+
+        {/* Touch-Accessible Container Actions (parity with right-click / Delete key) */}
+        {!isMutatingLocked && (onMoveOutToParent || onDeleteContainer) && (() => {
+          const moveOutCheck = canMoveOutToParent
+            ? canMoveOutToParent("container", selectedContainer.id)
+            : { allowed: false, parentLabel: "Parent" };
+          const delCheck = canDeleteContainer
+            ? canDeleteContainer(selectedContainer.id)
+            : { allowed: true };
+          return (
+            <div className="map-drawer-actions">
+              <div className="map-drawer-actions-label">Container Actions</div>
+              <div className="map-drawer-actions-grid">
+                {selectedContainer.parent_container_id && onMoveOutToParent && (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={!moveOutCheck.allowed}
+                    title={moveOutCheck.reason}
+                    onClick={() => {
+                      if (moveOutCheck.allowed) {
+                        onMoveOutToParent("container", selectedContainer.id);
+                      }
+                    }}
+                  >
+                    <ArrowUpRight size={13} />
+                    <span>Move Out to {moveOutCheck.parentLabel ?? "Parent"}</span>
+                  </button>
+                )}
+                {onDeleteContainer && (
+                  <button
+                    type="button"
+                    className="btn map-drawer-action-danger"
+                    disabled={!delCheck.allowed}
+                    title={delCheck.reason}
+                    onClick={() => {
+                      if (delCheck.allowed) {
+                        onDeleteContainer(selectedContainer.id);
+                      }
+                    }}
+                  >
+                    <Trash2 size={13} />
+                    <span>
+                      Delete Container
+                      {!delCheck.allowed && delCheck.reason ? " (Locked)" : ""}
+                    </span>
+                  </button>
+                )}
+              </div>
+              {!delCheck.allowed && delCheck.reason && (
+                <div className="map-drawer-action-hint">{delCheck.reason}</div>
+              )}
+            </div>
+          );
+        })()}
         {lightboxImage && (
           <ImageLightboxModal
             url={lightboxImage.url}
@@ -1701,6 +1782,7 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
   return (
     <div
       aria-label="Map Element Details"
+      className="map-details-drawer"
       style={{
         background: "var(--bg-card)",
         borderRadius: 8,
@@ -2212,6 +2294,97 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
         revealedLoreIds={revealedLoreIds}
         onToggleLoreReveal={onToggleLoreReveal}
       />
+
+      {/* Touch-Accessible Location Actions (parity with right-click / Delete key) */}
+      {!isMutatingLocked &&
+        (onSetStartingLocation ||
+          onConvertToContainer ||
+          onMoveOutToParent ||
+          onDeleteLocation) &&
+        (() => {
+          const convCheck = canConvertLocation
+            ? canConvertLocation(selectedLocation.id)
+            : { allowed: false };
+          const moveOutCheck = canMoveOutToParent
+            ? canMoveOutToParent("location", selectedLocation.id)
+            : { allowed: false, parentLabel: "Parent" };
+          const delCheck = canDeleteLocation
+            ? canDeleteLocation(selectedLocation.id)
+            : { allowed: true };
+          return (
+            <div className="map-drawer-actions">
+              <div className="map-drawer-actions-label">Location Actions</div>
+              <div className="map-drawer-actions-grid">
+                {mode === "editor" &&
+                  !selectedLocation.is_starting_location &&
+                  onSetStartingLocation && (
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => onSetStartingLocation(selectedLocation.id)}
+                    >
+                      <Star size={13} color="#fbbf24" />
+                      <span>Set as Starting Location</span>
+                    </button>
+                  )}
+                {onConvertToContainer && (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={!convCheck.allowed}
+                    title={convCheck.reason}
+                    onClick={() => {
+                      if (convCheck.allowed) {
+                        onConvertToContainer(selectedLocation.id);
+                      }
+                    }}
+                  >
+                    <Layers size={13} color="#fbbf24" />
+                    <span>Convert to Container (L1)</span>
+                  </button>
+                )}
+                {selectedLocation.container_id && onMoveOutToParent && (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={!moveOutCheck.allowed}
+                    title={moveOutCheck.reason}
+                    onClick={() => {
+                      if (moveOutCheck.allowed) {
+                        onMoveOutToParent("location", selectedLocation.id);
+                      }
+                    }}
+                  >
+                    <ArrowUpRight size={13} />
+                    <span>Move Out to {moveOutCheck.parentLabel ?? "Parent"}</span>
+                  </button>
+                )}
+                {onDeleteLocation && (
+                  <button
+                    type="button"
+                    className="btn map-drawer-action-danger"
+                    disabled={!delCheck.allowed}
+                    title={delCheck.reason}
+                    onClick={() => {
+                      if (delCheck.allowed) {
+                        onDeleteLocation(selectedLocation.id);
+                      }
+                    }}
+                  >
+                    <Trash2 size={13} />
+                    <span>
+                      Delete Location
+                      {!delCheck.allowed && delCheck.reason ? " (Locked)" : ""}
+                    </span>
+                  </button>
+                )}
+              </div>
+              {!delCheck.allowed && delCheck.reason && (
+                <div className="map-drawer-action-hint">{delCheck.reason}</div>
+              )}
+            </div>
+          );
+        })()}
       {lightboxImage && (
         <ImageLightboxModal
           url={lightboxImage.url}

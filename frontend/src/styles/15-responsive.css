@@ -329,10 +329,120 @@
     width: auto;
     max-height: 75dvh;
   }
+
+  /* Full-Screen Mobile Map Modal & Responsive Topology Chrome */
+  .map-fullscreen-modal-panel {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    border: none;
+    padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right))
+      max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+  }
+
+  .map-toolbar {
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+
+  .map-toolbar-title {
+    flex: 1 1 auto;
+    font-size: 0.84rem;
+  }
+
+  .map-toolbar-actions {
+    flex-wrap: nowrap;
+    flex-shrink: 0;
+  }
+
+  .map-toolbar-icon-btn,
+  .map-toolbar-close-btn {
+    min-width: 36px;
+    min-height: 36px;
+    padding: 6px;
+  }
+
+  .map-breadcrumbs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    white-space: nowrap;
+    scrollbar-width: none;
+    padding: 4px 8px;
+  }
+
+  .map-breadcrumbs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .map-palette-bar,
+  .map-details-placeholder,
+  .map-canvas-zoom-pill,
+  .map-legend-desktop {
+    display: none;
+  }
+
+  .map-topology-split {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .map-canvas-tl-mobile {
+    display: flex;
+  }
+
+  .map-canvas-bl-controls {
+    max-width: calc(100% - 76px);
+  }
+
+  .map-mobile-fab-row {
+    display: flex;
+  }
+
+  .map-canvas-center-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  /* Prevent iOS Safari auto-zoom on < 16px inputs inside the full-screen map */
+  .map-fullscreen-modal-panel input[type="text"],
+  .map-fullscreen-modal-panel input[type="number"],
+  .map-fullscreen-modal-panel textarea,
+  .map-toolbar-search-row .ui-search-input--card,
+  .map-inline-edge-input {
+    font-size: 16px;
+  }
+
+  .map-inline-edge-stepper {
+    width: 30px;
+    height: 30px;
+    font-size: 16px;
+  }
+
+  .map-inline-edge-input {
+    width: 48px;
+    height: 30px;
+    font-size: 16px;
+  }
+
+  .map-search-dropdown {
+    width: min(360px, calc(100vw - 16px));
+  }
 }
 
 /* Narrow Phone Polish (<= 620px) */
 @media (max-width: 620px) {
+  .map-toolbar-btn-label {
+    display: none;
+  }
+
+  .map-create-kind-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .stage-header {
     padding: 9px 10px;
     gap: 8px;

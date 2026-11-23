@@ -38,7 +38,9 @@ test.describe("03 - Interactive SVG Map Topology Canvas (SpatialTopologyView)", 
     // 1. Attempt to delete Starting Location (Main Floor) via Delete key -> verify block notice
     await page.keyboard.press("Delete");
     await expect(
-      page.getByText(/Reassign Starting Location before deleting this location/i)
+      page
+        .locator(".map-canvas-wrap")
+        .getByText(/Reassign Starting Location before deleting this location/i)
     ).toBeVisible();
     await expect(mainFloorNode).toBeVisible();
 

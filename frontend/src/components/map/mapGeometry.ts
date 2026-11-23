@@ -21,6 +21,178 @@ export const CONTAINER_PORT_OFFSET = 7;
 export const CONTAINER_HIT_HALF_W = CONTAINER_CARD_HALF_W + 2;
 export const CONTAINER_HIT_HALF_H = CONTAINER_CARD_HALF_H + 3;
 export const PORT_HIT_RADIUS = 8;
+export const PORT_TOUCH_HIT_RADIUS = 14;
+
+export const DEFAULT_MAP_VIEWBOX_W = 680;
+export const DEFAULT_MAP_VIEWBOX_H = 520;
+export const TAP_MOVE_THRESHOLD_PX = 5;
+export const DOUBLE_TAP_MAX_MS = 300;
+export const DOUBLE_TAP_MAX_DIST_PX = 28;
+
+export interface MapViewBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Compute an aspect-matched SVG viewBox centered at (0, 0).
+ * - Falls back to the canonical 680x520 landscape box when dimensions are unavailable (SSR/tests).
+ * - On narrow/portrait containers (< 680px wide), uses container CSS dimensions directly so
+ *   nodes, labels, and touch targets stay near 1:1 CSS pixels instead of shrinking to ~0.57x.
+ * - On desktop containers (>= 680px wide), preserves balanced framing anchored to 680x520.
+ */
+export function computeResponsiveViewBox(
+  containerW: number,
+  containerH: number
+): MapViewBox {
+  if (
+    !Number.isFinite(containerW) ||
+    !Number.isFinite(containerH) ||
+    containerW <= 0 ||
+    containerH <= 0
+  ) {
+    return {
+      x: -DEFAULT_MAP_VIEWBOX_W / 2,
+      y: -DEFAULT_MAP_VIEWBOX_H / 2,
+      width: DEFAULT_MAP_VIEWBOX_W,
+      height: DEFAULT_MAP_VIEWBOX_H,
+    };
+  }
+  if (containerW < DEFAULT_MAP_VIEWBOX_W) {
+    const width = Math.max(240, Math.round(containerW));
+    const height = Math.max(240, Math.round(containerH));
+    return {
+      x: -width / 2,
+      y: -height / 2,
+      width,
+      height,
+    };
+  }
+  const baseScale = Math.min(
+    containerW / DEFAULT_MAP_VIEWBOX_W,
+    containerH / DEFAULT_MAP_VIEWBOX_H
+  );
+  const width = Math.max(DEFAULT_MAP_VIEWBOX_W, Math.round(containerW / baseScale));
+  const height = Math.max(DEFAULT_MAP_VIEWBOX_H, Math.round(containerH / baseScale));
+  return {
+    x: -width / 2,
+    y: -height / 2,
+    width,
+    height,
+  };
+}
+
+/** Compute CSS-pixels-per-SVG-viewBox-unit scale factor for an SVG element rect. */
+export function computeSvgClientScale(
+  rect: { width: number; height: number } | null | undefined,
+  viewBox: { width: number; height: number } = {
+    width: DEFAULT_MAP_VIEWBOX_W,
+    height: DEFAULT_MAP_VIEWBOX_H,
+  }
+): number {
+  if (
+    !rect ||
+    rect.width <= 0 ||
+    rect.height <= 0 ||
+    viewBox.width <= 0 ||
+    viewBox.height <= 0
+  ) {
+    return 1;
+  }
+  return Math.min(rect.width / viewBox.width, rect.height / viewBox.height) || 1;
+}
+
+/** Convert client-space drag deltas into SVG world-space pan deltas for 1:1 finger tracking. */
+export function computePanDeltaWorld(
+  rawDx: number,
+  rawDy: number,
+  svgScale: number,
+  zoom: number
+): { dx: number; dy: number } {
+  const denom = Math.max(0.05, (svgScale || 1) * (zoom || 1));
+  return {
+    dx: rawDx / denom,
+    dy: rawDy / denom,
+  };
+}
+
+/**
+ * Compute updated zoom and pan for a two-finger pinch gesture so `anchorWorld`
+ * remains pinned directly beneath the current client midpoint `midClient`.
+ */
+export function computePinchZoomPan(params: {
+  initialZoom: number;
+  initialDist: number;
+  currentDist: number;
+  anchorWorld: { x: number; y: number };
+  midClient: { x: number; y: number };
+  svgRect: { left: number; top: number; width: number; height: number };
+  viewBox: { width: number; height: number };
+}): { zoom: number; pan: { x: number; y: number } } {
+  const {
+    initialZoom,
+    initialDist,
+    currentDist,
+    anchorWorld,
+    midClient,
+    svgRect,
+    viewBox,
+  } = params;
+  const ratio = initialDist > 1 ? currentDist / initialDist : 1;
+  const nextZoom = clampZoom(initialZoom * ratio);
+  const svgScale = computeSvgClientScale(svgRect, viewBox);
+  const vbX = (midClient.x - (svgRect.left + svgRect.width / 2)) / svgScale;
+  const vbY = (midClient.y - (svgRect.top + svgRect.height / 2)) / svgScale;
+  return {
+    zoom: nextZoom,
+    pan: {
+      x: vbX / nextZoom - anchorWorld.x,
+      y: vbY / nextZoom - anchorWorld.y,
+    },
+  };
+}
+
+/**
+ * Compute focal zoom toggle for a double-tap on empty canvas:
+ * zooms in (+0.75) when zoom < 1.5, or resets to 1.0 when zoom >= 1.5,
+ * keeping `tappedWorld` anchored under `tapClient`.
+ */
+export function computeDoubleTapZoomPan(params: {
+  currentZoom: number;
+  tappedWorld: { x: number; y: number };
+  tapClient: { x: number; y: number };
+  svgRect: { left: number; top: number; width: number; height: number };
+  viewBox: { width: number; height: number };
+}): { zoom: number; pan: { x: number; y: number } } {
+  const { currentZoom, tappedWorld, tapClient, svgRect, viewBox } = params;
+  const nextZoom = currentZoom < 1.5 ? clampZoom(currentZoom + 0.75) : 1;
+  const svgScale = computeSvgClientScale(svgRect, viewBox);
+  const vbX = (tapClient.x - (svgRect.left + svgRect.width / 2)) / svgScale;
+  const vbY = (tapClient.y - (svgRect.top + svgRect.height / 2)) / svgScale;
+  return {
+    zoom: nextZoom,
+    pan: {
+      x: vbX / nextZoom - tappedWorld.x,
+      y: vbY / nextZoom - tappedWorld.y,
+    },
+  };
+}
+
+/**
+ * Determine whether touching a node/container/ghost should defer dragging to
+ * tap-to-select-first (allowing swipes to pan the map instead of moving the node).
+ */
+export function shouldDeferNodeDragToTapFirst(params: {
+  pointerType: string;
+  isSelected: boolean;
+  isMutatingLocked: boolean;
+}): boolean {
+  if (params.isMutatingLocked) return true;
+  if (params.pointerType === "touch" && !params.isSelected) return true;
+  return false;
+}
 
 /** Compute world-space coordinates for a container supernode perimeter port dot. */
 export function getContainerPortPoint(

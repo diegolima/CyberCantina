@@ -213,7 +213,7 @@ describe("mapSearch pure matching & ranking", () => {
 });
 
 describe("TopologyHeaderToolbar map search rendering", () => {
-  it("renders the search combobox immediately before the zoom control group", () => {
+  it("renders the search combobox in TopologyHeaderToolbar and consolidated canvas zoom/center controls", () => {
     const { containers, locations, edges } = makeSearchFixture();
     const html = renderToStaticMarkup(
       <SpatialTopologyView
@@ -226,13 +226,12 @@ describe("TopologyHeaderToolbar map search rendering", () => {
       />
     );
 
-    const searchIdx = html.indexOf('aria-label="Search locations and containers"');
-    const zoomIdx = html.indexOf('aria-label="Map zoom controls"');
-    expect(searchIdx).toBeGreaterThan(-1);
-    expect(zoomIdx).toBeGreaterThan(-1);
-    expect(searchIdx).toBeLessThan(zoomIdx);
+    expect(html).toContain('aria-label="Search locations and containers"');
     expect(html).toContain('role="combobox"');
     expect(html).toContain('placeholder="Search locations &amp; areas…"');
+    expect(html).not.toContain('aria-label="Map zoom controls"');
+    expect(html).toContain('data-testid="canvas-zoom-indicator"');
+    expect(html).toContain('aria-label="Center on Selected / Active Location"');
   });
 
   it("remains backwards-compatible when TopologyHeaderToolbar is rendered without search callbacks", () => {
@@ -249,9 +248,6 @@ describe("TopologyHeaderToolbar map search rendering", () => {
         locationsCount={locations.length}
         edgesCount={edges.length}
         containersCount={containers.length}
-        zoom={1}
-        setZoom={() => {}}
-        handleCenter={() => {}}
         hasSaveMap={false}
         effectiveDirty={false}
         hasBlockingErrors={false}
@@ -266,7 +262,8 @@ describe("TopologyHeaderToolbar map search rendering", () => {
       />
     );
 
-    expect(html).toContain('aria-label="Map zoom controls"');
+    expect(html).toContain("Spatial Topology");
+    expect(html).not.toContain('aria-label="Map zoom controls"');
     expect(html).not.toContain('aria-label="Search locations and containers"');
   });
 });

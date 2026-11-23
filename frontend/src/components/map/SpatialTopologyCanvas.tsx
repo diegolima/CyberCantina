@@ -1,5 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { DoorOpen, GitBranch, Layers, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Crosshair,
+  DoorOpen,
+  GitBranch,
+  HelpCircle,
+  Layers,
+  MapPin,
+  Plus,
+  RotateCcw,
+  X,
+} from "lucide-react";
 import type {
   CompassDirection,
   LocationContainer,
@@ -8,11 +19,16 @@ import type {
 } from "../../types";
 import { resolveMapIconComponent } from "./mapIcons";
 import type { MapContextMenuState } from "./MapDialogs";
+import type { PaletteItemKind } from "./MapPaletteBar";
 import {
   CONTAINER_CARD_H,
   CONTAINER_CARD_RX,
   CONTAINER_CARD_W,
   CONTAINER_HOVER_PAD,
+  DEFAULT_MAP_VIEWBOX_H,
+  DEFAULT_MAP_VIEWBOX_W,
+  DOUBLE_TAP_MAX_DIST_PX,
+  DOUBLE_TAP_MAX_MS,
   GHOST_CARD_H,
   GHOST_CARD_RX,
   GHOST_CARD_W,
@@ -25,11 +41,20 @@ import {
   MAX_MAP_ZOOM,
   MIN_MAP_ZOOM,
   PORT_HIT_RADIUS,
+  PORT_TOUCH_HIT_RADIUS,
+  TAP_MOVE_THRESHOLD_PX,
   clampZoom,
   computeDistanceBadgeWidth,
+  computeDoubleTapZoomPan,
   computeEdgeClippedSegment,
+  computePanDeltaWorld,
+  computePinchZoomPan,
+  computeResponsiveViewBox,
+  computeSvgClientScale,
   getContainerPortPoint,
   resolveCanvasCursor,
+  shouldDeferNodeDragToTapFirst,
+  type MapViewBox,
   type NodeShapeDescriptor,
 } from "./mapGeometry";
 import {
@@ -98,6 +123,15 @@ export interface SpatialTopologyCanvasProps {
   handleDeleteEdgeGroup: (edgeIds: string[]) => void;
   drillIntoContainer: (contId: string | null) => void;
   onJumpToContainer?: (containerId: string | null, focusLocId?: string) => void;
+  handleCenter?: () => void;
+  isMobileViewport?: boolean;
+  undoCount?: number;
+  onUndo?: () => void;
+  validationMessage?: string | null;
+  unreachableCount?: number;
+  onFocusInvalid?: () => void;
+  canAddContainerHere?: boolean;
+  onQuickAdd?: (kind: PaletteItemKind) => void;
 }
 
 export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
@@ -142,13 +176,77 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
   handleDeleteEdgeGroup,
   drillIntoContainer,
   onJumpToContainer,
+  handleCenter,
+  isMobileViewport = false,
+  undoCount = 0,
+  onUndo,
+  validationMessage = null,
+  unreachableCount = 0,
+  onFocusInvalid,
+  canAddContainerHere = true,
+  onQuickAdd,
 }) => {
   const [isPanning, setIsPanning] = useState(false);
+  const [isPinching, setIsPinching] = useState(false);
+  const [showMobileLegend, setShowMobileLegend] = useState(false);
+  const [showMobileAddMenu, setShowMobileAddMenu] = useState(false);
   const [hoveredEdgePairKey, setHoveredEdgePairKey] = useState<string | null>(null);
+  const [viewBox, setViewBox] = useState<MapViewBox>(() => ({
+    x: -DEFAULT_MAP_VIEWBOX_W / 2,
+    y: -DEFAULT_MAP_VIEWBOX_H / 2,
+    width: DEFAULT_MAP_VIEWBOX_W,
+    height: DEFAULT_MAP_VIEWBOX_H,
+  }));
   const edgeHoverTimeoutRef = useRef<number | null>(null);
   const inlineInputRef = useRef<HTMLInputElement | null>(null);
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
+  const panRef = useRef(pan);
+  panRef.current = pan;
+  const viewBoxRef = useRef(viewBox);
+  viewBoxRef.current = viewBox;
+
+  const panPointerIdRef = useRef<number | null>(null);
+  const panPointerTypeRef = useRef<string>("mouse");
+  const pendingTapTargetRef = useRef<
+    | { kind: "location" | "container" | "ghost"; id: string }
+    | { kind: "edge"; openEditor: () => void }
+    | null
+  >(null);
+  const activeTouchPointersRef = useRef<Map<number, { clientX: number; clientY: number }>>(
+    new Map()
+  );
+  const pinchStateRef = useRef<{
+    initialZoom: number;
+    initialDist: number;
+    anchorWorld: { x: number; y: number };
+  } | null>(null);
+  const lastEmptyTapRef = useRef<{ time: number; clientX: number; clientY: number } | null>(
+    null
+  );
+
+  // Aspect-adaptive viewBox via ResizeObserver so portrait phones render crisp, tappable nodes
+  useEffect(() => {
+    const el = canvasWrapRef?.current ?? svgRef.current?.parentElement ?? null;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const updateFromRect = (w: number, h: number) => {
+      const next = computeResponsiveViewBox(w, h);
+      setViewBox((prev) =>
+        prev.width === next.width && prev.height === next.height ? prev : next
+      );
+    };
+    const rect = el.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) {
+      updateFromRect(rect.width, rect.height);
+    }
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      updateFromRect(entry.contentRect.width, entry.contentRect.height);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [canvasWrapRef, svgRef]);
 
   const cancelEdgeHoverClear = () => {
     if (edgeHoverTimeoutRef.current !== null) {
@@ -183,56 +281,209 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
     input.select();
   }, [inlineEdgeEdit?.edgeId]);
 
+  // Unified pointer-event panning + two-finger pinch-to-zoom + tap/double-tap resolution
   useEffect(() => {
-    if (!isPanning) return;
+    if (!isPanning && !isPinching) return;
 
-    const handleWindowMove = (e: MouseEvent) => {
+    const handleWindowPointerMove = (e: PointerEvent) => {
+      if (e.pointerType === "touch" && activeTouchPointersRef.current.has(e.pointerId)) {
+        activeTouchPointersRef.current.set(e.pointerId, {
+          clientX: e.clientX,
+          clientY: e.clientY,
+        });
+      }
+
+      if (pinchStateRef.current && activeTouchPointersRef.current.size >= 2) {
+        const pts = Array.from(activeTouchPointersRef.current.values());
+        const p1 = pts[0];
+        const p2 = pts[1];
+        const svgRect = svgRef.current?.getBoundingClientRect();
+        if (p1 && p2 && svgRect && svgRect.width > 0 && svgRect.height > 0) {
+          const currentDist = Math.hypot(p2.clientX - p1.clientX, p2.clientY - p1.clientY);
+          const midClient = {
+            x: (p1.clientX + p2.clientX) / 2,
+            y: (p1.clientY + p2.clientY) / 2,
+          };
+          const next = computePinchZoomPan({
+            initialZoom: pinchStateRef.current.initialZoom,
+            initialDist: pinchStateRef.current.initialDist,
+            currentDist,
+            anchorWorld: pinchStateRef.current.anchorWorld,
+            midClient,
+            svgRect,
+            viewBox: viewBoxRef.current,
+          });
+          setZoom(next.zoom);
+          setPan(next.pan);
+        }
+        return;
+      }
+
       if (!panDragRef.current.active) return;
+      if (
+        panPointerIdRef.current !== null &&
+        e.pointerId !== panPointerIdRef.current
+      ) {
+        return;
+      }
+
       const rawDx = e.clientX - panDragRef.current.startClientX;
       const rawDy = e.clientY - panDragRef.current.startClientY;
-      if (Math.hypot(rawDx, rawDy) > 4) {
+      if (Math.hypot(rawDx, rawDy) > TAP_MOVE_THRESHOLD_PX) {
         panDragRef.current.moved = true;
+        pendingTapTargetRef.current = null;
       }
-      const z = zoomRef.current || 1;
+      const svgRect = svgRef.current?.getBoundingClientRect();
+      const svgScale = computeSvgClientScale(svgRect, viewBoxRef.current);
+      const { dx, dy } = computePanDeltaWorld(
+        rawDx,
+        rawDy,
+        svgScale,
+        zoomRef.current || 1
+      );
       setPan({
-        x: panDragRef.current.origPanX + rawDx / z,
-        y: panDragRef.current.origPanY + rawDy / z,
+        x: panDragRef.current.origPanX + dx,
+        y: panDragRef.current.origPanY + dy,
       });
     };
 
-    const finishPan = (e?: MouseEvent) => {
+    const finishGesture = (e?: PointerEvent, cancelled = false) => {
+      if (e && e.pointerType === "touch") {
+        activeTouchPointersRef.current.delete(e.pointerId);
+      } else if (!e) {
+        activeTouchPointersRef.current.clear();
+      }
+
+      if (pinchStateRef.current) {
+        if (activeTouchPointersRef.current.size < 2) {
+          pinchStateRef.current = null;
+          setIsPinching(false);
+          panDragRef.current.active = false;
+          panPointerIdRef.current = null;
+          pendingTapTargetRef.current = null;
+          setIsPanning(false);
+        }
+        return;
+      }
+
       if (
+        e &&
+        panPointerIdRef.current !== null &&
+        e.pointerId !== panPointerIdRef.current
+      ) {
+        return;
+      }
+
+      const pendingTap = pendingTapTargetRef.current;
+      pendingTapTargetRef.current = null;
+
+      if (
+        !cancelled &&
         e &&
         panDragRef.current.active &&
         !panDragRef.current.moved &&
         panDragRef.current.button === 0 &&
-        e.button === 0
+        (e.button === 0 || e.pointerType === "touch")
       ) {
-        // Click on empty canvas deselects current element & hides details pane
-        setSelectedLocId(null);
-        setSelectedContainerId(null);
-        setSelectedGhostLocId?.(null);
-        setContextMenu(null);
-        setInlineEdgeEdit(null);
+        if (pendingTap) {
+          lastEmptyTapRef.current = null;
+          setShowMobileLegend(false);
+          setShowMobileAddMenu(false);
+          if (pendingTap.kind === "location") {
+            setSelectedContainerId(null);
+            setSelectedGhostLocId?.(null);
+            setSelectedLocId(pendingTap.id);
+          } else if (pendingTap.kind === "container") {
+            setSelectedGhostLocId?.(null);
+            setSelectedLocId(null);
+            setSelectedContainerId(pendingTap.id);
+          } else if (pendingTap.kind === "ghost") {
+            setSelectedContainerId(null);
+            setSelectedLocId(null);
+            setSelectedGhostLocId?.(pendingTap.id);
+          } else if (pendingTap.kind === "edge") {
+            pendingTap.openEditor();
+          }
+        } else {
+          // Empty canvas tap: check touch double-tap focal zoom, else deselect
+          const now = Date.now();
+          const prevTap = lastEmptyTapRef.current;
+          const isDoubleTap =
+            e.pointerType === "touch" &&
+            prevTap !== null &&
+            now - prevTap.time <= DOUBLE_TAP_MAX_MS &&
+            Math.hypot(e.clientX - prevTap.clientX, e.clientY - prevTap.clientY) <=
+              DOUBLE_TAP_MAX_DIST_PX;
+
+          if (isDoubleTap) {
+            lastEmptyTapRef.current = null;
+            const svgRect = svgRef.current?.getBoundingClientRect();
+            if (svgRect && svgRect.width > 0 && svgRect.height > 0) {
+              const tappedWorld = clientToWorldPoint(
+                e.clientX,
+                e.clientY,
+                svgRef.current,
+                viewportGroupRef.current,
+                panRef.current,
+                zoomRef.current || 1,
+                viewBoxRef.current
+              );
+              const next = computeDoubleTapZoomPan({
+                currentZoom: zoomRef.current || 1,
+                tappedWorld,
+                tapClient: { x: e.clientX, y: e.clientY },
+                svgRect,
+                viewBox: viewBoxRef.current,
+              });
+              setZoom(next.zoom);
+              setPan(next.pan);
+            }
+          } else {
+            if (e.pointerType === "touch") {
+              lastEmptyTapRef.current = {
+                time: now,
+                clientX: e.clientX,
+                clientY: e.clientY,
+              };
+            }
+            setSelectedLocId(null);
+            setSelectedContainerId(null);
+            setSelectedGhostLocId?.(null);
+            setContextMenu(null);
+            setInlineEdgeEdit(null);
+            setShowMobileLegend(false);
+            setShowMobileAddMenu(false);
+          }
+        }
       }
+
       panDragRef.current.active = false;
+      panPointerIdRef.current = null;
       setIsPanning(false);
     };
 
-    const handleWindowBlur = () => finishPan();
+    const handleWindowPointerUp = (e: PointerEvent) => finishGesture(e, false);
+    const handleWindowPointerCancel = (e: PointerEvent) => finishGesture(e, true);
+    const handleWindowBlur = () => finishGesture(undefined, true);
 
-    window.addEventListener("mousemove", handleWindowMove);
-    window.addEventListener("mouseup", finishPan);
+    window.addEventListener("pointermove", handleWindowPointerMove);
+    window.addEventListener("pointerup", handleWindowPointerUp);
+    window.addEventListener("pointercancel", handleWindowPointerCancel);
     window.addEventListener("blur", handleWindowBlur);
     return () => {
-      window.removeEventListener("mousemove", handleWindowMove);
-      window.removeEventListener("mouseup", finishPan);
+      window.removeEventListener("pointermove", handleWindowPointerMove);
+      window.removeEventListener("pointerup", handleWindowPointerUp);
+      window.removeEventListener("pointercancel", handleWindowPointerCancel);
       window.removeEventListener("blur", handleWindowBlur);
     };
   }, [
     isPanning,
+    isPinching,
     panDragRef,
+    svgRef,
+    viewportGroupRef,
     setPan,
+    setZoom,
     setSelectedLocId,
     setSelectedContainerId,
     setSelectedGhostLocId,
@@ -489,7 +740,8 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
         wrapEl,
         viewportGroupRef.current,
         pan,
-        zoom
+        zoom,
+        viewBox
       )
     : null;
   const wrapRectForClamp = wrapEl?.getBoundingClientRect();
@@ -509,50 +761,123 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
     isPanning,
   });
 
+  const portHitCircleRadius = isMobileViewport
+    ? PORT_TOUCH_HIT_RADIUS
+    : PORT_HIT_RADIUS;
+
+  const handleSvgContextMenu = (
+    e: React.MouseEvent,
+    target?: MapContextMenuState["target"]
+  ) => {
+    if (isMobileViewport || panPointerTypeRef.current === "touch") {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (target) {
+      openContextMenuAt(e, target);
+    } else {
+      e.preventDefault();
+      setContextMenu(null);
+    }
+  };
+
+  const handleSvgPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    panPointerTypeRef.current = e.pointerType;
+
+    if (e.pointerType === "touch") {
+      activeTouchPointersRef.current.set(e.pointerId, {
+        clientX: e.clientX,
+        clientY: e.clientY,
+      });
+
+      if (activeTouchPointersRef.current.size >= 2) {
+        // Engage two-finger midpoint pinch-to-zoom; cancel any active single-finger gesture
+        setNodeDrag(null);
+        setLinkDrag(null);
+        panDragRef.current.active = false;
+        panPointerIdRef.current = null;
+        pendingTapTargetRef.current = null;
+        lastEmptyTapRef.current = null;
+        setIsPanning(false);
+
+        const pts = Array.from(activeTouchPointersRef.current.values());
+        const p1 = pts[0];
+        const p2 = pts[1];
+        if (p1 && p2) {
+          const initialDist = Math.hypot(
+            p2.clientX - p1.clientX,
+            p2.clientY - p1.clientY
+          );
+          const midX = (p1.clientX + p2.clientX) / 2;
+          const midY = (p1.clientY + p2.clientY) / 2;
+          const anchorWorld = clientToWorldPoint(
+            midX,
+            midY,
+            svgRef.current,
+            viewportGroupRef.current,
+            panRef.current,
+            zoomRef.current || 1,
+            viewBoxRef.current
+          );
+          pinchStateRef.current = {
+            initialZoom: zoomRef.current || 1,
+            initialDist: Math.max(1, initialDist),
+            anchorWorld,
+          };
+          setIsPinching(true);
+        }
+        return;
+      }
+    }
+
+    if ((e.button !== 0 && e.button !== 1) || nodeDrag || linkDrag) return;
+    if (e.button === 1) {
+      e.preventDefault();
+    }
+    panPointerIdRef.current = e.pointerId;
+    panDragRef.current = {
+      active: true,
+      moved: false,
+      button: e.button,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      origPanX: pan.x,
+      origPanY: pan.y,
+    };
+    setIsPanning(true);
+  };
+
   return (
     <>
           <svg
             ref={svgRef}
             width="100%"
             height="100%"
-            viewBox="-340 -260 680 520"
+            viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`}
             style={{
               width: "100%",
               height: "100%",
               minHeight: 0,
               cursor: canvasCursor,
               display: "block",
+              touchAction: "none",
+              userSelect: "none",
+              WebkitUserSelect: "none",
+              WebkitTouchCallout: "none",
             }}
             onWheel={(e) => {
               e.preventDefault();
               const delta = e.deltaY < 0 ? 0.15 : -0.15;
               setZoom((z) => clampZoom(z + delta));
             }}
-            onMouseDown={(e) => {
-              if ((e.button !== 0 && e.button !== 1) || nodeDrag || linkDrag) return;
-              if (e.button === 1) {
-                e.preventDefault();
-              }
-              panDragRef.current = {
-                active: true,
-                moved: false,
-                button: e.button,
-                startClientX: e.clientX,
-                startClientY: e.clientY,
-                origPanX: pan.x,
-                origPanY: pan.y,
-              };
-              setIsPanning(true);
-            }}
+            onPointerDown={handleSvgPointerDown}
             onAuxClick={(e) => {
               if (e.button === 1) {
                 e.preventDefault();
               }
             }}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              setContextMenu(null);
-            }}
+            onContextMenu={(e) => handleSvgContextMenu(e)}
           >
             <g
               ref={viewportGroupRef}
@@ -684,13 +1009,43 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                       <g
                         key={`badge-${edge.id}`}
                         style={{ cursor: isPanning ? "grabbing" : "pointer" }}
-                        onMouseDown={(ev) => ev.stopPropagation()}
+                        onPointerDown={(ev) => {
+                          if (ev.button !== 0) return;
+                          if (
+                            (ev.pointerType === "touch" || isMobileViewport) &&
+                            mode === "editor" &&
+                            !isMutatingLocked
+                          ) {
+                            pendingTapTargetRef.current = {
+                              kind: "edge",
+                              openEditor: () => {
+                                if (
+                                  edge.isAggregated &&
+                                  edge.groupedEdges &&
+                                  edge.groupedEdges.length > 1 &&
+                                  passagePairCount > 1
+                                ) {
+                                  setMultiEdgeModalEdges(edge.groupedEdges);
+                                } else {
+                                  setInlineEdgeEdit({
+                                    edgeId: edge.rawEdge.id,
+                                    midX: clipped.midX,
+                                    midY: clipped.midY,
+                                    value: String(edge.travel_minutes),
+                                  });
+                                }
+                              },
+                            };
+                          } else if (ev.pointerType !== "touch") {
+                            ev.stopPropagation();
+                          }
+                        }}
                         onMouseEnter={() => {
                           if (isEditorQuickDeleteEnabled) enterEdgeHover(pairKey);
                         }}
                         onMouseLeave={() => leaveEdgeHover(pairKey)}
                         onContextMenu={(ev) =>
-                          openContextMenuAt(ev, {
+                          handleSvgContextMenu(ev, {
                             kind: "edge",
                             edgeId: edge.rawEdge.id,
                             ...(edge.isAggregated && edge.groupedEdges?.length
@@ -791,22 +1146,34 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                       style={{ cursor: isPanning ? "grabbing" : "pointer" }}
                       onPointerDown={(e) => {
                         if (e.button !== 0) return;
-                        e.stopPropagation();
-                        if (isMutatingLocked) {
-                          setSelectedContainerId(sn.container.id);
+                        if (
+                          shouldDeferNodeDragToTapFirst({
+                            pointerType: e.pointerType,
+                            isSelected,
+                            isMutatingLocked,
+                          })
+                        ) {
+                          pendingTapTargetRef.current = {
+                            kind: "container",
+                            id: sn.container.id,
+                          };
                           return;
                         }
+                        e.stopPropagation();
                         const wpt = clientToWorldPoint(
                           e.clientX,
                           e.clientY,
                           svgRef.current,
                           viewportGroupRef.current,
                           pan,
-                          zoom
+                          zoom,
+                          viewBox
                         );
                         setNodeDrag({
                           kind: "container",
                           id: sn.container.id,
+                          pointerId: e.pointerId,
+                          pointerType: e.pointerType,
                           startClientX: e.clientX,
                           startClientY: e.clientY,
                           pointerOffsetX: wpt.x - pt.x,
@@ -824,7 +1191,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                         drillIntoContainer(sn.container.id);
                       }}
                       onContextMenu={(e) =>
-                        openContextMenuAt(e, {
+                        handleSvgContextMenu(e, {
                           kind: "container",
                           id: sn.container.id,
                         })
@@ -940,6 +1307,8 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                                 sourceKind: "container",
                                 sourceId: sn.container.id,
                                 sourceSlot: slot,
+                                pointerId: ev.pointerId,
+                                pointerType: ev.pointerType,
                                 startX: px,
                                 startY: py,
                                 currX: px,
@@ -948,7 +1317,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                               });
                             }}
                           >
-                            <circle cx={px} cy={py} r={PORT_HIT_RADIUS} fill="transparent" />
+                            <circle cx={px} cy={py} r={portHitCircleRadius} fill="transparent" />
                             <circle
                               cx={px}
                               cy={py}
@@ -1067,23 +1436,34 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                       style={{ cursor: isPanning ? "grabbing" : "pointer" }}
                       onPointerDown={(e) => {
                         if (e.button !== 0) return;
-                        e.stopPropagation();
-                        if (isMutatingLocked) {
-                          setSelectedContainerId(null);
-                          setSelectedLocId(loc.id);
+                        if (
+                          shouldDeferNodeDragToTapFirst({
+                            pointerType: e.pointerType,
+                            isSelected,
+                            isMutatingLocked,
+                          })
+                        ) {
+                          pendingTapTargetRef.current = {
+                            kind: "location",
+                            id: loc.id,
+                          };
                           return;
                         }
+                        e.stopPropagation();
                         const wpt = clientToWorldPoint(
                           e.clientX,
                           e.clientY,
                           svgRef.current,
                           viewportGroupRef.current,
                           pan,
-                          zoom
+                          zoom,
+                          viewBox
                         );
                         setNodeDrag({
                           kind: "location",
                           id: loc.id,
+                          pointerId: e.pointerId,
+                          pointerType: e.pointerType,
                           startClientX: e.clientX,
                           startClientY: e.clientY,
                           pointerOffsetX: wpt.x - pt.x,
@@ -1097,7 +1477,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                         });
                       }}
                       onContextMenu={(e) =>
-                        openContextMenuAt(e, { kind: "location", id: loc.id })
+                        handleSvgContextMenu(e, { kind: "location", id: loc.id })
                       }
                     >
                       {/* Selection or Unreachable Warning Ring */}
@@ -1263,6 +1643,8 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                                 sourceKind: "location",
                                 sourceId: loc.id,
                                 sourceSlot: slot,
+                                pointerId: ev.pointerId,
+                                pointerType: ev.pointerType,
                                 startX: px,
                                 startY: py,
                                 currX: px,
@@ -1271,7 +1653,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                               });
                             }}
                           >
-                            <circle cx={px} cy={py} r={PORT_HIT_RADIUS} fill="transparent" />
+                            <circle cx={px} cy={py} r={portHitCircleRadius} fill="transparent" />
                             <circle
                               cx={px}
                               cy={py}
@@ -1323,6 +1705,19 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     }}
                     onPointerDown={(e) => {
                       if (e.button !== 0) return;
+                      if (
+                        shouldDeferNodeDragToTapFirst({
+                          pointerType: e.pointerType,
+                          isSelected,
+                          isMutatingLocked: false,
+                        })
+                      ) {
+                        pendingTapTargetRef.current = {
+                          kind: "ghost",
+                          id: ghost.destination.id,
+                        };
+                        return;
+                      }
                       e.stopPropagation();
                       const wpt = clientToWorldPoint(
                         e.clientX,
@@ -1330,11 +1725,14 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                         svgRef.current,
                         viewportGroupRef.current,
                         pan,
-                        zoom
+                        zoom,
+                        viewBox
                       );
                       setNodeDrag({
                         kind: "ghost",
                         id: ghost.destination.id,
+                        pointerId: e.pointerId,
+                        pointerType: e.pointerType,
                         startClientX: e.clientX,
                         startClientY: e.clientY,
                         pointerOffsetX: wpt.x - pt.x,
@@ -1431,6 +1829,10 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                           ev.preventDefault();
                           ev.stopPropagation();
                         }}
+                        onPointerDown={(ev) => {
+                          ev.preventDefault();
+                          ev.stopPropagation();
+                        }}
                         onDoubleClick={(ev) => ev.stopPropagation()}
                         onClick={(ev) => {
                           ev.stopPropagation();
@@ -1496,6 +1898,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
               role="group"
               aria-label="Edit link travel time"
               onMouseDown={(ev) => ev.stopPropagation()}
+              onPointerDown={(ev) => ev.stopPropagation()}
               onClick={(ev) => ev.stopPropagation()}
               onDoubleClick={(ev) => ev.stopPropagation()}
               onBlur={(ev) => {
@@ -1522,30 +1925,17 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
             >
               <button
                 type="button"
+                className="map-inline-edge-stepper"
                 aria-label="Decrease travel minutes"
                 title="Decrease (-1m)"
                 onMouseDown={(ev) => {
                   ev.preventDefault();
                   ev.stopPropagation();
                 }}
+                onPointerDown={(ev) => ev.stopPropagation()}
                 onClick={(ev) => {
                   ev.stopPropagation();
                   stepInlineEdgeEdit(-1);
-                }}
-                style={{
-                  background: "rgba(30, 41, 59, 0.85)",
-                  border: "1px solid #334155",
-                  borderRadius: 4,
-                  color: "#cbd5e1",
-                  width: 18,
-                  height: 20,
-                  fontSize: "12px",
-                  lineHeight: "16px",
-                  cursor: "pointer",
-                  padding: 0,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
                 }}
               >
                 −
@@ -1554,6 +1944,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                 ref={inlineInputRef}
                 type="text"
                 inputMode="numeric"
+                className="map-inline-edge-input"
                 aria-label="Travel minutes"
                 value={activeInlineEdge.value}
                 onChange={(ev) => {
@@ -1579,19 +1970,6 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     stepInlineEdgeEdit(-1);
                   }
                 }}
-                style={{
-                  width: 40,
-                  height: 20,
-                  fontSize: "12px",
-                  fontWeight: 600,
-                  textAlign: "center",
-                  background: "#111827",
-                  color: "#f1f5f9",
-                  border: "1px solid #1e293b",
-                  borderRadius: 4,
-                  outline: "none",
-                  padding: "0 2px",
-                }}
               />
               <span
                 style={{
@@ -1605,30 +1983,17 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
               </span>
               <button
                 type="button"
+                className="map-inline-edge-stepper"
                 aria-label="Increase travel minutes"
                 title="Increase (+1m)"
                 onMouseDown={(ev) => {
                   ev.preventDefault();
                   ev.stopPropagation();
                 }}
+                onPointerDown={(ev) => ev.stopPropagation()}
                 onClick={(ev) => {
                   ev.stopPropagation();
                   stepInlineEdgeEdit(1);
-                }}
-                style={{
-                  background: "rgba(30, 41, 59, 0.85)",
-                  border: "1px solid #334155",
-                  borderRadius: 4,
-                  color: "#cbd5e1",
-                  width: 18,
-                  height: 20,
-                  fontSize: "12px",
-                  lineHeight: "16px",
-                  cursor: "pointer",
-                  padding: 0,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
                 }}
               >
                 +
@@ -1703,123 +2068,279 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
             </div>
           )}
 
-          {/* Floating Legend Overlay */}
+          {/* Mobile Top-Left Floating Undo & Error-Only Validation Pills */}
+          {((undoCount > 0 && !isMutatingLocked && onUndo) ||
+            Boolean(validationMessage) ||
+            unreachableCount > 0) && (
+            <div
+              className="map-canvas-tl-mobile"
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              {undoCount > 0 && !isMutatingLocked && onUndo && (
+                <button
+                  type="button"
+                  className="btn map-mobile-pill-btn map-mobile-pill-btn--amber"
+                  onClick={onUndo}
+                  title="Undo last map change"
+                  aria-label={`Undo (${undoCount})`}
+                >
+                  <RotateCcw size={13} />
+                  <span>Undo ({undoCount})</span>
+                </button>
+              )}
+              {(validationMessage || unreachableCount > 0) && (
+                <button
+                  type="button"
+                  className="btn map-mobile-pill-btn map-mobile-pill-btn--warn"
+                  onClick={onFocusInvalid}
+                  title={
+                    validationMessage ||
+                    "Some nodes cannot reach/return from the Starting Location."
+                  }
+                >
+                  <AlertTriangle size={13} />
+                  <span>
+                    {validationMessage
+                      ? validationMessage
+                      : `${unreachableCount} Unlinked`}
+                  </span>
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Floating Bottom-Left Legend (Desktop) & ? / + Controls (Mobile) */}
           <div
-            style={{
-              position: "absolute",
-              left: 10,
-              bottom: 10,
-              maxWidth: "calc(100% - 140px)",
-              background: "rgba(11, 14, 20, 0.9)",
-              border: "1px solid var(--border-subtle)",
-              borderRadius: 6,
-              padding: "5px 10px",
-              fontSize: "0.69rem",
-              color: "var(--text-secondary)",
-              display: "flex",
-              gap: 10,
-              alignItems: "center",
-              flexWrap: "wrap",
-            }}
+            className="map-canvas-bl-controls"
+            onPointerDown={(e) => e.stopPropagation()}
           >
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              <strong style={{ color: "#f59e0b" }}>■</strong>{" "}
-              {mode === "campaign" ? "Current / Start" : "Starting Hub"}
-            </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              <GitBranch size={11} color="#c084fc" /> Passage Hub
-            </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              <DoorOpen size={11} color="#22d3ee" /> Portal
-            </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              <Layers size={11} color="#fbbf24" /> Container
-            </span>
-            <span style={{ color: "var(--text-muted)", fontSize: "0.66rem" }}>
-              Drag nodes · Middle-drag to pan · Drag ports to link · Double-click distance · Right-click for actions
-            </span>
+            <div className="map-legend-desktop">
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <strong style={{ color: "#f59e0b" }}>■</strong>{" "}
+                {mode === "campaign" ? "Current / Start" : "Starting Hub"}
+              </span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <GitBranch size={11} color="#c084fc" /> Passage Hub
+              </span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <DoorOpen size={11} color="#22d3ee" /> Portal
+              </span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <Layers size={11} color="#fbbf24" /> Container
+              </span>
+              <span className="map-legend-hint">
+                Drag nodes · Middle-drag to pan · Drag ports to link · Double-click distance · Right-click for actions
+              </span>
+            </div>
+
+            {showMobileLegend && (
+              <div
+                className="map-mobile-legend-popover"
+                role="dialog"
+                aria-label="Map Legend"
+              >
+                <div className="map-mobile-legend-header">
+                  <span>Map Legend</span>
+                  <button
+                    type="button"
+                    className="btn"
+                    style={{ padding: "2px 5px" }}
+                    aria-label="Close map legend"
+                    onClick={() => setShowMobileLegend(false)}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+                <div className="map-mobile-legend-items">
+                  <span>
+                    <strong style={{ color: "#f59e0b" }}>■</strong>{" "}
+                    {mode === "campaign" ? "Current / Start" : "Starting Hub"}
+                  </span>
+                  <span>
+                    <GitBranch size={11} color="#c084fc" /> Passage Hub
+                  </span>
+                  <span>
+                    <DoorOpen size={11} color="#22d3ee" /> Portal
+                  </span>
+                  <span>
+                    <Layers size={11} color="#fbbf24" /> Container
+                  </span>
+                </div>
+                <div className="map-mobile-legend-gestures">
+                  Drag to pan · Pinch or double-tap empty map to zoom · Tap node to select · Drag ports to link
+                </div>
+              </div>
+            )}
+
+            {showMobileAddMenu && !isMutatingLocked && onQuickAdd && (
+              <div
+                className="map-mobile-add-menu"
+                role="menu"
+                aria-label="Add map element"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="btn map-mobile-add-item"
+                  onClick={() => {
+                    onQuickAdd("location");
+                    setShowMobileAddMenu(false);
+                  }}
+                >
+                  <MapPin size={13} color="#22d3ee" />
+                  <span>+ Location</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="btn map-mobile-add-item"
+                  onClick={() => {
+                    onQuickAdd("hub");
+                    setShowMobileAddMenu(false);
+                  }}
+                >
+                  <GitBranch size={13} color="#c084fc" />
+                  <span>+ Passage Hub</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="btn map-mobile-add-item"
+                  disabled={!canAddContainerHere}
+                  title={
+                    !canAddContainerHere
+                      ? "Level 1 containers cannot hold nested containers"
+                      : "Add Container"
+                  }
+                  onClick={() => {
+                    if (!canAddContainerHere) return;
+                    onQuickAdd("container");
+                    setShowMobileAddMenu(false);
+                  }}
+                >
+                  <Layers size={13} color="#fbbf24" />
+                  <span>+ Container</span>
+                </button>
+              </div>
+            )}
+
+            <div className="map-mobile-fab-row">
+              <button
+                type="button"
+                className={`btn map-mobile-fab${showMobileLegend ? " active" : ""}`}
+                aria-label="Toggle map legend"
+                aria-expanded={showMobileLegend}
+                title="Map Legend"
+                onClick={() => {
+                  setShowMobileAddMenu(false);
+                  setShowMobileLegend((v) => !v);
+                }}
+              >
+                <HelpCircle size={16} />
+              </button>
+              {!isMutatingLocked && onQuickAdd && (
+                <button
+                  type="button"
+                  className={`btn map-mobile-fab map-mobile-fab--accent${showMobileAddMenu ? " active" : ""}`}
+                  aria-label="Add map element"
+                  aria-expanded={showMobileAddMenu}
+                  title="Add Location, Hub, or Container"
+                  onClick={() => {
+                    setShowMobileLegend(false);
+                    setShowMobileAddMenu((v) => !v);
+                  }}
+                >
+                  <Plus size={17} />
+                </button>
+              )}
+            </div>
           </div>
 
-          {/* Floating Bottom-Right Zoom Indicator Pill */}
+          {/* Floating Bottom-Right Center Icon (All Viewports) + Zoom Indicator Pill (Desktop) */}
           <div
-            data-testid="canvas-zoom-indicator"
-            aria-label="Canvas Zoom Indicator"
-            style={{
-              position: "absolute",
-              right: 10,
-              bottom: 10,
-              background: "rgba(11, 14, 20, 0.92)",
-              border: "1px solid var(--border-subtle)",
-              borderRadius: 6,
-              display: "inline-flex",
-              alignItems: "center",
-              overflow: "hidden",
-              fontSize: "0.7rem",
-              zIndex: 15,
-            }}
+            className="map-canvas-br-controls"
+            onPointerDown={(e) => e.stopPropagation()}
           >
-            <button
-              type="button"
-              disabled={zoom <= MIN_MAP_ZOOM}
-              onClick={() => setZoom((z) => clampZoom(z - 0.15))}
-              title="Zoom Out"
-              aria-label="Canvas Zoom Out"
-              style={{
-                background: "transparent",
-                border: "none",
-                color:
-                  zoom <= MIN_MAP_ZOOM
-                    ? "var(--text-muted)"
-                    : "var(--text-secondary)",
-                padding: "4px 7px",
-                cursor: zoom <= MIN_MAP_ZOOM ? "not-allowed" : "pointer",
-                fontWeight: 700,
-              }}
+            {handleCenter && (
+              <button
+                type="button"
+                className="btn map-canvas-center-btn"
+                onClick={handleCenter}
+                title="Center on Selected / Active Location"
+                aria-label="Center on Selected / Active Location"
+              >
+                <Crosshair size={16} />
+              </button>
+            )}
+
+            <div
+              data-testid="canvas-zoom-indicator"
+              aria-label="Canvas Zoom Indicator"
+              className="map-canvas-zoom-pill"
             >
-              −
-            </button>
-            <button
-              type="button"
-              onClick={() => setZoom(1)}
-              title="Click to reset zoom to 100%"
-              aria-label={`Canvas zoom ${Math.round(zoom * 100)}%`}
-              style={{
-                background: "transparent",
-                border: "none",
-                borderLeft: "1px solid var(--border-subtle)",
-                borderRight: "1px solid var(--border-subtle)",
-                color:
-                  Math.round(zoom * 100) === 100
-                    ? "var(--text-secondary)"
-                    : "var(--accent-cyan)",
-                padding: "4px 8px",
-                cursor: "pointer",
-                fontWeight: 700,
-                minWidth: 44,
-              }}
-            >
-              {Math.round(zoom * 100)}%
-            </button>
-            <button
-              type="button"
-              disabled={zoom >= MAX_MAP_ZOOM}
-              onClick={() => setZoom((z) => clampZoom(z + 0.15))}
-              title="Zoom In"
-              aria-label="Canvas Zoom In"
-              style={{
-                background: "transparent",
-                border: "none",
-                color:
-                  zoom >= MAX_MAP_ZOOM
-                    ? "var(--text-muted)"
-                    : "var(--text-secondary)",
-                padding: "4px 7px",
-                cursor: zoom >= MAX_MAP_ZOOM ? "not-allowed" : "pointer",
-                fontWeight: 700,
-              }}
-            >
-              +
-            </button>
+              <button
+                type="button"
+                disabled={zoom <= MIN_MAP_ZOOM}
+                onClick={() => setZoom((z) => clampZoom(z - 0.15))}
+                title="Zoom Out"
+                aria-label="Canvas Zoom Out"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color:
+                    zoom <= MIN_MAP_ZOOM
+                      ? "var(--text-muted)"
+                      : "var(--text-secondary)",
+                  padding: "4px 7px",
+                  cursor: zoom <= MIN_MAP_ZOOM ? "not-allowed" : "pointer",
+                  fontWeight: 700,
+                }}
+              >
+                −
+              </button>
+              <button
+                type="button"
+                onClick={() => setZoom(1)}
+                title="Click to reset zoom to 100%"
+                aria-label={`Canvas zoom ${Math.round(zoom * 100)}%`}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  borderLeft: "1px solid var(--border-subtle)",
+                  borderRight: "1px solid var(--border-subtle)",
+                  color:
+                    Math.round(zoom * 100) === 100
+                      ? "var(--text-secondary)"
+                      : "var(--accent-cyan)",
+                  padding: "4px 8px",
+                  cursor: "pointer",
+                  fontWeight: 700,
+                  minWidth: 44,
+                }}
+              >
+                {Math.round(zoom * 100)}%
+              </button>
+              <button
+                type="button"
+                disabled={zoom >= MAX_MAP_ZOOM}
+                onClick={() => setZoom((z) => clampZoom(z + 0.15))}
+                title="Zoom In"
+                aria-label="Canvas Zoom In"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color:
+                    zoom >= MAX_MAP_ZOOM
+                      ? "var(--text-muted)"
+                      : "var(--text-secondary)",
+                  padding: "4px 7px",
+                  cursor: zoom >= MAX_MAP_ZOOM ? "not-allowed" : "pointer",
+                  fontWeight: 700,
+                }}
+              >
+                +
+              </button>
+            </div>
           </div>
     </>
   );

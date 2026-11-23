@@ -8,6 +8,8 @@ import type {
 export interface NodeDragState {
   kind: "location" | "container" | "ghost";
   id: string;
+  pointerId?: number;
+  pointerType?: string;
   startClientX: number;
   startClientY: number;
   pointerOffsetX: number;
@@ -29,6 +31,8 @@ export interface LinkDragState {
   sourceKind: "location" | "container";
   sourceId: string;
   sourceSlot: CompassDirection;
+  pointerId?: number;
+  pointerType?: string;
   startX: number;
   startY: number;
   currX: number;
@@ -815,7 +819,8 @@ export function clientToWorldPoint(
   svgEl: SVGSVGElement | null,
   groupEl: SVGGElement | null,
   pan: { x: number; y: number },
-  zoom: number
+  zoom: number,
+  viewBox: { width: number; height: number } = { width: 680, height: 520 }
 ): { x: number; y: number } {
   if (
     svgEl &&
@@ -834,7 +839,7 @@ export function clientToWorldPoint(
   }
   const rect = svgEl?.getBoundingClientRect();
   if (!rect || rect.width === 0 || rect.height === 0) return { x: 0, y: 0 };
-  const scale = Math.min(rect.width / 680, rect.height / 520) || 1;
+  const scale = Math.min(rect.width / viewBox.width, rect.height / viewBox.height) || 1;
   const vbX = (clientX - (rect.left + rect.width / 2)) / scale;
   const vbY = (clientY - (rect.top + rect.height / 2)) / scale;
   return {
@@ -854,7 +859,8 @@ export function worldPointToWrapperPoint(
   wrapEl: HTMLElement | null,
   _groupEl: SVGGElement | null,
   pan: { x: number; y: number },
-  zoom: number
+  zoom: number,
+  viewBox: { width: number; height: number } = { width: 680, height: 520 }
 ): { x: number; y: number } | null {
   if (!svgEl || !wrapEl) return null;
   const wrapRect = wrapEl.getBoundingClientRect();
@@ -884,7 +890,7 @@ export function worldPointToWrapperPoint(
 
   const svgRect = svgEl.getBoundingClientRect();
   if (svgRect.width <= 0 || svgRect.height <= 0) return null;
-  const scale = Math.min(svgRect.width / 680, svgRect.height / 520) || 1;
+  const scale = Math.min(svgRect.width / viewBox.width, svgRect.height / viewBox.height) || 1;
   return {
     x: svgRect.left + svgRect.width / 2 + vbX * scale - originLeft,
     y: svgRect.top + svgRect.height / 2 + vbY * scale - originTop,
