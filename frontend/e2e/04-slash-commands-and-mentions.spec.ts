@@ -32,6 +32,7 @@ test.describe("04 - Composer Slash Command Autocomplete, Inline Pills & @Mention
     expect(cmdLabels).toEqual([
       "/choice",
       "/event",
+      "/gm",
       "/help",
       "/look",
       "/narrate",
