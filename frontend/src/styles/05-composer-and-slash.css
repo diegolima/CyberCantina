@@ -1404,6 +1404,38 @@
   padding: 2px;
 }
 
+.gm-tool-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--violet-bg);
+  border: 1px solid var(--violet-border-subtle);
+  color: var(--violet-fg-soft);
+  font-size: 0.76rem;
+}
+
+.gm-talk-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--amber-bg-subtle);
+  border-top: 1px solid var(--amber-border-subtle);
+  color: var(--amber-fg);
+  font-size: 0.79rem;
+}
+
+.gm-notice-dismiss {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px;
+}
+
 .gm-talk-streaming-guard {
   padding: 6px 14px;
   background: var(--amber-bg-subtle);

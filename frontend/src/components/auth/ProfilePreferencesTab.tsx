@@ -77,6 +77,7 @@ const INITIAL_DRAFT: ProfileModelDraft = {
   gmModelRole: "primary",
   gmTemperature: 0.5,
   gmMaxTokens: 1024,
+  gmToolsEnabled: false,
   activePromptPresetId: null,
 };
 
@@ -95,6 +96,7 @@ const FALLBACK_BEHAVIOR_DEFAULTS: ProfileBehaviorValues = {
   gmModelRole: "primary",
   gmTemperature: 0.5,
   gmMaxTokens: 1024,
+  gmToolsEnabled: false,
 };
 
 function getBehaviorDefaultsFromSettings(
@@ -118,6 +120,7 @@ function getBehaviorDefaultsFromSettings(
     gmModelRole: settings.default_gm_model_role ?? "primary",
     gmTemperature: settings.default_gm_temperature ?? 0.5,
     gmMaxTokens: settings.default_gm_max_tokens ?? 1024,
+    gmToolsEnabled: settings.default_gm_tools_enabled ?? false,
   };
 }
 
@@ -452,6 +455,7 @@ export const ProfilePreferencesTab: React.FC<ProfilePreferencesTabProps> = ({
     gmModelRole: draft.gmModelRole,
     gmTemperature: draft.gmTemperature,
     gmMaxTokens: draft.gmMaxTokens,
+    gmToolsEnabled: draft.gmToolsEnabled,
   };
 
   const behaviorDefaults = getBehaviorDefaultsFromSettings(modelSettings);

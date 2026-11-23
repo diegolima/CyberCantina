@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS user_model_settings (
     gm_model_role TEXT NULL,
     gm_temperature REAL NULL,
     gm_max_tokens INTEGER NULL,
+    gm_tools_enabled INTEGER NULL,
     updated_at TEXT NOT NULL
 );
 

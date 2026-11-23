@@ -263,6 +263,10 @@ class AppSettings(BaseModel):
         le=4096,
         description="Default maximum output tokens per GM Talk completion.",
     )
+    gm_tools_enabled: bool = Field(
+        default=False,
+        description="When True, GM Talk uses native LLM tool calling for read-only lookups and World Codex proposals (requires a tool-capable GM model).",
+    )
     agent_dispatch_mode: AgentDispatchMode = Field(
         default="sequential",
         description=(

@@ -59,6 +59,7 @@ const BASE_BEHAVIOR: ProfileBehaviorValues = {
   gmModelRole: "primary",
   gmTemperature: 0.5,
   gmMaxTokens: 1024,
+  gmToolsEnabled: false,
 };
 
 function makeBaseComposerProps(): ChatComposerProps {
@@ -483,5 +484,63 @@ describe("GM Talk UI components", () => {
       />
     );
     expect(cancelledHtml).toContain("Codex proposal dismissed");
+  });
+
+  it("renders GM Agentic Tools behavior toggle and live toolStatus / toolNotice / Tools pill in GmTalkDrawer", () => {
+    const cardsHtml = renderToStaticMarkup(
+      <ProfileBehaviorCards
+        values={{ ...BASE_BEHAVIOR, gmToolsEnabled: true }}
+        defaults={BASE_BEHAVIOR}
+        isLocked={false}
+        onChangeField={vi.fn()}
+      />
+    );
+    expect(cardsHtml).toContain("GM Agentic Tools");
+    expect(cardsHtml).toMatch(/type="checkbox" checked=""\s*\/><span>GM Agentic Tools/);
+
+    const streamingToolHtml = renderToStaticMarkup(
+      <GmTalkDrawer
+        campaignTitle="Kowloon Run"
+        worldName="New Kowloon"
+        unlockLore={false}
+        isClosing={false}
+        isExpanded={false}
+        isCampaignStreaming={false}
+        messages={[]}
+        isLoading={false}
+        isStreaming={true}
+        streamingText=""
+        streamingSources={[]}
+        toolStatus="Checking Turns 1–3…"
+        toolNotice="The active GM model or provider does not support native tools; answered using standard GM Talk mode."
+        error={null}
+        clearConfirm={false}
+        isClearing={false}
+        copiedId={null}
+        expandedSources={{}}
+        modelMeta={{
+          role: "clerk",
+          modelName: "qwen3:8b",
+          temperature: 0.4,
+          maxTokens: 1024,
+          toolsEnabled: true,
+        }}
+        onInsertAtTrigger={vi.fn()}
+        onClearChat={vi.fn()}
+        onCopyMessage={vi.fn()}
+        onToggleSources={vi.fn()}
+        onDismissToolNotice={vi.fn()}
+        onDismissError={vi.fn()}
+        onToggleExpanded={vi.fn()}
+        onMinimize={vi.fn()}
+      />
+    );
+
+    expect(streamingToolHtml).toContain("Clerk · qwen3:8b · Tools");
+    expect(streamingToolHtml).toContain("gm-tool-status-pill");
+    expect(streamingToolHtml).toContain("Checking Turns 1–3…");
+    expect(streamingToolHtml).toContain("gm-talk-notice");
+    expect(streamingToolHtml).toContain("does not support native tools");
+    expect(streamingToolHtml).toContain("Dismiss notice");
   });
 });

@@ -714,6 +714,10 @@ class SchemaInitMixin:
                 conn.execute(
                     "ALTER TABLE user_model_settings ADD COLUMN gm_max_tokens INTEGER NULL"
                 )
+            if "gm_tools_enabled" not in ums_cols:
+                conn.execute(
+                    "ALTER TABLE user_model_settings ADD COLUMN gm_tools_enabled INTEGER NULL"
+                )
 
             conn.execute(
                 """

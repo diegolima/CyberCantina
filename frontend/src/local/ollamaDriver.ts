@@ -218,6 +218,17 @@ export async function probeBrowserOllama(
   }
 }
 
+function isToolsUnsupportedErrorText(errLower: string): boolean {
+  return (
+    errLower.includes("does not support tools") ||
+    errLower.includes("support tool") ||
+    errLower.includes("tools is not supported") ||
+    errLower.includes("tools are not supported") ||
+    errLower.includes("tool calling is not supported") ||
+    errLower.includes("does not support function")
+  );
+}
+
 export async function runBrowserOllamaChat(
   req: RelayLlmRequest,
   onChunk: (delta: string) => void,
@@ -241,7 +252,9 @@ export async function runBrowserOllamaChat(
     keep_alive: req.options.keep_alive ?? "30m",
     options: opts,
   };
-  if (req.options.json_schema) {
+  if (req.options.tools && req.options.tools.length > 0 && req.mode === "complete") {
+    basePayload.tools = req.options.tools;
+  } else if (req.options.json_schema) {
     basePayload.format = req.options.json_schema;
   } else if (req.options.json_mode) {
     basePayload.format = "json";
@@ -259,7 +272,14 @@ export async function runBrowserOllamaChat(
     );
 
   let resp = await postChat(basePayload);
+  let cached400Text = "";
   if (resp.status === 400) {
+    cached400Text = await resp.text().catch(() => "");
+    if (isToolsUnsupportedErrorText(cached400Text.toLowerCase())) {
+      const err = new Error(`Ollama model '${req.model}' does not support native tools.`);
+      (err as Error & { code?: string }).code = "tools_unsupported";
+      throw err;
+    }
     const retryPayload = { ...basePayload };
     delete retryPayload.think;
     if (req.mode === "complete") {
@@ -269,6 +289,14 @@ export async function runBrowserOllamaChat(
       };
     }
     resp = await postChat(retryPayload);
+    if (resp.status === 400) {
+      cached400Text = await resp.text().catch(() => "");
+      if (isToolsUnsupportedErrorText(cached400Text.toLowerCase())) {
+        const err = new Error(`Ollama model '${req.model}' does not support native tools.`);
+        (err as Error & { code?: string }).code = "tools_unsupported";
+        throw err;
+      }
+    }
   }
 
   if (resp.status === 404) {
@@ -282,7 +310,7 @@ export async function runBrowserOllamaChat(
   }
 
   if (!resp.ok) {
-    const errText = await resp.text().catch(() => "");
+    const errText = cached400Text || (await resp.text().catch(() => ""));
     throw new Error(`Local Ollama error (HTTP ${resp.status}): ${errText || resp.statusText}`);
   }
 
@@ -348,13 +376,15 @@ export async function runBrowserOllamaChat(
   const msg = data?.message || {};
   const content = String(msg.content || "").trim();
   const thinking = String(msg.thinking || "").trim();
-  if (content) {
+  const toolCalls = Array.isArray(msg.tool_calls) ? msg.tool_calls : undefined;
+  if (content || (toolCalls && toolCalls.length > 0)) {
     return {
       content,
       thinking,
       done_reason: data?.done_reason || null,
       prompt_tokens: typeof data?.prompt_eval_count === "number" ? data.prompt_eval_count : null,
       completion_tokens: typeof data?.eval_count === "number" ? data.eval_count : null,
+      tool_calls: toolCalls,
     };
   }
 

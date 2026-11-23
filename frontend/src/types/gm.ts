@@ -95,6 +95,7 @@ export interface GmMessagesResponse {
   gm_model_name: string;
   gm_temperature: number;
   gm_max_tokens: number;
+  gm_tools_enabled?: boolean;
 }
 
 export interface GmMentionsResponse {
@@ -107,8 +108,19 @@ export interface GmStreamMetaEvent {
   model: string;
   temperature: number;
   max_tokens: number;
+  tools_enabled?: boolean;
   pinned_mentions: GmSourceRef[];
   retrieved_sources: GmSourceRef[];
+}
+
+export interface GmStreamToolStatusEvent {
+  tool_name: string;
+  label: string;
+  phase: "running" | "done";
+}
+
+export interface GmStreamNoticeEvent {
+  detail: string;
 }
 
 export interface GmStreamDoneEvent {

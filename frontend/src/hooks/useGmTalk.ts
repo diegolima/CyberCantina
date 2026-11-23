@@ -39,6 +39,7 @@ export interface GmModelMeta {
   modelName: string;
   temperature: number;
   maxTokens: number;
+  toolsEnabled?: boolean;
 }
 
 export interface UseGmTalkReturn {
@@ -51,6 +52,8 @@ export interface UseGmTalkReturn {
   isStreaming: boolean;
   streamingText: string;
   streamingSources: GmSourceRef[];
+  toolStatus: string | null;
+  toolNotice: string | null;
   error: string | null;
   clearConfirm: boolean;
   isClearing: boolean;
@@ -72,6 +75,7 @@ export interface UseGmTalkReturn {
   toggle: () => void;
   toggleExpanded: () => void;
   dismissError: () => void;
+  dismissToolNotice: () => void;
   setMentionSelectedIndex: React.Dispatch<React.SetStateAction<number>>;
   handleDraftChange: (nextText: string, cursorPos: number) => void;
   handleDraftCursorChange: (cursorPos: number) => void;
@@ -116,6 +120,8 @@ export function useGmTalk({
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState("");
   const [streamingSources, setStreamingSources] = useState<GmSourceRef[]>([]);
+  const [toolStatus, setToolStatus] = useState<string | null>(null);
+  const [toolNotice, setToolNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [clearConfirm, setClearConfirm] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
@@ -200,6 +206,8 @@ export function useGmTalk({
     setIsStreaming(false);
     setStreamingText("");
     setStreamingSources([]);
+    setToolStatus(null);
+    setToolNotice(null);
     setError(null);
     setClearConfirm(false);
     setIsClearing(false);
@@ -236,6 +244,7 @@ export function useGmTalk({
           modelName: res.gm_model_name,
           temperature: res.gm_temperature,
           maxTokens: res.gm_max_tokens,
+          toolsEnabled: Boolean(res.gm_tools_enabled),
         });
       })
       .catch((err) => {
@@ -333,6 +342,7 @@ export function useGmTalk({
     setIsStreaming(false);
     setStreamingText("");
     setStreamingSources([]);
+    setToolStatus(null);
   }, []);
 
   const sendMessage = useCallback(
@@ -351,6 +361,8 @@ export function useGmTalk({
       }
       setMentionDismissed(false);
       setError(null);
+      setToolNotice(null);
+      setToolStatus(null);
       setClearConfirm(false);
 
       const optimisticUserId = `gm-temp-user-${Date.now()}`;
@@ -388,6 +400,7 @@ export function useGmTalk({
                 modelName: meta.model,
                 temperature: meta.temperature,
                 maxTokens: meta.max_tokens,
+                toolsEnabled: Boolean(meta.tools_enabled),
               });
               const mergedSources: GmSourceRef[] = [
                 ...(meta.pinned_mentions || []),
@@ -395,8 +408,17 @@ export function useGmTalk({
               ];
               setStreamingSources(mergedSources);
             },
+            onToolStatus: (status) => {
+              if (!isMountedRef.current) return;
+              setToolStatus(status.phase === "running" ? status.label : null);
+            },
+            onNotice: (detail) => {
+              if (!isMountedRef.current) return;
+              setToolNotice(detail);
+            },
             onToken: (delta) => {
               if (!isMountedRef.current) return;
+              setToolStatus(null);
               streamingTextRef.current += delta;
               setStreamingText(streamingTextRef.current);
             },
@@ -409,6 +431,7 @@ export function useGmTalk({
               });
               setStreamingText("");
               setStreamingSources([]);
+              setToolStatus(null);
             },
             onError: (detail) => {
               if (!isMountedRef.current) return;
@@ -456,6 +479,7 @@ export function useGmTalk({
           setIsStreaming(false);
           setStreamingText("");
           setStreamingSources([]);
+          setToolStatus(null);
         }
       }
     },
@@ -808,6 +832,8 @@ export function useGmTalk({
     isStreaming,
     streamingText,
     streamingSources,
+    toolStatus,
+    toolNotice,
     error,
     clearConfirm,
     isClearing,
@@ -829,6 +855,7 @@ export function useGmTalk({
     toggle,
     toggleExpanded,
     dismissError: () => setError(null),
+    dismissToolNotice: () => setToolNotice(null),
     setMentionSelectedIndex,
     handleDraftChange,
     handleDraftCursorChange,

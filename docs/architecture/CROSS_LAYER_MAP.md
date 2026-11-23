@@ -437,6 +437,12 @@ erDiagram
 | :--- | :--- |
 | `backend/app/engine/gm_talk.py` | Out-of-character Neuromancer GM Talk engine: mention search, 3-layer spoiler gating, and hybrid RAG. |
 
+#### `app.engine.gm_tools`
+
+| File | Summary |
+| :--- | :--- |
+| `backend/app/engine/gm_tools.py` | Spoiler-gated read-only campaign tools, World Codex proposal tool, and bounded GM tool loop. |
+
 #### `app.engine.llm_client`
 
 | File | Summary |
@@ -595,6 +601,7 @@ erDiagram
 | `backend/app/schemas/gm.py` | Leaf Pydantic v2 schemas for GM Talk ('Neuromancer') out-of-character chat. |
 | `backend/app/schemas/housekeeping.py` | Pydantic v2 schemas for Chloromancer housekeeping scheduler and purge previews. |
 | `backend/app/schemas/import_export.py` | Schemas for native CyberCantina archive (.zcc) export and import. |
+| `backend/app/schemas/llm_tools.py` | Leaf Pydantic v2 schemas for provider-agnostic LLM tool definitions and calls. |
 | `backend/app/schemas/mechanics.py` | Schemas for mechanics checks, previews, and dice calculations. |
 | `backend/app/schemas/note.py` | Schemas for User Notes. |
 | `backend/app/schemas/party.py` | Leaf schemas for traveling parties, cognitive invite/travel intents, and party events. |

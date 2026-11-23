@@ -22,15 +22,27 @@ function isEmbeddingName(name: string): boolean {
 }
 
 export class RemoteDriverError extends Error {
-  code: ProbeErrorCode | "inference_failed" | "model_not_found";
+  code: ProbeErrorCode | "inference_failed" | "model_not_found" | "tools_unsupported";
   constructor(
-    code: ProbeErrorCode | "inference_failed" | "model_not_found",
+    code: ProbeErrorCode | "inference_failed" | "model_not_found" | "tools_unsupported",
     message: string
   ) {
     super(message);
     this.name = "RemoteDriverError";
     this.code = code;
   }
+}
+
+function isToolsUnsupportedErrorText(errLower: string): boolean {
+  return (
+    errLower.includes("does not support tools") ||
+    errLower.includes("support tool") ||
+    errLower.includes("tools is not supported") ||
+    errLower.includes("tools are not supported") ||
+    errLower.includes("tool calling is not supported") ||
+    errLower.includes("does not support function") ||
+    errLower.includes("tool_choice")
+  );
 }
 
 function isBlockedLiteralHost(host: string): boolean {
@@ -336,7 +348,10 @@ class OpenAiCompatAdapter {
       max_tokens: maxTokens,
       stream: req.mode === "stream",
     };
-    if (req.mode === "complete" && (req.options.json_mode || req.options.json_schema)) {
+    if (req.mode === "complete" && req.options.tools && req.options.tools.length > 0) {
+      payload.tools = req.options.tools;
+      payload.tool_choice = "auto";
+    } else if (req.mode === "complete" && (req.options.json_mode || req.options.json_schema)) {
       payload.response_format = { type: "json_object" };
     }
     if (req.options.disable_reasoning) {
@@ -1092,7 +1107,9 @@ export async function runRemoteProviderChat(
         keep_alive: req.options.keep_alive ?? "30m",
         options: opts,
       };
-      if (req.options.json_schema) {
+      if (req.options.tools && req.options.tools.length > 0 && req.mode === "complete") {
+        nativePayload.tools = req.options.tools;
+      } else if (req.options.json_schema) {
         nativePayload.format = req.options.json_schema;
       } else if (req.options.json_mode) {
         nativePayload.format = "json";
@@ -1107,6 +1124,13 @@ export async function runRemoteProviderChat(
 
       let nativeResp = await postNative(nativePayload);
       if (nativeResp.status === 400) {
+        const native400 = (await nativeResp.text().catch(() => "")).toLowerCase();
+        if (isToolsUnsupportedErrorText(native400)) {
+          throw new RemoteDriverError(
+            "tools_unsupported",
+            `Ollama model '${req.model}' does not support native tools.`
+          );
+        }
         const retryPayload = { ...nativePayload };
         delete retryPayload.think;
         if (req.mode === "complete") {
@@ -1116,6 +1140,15 @@ export async function runRemoteProviderChat(
           };
         }
         nativeResp = await postNative(retryPayload);
+        if (nativeResp.status === 400) {
+          const retry400 = (await nativeResp.text().catch(() => "")).toLowerCase();
+          if (isToolsUnsupportedErrorText(retry400)) {
+            throw new RemoteDriverError(
+              "tools_unsupported",
+              `Ollama model '${req.model}' does not support native tools.`
+            );
+          }
+        }
       }
 
       if (nativeResp.status === 401 || nativeResp.status === 403) {
@@ -1133,8 +1166,14 @@ export async function runRemoteProviderChat(
         const msg = data?.message || {};
         const content = String(msg.content || "").trim();
         const thinking = String(msg.thinking || "").trim();
-        if (content) {
-          return { content, thinking, done_reason: data?.done_reason || null };
+        const toolCalls = Array.isArray(msg.tool_calls) ? msg.tool_calls : undefined;
+        if (content || (toolCalls && toolCalls.length > 0)) {
+          return {
+            content,
+            thinking,
+            done_reason: data?.done_reason || null,
+            tool_calls: toolCalls,
+          };
         }
         if (req.options.json_schema || data?.done_reason === "length") {
           const fallbackPayload: Record<string, unknown> = {
@@ -1189,28 +1228,41 @@ export async function runRemoteProviderChat(
 
     let activePayload = { ...basePayload };
     let resp = await postOai(activePayload);
+    let cachedErrText = "";
 
-    if (resp.status === 400) {
-      const errText = (await resp.text().catch(() => "")).toLowerCase();
-      const retried = await activeAdapter.retryBadRequest(activePayload, errText, postOai);
-      if (retried) {
-        resp = retried.resp;
-        activePayload = retried.payload;
+    if (resp.status === 400 || resp.status === 422) {
+      cachedErrText = await resp.text().catch(() => "");
+      const errLower = cachedErrText.toLowerCase();
+      if (isToolsUnsupportedErrorText(errLower)) {
+        throw new RemoteDriverError(
+          "tools_unsupported",
+          `Provider model '${req.model}' does not support native tools.`
+        );
+      }
+      if (resp.status === 400) {
+        const retried = await activeAdapter.retryBadRequest(activePayload, errLower, postOai);
+        if (retried) {
+          resp = retried.resp;
+          activePayload = retried.payload;
+          cachedErrText = "";
+        }
       }
     }
 
     if (resp.status === 404 || resp.status === 403) {
-      const errText = (await resp.text().catch(() => "")).toLowerCase();
+      cachedErrText = await resp.text().catch(() => "");
+      const errLower = cachedErrText.toLowerCase();
       const fallback = await activeAdapter.resolveModelFallback(
         root,
         headers,
         req.model,
         resp.status,
-        errText,
+        errLower,
         signal
       );
       if (fallback) {
         resp = await postOai({ ...activePayload, model: fallback });
+        cachedErrText = "";
       }
     }
 
@@ -1221,7 +1273,13 @@ export async function runRemoteProviderChat(
       );
     }
     if (!resp.ok) {
-      const errText = await resp.text().catch(() => "");
+      const errText = cachedErrText || (await resp.text().catch(() => ""));
+      if ((resp.status === 400 || resp.status === 422) && isToolsUnsupportedErrorText(errText.toLowerCase())) {
+        throw new RemoteDriverError(
+          "tools_unsupported",
+          `Provider model '${req.model}' does not support native tools.`
+        );
+      }
       throw new RemoteDriverError(
         "inference_failed",
         `Provider error (HTTP ${resp.status}): ${errText || resp.statusText}`
@@ -1238,11 +1296,13 @@ export async function runRemoteProviderChat(
       choiceMsg.content || choiceMsg.reasoning_content || choiceMsg.reasoning || ""
     );
     const usage = data?.usage;
+    const toolCalls = Array.isArray(choiceMsg.tool_calls) ? choiceMsg.tool_calls : undefined;
     return {
       content,
       done_reason: data?.choices?.[0]?.finish_reason || null,
       prompt_tokens: typeof usage?.prompt_tokens === "number" ? usage.prompt_tokens : null,
       completion_tokens: typeof usage?.completion_tokens === "number" ? usage.completion_tokens : null,
+      tool_calls: toolCalls,
     };
   } catch (err) {
     if (err instanceof RemoteDriverError) throw err;

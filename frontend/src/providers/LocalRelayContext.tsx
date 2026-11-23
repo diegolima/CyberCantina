@@ -272,6 +272,12 @@ export const LocalRelayProvider: React.FC<{
       signal: AbortSignal
     ) => {
       if (req.driver === "webgpu") {
+        if (req.options.tools && req.options.tools.length > 0) {
+          throw new RemoteDriverError(
+            "tools_unsupported",
+            "WebGPU models do not support native GM tool calling."
+          );
+        }
         return webGpuDriver.run(req, emitChunk, signal);
       }
       if (req.driver === "browser_ollama") {
@@ -324,6 +330,7 @@ export const LocalRelayProvider: React.FC<{
           done_reason: result.done_reason || null,
           prompt_tokens: typeof result.prompt_tokens === "number" ? result.prompt_tokens : null,
           completion_tokens: typeof result.completion_tokens === "number" ? result.completion_tokens : null,
+          tool_calls: result.tool_calls,
         });
       } catch (err: any) {
         if (!controller.signal.aborted) {
@@ -332,6 +339,8 @@ export const LocalRelayProvider: React.FC<{
           let code = "inference_failed";
           if (err instanceof RemoteDriverError) {
             code = err.code;
+          } else if (err?.code === "tools_unsupported") {
+            code = "tools_unsupported";
           } else if (req.driver === "webgpu" && (lower.includes("webgpu") || lower.includes("adapter"))) {
             code = "webgpu_unsupported";
           } else if (lower.includes("not installed") || (lower.includes("model") && lower.includes("not found"))) {

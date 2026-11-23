@@ -489,7 +489,7 @@ class AuthUsersMixin:
                        agent_dispatch_mode, persona_disclosure_mode, clerk_mirrors_actor,
                        min_working_memory_turns, lod_summary_chunks, lod_importance_bonus,
                        zone2_budget_share_pct, recall_budget_prose_tokens, recall_budget_cognition_tokens,
-                       gm_model_role, gm_temperature, gm_max_tokens
+                       gm_model_role, gm_temperature, gm_max_tokens, gm_tools_enabled
                 FROM user_model_settings WHERE user_id = ?
                 """,
                 (user_id,),
@@ -549,6 +549,11 @@ class AuthUsersMixin:
                 gm_model_role=gm_role,
                 gm_temperature=row["gm_temperature"] if "gm_temperature" in rkeys else None,
                 gm_max_tokens=row["gm_max_tokens"] if "gm_max_tokens" in rkeys else None,
+                gm_tools_enabled=(
+                    bool(row["gm_tools_enabled"])
+                    if "gm_tools_enabled" in rkeys and row["gm_tools_enabled"] is not None
+                    else None
+                ),
             )
         finally:
             conn.close()
@@ -579,6 +584,9 @@ class AuthUsersMixin:
             mirror_val = (
                 None if payload.clerk_mirrors_actor is None else (1 if payload.clerk_mirrors_actor else 0)
             )
+            gm_tools_val = (
+                None if payload.gm_tools_enabled is None else (1 if payload.gm_tools_enabled else 0)
+            )
             conn.execute(
                 """
                 INSERT INTO user_model_settings (
@@ -587,10 +595,10 @@ class AuthUsersMixin:
                     agent_dispatch_mode, persona_disclosure_mode, clerk_mirrors_actor,
                     min_working_memory_turns, lod_summary_chunks, lod_importance_bonus,
                     zone2_budget_share_pct, recall_budget_prose_tokens, recall_budget_cognition_tokens,
-                    gm_model_role, gm_temperature, gm_max_tokens,
+                    gm_model_role, gm_temperature, gm_max_tokens, gm_tools_enabled,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     actor_profile_json = excluded.actor_profile_json,
                     clerk_profile_json = excluded.clerk_profile_json,
@@ -610,6 +618,7 @@ class AuthUsersMixin:
                     gm_model_role = excluded.gm_model_role,
                     gm_temperature = excluded.gm_temperature,
                     gm_max_tokens = excluded.gm_max_tokens,
+                    gm_tools_enabled = excluded.gm_tools_enabled,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -632,6 +641,7 @@ class AuthUsersMixin:
                     payload.gm_model_role,
                     payload.gm_temperature,
                     payload.gm_max_tokens,
+                    gm_tools_val,
                     now,
                 ),
             )

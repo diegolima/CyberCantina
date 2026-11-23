@@ -48,6 +48,7 @@ export interface ProfileModelDraft {
   gmModelRole: "primary" | "clerk";
   gmTemperature: number;
   gmMaxTokens: number;
+  gmToolsEnabled: boolean;
   activePromptPresetId: string | null;
 }
 
@@ -228,6 +229,9 @@ export function extractDraftFromProfileSettings(
     gmMaxTokens: useDefaults
       ? (data.default_gm_max_tokens ?? 1024)
       : (data.user_gm_max_tokens ?? data.default_gm_max_tokens ?? 1024),
+    gmToolsEnabled: useDefaults
+      ? (data.default_gm_tools_enabled ?? false)
+      : (data.user_gm_tools_enabled ?? data.default_gm_tools_enabled ?? false),
     activePromptPresetId: data.active_prompt_preset_id ?? null,
   };
 }
@@ -273,6 +277,7 @@ export function buildUserModelSettingsPayload(
     gm_model_role: draft.gmModelRole,
     gm_temperature: draft.gmTemperature,
     gm_max_tokens: draft.gmMaxTokens,
+    gm_tools_enabled: draft.gmToolsEnabled,
   };
 }
 
@@ -320,6 +325,7 @@ export function serializeProfileModelPayload(
     gm_model_role: payload.gm_model_role ?? null,
     gm_temperature: payload.gm_temperature ?? null,
     gm_max_tokens: payload.gm_max_tokens ?? null,
+    gm_tools_enabled: payload.gm_tools_enabled ?? null,
   });
 }
 

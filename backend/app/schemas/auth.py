@@ -332,6 +332,7 @@ class UserModelSettingsPayload(BaseModel):
     gm_model_role: Literal["primary", "clerk"] | None = None
     gm_temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     gm_max_tokens: int | None = Field(default=None, ge=128, le=4096)
+    gm_tools_enabled: bool | None = None
 
 
 class EffectiveWarning(BaseModel):
@@ -374,6 +375,7 @@ class ProfileModelSettingsResponse(BaseModel):
     effective_gm_model_role: Literal["primary", "clerk"] = "primary"
     effective_gm_temperature: float = 0.5
     effective_gm_max_tokens: int = 1024
+    effective_gm_tools_enabled: bool = False
     user_actor_profile: ModelProfile | None = None
     user_clerk_profile: ModelProfile | None = None
     user_working_memory_turns: int | None = None
@@ -390,6 +392,7 @@ class ProfileModelSettingsResponse(BaseModel):
     user_gm_model_role: Literal["primary", "clerk"] | None = None
     user_gm_temperature: float | None = None
     user_gm_max_tokens: int | None = None
+    user_gm_tools_enabled: bool | None = None
     active_prompt_preset_id: str | None = None
     default_actor_profile: ModelProfile
     default_clerk_profile: ModelProfile
@@ -407,4 +410,5 @@ class ProfileModelSettingsResponse(BaseModel):
     default_gm_model_role: Literal["primary", "clerk"] = "primary"
     default_gm_temperature: float = 0.5
     default_gm_max_tokens: int = 1024
+    default_gm_tools_enabled: bool = False
     default_embedding_profile: EmbeddingProfile | None = None

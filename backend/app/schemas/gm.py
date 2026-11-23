@@ -285,6 +285,7 @@ class GmMessagesResponse(BaseModel):
     gm_model_name: str = ""
     gm_temperature: float = 0.5
     gm_max_tokens: int = 1024
+    gm_tools_enabled: bool = False
 
 
 class GmMentionsResponse(BaseModel):

@@ -153,6 +153,7 @@ export interface UserModelSettingsPayload {
   gm_model_role?: "primary" | "clerk" | null;
   gm_temperature?: number | null;
   gm_max_tokens?: number | null;
+  gm_tools_enabled?: boolean | null;
 }
 
 export interface ProfileModelSettingsResponse {
@@ -180,6 +181,7 @@ export interface ProfileModelSettingsResponse {
   effective_gm_model_role?: "primary" | "clerk";
   effective_gm_temperature?: number;
   effective_gm_max_tokens?: number;
+  effective_gm_tools_enabled?: boolean;
   user_actor_profile?: ModelProfile | null;
   user_clerk_profile?: ModelProfile | null;
   user_working_memory_turns?: number | null;
@@ -196,6 +198,7 @@ export interface ProfileModelSettingsResponse {
   user_gm_model_role?: "primary" | "clerk" | null;
   user_gm_temperature?: number | null;
   user_gm_max_tokens?: number | null;
+  user_gm_tools_enabled?: boolean | null;
   active_prompt_preset_id?: string | null;
   default_actor_profile: ModelProfile;
   default_clerk_profile: ModelProfile;
@@ -213,5 +216,6 @@ export interface ProfileModelSettingsResponse {
   default_gm_model_role?: "primary" | "clerk";
   default_gm_temperature?: number;
   default_gm_max_tokens?: number;
+  default_gm_tools_enabled?: boolean;
   default_embedding_profile?: AppSettings["embedding_profile"];
 }

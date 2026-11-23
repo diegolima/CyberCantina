@@ -87,6 +87,7 @@ class EffectiveModels:
     gm_model_role: Literal["primary", "clerk"] = "primary"
     gm_temperature: float = 0.5
     gm_max_tokens: int = 1024
+    gm_tools_enabled: bool = False
 
 
 def _finalize_profile(
@@ -186,6 +187,7 @@ def resolve_effective_models(user_id: str | None) -> EffectiveModels:
     gm_role: Literal["primary", "clerk"] = settings.gm_model_role
     gm_temp = settings.gm_temperature
     gm_tokens = settings.gm_max_tokens
+    gm_tools = settings.gm_tools_enabled
 
     user_settings = (
         get_repo().get_user_model_settings(user_id)
@@ -225,6 +227,8 @@ def resolve_effective_models(user_id: str | None) -> EffectiveModels:
             gm_temp = user_settings.gm_temperature
         if user_settings.gm_max_tokens is not None:
             gm_tokens = user_settings.gm_max_tokens
+        if user_settings.gm_tools_enabled is not None:
+            gm_tools = user_settings.gm_tools_enabled
 
     warnings: list[EffectiveWarning] = []
     actor = _finalize_profile(
@@ -278,6 +282,7 @@ def resolve_effective_models(user_id: str | None) -> EffectiveModels:
         gm_model_role=gm_role,
         gm_temperature=gm_temp,
         gm_max_tokens=gm_tokens,
+        gm_tools_enabled=gm_tools,
     )
 
 

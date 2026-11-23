@@ -46,6 +46,7 @@ class RelayCompletionResult:
     done_reason: str | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -213,6 +214,8 @@ class LocalRelayHub:
                     )
                 pend.queue.put_nowait(None)
             elif pend.future is not None and not pend.future.done():
+                raw_tc = raw.get("tool_calls")
+                tc_list = list(raw_tc) if isinstance(raw_tc, list) else []
                 pend.future.set_result(
                     RelayCompletionResult(
                         content=str(raw.get("content") or ""),
@@ -220,6 +223,7 @@ class LocalRelayHub:
                         done_reason=(str(raw["done_reason"]) if raw.get("done_reason") else None),
                         prompt_tokens=_coerce_opt_int(raw.get("prompt_tokens")),
                         completion_tokens=_coerce_opt_int(raw.get("completion_tokens")),
+                        tool_calls=tc_list,
                     )
                 )
             return
@@ -251,7 +255,7 @@ class LocalRelayHub:
         driver: BrowserDriver,
         base_url: str,
         model: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         temperature: float,
         max_tokens: int,
         context_size: int | None,
@@ -261,6 +265,7 @@ class LocalRelayHub:
         disable_reasoning: bool,
         timeout: float,
         provider_id: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> RelayCompletionResult:
         session = self._pick_session(user_id, relay_tab_context.get())
         request_id = f"req_{uuid.uuid4().hex}"
@@ -273,6 +278,17 @@ class LocalRelayHub:
             kind="complete",
             future=future,
         )
+        options_payload: dict[str, Any] = {
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "context_size": context_size,
+            "keep_alive": keep_alive,
+            "json_mode": json_mode,
+            "json_schema": json_schema,
+            "disable_reasoning": disable_reasoning,
+        }
+        if tools:
+            options_payload["tools"] = tools
         payload = {
             "type": "llm.request",
             "request_id": request_id,
@@ -282,15 +298,7 @@ class LocalRelayHub:
             "base_url": base_url,
             "model": model,
             "messages": messages,
-            "options": {
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "context_size": context_size,
-                "keep_alive": keep_alive,
-                "json_mode": json_mode,
-                "json_schema": json_schema,
-                "disable_reasoning": disable_reasoning,
-            },
+            "options": options_payload,
         }
         try:
             await session.send_json(payload)

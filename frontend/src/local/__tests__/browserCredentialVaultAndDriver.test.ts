@@ -430,4 +430,87 @@ describe("remoteProviderDriver", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("forwards tools on OpenAI-compat providers and flags HTTP 400/422 tools_unsupported", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: "tool_calls",
+              message: {
+                content: "",
+                tool_calls: [
+                  {
+                    id: "call_rem_1",
+                    type: "function",
+                    function: {
+                      name: "get_campaign_turns",
+                      arguments: '{"start_turn":1,"end_turn":2}',
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+          usage: { prompt_tokens: 30, completion_tokens: 14 },
+        }),
+        { status: 200 }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await runRemoteProviderChat(
+      {
+        type: "llm.request",
+        request_id: "r-rem-tools",
+        driver: "openrouter",
+        provider_id: "prov_or",
+        mode: "complete",
+        base_url: "https://openrouter.ai/api/v1",
+        model: "qwen/qwen3-8b",
+        messages: [{ role: "user", content: "Inspect turns" }],
+        options: {
+          temperature: 0.4,
+          max_tokens: 256,
+          tools: [{ type: "function", function: { name: "get_campaign_turns" } }],
+        },
+      },
+      "sk-or-test",
+      () => {}
+    );
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.tools).toHaveLength(1);
+    expect(body.tool_choice).toBe("auto");
+    expect(res.tool_calls).toHaveLength(1);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response('{"error":"tools is not supported for this model"}', { status: 422 })
+      )
+    );
+    await expect(
+      runRemoteProviderChat(
+        {
+          type: "llm.request",
+          request_id: "r-rem-unsupported",
+          driver: "openai_compat",
+          provider_id: "prov_oai",
+          mode: "complete",
+          base_url: "https://api.example.com/v1",
+          model: "prose-only",
+          messages: [{ role: "user", content: "hi" }],
+          options: {
+            temperature: 0.4,
+            max_tokens: 256,
+            tools: [{ type: "function", function: { name: "search_world_codex" } }],
+          },
+        },
+        "sk-test",
+        () => {}
+      )
+    ).rejects.toMatchObject({ code: "tools_unsupported" });
+  });
 });

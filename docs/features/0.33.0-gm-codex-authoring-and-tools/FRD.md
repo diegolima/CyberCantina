@@ -9,7 +9,7 @@ last_updated: 2026-11-23
 # Feature Requirements Document (FRD)
 ## GM-Assisted World Codex Authoring & Phased Tool Calling
 
-**Status:** Phase 1 Completed (`v0.33.0`) · Phase 2 Planned (`v0.34.0`)  
+**Status:** Phase 1 Completed (`v0.33.0`) · Phase 2 Completed (`v0.34.0`)  
 **Target Version:** CyberCantina v0.33.0 (Phase 1) / v0.34.0 (Phase 2)  
 **Depends On:**
 - [v0.31.0 Campaign Lore Authoring, GM Mode ("Unlock Lore & Secrets"), Secret Discovery & Major Events](file:///home/diegolima/Git/cybercantina/docs/features/0.31.0-campaign-lore-gm-mode-and-major-events/FRD.md)
@@ -209,10 +209,10 @@ Once Phase 2's tool loop and `propose_*` confirmation pattern are established, f
 - [x] Proposal state (`pending`, `confirmed`, `cancelled`) persists across drawer close/reopen and page reload on the active branch, and respects `unlock_lore` spoiler boundaries.
 
 ### 5.2 Phase 2 Acceptance Criteria
-- [ ] **Profile → Preferences → Behavior → GM Talk** exposes a **`GM Agentic Tools`** (`gm_tools_enabled`) toggle (default `false`) that works cleanly with `gm_model_role` (`Primary` vs `Clerk`).
-- [ ] When enabled on a tool-capable model, Neuromancer can execute bounded read-only tools (`search_world_codex`, `get_world_codex_entry`, `search_campaign_turns`, `get_campaign_turns`, `get_campaign_entity`) within `unlock_lore` constraints and emit `tool_status` SSE progress events.
-- [ ] Calling `propose_world_lore_entry` emits the exact same `codex_proposal` card and persistence flow as Phase 1 without writing to the database until the user confirms.
-- [ ] When disabled or when an active provider/model rejects native `tools`, GM Talk gracefully falls back to Phase 1 behavior without breaking OOC chat.
+- [x] **Profile → Preferences → Behavior → GM Talk** exposes a **`GM Agentic Tools`** (`gm_tools_enabled`) toggle (default `false`) that works cleanly with `gm_model_role` (`Primary` vs `Clerk`).
+- [x] When enabled on a tool-capable model, Neuromancer can execute bounded read-only tools (`search_world_codex`, `get_world_codex_entry`, `search_campaign_turns`, `get_campaign_turns`, `get_campaign_entity`) within `unlock_lore` constraints and emit `tool_status` SSE progress events.
+- [x] Calling `propose_world_lore_entry` emits the exact same `codex_proposal` card and persistence flow as Phase 1 without writing to the database until the user confirms.
+- [x] When disabled or when an active provider/model rejects native `tools`, GM Talk gracefully falls back to Phase 1 behavior without breaking OOC chat.
 
 ### 5.3 Required Verification Suite
 - **Backend:**

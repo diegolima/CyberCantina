@@ -9,6 +9,8 @@ import type {
   GmStreamCodexProposalEvent,
   GmStreamDoneEvent,
   GmStreamMetaEvent,
+  GmStreamNoticeEvent,
+  GmStreamToolStatusEvent,
   WorldLoreNodeDraft,
 } from "../types";
 import {
@@ -21,6 +23,8 @@ import {
 
 export interface GmStreamCallbacks {
   onMeta?: (meta: GmStreamMetaEvent) => void;
+  onToolStatus?: (status: GmStreamToolStatusEvent) => void;
+  onNotice?: (detail: string) => void;
   onToken?: (delta: string) => void;
   onCodexProposal?: (event: GmStreamCodexProposalEvent) => void;
   onDone?: (data: GmStreamDoneEvent) => void;
@@ -119,6 +123,14 @@ export const gmApi = {
           case "token":
             if (typeof parsed?.text === "string") {
               callbacks.onToken?.(parsed.text);
+            }
+            break;
+          case "tool_status":
+            callbacks.onToolStatus?.(parsed as GmStreamToolStatusEvent);
+            break;
+          case "notice":
+            if (typeof (parsed as GmStreamNoticeEvent)?.detail === "string") {
+              callbacks.onNotice?.((parsed as GmStreamNoticeEvent).detail);
             }
             break;
           case "codex_proposal":

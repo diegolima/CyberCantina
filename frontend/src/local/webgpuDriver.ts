@@ -174,7 +174,7 @@ class WebGpuDriver {
         role: (m.role === "system" || m.role === "user" || m.role === "assistant"
           ? m.role
           : "user") as "system" | "user" | "assistant",
-        content: m.content,
+        content: String(m.content ?? ""),
       }));
 
       if (req.mode === "stream") {

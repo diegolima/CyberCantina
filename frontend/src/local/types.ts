@@ -8,6 +8,13 @@ export interface RelayLlmOptions {
   json_mode?: boolean;
   json_schema?: Record<string, unknown> | null;
   disable_reasoning?: boolean;
+  tools?: Record<string, unknown>[];
+}
+
+export interface RelayLlmMessage {
+  role: string;
+  content?: string | null;
+  [key: string]: unknown;
 }
 
 export type RelayDriver =
@@ -27,7 +34,7 @@ export interface RelayLlmRequest {
   mode: "complete" | "stream";
   base_url?: string;
   model: string;
-  messages: { role: string; content: string }[];
+  messages: RelayLlmMessage[];
   options: RelayLlmOptions;
 }
 
@@ -45,6 +52,7 @@ export interface RelayDriverResult {
   done_reason?: string | null;
   prompt_tokens?: number | null;
   completion_tokens?: number | null;
+  tool_calls?: Record<string, unknown>[];
 }
 
 export interface WebGpuProgress {

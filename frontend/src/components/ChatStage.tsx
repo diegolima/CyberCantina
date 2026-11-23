@@ -1772,6 +1772,8 @@ export const ChatStage: React.FC<ChatStageProps> = ({
             isStreaming={gmTalk.isStreaming}
             streamingText={gmTalk.streamingText}
             streamingSources={gmTalk.streamingSources}
+            toolStatus={gmTalk.toolStatus}
+            toolNotice={gmTalk.toolNotice}
             error={gmTalk.error}
             clearConfirm={gmTalk.clearConfirm}
             isClearing={gmTalk.isClearing}
@@ -1797,6 +1799,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               void gmTalk.cancelCodexProposal(msgId, propId);
             }}
             onOpenCodex={onOpenCodex}
+            onDismissToolNotice={gmTalk.dismissToolNotice}
             onDismissError={gmTalk.dismissError}
             onToggleExpanded={gmTalk.toggleExpanded}
             onMinimize={gmTalk.minimize}

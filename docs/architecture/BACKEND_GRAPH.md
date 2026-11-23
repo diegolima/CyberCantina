@@ -22,6 +22,7 @@ Source of truth: [backend/tach.toml](../../backend/tach.toml) validated by `tach
 | `app.engine.context` | `app.config`, `app.db`, `app.engine.affective_engine`, `app.engine.choices`, `app.engine.mentions`, `app.engine.parties`, `app.engine.telemetry`, `app.engine.world_clock`, `app.prompts`, `app.providers`, `app.schemas` |
 | `app.engine.gm_codex` | `app.config`, `app.db`, `app.engine.gm_talk`, `app.engine.llm_client`, `app.prompts`, `app.providers`, `app.schemas`, `app.security` |
 | `app.engine.gm_talk` | `app.config`, `app.db`, `app.engine.parties`, `app.prompts`, `app.schemas`, `app.security` |
+| `app.engine.gm_tools` | `app.config`, `app.db`, `app.engine.gm_codex`, `app.engine.gm_talk`, `app.engine.llm_client`, `app.providers`, `app.schemas`, `app.security` |
 | `app.engine.llm_client` | `app.config`, `app.engine.telemetry`, `app.providers`, `app.schemas`, `app.security` |
 | `app.engine.mentions` | `app.schemas` |
 | `app.engine.parties` | `app.schemas` |
@@ -38,7 +39,7 @@ Source of truth: [backend/tach.toml](../../backend/tach.toml) validated by `tach
 | `app.main` | `app.auth`, `app.config`, `app.db`, `app.dependencies`, `app.engine.llm_client`, `app.housekeeping`, `app.providers`, `app.routers`, `app.security` |
 | `app.prompts` | *(leaf / none)* |
 | `app.providers` | `app.config`, `app.db`, `app.schemas`, `app.security` |
-| `app.routers` | `app.auth`, `app.config`, `app.db`, `app.dependencies`, `app.engine.affective_engine`, `app.engine.choices`, `app.engine.clerk_placement`, `app.engine.gm_codex`, `app.engine.gm_talk`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.parties`, `app.engine.phase1_pre`, `app.engine.phase2_context`, `app.engine.phase3_actor`, `app.engine.phase3_cognition`, `app.engine.phase4_clerk`, `app.engine.phase4_prose`, `app.engine.phase5_clerk`, `app.engine.telemetry`, `app.housekeeping`, `app.prompts`, `app.providers`, `app.schemas`, `app.security`, `app.services`, `app.wizards` |
+| `app.routers` | `app.auth`, `app.config`, `app.db`, `app.dependencies`, `app.engine.affective_engine`, `app.engine.choices`, `app.engine.clerk_placement`, `app.engine.gm_codex`, `app.engine.gm_talk`, `app.engine.gm_tools`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.parties`, `app.engine.phase1_pre`, `app.engine.phase2_context`, `app.engine.phase3_actor`, `app.engine.phase3_cognition`, `app.engine.phase4_clerk`, `app.engine.phase4_prose`, `app.engine.phase5_clerk`, `app.engine.telemetry`, `app.housekeeping`, `app.prompts`, `app.providers`, `app.schemas`, `app.security`, `app.services`, `app.wizards` |
 | `app.schemas` | `app.config` |
 | `app.security` | *(leaf / none)* |
 | `app.services` | `app.config`, `app.db`, `app.dependencies`, `app.schemas`, `app.security`, `app.wizards` |
@@ -139,6 +140,14 @@ graph TD
     app.engine.gm_talk --> app.prompts
     app.engine.gm_talk --> app.schemas
     app.engine.gm_talk --> app.security
+    app.engine.gm_tools --> app.config
+    app.engine.gm_tools --> app.db
+    app.engine.gm_tools --> app.engine.gm_codex
+    app.engine.gm_tools --> app.engine.gm_talk
+    app.engine.gm_tools --> app.engine.llm_client
+    app.engine.gm_tools --> app.providers
+    app.engine.gm_tools --> app.schemas
+    app.engine.gm_tools --> app.security
     app.engine.llm_client --> app.config
     app.engine.llm_client --> app.engine.telemetry
     app.engine.llm_client --> app.providers
@@ -225,6 +234,7 @@ graph TD
     app.routers --> app.engine.clerk_placement
     app.routers --> app.engine.gm_codex
     app.routers --> app.engine.gm_talk
+    app.routers --> app.engine.gm_tools
     app.routers --> app.engine.llm_client
     app.routers --> app.engine.mentions
     app.routers --> app.engine.parties

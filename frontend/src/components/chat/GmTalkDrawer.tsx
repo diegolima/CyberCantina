@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Compass,
   Copy,
+  Info,
   Loader2,
   Lock,
   Maximize2,
@@ -38,6 +39,8 @@ export interface GmTalkDrawerProps {
   isStreaming: boolean;
   streamingText: string;
   streamingSources: GmSourceRef[];
+  toolStatus?: string | null;
+  toolNotice?: string | null;
   error: string | null;
   clearConfirm: boolean;
   isClearing: boolean;
@@ -60,6 +63,7 @@ export interface GmTalkDrawerProps {
   ) => void;
   onCancelCodexProposal?: (messageId: string, proposalId: string) => void;
   onOpenCodex?: () => void;
+  onDismissToolNotice?: () => void;
   onDismissError: () => void;
   onToggleExpanded: () => void;
   onMinimize: () => void;
@@ -78,6 +82,8 @@ export const GmTalkDrawer: React.FC<GmTalkDrawerProps> = ({
   isStreaming,
   streamingText,
   streamingSources,
+  toolStatus = null,
+  toolNotice = null,
   error,
   clearConfirm,
   isClearing,
@@ -95,6 +101,7 @@ export const GmTalkDrawer: React.FC<GmTalkDrawerProps> = ({
   onConfirmCodexProposal,
   onCancelCodexProposal,
   onOpenCodex,
+  onDismissToolNotice,
   onDismissError,
   onToggleExpanded,
   onMinimize,
@@ -157,10 +164,11 @@ export const GmTalkDrawer: React.FC<GmTalkDrawerProps> = ({
           {modelMeta?.modelName && (
             <span
               className="gm-model-pill"
-              title={`Role: ${modelMeta.role} · Temp ${modelMeta.temperature} · Max ${modelMeta.maxTokens} tok`}
+              title={`Role: ${modelMeta.role} · Temp ${modelMeta.temperature} · Max ${modelMeta.maxTokens} tok${modelMeta.toolsEnabled ? " · Tools ON" : ""}`}
             >
               {modelMeta.role === "clerk" ? "Clerk" : "Primary"} ·{" "}
               {modelMeta.modelName}
+              {modelMeta.toolsEnabled ? " · Tools" : ""}
             </span>
           )}
 
@@ -386,9 +394,16 @@ export const GmTalkDrawer: React.FC<GmTalkDrawerProps> = ({
                   </div>
                 </div>
                 <div className="gm-message-body">
-                  {streamingText
-                    ? renderFormattedProse(streamingText)
-                    : "Consulting campaign records…"}
+                  {streamingText ? (
+                    renderFormattedProse(streamingText)
+                  ) : toolStatus ? (
+                    <div className="gm-tool-status-pill" role="status" aria-live="polite">
+                      <Loader2 size={12} className="spinning" />
+                      <span>{toolStatus}</span>
+                    </div>
+                  ) : (
+                    "Consulting campaign records…"
+                  )}
                 </div>
                 {streamingSources.length > 0 && (
                   <div className="gm-sources-bar">
@@ -412,7 +427,24 @@ export const GmTalkDrawer: React.FC<GmTalkDrawerProps> = ({
         )}
       </div>
 
-      {/* Inline Error / Streaming Guard Banners */}
+      {/* Inline Notice / Error / Streaming Guard Banners */}
+      {toolNotice && (
+        <div className="gm-talk-notice" role="status">
+          <Info size={13} />
+          <span>{toolNotice}</span>
+          {onDismissToolNotice && (
+            <button
+              type="button"
+              className="gm-notice-dismiss"
+              onClick={onDismissToolNotice}
+              aria-label="Dismiss notice"
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+      )}
+
       {error && (
         <div className="gm-talk-error" role="alert">
           <AlertTriangle size={13} />

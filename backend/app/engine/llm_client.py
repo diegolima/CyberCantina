@@ -8,6 +8,7 @@ import math
 import os
 import re
 import time
+import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, TypeVar
@@ -22,6 +23,7 @@ from app.engine.telemetry import (
     active_turn_telemetry,
 )
 from app.providers.local_relay import (
+    RelayRemoteError,
     RelayStreamUsage,
     RelayUnavailableError,
     local_relay_hub,
@@ -38,6 +40,11 @@ from app.providers.openrouter_catalog import openrouter_catalog_service
 from app.providers.probe import bearer_headers, probe_service
 from app.providers.resolver import ProviderUnavailableError, resolve_system_profile
 from app.providers.webgpu_catalog import get_webgpu_max_context
+from app.schemas.llm_tools import (
+    LlmToolCall,
+    LlmToolCompletionResult,
+    LlmToolDefinition,
+)
 from app.schemas.telemetry import LlmCallTelemetry
 from app.security.url_policy import UrlBlockedError, assert_url_allowed, normalize_base_url
 
@@ -57,8 +64,174 @@ def _estimate_text_tokens_local(text: str) -> int:
     return max(1, math.ceil(len(text) / 3.3))
 
 
-def _estimate_messages_tokens_local(messages: list[dict[str, str]]) -> int:
-    return sum(_estimate_text_tokens_local(str(m.get("content") or "")) + 12 for m in messages)
+def _estimate_messages_tokens_local(messages: list[dict[str, Any]]) -> int:
+    total = 0
+    for m in messages:
+        total += _estimate_text_tokens_local(str(m.get("content") or ""))
+        if m.get("tool_calls"):
+            total += _estimate_text_tokens_local(json.dumps(m["tool_calls"]))
+        total += 12
+    return total
+
+
+class ToolsUnsupportedError(RuntimeError):
+    """Raised when the selected provider, model, or chat template does not support native tools."""
+
+
+_TOOL_UNSUPPORTED_MARKERS = (
+    "does not support tools",
+    "support tool",
+    "tools is not supported",
+    "tools are not supported",
+    "tool calling is not supported",
+    "tool use is not supported",
+    "function calling is not supported",
+    "does not support function",
+    "unknown field \"tools\"",
+    "unrecognized request argument supplied: tools",
+    "tool_choice",
+)
+
+
+def _is_tools_unsupported_error_text(err_lower: str) -> bool:
+    return any(marker in (err_lower or "") for marker in _TOOL_UNSUPPORTED_MARKERS)
+
+
+def _coerce_tool_arguments(raw_args: Any) -> dict[str, Any]:
+    if isinstance(raw_args, dict):
+        return dict(raw_args)
+    if isinstance(raw_args, str):
+        cleaned = raw_args.strip()
+        if not cleaned:
+            return {}
+        try:
+            parsed = json.loads(cleaned)
+            return dict(parsed) if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            try:
+                parsed = extract_json_object(cleaned)
+                return dict(parsed) if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+    return {}
+
+
+def _parse_tool_calls(raw_calls: Any) -> list[LlmToolCall]:
+    if not isinstance(raw_calls, list):
+        return []
+    parsed: list[LlmToolCall] = []
+    for item in raw_calls:
+        if not isinstance(item, dict):
+            continue
+        fn = item.get("function") if isinstance(item.get("function"), dict) else item
+        name = str(fn.get("name") or "").strip()
+        if not name:
+            continue
+        call_id = str(item.get("id") or "").strip() or f"call_{uuid.uuid4().hex[:10]}"
+        args = _coerce_tool_arguments(fn.get("arguments"))
+        parsed.append(LlmToolCall(id=call_id, name=name, arguments=args))
+    return parsed
+
+
+def _format_messages_for_ollama_tools(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    formatted: list[dict[str, Any]] = []
+    for m in messages:
+        role = str(m.get("role") or "user")
+        if role == "assistant" and isinstance(m.get("tool_calls"), list):
+            ollama_calls: list[dict[str, Any]] = []
+            for tc in m["tool_calls"]:
+                if not isinstance(tc, dict):
+                    continue
+                fn = tc.get("function") if isinstance(tc.get("function"), dict) else tc
+                name = str(fn.get("name") or "").strip()
+                if not name:
+                    continue
+                ollama_calls.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": _coerce_tool_arguments(fn.get("arguments")),
+                        },
+                    }
+                )
+            entry: dict[str, Any] = {
+                "role": "assistant",
+                "content": str(m.get("content") or ""),
+            }
+            if ollama_calls:
+                entry["tool_calls"] = ollama_calls
+            formatted.append(entry)
+        elif role == "tool":
+            tool_msg: dict[str, Any] = {
+                "role": "tool",
+                "content": str(m.get("content") or ""),
+            }
+            tool_name = m.get("tool_name") or m.get("name")
+            if tool_name:
+                tool_msg["tool_name"] = str(tool_name)
+            formatted.append(tool_msg)
+        else:
+            formatted.append(
+                {
+                    "role": role,
+                    "content": str(m.get("content") or ""),
+                }
+            )
+    return formatted
+
+
+def _format_messages_for_openai_tools(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    formatted: list[dict[str, Any]] = []
+    for m in messages:
+        role = str(m.get("role") or "user")
+        if role == "assistant" and isinstance(m.get("tool_calls"), list):
+            oai_calls: list[dict[str, Any]] = []
+            for tc in m["tool_calls"]:
+                if not isinstance(tc, dict):
+                    continue
+                fn = tc.get("function") if isinstance(tc.get("function"), dict) else tc
+                name = str(fn.get("name") or "").strip()
+                if not name:
+                    continue
+                raw_args = fn.get("arguments")
+                arg_str = (
+                    raw_args
+                    if isinstance(raw_args, str)
+                    else json.dumps(_coerce_tool_arguments(raw_args))
+                )
+                oai_calls.append(
+                    {
+                        "id": str(tc.get("id") or f"call_{uuid.uuid4().hex[:10]}"),
+                        "type": "function",
+                        "function": {"name": name, "arguments": arg_str},
+                    }
+                )
+            entry: dict[str, Any] = {
+                "role": "assistant",
+                "content": m.get("content") if m.get("content") is not None else "",
+            }
+            if oai_calls:
+                entry["tool_calls"] = oai_calls
+            formatted.append(entry)
+        elif role == "tool":
+            tool_msg: dict[str, Any] = {
+                "role": "tool",
+                "tool_call_id": str(m.get("tool_call_id") or ""),
+                "content": str(m.get("content") or ""),
+            }
+            tool_name = m.get("name") or m.get("tool_name")
+            if tool_name:
+                tool_msg["name"] = str(tool_name)
+            formatted.append(tool_msg)
+        else:
+            formatted.append(
+                {
+                    "role": role,
+                    "content": str(m.get("content") or ""),
+                }
+            )
+    return formatted
 
 
 def _coerce_nonneg_int(val: Any) -> int | None:
@@ -106,7 +279,7 @@ def _resolve_telemetry_context_ceiling(
 
 def _record_llm_telemetry(
     *,
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     output_text: str,
     profile: ModelProfile,
     provider_type: str,
@@ -824,6 +997,273 @@ class LLMClient:
             )
             parsed_retry = extract_json_object(raw_retry)
             return schema_cls.model_validate(parsed_retry)
+
+    async def complete_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[LlmToolDefinition],
+        *,
+        profile: ModelProfile | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        disable_reasoning: bool = True,
+    ) -> LlmToolCompletionResult:
+        """Execute one non-streaming chat turn with function tools across Ollama, OpenAI-compat, or Relay."""
+        active_profile = profile or settings.clerk_profile
+        temp = temperature if temperature is not None else active_profile.temperature
+        max_tok = max_tokens if max_tokens is not None else active_profile.max_tokens
+        started_at = time.monotonic()
+
+        target = await build_call_target(active_profile)
+        if target.provider_type in ("webgpu", "aihorde"):
+            raise ToolsUnsupportedError(
+                f"Provider '{target.provider_type}' does not support native tool calling."
+            )
+
+        tool_dicts = [t.to_openai_tool() for t in tools]
+
+        if target.provider_type == "browser_ollama" or target.credential_storage == "browser":
+            ctx = getattr(active_profile, "context_size", None)
+            is_ollama_wire = target.provider_type in ("browser_ollama", "ollama")
+            wire_msgs = (
+                _format_messages_for_ollama_tools(messages)
+                if is_ollama_wire
+                else _format_messages_for_openai_tools(messages)
+            )
+            try:
+                res = await local_relay_hub.complete(
+                    user_id=target.owner_id or target.caller_user_id or relay_user_context.get(),
+                    driver=target.provider_type,  # type: ignore[arg-type]
+                    base_url=target.root_url,
+                    model=active_profile.model,
+                    messages=wire_msgs,
+                    temperature=temp,
+                    max_tokens=max_tok,
+                    context_size=int(ctx) if ctx is not None else None,
+                    keep_alive=format_ollama_keep_alive(getattr(active_profile, "keep_alive_minutes", 30)),
+                    json_mode=False,
+                    json_schema=None,
+                    disable_reasoning=disable_reasoning,
+                    timeout=active_profile.timeout_seconds,
+                    provider_id=target.provider_id,
+                    tools=tool_dicts,
+                )
+            except RelayRemoteError as exc:
+                if exc.code == "tools_unsupported" or _is_tools_unsupported_error_text(str(exc).lower()):
+                    raise ToolsUnsupportedError(
+                        f"Model '{active_profile.model}' rejected native tools."
+                    ) from exc
+                raise
+
+            parsed_calls = _parse_tool_calls(res.tool_calls)
+            content = (res.content or "").strip()
+            _record_llm_telemetry(
+                messages=wire_msgs,
+                output_text=content or json.dumps([c.model_dump() for c in parsed_calls]),
+                profile=active_profile,
+                provider_type=target.provider_type,
+                provider_id=target.provider_id,
+                prompt_tokens=res.prompt_tokens,
+                completion_tokens=res.completion_tokens,
+                finish_reason=res.done_reason,
+                started_at=started_at,
+            )
+            return LlmToolCompletionResult(
+                content=content,
+                thinking=(res.thinking or "").strip(),
+                tool_calls=parsed_calls,
+                done_reason=res.done_reason,
+                prompt_tokens=res.prompt_tokens,
+                completion_tokens=res.completion_tokens,
+            )
+
+        client = await self.get_http_client(timeout=active_profile.timeout_seconds)
+
+        # 1. Native Ollama /api/chat
+        if not is_openai_compat_provider(target.provider_type):
+            ollama_msgs = _format_messages_for_ollama_tools(messages)
+            ollama_chat_url = f"{target.root_url}/api/chat"
+            ollama_opts = _build_ollama_options(
+                active_profile, temperature=temp, num_predict=max_tok
+            )
+            ollama_payload: dict[str, Any] = {
+                "model": active_profile.model,
+                "messages": ollama_msgs,
+                "stream": False,
+                "keep_alive": format_ollama_keep_alive(getattr(active_profile, "keep_alive_minutes", 30)),
+                "options": ollama_opts,
+                "tools": tool_dicts,
+            }
+            if disable_reasoning:
+                ollama_payload["think"] = False
+
+            try:
+                ollama_retries = 0
+                resp = await client.post(
+                    ollama_chat_url,
+                    headers=target.native_headers,
+                    json=ollama_payload,
+                    timeout=active_profile.timeout_seconds,
+                )
+                if resp.status_code == 400:
+                    err_lower = resp.text.lower()
+                    if _is_tools_unsupported_error_text(err_lower):
+                        raise ToolsUnsupportedError(
+                            f"Ollama model '{active_profile.model}' does not support tools."
+                        )
+                    if "think" in ollama_payload:
+                        ollama_retries += 1
+                        retry_payload = {k: v for k, v in ollama_payload.items() if k != "think"}
+                        resp = await client.post(
+                            ollama_chat_url,
+                            headers=target.native_headers,
+                            json=retry_payload,
+                            timeout=active_profile.timeout_seconds,
+                        )
+                        if resp.status_code == 400 and _is_tools_unsupported_error_text(resp.text.lower()):
+                            raise ToolsUnsupportedError(
+                                f"Ollama model '{active_profile.model}' does not support tools."
+                            )
+
+                if resp.status_code == 200:
+                    data = resp.json()
+                    msg = data.get("message") or {}
+                    content = (msg.get("content") or "").strip()
+                    parsed_calls = _parse_tool_calls(msg.get("tool_calls"))
+                    _record_llm_telemetry(
+                        messages=ollama_msgs,
+                        output_text=content or json.dumps([c.model_dump() for c in parsed_calls]),
+                        profile=active_profile,
+                        provider_type=target.provider_type,
+                        provider_id=target.provider_id,
+                        prompt_tokens=data.get("prompt_eval_count"),
+                        completion_tokens=data.get("eval_count"),
+                        finish_reason=data.get("done_reason"),
+                        started_at=started_at,
+                        retries=ollama_retries,
+                    )
+                    return LlmToolCompletionResult(
+                        content=content,
+                        thinking=(msg.get("thinking") or "").strip(),
+                        tool_calls=parsed_calls,
+                        done_reason=data.get("done_reason"),
+                        prompt_tokens=data.get("prompt_eval_count"),
+                        completion_tokens=data.get("eval_count"),
+                    )
+                if resp.status_code == 404:
+                    err_body = resp.text
+                    if "model" in err_body.lower() and "not found" in err_body.lower():
+                        raise RuntimeError(
+                            f"Ollama model '{active_profile.model}' is not installed. "
+                            f"Run `ollama pull {active_profile.model}` or select an installed model in Settings."
+                        )
+            except (ToolsUnsupportedError, RuntimeError):
+                raise
+            except httpx.HTTPError:
+                pass
+
+        # 2. OpenAI-compatible (/chat/completions)
+        adapter = get_openai_compat_provider(target.provider_type) or DEFAULT_OPENAI_COMPAT_PROVIDER
+        v1_url = get_chat_completions_url(target)
+        headers = target.openai_headers
+        oai_msgs = _format_messages_for_openai_tools(messages)
+        oai_payload = adapter.build_chat_payload(
+            model=active_profile.model,
+            messages=oai_msgs,
+            temperature=temp,
+            max_tokens=max_tok,
+            stream=False,
+            disable_reasoning=disable_reasoning,
+            tools=tool_dicts,
+            tool_choice="auto",
+        )
+
+        async with adapter.request_semaphore(headers):
+            active_payload = dict(oai_payload)
+            resp = await client.post(
+                v1_url, headers=headers, json=active_payload, timeout=active_profile.timeout_seconds
+            )
+            attempt = 0
+            while resp.status_code == 400:
+                err_lower = resp.text.lower()
+                if _is_tools_unsupported_error_text(err_lower):
+                    raise ToolsUnsupportedError(
+                        f"{adapter.display_name} model '{active_profile.model}' does not support tools."
+                    )
+                retry_payload = adapter.next_bad_request_payload(active_payload, err_lower, attempt)
+                if retry_payload is None:
+                    break
+                active_payload = retry_payload
+                attempt += 1
+                resp = await client.post(
+                    v1_url, headers=headers, json=active_payload, timeout=active_profile.timeout_seconds
+                )
+
+            if resp.status_code in (400, 422) and _is_tools_unsupported_error_text(resp.text.lower()):
+                raise ToolsUnsupportedError(
+                    f"{adapter.display_name} model '{active_profile.model}' does not support tools."
+                )
+
+            fallback, fatal_err = await adapter.resolve_model_fallback(
+                client, target.root_url, headers, active_profile.model, resp.status_code, resp.text
+            )
+            if fallback:
+                fallback_payload = dict(active_payload)
+                fallback_payload["model"] = fallback
+                fallback_resp = await client.post(
+                    v1_url, headers=headers, json=fallback_payload, timeout=active_profile.timeout_seconds
+                )
+                if fallback_resp.status_code == 200:
+                    resp = fallback_resp
+                elif fallback_resp.status_code in (400, 422) and _is_tools_unsupported_error_text(
+                    fallback_resp.text.lower()
+                ):
+                    raise ToolsUnsupportedError(
+                        f"{adapter.display_name} fallback model '{fallback}' does not support tools."
+                    )
+                else:
+                    raise RuntimeError(
+                        f"{adapter.display_name} model '{active_profile.model}' failed during tool call (HTTP {fallback_resp.status_code})."
+                    )
+            elif fatal_err:
+                raise RuntimeError(fatal_err)
+
+            if resp.status_code == 404 and "model" in resp.text.lower():
+                raise RuntimeError(
+                    f"Model '{active_profile.model}' not found at {v1_url}: {resp.text}"
+                )
+            resp.raise_for_status()
+
+        data = resp.json()
+        choice0 = data["choices"][0]
+        choice_msg = choice0["message"]
+        usage = data.get("usage") or {}
+        parsed_calls = _parse_tool_calls(choice_msg.get("tool_calls"))
+        final_text = (
+            choice_msg.get("content")
+            or choice_msg.get("reasoning_content")
+            or choice_msg.get("reasoning")
+            or ""
+        ).strip()
+        _record_llm_telemetry(
+            messages=oai_msgs,
+            output_text=final_text or json.dumps([c.model_dump() for c in parsed_calls]),
+            profile=active_profile,
+            provider_type=target.provider_type,
+            provider_id=target.provider_id,
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+            finish_reason=choice0.get("finish_reason"),
+            started_at=started_at,
+            retries=attempt,
+        )
+        return LlmToolCompletionResult(
+            content=final_text,
+            tool_calls=parsed_calls,
+            done_reason=choice0.get("finish_reason"),
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+        )
 
     async def stream_chat(
         self,

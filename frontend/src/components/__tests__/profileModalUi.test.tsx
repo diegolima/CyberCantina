@@ -40,6 +40,7 @@ const BASE_DEFAULTS: ProfileBehaviorValues = {
   gmModelRole: "primary",
   gmTemperature: 0.5,
   gmMaxTokens: 1024,
+  gmToolsEnabled: false,
 };
 
 const BASE_MODEL_SETTINGS: ProfileModelSettingsResponse = {

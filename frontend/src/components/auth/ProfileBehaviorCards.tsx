@@ -30,6 +30,7 @@ export interface ProfileBehaviorValues {
   gmModelRole: "primary" | "clerk";
   gmTemperature: number;
   gmMaxTokens: number;
+  gmToolsEnabled: boolean;
 }
 
 export interface ProfileBehaviorCardsProps {
@@ -106,6 +107,7 @@ export const ProfileBehaviorCards: React.FC<ProfileBehaviorCardsProps> = ({
   const delegateCheckboxId = useId();
   const gmRoleSelectId = useId();
   const gmTempInputId = useId();
+  const gmToolsCheckboxId = useId();
 
   const [gmTempDraft, setGmTempDraft] = useState(values.gmTemperature.toFixed(2).replace(/\.?0+$/, (m) => (m === ".00" ? ".0" : m)));
   const [gmTempFocused, setGmTempFocused] = useState(false);
@@ -680,6 +682,44 @@ export const ProfileBehaviorCards: React.FC<ProfileBehaviorCardsProps> = ({
               />
             }
           />
+
+          <div className="form-group">
+            <div className="behavior-field-label-row">
+              <label
+                className="behavior-toggle-label"
+                htmlFor={gmToolsCheckboxId}
+              >
+                <input
+                  id={gmToolsCheckboxId}
+                  type="checkbox"
+                  checked={values.gmToolsEnabled}
+                  disabled={isLocked}
+                  onChange={(e) =>
+                    onChangeField("gmToolsEnabled", e.target.checked, {
+                      immediate: true,
+                    })
+                  }
+                />
+                <span>GM Agentic Tools</span>
+              </label>
+              <FieldResetButton
+                fieldLabel="GM Agentic Tools"
+                defaultDisplay={defaults.gmToolsEnabled ? "On" : "Off"}
+                visible={
+                  !isLocked &&
+                  values.gmToolsEnabled !== defaults.gmToolsEnabled
+                }
+                onReset={() =>
+                  onChangeField("gmToolsEnabled", defaults.gmToolsEnabled, {
+                    immediate: true,
+                  })
+                }
+              />
+            </div>
+            <div className="form-hint" style={{ fontSize: "0.7rem" }}>
+              Allow Neuromancer to run read-only Codex/turn lookups and propose World Codex entries conversationally. Requires a tool-capable GM model (tip: keep a prose model on Primary and assign a tool-capable model to Clerk).
+            </div>
+          </div>
         </div>
       </section>
     </div>

@@ -26,7 +26,8 @@ from app.engine.gm_talk import (
     is_offline_fallback_enabled,
     search_gm_mentions,
 )
-from app.engine.llm_client import llm_client
+from app.engine.gm_tools import run_gm_tool_loop
+from app.engine.llm_client import ToolsUnsupportedError, llm_client
 from app.providers.local_relay import (
     RelayRemoteError,
     RelayUnavailableError,
@@ -80,6 +81,7 @@ def get_campaign_gm_messages(
         gm_model_name=gm_profile.model,
         gm_temperature=gm_profile.temperature,
         gm_max_tokens=gm_profile.max_tokens,
+        gm_tools_enabled=bool(getattr(eff, "gm_tools_enabled", False)),
     )
 
 
@@ -139,6 +141,7 @@ async def stream_campaign_gm_chat(
 
     eff = _resolve_facade_attr("resolve_effective_models", resolve_effective_models)(current_user.id)
     gm_profile, gm_role = resolve_gm_profile(eff)
+    gm_tools_enabled = bool(getattr(eff, "gm_tools_enabled", False))
     resolved_prompts = repo.resolve_effective_prompts(
         user_id=current_user.id,
         campaign_id=campaign_id,
@@ -169,51 +172,133 @@ async def stream_campaign_gm_chat(
                     "model": gm_profile.model,
                     "temperature": gm_profile.temperature,
                     "max_tokens": gm_profile.max_tokens,
+                    "tools_enabled": gm_tools_enabled,
                     "pinned_mentions": [s.model_dump() for s in prep.pinned_sources],
                     "retrieved_sources": [s.model_dump() for s in prep.retrieved_sources],
                 },
             )
 
+            active_llm = _resolve_facade_attr("llm_client", llm_client)
             tag_filter = ReasoningTagStreamFilter()
             chunks: list[str] = []
-            try:
-                active_llm = _resolve_facade_attr("llm_client", llm_client)
-                async for raw_delta in active_llm.stream_chat(
-                    prep.messages,
-                    profile=gm_profile,
-                    disable_reasoning=True,
-                ):
-                    clean_delta = tag_filter.feed(raw_delta)
-                    if clean_delta:
-                        chunks.append(clean_delta)
-                        yield _sse_packet("token", {"text": clean_delta})
-                tail = tag_filter.flush()
-                if tail:
-                    chunks.append(tail)
-                    yield _sse_packet("token", {"text": tail})
-            except (RelayUnavailableError, RelayRemoteError):
-                raise
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                if is_offline_fallback_enabled() and not chunks:
-                    fallback = build_offline_gm_reply(req.message, prep)
-                    chunks.append(fallback)
-                    yield _sse_packet("token", {"text": fallback})
-                else:
-                    logger.warning(
-                        "GM Talk LLM stream failed for campaign '%s': %s",
+            proposals: list[GmCodexProposal] = []
+            merged_sources = list(prep.all_sources)
+            run_phase1_flow = not gm_tools_enabled
+            stream_messages: list[dict[str, object]] = list(prep.messages)
+
+            if gm_tools_enabled and prep.bundle is not None:
+                try:
+                    async for ev_kind, ev_val in run_gm_tool_loop(
+                        repo,
+                        bundle=prep.bundle,
+                        prep=prep,
+                        gm_profile=gm_profile,
+                        llm_client_override=active_llm,
+                    ):
+                        if ev_kind == "tool_status":
+                            yield _sse_packet("tool_status", ev_val)
+                        elif ev_kind == "extra_sources":
+                            seen_src = {(s.kind, s.id) for s in merged_sources}
+                            for src in ev_val:
+                                if (src.kind, src.id) not in seen_src:
+                                    seen_src.add((src.kind, src.id))
+                                    merged_sources.append(src)
+                        elif ev_kind == "proposals":
+                            proposals = list(ev_val)
+                        elif ev_kind == "final_text":
+                            if ev_val:
+                                chunks.append(ev_val)
+                                yield _sse_packet("token", {"text": ev_val})
+                        elif ev_kind == "fallback_stream":
+                            stream_messages = list(ev_val)
+                            # Stream final synthesis without triggering Phase 1 auto-draft twice
+                            async for raw_delta in active_llm.stream_chat(
+                                stream_messages,
+                                profile=gm_profile,
+                                disable_reasoning=True,
+                            ):
+                                clean_delta = tag_filter.feed(raw_delta)
+                                if clean_delta:
+                                    chunks.append(clean_delta)
+                                    yield _sse_packet("token", {"text": clean_delta})
+                            tail = tag_filter.flush()
+                            if tail:
+                                chunks.append(tail)
+                                yield _sse_packet("token", {"text": tail})
+                except ToolsUnsupportedError:
+                    logger.info(
+                        "GM tools unsupported for model '%s' in campaign '%s'; falling back to Phase 1.",
+                        sanitize_log_value(gm_profile.model),
                         sanitize_log_value(campaign_id),
-                        sanitize_log_value(type(exc).__name__),
                     )
                     yield _sse_packet(
-                        "error",
-                        {"detail": "Neuromancer could not generate a response. Check your model provider and try again."},
+                        "notice",
+                        {
+                            "detail": (
+                                "The active GM model or provider does not support native tools; "
+                                "answered using standard GM Talk mode."
+                            )
+                        },
                     )
-                    return
+                    run_phase1_flow = True
+                except (RelayUnavailableError, RelayRemoteError, asyncio.CancelledError):
+                    raise
+                except Exception as exc:
+                    if is_offline_fallback_enabled() and not chunks:
+                        run_phase1_flow = True
+                    else:
+                        logger.warning(
+                            "GM Talk tool loop failed for campaign '%s': %s",
+                            sanitize_log_value(campaign_id),
+                            sanitize_log_value(type(exc).__name__),
+                        )
+                        yield _sse_packet(
+                            "error",
+                            {
+                                "detail": (
+                                    "Neuromancer could not generate a response. "
+                                    "Check your model provider and try again."
+                                )
+                            },
+                        )
+                        return
+
+            if run_phase1_flow:
+                try:
+                    async for raw_delta in active_llm.stream_chat(
+                        prep.messages,
+                        profile=gm_profile,
+                        disable_reasoning=True,
+                    ):
+                        clean_delta = tag_filter.feed(raw_delta)
+                        if clean_delta:
+                            chunks.append(clean_delta)
+                            yield _sse_packet("token", {"text": clean_delta})
+                    tail = tag_filter.flush()
+                    if tail:
+                        chunks.append(tail)
+                        yield _sse_packet("token", {"text": tail})
+                except (RelayUnavailableError, RelayRemoteError, asyncio.CancelledError):
+                    raise
+                except Exception as exc:
+                    if is_offline_fallback_enabled() and not chunks:
+                        fallback = build_offline_gm_reply(req.message, prep)
+                        chunks.append(fallback)
+                        yield _sse_packet("token", {"text": fallback})
+                    else:
+                        logger.warning(
+                            "GM Talk LLM stream failed for campaign '%s': %s",
+                            sanitize_log_value(campaign_id),
+                            sanitize_log_value(type(exc).__name__),
+                        )
+                        yield _sse_packet(
+                            "error",
+                            {"detail": "Neuromancer could not generate a response. Check your model provider and try again."},
+                        )
+                        return
 
             assistant_text = "".join(chunks).strip()
-            if not assistant_text:
+            if not assistant_text and not proposals:
                 if is_offline_fallback_enabled():
                     assistant_text = build_offline_gm_reply(req.message, prep)
                     yield _sse_packet("token", {"text": assistant_text})
@@ -224,6 +309,13 @@ async def stream_campaign_gm_chat(
                     )
                     return
 
+            if not assistant_text and proposals:
+                assistant_text = (
+                    f"I've prepared a tentative World Codex entry for **{proposals[0].draft.title}**. "
+                    "Review or edit it below and confirm when ready."
+                )
+                yield _sse_packet("token", {"text": assistant_text})
+
             anchor_turn_id = prep.bundle.campaign.active_leaf_turn_id if prep.bundle else campaign.active_leaf_turn_id
             pinned_refs = [
                 ref
@@ -231,8 +323,7 @@ async def stream_campaign_gm_chat(
                 if any(s.kind == ref.kind and s.id == ref.id for s in prep.pinned_sources)
             ]
 
-            proposals: list[GmCodexProposal] = []
-            if detect_explicit_codex_add_intent(req.message):
+            if run_phase1_flow and detect_explicit_codex_add_intent(req.message):
                 try:
                     proposal = await draft_world_codex_proposal(
                         repo,
@@ -260,7 +351,7 @@ async def stream_campaign_gm_chat(
                 user_content=req.message,
                 user_mentions=pinned_refs,
                 assistant_content=assistant_text,
-                sources=prep.all_sources,
+                sources=merged_sources,
                 assistant_proposals=proposals,
             )
             for prop in proposals:

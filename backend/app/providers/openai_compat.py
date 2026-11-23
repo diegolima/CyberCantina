@@ -163,13 +163,15 @@ class OpenAICompatProvider:
         self,
         *,
         model: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         temperature: float,
         max_tokens: int,
         stream: bool,
         json_mode: bool = False,
         json_schema: dict[str, Any] | None = None,
         disable_reasoning: bool = False,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | None = None,
     ) -> dict[str, Any]:
         eff_max_tokens = max(max_tokens, self.min_max_tokens) if self.min_max_tokens else max_tokens
         payload: dict[str, Any] = {
@@ -181,6 +183,9 @@ class OpenAICompatProvider:
         }
         if not stream and (json_mode or json_schema is not None):
             payload["response_format"] = {"type": "json_object"}
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = tool_choice or "auto"
         if disable_reasoning:
             self.apply_disable_reasoning(payload)
         return payload

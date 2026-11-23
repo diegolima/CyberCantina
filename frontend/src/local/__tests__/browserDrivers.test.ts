@@ -146,4 +146,87 @@ describe("ollamaDriver", () => {
     expect(chunks.join("")).toBe("Hello browser!");
     expect(res.content).toBe("Hello browser!");
   });
+
+  it("forwards tools in complete mode, extracts tool_calls, and flags tools_unsupported", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          message: {
+            content: "",
+            tool_calls: [
+              {
+                function: {
+                  name: "search_world_codex",
+                  arguments: { query: "Aegis" },
+                },
+              },
+            ],
+          },
+          done_reason: "stop",
+          prompt_eval_count: 25,
+          eval_count: 10,
+        }),
+        { status: 200 }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await runBrowserOllamaChat(
+      {
+        type: "llm.request",
+        request_id: "r-tools-ok",
+        driver: "browser_ollama",
+        mode: "complete",
+        base_url: "http://localhost:11434",
+        model: "qwen3:8b",
+        messages: [{ role: "user", content: "Search Aegis" }],
+        options: {
+          temperature: 0.3,
+          max_tokens: 256,
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "search_world_codex",
+                description: "Search Codex",
+                parameters: { type: "object", properties: { query: { type: "string" } } },
+              },
+            },
+          ],
+        },
+      },
+      () => {}
+    );
+
+    const reqBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(reqBody.tools).toHaveLength(1);
+    expect(reqBody.stream).toBe(false);
+    expect(res.tool_calls).toHaveLength(1);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response("registry.ollama.ai/library/llama3 does not support tools", { status: 400 })
+      )
+    );
+    await expect(
+      runBrowserOllamaChat(
+        {
+          type: "llm.request",
+          request_id: "r-tools-unsupported",
+          driver: "browser_ollama",
+          mode: "complete",
+          base_url: "http://localhost:11434",
+          model: "llama3:8b",
+          messages: [{ role: "user", content: "hi" }],
+          options: {
+            temperature: 0.3,
+            max_tokens: 256,
+            tools: [{ type: "function", function: { name: "search_world_codex" } }],
+          },
+        },
+        () => {}
+      )
+    ).rejects.toMatchObject({ code: "tools_unsupported" });
+  });
 });
