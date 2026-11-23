@@ -196,6 +196,7 @@ def heuristic_world_post_turn_delta(
     active_location: LocationNode,
     neighbors: list[NeighborLocationView],
     current_timestamp: str | None = None,
+    candidate_secrets: list | None = None,
 ) -> WorldPostTurnDelta:
     """Deterministic fallback global world state extractor (clock, spatial graph, scene flags)."""
     legacy = _heuristic_spatial_and_inventory_delta(
@@ -219,6 +220,27 @@ def heuristic_world_post_turn_delta(
                 new_ts = advance_world_timestamp(current_timestamp, hint_minutes)
             elapsed = min(hint_minutes, MAX_TURN_ELAPSED_MINUTES_SANITY)
 
+    revealed_ids: list[str] = []
+    if candidate_secrets and raw_prose:
+        prose_low = raw_prose.lower()
+        all_rolls = []
+        if pre_turn.character_rolls:
+            all_rolls.extend(pre_turn.character_rolls.values())
+        elif pre_turn.resolved_roll is not None:
+            all_rolls.append(pre_turn.resolved_roll)
+        has_only_failed = bool(all_rolls) and not any(
+            r.outcome_tier in ("Clean Success", "Critical Success") for r in all_rolls
+        )
+        if not has_only_failed:
+            for sec in candidate_secrets:
+                title_low = (getattr(sec, "title", "") or "").strip().lower()
+                tags = getattr(sec, "entity_tags", None) or []
+                if (title_low and len(title_low) >= 4 and title_low in prose_low) or any(
+                    len(t.strip()) >= 4 and re.search(rf"\b{re.escape(t.strip().lower())}\b", prose_low)
+                    for t in tags
+                ):
+                    revealed_ids.append(sec.id)
+
     return WorldPostTurnDelta(
         elapsed_minutes=elapsed,
         new_world_timestamp=new_ts,
@@ -228,4 +250,6 @@ def heuristic_world_post_turn_delta(
         notable_event_summary=legacy.notable_event_summary,
         scene_flags_updated=legacy.scene_flags_updated,
         scene_flags_removed=legacy.scene_flags_removed,
+        revealed_secret_lore_ids=revealed_ids,
+        major_event=None,
     )

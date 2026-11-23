@@ -397,8 +397,29 @@ def test_pydantic_and_api_validation_world_and_location_lore(
     assert len(created_world["locations"][0]["lore_nodes"]) == 1
     assert created_world["locations"][0]["lore_nodes"][0]["category"] == "secret"
 
-    # PUT /api/campaigns/{campaign_id}/locations/{loc_id}/lore rejects empty tags (422),
-    # rejects foreign world location (400/404), and persists valid CoW override (200)
+    # PUT /api/campaigns/{campaign_id}/locations/{loc_id}/lore requires GM Mode (403 when locked),
+    # rejects empty tags (422), rejects foreign world location (400/404), and persists valid CoW override (200)
+    res_locked_camp_lore = client.put(
+        f"/api/campaigns/{camp_id}/locations/{loc_id}/lore",
+        json={
+            "lore_nodes": [
+                {
+                    "title": "Blocked While Locked",
+                    "category": "rumor",
+                    "content": "Should fail with 403.",
+                    "entity_tags": ["blocked"],
+                }
+            ]
+        },
+    )
+    assert res_locked_camp_lore.status_code == 403
+
+    res_unlock = client.patch(
+        f"/api/campaigns/{camp_id}/world-settings",
+        json={"unlock_lore": True},
+    )
+    assert res_unlock.status_code == 200
+
     res_bad_camp_lore = client.put(
         f"/api/campaigns/{camp_id}/locations/{loc_id}/lore",
         json={
@@ -651,6 +672,12 @@ def test_campaign_cow_isolation_world_fork_remapping_and_vector_cleanup(
         name="Campaign Beta", world_id=world.id, character_id=char_id
     )
 
+    from app.schemas.turn import CampaignWorldSettings
+
+    empty_repo.update_campaign_world_settings(
+        camp_a.id, CampaignWorldSettings(describe_on_first_visit=True, unlock_lore=True)
+    )
+
     # Override dock_loc lore in Campaign A while passing base_lore_id (tests PK collision avoidance!)
     bundle_a = asyncio.run(
         empty_repo.aupdate_campaign_location_lore(
@@ -817,7 +844,12 @@ def test_branch_timeline_visibility_for_improvised_location_lore(
     )
     assert improv_loc.created_at_turn_id == turn_1.id
 
-    # Attach non-secret location lore to the improvised room while on turn_1
+    # Attach non-secret location lore to the improvised room while on turn_1 (requires GM Mode)
+    from app.schemas.turn import CampaignWorldSettings
+
+    empty_repo.update_campaign_world_settings(
+        camp_id, CampaignWorldSettings(describe_on_first_visit=True, unlock_lore=True)
+    )
     asyncio.run(
         empty_repo.aupdate_campaign_location_lore(
             camp_id,
@@ -904,7 +936,12 @@ def test_phase2_and_phase3_context_hygiene_remote_rag_and_hard_secret_gating(
         l for l in bundle0.visible_locations if "Cooling Tunnels" in l.name
     )
 
-    # Populate Main Floor (active room) with 1 ambient history + 1 secret
+    # Populate Main Floor (active room) with 1 ambient history + 1 secret (GM Mode enabled)
+    from app.schemas.turn import CampaignWorldSettings
+
+    empty_repo.update_campaign_world_settings(
+        camp_id, CampaignWorldSettings(describe_on_first_visit=True, unlock_lore=True)
+    )
     asyncio.run(
         empty_repo.aupdate_campaign_location_lore(
             camp_id,

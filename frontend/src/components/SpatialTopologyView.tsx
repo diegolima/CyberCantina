@@ -140,6 +140,12 @@ export interface SpatialTopologyViewProps {
     containerId: string,
     loreNodes: LocationLoreNodeDraft[]
   ) => Promise<void> | void;
+  unlockLore?: boolean;
+  revealedLoreIds?: readonly string[];
+  onToggleLoreReveal?: (
+    loreId: string,
+    revealed: boolean
+  ) => Promise<void> | void;
   isMutatingLocked?: boolean;
   initialContainerFocus?: "active" | "root";
   externalFocusRequest?: {
@@ -172,6 +178,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   isOverriding = false,
   onSaveCampaignLocationLore,
   onSaveCampaignContainerLore,
+  unlockLore = false,
+  revealedLoreIds = [],
+  onToggleLoreReveal,
   isMutatingLocked = false,
   initialContainerFocus = "active",
   externalFocusRequest = null,
@@ -1478,6 +1487,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             isOverriding={isOverriding}
             onSaveCampaignLocationLore={onSaveCampaignLocationLore}
             onSaveCampaignContainerLore={onSaveCampaignContainerLore}
+            unlockLore={unlockLore}
+            revealedLoreIds={revealedLoreIds}
+            onToggleLoreReveal={onToggleLoreReveal}
             usedIconKeys={usedMapIconKeys}
             onOpenIconBrowser={setIconBrowserTarget}
             worldMedia={worldMedia}

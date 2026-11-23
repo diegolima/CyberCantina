@@ -43,6 +43,10 @@
 | `POST` | `/api/campaigns/{campaign_id}/location-override` | `app.routers.campaign_routes.crud_and_state.override_campaign_location` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/locations` | `app.routers.campaign_routes.spatial_routes.create_campaign_linked_location` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `PUT` | `/api/campaigns/{campaign_id}/locations/{location_id}/lore` | `app.routers.campaign_routes.spatial_routes.update_campaign_location_lore` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
+| `PUT` | `/api/campaigns/{campaign_id}/lore` | `app.routers.campaign_routes.spatial_routes.update_campaign_world_lore` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
+| `POST` | `/api/campaigns/{campaign_id}/lore/{lore_id}/reveal` | `app.routers.campaign_routes.spatial_routes.toggle_campaign_lore_reveal` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
+| `DELETE` | `/api/campaigns/{campaign_id}/major-events/{turn_id}` | `app.routers.campaign_routes.spatial_routes.delete_campaign_major_event` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
+| `PATCH` | `/api/campaigns/{campaign_id}/major-events/{turn_id}` | `app.routers.campaign_routes.spatial_routes.update_campaign_major_event` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `PUT` | `/api/campaigns/{campaign_id}/map` | `app.routers.campaign_routes.spatial_routes.update_campaign_map` | `CampaignStateBundle` | `frontend/src/api/worlds.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/parties` | `app.routers.campaign_routes.crud_and_state.create_campaign_npc_party` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `DELETE` | `/api/campaigns/{campaign_id}/parties/{party_id}` | `app.routers.campaign_routes.crud_and_state.delete_campaign_party` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
@@ -175,6 +179,8 @@ erDiagram
     location_containers ||--o{ campaign_container_lore_overrides : references
     campaigns ||--o{ campaign_location_lore_overrides : references
     location_nodes ||--o{ campaign_location_lore_overrides : references
+    campaigns ||--o{ campaign_lore_tombstones : references
+    turn_nodes ||--o{ campaign_lore_tombstones : references
     campaigns ||--o{ campaign_spatial_overrides : references
     turn_nodes ||--o{ campaign_spatial_overrides : references
     characters ||--o{ campaigns : references
@@ -248,6 +254,7 @@ erDiagram
 | `campaign_container_lore_overrides` | `campaigns`, `location_containers` |
 | `turn_nodes` | `campaigns`, `turn_nodes` |
 | `world_state_snapshots` | `location_nodes`, `turn_nodes` |
+| `campaign_lore_tombstones` | `campaigns`, `turn_nodes` |
 | `campaign_spatial_overrides` | `campaigns`, `turn_nodes` |
 | `character_states` | `characters`, `location_nodes`, `turn_nodes` |
 | `persona_turn_states` | `turn_nodes` |
@@ -826,6 +833,7 @@ erDiagram
 | `frontend/src/components/story/StoryModal.tsx` |
 | `frontend/src/components/story/branchGraphLayout.ts` |
 | `frontend/src/components/story/storyBookmarks.ts` |
+| `frontend/src/components/story/storyMajorEvents.ts` |
 
 #### `components/wizard`
 

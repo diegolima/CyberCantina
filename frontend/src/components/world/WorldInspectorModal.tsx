@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   AlertTriangle,
@@ -25,12 +25,14 @@ import type {
   LocationContainer,
   LocationEdge,
   LocationLoreCategory,
+  LocationLoreNodeDraft,
   LocationNode,
   LoreNode,
   PersonaRecord,
   PersonaTurnStateSnapshot,
   WorldGlobalRules,
   WorldLoreCategory,
+  WorldLoreNodeDraft,
   WorldMediaItem,
   WorldRecord,
 } from "../../types";
@@ -66,6 +68,27 @@ interface WorldInspectorModalProps {
   onSaveCampaignWorldSettings?: (
     settings: CampaignWorldSettings
   ) => Promise<void> | void;
+  onSaveCampaignWorldLore?: (
+    loreNodes: WorldLoreNodeDraft[]
+  ) => Promise<void> | void;
+  onSaveCampaignLocationLore?: (
+    locationId: string,
+    drafts: LocationLoreNodeDraft[]
+  ) => Promise<void> | void;
+  onSaveCampaignContainerLore?: (
+    containerId: string,
+    drafts: LocationLoreNodeDraft[]
+  ) => Promise<void> | void;
+  onToggleCampaignLoreReveal?: (
+    loreId: string,
+    revealed: boolean
+  ) => Promise<void> | void;
+  onSaveCampaignMap?: (payload: {
+    containers: LocationContainer[];
+    locations: LocationNode[];
+    edges: LocationEdge[];
+  }) => Promise<void> | void;
+  revealedLoreIds?: readonly string[];
   isMutatingLocked?: boolean;
   onBackToSeed?: () => void;
   onCommitDraft?: (payload: {
@@ -96,6 +119,12 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   initialTab = "base",
   campaignWorldSettings,
   onSaveCampaignWorldSettings,
+  onSaveCampaignWorldLore,
+  onSaveCampaignLocationLore,
+  onSaveCampaignContainerLore,
+  onToggleCampaignLoreReveal,
+  onSaveCampaignMap,
+  revealedLoreIds = [],
   isMutatingLocked = false,
   onBackToSeed,
   onCommitDraft,
@@ -122,6 +151,33 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
       world.global_rules.describe_on_first_visit ??
       true
   );
+  const [campaignUnlockLore, setCampaignUnlockLore] = useState<boolean>(
+    Boolean(campaignWorldSettings?.unlock_lore)
+  );
+  const [savingGmToggle, setSavingGmToggle] = useState(false);
+  const [campaignWorldLoreDirty, setCampaignWorldLoreDirty] = useState(false);
+
+  useEffect(() => {
+    if (isCampaignMode) {
+      setCampaignUnlockLore(Boolean(campaignWorldSettings?.unlock_lore));
+    }
+  }, [isCampaignMode, campaignWorldSettings?.unlock_lore]);
+
+  useEffect(() => {
+    if (isCampaignMode && !campaignWorldLoreDirty) {
+      setLoreNodes(
+        world.lore_nodes.map((lore) => ({
+          ...lore,
+          category: WORLD_LORE_CATEGORIES.includes(
+            lore.category as WorldLoreCategory
+          )
+            ? (lore.category as WorldLoreCategory)
+            : "faction",
+          entity_tags: [...lore.entity_tags],
+        }))
+      );
+    }
+  }, [isCampaignMode, world.lore_nodes, campaignWorldLoreDirty]);
   const [containers, setContainers] = useState<LocationContainer[]>(
     (world.containers ?? []).map((cont) => ({
       ...cont,
@@ -187,7 +243,8 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
     : containers;
   const effectiveLocations = isCampaignMode ? world.locations : locations;
   const effectiveEdges = isCampaignMode ? world.edges : edges;
-  const effectiveLoreNodes = isCampaignMode ? world.lore_nodes : loreNodes;
+  const effectiveLoreNodes =
+    isCampaignMode && !campaignUnlockLore ? world.lore_nodes : loreNodes;
 
   const unsupportedFields = useMemo(
     () => buildWorldUnsupportedFieldsState(world),
@@ -360,19 +417,65 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
 
   const handleSave = async () => {
     if (isCampaignMode) {
-      if (!onSaveCampaignWorldSettings) {
-        onSaved(world);
-        return;
+      let flushedCampaignLore: WorldLoreNodeDraft[] | null = null;
+      if (campaignUnlockLore && campaignWorldLoreDirty && onSaveCampaignWorldLore) {
+        const flushed = loreNodes.map((lore) => {
+          const pendingRaw = pendingWorldLoreTagDrafts[lore.id] || "";
+          const pendingParts = pendingRaw
+            .split(/[,;\n]+/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+          const effectiveTags = normalizeTagList(
+            lore.entity_tags || [],
+            pendingParts
+          );
+          return {
+            id: lore.id.startsWith("new_lore_") ? null : lore.id,
+            title: lore.title.trim(),
+            content: lore.content.trim(),
+            category: WORLD_LORE_CATEGORIES.includes(
+              lore.category as WorldLoreCategory
+            )
+              ? (lore.category as WorldLoreCategory)
+              : "faction",
+            entity_tags: effectiveTags,
+          };
+        });
+        for (let i = 0; i < flushed.length; i++) {
+          const item = flushed[i];
+          if (!item.title || !item.content || item.entity_tags.length === 0) {
+            setActiveTab("codex");
+            setCodexFocusRequest({
+              loreId: loreNodes[i].id,
+              nonce: ++focusNonceRef.current,
+            });
+            setError(
+              `Codex entry #${i + 1} ("${item.title || "Untitled"}") requires a title, content, and at least 1 trigger keyword.`
+            );
+            return;
+          }
+        }
+        flushedCampaignLore = flushed;
       }
+
       setSaving(true);
       setError(null);
       try {
-        await onSaveCampaignWorldSettings({
-          describe_on_first_visit: campaignDescribeFirstVisit,
-        });
+        if (onSaveCampaignWorldSettings) {
+          await onSaveCampaignWorldSettings({
+            describe_on_first_visit: campaignDescribeFirstVisit,
+            unlock_lore: campaignUnlockLore,
+          });
+        }
+        if (flushedCampaignLore !== null && onSaveCampaignWorldLore) {
+          await onSaveCampaignWorldLore(flushedCampaignLore);
+          setCampaignWorldLoreDirty(false);
+          setPendingWorldLoreTagDrafts({});
+        }
+        setIsDirty(false);
         onSaved(world);
       } catch (err) {
-        setError(String(err));
+        setError(err instanceof Error ? err.message : String(err));
       } finally {
         setSaving(false);
       }
@@ -550,6 +653,21 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
           <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <Globe size={18} color="var(--accent-cyan)" />
             World Sheet
+            {isCampaignMode && campaignUnlockLore && (
+              <span
+                style={{
+                  fontSize: "0.7rem",
+                  color: "var(--accent-amber)",
+                  background: "rgba(245, 158, 11, 0.14)",
+                  border: "1px solid rgba(245, 158, 11, 0.45)",
+                  padding: "2px 8px",
+                  borderRadius: 999,
+                  fontWeight: 600,
+                }}
+              >
+                GM Mode Active
+              </span>
+            )}
             {mode === "wizard" && (
               <span
                 style={{
@@ -629,7 +747,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             <BookOpen size={14} />
             <span>Codex</span>
             <span className="modal-tab-badge">{effectiveLoreNodes.length}</span>
-            {invalidWorldLoreCount > 0 && !isCampaignMode && (
+            {invalidWorldLoreCount > 0 && (!isCampaignMode || campaignUnlockLore) && (
               <span
                 className="modal-tab-badge"
                 style={{
@@ -851,7 +969,14 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                     "")
                 }
                 mode={isCampaignMode ? "campaign" : "editor"}
-                isMutatingLocked={isCampaignMode || isMutatingLocked}
+                isMutatingLocked={
+                  isCampaignMode && !campaignUnlockLore ? true : isMutatingLocked
+                }
+                unlockLore={isCampaignMode ? campaignUnlockLore : false}
+                revealedLoreIds={revealedLoreIds}
+                onSaveCampaignLocationLore={onSaveCampaignLocationLore}
+                onSaveCampaignContainerLore={onSaveCampaignContainerLore}
+                onToggleLoreReveal={onToggleCampaignLoreReveal}
                 externalFocusRequest={externalMapFocus}
                 worldMedia={media}
                 visitedContainerIds={visitedContainerIds}
@@ -864,7 +989,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 }}
                 hasUnsavedChanges={isDirty}
                 isSavingMap={saving}
-                onSaveMap={isCampaignMode ? undefined : handleSave}
+                onSaveMap={isCampaignMode ? onSaveCampaignMap : handleSave}
                 onChangeGraph={
                   isCampaignMode
                     ? undefined
@@ -891,6 +1016,9 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             worldId={activeWorldId}
             isActive={activeTab === "codex"}
             isCampaignMode={isCampaignMode}
+            unlockLore={isCampaignMode ? campaignUnlockLore : false}
+            revealedLoreIds={revealedLoreIds}
+            isMutatingLocked={isMutatingLocked}
             campaignId={campaignId}
             loreNodes={effectiveLoreNodes}
             pendingWorldLoreTagDrafts={pendingWorldLoreTagDrafts}
@@ -902,11 +1030,19 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             activePersonaTurnState={activePersonaTurnState}
             campaignCharacters={campaignCharacters}
             externalFocusRequest={codexFocusRequest}
-            onUpdateLoreNodes={(updater) => setLoreNodes(updater)}
+            onUpdateLoreNodes={(updater) => {
+              setLoreNodes(updater);
+              if (isCampaignMode) {
+                setCampaignWorldLoreDirty(true);
+              }
+            }}
             onUpdatePendingTagDrafts={(updater) =>
               setPendingWorldLoreTagDrafts(updater)
             }
             onMarkDirty={markDirty}
+            onSaveCampaignLocationLore={onSaveCampaignLocationLore}
+            onSaveCampaignContainerLore={onSaveCampaignContainerLore}
+            onToggleLoreReveal={onToggleCampaignLoreReveal}
             onOpenOnMap={(kind, id) => {
               setExternalMapFocus({
                 kind,
@@ -983,6 +1119,88 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 <span style={{ fontSize: "0.76rem", color: "var(--text-secondary)", lineHeight: 1.45 }}>
                   Automatically show collapsible atmospheric description cards from the world map when arriving at unvisited locations or containers—without extra LLM calls or context overhead.
                 </span>
+              </div>
+            </label>
+
+            <label
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 10,
+                background: "var(--bg-card)",
+                border:
+                  isCampaignMode && campaignUnlockLore
+                    ? "1px solid rgba(245, 158, 11, 0.5)"
+                    : "1px solid var(--border-subtle)",
+                borderRadius: 8,
+                padding: "12px 14px",
+                cursor:
+                  !isCampaignMode || isMutatingLocked || savingGmToggle
+                    ? "not-allowed"
+                    : "pointer",
+                opacity: !isCampaignMode || isMutatingLocked || savingGmToggle ? 0.6 : 1,
+              }}
+            >
+              <input
+                type="checkbox"
+                style={{ marginTop: 3 }}
+                disabled={!isCampaignMode || isMutatingLocked || savingGmToggle}
+                checked={isCampaignMode ? campaignUnlockLore : false}
+                onChange={async (e) => {
+                  if (!isCampaignMode) return;
+                  const nextVal = e.target.checked;
+                  setCampaignUnlockLore(nextVal);
+                  if (!nextVal) {
+                    setCampaignWorldLoreDirty(false);
+                    setLoreNodes(
+                      world.lore_nodes.map((lore) => ({
+                        ...lore,
+                        category: WORLD_LORE_CATEGORIES.includes(
+                          lore.category as WorldLoreCategory
+                        )
+                          ? (lore.category as WorldLoreCategory)
+                          : "faction",
+                        entity_tags: [...lore.entity_tags],
+                      }))
+                    );
+                  }
+                  if (onSaveCampaignWorldSettings) {
+                    setSavingGmToggle(true);
+                    setError(null);
+                    try {
+                      await onSaveCampaignWorldSettings({
+                        describe_on_first_visit: campaignDescribeFirstVisit,
+                        unlock_lore: nextVal,
+                      });
+                    } catch (err) {
+                      setCampaignUnlockLore(!nextVal);
+                      setError(err instanceof Error ? err.message : String(err));
+                    } finally {
+                      setSavingGmToggle(false);
+                    }
+                  } else {
+                    markDirty();
+                  }
+                }}
+              />
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>
+                  Unlock Lore &amp; Secrets (GM Mode)
+                </span>
+                {isCampaignMode ? (
+                  <>
+                    <span style={{ fontSize: "0.76rem", color: "var(--text-secondary)", lineHeight: 1.45 }}>
+                      Reveals all hidden location/container secrets in the Codex and Map Inspector (UI-only—AI characters still follow in-game discovery rules) and unlocks adding, editing, or deleting lore in the Codex, Locations, L1 Containers, visited location details, and Story Major Events.
+                    </span>
+                    <span style={{ fontSize: "0.72rem", color: "var(--accent-amber)", lineHeight: 1.45 }}>
+                      Tip: Lore changes apply only to this campaign from the current turn onward and never alter the base world. If you branch or rewind to an earlier turn (e.g., branching from Turn 4 after editing at Turn 8), later lore edits will not appear on that branch.
+                    </span>
+                  </>
+                ) : (
+                  <span style={{ fontSize: "0.76rem", color: "var(--text-muted)", lineHeight: 1.45 }}>
+                    Campaign-only GM override. Disabled in World Edit mode because all world lore and secrets are already visible and editable here.
+                  </span>
+                )}
               </div>
             </label>
           </div>

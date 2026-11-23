@@ -363,9 +363,23 @@ def update_campaign_world_settings(
 ) -> CampaignStateBundle:
     """Update campaign-scoped world settings forward-only without modifying base worlds."""
     try:
-        return _resolve_facade_attr("get_repo", get_repo)().update_campaign_world_settings(
+        repo = _resolve_facade_attr("get_repo", get_repo)()
+        existing = repo.get_campaign(campaign_id, owner_id=current_user.id).world_settings
+        next_settings = CampaignWorldSettings(
+            describe_on_first_visit=(
+                req.describe_on_first_visit
+                if req.describe_on_first_visit is not None
+                else existing.describe_on_first_visit
+            ),
+            unlock_lore=(
+                req.unlock_lore
+                if req.unlock_lore is not None
+                else existing.unlock_lore
+            ),
+        )
+        return repo.update_campaign_world_settings(
             campaign_id,
-            CampaignWorldSettings(describe_on_first_visit=req.describe_on_first_visit),
+            next_settings,
             owner_id=current_user.id,
         )
     except KeyError as exc:

@@ -6,6 +6,7 @@ import asyncio
 import logging
 
 from app.schemas.character import ItemFlag
+from app.schemas.world import WorldLoreNodeDraft
 from app.schemas.party import LocationOverrideMoveMode
 from fastapi import APIRouter
 from pydantic import (
@@ -103,7 +104,24 @@ class CampaignEdgeDistanceUpdateRequest(BaseModel):
 
 
 class CampaignWorldSettingsPatchRequest(BaseModel):
-    describe_on_first_visit: bool = True
+    describe_on_first_visit: bool | None = None
+    unlock_lore: bool | None = None
+
+
+class CampaignWorldLoreUpdateRequest(BaseModel):
+    lore_nodes: list[WorldLoreNodeDraft] = Field(default_factory=list)
+
+
+class CampaignLoreRevealRequest(BaseModel):
+    revealed: bool
+
+
+class CampaignMajorEventUpdateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=120)
+    summary: str = Field(..., min_length=1, max_length=2000)
+    keywords: list[str] = Field(default_factory=list)
+    updated_description: str | None = None
+    environmental_tags: list[str] | None = None
 
 
 class TurnBookmarkUpdateRequest(BaseModel):

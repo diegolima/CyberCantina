@@ -98,6 +98,7 @@ flowchart TD
     b_11 --> b_20
     b_12 --> b_20
     b_12 --> b_21
+    b_13 --> b_2
     b_13 --> b_20
     b_14 --> b_1
     b_14 --> b_2
@@ -136,7 +137,7 @@ flowchart TD
 | `components/prompts` | 3 | *(leaf)* |
 | `components/providers` | 5 | `api`, `local`, `providers`, `types` |
 | `components/shared` | 5 | `types`, `utils` |
-| `components/story` | 4 | `types` |
+| `components/story` | 5 | `components (root)`, `types` |
 | `components/wizard` | 2 | `api`, `components (root)`, `types` |
 | `components/world` | 8 | `api`, `components (root)`, `components/map`, `components/shared`, `types`, `utils` |
 | `hooks` | 3 | `api`, `types`, `utils` |

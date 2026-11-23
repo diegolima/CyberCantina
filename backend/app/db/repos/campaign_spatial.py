@@ -786,6 +786,108 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
             locations = [loc for loc in locations if loc.id not in superseded_loc_ids]
         return containers, locations
 
+    def apply_clerk_location_mutation(
+        self,
+        *,
+        campaign_id: str,
+        turn_id: str,
+        location: LocationNode,
+        updated_description: str | None = None,
+        tags_added: list[str] | None = None,
+        tags_removed: list[str] | None = None,
+    ) -> tuple[str, list[str], list[str], list[str]]:
+        """Persist a branch-safe Clerk physical mutation via campaign_spatial_overrides without clobbering spatial layout.
+
+        Returns (final_description, final_tags, applied_added, applied_removed).
+        """
+        final_desc = (
+            updated_description.strip()
+            if updated_description and updated_description.strip()
+            else location.description
+        )
+        remove_lower = {t.strip().lower() for t in (tags_removed or []) if t and t.strip()}
+        applied_removed: list[str] = []
+        final_tags: list[str] = []
+        seen_lower: set[str] = set()
+        for existing in location.environmental_tags or []:
+            clean = existing.strip()
+            if not clean:
+                continue
+            low = clean.lower()
+            if low in remove_lower:
+                applied_removed.append(clean)
+                continue
+            if low not in seen_lower:
+                seen_lower.add(low)
+                final_tags.append(clean)
+        applied_added: list[str] = []
+        for add_t in tags_added or []:
+            clean = add_t.strip()[:64]
+            if not clean:
+                continue
+            low = clean.lower()
+            if low not in seen_lower:
+                seen_lower.add(low)
+                final_tags.append(clean)
+                applied_added.append(clean)
+
+        conn = self._connect()
+        try:
+            existing_row = conn.execute(
+                """
+                SELECT parent_id, is_entry_exit, ui_x, ui_y, icon, metadata_override_json
+                FROM campaign_spatial_overrides
+                WHERE turn_id = ? AND campaign_id = ? AND entity_type = 'location' AND entity_id = ?
+                """,
+                (turn_id, campaign_id, location.id),
+            ).fetchone()
+            meta: dict[str, Any] = {}
+            if existing_row and existing_row["metadata_override_json"]:
+                try:
+                    parsed = json.loads(existing_row["metadata_override_json"])
+                    if isinstance(parsed, dict):
+                        meta = dict(parsed)
+                except Exception:
+                    meta = {}
+
+            parent_id = existing_row["parent_id"] if existing_row else location.container_id
+            is_entry_exit = (
+                existing_row["is_entry_exit"]
+                if existing_row and existing_row["is_entry_exit"] is not None
+                else (1 if location.is_entry_exit else 0)
+            )
+            ui_x = existing_row["ui_x"] if existing_row else location.ui_x
+            ui_y = existing_row["ui_y"] if existing_row else location.ui_y
+            icon = existing_row["icon"] if existing_row else location.icon
+
+            meta["description"] = final_desc
+            meta["environmental_tags"] = final_tags
+
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO campaign_spatial_overrides (
+                    turn_id, campaign_id, entity_type, entity_id, parent_id,
+                    is_entry_exit, ui_x, ui_y, icon, metadata_override_json
+                )
+                VALUES (?, ?, 'location', ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    turn_id,
+                    campaign_id,
+                    location.id,
+                    parent_id,
+                    is_entry_exit,
+                    ui_x,
+                    ui_y,
+                    icon,
+                    json.dumps(meta),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return final_desc, final_tags, applied_added, applied_removed
+
     @staticmethod
     def _row_to_lore_node(r: sqlite3.Row) -> LoreNode:
         keys = r.keys()
@@ -795,6 +897,9 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
             location_id=r["location_id"] if "location_id" in keys else None,
             container_id=r["container_id"] if "container_id" in keys else None,
             campaign_id=r["campaign_id"] if "campaign_id" in keys else None,
+            created_at_turn_id=r["created_at_turn_id"] if "created_at_turn_id" in keys else None,
+            origin_lore_id=r["origin_lore_id"] if "origin_lore_id" in keys else None,
+            is_major_event=bool(r["is_major_event"]) if "is_major_event" in keys else False,
             title=r["title"],
             category=r["category"],
             content=r["content"],

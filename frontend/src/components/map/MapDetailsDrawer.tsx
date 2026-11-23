@@ -116,6 +116,12 @@ export interface MapDetailsDrawerProps {
     containerId: string,
     drafts: LocationLoreNodeDraft[]
   ) => Promise<void> | void;
+  unlockLore?: boolean;
+  revealedLoreIds?: readonly string[];
+  onToggleLoreReveal?: (
+    loreId: string,
+    revealed: boolean
+  ) => Promise<void> | void;
   usedIconKeys?: string[];
   worldMedia?: WorldMediaItem[];
   visitedContainerIds?: string[];
@@ -946,6 +952,9 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
   isOverriding = false,
   onSaveCampaignLocationLore,
   onSaveCampaignContainerLore,
+  unlockLore = false,
+  revealedLoreIds = [],
+  onToggleLoreReveal,
   usedIconKeys = [],
   worldMedia = [],
   visitedContainerIds = [],
@@ -969,9 +978,12 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
     setNameDraft(selectedLocation?.name ?? "");
   }, [selectedLocation?.id, selectedLocation?.name]);
 
-  const isLocNarrativeLocked =
+  const isLocStructuralLocked =
     isMutatingLocked ||
     (mode === "campaign" && Boolean(selectedLocation?.is_visited));
+  const isLocNarrativeLocked =
+    isMutatingLocked ||
+    (mode === "campaign" && Boolean(selectedLocation?.is_visited) && !unlockLore);
 
   const isContVisited =
     visitedContainerIds.includes(selectedContainer?.id ?? "") ||
@@ -1649,6 +1661,9 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
                 : undefined
             }
             onCampaignSave={onSaveCampaignContainerLore}
+            unlockLore={unlockLore}
+            revealedLoreIds={revealedLoreIds}
+            onToggleLoreReveal={onToggleLoreReveal}
           />
         ) : (
           <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", fontStyle: "italic" }}>
@@ -1949,13 +1964,13 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
             alignItems: "center",
             gap: 5,
             fontSize: "0.72rem",
-            cursor: isLocNarrativeLocked ? "not-allowed" : "pointer",
+            cursor: isLocStructuralLocked ? "not-allowed" : "pointer",
             color: selectedLocation.is_hub ? "#c084fc" : "var(--text-secondary)",
           }}
         >
           <input
             type="checkbox"
-            disabled={isLocNarrativeLocked}
+            disabled={isLocStructuralLocked}
             checked={Boolean(selectedLocation.is_hub)}
             onChange={(e) =>
               onPatchLocation(selectedLocation.id, { is_hub: e.target.checked })
@@ -2075,7 +2090,7 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
           <textarea
             className="field-textarea"
             rows={2}
-            disabled={isLocNarrativeLocked}
+            disabled={isLocStructuralLocked}
             value={selectedLocation.starting_message ?? ""}
             placeholder="Opening prose when starting a campaign here..."
             onChange={(e) =>
@@ -2193,6 +2208,9 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
             : undefined
         }
         onCampaignSave={onSaveCampaignLocationLore}
+        unlockLore={unlockLore}
+        revealedLoreIds={revealedLoreIds}
+        onToggleLoreReveal={onToggleLoreReveal}
       />
       {lightboxImage && (
         <ImageLightboxModal

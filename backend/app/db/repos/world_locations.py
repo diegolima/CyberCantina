@@ -194,6 +194,7 @@ class WorldLocationsMixin:
         location_id: str,
         *,
         campaign_id: str | None = None,
+        valid_turn_ids: set[str] | None = None,
     ) -> LocationNode:
         conn = self._connect()
         try:
@@ -204,7 +205,10 @@ class WorldLocationsMixin:
                 raise KeyError(f"Location '{location_id}' not found")
             loc = self._row_to_location(row)
             loc.lore_nodes = self._resolve_location_lore_map(
-                conn, [location_id], campaign_id=campaign_id
+                conn,
+                [location_id],
+                campaign_id=campaign_id,
+                valid_turn_ids=valid_turn_ids,
             ).get(location_id, [])
             if loc.image_media_id:
                 m_row = conn.execute(
@@ -309,6 +313,7 @@ class WorldLocationsMixin:
                     conn,
                     [n.destination.id for n in neighbors],
                     campaign_id=campaign_id,
+                    valid_turn_ids=valid_turn_ids,
                 )
                 for n in neighbors:
                     n.destination.lore_nodes = loc_lore_map.get(n.destination.id, [])

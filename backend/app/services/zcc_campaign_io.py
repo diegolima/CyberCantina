@@ -300,14 +300,34 @@ def extract_campaign_export_bundle(
             superseded_base_locations = []
             superseded_base_edges = []
 
-        # Campaign-scoped lore nodes & overrides
+        # Campaign-scoped lore nodes, tombstones & legacy overrides
+        raw_campaign_lore = conn.execute(
+            "SELECT * FROM lore_nodes WHERE campaign_id = ?",
+            (campaign_id,),
+        ).fetchall()
         campaign_lore_nodes = [
             dict(r)
-            for r in conn.execute(
-                "SELECT * FROM lore_nodes WHERE campaign_id = ?",
-                (campaign_id,),
-            ).fetchall()
+            for r in raw_campaign_lore
+            if not (
+                "created_at_turn_id" in r.keys()
+                and r["created_at_turn_id"]
+                and str(r["created_at_turn_id"]) not in exported_turn_ids
+            )
         ]
+        try:
+            lore_tombstones = (
+                [
+                    dict(r)
+                    for r in conn.execute(
+                        f"SELECT * FROM campaign_lore_tombstones WHERE campaign_id = ? AND turn_id IN ({placeholders})",
+                        (campaign_id, *exported_turn_ids),
+                    ).fetchall()
+                ]
+                if exported_turn_ids
+                else []
+            )
+        except Exception:
+            lore_tombstones = []
         loc_lore_overrides = [
             dict(r)
             for r in conn.execute(
@@ -402,6 +422,7 @@ def extract_campaign_export_bundle(
         },
         "lore_deltas": {
             "lore_nodes": campaign_lore_nodes,
+            "lore_tombstones": lore_tombstones,
             "location_lore_overrides": loc_lore_overrides,
             "container_lore_overrides": cont_lore_overrides,
         },
@@ -423,6 +444,33 @@ def _remap_id(val: Any, id_remap: dict[str, str]) -> Any:
     if val in SPECIAL_ACTOR_IDS:
         return val
     return id_remap.get(val, val)
+
+
+def _remap_post_turn_json(raw_json: Any, id_remap: dict[str, str]) -> Any:
+    if not raw_json or not isinstance(raw_json, str):
+        return raw_json
+    try:
+        parsed = json.loads(raw_json)
+    except Exception:
+        return raw_json
+    if not isinstance(parsed, dict):
+        return raw_json
+    changed = False
+    rev = parsed.get("revealed_secret_lore_ids")
+    if isinstance(rev, list) and rev:
+        parsed["revealed_secret_lore_ids"] = [
+            str(_remap_id(str(x), id_remap)) for x in rev
+        ]
+        changed = True
+    me = parsed.get("major_event")
+    if isinstance(me, dict):
+        for key in ("turn_id", "lore_node_id", "location_id"):
+            if me.get(key):
+                me[key] = str(_remap_id(str(me[key]), id_remap))
+        if me.get("turn_id"):
+            me["id"] = f"me_{me['turn_id']}"
+        changed = True
+    return json.dumps(parsed) if changed else raw_json
 
 
 def _remap_id_list_json(raw_json: Any, id_remap: dict[str, str]) -> str:
@@ -801,6 +849,7 @@ def ingest_campaigns_atomic(
                 mapped_actor = str(_remap_id(str(t.get("actor_id") or new_char_id), id_remap))
                 recalled_json = _remap_recalled_items_json(t.get("recalled_items_json"), id_remap)
                 cognitions_json = _remap_cognitions_json(t.get("cognitions_json"), id_remap)
+                post_turn_json = _remap_post_turn_json(t.get("post_turn_json"), id_remap)
                 conn.execute(
                     """
                     INSERT INTO turn_nodes (
@@ -823,7 +872,7 @@ def ingest_campaigns_atomic(
                         cognitions_json,
                         t.get("whispers_json"),
                         str(t.get("pre_turn_json") or "{}"),
-                        t.get("post_turn_json"),
+                        post_turn_json,
                         recalled_json,
                         t.get("telemetry_json"),
                         1 if t.get("is_bookmarked") else 0,
@@ -991,29 +1040,38 @@ def ingest_campaigns_atomic(
                     ),
                 )
 
-            # 6. Insert campaign-scoped lore_nodes & lore overrides
+            # 6. Insert campaign-scoped lore_nodes, tombstones & legacy lore overrides
             for ln in camp_lore_nodes:
                 new_ln_id = id_remap[str(ln["id"])]
                 old_lid = ln.get("location_id")
                 old_cid = ln.get("container_id")
                 mapped_lid = id_remap.get(str(old_lid)) if old_lid else None
                 mapped_cid = id_remap.get(str(old_cid)) if old_cid else None
-                if not mapped_lid and not mapped_cid:
+                if old_lid and not mapped_lid:
                     continue
+                if old_cid and not mapped_cid:
+                    continue
+                is_scoped = bool(mapped_lid or mapped_cid)
                 clean_cat = normalize_lore_category(
                     str(ln.get("category") or "rumor"),
-                    allow_secret=True,
-                    allow_artifact=False,
+                    allow_secret=is_scoped,
+                    allow_artifact=not is_scoped,
                     strict=False,
                 )
+                old_ct = ln.get("created_at_turn_id")
+                mapped_ct = id_remap.get(str(old_ct)) if old_ct else None
+                old_orig = ln.get("origin_lore_id")
+                mapped_orig = str(_remap_id(str(old_orig), id_remap)) if old_orig else None
+                is_me = 1 if ln.get("is_major_event") else 0
                 tags_json = str(ln.get("entity_tags_json") or '["lore"]')
                 conn.execute(
                     """
                     INSERT INTO lore_nodes (
                         id, world_id, location_id, container_id, campaign_id,
+                        created_at_turn_id, origin_lore_id, is_major_event,
                         title, category, content, entity_tags_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         new_ln_id,
@@ -1021,12 +1079,29 @@ def ingest_campaigns_atomic(
                         mapped_lid,
                         mapped_cid,
                         new_camp_id,
+                        mapped_ct,
+                        mapped_orig,
+                        is_me,
                         str(ln.get("title") or "Lore"),
                         clean_cat,
                         str(ln.get("content") or "Details"),
                         tags_json,
                     ),
                 )
+
+            for tomb in lore_deltas.get("lore_tombstones") or []:
+                if isinstance(tomb, dict):
+                    mapped_tid = id_remap.get(str(tomb.get("turn_id") or ""))
+                    raw_lore_id = str(tomb.get("lore_id") or "")
+                    mapped_lore_id = str(_remap_id(raw_lore_id, id_remap)) if raw_lore_id else ""
+                    if mapped_tid and mapped_lore_id:
+                        conn.execute(
+                            """
+                            INSERT OR IGNORE INTO campaign_lore_tombstones (campaign_id, turn_id, lore_id)
+                            VALUES (?, ?, ?)
+                            """,
+                            (new_camp_id, mapped_tid, mapped_lore_id),
+                        )
 
             for lo in lore_deltas.get("location_lore_overrides") or []:
                 if isinstance(lo, dict):
@@ -1065,9 +1140,9 @@ def ingest_campaigns_atomic(
                     INSERT INTO world_state_snapshots (
                         turn_id, world_timestamp, active_location_id, scene_flags_json,
                         campaign_elapsed_minutes, visited_location_ids_json,
-                        visited_container_ids_json, parties_json
+                        visited_container_ids_json, revealed_lore_ids_json, parties_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         mapped_tid,
@@ -1077,6 +1152,7 @@ def ingest_campaigns_atomic(
                         int(snap.get("campaign_elapsed_minutes") or 0),
                         _remap_id_list_json(snap.get("visited_location_ids_json"), id_remap),
                         _remap_id_list_json(snap.get("visited_container_ids_json"), id_remap),
+                        _remap_id_list_json(snap.get("revealed_lore_ids_json") or "[]", id_remap),
                         _remap_parties_json(snap.get("parties_json"), id_remap),
                     ),
                 )

@@ -629,6 +629,9 @@ class LoreNode(BaseModel):
     location_id: str | None = None
     container_id: str | None = None
     campaign_id: str | None = None
+    created_at_turn_id: str | None = None
+    origin_lore_id: str | None = None
+    is_major_event: bool = False
     title: str = Field(..., min_length=1, max_length=120)
     category: AnyLoreCategory
     content: str = Field(..., min_length=1, max_length=2000)
@@ -664,10 +667,6 @@ class LoreNode(BaseModel):
         ):
             raise ValueError(
                 f"Category '{self.category}' is only allowed on world lore entries, not location or container lore."
-            )
-        if self.campaign_id is not None and self.location_id is None and self.container_id is None:
-            raise ValueError(
-                "Campaign-scoped lore overrides must belong to a specific location or container."
             )
         if self.location_id is not None and self.container_id is not None:
             raise ValueError("Lore entry cannot be scoped to both a location and a container.")

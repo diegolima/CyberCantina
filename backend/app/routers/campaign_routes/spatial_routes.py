@@ -22,6 +22,9 @@ from app.routers.campaign_routes.schemas_and_gate import _resolve_facade_attr
 from app.routers.campaign_routes.schemas_and_gate import (
     CampaignEdgeCreateRequest,
     CampaignEdgeDistanceUpdateRequest,
+    CampaignLoreRevealRequest,
+    CampaignMajorEventUpdateRequest,
+    CampaignWorldLoreUpdateRequest,
     LinkedLocationCreateRequest,
     router,
 )
@@ -139,6 +142,110 @@ def update_campaign_map(
 
 
 @router.put(
+    "/api/campaigns/{campaign_id}/lore",
+    response_model=CampaignStateBundle,
+)
+async def update_campaign_world_lore(
+    campaign_id: str,
+    req: CampaignWorldLoreUpdateRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Update branch-safe campaign-scoped Copy-on-Write World Codex lore entries (requires GM Mode)."""
+    try:
+        return await _resolve_facade_attr("get_repo", get_repo)().aupdate_campaign_world_lore(
+            campaign_id,
+            req.lore_nodes,
+            owner_id=current_user.id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/api/campaigns/{campaign_id}/lore/{lore_id}/reveal",
+    response_model=CampaignStateBundle,
+)
+def toggle_campaign_lore_reveal(
+    campaign_id: str,
+    lore_id: str,
+    req: CampaignLoreRevealRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Manually mark a location or container secret lore entry revealed or hidden on the active branch (requires GM Mode)."""
+    try:
+        return _resolve_facade_attr("get_repo", get_repo)().toggle_campaign_lore_reveal(
+            campaign_id,
+            lore_id,
+            revealed=req.revealed,
+            owner_id=current_user.id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch(
+    "/api/campaigns/{campaign_id}/major-events/{turn_id}",
+    response_model=CampaignStateBundle,
+)
+async def update_campaign_major_event(
+    campaign_id: str,
+    turn_id: str,
+    req: CampaignMajorEventUpdateRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Edit a World or Location Major Event directly from the Story Major Events tab (requires GM Mode)."""
+    try:
+        return await _resolve_facade_attr("get_repo", get_repo)().aupdate_campaign_major_event(
+            campaign_id,
+            turn_id,
+            title=req.title,
+            summary=req.summary,
+            keywords=req.keywords,
+            updated_description=req.updated_description,
+            environmental_tags=req.environmental_tags,
+            owner_id=current_user.id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete(
+    "/api/campaigns/{campaign_id}/major-events/{turn_id}",
+    response_model=CampaignStateBundle,
+)
+def delete_campaign_major_event(
+    campaign_id: str,
+    turn_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Delete a World Major Event or delete & revert a Location Major Event (requires GM Mode)."""
+    try:
+        return _resolve_facade_attr("get_repo", get_repo)().delete_campaign_major_event(
+            campaign_id,
+            turn_id,
+            owner_id=current_user.id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put(
     "/api/campaigns/{campaign_id}/locations/{location_id}/lore",
     response_model=CampaignStateBundle,
 )
@@ -148,7 +255,7 @@ async def update_campaign_location_lore(
     req: CampaignLocationLoreUpdatePayload,
     current_user: UserProfile = Depends(get_current_user),
 ) -> CampaignStateBundle:
-    """Update campaign-scoped Copy-on-Write lore entries for a visible location."""
+    """Update campaign-scoped Copy-on-Write lore entries for a visible location (requires GM Mode)."""
     try:
         return await _resolve_facade_attr("get_repo", get_repo)().aupdate_campaign_location_lore(
             campaign_id,
@@ -156,6 +263,8 @@ async def update_campaign_location_lore(
             req.lore_nodes,
             owner_id=current_user.id,
         )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -172,7 +281,7 @@ async def update_campaign_container_lore(
     req: CampaignContainerLoreUpdatePayload,
     current_user: UserProfile = Depends(get_current_user),
 ) -> CampaignStateBundle:
-    """Update campaign-scoped Copy-on-Write lore entries for a Level 1 container."""
+    """Update campaign-scoped Copy-on-Write lore entries for a Level 1 container (requires GM Mode)."""
     try:
         return await _resolve_facade_attr("get_repo", get_repo)().aupdate_campaign_container_lore(
             campaign_id,
@@ -180,6 +289,8 @@ async def update_campaign_container_lore(
             req.lore_nodes,
             owner_id=current_user.id,
         )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

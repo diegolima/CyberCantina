@@ -1,6 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { Compass, Film, Layers, MapPin, Maximize2 } from "lucide-react";
-import type { LocationContainer, LocationNode } from "../../types";
+import type {
+  LocationContainer,
+  LocationLoreNodeDraft,
+  LocationNode,
+} from "../../types";
+import { MapLoreSection } from "../map/MapLoreSection";
 import {
   CONTAINER_DEPTH_LABELS,
   buildContainerBreadcrumbChain,
@@ -10,6 +15,7 @@ import {
   getVisibleScopedLore,
   isCodexContainerImageVisible,
   isCodexLocationImageVisible,
+  isSecretLoreRevealed,
 } from "./codexHelpers";
 
 interface CodexLocationDetailProps {
@@ -21,6 +27,21 @@ interface CodexLocationDetailProps {
   visitedContainerIds: readonly string[];
   activeLocationId?: string;
   isCampaignMode: boolean;
+  unlockLore?: boolean;
+  revealedLoreIds?: readonly string[];
+  isMutatingLocked?: boolean;
+  onSaveCampaignLocationLore?: (
+    locationId: string,
+    drafts: LocationLoreNodeDraft[]
+  ) => Promise<void> | void;
+  onSaveCampaignContainerLore?: (
+    containerId: string,
+    drafts: LocationLoreNodeDraft[]
+  ) => Promise<void> | void;
+  onToggleLoreReveal?: (
+    loreId: string,
+    revealed: boolean
+  ) => Promise<void> | void;
   onOpenOnMap: (kind: "location" | "container", id: string) => void;
   onEnlargeImage: (
     url: string,
@@ -39,6 +60,12 @@ export const CodexLocationDetail: React.FC<CodexLocationDetailProps> = ({
   visitedContainerIds,
   activeLocationId,
   isCampaignMode,
+  unlockLore = false,
+  revealedLoreIds = [],
+  isMutatingLocked = false,
+  onSaveCampaignLocationLore,
+  onSaveCampaignContainerLore,
+  onToggleLoreReveal,
   onOpenOnMap,
   onEnlargeImage,
 }) => {
@@ -54,7 +81,10 @@ export const CodexLocationDetail: React.FC<CodexLocationDetailProps> = ({
       location.container_id,
       containers as LocationContainer[]
     );
-    const localLore = getVisibleScopedLore(location.lore_nodes, isCampaignMode);
+    const localLore = getVisibleScopedLore(location.lore_nodes, isCampaignMode, {
+      unlockLore,
+      revealedLoreIds,
+    });
     const showImage =
       isCodexLocationImageVisible(location, isCampaignMode) &&
       Boolean(location.image_url) &&
@@ -180,36 +210,73 @@ export const CodexLocationDetail: React.FC<CodexLocationDetailProps> = ({
         )}
 
         <div className="codex-section-card">
-          <div className="codex-section-label">
-            Local Lore ({localLore.length})
-          </div>
-          {localLore.length === 0 ? (
-            <div className="codex-muted-note">
-              No local lore entries visible for this location.
-            </div>
+          {isCampaignMode && unlockLore && onSaveCampaignLocationLore ? (
+            <MapLoreSection
+              mode="campaign"
+              isMutatingLocked={isMutatingLocked}
+              targetId={location.id}
+              targetName={location.name}
+              worldId={location.world_id}
+              scopeLabel="Local Lore & Secrets"
+              emptyText="No local lore entries attached to this location."
+              loreList={location.lore_nodes ?? []}
+              canEditDraftLore={false}
+              savedInDb
+              unlockLore={unlockLore}
+              revealedLoreIds={revealedLoreIds}
+              onCampaignSave={onSaveCampaignLocationLore}
+              onToggleLoreReveal={onToggleLoreReveal}
+            />
           ) : (
-            <div className="codex-local-lore-list">
-              {localLore.map((ln) => (
-                <div key={ln.id} className="codex-local-lore-item">
-                  <div className="codex-local-lore-head">
-                    <strong>{ln.title}</strong>
-                    <span className={`lore-cat-badge lore-cat-badge--${ln.category}`}>
-                      {getLoreCategoryLabel(ln.category)}
-                    </span>
-                  </div>
-                  <p className="codex-prose-text">{ln.content}</p>
-                  {ln.entity_tags.length > 0 && (
-                    <div className="codex-chip-list">
-                      {ln.entity_tags.map((tag) => (
-                        <span key={tag} className="badge codex-tag-chip">
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  )}
+            <>
+              <div className="codex-section-label">
+                Local Lore ({localLore.length})
+              </div>
+              {localLore.length === 0 ? (
+                <div className="codex-muted-note">
+                  No local lore entries visible for this location.
                 </div>
-              ))}
-            </div>
+              ) : (
+                <div className="codex-local-lore-list">
+                  {localLore.map((ln) => {
+                    const revealed =
+                      ln.category === "secret" &&
+                      isSecretLoreRevealed(ln, revealedLoreIds);
+                    return (
+                    <div key={ln.id} className="codex-local-lore-item">
+                      <div className="codex-local-lore-head">
+                        <strong>{ln.title}</strong>
+                        <div style={{ display: "inline-flex", gap: 5, alignItems: "center" }}>
+                          <span className={`lore-cat-badge lore-cat-badge--${ln.category}`}>
+                            {getLoreCategoryLabel(ln.category)}
+                          </span>
+                          {isCampaignMode && ln.category === "secret" && (
+                            <span
+                              className={`badge ${
+                                revealed ? "codex-badge--emerald" : "codex-badge--amber"
+                              }`}
+                            >
+                              {revealed ? "Discovered" : "Hidden (GM)"}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <p className="codex-prose-text">{ln.content}</p>
+                      {ln.entity_tags.length > 0 && (
+                        <div className="codex-chip-list">
+                          {ln.entity_tags.map((tag) => (
+                            <span key={tag} className="badge codex-tag-chip">
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -225,7 +292,10 @@ export const CodexLocationDetail: React.FC<CodexLocationDetailProps> = ({
       CONTAINER_DEPTH_LABELS[container.depth] ?? `Level ${container.depth}`;
     const localLore =
       container.depth === 1
-        ? getVisibleScopedLore(container.lore_nodes, isCampaignMode)
+        ? getVisibleScopedLore(container.lore_nodes, isCampaignMode, {
+            unlockLore,
+            revealedLoreIds,
+          })
         : [];
     const childContCount = containers.filter(
       (c) => c.parent_container_id === container.id
@@ -347,36 +417,73 @@ export const CodexLocationDetail: React.FC<CodexLocationDetailProps> = ({
 
         {container.depth === 1 && (
           <div className="codex-section-card">
-            <div className="codex-section-label">
-              Area Lore ({localLore.length})
-            </div>
-            {localLore.length === 0 ? (
-              <div className="codex-muted-note">
-                No area lore entries visible for this container.
-              </div>
+            {isCampaignMode && unlockLore && onSaveCampaignContainerLore ? (
+              <MapLoreSection
+                mode="campaign"
+                isMutatingLocked={isMutatingLocked}
+                targetId={container.id}
+                targetName={container.name}
+                worldId={container.world_id}
+                scopeLabel="Area Lore & Secrets"
+                emptyText="No area lore entries attached to this container."
+                loreList={container.lore_nodes ?? []}
+                canEditDraftLore={false}
+                savedInDb
+                unlockLore={unlockLore}
+                revealedLoreIds={revealedLoreIds}
+                onCampaignSave={onSaveCampaignContainerLore}
+                onToggleLoreReveal={onToggleLoreReveal}
+              />
             ) : (
-              <div className="codex-local-lore-list">
-                {localLore.map((ln) => (
-                  <div key={ln.id} className="codex-local-lore-item">
-                    <div className="codex-local-lore-head">
-                      <strong>{ln.title}</strong>
-                      <span className={`lore-cat-badge lore-cat-badge--${ln.category}`}>
-                        {getLoreCategoryLabel(ln.category)}
-                      </span>
-                    </div>
-                    <p className="codex-prose-text">{ln.content}</p>
-                    {ln.entity_tags.length > 0 && (
-                      <div className="codex-chip-list">
-                        {ln.entity_tags.map((tag) => (
-                          <span key={tag} className="badge codex-tag-chip">
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-                    )}
+              <>
+                <div className="codex-section-label">
+                  Area Lore ({localLore.length})
+                </div>
+                {localLore.length === 0 ? (
+                  <div className="codex-muted-note">
+                    No area lore entries visible for this container.
                   </div>
-                ))}
-              </div>
+                ) : (
+                  <div className="codex-local-lore-list">
+                    {localLore.map((ln) => {
+                      const revealed =
+                        ln.category === "secret" &&
+                        isSecretLoreRevealed(ln, revealedLoreIds);
+                      return (
+                      <div key={ln.id} className="codex-local-lore-item">
+                        <div className="codex-local-lore-head">
+                          <strong>{ln.title}</strong>
+                          <div style={{ display: "inline-flex", gap: 5, alignItems: "center" }}>
+                            <span className={`lore-cat-badge lore-cat-badge--${ln.category}`}>
+                              {getLoreCategoryLabel(ln.category)}
+                            </span>
+                            {isCampaignMode && ln.category === "secret" && (
+                              <span
+                                className={`badge ${
+                                  revealed ? "codex-badge--emerald" : "codex-badge--amber"
+                                }`}
+                              >
+                                {revealed ? "Discovered" : "Hidden (GM)"}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <p className="codex-prose-text">{ln.content}</p>
+                        {ln.entity_tags.length > 0 && (
+                          <div className="codex-chip-list">
+                            {ln.entity_tags.map((tag) => (
+                              <span key={tag} className="badge codex-tag-chip">
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}

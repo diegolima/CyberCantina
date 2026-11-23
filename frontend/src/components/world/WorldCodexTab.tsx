@@ -20,6 +20,7 @@ import {
 import { api } from "../../api";
 import type {
   LocationContainer,
+  LocationLoreNodeDraft,
   LocationNode,
   LoreNode,
   PersonaRecord,
@@ -62,6 +63,9 @@ interface WorldCodexTabProps {
   worldId: string;
   isActive: boolean;
   isCampaignMode: boolean;
+  unlockLore?: boolean;
+  revealedLoreIds?: readonly string[];
+  isMutatingLocked?: boolean;
   campaignId?: string;
   loreNodes: LoreNode[];
   pendingWorldLoreTagDrafts: Record<string, string>;
@@ -81,6 +85,18 @@ interface WorldCodexTabProps {
   ) => void;
   onMarkDirty: () => void;
   onOpenOnMap: (kind: "location" | "container", id: string) => void;
+  onSaveCampaignLocationLore?: (
+    locationId: string,
+    drafts: LocationLoreNodeDraft[]
+  ) => Promise<void> | void;
+  onSaveCampaignContainerLore?: (
+    containerId: string,
+    drafts: LocationLoreNodeDraft[]
+  ) => Promise<void> | void;
+  onToggleLoreReveal?: (
+    loreId: string,
+    revealed: boolean
+  ) => Promise<void> | void;
 }
 
 const SECTION_ICON: Record<CodexSectionId, React.ReactNode> = {
@@ -96,6 +112,9 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   worldId,
   isActive,
   isCampaignMode,
+  unlockLore = false,
+  revealedLoreIds = [],
+  isMutatingLocked = false,
   campaignId,
   loreNodes,
   pendingWorldLoreTagDrafts,
@@ -113,7 +132,11 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   onUpdatePendingTagDrafts,
   onMarkDirty,
   onOpenOnMap,
+  onSaveCampaignLocationLore,
+  onSaveCampaignContainerLore,
+  onToggleLoreReveal,
 }) => {
+  const canEditWorldLore = !isCampaignMode || (unlockLore && !isMutatingLocked);
   const [activeSection, setActiveSection] = useState<CodexSectionId | null>(
     initialSection
   );
@@ -153,7 +176,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
 
   const invalidCountsBySection = useMemo(
     () =>
-      isCampaignMode
+      !canEditWorldLore
         ? {
             history_culture: 0,
             factions_figures: 0,
@@ -161,7 +184,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
             rumors_threats: 0,
           }
         : countInvalidWorldLoreBySection(loreNodes, pendingWorldLoreTagDrafts),
-    [isCampaignMode, loreNodes, pendingWorldLoreTagDrafts]
+    [canEditWorldLore, loreNodes, pendingWorldLoreTagDrafts]
   );
 
   // Lazy load live persona turn state if omitted in campaign mode
@@ -231,6 +254,8 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   const hubSectionData = useMemo(() => {
     const locTree = buildCodexLocationTree(containers, locations, {
       isCampaignMode,
+      unlockLore,
+      revealedLoreIds,
     });
     const castItems = isCampaignMode
       ? buildCodexMajorCharacterList(activePersona, campaignCharacters)
@@ -289,6 +314,8 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     containers,
     locations,
     isCampaignMode,
+    unlockLore,
+    revealedLoreIds,
     activePersona,
     campaignCharacters,
     loreNodes,
@@ -308,6 +335,8 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
       pendingDrafts: pendingWorldLoreTagDrafts,
       query: globalQuery,
       isCampaignMode,
+      unlockLore,
+      revealedLoreIds,
       frozenOrderIds,
     });
   }, [
@@ -320,6 +349,8 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     pendingWorldLoreTagDrafts,
     globalQuery,
     isCampaignMode,
+    unlockLore,
+    revealedLoreIds,
     frozenOrderIds,
   ]);
 
@@ -347,8 +378,18 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     return buildCodexLocationTree(containers, locations, {
       query: categoryQuery,
       isCampaignMode,
+      unlockLore,
+      revealedLoreIds,
     });
-  }, [activeSection, containers, locations, categoryQuery, isCampaignMode]);
+  }, [
+    activeSection,
+    containers,
+    locations,
+    categoryQuery,
+    isCampaignMode,
+    unlockLore,
+    revealedLoreIds,
+  ]);
 
   // Auto-expand ancestor containers when searching in Locations
   const effectiveExpandedContainerIds = useMemo(() => {
@@ -442,7 +483,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   };
 
   const handleAddLoreEntry = (forcedSection?: EditableCodexSectionId) => {
-    if (isCampaignMode) return;
+    if (!canEditWorldLore) return;
     const targetSection: EditableCodexSectionId =
       forcedSection ??
       (activeSection && isEditableCodexSection(activeSection)
@@ -519,7 +560,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   };
 
   const handleDuplicateLore = (source: LoreNode) => {
-    if (isCampaignMode) return;
+    if (!canEditWorldLore) return;
     duplicateSeqRef.current += 1;
     const newId = `new_lore_${Date.now()}_${duplicateSeqRef.current}`;
     const flushedTags = flushWorldLoreTags(
@@ -548,7 +589,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   };
 
   const handleDeleteLore = (target: LoreNode) => {
-    if (isCampaignMode) return;
+    if (!canEditWorldLore) return;
     const lookupKey = isGlobalSearchMode ? `lore:${target.id}` : target.id;
     const currentIdx = visibleRowKeys.indexOf(lookupKey);
     const nextNeighborId =
@@ -723,7 +764,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
           <CodexLoreEditor
             lore={lore}
             pendingTagDraft={pendingWorldLoreTagDrafts[lore.id] || ""}
-            isCampaignMode={isCampaignMode}
+            isCampaignMode={!canEditWorldLore}
             titleInputRef={titleInputRef}
             reclassifiedNotice={
               reclassifiedNotice?.loreId === lore.id ? reclassifiedNotice : null
@@ -759,6 +800,12 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
             visitedContainerIds={visitedContainerIds}
             activeLocationId={activeLocationId}
             isCampaignMode={isCampaignMode}
+            unlockLore={unlockLore}
+            revealedLoreIds={revealedLoreIds}
+            isMutatingLocked={isMutatingLocked}
+            onSaveCampaignLocationLore={onSaveCampaignLocationLore}
+            onSaveCampaignContainerLore={onSaveCampaignContainerLore}
+            onToggleLoreReveal={onToggleLoreReveal}
             onOpenOnMap={onOpenOnMap}
             onEnlargeImage={(url, label, videoUrl, videoMimeType) =>
               setLightboxImage({ url, label, videoUrl, videoMimeType })
@@ -776,6 +823,12 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
             visitedContainerIds={visitedContainerIds}
             activeLocationId={activeLocationId}
             isCampaignMode={isCampaignMode}
+            unlockLore={unlockLore}
+            revealedLoreIds={revealedLoreIds}
+            isMutatingLocked={isMutatingLocked}
+            onSaveCampaignLocationLore={onSaveCampaignLocationLore}
+            onSaveCampaignContainerLore={onSaveCampaignContainerLore}
+            onToggleLoreReveal={onToggleLoreReveal}
             onOpenOnMap={onOpenOnMap}
             onEnlargeImage={(url, label, videoUrl, videoMimeType) =>
               setLightboxImage({ url, label, videoUrl, videoMimeType })
@@ -825,7 +878,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
             <BookOpen size={24} color={meta.accentColor} />
             <strong>{meta.label}</strong>
             <p>{meta.description}</p>
-            {!isCampaignMode && (
+            {canEditWorldLore && (
               <button
                 type="button"
                 className="btn btn-sm"
@@ -842,7 +895,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
         <CodexLoreEditor
           lore={selectedLore}
           pendingTagDraft={pendingWorldLoreTagDrafts[selectedLore.id] || ""}
-          isCampaignMode={isCampaignMode}
+          isCampaignMode={!canEditWorldLore}
           titleInputRef={titleInputRef}
           reclassifiedNotice={
             reclassifiedNotice?.loreId === selectedLore.id
@@ -903,6 +956,12 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
           visitedContainerIds={visitedContainerIds}
           activeLocationId={activeLocationId}
           isCampaignMode={isCampaignMode}
+          unlockLore={unlockLore}
+          revealedLoreIds={revealedLoreIds}
+          isMutatingLocked={isMutatingLocked}
+          onSaveCampaignLocationLore={onSaveCampaignLocationLore}
+          onSaveCampaignContainerLore={onSaveCampaignContainerLore}
+          onToggleLoreReveal={onToggleLoreReveal}
           onOpenOnMap={onOpenOnMap}
           onEnlargeImage={(url, label, videoUrl, videoMimeType) =>
             setLightboxImage({ url, label, videoUrl, videoMimeType })
@@ -1012,7 +1071,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
             </div>
           )}
 
-          {!isCampaignMode &&
+          {canEditWorldLore &&
             (!activeSection || isEditableCodexSection(activeSection)) && (
               <button
                 type="button"
@@ -1049,7 +1108,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
                     <span className="codex-hub-card-title">{sec.label}</span>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    {invalidCount > 0 && !isCampaignMode && (
+                    {invalidCount > 0 && canEditWorldLore && (
                       <span
                         className="codex-invalid-badge"
                         title={`${invalidCount} incomplete entry/entries`}
@@ -1097,7 +1156,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
                 if (pillDisabled) return null;
                 const isSelected = activeSection === sec.id;
                 const inv =
-                  !isCampaignMode && isEditableCodexSection(sec.id)
+                  canEditWorldLore && isEditableCodexSection(sec.id)
                     ? invalidCountsBySection[sec.id]
                     : 0;
                 return (
@@ -1318,7 +1377,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
                           {displayTitle}
                         </span>
                         <div className="codex-list-row-meta">
-                          {isInvalid && !isCampaignMode && (
+                          {isInvalid && canEditWorldLore && (
                             <span
                               className="codex-invalid-dot"
                               title="Missing title, content, or keywords"

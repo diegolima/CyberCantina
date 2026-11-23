@@ -298,13 +298,34 @@ export function countInvalidWorldLoreBySection(
   return counts;
 }
 
+export function isSecretLoreRevealed(
+  lore: LoreNode,
+  revealedLoreIds?: readonly string[] | ReadonlySet<string> | null
+): boolean {
+  if (!revealedLoreIds) return false;
+  const canonId = lore.origin_lore_id || lore.id;
+  if (revealedLoreIds instanceof Set) {
+    return revealedLoreIds.has(canonId) || revealedLoreIds.has(lore.id);
+  }
+  const arr = revealedLoreIds as readonly string[];
+  return arr.includes(canonId) || arr.includes(lore.id);
+}
+
 export function getVisibleScopedLore(
   loreNodes: readonly LoreNode[] | undefined | null,
-  isCampaignMode: boolean
+  isCampaignMode: boolean,
+  opts?: {
+    unlockLore?: boolean;
+    revealedLoreIds?: readonly string[] | ReadonlySet<string> | null;
+  }
 ): LoreNode[] {
   if (!loreNodes || loreNodes.length === 0) return [];
-  if (!isCampaignMode) return [...loreNodes];
-  return loreNodes.filter((ln) => ln.category !== "secret");
+  if (!isCampaignMode || opts?.unlockLore) return [...loreNodes];
+  return loreNodes.filter(
+    (ln) =>
+      ln.category !== "secret" ||
+      isSecretLoreRevealed(ln, opts?.revealedLoreIds)
+  );
 }
 
 function matchThreeTier(
@@ -397,6 +418,8 @@ export function searchAllCodexEntries(opts: {
   pendingDrafts?: Record<string, string>;
   query: string;
   isCampaignMode: boolean;
+  unlockLore?: boolean;
+  revealedLoreIds?: readonly string[] | ReadonlySet<string> | null;
   frozenOrderIds?: readonly string[] | null;
 }): CodexSearchHit[] {
   const {
@@ -408,6 +431,8 @@ export function searchAllCodexEntries(opts: {
     pendingDrafts = {},
     query,
     isCampaignMode,
+    unlockLore = false,
+    revealedLoreIds,
     frozenOrderIds,
   } = opts;
   const q = query.trim().toLowerCase();
@@ -441,7 +466,12 @@ export function searchAllCodexEntries(opts: {
 
   for (const cont of containers) {
     const localLore =
-      cont.depth === 1 ? getVisibleScopedLore(cont.lore_nodes, isCampaignMode) : [];
+      cont.depth === 1
+        ? getVisibleScopedLore(cont.lore_nodes, isCampaignMode, {
+            unlockLore,
+            revealedLoreIds,
+          })
+        : [];
     const contentFields = [
       cont.description,
       ...localLore.flatMap((ln) => [ln.title, ...ln.entity_tags, ln.content]),
@@ -469,7 +499,10 @@ export function searchAllCodexEntries(opts: {
   }
 
   for (const loc of locations) {
-    const localLore = getVisibleScopedLore(loc.lore_nodes, isCampaignMode);
+    const localLore = getVisibleScopedLore(loc.lore_nodes, isCampaignMode, {
+      unlockLore,
+      revealedLoreIds,
+    });
     const contentFields = [
       loc.summary,
       loc.description,
@@ -554,9 +587,14 @@ export function searchAllCodexEntries(opts: {
 export function buildCodexLocationTree(
   containers: readonly LocationContainer[],
   locations: readonly LocationNode[],
-  opts: { query?: string; isCampaignMode: boolean }
+  opts: {
+    query?: string;
+    isCampaignMode: boolean;
+    unlockLore?: boolean;
+    revealedLoreIds?: readonly string[] | ReadonlySet<string> | null;
+  }
 ): CodexLocationTreeResult {
-  const { query = "", isCampaignMode } = opts;
+  const { query = "", isCampaignMode, unlockLore = false, revealedLoreIds } = opts;
   const q = query.trim().toLowerCase();
 
   const containerById = new Map<string, LocationContainer>();
@@ -614,7 +652,10 @@ export function buildCodexLocationTree(
   const builtContainerIds = new Set<string>();
 
   const buildLocationNode = (loc: LocationNode): CodexLocationTreeNode => {
-    const localLore = getVisibleScopedLore(loc.lore_nodes, isCampaignMode);
+    const localLore = getVisibleScopedLore(loc.lore_nodes, isCampaignMode, {
+      unlockLore,
+      revealedLoreIds,
+    });
     const tier = q
       ? matchThreeTier(
           q,
@@ -668,7 +709,12 @@ export function buildCodexLocationTree(
     children.sort((a, b) => compareCodexTitles(a.name, b.name, a.key, b.key));
 
     const localLore =
-      cont.depth === 1 ? getVisibleScopedLore(cont.lore_nodes, isCampaignMode) : [];
+      cont.depth === 1
+        ? getVisibleScopedLore(cont.lore_nodes, isCampaignMode, {
+            unlockLore,
+            revealedLoreIds,
+          })
+        : [];
     const tier = q
       ? matchThreeTier(
           q,

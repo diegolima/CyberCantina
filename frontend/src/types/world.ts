@@ -32,6 +32,14 @@ export const LOCATION_LORE_CATEGORIES: LocationLoreCategory[] = [
   "secret",
 ];
 
+export interface WorldLoreNodeDraft {
+  id?: string | null;
+  title: string;
+  category: WorldLoreCategory;
+  content: string;
+  entity_tags: string[];
+}
+
 export interface LocationLoreNodeDraft {
   id?: string | null;
   title: string;
@@ -46,6 +54,9 @@ export interface LoreNode {
   location_id?: string | null;
   container_id?: string | null;
   campaign_id?: string | null;
+  created_at_turn_id?: string | null;
+  origin_lore_id?: string | null;
+  is_major_event?: boolean;
   title: string;
   category: AnyLoreCategory;
   content: string;

@@ -209,6 +209,10 @@ export const App: React.FC = () => {
     handleUpdateCampaignWorldSettings,
     handleToggleItemEquip,
     handleUpdateCampaignMemories,
+    handleSaveCampaignWorldLore,
+    handleToggleCampaignLoreReveal,
+    handleUpdateCampaignMajorEvent,
+    handleDeleteCampaignMajorEvent,
     handleSaveCampaignLocationLore,
     handleSaveCampaignContainerLore,
     handleSaveCampaignMap,
@@ -916,6 +920,7 @@ export const App: React.FC = () => {
           onUpdateCampaignMemories={handleUpdateCampaignMemories}
           onSaveCampaignLocationLore={handleSaveCampaignLocationLore}
           onSaveCampaignContainerLore={handleSaveCampaignContainerLore}
+          onToggleCampaignLoreReveal={handleToggleCampaignLoreReveal}
           isMutatingLocked={isStreaming || isPhase4Running}
           worlds={worlds}
         />
@@ -933,6 +938,8 @@ export const App: React.FC = () => {
           onZoomToTurn={handleZoomToStoryTurn}
           onSwitchTimeline={handleSwitchStoryTimeline}
           onBranchFromTurn={handleBranchFromStoryTurn}
+          onUpdateMajorEvent={handleUpdateCampaignMajorEvent}
+          onDeleteMajorEvent={handleDeleteCampaignMajorEvent}
         />
       )}
 
@@ -953,6 +960,7 @@ export const App: React.FC = () => {
             containers: bundle.containers ?? campaignWorld.containers ?? [],
             locations: bundle.visible_locations,
             edges: bundle.visible_edges ?? campaignWorld.edges,
+            lore_nodes: bundle.world_lore_nodes ?? campaignWorld.lore_nodes,
           }}
           mode="campaign"
           initialTab={campaignWorldSheetTab}
@@ -963,11 +971,17 @@ export const App: React.FC = () => {
           visitedContainerIds={
             bundle.current_world_snapshot.visited_container_ids ?? []
           }
+          revealedLoreIds={bundle.current_world_snapshot.revealed_lore_ids ?? []}
           campaignWorldSettings={bundle.campaign.world_settings}
           appSettings={appSettings}
           isAdmin={currentUser.role === "admin"}
           isMutatingLocked={isStreaming || isPhase4Running}
           onSaveCampaignWorldSettings={handleUpdateCampaignWorldSettings}
+          onSaveCampaignWorldLore={handleSaveCampaignWorldLore}
+          onSaveCampaignLocationLore={handleSaveCampaignLocationLore}
+          onSaveCampaignContainerLore={handleSaveCampaignContainerLore}
+          onToggleCampaignLoreReveal={handleToggleCampaignLoreReveal}
+          onSaveCampaignMap={handleSaveCampaignMap}
           onClose={() => setCampaignWorldSheetTab(null)}
           onSaved={() => setCampaignWorldSheetTab(null)}
         />

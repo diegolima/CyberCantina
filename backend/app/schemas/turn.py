@@ -50,6 +50,7 @@ from app.schemas.world import (
     LocationContainer,
     LocationEdge,
     LocationNode,
+    LoreNode,
     NeighborLocationView,
     normalize_compass_direction,
     validate_container_hierarchy_integrity,
@@ -384,6 +385,7 @@ class WorldStateSnapshot(BaseModel):
     )
     visited_location_ids: list[str] = Field(default_factory=list)
     visited_container_ids: list[str] = Field(default_factory=list)
+    revealed_lore_ids: list[str] = Field(default_factory=list)
     parties: list[PartyRecord] = Field(default_factory=list)
 
 
@@ -391,6 +393,7 @@ class CampaignWorldSettings(BaseModel):
     """Per-campaign world behavior settings copied from base world defaults."""
 
     describe_on_first_visit: bool = True
+    unlock_lore: bool = False
 
 
 class FirstVisitDescriptionCard(BaseModel):
@@ -505,6 +508,75 @@ class ExtractedCharacterMemory(BaseModel):
         return "revelation"
 
 
+class MajorEventSpec(BaseModel):
+    """Structured permanent world-changing or location-changing milestone emitted by the Phase 5 World Clerk."""
+
+    model_config = ConfigDict(
+        json_schema_extra=lambda schema: schema.update(
+            required=list(schema.get("properties", {}).keys())
+        )
+    )
+
+    scope: Literal["world", "location"] = Field(
+        description=(
+            "'world' for permanent realm/region/faction-wide historical events; "
+            "'location' for permanent physical or regime changes to the current location."
+        )
+    )
+    evocative_title: str = Field(
+        min_length=1,
+        max_length=100,
+        description="Concise 1-sentence evocative title WITHOUT date prefix.",
+    )
+    summary: str = Field(
+        min_length=1,
+        max_length=1500,
+        description=(
+            "Brief objective summary explicitly naming involved character(s)/persona(s) and, "
+            "for world events, referencing the location where it occurred."
+        ),
+    )
+    keywords: list[str] = Field(
+        default_factory=list,
+        description="Relevant entity, character, faction, and location trigger keywords.",
+    )
+    location_description_update: str | None = Field(
+        default=None,
+        description=(
+            "For scope=='location' only: targeted revision of the current location's description "
+            "preserving unchanged layout/details while updating what permanently changed. Null for scope=='world'."
+        ),
+    )
+    environmental_tags_added: list[str] = Field(
+        default_factory=list,
+        description="For scope=='location' only: new permanent environmental tags to add.",
+    )
+    environmental_tags_removed: list[str] = Field(
+        default_factory=list,
+        description="For scope=='location' only: obsolete environmental tags to remove.",
+    )
+
+
+class MajorEventRecord(BaseModel):
+    """Persisted branch-safe Major Event chronicle record stored on PostTurnStateDelta."""
+
+    id: str
+    turn_id: str
+    scope: Literal["world", "location"]
+    date_label: str = ""
+    title: str
+    summary: str
+    keywords: list[str] = Field(default_factory=list)
+    lore_node_id: str | None = None
+    location_id: str | None = None
+    location_name: str | None = None
+    previous_description: str | None = None
+    updated_description: str | None = None
+    tags_added: list[str] = Field(default_factory=list)
+    tags_removed: list[str] = Field(default_factory=list)
+    deleted: bool = False
+
+
 class WorldPostTurnDelta(BaseModel):
     """Global world-state output produced by the Post-Turn World Clerk (clock, space, flags, macro events)."""
 
@@ -537,6 +609,20 @@ class WorldPostTurnDelta(BaseModel):
     )
     scene_flags_updated: list[str] = Field(default_factory=list)
     scene_flags_removed: list[str] = Field(default_factory=list)
+    revealed_secret_lore_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Exact IDs from the candidate unrevealed location/container secrets whose substance was "
+            "actually disclosed, discovered, or witnessed in public turn prose. Empty list otherwise."
+        ),
+    )
+    major_event: MajorEventSpec | None = Field(
+        default=None,
+        description=(
+            "Emit ONLY when a permanent world-changing or location-changing event occurred this turn "
+            "(null on ~90%+ of routine turns)."
+        ),
+    )
 
     @field_validator("elapsed_minutes", mode="before")
     @classmethod
@@ -865,6 +951,14 @@ class PostTurnStateDelta(BaseModel):
         default=None,
         description="Structured party membership and travel outcomes reconciled in Phase 5.",
     )
+    revealed_secret_lore_ids: list[str] = Field(
+        default_factory=list,
+        description="Secret lore IDs newly disclosed in public narrative prose during this turn.",
+    )
+    major_event: MajorEventRecord | None = Field(
+        default=None,
+        description="Structured world-changing or location-changing Major Event logged during Phase 5.",
+    )
 
 
 CharacterSpotlightRole = Literal["primary_speaker", "co_present"]
@@ -1072,6 +1166,7 @@ class CampaignStateBundle(BaseModel):
     neighbor_locations: list[NeighborLocationView]
     visible_locations: list[LocationNode]
     visible_edges: list[LocationEdge] = Field(default_factory=list)
+    world_lore_nodes: list[LoreNode] = Field(default_factory=list)
     episodic_chunks: list[EpisodicChunkRecord]
     all_episodic_chunks: list[EpisodicChunkRecord] = Field(default_factory=list)
 

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, streamCampaignTurn } from "../api";
 import type {
+  CampaignMajorEventUpdatePayload,
   CampaignStateBundle,
   CampaignWorldSettings,
   CharacterChoiceSet,
@@ -22,6 +23,7 @@ import type {
   Phase4TurnProgress,
   TurnBookmarkUpdatePayload,
   TurnNodeRecord,
+  WorldLoreNodeDraft,
   WorldRecord,
 } from "../types";
 
@@ -550,6 +552,52 @@ export function useCampaignTurnActions({
     }
   };
 
+  const handleSaveCampaignWorldLore = async (
+    loreNodes: WorldLoreNodeDraft[]
+  ) => {
+    if (!bundle || isStreaming || isPhase4Running) return;
+    const updated = await api.updateCampaignWorldLore(
+      bundle.campaign.id,
+      loreNodes
+    );
+    setBundle(updated);
+  };
+
+  const handleToggleCampaignLoreReveal = async (
+    loreId: string,
+    revealed: boolean
+  ) => {
+    if (!bundle || isStreaming || isPhase4Running) return;
+    const updated = await api.toggleCampaignLoreReveal(
+      bundle.campaign.id,
+      loreId,
+      revealed
+    );
+    setBundle(updated);
+  };
+
+  const handleUpdateCampaignMajorEvent = async (
+    turnId: string,
+    payload: CampaignMajorEventUpdatePayload
+  ) => {
+    if (!bundle || isStreaming || isPhase4Running) return;
+    const updated = await api.updateCampaignMajorEvent(
+      bundle.campaign.id,
+      turnId,
+      payload
+    );
+    setBundle(updated);
+  };
+
+  const handleDeleteCampaignMajorEvent = async (turnId: string) => {
+    if (!bundle || isStreaming || isPhase4Running) return;
+    const updated = await api.deleteCampaignMajorEvent(
+      bundle.campaign.id,
+      turnId
+    );
+    setBundle(updated);
+  };
+
   const handleSaveCampaignLocationLore = async (
     locationId: string,
     loreNodes: LocationLoreNodeDraft[]
@@ -665,6 +713,10 @@ export function useCampaignTurnActions({
     handleUpdateCampaignWorldSettings,
     handleToggleItemEquip,
     handleUpdateCampaignMemories,
+    handleSaveCampaignWorldLore,
+    handleToggleCampaignLoreReveal,
+    handleUpdateCampaignMajorEvent,
+    handleDeleteCampaignMajorEvent,
     handleSaveCampaignLocationLore,
     handleSaveCampaignContainerLore,
     handleSaveCampaignMap,

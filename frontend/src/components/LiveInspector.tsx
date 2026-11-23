@@ -95,6 +95,10 @@ interface LiveInspectorProps {
     containerId: string,
     loreNodes: LocationLoreNodeDraft[]
   ) => Promise<void> | void;
+  onToggleCampaignLoreReveal?: (
+    loreId: string,
+    revealed: boolean
+  ) => Promise<void> | void;
   onOpenWorldSheet?: () => void;
   isMutatingLocked?: boolean;
   worlds?: WorldRecord[];
@@ -116,6 +120,7 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   onUpdateCampaignMemories,
   onSaveCampaignLocationLore,
   onSaveCampaignContainerLore,
+  onToggleCampaignLoreReveal,
   onOpenWorldSheet,
   isMutatingLocked = false,
   worlds = [],
@@ -435,6 +440,9 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
               isOverriding={isOverriding}
               onSaveCampaignLocationLore={onSaveCampaignLocationLore}
               onSaveCampaignContainerLore={onSaveCampaignContainerLore}
+              unlockLore={Boolean(bundle.campaign.world_settings?.unlock_lore)}
+              revealedLoreIds={bundle.current_world_snapshot.revealed_lore_ids ?? []}
+              onToggleLoreReveal={onToggleCampaignLoreReveal}
               isMutatingLocked={isMutatingLocked}
               visitedContainerIds={bundle.current_world_snapshot.visited_container_ids ?? []}
             />

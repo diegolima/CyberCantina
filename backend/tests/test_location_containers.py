@@ -436,13 +436,23 @@ def test_lore_nodes_check_constraint_migration(tmp_path: Path) -> None:
             """
         )
         conn2.execute(
-            "INSERT INTO lore_nodes VALUES ('lr_csec', 'w1', NULL, 'c1', NULL, 'Keep Secret', 'secret', 'Secret door.', '[\"door\"]')"
+            """
+            INSERT INTO lore_nodes (
+                id, world_id, location_id, container_id, campaign_id, title, category, content, entity_tags_json
+            )
+            VALUES ('lr_csec', 'w1', NULL, 'c1', NULL, 'Keep Secret', 'secret', 'Secret door.', '["door"]')
+            """
         )
 
         # Mutual exclusivity check fails when BOTH location_id and container_id are populated
         with pytest.raises(sqlite3.IntegrityError):
             conn2.execute(
-                "INSERT INTO lore_nodes VALUES ('lr_bad', 'w1', 'l1', 'c1', NULL, 'Bad', 'rumor', 'Conflict', '[\"bad\"]')"
+                """
+                INSERT INTO lore_nodes (
+                    id, world_id, location_id, container_id, campaign_id, title, category, content, entity_tags_json
+                )
+                VALUES ('lr_bad', 'w1', 'l1', 'c1', NULL, 'Bad', 'rumor', 'Conflict', '["bad"]')
+                """
             )
     finally:
         conn2.close()
@@ -553,10 +563,20 @@ def test_lore_nodes_codex_category_migration_from_v019(tmp_path: Path) -> None:
 
         # World-level figure and threat inserts succeed
         conn2.execute(
-            "INSERT INTO lore_nodes VALUES ('lr_fig', 'w1', NULL, NULL, NULL, 'Marshal Kael', 'figure', 'Dock marshal.', '[\"kael\"]')"
+            """
+            INSERT INTO lore_nodes (
+                id, world_id, location_id, container_id, campaign_id, title, category, content, entity_tags_json
+            )
+            VALUES ('lr_fig', 'w1', NULL, NULL, NULL, 'Marshal Kael', 'figure', 'Dock marshal.', '["kael"]')
+            """
         )
         conn2.execute(
-            "INSERT INTO lore_nodes VALUES ('lr_thr', 'w1', NULL, NULL, NULL, 'Kraken Fog', 'threat', 'Deadly mist.', '[\"fog\"]')"
+            """
+            INSERT INTO lore_nodes (
+                id, world_id, location_id, container_id, campaign_id, title, category, content, entity_tags_json
+            )
+            VALUES ('lr_thr', 'w1', NULL, NULL, NULL, 'Kraken Fog', 'threat', 'Deadly mist.', '["fog"]')
+            """
         )
 
         # Location/container figure/threat/artifact must be rejected by CHECK
@@ -565,7 +585,12 @@ def test_lore_nodes_codex_category_migration_from_v019(tmp_path: Path) -> None:
             for bad_cat in ("figure", "threat", "artifact"):
                 with pytest.raises(sqlite3.IntegrityError):
                     conn2.execute(
-                        f"INSERT INTO lore_nodes VALUES ('lr_bad_{tag}_{bad_cat}', 'w1', {cols_sql}, NULL, 'Bad', '{bad_cat}', 'Invalid', '[\"bad\"]')"
+                        f"""
+                        INSERT INTO lore_nodes (
+                            id, world_id, location_id, container_id, campaign_id, title, category, content, entity_tags_json
+                        )
+                        VALUES ('lr_bad_{tag}_{bad_cat}', 'w1', {cols_sql}, NULL, 'Bad', '{bad_cat}', 'Invalid', '["bad"]')
+                        """
                     )
     finally:
         conn2.close()
@@ -1105,6 +1130,13 @@ def test_campaign_container_lore_cow_and_secrets_excluded(
 
     camp_a = repo.create_campaign(name="Camp A", world_id=world.id, character_id=kira.id, owner_id="user_container_admin")
     camp_b = repo.create_campaign(name="Camp B", world_id=world.id, character_id=kira.id, owner_id="user_container_admin")
+
+    # Enable GM Mode on Camp A before mutating container lore
+    unlock_resp = client.patch(
+        f"/api/campaigns/{camp_a.id}/world-settings",
+        json={"unlock_lore": True},
+    )
+    assert unlock_resp.status_code == 200
 
     # Macro L2 container lore CoW rejected (400)
     bad_resp = client.put(

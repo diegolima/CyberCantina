@@ -1,14 +1,36 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Bookmark, GitBranch, Navigation, ScrollText, Search, X } from "lucide-react";
-import type { CampaignStateBundle } from "../../types";
+import {
+  Bookmark,
+  ChevronDown,
+  ChevronRight,
+  GitBranch,
+  Globe,
+  Landmark,
+  MapPin,
+  Navigation,
+  Pencil,
+  ScrollText,
+  Search,
+  Trash2,
+  X,
+} from "lucide-react";
+import type {
+  CampaignMajorEventUpdatePayload,
+  CampaignStateBundle,
+} from "../../types";
+import { TagChipsInput, normalizeTagList } from "../TagChipsInput";
 import { BranchGraphCanvas } from "./BranchGraphCanvas";
 import { countVisibleTimelines } from "./branchGraphLayout";
 import {
   buildStoryBookmarkItems,
   filterStoryBookmarkItems,
 } from "./storyBookmarks";
+import {
+  buildStoryMajorEvents,
+  type StoryMajorEventItem,
+} from "./storyMajorEvents";
 
-export type StoryModalTab = "summary" | "timelines" | "bookmarks";
+export type StoryModalTab = "summary" | "major_events" | "timelines" | "bookmarks";
 
 export interface StoryModalProps {
   isOpen: boolean;
@@ -19,9 +41,16 @@ export interface StoryModalProps {
   isMutatingLocked?: boolean;
   /** Optional initial selected node ID for the Branch Graph (helpful in tests). */
   initialSelectedNodeId?: string | null;
+  /** Optional initial expanded Major Event key (helpful in tests). */
+  initialExpandedMajorEventKey?: string | null;
   onZoomToTurn: (turnId: string) => void;
   onSwitchTimeline: (tipTurnId: string) => Promise<void> | void;
   onBranchFromTurn: (turnId: string) => Promise<void> | void;
+  onUpdateMajorEvent?: (
+    turnId: string,
+    payload: CampaignMajorEventUpdatePayload
+  ) => Promise<void> | void;
+  onDeleteMajorEvent?: (turnId: string) => Promise<void> | void;
 }
 
 export const StoryModal: React.FC<StoryModalProps> = ({
@@ -32,23 +61,44 @@ export const StoryModal: React.FC<StoryModalProps> = ({
   memoryConfig,
   isMutatingLocked = false,
   initialSelectedNodeId,
+  initialExpandedMajorEventKey = null,
   onZoomToTurn,
   onSwitchTimeline,
   onBranchFromTurn,
+  onUpdateMajorEvent,
+  onDeleteMajorEvent,
 }) => {
   const [activeTab, setActiveTab] = useState<StoryModalTab>(initialTab);
   const [bookmarkQuery, setBookmarkQuery] = useState("");
   const [focusedTimelineTurnId, setFocusedTimelineTurnId] = useState<string | null>(
     null
   );
+  const [expandedMajorEventKey, setExpandedMajorEventKey] = useState<string | null>(
+    initialExpandedMajorEventKey
+  );
+  const [editingEventKey, setEditingEventKey] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editSummary, setEditSummary] = useState("");
+  const [editKeywords, setEditKeywords] = useState<string[]>([]);
+  const [editPendingKwDraft, setEditPendingKwDraft] = useState("");
+  const [editLocDescription, setEditLocDescription] = useState("");
+  const [editLocTags, setEditLocTags] = useState<string[]>([]);
+  const [editPendingLocTagDraft, setEditPendingLocTagDraft] = useState("");
+  const [majorEventError, setMajorEventError] = useState<string | null>(null);
+  const [busyMajorEventKey, setBusyMajorEventKey] = useState<string | null>(null);
+
+  const unlockLore = Boolean(bundle.campaign.world_settings?.unlock_lore);
 
   useEffect(() => {
     if (isOpen) {
       setActiveTab(initialTab);
       setFocusedTimelineTurnId(null);
       setBookmarkQuery("");
+      setExpandedMajorEventKey(initialExpandedMajorEventKey);
+      setEditingEventKey(null);
+      setMajorEventError(null);
     }
-  }, [isOpen, initialTab]);
+  }, [isOpen, initialTab, initialExpandedMajorEventKey]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -102,6 +152,78 @@ export const StoryModal: React.FC<StoryModalProps> = ({
     [bookmarkItems, bookmarkQuery]
   );
 
+  const majorEvents = useMemo(() => buildStoryMajorEvents(bundle), [bundle]);
+
+  const startEditingMajorEvent = (item: StoryMajorEventItem) => {
+    setExpandedMajorEventKey(item.key);
+    setEditingEventKey(item.key);
+    setEditTitle(item.title);
+    setEditSummary(item.summary);
+    setEditKeywords([...item.keywords]);
+    setEditPendingKwDraft("");
+    setEditLocDescription(item.updatedDescription ?? "");
+    setEditLocTags([...item.currentLocationTags]);
+    setEditPendingLocTagDraft("");
+    setMajorEventError(null);
+  };
+
+  const handleSaveMajorEvent = async (item: StoryMajorEventItem) => {
+    if (!onUpdateMajorEvent || !item.turnId || busyMajorEventKey) return;
+    const cleanTitle = editTitle.trim();
+    const cleanSummary = editSummary.trim();
+    const pendingKws = editPendingKwDraft
+      .split(/[,;\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const mergedKws = normalizeTagList(editKeywords, pendingKws);
+    if (!cleanTitle) {
+      setMajorEventError("Event title is required.");
+      return;
+    }
+    if (!cleanSummary) {
+      setMajorEventError("Event details are required.");
+      return;
+    }
+    const payload: CampaignMajorEventUpdatePayload = {
+      title: cleanTitle,
+      summary: cleanSummary,
+      keywords: mergedKws,
+    };
+    if (item.scope === "location") {
+      const pendingLocTags = editPendingLocTagDraft
+        .split(/[,;\n]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      payload.updated_description = editLocDescription.trim() || null;
+      payload.environmental_tags = normalizeTagList(editLocTags, pendingLocTags);
+    }
+    setBusyMajorEventKey(item.key);
+    setMajorEventError(null);
+    try {
+      await onUpdateMajorEvent(item.turnId, payload);
+      setEditingEventKey(null);
+    } catch (err) {
+      setMajorEventError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyMajorEventKey(null);
+    }
+  };
+
+  const handleDeleteMajorEvent = async (item: StoryMajorEventItem) => {
+    if (!onDeleteMajorEvent || !item.turnId || busyMajorEventKey) return;
+    setBusyMajorEventKey(item.key);
+    setMajorEventError(null);
+    try {
+      await onDeleteMajorEvent(item.turnId);
+      if (editingEventKey === item.key) setEditingEventKey(null);
+      if (expandedMajorEventKey === item.key) setExpandedMajorEventKey(null);
+    } catch (err) {
+      setMajorEventError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyMajorEventKey(null);
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -140,6 +262,21 @@ export const StoryModal: React.FC<StoryModalProps> = ({
                 <span className="story-modal-tab-count">
                   {bundle.episodic_chunks.length}
                 </span>
+              )}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "major_events"}
+              className={`story-modal-tab ${
+                activeTab === "major_events" ? "active" : ""
+              }`}
+              onClick={() => setActiveTab("major_events")}
+            >
+              <Landmark size={14} />
+              <span>Major Events</span>
+              {majorEvents.length > 0 && (
+                <span className="story-modal-tab-count">{majorEvents.length}</span>
               )}
             </button>
             <button
@@ -212,6 +349,245 @@ export const StoryModal: React.FC<StoryModalProps> = ({
                       {chunk.summary_text}
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+          ) : activeTab === "major_events" ? (
+            <div
+              className="story-major-events-panel"
+              role="tabpanel"
+              aria-label="Major Events"
+            >
+              <div className="story-summary-scope-note">
+                Showing major world and location events for the{" "}
+                <strong>currently active timeline branch</strong> in chronological order.
+                {unlockLore && (
+                  <span className="story-gm-inline-badge">GM Mode Active — Edit/Remove enabled</span>
+                )}
+              </div>
+
+              {majorEventError && (
+                <div className="story-major-event-error">{majorEventError}</div>
+              )}
+
+              {majorEvents.length === 0 ? (
+                <div className="inspector-empty ui-empty-state ui-empty-state--dashed-dark">
+                  No major world-changing or location-changing events have been recorded on this timeline yet.
+                </div>
+              ) : (
+                <div className="story-major-events-list">
+                  {majorEvents.map((item) => {
+                    const isExpanded = expandedMajorEventKey === item.key;
+                    const isEditing = editingEventKey === item.key;
+                    const isBusy = busyMajorEventKey === item.key;
+                    return (
+                      <div
+                        key={item.key}
+                        className={`story-major-event-card ${
+                          isExpanded ? "is-expanded" : ""
+                        }`}
+                        data-major-event-turn-id={item.turnId}
+                      >
+                        <button
+                          type="button"
+                          className="story-major-event-header"
+                          aria-expanded={isExpanded}
+                          onClick={() => {
+                            if (isEditing) return;
+                            setExpandedMajorEventKey(isExpanded ? null : item.key);
+                          }}
+                        >
+                          <span className="story-major-event-title-wrap">
+                            {isExpanded ? (
+                              <ChevronDown size={14} color="var(--accent-amber)" />
+                            ) : (
+                              <ChevronRight size={14} color="var(--text-muted)" />
+                            )}
+                            <span className="story-major-event-title">{item.title}</span>
+                          </span>
+                          <span className="story-major-event-badges">
+                            <span
+                              className={`badge ${
+                                item.scope === "world"
+                                  ? "codex-badge--amber"
+                                  : "codex-badge--location"
+                              }`}
+                            >
+                              {item.scope === "world" ? (
+                                <>
+                                  <Globe size={10} /> World
+                                </>
+                              ) : (
+                                <>
+                                  <MapPin size={10} /> {item.locationName || "Location"}
+                                </>
+                              )}
+                            </span>
+                            {item.turnDepthIndex > 0 && (
+                              <span className="badge codex-badge--muted">
+                                Turn #{item.turnDepthIndex}
+                              </span>
+                            )}
+                          </span>
+                        </button>
+
+                        {isExpanded && (
+                          <div className="story-major-event-body">
+                            {isEditing ? (
+                              <div className="story-major-event-edit-form">
+                                <input
+                                  className="field-input"
+                                  value={editTitle}
+                                  disabled={isBusy || isMutatingLocked}
+                                  placeholder="YYYY-MM-DD - Evocative title"
+                                  onChange={(e) => setEditTitle(e.target.value)}
+                                />
+                                <textarea
+                                  className="field-textarea"
+                                  rows={3}
+                                  value={editSummary}
+                                  disabled={isBusy || isMutatingLocked}
+                                  placeholder="Major event summary..."
+                                  onChange={(e) => setEditSummary(e.target.value)}
+                                />
+                                <TagChipsInput
+                                  value={editKeywords}
+                                  onChange={setEditKeywords}
+                                  onDraftChange={setEditPendingKwDraft}
+                                  disabled={isBusy || isMutatingLocked}
+                                  placeholder="Add keywords..."
+                                  accentVariant="amber"
+                                />
+                                {item.scope === "location" && (
+                                  <>
+                                    <label className="story-major-event-field-label">
+                                      Updated Location Description
+                                    </label>
+                                    <textarea
+                                      className="field-textarea"
+                                      rows={3}
+                                      value={editLocDescription}
+                                      disabled={isBusy || isMutatingLocked}
+                                      placeholder="Revised location description..."
+                                      onChange={(e) => setEditLocDescription(e.target.value)}
+                                    />
+                                    <label className="story-major-event-field-label">
+                                      Location Environmental Tags
+                                    </label>
+                                    <TagChipsInput
+                                      value={editLocTags}
+                                      onChange={setEditLocTags}
+                                      onDraftChange={setEditPendingLocTagDraft}
+                                      disabled={isBusy || isMutatingLocked}
+                                      placeholder="Environmental tags..."
+                                      accentVariant="cyan"
+                                    />
+                                  </>
+                                )}
+                                <div className="story-major-event-actions">
+                                  <button
+                                    type="button"
+                                    className="btn btn-sm"
+                                    disabled={isBusy}
+                                    onClick={() => {
+                                      setEditingEventKey(null);
+                                      setMajorEventError(null);
+                                    }}
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-amber btn-sm"
+                                    disabled={isBusy || isMutatingLocked}
+                                    onClick={() => handleSaveMajorEvent(item)}
+                                  >
+                                    {isBusy ? "Saving..." : "Save Changes"}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                <p className="story-major-event-summary">{item.summary}</p>
+                                {item.scope === "world" && item.locationName && (
+                                  <div className="story-major-event-location-ref">
+                                    <MapPin size={11} /> Occurred at: <strong>{item.locationName}</strong>
+                                  </div>
+                                )}
+                                {item.scope === "location" && item.updatedDescription && (
+                                  <div className="story-major-event-loc-change">
+                                    <div className="story-major-event-loc-change-label">
+                                      Updated Location Description ({item.locationName || "Location"})
+                                    </div>
+                                    <p>{item.updatedDescription}</p>
+                                    {(item.tagsAdded.length > 0 || item.tagsRemoved.length > 0) && (
+                                      <div className="codex-chip-list">
+                                        {item.tagsAdded.map((t) => (
+                                          <span key={`add-${t}`} className="badge codex-badge--emerald">
+                                            +{t}
+                                          </span>
+                                        ))}
+                                        {item.tagsRemoved.map((t) => (
+                                          <span key={`rem-${t}`} className="badge codex-badge--muted">
+                                            -{t}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                                {item.keywords.length > 0 && (
+                                  <div className="codex-chip-list">
+                                    {item.keywords.map((kw) => (
+                                      <span key={kw} className="badge codex-tag-chip">
+                                        {kw}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                                <div className="story-major-event-actions">
+                                  {item.turnId && (
+                                    <button
+                                      type="button"
+                                      className="btn btn-sm"
+                                      onClick={() => onZoomToTurn(item.turnId)}
+                                    >
+                                      <Navigation size={11} /> Jump to Turn #{item.turnDepthIndex}
+                                    </button>
+                                  )}
+                                  {unlockLore && !isMutatingLocked && item.turnId && (
+                                    <div style={{ display: "inline-flex", gap: 6, marginLeft: "auto" }}>
+                                      {onUpdateMajorEvent && (
+                                        <button
+                                          type="button"
+                                          className="btn btn-sm"
+                                          disabled={isBusy}
+                                          onClick={() => startEditingMajorEvent(item)}
+                                        >
+                                          <Pencil size={11} /> Edit
+                                        </button>
+                                      )}
+                                      {onDeleteMajorEvent && (
+                                        <button
+                                          type="button"
+                                          className="btn btn-sm story-major-event-delete-btn"
+                                          disabled={isBusy}
+                                          onClick={() => handleDeleteMajorEvent(item)}
+                                        >
+                                          <Trash2 size={11} />{" "}
+                                          {item.scope === "location" ? "Delete & Revert" : "Delete"}
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

@@ -238,6 +238,22 @@ class VectorStore:
             return set()
 
     @staticmethod
+    def _load_tombstoned_lore_ids(
+        conn: sqlite3.Connection, campaign_id: str, valid_turns: set[str]
+    ) -> set[str]:
+        if not campaign_id or not valid_turns:
+            return set()
+        try:
+            placeholders = ",".join("?" for _ in valid_turns)
+            rows = conn.execute(
+                f"SELECT lore_id FROM campaign_lore_tombstones WHERE campaign_id = ? AND turn_id IN ({placeholders})",
+                [campaign_id, *valid_turns],
+            ).fetchall()
+            return {r["lore_id"] for r in rows}
+        except sqlite3.OperationalError:
+            return set()
+
+    @staticmethod
     def _is_scoped_lore_row_eligible(
         row: sqlite3.Row,
         *,
@@ -459,6 +475,7 @@ class VectorStore:
                 if overridden_container_ids is not None
                 else self._load_overridden_container_ids(conn, campaign_id)
             )
+            tombstoned_lore_ids = self._load_tombstoned_lore_ids(conn, campaign_id, valid_turns)
             has_campaign_shards = conn.execute(
                 """
                 SELECT 1 FROM vector_entries
@@ -472,6 +489,7 @@ class VectorStore:
                 char_clause = "(character_id = ? AND campaign_id = ? AND source_type = 'character_shard')"
                 params = (
                     world_id,
+                    campaign_id,
                     world_id,
                     campaign_id,
                     world_id,
@@ -484,6 +502,7 @@ class VectorStore:
                 char_clause = "(character_id = ? AND (campaign_id IS NULL OR campaign_id = '') AND source_type = 'character_shard')"
                 params = (
                     world_id,
+                    campaign_id,
                     world_id,
                     campaign_id,
                     world_id,
@@ -498,7 +517,7 @@ class VectorStore:
                        anchor_turn_id, superseded_at_turn_id, title, content, keywords_json,
                        embedding_blob, embedding_fingerprint
                 FROM vector_entries
-                WHERE (world_id = ? AND source_type = 'lore')
+                WHERE (world_id = ? AND source_type = 'lore' AND (campaign_id IS NULL OR campaign_id = '' OR campaign_id = ?))
                    OR (world_id = ? AND source_type = 'location_lore' AND (campaign_id IS NULL OR campaign_id = '' OR campaign_id = ?))
                    OR (world_id = ? AND source_type = 'container_lore' AND (campaign_id IS NULL OR campaign_id = '' OR campaign_id = ?))
                    OR {char_clause}
@@ -529,6 +548,8 @@ class VectorStore:
                 continue
 
             stype = row["source_type"]
+            if stype in ("lore", "location_lore", "container_lore") and row["id"] in tombstoned_lore_ids:
+                continue
             if stype == "location_lore":
                 if not self._is_scoped_lore_row_eligible(
                     row,
@@ -630,6 +651,7 @@ class VectorStore:
                 if overridden_container_ids is not None
                 else self._load_overridden_container_ids(conn, campaign_id)
             )
+            tombstoned_lore_ids = self._load_tombstoned_lore_ids(conn, campaign_id, valid_turns)
             chars_with_camp_shards: set[str] = set()
             shard_clause = ""
             shard_params: tuple[str, ...] = ()
@@ -652,13 +674,13 @@ class VectorStore:
                        anchor_turn_id, superseded_at_turn_id, title, content, keywords_json,
                        embedding_blob, embedding_fingerprint
                 FROM vector_entries
-                WHERE (world_id = ? AND source_type = 'lore')
+                WHERE (world_id = ? AND source_type = 'lore' AND (campaign_id IS NULL OR campaign_id = '' OR campaign_id = ?))
                    OR (world_id = ? AND source_type = 'location_lore' AND (campaign_id IS NULL OR campaign_id = '' OR campaign_id = ?))
                    OR (world_id = ? AND source_type = 'container_lore' AND (campaign_id IS NULL OR campaign_id = '' OR campaign_id = ?))
                    {shard_clause}
                    OR (campaign_id = ? AND source_type = 'episodic_chunk')
                 """,
-                (world_id, world_id, campaign_id, world_id, campaign_id, *shard_params, campaign_id),
+                (world_id, campaign_id, world_id, campaign_id, world_id, campaign_id, *shard_params, campaign_id),
             ).fetchall()
         finally:
             conn.close()
@@ -682,6 +704,8 @@ class VectorStore:
                 continue
 
             stype = row["source_type"]
+            if stype in ("lore", "location_lore", "container_lore") and row["id"] in tombstoned_lore_ids:
+                continue
             if stype == "location_lore":
                 if not self._is_scoped_lore_row_eligible(
                     row,

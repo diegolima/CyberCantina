@@ -41,10 +41,14 @@ class SchemaInitMixin:
             "campaign_id" in ddl_sql
             and "location_id" in ddl_sql
             and "container_id" in ddl_sql
+            and "created_at_turn_id" in ddl_sql
+            and "origin_lore_id" in ddl_sql
+            and "is_major_event" in ddl_sql
             and "json_array_length(entity_tags_json)" in ddl_sql
             and "'artifact'" in ddl_sql
             and "'figure'" in ddl_sql
             and "'threat'" in ddl_sql
+            and "campaign_id IS NULL OR location_id IS NOT NULL OR container_id IS NOT NULL" not in ddl_sql
         ):
             return
 
@@ -101,13 +105,15 @@ class SchemaInitMixin:
                     location_id TEXT NULL REFERENCES location_nodes(id) ON DELETE CASCADE,
                     container_id TEXT NULL REFERENCES location_containers(id) ON DELETE CASCADE,
                     campaign_id TEXT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+                    created_at_turn_id TEXT NULL,
+                    origin_lore_id TEXT NULL,
+                    is_major_event INTEGER NOT NULL DEFAULT 0,
                     title TEXT NOT NULL CHECK(length(trim(title)) >= 1),
                     category TEXT NOT NULL CHECK(
                         category IN ('history', 'culture', 'faction', 'figure', 'rumor', 'threat', 'artifact', 'secret')
                         AND ((location_id IS NOT NULL OR container_id IS NOT NULL) OR category != 'secret')
                         AND (location_id IS NULL OR category NOT IN ('artifact', 'figure', 'threat'))
                         AND (container_id IS NULL OR category NOT IN ('artifact', 'figure', 'threat'))
-                        AND (campaign_id IS NULL OR location_id IS NOT NULL OR container_id IS NOT NULL)
                         AND (location_id IS NULL OR container_id IS NULL)
                     ),
                     content TEXT NOT NULL CHECK(length(trim(content)) >= 1),
@@ -134,8 +140,17 @@ class SchemaInitMixin:
                 if loc_id and cont_id:
                     cont_id = None
                 camp_id = r["campaign_id"] if "campaign_id" in r_keys else None
-                if camp_id and ((not loc_id and not cont_id) or camp_id not in valid_camp_ids):
+                if camp_id and camp_id not in valid_camp_ids:
                     camp_id = None
+                created_at_turn_id = (
+                    r["created_at_turn_id"] if "created_at_turn_id" in r_keys else None
+                )
+                origin_lore_id = (
+                    r["origin_lore_id"] if "origin_lore_id" in r_keys else None
+                )
+                is_major_event = (
+                    int(bool(r["is_major_event"])) if "is_major_event" in r_keys else 0
+                )
 
                 clean_title = (r["title"] or "").strip()[:120] or "World Lore"
                 clean_content = (r["content"] or "").strip()[:2000] or clean_title
@@ -156,9 +171,11 @@ class SchemaInitMixin:
                 conn.execute(
                     """
                     INSERT INTO lore_nodes_migrated (
-                        id, world_id, location_id, container_id, campaign_id, title, category, content, entity_tags_json
+                        id, world_id, location_id, container_id, campaign_id,
+                        created_at_turn_id, origin_lore_id, is_major_event,
+                        title, category, content, entity_tags_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         r["id"],
@@ -166,6 +183,9 @@ class SchemaInitMixin:
                         loc_id,
                         cont_id,
                         camp_id,
+                        created_at_turn_id,
+                        origin_lore_id,
+                        is_major_event,
                         clean_title,
                         clean_cat,
                         clean_content,
@@ -914,6 +934,11 @@ class SchemaInitMixin:
             if "parties_json" not in ws_cols:
                 conn.execute(
                     "ALTER TABLE world_state_snapshots ADD COLUMN parties_json TEXT NOT NULL DEFAULT '[]'"
+                )
+
+            if "revealed_lore_ids_json" not in ws_cols:
+                conn.execute(
+                    "ALTER TABLE world_state_snapshots ADD COLUMN revealed_lore_ids_json TEXT NOT NULL DEFAULT '[]'"
                 )
 
             camp_cols = {

@@ -36,6 +36,81 @@ from app.db.repos.base import (
 class WorldsMixin:
     """World CRUD, scoped lore helpers, and pending-deletion pruning."""
 
+    @staticmethod
+    def _load_tombstoned_lore_ids(
+        conn: sqlite3.Connection,
+        campaign_id: str | None,
+        valid_turn_ids: set[str] | None = None,
+    ) -> set[str]:
+        if not campaign_id:
+            return set()
+        if valid_turn_ids is not None and not valid_turn_ids:
+            return set()
+        try:
+            if valid_turn_ids is not None:
+                placeholders = ",".join("?" for _ in valid_turn_ids)
+                rows = conn.execute(
+                    f"""
+                    SELECT lore_id FROM campaign_lore_tombstones
+                    WHERE campaign_id = ? AND turn_id IN ({placeholders})
+                    """,
+                    [campaign_id, *valid_turn_ids],
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT lore_id FROM campaign_lore_tombstones WHERE campaign_id = ?",
+                    (campaign_id,),
+                ).fetchall()
+            return {r["lore_id"] for r in rows}
+        except sqlite3.OperationalError:
+            return set()
+
+    def _resolve_world_lore_list(
+        self,
+        conn: sqlite3.Connection,
+        world_id: str,
+        *,
+        campaign_id: str | None = None,
+        valid_turn_ids: set[str] | None = None,
+    ) -> list[LoreNode]:
+        """Hydrate world-level LoreNodes with branch-safe campaign CoW additions and tombstones."""
+        if campaign_id:
+            tombstoned_ids = self._load_tombstoned_lore_ids(conn, campaign_id, valid_turn_ids)
+            lore_rows = conn.execute(
+                """
+                SELECT * FROM lore_nodes
+                WHERE world_id = ? AND location_id IS NULL AND container_id IS NULL
+                  AND (campaign_id IS NULL OR campaign_id = ?)
+                ORDER BY rowid ASC
+                """,
+                (world_id, campaign_id),
+            ).fetchall()
+        else:
+            tombstoned_ids = set()
+            lore_rows = conn.execute(
+                """
+                SELECT * FROM lore_nodes
+                WHERE world_id = ? AND location_id IS NULL AND container_id IS NULL AND campaign_id IS NULL
+                ORDER BY rowid ASC
+                """,
+                (world_id,),
+            ).fetchall()
+
+        result: list[LoreNode] = []
+        for r in lore_rows:
+            if r["id"] in tombstoned_ids:
+                continue
+            r_keys = r.keys()
+            r_camp = r["campaign_id"]
+            r_turn = r["created_at_turn_id"] if "created_at_turn_id" in r_keys else None
+            if r_camp is not None:
+                if r_camp != campaign_id:
+                    continue
+                if valid_turn_ids is not None and r_turn is not None and r_turn not in valid_turn_ids:
+                    continue
+            result.append(self._row_to_lore_node(r))
+        return result
+
     def _resolve_scoped_lore_map(
         self,
         conn: sqlite3.Connection,
@@ -43,14 +118,16 @@ class WorldsMixin:
         scope_ids: list[str] | set[str],
         override_table: str,
         campaign_id: str | None = None,
+        valid_turn_ids: set[str] | None = None,
     ) -> dict[str, list[LoreNode]]:
-        """Hydrate per-entity LoreNodes (location_id or container_id) with Copy-on-Write campaign override precedence."""
+        """Hydrate per-entity LoreNodes (location_id or container_id) with branch-safe campaign CoW precedence."""
         clean_ids = [sid for sid in scope_ids if sid]
         if not clean_ids:
             return {}
 
         placeholders = ",".join("?" for _ in clean_ids)
         overridden_ids: set[str] = set()
+        tombstoned_ids: set[str] = set()
         if campaign_id:
             ov_rows = conn.execute(
                 f"""
@@ -60,6 +137,7 @@ class WorldsMixin:
                 [campaign_id, *clean_ids],
             ).fetchall()
             overridden_ids = {r[scope_col] for r in ov_rows}
+            tombstoned_ids = self._load_tombstoned_lore_ids(conn, campaign_id, valid_turn_ids)
             lore_rows = conn.execute(
                 f"""
                 SELECT * FROM lore_nodes
@@ -85,12 +163,21 @@ class WorldsMixin:
             sid = r[scope_col]
             if not sid or sid not in result:
                 continue
+            if r["id"] in tombstoned_ids:
+                continue
+            r_keys = r.keys()
             r_camp = r["campaign_id"]
+            r_turn = r["created_at_turn_id"] if "created_at_turn_id" in r_keys else None
+            if r_camp is not None:
+                if r_camp != campaign_id:
+                    continue
+                if valid_turn_ids is not None and r_turn is not None and r_turn not in valid_turn_ids:
+                    continue
             if sid in overridden_ids:
                 if r_camp == campaign_id:
                     result[sid].append(self._row_to_lore_node(r))
             else:
-                if r_camp is None:
+                if r_camp is None or r_camp == campaign_id:
                     result[sid].append(self._row_to_lore_node(r))
         return result
 
@@ -99,14 +186,16 @@ class WorldsMixin:
         conn: sqlite3.Connection,
         location_ids: list[str] | set[str],
         campaign_id: str | None = None,
+        valid_turn_ids: set[str] | None = None,
     ) -> dict[str, list[LoreNode]]:
-        """Hydrate per-location LoreNodes with Copy-on-Write campaign override precedence."""
+        """Hydrate per-location LoreNodes with branch-safe campaign CoW precedence."""
         return self._resolve_scoped_lore_map(
             conn,
             "location_id",
             location_ids,
             "campaign_location_lore_overrides",
             campaign_id=campaign_id,
+            valid_turn_ids=valid_turn_ids,
         )
 
     def _resolve_container_lore_map(
@@ -114,14 +203,16 @@ class WorldsMixin:
         conn: sqlite3.Connection,
         container_ids: list[str] | set[str],
         campaign_id: str | None = None,
+        valid_turn_ids: set[str] | None = None,
     ) -> dict[str, list[LoreNode]]:
-        """Hydrate per-container LoreNodes with Copy-on-Write campaign override precedence."""
+        """Hydrate per-container LoreNodes with branch-safe campaign CoW precedence."""
         return self._resolve_scoped_lore_map(
             conn,
             "container_id",
             container_ids,
             "campaign_container_lore_overrides",
             campaign_id=campaign_id,
+            valid_turn_ids=valid_turn_ids,
         )
 
     def create_world_from_draft(
@@ -556,14 +647,12 @@ class WorldsMixin:
             edge_rows = conn.execute(
                 "SELECT * FROM location_edges WHERE world_id = ?", (world_id,)
             ).fetchall()
-            lore_rows = conn.execute(
-                """
-                SELECT * FROM lore_nodes
-                WHERE world_id = ? AND location_id IS NULL AND container_id IS NULL AND campaign_id IS NULL
-                ORDER BY rowid ASC
-                """,
-                (world_id,),
-            ).fetchall()
+            lore_nodes = self._resolve_world_lore_list(
+                conn,
+                world_id,
+                campaign_id=None if base_only else campaign_id,
+                valid_turn_ids=None if base_only else valid_turn_ids,
+            )
 
             containers: list[LocationContainer] = []
             for r in container_rows:
@@ -602,6 +691,7 @@ class WorldsMixin:
                 conn,
                 [c.id for c in containers if c.depth == 1],
                 campaign_id=None if base_only else campaign_id,
+                valid_turn_ids=None if base_only else valid_turn_ids,
             )
             for c in containers:
                 if c.depth == 1:
@@ -611,6 +701,7 @@ class WorldsMixin:
                 conn,
                 [loc.id for loc in locations],
                 campaign_id=None if base_only else campaign_id,
+                valid_turn_ids=None if base_only else valid_turn_ids,
             )
             for loc in locations:
                 loc.lore_nodes = loc_lore_map.get(loc.id, [])
@@ -639,8 +730,6 @@ class WorldsMixin:
             if r["from_location_id"] not in visible_loc_ids or r["to_location_id"] not in visible_loc_ids:
                 continue
             edges.append(self._row_to_edge(r))
-
-        lore_nodes = [self._row_to_lore_node(r) for r in lore_rows]
 
         w_keys = w_row.keys()
         raw_rules_dict = json.loads(w_row["global_rules_json"] or "{}")

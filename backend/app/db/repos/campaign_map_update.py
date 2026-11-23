@@ -187,16 +187,19 @@ class CampaignMapUpdateMixin:
                         raise ValueError(
                             f"Cannot remove visited location '{orig_loc.name}' from its existing container hierarchy."
                         )
-                    # 2. Narrative field locks
-                    narrative_changed = (
+                    # 2. Narrative field locks (GM Mode unlocks name, summary, description, environmental_tags)
+                    gm_unlocked = bool(campaign.world_settings.unlock_lore)
+                    gm_editable_changed = (
                         loc.name.strip() != orig_loc.name.strip()
                         or loc.summary != orig_loc.summary
                         or loc.description != orig_loc.description
                         or list(loc.environmental_tags) != list(orig_loc.environmental_tags)
-                        or loc.starting_message != orig_loc.starting_message
+                    )
+                    structural_narrative_changed = (
+                        loc.starting_message != orig_loc.starting_message
                         or bool(loc.is_hub) != bool(orig_loc.is_hub)
                     )
-                    if narrative_changed:
+                    if structural_narrative_changed or (gm_editable_changed and not gm_unlocked):
                         raise ValueError(
                             f"Cannot modify name, summary, description, tags, or hub role of visited location '{orig_loc.name}'."
                         )

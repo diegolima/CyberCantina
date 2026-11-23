@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { BookOpen, ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
+import { BookOpen, ChevronDown, ChevronRight, Eye, EyeOff, Plus, Trash2 } from "lucide-react";
 import {
   LOCATION_LORE_CATEGORIES,
   LocationLoreCategory,
@@ -19,11 +19,26 @@ export interface MapLoreSectionProps {
   loreList: LoreNode[];
   canEditDraftLore: boolean;
   savedInDb: boolean;
+  unlockLore?: boolean;
+  revealedLoreIds?: readonly string[];
   onDraftUpdate?: (nextLore: LoreNode[]) => void;
   onCampaignSave?: (
     id: string,
     drafts: LocationLoreNodeDraft[]
   ) => Promise<void> | void;
+  onToggleLoreReveal?: (
+    loreId: string,
+    revealed: boolean
+  ) => Promise<void> | void;
+}
+
+function isSecretRevealed(
+  lore: LoreNode,
+  revealedLoreIds?: readonly string[]
+): boolean {
+  if (!revealedLoreIds || revealedLoreIds.length === 0) return false;
+  const canonId = lore.origin_lore_id || lore.id;
+  return revealedLoreIds.includes(canonId) || revealedLoreIds.includes(lore.id);
 }
 
 export const MapLoreSection: React.FC<MapLoreSectionProps> = ({
@@ -37,9 +52,22 @@ export const MapLoreSection: React.FC<MapLoreSectionProps> = ({
   loreList,
   canEditDraftLore,
   savedInDb,
+  unlockLore = false,
+  revealedLoreIds = [],
   onDraftUpdate,
   onCampaignSave,
+  onToggleLoreReveal,
 }) => {
+  const canEditCampaignLore =
+    mode === "campaign" && unlockLore && savedInDb && Boolean(onCampaignSave);
+  const visibleLoreList =
+    mode === "campaign" && !unlockLore
+      ? loreList.filter(
+          (ln) =>
+            ln.category !== "secret" || isSecretRevealed(ln, revealedLoreIds)
+        )
+      : loreList;
+  const [togglingRevealId, setTogglingRevealId] = useState<string | null>(null);
   const [expandedEditorLoreId, setExpandedEditorLoreId] = useState<string | null>(
     null
   );
@@ -214,7 +242,7 @@ export const MapLoreSection: React.FC<MapLoreSectionProps> = ({
             style={{ display: "inline-flex", alignItems: "center", gap: 5, marginBottom: 0 }}
           >
             <BookOpen size={12} color="var(--accent-cyan)" />
-            {scopeLabel} ({loreList.length})
+            {scopeLabel} ({visibleLoreList.length})
           </span>
 
           {canEditDraftLore && onDraftUpdate && (
@@ -228,7 +256,7 @@ export const MapLoreSection: React.FC<MapLoreSectionProps> = ({
             </button>
           )}
 
-          {mode === "campaign" && savedInDb && onCampaignSave && !campLoreFormMode && (
+          {canEditCampaignLore && !campLoreFormMode && (
             <button
               type="button"
               className="btn"
@@ -249,7 +277,7 @@ export const MapLoreSection: React.FC<MapLoreSectionProps> = ({
           )}
         </div>
 
-        {mode === "campaign" && !savedInDb && (
+        {mode === "campaign" && unlockLore && !savedInDb && (
           <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", fontStyle: "italic" }}>
             Save the map first to attach persistent campaign lore to this new node.
           </div>
@@ -259,7 +287,7 @@ export const MapLoreSection: React.FC<MapLoreSectionProps> = ({
           <div style={{ fontSize: "0.71rem", color: "#fda4af" }}>{campLoreError}</div>
         )}
 
-        {mode === "campaign" && savedInDb && campLoreFormMode && (
+        {canEditCampaignLore && campLoreFormMode && (
           <div
             style={{
               border: "1px solid rgba(6, 182, 212, 0.45)",
@@ -338,7 +366,7 @@ export const MapLoreSection: React.FC<MapLoreSectionProps> = ({
           </div>
         )}
 
-        {loreList.length === 0 ? (
+        {visibleLoreList.length === 0 ? (
           <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", fontStyle: "italic" }}>
             {emptyText}
           </div>
@@ -439,7 +467,13 @@ export const MapLoreSection: React.FC<MapLoreSectionProps> = ({
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {loreList.map((ln, idx) => (
+            {visibleLoreList.map((ln, idx) => {
+              const revealed =
+                ln.category === "secret"
+                  ? isSecretRevealed(ln, revealedLoreIds)
+                  : false;
+              const isToggling = togglingRevealId === ln.id;
+              return (
               <div
                 key={ln.id}
                 style={{
@@ -456,13 +490,50 @@ export const MapLoreSection: React.FC<MapLoreSectionProps> = ({
                     justifyContent: "space-between",
                     alignItems: "center",
                     gap: 6,
+                    flexWrap: "wrap",
                   }}
                 >
-                  <span style={{ fontWeight: 700, color: "var(--text-primary)" }}>
-                    {ln.title} <span className="badge">{ln.category}</span>
+                  <span style={{ fontWeight: 700, color: "var(--text-primary)", display: "inline-flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+                    {ln.title}
+                    <span className={`badge lore-cat-badge--${ln.category}`}>{ln.category}</span>
+                    {mode === "campaign" && ln.category === "secret" && (
+                      <span
+                        className={`badge ${
+                          revealed ? "codex-badge--emerald" : "codex-badge--amber"
+                        }`}
+                        style={{ fontSize: "0.62rem" }}
+                      >
+                        {revealed ? "Discovered" : "Hidden (GM)"}
+                      </span>
+                    )}
                   </span>
-                  {mode === "campaign" && savedInDb && onCampaignSave && (
-                    <div style={{ display: "flex", gap: 4 }}>
+                  {canEditCampaignLore && (
+                    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                      {ln.category === "secret" && onToggleLoreReveal && (
+                        <button
+                          type="button"
+                          className="btn"
+                          style={{ padding: "1px 6px", fontSize: "0.66rem", display: "inline-flex", alignItems: "center", gap: 3 }}
+                          disabled={isMutatingLocked || isSavingCampLore || isToggling}
+                          onClick={async () => {
+                            setTogglingRevealId(ln.id);
+                            setCampLoreError(null);
+                            try {
+                              await onToggleLoreReveal(ln.id, !revealed);
+                            } catch (err: unknown) {
+                              setCampLoreError(
+                                err instanceof Error ? err.message : "Failed to update secret visibility."
+                              );
+                            } finally {
+                              setTogglingRevealId(null);
+                            }
+                          }}
+                          title={revealed ? "Mark this secret hidden again" : "Mark this secret discovered"}
+                        >
+                          {revealed ? <EyeOff size={10} /> : <Eye size={10} />}
+                          {revealed ? "Mark Hidden" : "Mark Revealed"}
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="btn"
@@ -502,7 +573,8 @@ export const MapLoreSection: React.FC<MapLoreSectionProps> = ({
                   {ln.content}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

@@ -31,6 +31,19 @@ def format_world_timestamp(dt: datetime) -> str:
     return dt.strftime(_CANONICAL_FORMAT)
 
 
+def extract_world_date_label(timestamp_str: str | None) -> str:
+    """Return a clean date-only label ('YYYY-MM-DD' for canonical timestamps, or time-stripped custom calendar)."""
+    if not timestamp_str:
+        return ""
+    dt = parse_world_timestamp(timestamp_str)
+    if dt is not None:
+        return dt.strftime("%Y-%m-%d")
+    cleaned = timestamp_str.strip()
+    cleaned = re.sub(r"\s*\(\+\d+m\)$", "", cleaned)
+    cleaned = re.sub(r"[\s,T]+\d{1,2}:\d{2}(?::\d{2})?$", "", cleaned)
+    return cleaned.strip(" ,-") or timestamp_str.strip()
+
+
 def time_of_day_label(hour: int) -> str:
     if hour < 5:
         return "late night"

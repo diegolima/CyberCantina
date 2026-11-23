@@ -1,4 +1,5 @@
 import type {
+  CampaignMajorEventUpdatePayload,
   CampaignRecord,
   CampaignStateBundle,
   CampaignWorldSettings,
@@ -15,6 +16,7 @@ import type {
   TurnBookmarkSummaryResponse,
   TurnBookmarkUpdatePayload,
   TurnNodeRecord,
+  WorldLoreNodeDraft,
 } from "../types";
 import { API_BASE, fetchJson } from "./client";
 
@@ -123,6 +125,52 @@ export const campaignsApi = {
       {
         method: "POST",
         body: JSON.stringify({ memory_shards: memoryShards }),
+      }
+    ),
+
+  updateCampaignWorldLore: (
+    campaignId: string,
+    loreNodes: WorldLoreNodeDraft[]
+  ) =>
+    fetchJson<CampaignStateBundle>(
+      `${API_BASE}/campaigns/${campaignId}/lore`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ lore_nodes: loreNodes }),
+      }
+    ),
+
+  toggleCampaignLoreReveal: (
+    campaignId: string,
+    loreId: string,
+    revealed: boolean
+  ) =>
+    fetchJson<CampaignStateBundle>(
+      `${API_BASE}/campaigns/${campaignId}/lore/${loreId}/reveal`,
+      {
+        method: "POST",
+        body: JSON.stringify({ revealed }),
+      }
+    ),
+
+  updateCampaignMajorEvent: (
+    campaignId: string,
+    turnId: string,
+    payload: CampaignMajorEventUpdatePayload
+  ) =>
+    fetchJson<CampaignStateBundle>(
+      `${API_BASE}/campaigns/${campaignId}/major-events/${turnId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      }
+    ),
+
+  deleteCampaignMajorEvent: (campaignId: string, turnId: string) =>
+    fetchJson<CampaignStateBundle>(
+      `${API_BASE}/campaigns/${campaignId}/major-events/${turnId}`,
+      {
+        method: "DELETE",
       }
     ),
 

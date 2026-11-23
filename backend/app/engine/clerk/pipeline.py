@@ -46,6 +46,7 @@ from app.engine.parties import (
 from app.engine.phase2_context import resolve_character_previous_state
 from app.engine.world_clock import (
     describe_world_timestamp,
+    extract_world_date_label,
     resolve_bounded_turn_elapsed_minutes,
     resolve_turn_timestamp,
 )
@@ -72,6 +73,7 @@ from app.schemas.turn import (
     CharacterAgentDelta,
     EpisodicChunkLLMOutput,
     EpisodicChunkRecord,
+    MajorEventRecord,
     PersonaGossipEvent,
     Phase4ProgressCallback,
     Phase4ProgressEvent,
@@ -84,7 +86,9 @@ from app.schemas.turn import (
 )
 from app.schemas.world import (
     LocationNode,
+    LoreNode,
     NeighborLocationView,
+    normalize_and_validate_entity_tags,
 )
 
 from app.engine.clerk.episodic import (
@@ -284,6 +288,72 @@ async def run_phase5_post_turn_clerk(
     current_time_str = describe_world_timestamp(current_timestamp)
     speaker_label = "Narrator" if (is_narrator_turn or is_solo_turn) else character.name
 
+    # Gather prior revealed secrets & candidate unrevealed secrets (active location + immediate L1 container)
+    prior_revealed_ids = list(
+        dict.fromkeys(
+            [
+                *(
+                    prior_branch_turns[-1].world_snapshot.revealed_lore_ids
+                    if prior_branch_turns
+                    else []
+                ),
+                *(completed_turn.world_snapshot.revealed_lore_ids or []),
+            ]
+        )
+    )
+    prior_revealed_set = set(prior_revealed_ids)
+    candidate_secrets: list[LoreNode] = []
+    for ln in active_location.lore_nodes or []:
+        if ln.category == "secret":
+            canon_id = ln.origin_lore_id or ln.id
+            if canon_id not in prior_revealed_set and ln.id not in prior_revealed_set:
+                candidate_secrets.append(ln)
+    try:
+        world_for_secrets = repo.get_world(
+            world_id, valid_turn_ids=valid_turn_ids, campaign_id=campaign_id
+        )
+        if active_location.container_id:
+            imm_cont = next(
+                (
+                    c
+                    for c in world_for_secrets.containers
+                    if c.id == active_location.container_id and c.depth == 1
+                ),
+                None,
+            )
+            if imm_cont is not None:
+                for ln in imm_cont.lore_nodes or []:
+                    if ln.category == "secret":
+                        canon_id = ln.origin_lore_id or ln.id
+                        if canon_id not in prior_revealed_set and ln.id not in prior_revealed_set:
+                            candidate_secrets.append(ln)
+    except Exception:
+        pass
+
+    candidate_secret_map: dict[str, LoreNode] = {ln.id: ln for ln in candidate_secrets}
+    for ln in candidate_secrets:
+        if ln.origin_lore_id:
+            candidate_secret_map.setdefault(ln.origin_lore_id, ln)
+
+    candidate_secrets_block = ""
+    if candidate_secrets:
+        secret_lines = "\n".join(
+            f"- id='{ln.id}': {ln.title} — {ln.content[:220]} (tags: {', '.join(ln.entity_tags[:5])})"
+            for ln in candidate_secrets
+        )
+        candidate_secrets_block = f"\nCandidate Unrevealed Secrets at Current Location:\n{secret_lines}\n"
+
+    active_loc_env_str = (
+        ", ".join(active_location.environmental_tags)
+        if active_location.environmental_tags
+        else "None"
+    )
+    involved_roster_parts = [
+        *([f"Player Persona: {eff_persona_name}"] if eff_persona_name else ["Player"]),
+        *[c.name for c in scene_characters],
+    ]
+    involved_roster_str = ", ".join(dict.fromkeys(involved_roster_parts))
+
     world_system_prompt = render_template(
         post_turn_prompt_template or get_default_prompt("clerk_post_turn_system"),
         character_name=character.name,
@@ -291,8 +361,12 @@ async def run_phase5_post_turn_clerk(
     world_user_prompt = (
         f"Current In-Game Time (start of this turn): {current_time_str}\n"
         f"Current Location: {active_location.name} (id='{active_location.id}')\n"
+        f"Current Location Description: {active_location.description}\n"
+        f"Current Location Environmental Tags: {active_loc_env_str}\n"
+        f"Present Characters/Persona: {involved_roster_str}\n"
         f"Current Scene Flags: {existing_flags_str}\n"
-        f"Known Exits:\n{neighbor_options}\n\n"
+        f"Known Exits:\n{neighbor_options}\n"
+        f"{candidate_secrets_block}\n"
         f"User Message: {completed_turn.user_message}\n"
         f"{speaker_label} Response:\n{completed_turn.raw_prose}"
     )
@@ -339,6 +413,7 @@ async def run_phase5_post_turn_clerk(
                 active_location=active_location,
                 neighbors=neighbors,
                 current_timestamp=current_timestamp,
+                candidate_secrets=candidate_secrets,
             )
         if on_progress:
             await on_progress(
@@ -573,7 +648,9 @@ async def run_phase5_post_turn_clerk(
     merged_visited_containers = list(prev_visited_containers)
     try:
         camp_rec = repo.get_campaign(campaign_id)
-        world_rec = repo.get_world(world_id, valid_turn_ids=valid_turn_ids)
+        world_rec = repo.get_world(
+            world_id, valid_turn_ids=valid_turn_ids, campaign_id=campaign_id
+        )
         target_loc_obj = next(
             (loc for loc in world_rec.locations if loc.id == new_location_id),
             None,
@@ -611,6 +688,16 @@ async def run_phase5_post_turn_clerk(
             )
         )
 
+    # 2.5 Reconcile prose-grounded secret reveals (canonical IDs, branch-safe)
+    newly_revealed_ids: list[str] = []
+    for raw_sid in world_delta.revealed_secret_lore_ids or []:
+        matched = candidate_secret_map.get(str(raw_sid).strip())
+        if matched is not None:
+            canon_id = matched.origin_lore_id or matched.id
+            if canon_id not in prior_revealed_set and canon_id not in newly_revealed_ids:
+                newly_revealed_ids.append(canon_id)
+    merged_revealed_lore_ids = list(dict.fromkeys([*prior_revealed_ids, *newly_revealed_ids]))
+
     updated_world_snapshot = WorldStateSnapshot(
         turn_id=completed_turn.id,
         world_timestamp=new_timestamp,
@@ -619,6 +706,7 @@ async def run_phase5_post_turn_clerk(
         scene_flags=merged_flags,
         visited_location_ids=merged_visited,
         visited_container_ids=merged_visited_containers,
+        revealed_lore_ids=merged_revealed_lore_ids,
         parties=list(completed_turn.world_snapshot.parties or []),
     )
 
@@ -1040,6 +1128,74 @@ async def run_phase5_post_turn_clerk(
             ),
             None,
         )
+    # 5.5 Persist Major Event (world-changing Codex history lore or location-changing spatial override)
+    persisted_major_event: MajorEventRecord | None = None
+    if world_delta.major_event is not None:
+        me_spec = world_delta.major_event
+        date_label = extract_world_date_label(new_timestamp)
+        raw_ev_title = me_spec.evocative_title.strip()
+        if date_label and raw_ev_title.lower().startswith(date_label.lower()):
+            raw_ev_title = raw_ev_title[len(date_label) :].lstrip(" -—:–")
+        full_title = (
+            f"{date_label} - {raw_ev_title}".strip(" -")
+            if date_label
+            else raw_ev_title
+        )[:120]
+        me_summary = me_spec.summary.strip()[:2000]
+        me_keywords = normalize_and_validate_entity_tags(
+            [*(me_spec.keywords or []), active_location.name],
+            strict=False,
+            fallback_title=full_title,
+            fallback_content=me_summary,
+        )
+        if me_spec.scope == "world":
+            created_lore = await repo.aadd_clerk_world_major_event_lore(
+                campaign_id=campaign_id,
+                world_id=world_id,
+                turn_id=completed_turn.id,
+                title=full_title,
+                content=me_summary,
+                keywords=me_keywords,
+            )
+            persisted_major_event = MajorEventRecord(
+                id=f"me_{completed_turn.id}",
+                turn_id=completed_turn.id,
+                scope="world",
+                date_label=date_label,
+                title=created_lore.title,
+                summary=created_lore.content,
+                keywords=created_lore.entity_tags,
+                lore_node_id=created_lore.id,
+                location_id=active_location.id,
+                location_name=active_location.name,
+            )
+        else:
+            final_desc, _final_tags, applied_added, applied_removed = (
+                repo.apply_clerk_location_mutation(
+                    campaign_id=campaign_id,
+                    turn_id=completed_turn.id,
+                    location=active_location,
+                    updated_description=me_spec.location_description_update,
+                    tags_added=me_spec.environmental_tags_added,
+                    tags_removed=me_spec.environmental_tags_removed,
+                )
+            )
+            persisted_major_event = MajorEventRecord(
+                id=f"me_{completed_turn.id}",
+                turn_id=completed_turn.id,
+                scope="location",
+                date_label=date_label,
+                title=full_title,
+                summary=me_summary,
+                keywords=me_keywords,
+                location_id=active_location.id,
+                location_name=active_location.name,
+                previous_description=active_location.description,
+                updated_description=final_desc,
+                tags_added=applied_added,
+                tags_removed=applied_removed,
+            )
+
     composite_post_turn = PostTurnStateDelta(
         elapsed_minutes=world_delta.elapsed_minutes,
         new_world_timestamp=world_delta.new_world_timestamp,
@@ -1067,6 +1223,8 @@ async def run_phase5_post_turn_clerk(
         first_visit_cards=first_visit_cards,
         first_visit_media=first_visit_media,
         party_event_delta=party_event_delta,
+        revealed_secret_lore_ids=newly_revealed_ids,
+        major_event=persisted_major_event,
     )
 
     primary_char_state = updated_states_by_char.get(
@@ -1091,7 +1249,9 @@ async def run_phase5_post_turn_clerk(
     primary_witness_id = (
         character.id if any(c.id == character.id for c in scene_characters) else None
     )
-    if world_delta.notable_event_summary:
+    if world_delta.notable_event_summary and not (
+        persisted_major_event is not None and persisted_major_event.scope == "world"
+    ):
         await repo.vector_store.aupsert_entry(
             entry_id=f"event_{completed_turn.id}",
             source_type="episodic_chunk",

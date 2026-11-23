@@ -26,6 +26,7 @@ import type {
   LocationContainer,
   LocationEdge,
   LocationNode,
+  LoreNode,
   NeighborLocationView,
 } from "./world";
 
@@ -51,11 +52,39 @@ export interface WorldStateSnapshot {
   scene_flags: string[];
   visited_location_ids?: string[];
   visited_container_ids?: string[];
+  revealed_lore_ids?: string[];
   parties?: PartyRecord[];
 }
 
 export interface CampaignWorldSettings {
   describe_on_first_visit: boolean;
+  unlock_lore?: boolean;
+}
+
+export interface MajorEventRecord {
+  id: string;
+  turn_id: string;
+  scope: "world" | "location";
+  date_label: string;
+  title: string;
+  summary: string;
+  keywords: string[];
+  lore_node_id?: string | null;
+  location_id?: string | null;
+  location_name?: string | null;
+  previous_description?: string | null;
+  updated_description?: string | null;
+  tags_added?: string[];
+  tags_removed?: string[];
+  deleted?: boolean;
+}
+
+export interface CampaignMajorEventUpdatePayload {
+  title: string;
+  summary: string;
+  keywords: string[];
+  updated_description?: string | null;
+  environmental_tags?: string[] | null;
 }
 
 export interface FirstVisitDescriptionCard {
@@ -164,6 +193,8 @@ export interface PostTurnStateDelta {
   first_visit_cards?: FirstVisitDescriptionCard[];
   first_visit_media?: FirstVisitMediaItem[];
   party_event_delta?: PartyEventDelta | null;
+  revealed_secret_lore_ids?: string[];
+  major_event?: MajorEventRecord | null;
 }
 
 export type Phase5AgentKind = "world_clerk" | "character";
@@ -523,6 +554,7 @@ export interface CampaignStateBundle {
   visible_locations: LocationNode[];
   visible_edges?: LocationEdge[];
   containers?: LocationContainer[];
+  world_lore_nodes?: LoreNode[];
   episodic_chunks: EpisodicChunkRecord[];
   all_episodic_chunks?: EpisodicChunkRecord[];
 }

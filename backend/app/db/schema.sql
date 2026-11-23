@@ -274,7 +274,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     persona_snapshot_json TEXT NULL,
     active_leaf_turn_id TEXT NULL,
     prompt_preset_id TEXT NULL REFERENCES prompt_presets(id) ON DELETE SET NULL,
-    world_settings_json TEXT NOT NULL DEFAULT '{"describe_on_first_visit": true}',
+    world_settings_json TEXT NOT NULL DEFAULT '{"describe_on_first_visit": true, "unlock_lore": false}',
     created_at TEXT NOT NULL
 );
 
@@ -304,13 +304,15 @@ CREATE TABLE IF NOT EXISTS lore_nodes (
     location_id TEXT NULL REFERENCES location_nodes(id) ON DELETE CASCADE,
     container_id TEXT NULL REFERENCES location_containers(id) ON DELETE CASCADE,
     campaign_id TEXT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    created_at_turn_id TEXT NULL,
+    origin_lore_id TEXT NULL,
+    is_major_event INTEGER NOT NULL DEFAULT 0,
     title TEXT NOT NULL CHECK(length(trim(title)) >= 1),
     category TEXT NOT NULL CHECK(
         category IN ('history', 'culture', 'faction', 'figure', 'rumor', 'threat', 'artifact', 'secret')
         AND ((location_id IS NOT NULL OR container_id IS NOT NULL) OR category != 'secret')
         AND (location_id IS NULL OR category NOT IN ('artifact', 'figure', 'threat'))
         AND (container_id IS NULL OR category NOT IN ('artifact', 'figure', 'threat'))
-        AND (campaign_id IS NULL OR location_id IS NOT NULL OR container_id IS NOT NULL)
         AND (location_id IS NULL OR container_id IS NULL)
     ),
     content TEXT NOT NULL CHECK(length(trim(content)) >= 1),
@@ -326,6 +328,7 @@ CREATE INDEX IF NOT EXISTS idx_lore_nodes_world ON lore_nodes(world_id);
 CREATE INDEX IF NOT EXISTS idx_lore_nodes_world_scope ON lore_nodes(world_id, location_id, campaign_id);
 CREATE INDEX IF NOT EXISTS idx_lore_nodes_location_campaign ON lore_nodes(location_id, campaign_id);
 CREATE INDEX IF NOT EXISTS idx_lore_nodes_container ON lore_nodes(container_id, campaign_id);
+CREATE INDEX IF NOT EXISTS idx_lore_nodes_campaign_turn ON lore_nodes(campaign_id, created_at_turn_id);
 
 CREATE TABLE IF NOT EXISTS campaign_location_lore_overrides (
     campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
@@ -372,8 +375,18 @@ CREATE TABLE IF NOT EXISTS world_state_snapshots (
     campaign_elapsed_minutes INTEGER NOT NULL DEFAULT 0,
     visited_location_ids_json TEXT NOT NULL DEFAULT '[]',
     visited_container_ids_json TEXT NOT NULL DEFAULT '[]',
+    revealed_lore_ids_json TEXT NOT NULL DEFAULT '[]',
     parties_json TEXT NOT NULL DEFAULT '[]'
 );
+
+CREATE TABLE IF NOT EXISTS campaign_lore_tombstones (
+    campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    turn_id TEXT NOT NULL REFERENCES turn_nodes(id) ON DELETE CASCADE,
+    lore_id TEXT NOT NULL,
+    PRIMARY KEY (campaign_id, turn_id, lore_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_campaign_lore_tombstones_campaign ON campaign_lore_tombstones(campaign_id, turn_id);
 
 CREATE TABLE IF NOT EXISTS campaign_spatial_overrides (
     turn_id TEXT NOT NULL REFERENCES turn_nodes(id) ON DELETE CASCADE,
