@@ -6,9 +6,10 @@ import {
 } from "../promptRoleDefinitions";
 
 describe("promptRoleDefinitions", () => {
-  const ALL_14_PROMPTS = [
+  const ALL_15_PROMPTS = [
     "actor_zone1_system",
     "narrator_zone1_system",
+    "gm_talk_system",
     "character_cognition_system",
     "character_post_turn_system",
     "clerk_pre_turn_system",
@@ -28,18 +29,18 @@ describe("promptRoleDefinitions", () => {
     expect(roleIds).toEqual(["storytelling", "cognition", "auxiliary", "wizard"]);
   });
 
-  it("maps every one of the 14 system prompt keys to exactly one role without duplicates", () => {
+  it("maps every one of the 15 system prompt keys to exactly one role without duplicates", () => {
     const mappedKeys: string[] = [];
     for (const role of PROMPT_ROLES) {
       for (const key of role.promptKeys) {
-        expect(ALL_14_PROMPTS).toContain(key);
+        expect(ALL_15_PROMPTS).toContain(key);
         expect(mappedKeys).not.toContain(key);
         mappedKeys.push(key);
       }
     }
 
-    expect(mappedKeys.length).toBe(14);
-    for (const key of ALL_14_PROMPTS) {
+    expect(mappedKeys.length).toBe(15);
+    for (const key of ALL_15_PROMPTS) {
       expect(mappedKeys).toContain(key);
     }
   });
@@ -50,7 +51,7 @@ describe("promptRoleDefinitions", () => {
     const auxiliary = PROMPT_ROLES.find((r) => r.id === "auxiliary")!;
     const wizard = PROMPT_ROLES.find((r) => r.id === "wizard")!;
 
-    expect(storytelling.promptKeys).toHaveLength(2);
+    expect(storytelling.promptKeys).toHaveLength(3);
     expect(cognition.promptKeys).toHaveLength(2);
     expect(auxiliary.promptKeys).toHaveLength(6);
     expect(wizard.promptKeys).toHaveLength(4);
@@ -59,6 +60,7 @@ describe("promptRoleDefinitions", () => {
   it("correctly resolves role via getRoleForPromptKey", () => {
     expect(getRoleForPromptKey("actor_zone1_system")).toBe("storytelling");
     expect(getRoleForPromptKey("narrator_zone1_system")).toBe("storytelling");
+    expect(getRoleForPromptKey("gm_talk_system")).toBe("storytelling");
 
     expect(getRoleForPromptKey("character_cognition_system")).toBe("cognition");
     expect(getRoleForPromptKey("character_post_turn_system")).toBe("cognition");

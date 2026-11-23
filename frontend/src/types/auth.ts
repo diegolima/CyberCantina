@@ -150,6 +150,9 @@ export interface UserModelSettingsPayload {
   zone2_budget_share_pct?: number | null;
   recall_budget_prose_tokens?: number | null;
   recall_budget_cognition_tokens?: number | null;
+  gm_model_role?: "primary" | "clerk" | null;
+  gm_temperature?: number | null;
+  gm_max_tokens?: number | null;
 }
 
 export interface ProfileModelSettingsResponse {
@@ -174,6 +177,9 @@ export interface ProfileModelSettingsResponse {
   effective_zone2_budget_share_pct?: number;
   effective_recall_budget_prose_tokens?: number;
   effective_recall_budget_cognition_tokens?: number;
+  effective_gm_model_role?: "primary" | "clerk";
+  effective_gm_temperature?: number;
+  effective_gm_max_tokens?: number;
   user_actor_profile?: ModelProfile | null;
   user_clerk_profile?: ModelProfile | null;
   user_working_memory_turns?: number | null;
@@ -187,6 +193,9 @@ export interface ProfileModelSettingsResponse {
   user_zone2_budget_share_pct?: number | null;
   user_recall_budget_prose_tokens?: number | null;
   user_recall_budget_cognition_tokens?: number | null;
+  user_gm_model_role?: "primary" | "clerk" | null;
+  user_gm_temperature?: number | null;
+  user_gm_max_tokens?: number | null;
   active_prompt_preset_id?: string | null;
   default_actor_profile: ModelProfile;
   default_clerk_profile: ModelProfile;
@@ -201,5 +210,8 @@ export interface ProfileModelSettingsResponse {
   default_zone2_budget_share_pct?: number;
   default_recall_budget_prose_tokens?: number;
   default_recall_budget_cognition_tokens?: number;
+  default_gm_model_role?: "primary" | "clerk";
+  default_gm_temperature?: number;
+  default_gm_max_tokens?: number;
   default_embedding_profile?: AppSettings["embedding_profile"];
 }

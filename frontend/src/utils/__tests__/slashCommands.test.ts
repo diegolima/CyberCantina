@@ -65,6 +65,7 @@ describe("slashCommands registry & autocomplete", () => {
     expect(SLASH_COMMANDS.map((c) => c.name)).toEqual([
       "choice",
       "event",
+      "gm",
       "help",
       "look",
       "narrate",
@@ -86,6 +87,7 @@ describe("slashCommands registry & autocomplete", () => {
     expect(emptyQuery?.items.map((i) => i.label)).toEqual([
       "choice",
       "event",
+      "gm",
       "help",
       "look",
       "narrate",
@@ -98,11 +100,13 @@ describe("slashCommands registry & autocomplete", () => {
     expect(cQuery?.items.slice(1).map((i) => i.label)).toEqual([
       "event",
       "narrate",
+      "gm",
       "look",
     ]);
     expect(cQuery?.items[1].matchedAlias).toBe("complication");
     expect(cQuery?.items[2].matchedAlias).toBe("custom");
-    expect(cQuery?.items[3].matchedAlias).toBe("scene");
+    expect(cQuery?.items[3].matchedAlias).toBe("neuromancer");
+    expect(cQuery?.items[4].matchedAlias).toBe("scene");
 
     const descQuery = detectSlashAutocompleteContext(
       "/desc",
@@ -205,9 +209,10 @@ describe("slashCommands registry & autocomplete", () => {
     expect(choiceItem?.unavailableReason).toBe("Requires someone present");
 
     // First enabled skips /choice (index 0) and lands on /event (index 1)
+    const lastIdx = stage1Solo.items.length - 1;
     expect(findFirstEnabledIndex(stage1Solo.items)).toBe(1);
-    expect(findNextEnabledIndex(stage1Solo.items, 6, 1)).toBe(1);
-    expect(findNextEnabledIndex(stage1Solo.items, 1, -1)).toBe(6);
+    expect(findNextEnabledIndex(stage1Solo.items, lastIdx, 1)).toBe(1);
+    expect(findNextEnabledIndex(stage1Solo.items, 1, -1)).toBe(lastIdx);
 
     const stage2Solo = detectSlashAutocompleteContext(
       "",
@@ -227,7 +232,7 @@ describe("slashCommands registry & autocomplete", () => {
       stage1Edit.items
         .filter((i) => i.available)
         .map((i) => i.commandId)
-    ).toEqual(["help", "narrate", "party"]);
+    ).toEqual(["gm", "help", "narrate", "party"]);
   });
 
   it("promotes space-committed aliases and pasted two-stage /party prefixes", () => {

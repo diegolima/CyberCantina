@@ -488,7 +488,8 @@ class AuthUsersMixin:
                        active_prompt_preset_id, delegate_cognition_to_clerk, max_scene_flags,
                        agent_dispatch_mode, persona_disclosure_mode, clerk_mirrors_actor,
                        min_working_memory_turns, lod_summary_chunks, lod_importance_bonus,
-                       zone2_budget_share_pct, recall_budget_prose_tokens, recall_budget_cognition_tokens
+                       zone2_budget_share_pct, recall_budget_prose_tokens, recall_budget_cognition_tokens,
+                       gm_model_role, gm_temperature, gm_max_tokens
                 FROM user_model_settings WHERE user_id = ?
                 """,
                 (user_id,),
@@ -525,6 +526,8 @@ class AuthUsersMixin:
                 else None
             )
             pdm = raw_pdm if raw_pdm in ("llm_intent", "token_matching", "hybrid") else "llm_intent"
+            raw_gm_role = row["gm_model_role"] if "gm_model_role" in rkeys else None
+            gm_role = raw_gm_role if raw_gm_role in ("primary", "clerk") else None
             return UserModelSettingsPayload(
                 actor_profile=actor,
                 clerk_profile=clerk,
@@ -543,6 +546,9 @@ class AuthUsersMixin:
                 zone2_budget_share_pct=row["zone2_budget_share_pct"] if "zone2_budget_share_pct" in rkeys else None,
                 recall_budget_prose_tokens=row["recall_budget_prose_tokens"] if "recall_budget_prose_tokens" in rkeys else None,
                 recall_budget_cognition_tokens=row["recall_budget_cognition_tokens"] if "recall_budget_cognition_tokens" in rkeys else None,
+                gm_model_role=gm_role,
+                gm_temperature=row["gm_temperature"] if "gm_temperature" in rkeys else None,
+                gm_max_tokens=row["gm_max_tokens"] if "gm_max_tokens" in rkeys else None,
             )
         finally:
             conn.close()
@@ -581,9 +587,10 @@ class AuthUsersMixin:
                     agent_dispatch_mode, persona_disclosure_mode, clerk_mirrors_actor,
                     min_working_memory_turns, lod_summary_chunks, lod_importance_bonus,
                     zone2_budget_share_pct, recall_budget_prose_tokens, recall_budget_cognition_tokens,
+                    gm_model_role, gm_temperature, gm_max_tokens,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     actor_profile_json = excluded.actor_profile_json,
                     clerk_profile_json = excluded.clerk_profile_json,
@@ -600,6 +607,9 @@ class AuthUsersMixin:
                     zone2_budget_share_pct = excluded.zone2_budget_share_pct,
                     recall_budget_prose_tokens = excluded.recall_budget_prose_tokens,
                     recall_budget_cognition_tokens = excluded.recall_budget_cognition_tokens,
+                    gm_model_role = excluded.gm_model_role,
+                    gm_temperature = excluded.gm_temperature,
+                    gm_max_tokens = excluded.gm_max_tokens,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -619,6 +629,9 @@ class AuthUsersMixin:
                     payload.zone2_budget_share_pct,
                     payload.recall_budget_prose_tokens,
                     payload.recall_budget_cognition_tokens,
+                    payload.gm_model_role,
+                    payload.gm_temperature,
+                    payload.gm_max_tokens,
                     now,
                 ),
             )

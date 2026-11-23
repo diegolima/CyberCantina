@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import {
   AlertCircle,
   Bookmark,
+  Compass,
   Download,
   Eye,
   EyeOff,
@@ -27,6 +28,7 @@ export const ExportCampaignModal: React.FC<ExportCampaignModalProps> = ({
   const [stripBookmarkComments, setStripBookmarkComments] = useState(false);
   const [includeWorldMedia, setIncludeWorldMedia] = useState(true);
   const [includeVideos, setIncludeVideos] = useState(false);
+  const [includeGmChat, setIncludeGmChat] = useState(false);
   const [passwordEnabled, setPasswordEnabled] = useState(false);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -49,6 +51,7 @@ export const ExportCampaignModal: React.FC<ExportCampaignModalProps> = ({
         strip_bookmark_comments: stripBookmarkComments,
         include_world_media: includeWorldMedia,
         include_videos: includeVideos,
+        include_gm_chat: includeGmChat,
         password: passwordEnabled ? password : null,
       });
       onClose();
@@ -239,6 +242,23 @@ export const ExportCampaignModal: React.FC<ExportCampaignModalProps> = ({
                 onChange={(e) => setIncludeVideos(e.target.checked)}
               />
               <span>Include linked videos (larger archive)</span>
+            </label>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", fontSize: "0.82rem" }}>
+              <input
+                type="checkbox"
+                checked={includeGmChat}
+                onChange={(e) => setIncludeGmChat(e.target.checked)}
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontWeight: 500 }}>
+                  <Compass size={13} color="var(--accent-violet)" />
+                  Include GM conversations
+                </span>
+                <span style={{ display: "block", fontSize: "0.74rem", color: "var(--text-muted)" }}>
+                  Include out-of-character Neuromancer GM Talk history in this archive.
+                </span>
+              </span>
             </label>
           </div>
 

@@ -69,6 +69,8 @@ import { TurnCard } from "./chat/TurnCard";
 import { getLatestBranchTurnId } from "./chat/arrivalHelpers";
 import { LiveStreamingTurnCard } from "./chat/LiveStreamingTurnCard";
 import { ChatComposer } from "./chat/ChatComposer";
+import { GmTalkDrawer } from "./chat/GmTalkDrawer";
+import { useGmTalk } from "../hooks/useGmTalk";
 
 export const ChatStage: React.FC<ChatStageProps> = ({
   bundle,
@@ -123,6 +125,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const [isContextHealthOpen, setIsContextHealthOpen] = useState(false);
   const [highlightedTurnId, setHighlightedTurnId] = useState<string | null>(null);
   const turnFeedRef = useRef<HTMLDivElement | null>(null);
+  const gmDrawerRef = useRef<HTMLElement | null>(null);
 
   const activeTelemetryTurn = useMemo(() => getActiveTurnForTelemetry(bundle), [bundle]);
   const activeTurnTelemetry = activeTelemetryTurn?.telemetry ?? null;
@@ -136,6 +139,60 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const narratorBtnRef = useRef<HTMLButtonElement | null>(null);
   const exitsBtnRef = useRef<HTMLButtonElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Out-of-Character GM Talk ("Neuromancer") Slide-out & Composer Mode State
+  const gmUnlockLore = Boolean(bundle.campaign.world_settings?.unlock_lore);
+  const gmTalk = useGmTalk({
+    campaignId: bundle.campaign.id,
+    activeLeafTurnId: bundle.campaign.active_leaf_turn_id ?? null,
+    unlockLore: gmUnlockLore,
+    isCampaignStreaming: isBusy,
+    textareaRef,
+  });
+
+  // Clicking outside the GM slide-out and reused composer minimizes GM Talk
+  useEffect(() => {
+    if (!gmTalk.isOpen || gmTalk.isClosing) return;
+
+    const handleDocMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (gmDrawerRef.current?.contains(target)) return;
+      if (composerBarRef.current?.contains(target)) return;
+      if (target instanceof Element && target.closest(".modal-overlay")) return;
+      gmTalk.minimize();
+    };
+
+    const handleDocKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (
+        document.activeElement instanceof Element &&
+        document.activeElement.closest(".modal-overlay")
+      ) {
+        return;
+      }
+      if (gmTalk.mentionPopoverOpen) {
+        e.preventDefault();
+        gmTalk.dismissMentionPopover();
+        return;
+      }
+      e.preventDefault();
+      gmTalk.minimize();
+    };
+
+    document.addEventListener("mousedown", handleDocMouseDown);
+    document.addEventListener("keydown", handleDocKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleDocMouseDown);
+      document.removeEventListener("keydown", handleDocKeyDown);
+    };
+  }, [
+    gmTalk.dismissMentionPopover,
+    gmTalk.isClosing,
+    gmTalk.isOpen,
+    gmTalk.mentionPopoverOpen,
+    gmTalk.minimize,
+  ]);
 
   // Director Choices State
   const [stagedChoices, setStagedChoices] = useState<Record<string, CharacterChoiceSet>>({});
@@ -1117,6 +1174,19 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       const cmdSpec = resolveSlashCommandToken(parts[0] || "");
       const arg = parts.slice(1).join(" ").trim();
 
+      if (cmdSpec?.id === "gm") {
+        setActiveSlash(null);
+        setInputText("");
+        setSlashCursorPos(0);
+        setSubmitSlashError(null);
+        setSlashPickerDismissed(false);
+        setMentionPickerOpen(false);
+        setActivePopover("none");
+        magicWand.reset();
+        gmTalk.open(arg || null);
+        return;
+      }
+
       if (cmdSpec?.id === "help") {
         setActiveSlash(null);
         setInputText("");
@@ -1569,7 +1639,8 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         </div>
       </header>
 
-      <div className="turn-feed" ref={turnFeedRef}>
+      <div className="chat-stage-feed-region">
+        <div className="turn-feed" ref={turnFeedRef}>
         {bundle.active_branch_turns.map((turn, turnIdx) => {
           const isRoot = turn.depth_index === 0;
           const isLastTurn =
@@ -1681,9 +1752,43 @@ export const ChatStage: React.FC<ChatStageProps> = ({
             )}
           </div>
         )}
+        </div>
+
+        {/* Out-of-Character GM Talk Slide-Out Drawer ("Neuromancer") */}
+        {gmTalk.isOpen && (
+          <GmTalkDrawer
+            drawerRef={gmDrawerRef}
+            campaignTitle={bundle.campaign.name}
+            worldName={bundle.campaign.world_name || "Active World"}
+            unlockLore={gmUnlockLore}
+            isClosing={gmTalk.isClosing}
+            isExpanded={gmTalk.isExpanded}
+            isCampaignStreaming={isBusy}
+            messages={gmTalk.messages}
+            isLoading={gmTalk.isLoading}
+            isStreaming={gmTalk.isStreaming}
+            streamingText={gmTalk.streamingText}
+            streamingSources={gmTalk.streamingSources}
+            error={gmTalk.error}
+            clearConfirm={gmTalk.clearConfirm}
+            isClearing={gmTalk.isClearing}
+            copiedId={gmTalk.copiedId}
+            expandedSources={gmTalk.expandedSources}
+            modelMeta={gmTalk.modelMeta}
+            onInsertAtTrigger={gmTalk.insertAtTrigger}
+            onClearChat={() => {
+              void gmTalk.handleClearChat();
+            }}
+            onCopyMessage={gmTalk.copyMessage}
+            onToggleSources={gmTalk.toggleSources}
+            onDismissError={gmTalk.dismissError}
+            onToggleExpanded={gmTalk.toggleExpanded}
+            onMinimize={gmTalk.minimize}
+          />
+        )}
       </div>
 
-      {/* Quick Action Bar + Composer */}
+      {/* Quick Action Bar + Composer (Shared between Story Mode and GM Talk Mode) */}
       <ChatComposer
         composerBarRef={composerBarRef}
         narratorBtnRef={narratorBtnRef}
@@ -1758,6 +1863,34 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         handleRemoveOption={handleRemoveOption}
         handleCancelEdit={handleCancelEdit}
         handleSend={handleSend}
+        onOpenGmTalk={() => gmTalk.open()}
+        gmMode={{
+          isActive: gmTalk.isModeActive,
+          isStreaming: gmTalk.isStreaming,
+          isCampaignStreaming: isBusy,
+          draftText: gmTalk.draftText,
+          pinnedMentions: gmTalk.pinnedMentions,
+          mentionTrigger: gmTalk.mentionTrigger,
+          mentionPopoverOpen: gmTalk.mentionPopoverOpen,
+          mentionItems: gmTalk.mentionItems,
+          mentionLoading: gmTalk.mentionLoading,
+          mentionSelectedIndex: gmTalk.mentionSelectedIndex,
+          onHoverMentionIndex: gmTalk.setMentionSelectedIndex,
+          onDraftChange: gmTalk.handleDraftChange,
+          onDraftCursorChange: gmTalk.handleDraftCursorChange,
+          onSelectMentionCategory: gmTalk.handleSelectCategory,
+          onSelectMentionCandidate: gmTalk.handleSelectCandidate,
+          onPopCategoryToBrowse: gmTalk.handlePopCategoryToBrowse,
+          onDismissMentionPopover: gmTalk.dismissMentionPopover,
+          onRemovePinnedMention: gmTalk.handleRemovePinnedMention,
+          onInsertAtTrigger: gmTalk.insertAtTrigger,
+          onSend: () => {
+            void gmTalk.sendMessage();
+          },
+          onStop: gmTalk.stopStreaming,
+          onToggleOpen: gmTalk.toggle,
+          onMinimize: gmTalk.minimize,
+        }}
       />
 
       {/* Phase 4 Clerk & Character Agent Changes Modal */}

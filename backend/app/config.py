@@ -247,6 +247,22 @@ class AppSettings(BaseModel):
         default=False,
         description="When True, the analytical Clerk model generates character cognition (<cognition> block) before the Actor writes narrative prose.",
     )
+    gm_model_role: Literal["primary", "clerk"] = Field(
+        default="primary",
+        description="Which configured model profile ('primary' Actor or 'clerk') powers Neuromancer in GM Talk.",
+    )
+    gm_temperature: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=2.0,
+        description="Default sampling temperature for out-of-character GM Talk completions.",
+    )
+    gm_max_tokens: int = Field(
+        default=1024,
+        ge=128,
+        le=4096,
+        description="Default maximum output tokens per GM Talk completion.",
+    )
     agent_dispatch_mode: AgentDispatchMode = Field(
         default="sequential",
         description=(

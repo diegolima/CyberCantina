@@ -329,6 +329,7 @@ export type ComposerTrayId =
 export type SlashCommandId =
   | "choice"
   | "event"
+  | "gm"
   | "help"
   | "look"
   | "narrate"
@@ -340,6 +341,7 @@ export type PartySubcommandId = "disband" | "invite" | "kick" | "leave";
 export type SlashCommandIconKey =
   | "list_checks"
   | "zap"
+  | "compass"
   | "help_circle"
   | "eye"
   | "sparkles"

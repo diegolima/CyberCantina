@@ -298,6 +298,17 @@ depends_on = [
 ]
 
 [[modules]]
+path = "app.engine.gm_talk"
+depends_on = [
+    "app.config",
+    "app.db",
+    "app.engine.parties",
+    "app.prompts",
+    "app.schemas",
+    "app.security",
+]
+
+[[modules]]
 path = "app.wizards"
 depends_on = [
     "app.config",
@@ -337,6 +348,7 @@ depends_on = [
     "app.engine.affective_engine",
     "app.engine.choices",
     "app.engine.clerk_placement",
+    "app.engine.gm_talk",
     "app.engine.llm_client",
     "app.engine.mentions",
     "app.engine.parties",

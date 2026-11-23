@@ -2,6 +2,7 @@ import { adminMessagesApi } from "./adminMessages";
 import { authApi } from "./auth";
 import { campaignsApi } from "./campaigns";
 import { charactersApi } from "./characters";
+import { gmApi } from "./gm";
 import { importExportApi } from "./importExport";
 import { notesApi } from "./notes";
 import { personasApi } from "./personas";
@@ -36,4 +37,5 @@ export const api = {
   ...importExportApi,
   ...personasApi,
   ...campaignsApi,
+  ...gmApi,
 };

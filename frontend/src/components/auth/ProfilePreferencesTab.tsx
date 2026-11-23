@@ -74,6 +74,9 @@ const INITIAL_DRAFT: ProfileModelDraft = {
   agentDispatchMode: "sequential",
   personaDisclosureMode: "llm_intent",
   delegateCognitionToClerk: false,
+  gmModelRole: "primary",
+  gmTemperature: 0.5,
+  gmMaxTokens: 1024,
   activePromptPresetId: null,
 };
 
@@ -89,6 +92,9 @@ const FALLBACK_BEHAVIOR_DEFAULTS: ProfileBehaviorValues = {
   agentDispatchMode: "sequential",
   personaDisclosureMode: "llm_intent",
   delegateCognitionToClerk: false,
+  gmModelRole: "primary",
+  gmTemperature: 0.5,
+  gmMaxTokens: 1024,
 };
 
 function getBehaviorDefaultsFromSettings(
@@ -109,6 +115,9 @@ function getBehaviorDefaultsFromSettings(
     personaDisclosureMode:
       settings.default_persona_disclosure_mode ?? "llm_intent",
     delegateCognitionToClerk: settings.default_delegate_cognition_to_clerk,
+    gmModelRole: settings.default_gm_model_role ?? "primary",
+    gmTemperature: settings.default_gm_temperature ?? 0.5,
+    gmMaxTokens: settings.default_gm_max_tokens ?? 1024,
   };
 }
 
@@ -440,6 +449,9 @@ export const ProfilePreferencesTab: React.FC<ProfilePreferencesTabProps> = ({
     agentDispatchMode: draft.agentDispatchMode,
     personaDisclosureMode: draft.personaDisclosureMode,
     delegateCognitionToClerk: draft.delegateCognitionToClerk,
+    gmModelRole: draft.gmModelRole,
+    gmTemperature: draft.gmTemperature,
+    gmMaxTokens: draft.gmMaxTokens,
   };
 
   const behaviorDefaults = getBehaviorDefaultsFromSettings(modelSettings);
@@ -779,6 +791,7 @@ export const ProfilePreferencesTab: React.FC<ProfilePreferencesTabProps> = ({
             values={behaviorValues}
             defaults={behaviorDefaults}
             isLocked={isLocked}
+            clerkMirrorsActor={draft.clerkMirrorsActor}
             onChangeField={(key, val, opts) =>
               updateDraft({ [key]: val } as Partial<ProfileModelDraft>, opts)
             }

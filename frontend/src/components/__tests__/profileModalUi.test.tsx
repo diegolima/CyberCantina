@@ -37,6 +37,9 @@ const BASE_DEFAULTS: ProfileBehaviorValues = {
   agentDispatchMode: "sequential",
   personaDisclosureMode: "llm_intent",
   delegateCognitionToClerk: false,
+  gmModelRole: "primary",
+  gmTemperature: 0.5,
+  gmMaxTokens: 1024,
 };
 
 const BASE_MODEL_SETTINGS: ProfileModelSettingsResponse = {

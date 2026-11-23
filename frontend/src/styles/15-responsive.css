@@ -474,6 +474,25 @@
     min-width: 220px;
     max-width: calc(100vw - 24px);
   }
+
+  .gm-slideout-panel {
+    height: 72%;
+    min-height: 220px;
+  }
+
+  .gm-slideout-header {
+    padding: 9px 12px;
+  }
+
+  .gm-model-pill {
+    display: none;
+  }
+
+  .gm-mention-row-body {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -488,6 +507,9 @@
   .magic-wand-revert-bar,
   .composer-flyout-menu,
   .slash-help-tray,
+  .gm-slideout-panel,
+  .gm-slideout-panel--closing,
+  .gm-talk-streaming-dot,
   .ui-pill--fade,
   .change-dot,
   .provider-dot--probing,

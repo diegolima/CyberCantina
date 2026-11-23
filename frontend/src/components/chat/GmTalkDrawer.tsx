@@ -1,0 +1,362 @@
+import React, { useEffect, useRef } from "react";
+import {
+  AlertTriangle,
+  AtSign,
+  Check,
+  ChevronDown,
+  Compass,
+  Copy,
+  Loader2,
+  Lock,
+  Maximize2,
+  Minimize2,
+  Shield,
+  Trash2,
+  X,
+} from "lucide-react";
+import type { GmChatMessage, GmSourceRef } from "../../types";
+import type { GmModelMeta } from "../../hooks/useGmTalk";
+import { GM_GREETING_MESSAGE, GM_NAME } from "../../utils/gmMentions";
+import { renderFormattedProse } from "./chatHelpers";
+
+export interface GmTalkDrawerProps {
+  drawerRef?: React.RefObject<HTMLElement>;
+  campaignTitle: string;
+  worldName: string;
+  unlockLore: boolean;
+  isClosing: boolean;
+  isExpanded: boolean;
+  isCampaignStreaming: boolean;
+  messages: GmChatMessage[];
+  isLoading: boolean;
+  isStreaming: boolean;
+  streamingText: string;
+  streamingSources: GmSourceRef[];
+  error: string | null;
+  clearConfirm: boolean;
+  isClearing: boolean;
+  copiedId: string | null;
+  expandedSources: Record<string, boolean>;
+  modelMeta: GmModelMeta | null;
+  onInsertAtTrigger: () => void;
+  onClearChat: () => void;
+  onCopyMessage: (id: string, content: string) => void;
+  onToggleSources: (id: string) => void;
+  onDismissError: () => void;
+  onToggleExpanded: () => void;
+  onMinimize: () => void;
+}
+
+export const GmTalkDrawer: React.FC<GmTalkDrawerProps> = ({
+  drawerRef,
+  campaignTitle,
+  worldName,
+  unlockLore,
+  isClosing,
+  isExpanded,
+  isCampaignStreaming,
+  messages,
+  isLoading,
+  isStreaming,
+  streamingText,
+  streamingSources,
+  error,
+  clearConfirm,
+  isClearing,
+  copiedId,
+  expandedSources,
+  modelMeta,
+  onInsertAtTrigger,
+  onClearChat,
+  onCopyMessage,
+  onToggleSources,
+  onDismissError,
+  onToggleExpanded,
+  onMinimize,
+}) => {
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = messagesEndRef.current;
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+  }, [messages.length, streamingText, isStreaming]);
+
+  const panelClasses = [
+    "gm-slideout-panel",
+    isExpanded ? "gm-slideout-panel--expanded" : "",
+    isClosing ? "gm-slideout-panel--closing" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    <section
+      ref={drawerRef}
+      className={panelClasses}
+      role="region"
+      aria-label={`${GM_NAME} — GM Talk`}
+    >
+      {/* Header Bar */}
+      <div className="gm-slideout-header">
+        <div className="gm-talk-header-title">
+          <Compass size={16} color="var(--accent-violet)" />
+          <div className="gm-talk-header-meta">
+            <strong>{GM_NAME} · GM Talk</strong>
+            <span>
+              {campaignTitle} · {worldName}
+            </span>
+          </div>
+        </div>
+
+        <div className="gm-talk-header-actions">
+          <span
+            className={`gm-spoiler-pill ${
+              unlockLore
+                ? "gm-spoiler-pill--unlocked"
+                : "gm-spoiler-pill--safe"
+            }`}
+            title={
+              unlockLore
+                ? "Unlock Lore & Secrets (GM Mode) is enabled in World Settings — secrets and private cognitions are visible."
+                : "Spoiler-Safe Mode — unrevealed secrets, unvisited areas, and private character cognitions are hidden."
+            }
+          >
+            {unlockLore ? <Shield size={11} /> : <Lock size={11} />}
+            <span>
+              {unlockLore ? "GM Mode · Secrets Unlocked" : "Spoiler-Safe"}
+            </span>
+          </span>
+
+          {modelMeta?.modelName && (
+            <span
+              className="gm-model-pill"
+              title={`Role: ${modelMeta.role} · Temp ${modelMeta.temperature} · Max ${modelMeta.maxTokens} tok`}
+            >
+              {modelMeta.role === "clerk" ? "Clerk" : "Primary"} ·{" "}
+              {modelMeta.modelName}
+            </span>
+          )}
+
+          <button
+            type="button"
+            className={`btn gm-clear-btn ${
+              clearConfirm ? "gm-clear-btn--confirm" : ""
+            }`}
+            disabled={isStreaming || isClearing || messages.length === 0}
+            onClick={onClearChat}
+            title="Clear GM chat messages on the active branch"
+          >
+            <Trash2 size={12} />
+            <span>
+              {isClearing
+                ? "Clearing…"
+                : clearConfirm
+                  ? "Confirm Clear?"
+                  : "Clear Chat"}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className="btn gm-slideout-icon-btn"
+            onClick={onToggleExpanded}
+            aria-label={isExpanded ? "Restore 50% height" : "Expand GM Talk"}
+            title={isExpanded ? "Restore 50% height" : "Expand GM Talk"}
+          >
+            {isExpanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+          </button>
+
+          <button
+            type="button"
+            className="btn gm-slideout-icon-btn"
+            onClick={onMinimize}
+            aria-label="Minimize GM Talk"
+            title="Minimize GM Talk (Esc)"
+          >
+            <ChevronDown size={15} />
+          </button>
+        </div>
+      </div>
+
+      {/* Scrollable Conversation Body */}
+      <div className="gm-talk-messages">
+        {isLoading && messages.length === 0 ? (
+          <div className="gm-talk-loading">
+            <Loader2 size={16} className="spinning" />
+            <span>Loading Neuromancer session…</span>
+          </div>
+        ) : (
+          <>
+            {messages.length === 0 && !isStreaming && (
+              <div className="gm-greeting-card">
+                <div className="gm-message-role-row">
+                  <Compass size={13} color="var(--accent-violet)" />
+                  <strong>{GM_NAME}</strong>
+                  <span className="gm-message-role-badge">GM · OOC</span>
+                </div>
+                <p className="gm-greeting-text">{GM_GREETING_MESSAGE}</p>
+                <div className="gm-greeting-tips">
+                  <span>
+                    Type <code>@</code> in the prompt below to browse{" "}
+                    <strong>Characters</strong>, <strong>Lore</strong>,{" "}
+                    <strong>Locations</strong>, <strong>Containers</strong>, or{" "}
+                    <strong>Turns</strong>.
+                  </span>
+                  <button
+                    type="button"
+                    className="btn gm-try-at-btn"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={onInsertAtTrigger}
+                  >
+                    <AtSign size={12} />
+                    <span>Browse @</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {messages.map((msg) => {
+              const isUser = msg.role === "user";
+              const showSources = Boolean(expandedSources[msg.id]);
+              return (
+                <div
+                  key={msg.id}
+                  className={`gm-message-card ${
+                    isUser ? "gm-message-card--user" : "gm-message-card--gm"
+                  }`}
+                >
+                  <div className="gm-message-header">
+                    <div className="gm-message-role-row">
+                      {!isUser && (
+                        <Compass size={12} color="var(--accent-violet)" />
+                      )}
+                      <strong>{isUser ? "You (OOC)" : GM_NAME}</strong>
+                      {!isUser && (
+                        <span className="gm-message-role-badge">GM</span>
+                      )}
+                    </div>
+                    {!isUser && (
+                      <button
+                        type="button"
+                        className="gm-copy-btn"
+                        onClick={() => onCopyMessage(msg.id, msg.content)}
+                        title="Copy reply"
+                        aria-label="Copy Neuromancer reply"
+                      >
+                        {copiedId === msg.id ? (
+                          <Check size={12} color="var(--accent-emerald)" />
+                        ) : (
+                          <Copy size={12} />
+                        )}
+                      </button>
+                    )}
+                  </div>
+
+                  {isUser && msg.mentions && msg.mentions.length > 0 && (
+                    <div className="gm-message-mentions">
+                      {msg.mentions.map((ref) => (
+                        <span
+                          key={`${ref.kind}:${ref.id}`}
+                          className="gm-mention-badge"
+                        >
+                          @{ref.label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="gm-message-body">
+                    {isUser ? msg.content : renderFormattedProse(msg.content)}
+                  </div>
+
+                  {!isUser && msg.sources && msg.sources.length > 0 && (
+                    <div className="gm-sources-bar">
+                      <button
+                        type="button"
+                        className="gm-sources-toggle"
+                        onClick={() => onToggleSources(msg.id)}
+                      >
+                        Sources used ({msg.sources.length}){" "}
+                        {showSources ? "▾" : "▸"}
+                      </button>
+                      {showSources && (
+                        <div className="gm-sources-list">
+                          {msg.sources.map((src, idx) => (
+                            <span
+                              key={`${src.kind}:${src.id}:${idx}`}
+                              className="gm-source-chip"
+                            >
+                              {src.kind}: {src.label}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {isStreaming && (
+              <div className="gm-message-card gm-message-card--gm gm-message-card--streaming">
+                <div className="gm-message-header">
+                  <div className="gm-message-role-row">
+                    <Compass size={12} color="var(--accent-violet)" />
+                    <strong>{GM_NAME}</strong>
+                    <span className="gm-message-role-badge">Thinking…</span>
+                  </div>
+                </div>
+                <div className="gm-message-body">
+                  {streamingText
+                    ? renderFormattedProse(streamingText)
+                    : "Consulting campaign records…"}
+                </div>
+                {streamingSources.length > 0 && (
+                  <div className="gm-sources-bar">
+                    <div className="gm-sources-list">
+                      {streamingSources.map((src, idx) => (
+                        <span
+                          key={`${src.kind}:${src.id}:${idx}`}
+                          className="gm-source-chip"
+                        >
+                          {src.kind}: {src.label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div ref={messagesEndRef} />
+          </>
+        )}
+      </div>
+
+      {/* Inline Error / Streaming Guard Banners */}
+      {error && (
+        <div className="gm-talk-error" role="alert">
+          <AlertTriangle size={13} />
+          <span>{error}</span>
+          <button
+            type="button"
+            className="gm-error-dismiss"
+            onClick={onDismissError}
+            aria-label="Dismiss error"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
+      {isCampaignStreaming && (
+        <div className="gm-talk-streaming-guard">
+          Campaign turn in progress — wait for it to finish before asking{" "}
+          {GM_NAME}.
+        </div>
+      )}
+    </section>
+  );
+};

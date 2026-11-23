@@ -863,6 +863,7 @@ def build_campaign_zcc_export_to_file(
     strip_bookmark_comments: bool = False,
     include_world_media: bool = True,
     include_videos: bool = False,
+    include_gm_chat: bool = False,
     selected_video_ids: list[str] | None = None,
     password: str | None = None,
 ) -> tuple[Path, str]:
@@ -873,6 +874,7 @@ def build_campaign_zcc_export_to_file(
         owner_id=owner_id,
         timeline_scope=timeline_scope,
         strip_bookmark_comments=strip_bookmark_comments,
+        include_gm_chat=include_gm_chat,
     )
     camp_name = str(extracted.campaign_payload.get("name") or "campaign")
     out_path = build_zcc_export_to_file(

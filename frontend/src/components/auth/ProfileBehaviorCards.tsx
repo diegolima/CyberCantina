@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useId, useState } from "react";
 import {
   Brain,
+  Compass,
   Cpu,
   type LucideIcon,
   MessageSquare,
@@ -26,12 +27,16 @@ export interface ProfileBehaviorValues {
   agentDispatchMode: AgentDispatchMode;
   personaDisclosureMode: DisclosureDetectionMode;
   delegateCognitionToClerk: boolean;
+  gmModelRole: "primary" | "clerk";
+  gmTemperature: number;
+  gmMaxTokens: number;
 }
 
 export interface ProfileBehaviorCardsProps {
   values: ProfileBehaviorValues;
   defaults: ProfileBehaviorValues;
   isLocked: boolean;
+  clerkMirrorsActor?: boolean;
   onChangeField: <K extends keyof ProfileBehaviorValues>(
     key: K,
     value: ProfileBehaviorValues[K],
@@ -46,6 +51,7 @@ const CARD_ICONS: Record<BehaviorIconKey, LucideIcon> = {
   recaps: ScrollText,
   recall: Brain,
   engine: Cpu,
+  gm: Compass,
 };
 
 interface FieldResetButtonProps {
@@ -90,6 +96,7 @@ export const ProfileBehaviorCards: React.FC<ProfileBehaviorCardsProps> = ({
   values,
   defaults,
   isLocked,
+  clerkMirrorsActor = false,
   onChangeField,
   onFieldBlurSettled,
   onBehaviorInvalidChange,
@@ -97,6 +104,26 @@ export const ProfileBehaviorCards: React.FC<ProfileBehaviorCardsProps> = ({
   const dispatchSelectId = useId();
   const disclosureSelectId = useId();
   const delegateCheckboxId = useId();
+  const gmRoleSelectId = useId();
+  const gmTempInputId = useId();
+
+  const [gmTempDraft, setGmTempDraft] = useState(values.gmTemperature.toFixed(2).replace(/\.?0+$/, (m) => (m === ".00" ? ".0" : m)));
+  const [gmTempFocused, setGmTempFocused] = useState(false);
+
+  useEffect(() => {
+    if (!gmTempFocused) {
+      setGmTempDraft(String(values.gmTemperature));
+    }
+  }, [values.gmTemperature, gmTempFocused]);
+
+  const parsedGmTemp = (() => {
+    const trimmed = gmTempDraft.trim();
+    if (!trimmed) return null;
+    const num = Number(trimmed);
+    if (!Number.isFinite(num) || num < 0 || num > 2) return null;
+    return Math.round(num * 100) / 100;
+  })();
+  const gmTempValid = parsedGmTemp !== null;
 
   const [invalidMap, setInvalidMap] = useState<Record<string, boolean>>({});
 
@@ -108,6 +135,10 @@ export const ProfileBehaviorCards: React.FC<ProfileBehaviorCardsProps> = ({
       return { ...prev, [fieldKey]: isInvalid };
     });
   }, []);
+
+  useEffect(() => {
+    setFieldValidity("gmTemperature", gmTempValid);
+  }, [gmTempValid, setFieldValidity]);
 
   useEffect(() => {
     const count = Object.values(invalidMap).filter(Boolean).length;
@@ -507,6 +538,148 @@ export const ProfileBehaviorCards: React.FC<ProfileBehaviorCardsProps> = ({
               Run Phase 3 character inner-thought cognition on the lighter Clerk model instead of the Actor model.
             </div>
           </div>
+        </div>
+      </section>
+
+      {/* 5. GM Talk (Neuromancer · Out-of-Character Assistant) */}
+      <section
+        className="behavior-card"
+        style={{ "--card-accent-color": cardMap.gm.accent } as React.CSSProperties}
+      >
+        {renderCardHeader("gm")}
+        <div className="behavior-card-fields">
+          <div className="form-group">
+            <div className="behavior-field-label-row">
+              <label className="form-label" htmlFor={gmRoleSelectId}>
+                GM Model Role
+              </label>
+              <FieldResetButton
+                fieldLabel="GM Model Role"
+                defaultDisplay={defaults.gmModelRole === "clerk" ? "Clerk" : "Primary"}
+                visible={!isLocked && values.gmModelRole !== defaults.gmModelRole}
+                onReset={() =>
+                  onChangeField("gmModelRole", defaults.gmModelRole, {
+                    immediate: true,
+                  })
+                }
+              />
+            </div>
+            <select
+              id={gmRoleSelectId}
+              className="field-select"
+              disabled={isLocked}
+              value={values.gmModelRole}
+              onChange={(e) =>
+                onChangeField(
+                  "gmModelRole",
+                  e.target.value as "primary" | "clerk",
+                  { immediate: true }
+                )
+              }
+            >
+              <option value="primary">Primary (Actor Model)</option>
+              <option value="clerk">Clerk (Auxiliary Model)</option>
+            </select>
+            <div className="form-hint" style={{ fontSize: "0.7rem" }}>
+              {clerkMirrorsActor && values.gmModelRole === "clerk"
+                ? "Clerk mirrors Actor is enabled in Models, so both roles share the Primary model."
+                : "Select which configured model powers Neuromancer without changing loaded context size."}
+            </div>
+          </div>
+
+          <div className="form-group">
+            <div className="behavior-field-label-row">
+              <label className="form-label" htmlFor={gmTempInputId}>
+                GM Temperature
+              </label>
+              <FieldResetButton
+                fieldLabel="GM Temperature"
+                defaultDisplay={String(defaults.gmTemperature)}
+                visible={!isLocked && values.gmTemperature !== defaults.gmTemperature}
+                onReset={() => {
+                  setGmTempDraft(String(defaults.gmTemperature));
+                  onChangeField("gmTemperature", defaults.gmTemperature, {
+                    immediate: true,
+                  });
+                }}
+              />
+            </div>
+            <input
+              id={gmTempInputId}
+              type="text"
+              inputMode="decimal"
+              className={`form-input ${gmTempValid ? "" : "invalid"}`}
+              style={gmTempValid ? undefined : { borderColor: "var(--accent-rose)" }}
+              value={gmTempDraft}
+              disabled={isLocked}
+              aria-invalid={!gmTempValid}
+              onFocus={() => setGmTempFocused(true)}
+              onBlur={() => {
+                setGmTempFocused(false);
+                if (parsedGmTemp === null) {
+                  setGmTempDraft(String(values.gmTemperature));
+                } else {
+                  setGmTempDraft(String(parsedGmTemp));
+                  if (parsedGmTemp !== values.gmTemperature) {
+                    onChangeField("gmTemperature", parsedGmTemp);
+                  }
+                }
+                onFieldBlurSettled?.();
+              }}
+              onChange={(e) => {
+                const raw = e.target.value;
+                setGmTempDraft(raw);
+                const t = raw.trim();
+                if (t) {
+                  const num = Number(t);
+                  if (Number.isFinite(num) && num >= 0 && num <= 2) {
+                    const rounded = Math.round(num * 100) / 100;
+                    if (rounded !== values.gmTemperature) {
+                      onChangeField("gmTemperature", rounded);
+                    }
+                  }
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+            />
+            <div className="form-hint" style={{ fontSize: "0.7rem" }}>
+              Sampling temperature (0.0–2.0, default 0.5) for grounded out-of-character answers.
+            </div>
+            {!gmTempValid && (
+              <div className="nsf-error" role="alert">
+                Enter a number between 0.0 and 2.0.
+              </div>
+            )}
+          </div>
+
+          <IntegerField
+            label="GM Max Tokens"
+            value={values.gmMaxTokens}
+            min={128}
+            max={4096}
+            disabled={isLocked}
+            hint="Maximum output tokens per Neuromancer response (128–4096, default 1024)."
+            onCommit={(v) => onChangeField("gmMaxTokens", v)}
+            onBlurSettled={onFieldBlurSettled}
+            onValidityChange={(valid) => setFieldValidity("gmMaxTokens", valid)}
+            labelAction={
+              <FieldResetButton
+                fieldLabel="GM Max Tokens"
+                defaultDisplay={String(defaults.gmMaxTokens)}
+                visible={!isLocked && values.gmMaxTokens !== defaults.gmMaxTokens}
+                onReset={() =>
+                  onChangeField("gmMaxTokens", defaults.gmMaxTokens, {
+                    immediate: true,
+                  })
+                }
+              />
+            }
+          />
         </div>
       </section>
     </div>

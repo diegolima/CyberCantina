@@ -702,6 +702,36 @@ class SchemaInitMixin:
                 conn.execute(
                     "ALTER TABLE user_model_settings ADD COLUMN recall_budget_cognition_tokens INTEGER NULL"
                 )
+            if "gm_model_role" not in ums_cols:
+                conn.execute(
+                    "ALTER TABLE user_model_settings ADD COLUMN gm_model_role TEXT NULL"
+                )
+            if "gm_temperature" not in ums_cols:
+                conn.execute(
+                    "ALTER TABLE user_model_settings ADD COLUMN gm_temperature REAL NULL"
+                )
+            if "gm_max_tokens" not in ums_cols:
+                conn.execute(
+                    "ALTER TABLE user_model_settings ADD COLUMN gm_max_tokens INTEGER NULL"
+                )
+
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS gm_chat_messages (
+                    id TEXT PRIMARY KEY,
+                    campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+                    anchor_turn_id TEXT NULL REFERENCES turn_nodes(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+                    content TEXT NOT NULL,
+                    mentions_json TEXT NOT NULL DEFAULT '[]',
+                    sources_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_gm_chat_messages_campaign ON gm_chat_messages(campaign_id, anchor_turn_id, created_at)"
+            )
 
             # Seed / ensure built-in prompt presets
             now_iso = utc_now_iso()

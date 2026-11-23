@@ -257,7 +257,7 @@ describe("slash command UI rendering", () => {
         onClose={vi.fn()}
       />
     );
-    const orderedNames = ["/choice", "/event", "/help", "/look", "/narrate", "/party", "/wait"];
+    const orderedNames = ["/choice", "/event", "/gm", "/help", "/look", "/narrate", "/party", "/wait"];
     let lastPos = -1;
     for (const cmd of orderedNames) {
       const pos = standaloneHtml.indexOf(cmd);

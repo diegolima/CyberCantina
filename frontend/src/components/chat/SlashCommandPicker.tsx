@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import {
   Clock,
+  Compass,
   Eye,
   HelpCircle,
   ListChecks,
@@ -27,6 +28,8 @@ export const SlashCommandIcon: React.FC<SlashCommandIconProps> = ({
       return <ListChecks size={size} className={className} />;
     case "zap":
       return <Zap size={size} className={className} />;
+    case "compass":
+      return <Compass size={size} className={className} />;
     case "help_circle":
       return <HelpCircle size={size} className={className} />;
     case "eye":

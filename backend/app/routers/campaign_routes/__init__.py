@@ -73,6 +73,12 @@ from app.routers.campaign_routes.turn_streaming import (
     stream_campaign_turn,
     submit_campaign_turn_sync,
 )
+from app.routers.campaign_routes.gm_routes import (
+    get_campaign_gm_messages,
+    clear_campaign_gm_messages,
+    search_campaign_gm_mentions,
+    stream_campaign_gm_chat,
+)
 
 __all__ = [
     "logger",
@@ -131,4 +137,8 @@ __all__ = [
     "_RELAY_ERROR_MESSAGES",
     "stream_campaign_turn",
     "submit_campaign_turn_sync",
+    "get_campaign_gm_messages",
+    "clear_campaign_gm_messages",
+    "search_campaign_gm_mentions",
+    "stream_campaign_gm_chat",
 ]

@@ -8,6 +8,7 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from fastapi import HTTPException, Request, Response, UploadFile
 from PIL import Image
@@ -83,6 +84,9 @@ class EffectiveModels:
     zone2_budget_share_pct: int = 45
     recall_budget_prose_tokens: int = 450
     recall_budget_cognition_tokens: int = 220
+    gm_model_role: Literal["primary", "clerk"] = "primary"
+    gm_temperature: float = 0.5
+    gm_max_tokens: int = 1024
 
 
 def _finalize_profile(
@@ -179,6 +183,9 @@ def resolve_effective_models(user_id: str | None) -> EffectiveModels:
     z2_share = settings.memory_config.zone2_budget_share_pct
     recall_prose = settings.memory_config.recall_budget_prose_tokens
     recall_cog = settings.memory_config.recall_budget_cognition_tokens
+    gm_role: Literal["primary", "clerk"] = settings.gm_model_role
+    gm_temp = settings.gm_temperature
+    gm_tokens = settings.gm_max_tokens
 
     user_settings = (
         get_repo().get_user_model_settings(user_id)
@@ -212,6 +219,12 @@ def resolve_effective_models(user_id: str | None) -> EffectiveModels:
             recall_prose = user_settings.recall_budget_prose_tokens
         if user_settings.recall_budget_cognition_tokens is not None:
             recall_cog = user_settings.recall_budget_cognition_tokens
+        if user_settings.gm_model_role in ("primary", "clerk"):
+            gm_role = user_settings.gm_model_role
+        if user_settings.gm_temperature is not None:
+            gm_temp = user_settings.gm_temperature
+        if user_settings.gm_max_tokens is not None:
+            gm_tokens = user_settings.gm_max_tokens
 
     warnings: list[EffectiveWarning] = []
     actor = _finalize_profile(
@@ -262,6 +275,28 @@ def resolve_effective_models(user_id: str | None) -> EffectiveModels:
         zone2_budget_share_pct=z2_share,
         recall_budget_prose_tokens=recall_prose,
         recall_budget_cognition_tokens=recall_cog,
+        gm_model_role=gm_role,
+        gm_temperature=gm_temp,
+        gm_max_tokens=gm_tokens,
+    )
+
+
+def resolve_gm_profile(eff: EffectiveModels) -> tuple[ModelProfile, Literal["primary", "clerk"]]:
+    """Select the effective Actor or Clerk profile for GM Talk, overriding only temperature and max_tokens."""
+    if eff.gm_model_role == "clerk" and not eff.clerk_mirrors_actor:
+        base = eff.clerk
+        effective_role: Literal["primary", "clerk"] = "clerk"
+    else:
+        base = eff.actor
+        effective_role = "primary"
+    return (
+        base.model_copy(
+            update={
+                "temperature": eff.gm_temperature,
+                "max_tokens": eff.gm_max_tokens,
+            }
+        ),
+        effective_role,
     )
 
 

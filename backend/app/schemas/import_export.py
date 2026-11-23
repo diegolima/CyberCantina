@@ -69,6 +69,7 @@ class ExportCampaignRequest(BaseModel):
     strip_bookmark_comments: bool = False
     include_world_media: bool = True
     include_videos: bool = False
+    include_gm_chat: bool = False
     selected_video_ids: list[str] | None = None
     password: str | None = Field(default=None, min_length=1, max_length=256)
 

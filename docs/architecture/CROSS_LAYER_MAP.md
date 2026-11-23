@@ -39,6 +39,10 @@
 | `POST` | `/api/campaigns/{campaign_id}/edges` | `app.routers.campaign_routes.spatial_routes.connect_campaign_locations` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `DELETE` | `/api/campaigns/{campaign_id}/edges/{edge_id}` | `app.routers.campaign_routes.spatial_routes.remove_campaign_edge` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `PATCH` | `/api/campaigns/{campaign_id}/edges/{edge_id}` | `app.routers.campaign_routes.spatial_routes.update_campaign_edge_distance` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
+| `POST` | `/api/campaigns/{campaign_id}/gm/chat` | `app.routers.campaign_routes.gm_routes.stream_campaign_gm_chat` | — | `frontend/src/api/gm.ts` |
+| `GET` | `/api/campaigns/{campaign_id}/gm/mentions` | `app.routers.campaign_routes.gm_routes.search_campaign_gm_mentions` | `GmMentionsResponse` | *(backend-only / test / SSE)* |
+| `DELETE` | `/api/campaigns/{campaign_id}/gm/messages` | `app.routers.campaign_routes.gm_routes.clear_campaign_gm_messages` | `dict` | `frontend/src/api/gm.ts` |
+| `GET` | `/api/campaigns/{campaign_id}/gm/messages` | `app.routers.campaign_routes.gm_routes.get_campaign_gm_messages` | `GmMessagesResponse` | `frontend/src/api/gm.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/item-equip` | `app.routers.campaign_routes.crud_and_state.toggle_campaign_item_equip` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/location-override` | `app.routers.campaign_routes.crud_and_state.override_campaign_location` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/locations` | `app.routers.campaign_routes.spatial_routes.create_campaign_linked_location` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
@@ -196,6 +200,8 @@ erDiagram
     worlds ||--o{ characters : references
     campaigns ||--o{ episodic_chunks : references
     turn_nodes ||--o{ episodic_chunks : references
+    campaigns ||--o{ gm_chat_messages : references
+    turn_nodes ||--o{ gm_chat_messages : references
     location_containers ||--o{ location_containers : references
     media_assets ||--o{ location_containers : references
     worlds ||--o{ location_containers : references
@@ -267,6 +273,7 @@ erDiagram
 | `providers` | `users` |
 | `chloromancer_runs` | — |
 | `admin_messages` | — |
+| `gm_chat_messages` | `campaigns`, `turn_nodes` |
 
 ## 3. Domain Package File Index
 
@@ -317,6 +324,7 @@ erDiagram
 | `backend/app/db/repos/character_versions.py` | Character updates, version history snapshots/restores, and campaign memory edits. |
 | `backend/app/db/repos/characters.py` | Character creation, access checks, media staging, portraits/gallery, and soft-deletion. |
 | `backend/app/db/repos/chloromancer.py` | Chloromancer housekeeping run-history persistence. |
+| `backend/app/db/repos/gm_chat.py` | Branch-aware SQLite persistence for out-of-character Neuromancer GM Talk messages. |
 | `backend/app/db/repos/media_assets.py` | Unified media asset persistence, 1:1 linked-video lifecycle, hydration, and admin purge. |
 | `backend/app/db/repos/notes.py` | User notes persistence and row mapping. |
 | `backend/app/db/repos/personas.py` | Player personas and dynamic campaign persona turn state. |
@@ -413,6 +421,12 @@ erDiagram
 | `backend/app/engine/context/zone1_static.py` | Zone 1 KV-cached static system prompt assembly and discovered-persona views. |
 | `backend/app/engine/context/zone2_episodic.py` | Zone 2 LOD episodic memory rendering, vector recall packing, and compacted turn elevation. |
 | `backend/app/engine/context/zone4_ephemeral.py` | Zone 4 ephemeral tail frame and elapsed snapshot state projection. |
+
+#### `app.engine.gm_talk`
+
+| File | Summary |
+| :--- | :--- |
+| `backend/app/engine/gm_talk.py` | Out-of-character Neuromancer GM Talk engine: mention search, 3-layer spoiler gating, and hybrid RAG. |
 
 #### `app.engine.llm_client`
 
@@ -554,6 +568,7 @@ erDiagram
 | :--- | :--- |
 | `backend/app/routers/campaign_routes/__init__.py` | Campaign REST & SSE endpoints package. |
 | `backend/app/routers/campaign_routes/crud_and_state.py` | Campaign CRUD, branching, character membership, inventory equip, and turn deletion endpoints. |
+| `backend/app/routers/campaign_routes/gm_routes.py` | GM Talk ('Neuromancer') REST & SSE streaming routes. |
 | `backend/app/routers/campaign_routes/schemas_and_gate.py` | Campaign router instance, request schemas, concurrency turn gate, and monkeypatch resolver. |
 | `backend/app/routers/campaign_routes/spatial_routes.py` | Campaign linked-location, edge distance, map layout, and lore endpoints. |
 | `backend/app/routers/campaign_routes/turn_streaming.py` | Campaign turn execution pipeline, SSE streaming, and synchronous turn submission. |
@@ -568,6 +583,7 @@ erDiagram
 | `backend/app/schemas/auth.py` | Pydantic schemas for Multi-User Authentication, WebAuthn Passkeys, Profile, and Admin. |
 | `backend/app/schemas/character.py` | Character, psyche, memory shard, and cognition schemas. |
 | `backend/app/schemas/enrich.py` | Pydantic schemas for the AI Magic Wand text enrichment endpoint. |
+| `backend/app/schemas/gm.py` | Leaf Pydantic v2 schemas for GM Talk ('Neuromancer') out-of-character chat. |
 | `backend/app/schemas/housekeeping.py` | Pydantic v2 schemas for Chloromancer housekeeping scheduler and purge previews. |
 | `backend/app/schemas/import_export.py` | Schemas for native CyberCantina archive (.zcc) export and import. |
 | `backend/app/schemas/mechanics.py` | Schemas for mechanics checks, previews, and dice calculations. |
@@ -640,6 +656,7 @@ erDiagram
 | `frontend/src/api/campaigns.ts` |
 | `frontend/src/api/characters.ts` |
 | `frontend/src/api/client.ts` |
+| `frontend/src/api/gm.ts` |
 | `frontend/src/api/importExport.ts` |
 | `frontend/src/api/index.ts` |
 | `frontend/src/api/notes.ts` |
@@ -725,6 +742,8 @@ erDiagram
 | `frontend/src/components/chat/ContextHealthModal.tsx` |
 | `frontend/src/components/chat/ContextHealthPill.tsx` |
 | `frontend/src/components/chat/DirectorChoicesDrawer.tsx` |
+| `frontend/src/components/chat/GmMentionPopover.tsx` |
+| `frontend/src/components/chat/GmTalkDrawer.tsx` |
 | `frontend/src/components/chat/LiveStreamingTurnCard.tsx` |
 | `frontend/src/components/chat/SlashCommandPicker.tsx` |
 | `frontend/src/components/chat/SlashHelpTray.tsx` |
@@ -860,6 +879,7 @@ erDiagram
 | File |
 | :--- |
 | `frontend/src/hooks/useCampaignTurnActions.ts` |
+| `frontend/src/hooks/useGmTalk.ts` |
 | `frontend/src/hooks/useMagicWand.ts` |
 | `frontend/src/hooks/useResponsiveCampaignLayout.ts` |
 
@@ -895,6 +915,7 @@ erDiagram
 | `frontend/src/types/affective.ts` |
 | `frontend/src/types/auth.ts` |
 | `frontend/src/types/character.ts` |
+| `frontend/src/types/gm.ts` |
 | `frontend/src/types/importExport.ts` |
 | `frontend/src/types/index.ts` |
 | `frontend/src/types/mechanics.ts` |
@@ -915,6 +936,7 @@ erDiagram
 | `frontend/src/utils/campaignLayout.ts` |
 | `frontend/src/utils/choiceCommand.ts` |
 | `frontend/src/utils/entityImages.ts` |
+| `frontend/src/utils/gmMentions.ts` |
 | `frontend/src/utils/importExportLogic.ts` |
 | `frontend/src/utils/mentions.ts` |
 | `frontend/src/utils/narratorCognition.ts` |

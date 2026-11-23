@@ -248,6 +248,7 @@ async def export_campaign(
             strip_bookmark_comments=req.strip_bookmark_comments,
             include_world_media=req.include_world_media,
             include_videos=req.include_videos,
+            include_gm_chat=req.include_gm_chat,
             selected_video_ids=req.selected_video_ids,
             password=req.password,
         )

@@ -329,6 +329,9 @@ class UserModelSettingsPayload(BaseModel):
     zone2_budget_share_pct: int | None = Field(default=None, ge=10, le=80)
     recall_budget_prose_tokens: int | None = Field(default=None, ge=100, le=2000)
     recall_budget_cognition_tokens: int | None = Field(default=None, ge=60, le=1000)
+    gm_model_role: Literal["primary", "clerk"] | None = None
+    gm_temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    gm_max_tokens: int | None = Field(default=None, ge=128, le=4096)
 
 
 class EffectiveWarning(BaseModel):
@@ -368,6 +371,9 @@ class ProfileModelSettingsResponse(BaseModel):
     effective_zone2_budget_share_pct: int = 45
     effective_recall_budget_prose_tokens: int = 450
     effective_recall_budget_cognition_tokens: int = 220
+    effective_gm_model_role: Literal["primary", "clerk"] = "primary"
+    effective_gm_temperature: float = 0.5
+    effective_gm_max_tokens: int = 1024
     user_actor_profile: ModelProfile | None = None
     user_clerk_profile: ModelProfile | None = None
     user_working_memory_turns: int | None = None
@@ -381,6 +387,9 @@ class ProfileModelSettingsResponse(BaseModel):
     user_zone2_budget_share_pct: int | None = None
     user_recall_budget_prose_tokens: int | None = None
     user_recall_budget_cognition_tokens: int | None = None
+    user_gm_model_role: Literal["primary", "clerk"] | None = None
+    user_gm_temperature: float | None = None
+    user_gm_max_tokens: int | None = None
     active_prompt_preset_id: str | None = None
     default_actor_profile: ModelProfile
     default_clerk_profile: ModelProfile
@@ -395,4 +404,7 @@ class ProfileModelSettingsResponse(BaseModel):
     default_zone2_budget_share_pct: int = 45
     default_recall_budget_prose_tokens: int = 450
     default_recall_budget_cognition_tokens: int = 220
+    default_gm_model_role: Literal["primary", "clerk"] = "primary"
+    default_gm_temperature: float = 0.5
+    default_gm_max_tokens: int = 1024
     default_embedding_profile: EmbeddingProfile | None = None

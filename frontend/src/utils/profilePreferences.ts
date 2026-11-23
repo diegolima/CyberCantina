@@ -14,7 +14,7 @@ export type ProfileInitialTab =
   | "models"
   | "prompts"
   | "behavior";
-export type BehaviorIconKey = "dialogue" | "recaps" | "recall" | "engine";
+export type BehaviorIconKey = "dialogue" | "recaps" | "recall" | "engine" | "gm";
 
 const FALLBACK_ACTOR_CONTEXT_SIZE = 12288;
 const FALLBACK_CLERK_CONTEXT_SIZE = 8192;
@@ -45,6 +45,9 @@ export interface ProfileModelDraft {
   agentDispatchMode: AgentDispatchMode;
   personaDisclosureMode: DisclosureDetectionMode;
   delegateCognitionToClerk: boolean;
+  gmModelRole: "primary" | "clerk";
+  gmTemperature: number;
+  gmMaxTokens: number;
   activePromptPresetId: string | null;
 }
 
@@ -79,6 +82,12 @@ export const BEHAVIOR_CARD_META: readonly BehaviorCardMeta[] = [
     title: "Scene State & Turn Engine",
     subtitle: "Simulation & Pipeline · Zone 4",
     accent: "var(--accent-emerald)",
+  },
+  {
+    id: "gm",
+    title: "GM Talk",
+    subtitle: "Neuromancer · OOC Assistant",
+    accent: "var(--accent-violet, #a78bfa)",
   },
 ] as const;
 
@@ -210,6 +219,15 @@ export function extractDraftFromProfileSettings(
       ? data.default_delegate_cognition_to_clerk
       : (data.user_delegate_cognition_to_clerk ??
         data.default_delegate_cognition_to_clerk),
+    gmModelRole: useDefaults
+      ? (data.default_gm_model_role ?? "primary")
+      : (data.user_gm_model_role ?? data.default_gm_model_role ?? "primary"),
+    gmTemperature: useDefaults
+      ? (data.default_gm_temperature ?? 0.5)
+      : (data.user_gm_temperature ?? data.default_gm_temperature ?? 0.5),
+    gmMaxTokens: useDefaults
+      ? (data.default_gm_max_tokens ?? 1024)
+      : (data.user_gm_max_tokens ?? data.default_gm_max_tokens ?? 1024),
     activePromptPresetId: data.active_prompt_preset_id ?? null,
   };
 }
@@ -252,6 +270,9 @@ export function buildUserModelSettingsPayload(
     zone2_budget_share_pct: draft.zone2BudgetSharePct,
     recall_budget_prose_tokens: draft.recallBudgetProseTokens,
     recall_budget_cognition_tokens: draft.recallBudgetCognitionTokens,
+    gm_model_role: draft.gmModelRole,
+    gm_temperature: draft.gmTemperature,
+    gm_max_tokens: draft.gmMaxTokens,
   };
 }
 
@@ -296,6 +317,9 @@ export function serializeProfileModelPayload(
     recall_budget_prose_tokens: payload.recall_budget_prose_tokens ?? null,
     recall_budget_cognition_tokens:
       payload.recall_budget_cognition_tokens ?? null,
+    gm_model_role: payload.gm_model_role ?? null,
+    gm_temperature: payload.gm_temperature ?? null,
+    gm_max_tokens: payload.gm_max_tokens ?? null,
   });
 }
 

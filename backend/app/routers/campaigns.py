@@ -14,8 +14,10 @@ from app.dependencies import (
     get_effective_user_model_settings,
     get_repo,
     resolve_effective_models,
+    resolve_gm_profile,
     run_entity_pruner,
 )  # noqa: F401
+from app.engine.llm_client import llm_client  # noqa: F401
 from app.engine.affective_engine import (
     compute_provisional_cognition_preview,
     ensure_snapshot_care_state,
@@ -139,4 +141,10 @@ from app.routers.campaign_routes.turn_streaming import (  # noqa: F401
     _RELAY_ERROR_MESSAGES,
     stream_campaign_turn,
     submit_campaign_turn_sync,
+)
+from app.routers.campaign_routes.gm_routes import (  # noqa: F401
+    get_campaign_gm_messages,
+    clear_campaign_gm_messages,
+    search_campaign_gm_mentions,
+    stream_campaign_gm_chat,
 )

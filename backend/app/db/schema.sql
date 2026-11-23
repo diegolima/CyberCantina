@@ -75,6 +75,9 @@ CREATE TABLE IF NOT EXISTS user_model_settings (
     zone2_budget_share_pct INTEGER NULL,
     recall_budget_prose_tokens INTEGER NULL,
     recall_budget_cognition_tokens INTEGER NULL,
+    gm_model_role TEXT NULL,
+    gm_temperature REAL NULL,
+    gm_max_tokens INTEGER NULL,
     updated_at TEXT NOT NULL
 );
 
@@ -569,3 +572,17 @@ CREATE INDEX IF NOT EXISTS idx_admin_messages_active
     ON admin_messages(deleted_at, urgency, sort_order, created_at);
 CREATE INDEX IF NOT EXISTS idx_admin_messages_purge
     ON admin_messages(deleted_at, expires_at);
+
+-- Out-of-character Neuromancer GM Talk messages (branch-safe via anchor_turn_id)
+CREATE TABLE IF NOT EXISTS gm_chat_messages (
+    id TEXT PRIMARY KEY,
+    campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    anchor_turn_id TEXT NULL REFERENCES turn_nodes(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+    content TEXT NOT NULL,
+    mentions_json TEXT NOT NULL DEFAULT '[]',
+    sources_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gm_chat_messages_campaign
+    ON gm_chat_messages(campaign_id, anchor_turn_id, created_at);

@@ -37,6 +37,7 @@ export interface ExportCampaignRequest {
   strip_bookmark_comments?: boolean;
   include_world_media?: boolean;
   include_videos?: boolean;
+  include_gm_chat?: boolean;
   selected_video_ids?: string[] | null;
   password?: string | null;
 }

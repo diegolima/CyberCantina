@@ -6,6 +6,7 @@ from typing import Any
 
 PROMPT_KEY_ACTOR_ZONE1 = "actor_zone1_system"
 PROMPT_KEY_NARRATOR_ZONE1 = "narrator_zone1_system"
+PROMPT_KEY_GM_TALK_SYSTEM = "gm_talk_system"
 PROMPT_KEY_CLERK_PRE_TURN = "clerk_pre_turn_system"
 PROMPT_KEY_CHARACTER_COGNITION = "character_cognition_system"
 PROMPT_KEY_CLERK_SUMMARY = "clerk_episodic_summary_system"
@@ -25,6 +26,7 @@ PROMPT_KEY_WIZARD_CHARACTER_IMPORT_ST = "wizard_character_sillytavern_system"
 ALL_PROMPT_KEYS = [
     PROMPT_KEY_ACTOR_ZONE1,
     PROMPT_KEY_NARRATOR_ZONE1,
+    PROMPT_KEY_GM_TALK_SYSTEM,
     PROMPT_KEY_CLERK_PRE_TURN,
     PROMPT_KEY_CHARACTER_COGNITION,
     PROMPT_KEY_CLERK_SUMMARY,
@@ -538,9 +540,22 @@ DEFAULT_NARRATOR_ZONE1_SYSTEM = (
     "Do NOT output <cognition> blocks. Output only narrative prose."
 )
 
+DEFAULT_GM_TALK_SYSTEM = (
+    "You are Neuromancer, CyberCantina's out-of-character (OOC) Game Master assistant for the ongoing campaign in {world_name}.\n\n"
+    "=== ROLE & INTERACTION CONTRACT ===\n"
+    "- Speak directly to the player out of character. Never roleplay as an NPC or write in-character turn prose unless the player explicitly asks for an illustrative example or brainstorm.\n"
+    "- Ground every answer strictly in the campaign context supplied below (<world>, <current_scene>, <party>, <recent_turns>, <referenced_entities>, <retrieved_lore>).\n"
+    "- When referencing specific turns, events, lore entries, or character states, cite them clearly (e.g., 'In Turn 4...' or by entry title). If a detail is not established in the provided context, say so plainly rather than inventing canon.\n"
+    "- Keep answers concise, clear, and well-structured using lightweight Markdown.\n"
+    "- Do NOT output <cognition> blocks or internal chain-of-thought wrappers.\n\n"
+    "=== SPOILER & EPISTEMIC POLICY ===\n"
+    "{spoiler_policy}"
+)
+
 FACTORY_DEFAULT_PROMPTS: dict[str, str] = {
     PROMPT_KEY_ACTOR_ZONE1: DEFAULT_ACTOR_ZONE1_SYSTEM,
     PROMPT_KEY_NARRATOR_ZONE1: DEFAULT_NARRATOR_ZONE1_SYSTEM,
+    PROMPT_KEY_GM_TALK_SYSTEM: DEFAULT_GM_TALK_SYSTEM,
     PROMPT_KEY_CLERK_PRE_TURN: DEFAULT_CLERK_PRE_TURN_SYSTEM,
     PROMPT_KEY_CHARACTER_COGNITION: DEFAULT_CHARACTER_COGNITION_SYSTEM,
     PROMPT_KEY_CLERK_SUMMARY: DEFAULT_CLERK_EPISODIC_SUMMARY_SYSTEM,
@@ -841,6 +856,19 @@ PROMPTS_METADATA = [
             "characters to be appended to a world-focused campaign start message."
         ),
         "available_variables": [],
+        "required_tags": [],
+    },
+    {
+        "key": PROMPT_KEY_GM_TALK_SYSTEM,
+        "title": "Neuromancer · GM Talk (OOC Assistant)",
+        "description": (
+            "System prompt for Neuromancer, the out-of-character Game Master assistant accessed via "
+            "Talk to GM or /gm to discuss lore, world state, party state, and past turns."
+        ),
+        "available_variables": [
+            {"name": "world_name", "description": "Name of the active campaign world"},
+            {"name": "spoiler_policy", "description": "Dynamic spoiler gating rule based on Unlock Lore & Secrets (GM Mode)"},
+        ],
         "required_tags": [],
     },
     {

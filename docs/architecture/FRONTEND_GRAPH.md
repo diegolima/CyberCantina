@@ -125,11 +125,11 @@ flowchart TD
 | Bucket | Files | Outgoing Dependencies |
 | :--- | ---: | :--- |
 | `App` | 1 | `api`, `components (root)`, `components/party`, `components/story`, `components/world`, `hooks`, `providers`, `types`, `utils` |
-| `api` | 14 | `types` |
+| `api` | 15 | `types` |
 | `components (root)` | 25 | `api`, `components/auth`, `components/character`, `components/chat`, `components/inspector`, `components/map`, `components/prompts`, `components/shared`, `components/wizard`, `components/world`, `hooks`, `providers`, `types`, `utils` |
 | `components/auth` | 14 | `api`, `components (root)`, `components/models`, `components/providers`, `components/shared`, `types`, `utils` |
 | `components/character` | 12 | `api`, `components (root)`, `components/shared`, `types`, `utils` |
-| `components/chat` | 15 | `components (root)`, `components/inspector`, `components/shared`, `hooks`, `types`, `utils` |
+| `components/chat` | 17 | `components (root)`, `components/inspector`, `components/shared`, `hooks`, `types`, `utils` |
 | `components/inspector` | 13 | `components (root)`, `components/map`, `components/shared`, `types`, `utils` |
 | `components/map` | 15 | `components (root)`, `components/inspector`, `components/shared`, `hooks`, `types` |
 | `components/models` | 12 | `components/providers`, `local`, `types` |
@@ -140,9 +140,9 @@ flowchart TD
 | `components/story` | 5 | `components (root)`, `types` |
 | `components/wizard` | 2 | `api`, `components (root)`, `types` |
 | `components/world` | 8 | `api`, `components (root)`, `components/map`, `components/shared`, `types`, `utils` |
-| `hooks` | 3 | `api`, `types`, `utils` |
+| `hooks` | 4 | `api`, `types`, `utils` |
 | `local` | 7 | `types` |
 | `main` | 1 | `App`, `styles.css` |
 | `providers` | 1 | `api`, `local`, `types` |
-| `types` | 15 | *(leaf)* |
-| `utils` | 13 | `types` |
+| `types` | 16 | *(leaf)* |
+| `utils` | 14 | `types` |

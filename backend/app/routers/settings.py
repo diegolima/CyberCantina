@@ -246,6 +246,9 @@ def get_profile_models(
         or user_override.zone2_budget_share_pct is not None
         or user_override.recall_budget_prose_tokens is not None
         or user_override.recall_budget_cognition_tokens is not None
+        or user_override.gm_model_role is not None
+        or user_override.gm_temperature is not None
+        or user_override.gm_max_tokens is not None
     )
     actor_ctx_fallback = settings.actor_profile.context_size or DEFAULT_ACTOR_CONTEXT_SIZE
     clerk_ctx_fallback = settings.clerk_profile.context_size or DEFAULT_CLERK_CONTEXT_SIZE
@@ -269,6 +272,9 @@ def get_profile_models(
         effective_zone2_budget_share_pct=eff.zone2_budget_share_pct,
         effective_recall_budget_prose_tokens=eff.recall_budget_prose_tokens,
         effective_recall_budget_cognition_tokens=eff.recall_budget_cognition_tokens,
+        effective_gm_model_role=eff.gm_model_role,
+        effective_gm_temperature=eff.gm_temperature,
+        effective_gm_max_tokens=eff.gm_max_tokens,
         user_actor_profile=_public_profile(user_override.actor_profile, current_user, fallback_ctx=actor_ctx_fallback) if user_override and user_override.actor_profile else None,
         user_clerk_profile=_public_profile(user_override.clerk_profile, current_user, fallback_ctx=clerk_ctx_fallback) if user_override and user_override.clerk_profile else None,
         user_working_memory_turns=user_override.working_memory_turns if user_override else None,
@@ -283,6 +289,9 @@ def get_profile_models(
         user_zone2_budget_share_pct=user_override.zone2_budget_share_pct if user_override else None,
         user_recall_budget_prose_tokens=user_override.recall_budget_prose_tokens if user_override else None,
         user_recall_budget_cognition_tokens=user_override.recall_budget_cognition_tokens if user_override else None,
+        user_gm_model_role=user_override.gm_model_role if user_override else None,
+        user_gm_temperature=user_override.gm_temperature if user_override else None,
+        user_gm_max_tokens=user_override.gm_max_tokens if user_override else None,
         active_prompt_preset_id=user_override.active_prompt_preset_id if user_override else None,
         default_actor_profile=_public_profile(settings.actor_profile, current_user, fallback_ctx=actor_ctx_fallback),
         default_clerk_profile=_public_profile(settings.clerk_profile, current_user, fallback_ctx=clerk_ctx_fallback),
@@ -298,6 +307,9 @@ def get_profile_models(
         default_zone2_budget_share_pct=settings.memory_config.zone2_budget_share_pct,
         default_recall_budget_prose_tokens=settings.memory_config.recall_budget_prose_tokens,
         default_recall_budget_cognition_tokens=settings.memory_config.recall_budget_cognition_tokens,
+        default_gm_model_role=settings.gm_model_role,
+        default_gm_temperature=settings.gm_temperature,
+        default_gm_max_tokens=settings.gm_max_tokens,
         default_embedding_profile=(
             settings.embedding_profile
             if current_user.role == "admin"

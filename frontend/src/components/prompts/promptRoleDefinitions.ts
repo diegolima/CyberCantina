@@ -23,6 +23,7 @@ export const PROMPT_ROLES: PromptRoleMeta[] = [
     promptKeys: [
       "actor_zone1_system",
       "narrator_zone1_system",
+      "gm_talk_system",
     ],
   },
   {

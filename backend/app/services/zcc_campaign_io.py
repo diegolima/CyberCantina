@@ -96,6 +96,7 @@ def extract_campaign_export_bundle(
     *,
     timeline_scope: Literal["full", "active"] = "full",
     strip_bookmark_comments: bool = False,
+    include_gm_chat: bool = False,
 ) -> ExtractedCampaignBundle:
     """Extract a running campaign and all branch-consistent runtime tables for .zcc v2 export."""
     campaign = repo.get_campaign(campaign_id, owner_id=owner_id)
@@ -379,6 +380,23 @@ def extract_campaign_export_bundle(
                     "embedding_fingerprint": vr["embedding_fingerprint"],
                 }
             )
+
+        gm_chat_messages: list[dict[str, Any]] = []
+        if include_gm_chat:
+            raw_gm = conn.execute(
+                """
+                SELECT id, campaign_id, anchor_turn_id, role, content, mentions_json, sources_json, created_at
+                FROM gm_chat_messages
+                WHERE campaign_id = ?
+                ORDER BY created_at ASC, rowid ASC
+                """,
+                (campaign_id,),
+            ).fetchall()
+            for gr in raw_gm:
+                anchor = gr["anchor_turn_id"]
+                if timeline_scope == "active" and anchor and str(anchor) not in exported_turn_ids:
+                    continue
+                gm_chat_messages.append(dict(gr))
     finally:
         conn.close()
 
@@ -428,6 +446,7 @@ def extract_campaign_export_bundle(
         },
         "episodic_chunks": episodic_chunks,
         "vector_entries": exported_vectors,
+        "gm_chat_messages": gm_chat_messages,
     }
 
     return ExtractedCampaignBundle(
@@ -471,6 +490,29 @@ def _remap_post_turn_json(raw_json: Any, id_remap: dict[str, str]) -> Any:
             me["id"] = f"me_{me['turn_id']}"
         changed = True
     return json.dumps(parsed) if changed else raw_json
+
+
+def _remap_gm_refs_json(raw_json: Any, id_remap: dict[str, str]) -> str:
+    if isinstance(raw_json, str):
+        try:
+            parsed = json.loads(raw_json)
+        except Exception:
+            return raw_json
+    elif isinstance(raw_json, list):
+        parsed = raw_json
+    else:
+        return "[]"
+    if not isinstance(parsed, list):
+        return json.dumps(parsed)
+    remapped: list[Any] = []
+    for item in parsed:
+        if isinstance(item, dict) and item.get("id"):
+            copy_item = dict(item)
+            copy_item["id"] = str(_remap_id(str(item["id"]), id_remap))
+            remapped.append(copy_item)
+        else:
+            remapped.append(item)
+    return json.dumps(remapped)
 
 
 def _remap_id_list_json(raw_json: Any, id_remap: dict[str, str]) -> str:
@@ -1291,6 +1333,38 @@ def ingest_campaigns_atomic(
                         keywords_json,
                         emb_blob,
                         emb_fp,
+                    ),
+                )
+
+            # 12. Insert optional GM Talk messages (remapping anchor_turn_id & mention/source IDs)
+            for gm_row in camp.get("gm_chat_messages") or []:
+                if not isinstance(gm_row, dict):
+                    continue
+                old_anchor = gm_row.get("anchor_turn_id")
+                mapped_anchor: str | None = None
+                if old_anchor:
+                    mapped_anchor = id_remap.get(str(old_anchor))
+                    if not mapped_anchor:
+                        continue
+                gm_role = str(gm_row.get("role") or "")
+                if gm_role not in ("user", "assistant"):
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO gm_chat_messages (
+                        id, campaign_id, anchor_turn_id, role, content, mentions_json, sources_json, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"gm_{uuid.uuid4().hex[:12]}",
+                        new_camp_id,
+                        mapped_anchor,
+                        gm_role,
+                        str(gm_row.get("content") or ""),
+                        _remap_gm_refs_json(gm_row.get("mentions_json"), id_remap),
+                        _remap_gm_refs_json(gm_row.get("sources_json"), id_remap),
+                        str(gm_row.get("created_at") or now),
                     ),
                 )
 
