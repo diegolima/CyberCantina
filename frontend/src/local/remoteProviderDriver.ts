@@ -4,7 +4,12 @@ import type {
   ProviderProbeResponse,
   ProviderType,
 } from "../types";
-import type { RelayDriverResult, RelayLlmRequest } from "./types";
+import {
+  extractCostUsd,
+  extractOllamaUsage,
+  type RelayDriverResult,
+  type RelayLlmRequest,
+} from "./types";
 
 const EMBED_KEYWORDS = [
   "embed",
@@ -961,6 +966,7 @@ async function readSseStream(
   let fullContent = "";
   let promptTokens: number | null = null;
   let completionTokens: number | null = null;
+  let costUsd: number | null = null;
   let finishReason: string | null = null;
 
   const processLine = (rawLine: string) => {
@@ -974,6 +980,8 @@ async function readSseStream(
       if (usage && typeof usage === "object") {
         if (typeof usage.prompt_tokens === "number") promptTokens = usage.prompt_tokens;
         if (typeof usage.completion_tokens === "number") completionTokens = usage.completion_tokens;
+        const parsedCost = extractCostUsd(usage.cost);
+        if (parsedCost !== null) costUsd = parsedCost;
       }
       const fr = chunk?.choices?.[0]?.finish_reason;
       if (typeof fr === "string" && fr) {
@@ -1006,6 +1014,7 @@ async function readSseStream(
     done_reason: finishReason,
     prompt_tokens: promptTokens,
     completion_tokens: completionTokens,
+    cost_usd: costUsd,
   };
 }
 
@@ -1042,8 +1051,7 @@ async function readOllamaNdjsonStream(
             return {
               content: fullContent,
               done_reason: chunk?.done_reason || null,
-              prompt_tokens: typeof chunk?.prompt_eval_count === "number" ? chunk.prompt_eval_count : null,
-              completion_tokens: typeof chunk?.eval_count === "number" ? chunk.eval_count : null,
+              ...extractOllamaUsage(chunk),
             };
           }
         } catch {
@@ -1172,6 +1180,7 @@ export async function runRemoteProviderChat(
             content,
             thinking,
             done_reason: data?.done_reason || null,
+            ...extractOllamaUsage(data),
             tool_calls: toolCalls,
           };
         }
@@ -1191,11 +1200,17 @@ export async function runRemoteProviderChat(
                 content: retryContent,
                 thinking: String(retryMsg.thinking || "").trim(),
                 done_reason: retryData?.done_reason || null,
+                ...extractOllamaUsage(retryData),
               };
             }
           }
         }
-        return { content, thinking, done_reason: data?.done_reason || null };
+        return {
+          content,
+          thinking,
+          done_reason: data?.done_reason || null,
+          ...extractOllamaUsage(data),
+        };
       }
 
       if (nativeResp.status === 404) {
@@ -1302,6 +1317,7 @@ export async function runRemoteProviderChat(
       done_reason: data?.choices?.[0]?.finish_reason || null,
       prompt_tokens: typeof usage?.prompt_tokens === "number" ? usage.prompt_tokens : null,
       completion_tokens: typeof usage?.completion_tokens === "number" ? usage.completion_tokens : null,
+      cost_usd: extractCostUsd(usage?.cost),
       tool_calls: toolCalls,
     };
   } catch (err) {

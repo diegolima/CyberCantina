@@ -453,7 +453,7 @@ describe("remoteProviderDriver", () => {
               },
             },
           ],
-          usage: { prompt_tokens: 30, completion_tokens: 14 },
+          usage: { prompt_tokens: 30, completion_tokens: 14, cost: 0.0021 },
         }),
         { status: 200 }
       )
@@ -484,6 +484,7 @@ describe("remoteProviderDriver", () => {
     expect(body.tools).toHaveLength(1);
     expect(body.tool_choice).toBe("auto");
     expect(res.tool_calls).toHaveLength(1);
+    expect(res.cost_usd).toBeCloseTo(0.0021);
 
     vi.stubGlobal(
       "fetch",

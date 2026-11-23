@@ -52,7 +52,31 @@ export interface RelayDriverResult {
   done_reason?: string | null;
   prompt_tokens?: number | null;
   completion_tokens?: number | null;
+  eval_duration_ms?: number | null;
+  cost_usd?: number | null;
   tool_calls?: Record<string, unknown>[];
+}
+
+export function nsToMs(ns: unknown): number | null {
+  if (typeof ns !== "number" || !Number.isFinite(ns) || ns <= 0) return null;
+  return Math.max(1, Math.round(ns / 1_000_000));
+}
+
+export function extractCostUsd(raw: unknown): number | null {
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) return null;
+  return raw;
+}
+
+export function extractOllamaUsage(payload: any): {
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  eval_duration_ms: number | null;
+} {
+  return {
+    prompt_tokens: typeof payload?.prompt_eval_count === "number" ? payload.prompt_eval_count : null,
+    completion_tokens: typeof payload?.eval_count === "number" ? payload.eval_count : null,
+    eval_duration_ms: nsToMs(payload?.eval_duration),
+  };
 }
 
 export interface WebGpuProgress {

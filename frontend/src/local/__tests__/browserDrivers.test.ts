@@ -165,6 +165,7 @@ describe("ollamaDriver", () => {
           done_reason: "stop",
           prompt_eval_count: 25,
           eval_count: 10,
+          eval_duration: 500_000_000,
         }),
         { status: 200 }
       )
@@ -202,6 +203,7 @@ describe("ollamaDriver", () => {
     expect(reqBody.tools).toHaveLength(1);
     expect(reqBody.stream).toBe(false);
     expect(res.tool_calls).toHaveLength(1);
+    expect(res.eval_duration_ms).toBe(500);
 
     vi.stubGlobal(
       "fetch",

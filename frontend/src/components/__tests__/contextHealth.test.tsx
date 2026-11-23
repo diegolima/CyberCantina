@@ -171,6 +171,7 @@ describe("ContextHealthPill & ContextHealthModal SSR rendering", () => {
         telemetry={SAMPLE_WARNING_TELEMETRY}
         turnDepth={5}
         onOpenSettings={() => {}}
+        initialExpandedPhases={{ phase1_pre: true }}
       />,
     );
     expect(warnHtml).toContain("Phase 1 — Pre-Turn");
@@ -180,6 +181,8 @@ describe("ContextHealthPill & ContextHealthModal SSR rendering", () => {
     expect(warnHtml).toContain("2 working-memory turns dropped");
     expect(warnHtml).toContain("Zone 1 Static");
     expect(warnHtml).toContain("Open Model Settings");
+    expect(warnHtml).toContain("<th>Time</th>");
+    expect(warnHtml).toContain("420ms");
 
     const critHtml = ReactDOMServer.renderToStaticMarkup(
       <ContextHealthModal

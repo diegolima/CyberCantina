@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.provider import ProviderColor
+
 TelemetryPhaseKey = Literal[
     "phase1_pre",
     "phase3_cognition",
@@ -27,6 +29,9 @@ class LlmCallTelemetry(BaseModel):
     label: str
     model: str = ""
     provider_type: str = ""
+    provider_id: str | None = None
+    provider_name: str | None = None
+    provider_color: ProviderColor | None = None
     prompt_tokens: int = Field(default=0, ge=0)
     completion_tokens: int = Field(default=0, ge=0)
     usage_source: TokenUsageSource = "estimated"
@@ -34,6 +39,9 @@ class LlmCallTelemetry(BaseModel):
     finish_reason: str = "unknown"
     retries: int = Field(default=0, ge=0)
     duration_ms: int = Field(default=0, ge=0)
+    ttft_ms: int | None = Field(default=None, ge=0)
+    eval_duration_ms: int | None = Field(default=None, ge=0)
+    cost_usd: float | None = Field(default=None, ge=0.0)
     error: str | None = None
 
 

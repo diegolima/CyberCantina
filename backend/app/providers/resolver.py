@@ -94,6 +94,8 @@ def resolve_endpoint(
         network_restricted=record.network_restricted,
         owner_id=record.owner_id,
         credential_storage=record.credential_storage,
+        provider_name=record.name,
+        provider_color=record.color,
     )
 
 

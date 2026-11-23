@@ -37,6 +37,7 @@ import {
 import type { ActiveAgentModalTarget } from "../inspector/AgentChangesModal";
 import { StandaloneArrivalCard } from "./StandaloneArrivalCard";
 import { TurnBookmarkNoteRow } from "./TurnBookmarkNoteRow";
+import { TurnProseModelPill } from "./TurnProseModelPill";
 import {
   getTierBadgeClass,
   renderFormattedProse,
@@ -81,6 +82,10 @@ export interface TurnCardProps {
     turnId: string,
     signal?: AbortSignal
   ) => Promise<string>;
+  isModelPopoverOpen?: boolean;
+  onToggleModelPopover?: (turnId: string) => void;
+  onCloseModelPopover?: () => void;
+  onOpenContextHealthForTurn?: (turn: TurnNodeRecord) => void;
 }
 
 export const TurnCard: React.FC<TurnCardProps> = ({
@@ -115,11 +120,31 @@ export const TurnCard: React.FC<TurnCardProps> = ({
   onOpenAgentModal,
   onUpdateTurnBookmark,
   onSummarizeTurnForBookmark,
+  isModelPopoverOpen,
+  onToggleModelPopover,
+  onCloseModelPopover,
+  onOpenContextHealthForTurn,
 }) => {
   const [selectedCognitionCharIdByTurn, setSelectedCognitionCharIdByTurn] = useState<Record<string, string>>({});
   const [showRetainedIds, setShowRetainedIds] = useState<Record<string, boolean>>({});
   const [brokenPersonaPortraitUrl, setBrokenPersonaPortraitUrl] = useState<string | null>(null);
   const [isTogglingBookmark, setIsTogglingBookmark] = useState(false);
+  const [localModelPopoverOpen, setLocalModelPopoverOpen] = useState(false);
+  const effectiveModelPopoverOpen = isModelPopoverOpen ?? localModelPopoverOpen;
+  const handleToggleModelPopover = () => {
+    if (onToggleModelPopover) {
+      onToggleModelPopover(turn.id);
+    } else {
+      setLocalModelPopoverOpen((prev) => !prev);
+    }
+  };
+  const handleCloseModelPopover = () => {
+    if (onCloseModelPopover) {
+      onCloseModelPopover();
+    } else {
+      setLocalModelPopoverOpen(false);
+    }
+  };
   const toggleRetained = (id: string) =>
     setShowRetainedIds((prev) => ({ ...prev, [id]: !prev[id] }));
   const personaPortraitUrl = bundle.campaign.persona_snapshot?.portrait_url || null;
@@ -320,7 +345,9 @@ export const TurnCard: React.FC<TurnCardProps> = ({
         data-turn-id={turn.id}
         className={`turn-card ${isNarratorTurn ? "narrator-turn-card" : ""} ${
           isEditingThisTurn ? "turn-card--editing" : ""
-        } ${isHighlighted ? "turn-card--highlighted" : ""}`}
+        } ${isHighlighted ? "turn-card--highlighted" : ""} ${
+          effectiveModelPopoverOpen ? "turn-card--popover-open" : ""
+        }`}
       >
               {!isRoot && (
                 <div className="turn-card-top-row">
@@ -1150,6 +1177,7 @@ export const TurnCard: React.FC<TurnCardProps> = ({
                 }}
               >
                 <div
+                  className="turn-card-footer-row"
                   style={{
                     display: "flex",
                     justifyContent: "space-between",
@@ -1161,6 +1189,13 @@ export const TurnCard: React.FC<TurnCardProps> = ({
                   <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                     <span>Turn #{turn.depth_index}</span>
                     <span>• {turn.world_snapshot.world_timestamp}</span>
+                    <TurnProseModelPill
+                      turn={turn}
+                      isOpen={effectiveModelPopoverOpen}
+                      onToggle={handleToggleModelPopover}
+                      onClose={handleCloseModelPopover}
+                      onInspectFullTelemetry={onOpenContextHealthForTurn}
+                    />
                     {turn.post_turn?.notable_event_summary && (
                       <span style={{ color: "var(--accent-amber)" }}>
                         ★ {turn.post_turn.notable_event_summary}

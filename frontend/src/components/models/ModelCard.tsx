@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
-  Brain,
   Cpu,
   Database,
+  Feather,
   Link,
   Lock,
   Monitor,
@@ -230,7 +230,7 @@ export const ModelCard: React.FC<ModelCardProps> = ({
   // Watermark icon
   const watermarkIcon =
     role === "actor" ? (
-      <Brain size={110} />
+      <Feather size={110} />
     ) : role === "clerk" ? (
       <Cpu size={110} />
     ) : (

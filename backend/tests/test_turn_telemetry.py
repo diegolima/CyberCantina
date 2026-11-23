@@ -616,3 +616,289 @@ def test_turn_telemetry_persists_and_migrates(empty_repo: CantinaRepository) -> 
     assert reloaded.telemetry.phase5_pending is False
     assert reloaded.telemetry.phases["phase5_clerk"].peak_prompt_tokens == 1100
     assert reloaded.telemetry.total_prompt_tokens == 3500
+
+
+# ---------------------------------------------------------------------------
+# 5. v0.35.0 Prose Model Attribution, Timing & Passive Cost Capture
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_llm_call_telemetry_json_deserializes_with_none_defaults() -> None:
+    legacy_json = json.dumps(
+        {
+            "phase": "phase4_prose",
+            "label": "Prose: Mira",
+            "model": "qwen2.5:14b",
+            "provider_type": "ollama",
+            "prompt_tokens": 1800,
+            "completion_tokens": 120,
+            "usage_source": "exact",
+            "finish_reason": "stop",
+            "retries": 0,
+            "duration_ms": 2300,
+        }
+    )
+    parsed = LlmCallTelemetry.model_validate_json(legacy_json)
+    assert parsed.provider_id is None
+    assert parsed.provider_name is None
+    assert parsed.provider_color is None
+    assert parsed.ttft_ms is None
+    assert parsed.eval_duration_ms is None
+    assert parsed.cost_usd is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_endpoint_and_build_call_target_propagate_provider_metadata(
+    empty_repo: CantinaRepository,
+) -> None:
+    from app.db.provider_store import ProviderStore
+    from app.engine.llm_client import build_call_target
+    from app.providers.resolver import resolve_endpoint
+
+    store = ProviderStore(empty_repo.db_path)
+    ollama_rec = store.create(
+        name="Home GPU",
+        type="ollama",
+        scope="system",
+        owner_id=None,
+        color="cyan",
+        is_enabled=True,
+        base_url="http://198.51.100.10:11434",
+        bearer_token=None,
+        network_restricted=False,
+    )
+    openrouter_rec = store.create(
+        name="OpenRouter Cloud",
+        type="openrouter",
+        scope="system",
+        owner_id=None,
+        color="purple",
+        is_enabled=True,
+        base_url="https://openrouter.ai/api/v1",
+        bearer_token="sk-or-test-key",
+        network_restricted=False,
+    )
+    relay_rec = store.create(
+        name="Browser Rig",
+        type="browser_ollama",
+        scope="system",
+        owner_id=None,
+        color="bronze",
+        is_enabled=True,
+        base_url="http://localhost:11434",
+        bearer_token=None,
+        network_restricted=False,
+        credential_storage="browser",
+    )
+
+    for rec in (ollama_rec, openrouter_rec, relay_rec):
+        ep = resolve_endpoint(
+            ModelProfile(provider_id=rec.id, model="test-model"),
+            user_id=None,
+            role="actor",
+            store=store,
+        )
+        assert ep is not None
+        assert ep.provider_name == rec.name
+        assert ep.provider_color == rec.color
+
+        target = await build_call_target(ModelProfile(provider_id=rec.id, model="test-model", resolved=ep))
+        assert target.provider_id == rec.id
+        assert target.provider_name == rec.name
+        assert target.provider_color == rec.color
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_captures_ttft_eval_duration_fallback_model_and_cost() -> None:
+    client = LLMClient()
+    fake_http = _FakeHttpClient(
+        stream_responses=[
+            _FakeStreamResponse(
+                200,
+                [
+                    json.dumps({"message": {"content": "First "}, "done": False}),
+                    json.dumps(
+                        {
+                            "message": {"content": "chunk."},
+                            "done": True,
+                            "prompt_eval_count": 500,
+                            "eval_count": 40,
+                            "eval_duration": 800_000_000,
+                            "done_reason": "stop",
+                        }
+                    ),
+                ],
+            ),
+            _FakeStreamResponse(404, [], body='{"error":"model offline"}'),
+            _FakeStreamResponse(
+                200,
+                [
+                    'data: {"choices": [{"delta": {"content": "Fallback "}}]}',
+                    'data: {"choices": [{"delta": {"content": "prose."}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 900, "completion_tokens": 60, "cost": 0.0042}}',
+                    "data: [DONE]",
+                ],
+            ),
+        ]
+    )
+
+    async def _get_http(*, timeout: float = 120.0) -> _FakeHttpClient:
+        return fake_http
+
+    client.get_http_client = _get_http  # type: ignore[method-assign]
+
+    ollama_profile = ModelProfile(
+        model="qwen2.5:14b",
+        context_size=12288,
+        resolved=ResolvedEndpoint(
+            provider_id="prov_ollama",
+            type="ollama",
+            root_url="http://localhost:11434",
+            credential_storage="server",
+            provider_name="Workstation Ollama",
+            provider_color="cyan",
+        ),
+    )
+
+    collector = TurnTelemetryCollector()
+    tok = active_turn_telemetry.set(collector)
+    try:
+        with telemetry_phase_scope("phase4_prose", "Prose: Mira"):
+            out_ollama = [
+                d
+                async for d in client.stream_chat(
+                    [{"role": "user", "content": "Hello"}],
+                    profile=ollama_profile,
+                )
+            ]
+        assert "".join(out_ollama) == "First chunk."
+    finally:
+        active_turn_telemetry.reset(tok)
+
+    ollama_call = collector.build_snapshot().phases["phase4_prose"].calls[0]
+    assert ollama_call.provider_id == "prov_ollama"
+    assert ollama_call.provider_name == "Workstation Ollama"
+    assert ollama_call.provider_color == "cyan"
+    assert ollama_call.ttft_ms is not None and ollama_call.ttft_ms >= 0
+    assert ollama_call.eval_duration_ms == 800
+    assert ollama_call.cost_usd is None
+
+    # Now test OpenAI-compat fallback model attribution + passive usage.cost capture
+    from app.providers.openai_compat import OpenRouterProvider
+
+    orig_resolve = OpenRouterProvider.resolve_model_fallback
+
+    async def _fake_resolve(
+        self: OpenRouterProvider,
+        http_client: Any,
+        root_url: str,
+        headers: dict[str, str],
+        model: str,
+        status_code: int,
+        err_text: str,
+    ) -> tuple[str | None, str | None]:
+        return ("anthropic/claude-3.5-haiku", None)
+
+    OpenRouterProvider.resolve_model_fallback = _fake_resolve  # type: ignore[method-assign]
+    try:
+        or_profile = ModelProfile(
+            model="anthropic/claude-3.7-sonnet",
+            resolved=ResolvedEndpoint(
+                provider_id="prov_or",
+                type="openrouter",
+                root_url="https://openrouter.ai/api/v1",
+                bearer_token="sk-or-test",
+                credential_storage="server",
+                provider_name="OpenRouter",
+                provider_color="purple",
+            ),
+        )
+        or_collector = TurnTelemetryCollector()
+        or_tok = active_turn_telemetry.set(or_collector)
+        try:
+            with telemetry_phase_scope("phase4_prose", "Prose: Mira"):
+                out_or = [
+                    d
+                    async for d in client.stream_chat(
+                        [{"role": "user", "content": "Hello"}],
+                        profile=or_profile,
+                    )
+                ]
+            assert "".join(out_or) == "Fallback prose."
+        finally:
+            active_turn_telemetry.reset(or_tok)
+
+        or_call = or_collector.build_snapshot().phases["phase4_prose"].calls[0]
+        assert or_call.model == "anthropic/claude-3.5-haiku"
+        assert or_call.provider_id == "prov_or"
+        assert or_call.provider_name == "OpenRouter"
+        assert or_call.provider_color == "purple"
+        assert or_call.ttft_ms is not None and or_call.ttft_ms >= 0
+        assert or_call.cost_usd == pytest.approx(0.0042)
+    finally:
+        OpenRouterProvider.resolve_model_fallback = orig_resolve  # type: ignore[method-assign]
+
+
+@pytest.mark.asyncio
+async def test_local_relay_hub_parses_eval_duration_ms_and_cost_usd() -> None:
+    import asyncio
+    from app.providers.local_relay import LocalRelayHub, RelayStreamUsage, _PendingRequest, _RelaySession
+
+    class _DummyWs:
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            return None
+
+    hub = LocalRelayHub()
+    session = _RelaySession(user_id="u1", tab_id="t1", websocket=_DummyWs())  # type: ignore[arg-type]
+
+    # Stream mode
+    usage_out: list[RelayStreamUsage] = []
+    q: asyncio.Queue[str | BaseException | None] = asyncio.Queue()
+    hub._pending["req_stream"] = _PendingRequest(
+        request_id="req_stream",
+        user_id="u1",
+        tab_id="t1",
+        kind="stream",
+        queue=q,
+        usage_out=usage_out,
+    )
+    await hub.handle_message(
+        session,
+        {
+            "type": "llm.done",
+            "request_id": "req_stream",
+            "prompt_tokens": 100,
+            "completion_tokens": 25,
+            "done_reason": "stop",
+            "eval_duration_ms": 512,
+            "cost_usd": 0.0015,
+        },
+    )
+    assert len(usage_out) == 1
+    assert usage_out[0].eval_duration_ms == 512
+    assert usage_out[0].cost_usd == pytest.approx(0.0015)
+
+    # Complete mode rejects bool/negative/NaN for eval_duration_ms and cost_usd
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future[Any] = loop.create_future()
+    hub._pending["req_comp"] = _PendingRequest(
+        request_id="req_comp",
+        user_id="u1",
+        tab_id="t1",
+        kind="complete",
+        future=fut,
+    )
+    await hub.handle_message(
+        session,
+        {
+            "type": "llm.done",
+            "request_id": "req_comp",
+            "content": "Done",
+            "prompt_tokens": 50,
+            "completion_tokens": 12,
+            "eval_duration_ms": True,
+            "cost_usd": -1.5,
+        },
+    )
+    res = await fut
+    assert res.eval_duration_ms is None
+    assert res.cost_usd is None

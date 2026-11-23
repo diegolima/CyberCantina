@@ -17,6 +17,7 @@ import {
   getHealthStatusLabel,
   getPhaseSummary,
 } from "./contextHealthHelpers";
+import { formatDurationMs } from "./proseTelemetryHelpers";
 
 interface ContextHealthModalProps {
   isOpen: boolean;
@@ -24,6 +25,7 @@ interface ContextHealthModalProps {
   telemetry: TurnTelemetry | null;
   turnDepth?: number | null;
   onOpenSettings?: () => void;
+  initialExpandedPhases?: Partial<Record<TelemetryPhaseKey, boolean>>;
 }
 
 const ZoneBreakdownBar: React.FC<{
@@ -80,8 +82,11 @@ export const ContextHealthModal: React.FC<ContextHealthModalProps> = ({
   telemetry,
   turnDepth,
   onOpenSettings,
+  initialExpandedPhases,
 }) => {
-  const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>({});
+  const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>(() => ({
+    ...(initialExpandedPhases ?? {}),
+  }));
 
   useEffect(() => {
     if (!isOpen) return;
@@ -334,6 +339,7 @@ export const ContextHealthModal: React.FC<ContextHealthModalProps> = ({
                                 <th>Model</th>
                                 <th>Prompt</th>
                                 <th>Output</th>
+                                <th>Time</th>
                                 <th>Stop</th>
                                 <th>Source</th>
                               </tr>
@@ -361,6 +367,9 @@ export const ContextHealthModal: React.FC<ContextHealthModalProps> = ({
                                   <td className="context-health-mono">{c.model || "—"}</td>
                                   <td>{formatTokenCount(c.prompt_tokens)}</td>
                                   <td>{formatTokenCount(c.completion_tokens)}</td>
+                                  <td className="context-health-mono">
+                                    {formatDurationMs(c.duration_ms) ?? "—"}
+                                  </td>
                                   <td
                                     style={
                                       c.finish_reason === "length"

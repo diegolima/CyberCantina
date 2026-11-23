@@ -45,6 +45,7 @@ from app.schemas.llm_tools import (
     LlmToolCompletionResult,
     LlmToolDefinition,
 )
+from app.schemas.provider import ProviderColor
 from app.schemas.telemetry import LlmCallTelemetry
 from app.security.url_policy import UrlBlockedError, assert_url_allowed, normalize_base_url
 
@@ -234,11 +235,40 @@ def _format_messages_for_openai_tools(messages: list[dict[str, Any]]) -> list[di
     return formatted
 
 
+_VALID_PROVIDER_COLORS: frozenset[str] = frozenset({"neutral", "cyan", "purple", "indigo", "bronze"})
+
+
 def _coerce_nonneg_int(val: Any) -> int | None:
     if isinstance(val, bool) or val is None:
         return None
     if isinstance(val, int) and val >= 0:
         return val
+    return None
+
+
+def _coerce_provider_color(raw: Any) -> ProviderColor | None:
+    if isinstance(raw, str) and raw in _VALID_PROVIDER_COLORS:
+        return raw  # type: ignore[return-value]
+    return None
+
+
+def _ns_to_ms(raw_ns: Any) -> int | None:
+    if isinstance(raw_ns, bool) or raw_ns is None:
+        return None
+    if isinstance(raw_ns, (int, float)):
+        val = float(raw_ns)
+        if math.isfinite(val) and val > 0.0:
+            return max(1, round(val / 1_000_000.0))
+    return None
+
+
+def _coerce_opt_cost_usd(raw: Any) -> float | None:
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        val = float(raw)
+        if math.isfinite(val) and val >= 0.0:
+            return val
     return None
 
 
@@ -259,10 +289,13 @@ def _resolve_telemetry_context_ceiling(
     profile: ModelProfile,
     provider_type: str,
     provider_id: str | None,
+    *,
+    model_name: str | None = None,
 ) -> int | None:
+    effective_model = model_name or profile.model
     ctx = getattr(profile, "context_size", None)
     if provider_type == "webgpu":
-        wgpu_max = get_webgpu_max_context(profile.model)
+        wgpu_max = get_webgpu_max_context(effective_model)
         if ctx is not None and int(ctx) > 0:
             return min(int(ctx), wgpu_max)
         return wgpu_max
@@ -272,9 +305,9 @@ def _resolve_telemetry_context_ceiling(
         return None
     if provider_type == "openrouter":
         for m in openrouter_catalog_service.get_cached_models_sync():
-            if m.name == profile.model and m.context_length and m.context_length > 0:
+            if m.name == effective_model and m.context_length and m.context_length > 0:
                 return m.context_length
-    return probe_service.get_cached_model_context_length(provider_id, profile.model)
+    return probe_service.get_cached_model_context_length(provider_id, effective_model)
 
 
 def _record_llm_telemetry(
@@ -290,11 +323,18 @@ def _record_llm_telemetry(
     started_at: float,
     retries: int = 0,
     error: str | None = None,
+    model_override: str | None = None,
+    provider_name: str | None = None,
+    provider_color: str | None = None,
+    ttft_ms: int | None = None,
+    eval_duration_ms: int | None = None,
+    cost_usd: float | None = None,
 ) -> None:
     collector = active_turn_telemetry.get()
     phase = active_telemetry_phase.get()
     if collector is None or phase is None:
         return
+    effective_model = model_override or profile.model
     exact_prompt = _coerce_nonneg_int(prompt_tokens)
     exact_completion = _coerce_nonneg_int(completion_tokens)
     if exact_prompt is not None and exact_completion is not None:
@@ -312,15 +352,26 @@ def _record_llm_telemetry(
         LlmCallTelemetry(
             phase=phase,
             label=label,
-            model=profile.model,
+            model=effective_model,
             provider_type=provider_type,
+            provider_id=provider_id,
+            provider_name=provider_name,
+            provider_color=_coerce_provider_color(provider_color),
             prompt_tokens=p_tok,
             completion_tokens=c_tok,
             usage_source=usage_source,
-            context_ceiling=_resolve_telemetry_context_ceiling(profile, provider_type, provider_id),
+            context_ceiling=_resolve_telemetry_context_ceiling(
+                profile,
+                provider_type,
+                provider_id,
+                model_name=effective_model,
+            ),
             finish_reason=_normalize_finish_reason(finish_reason),
             retries=retries,
             duration_ms=duration_ms,
+            ttft_ms=_coerce_nonneg_int(ttft_ms),
+            eval_duration_ms=_coerce_nonneg_int(eval_duration_ms),
+            cost_usd=_coerce_opt_cost_usd(cost_usd),
             error=error,
         )
     )
@@ -427,6 +478,8 @@ class CallTarget:
     caller_user_id: str | None = None
     provider_id: str | None = None
     credential_storage: str = "server"
+    provider_name: str | None = None
+    provider_color: str | None = None
 
 
 _CLOUD_OPENAI_PROVIDER_TYPES = OPENAI_COMPAT_PROVIDER_TYPES
@@ -460,6 +513,8 @@ async def build_call_target(profile: ModelProfile, role: str = "model") -> CallT
                 caller_user_id=endpoint.caller_user_id,
                 provider_id=endpoint.provider_id,
                 credential_storage=endpoint.credential_storage,
+                provider_name=endpoint.provider_name,
+                provider_color=endpoint.provider_color,
             )
         if endpoint.network_restricted:
             try:
@@ -469,17 +524,34 @@ async def build_call_target(profile: ModelProfile, role: str = "model") -> CallT
         adapter = get_openai_compat_provider(ptype)
         if adapter is not None:
             oai = adapter.build_chat_headers(endpoint.bearer_token, referer_url=_public_referer_url())
-            return CallTarget(endpoint.root_url, {}, oai, provider_type=ptype)
+            return CallTarget(
+                endpoint.root_url,
+                {},
+                oai,
+                provider_type=ptype,
+                provider_id=endpoint.provider_id,
+                provider_name=endpoint.provider_name,
+                provider_color=endpoint.provider_color,
+            )
 
         native = bearer_headers(endpoint.bearer_token)
         oai = {"Authorization": f"Bearer {endpoint.bearer_token or 'ollama'}", "Content-Type": "application/json"}
-        return CallTarget(get_ollama_root_url(endpoint.root_url), native, oai, provider_type="ollama")
+        return CallTarget(
+            get_ollama_root_url(endpoint.root_url),
+            native,
+            oai,
+            provider_type="ollama",
+            provider_id=endpoint.provider_id,
+            provider_name=endpoint.provider_name,
+            provider_color=endpoint.provider_color,
+        )
     legacy_token = profile.api_key if profile.api_key not in ("", "ollama") else None
     return CallTarget(
         get_ollama_root_url(profile.base_url),
         bearer_headers(legacy_token),
         {"Authorization": f"Bearer {profile.api_key}", "Content-Type": "application/json"},
         provider_type="ollama",
+        provider_color="neutral",
     )
 
 
@@ -740,10 +812,14 @@ class LLMClient:
                 profile=active_profile,
                 provider_type=target.provider_type,
                 provider_id=target.provider_id,
+                provider_name=target.provider_name,
+                provider_color=target.provider_color,
                 prompt_tokens=res.prompt_tokens,
                 completion_tokens=res.completion_tokens,
                 finish_reason=res.done_reason,
                 started_at=started_at,
+                eval_duration_ms=res.eval_duration_ms,
+                cost_usd=res.cost_usd,
             )
             return final_text
 
@@ -791,11 +867,14 @@ class LLMClient:
                             profile=active_profile,
                             provider_type=target.provider_type,
                             provider_id=target.provider_id,
+                            provider_name=target.provider_name,
+                            provider_color=target.provider_color,
                             prompt_tokens=data.get("prompt_eval_count"),
                             completion_tokens=data.get("eval_count"),
                             finish_reason=data.get("done_reason"),
                             started_at=started_at,
                             retries=ollama_retries,
+                            eval_duration_ms=_ns_to_ms(data.get("eval_duration")),
                         )
                         return content
 
@@ -819,11 +898,14 @@ class LLMClient:
                                     profile=active_profile,
                                     provider_type=target.provider_type,
                                     provider_id=target.provider_id,
+                                    provider_name=target.provider_name,
+                                    provider_color=target.provider_color,
                                     prompt_tokens=retry_data.get("prompt_eval_count"),
                                     completion_tokens=retry_data.get("eval_count"),
                                     finish_reason=retry_data.get("done_reason"),
                                     started_at=started_at,
                                     retries=ollama_retries,
+                                    eval_duration_ms=_ns_to_ms(retry_data.get("eval_duration")),
                                 )
                                 return retry_content
                             thinking_fallback = (retry_msg.get("thinking") or "").strip()
@@ -834,11 +916,14 @@ class LLMClient:
                                     profile=active_profile,
                                     provider_type=target.provider_type,
                                     provider_id=target.provider_id,
+                                    provider_name=target.provider_name,
+                                    provider_color=target.provider_color,
                                     prompt_tokens=retry_data.get("prompt_eval_count"),
                                     completion_tokens=retry_data.get("eval_count"),
                                     finish_reason=retry_data.get("done_reason"),
                                     started_at=started_at,
                                     retries=ollama_retries,
+                                    eval_duration_ms=_ns_to_ms(retry_data.get("eval_duration")),
                                 )
                                 return thinking_fallback
 
@@ -850,11 +935,14 @@ class LLMClient:
                             profile=active_profile,
                             provider_type=target.provider_type,
                             provider_id=target.provider_id,
+                            provider_name=target.provider_name,
+                            provider_color=target.provider_color,
                             prompt_tokens=data.get("prompt_eval_count"),
                             completion_tokens=data.get("eval_count"),
                             finish_reason=data.get("done_reason"),
                             started_at=started_at,
                             retries=ollama_retries,
+                            eval_duration_ms=_ns_to_ms(data.get("eval_duration")),
                         )
                         return thinking_text
                 elif resp.status_code == 404:
@@ -905,6 +993,7 @@ class LLMClient:
                 fallback_payload["model"] = fallback
                 fallback_resp = await client.post(v1_url, headers=headers, json=fallback_payload, timeout=active_profile.timeout_seconds)
                 if fallback_resp.status_code == 200:
+                    active_payload = fallback_payload
                     resp = fallback_resp
                 else:
                     raise RuntimeError(
@@ -934,11 +1023,15 @@ class LLMClient:
             profile=active_profile,
             provider_type=target.provider_type,
             provider_id=target.provider_id,
+            provider_name=target.provider_name,
+            provider_color=target.provider_color,
+            model_override=str(active_payload.get("model") or active_profile.model),
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),
             finish_reason=choice0.get("finish_reason"),
             started_at=started_at,
             retries=attempt,
+            cost_usd=_coerce_opt_cost_usd(usage.get("cost")),
         )
         return final_text
 
@@ -1063,10 +1156,14 @@ class LLMClient:
                 profile=active_profile,
                 provider_type=target.provider_type,
                 provider_id=target.provider_id,
+                provider_name=target.provider_name,
+                provider_color=target.provider_color,
                 prompt_tokens=res.prompt_tokens,
                 completion_tokens=res.completion_tokens,
                 finish_reason=res.done_reason,
                 started_at=started_at,
+                eval_duration_ms=res.eval_duration_ms,
+                cost_usd=res.cost_usd,
             )
             return LlmToolCompletionResult(
                 content=content,
@@ -1136,11 +1233,14 @@ class LLMClient:
                         profile=active_profile,
                         provider_type=target.provider_type,
                         provider_id=target.provider_id,
+                        provider_name=target.provider_name,
+                        provider_color=target.provider_color,
                         prompt_tokens=data.get("prompt_eval_count"),
                         completion_tokens=data.get("eval_count"),
                         finish_reason=data.get("done_reason"),
                         started_at=started_at,
                         retries=ollama_retries,
+                        eval_duration_ms=_ns_to_ms(data.get("eval_duration")),
                     )
                     return LlmToolCompletionResult(
                         content=content,
@@ -1214,6 +1314,7 @@ class LLMClient:
                     v1_url, headers=headers, json=fallback_payload, timeout=active_profile.timeout_seconds
                 )
                 if fallback_resp.status_code == 200:
+                    active_payload = fallback_payload
                     resp = fallback_resp
                 elif fallback_resp.status_code in (400, 422) and _is_tools_unsupported_error_text(
                     fallback_resp.text.lower()
@@ -1251,11 +1352,15 @@ class LLMClient:
             profile=active_profile,
             provider_type=target.provider_type,
             provider_id=target.provider_id,
+            provider_name=target.provider_name,
+            provider_color=target.provider_color,
+            model_override=str(active_payload.get("model") or active_profile.model),
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),
             finish_reason=choice0.get("finish_reason"),
             started_at=started_at,
             retries=attempt,
+            cost_usd=_coerce_opt_cost_usd(usage.get("cost")),
         )
         return LlmToolCompletionResult(
             content=final_text,
@@ -1283,6 +1388,7 @@ class LLMClient:
                 ctx = min(int(ctx), get_webgpu_max_context(active_profile.model))
             usage_out: list[RelayStreamUsage] = []
             output_parts: list[str] = []
+            first_token_at: float | None = None
             try:
                 async for delta in local_relay_hub.stream(
                     user_id=target.owner_id or target.caller_user_id or relay_user_context.get(),
@@ -1299,6 +1405,8 @@ class LLMClient:
                     provider_id=target.provider_id,
                     usage_out=usage_out,
                 ):
+                    if delta and first_token_at is None:
+                        first_token_at = time.monotonic()
                     output_parts.append(delta)
                     yield delta
             finally:
@@ -1309,10 +1417,19 @@ class LLMClient:
                     profile=active_profile,
                     provider_type=target.provider_type,
                     provider_id=target.provider_id,
+                    provider_name=target.provider_name,
+                    provider_color=target.provider_color,
                     prompt_tokens=u.prompt_tokens if u else None,
                     completion_tokens=u.completion_tokens if u else None,
                     finish_reason=u.done_reason if u else None,
                     started_at=started_at,
+                    ttft_ms=(
+                        max(0, int((first_token_at - started_at) * 1000))
+                        if first_token_at is not None
+                        else None
+                    ),
+                    eval_duration_ms=u.eval_duration_ms if u else None,
+                    cost_usd=u.cost_usd if u else None,
                 )
             return
 
@@ -1341,6 +1458,8 @@ class LLMClient:
                 ollama_prompt_tok: int | None = None
                 ollama_comp_tok: int | None = None
                 ollama_done_reason: Any = None
+                ollama_eval_duration_ns: Any = None
+                first_token_at: float | None = None
                 async with client.stream("POST", ollama_chat_url, headers=target.native_headers, json=ollama_payload, timeout=active_profile.timeout_seconds) as resp:
                     if resp.status_code == 200:
                         try:
@@ -1351,12 +1470,15 @@ class LLMClient:
                                     chunk = json.loads(line)
                                     delta = chunk.get("message", {}).get("content")
                                     if delta:
+                                        if first_token_at is None:
+                                            first_token_at = time.monotonic()
                                         ollama_stream_parts.append(delta)
                                         yield delta
                                     if chunk.get("done"):
                                         ollama_prompt_tok = chunk.get("prompt_eval_count")
                                         ollama_comp_tok = chunk.get("eval_count")
                                         ollama_done_reason = chunk.get("done_reason")
+                                        ollama_eval_duration_ns = chunk.get("eval_duration")
                                         return
                                 except json.JSONDecodeError:
                                     continue
@@ -1368,10 +1490,18 @@ class LLMClient:
                                 profile=active_profile,
                                 provider_type=target.provider_type,
                                 provider_id=target.provider_id,
+                                provider_name=target.provider_name,
+                                provider_color=target.provider_color,
                                 prompt_tokens=ollama_prompt_tok,
                                 completion_tokens=ollama_comp_tok,
                                 finish_reason=ollama_done_reason,
                                 started_at=started_at,
+                                ttft_ms=(
+                                    max(0, int((first_token_at - started_at) * 1000))
+                                    if first_token_at is not None
+                                    else None
+                                ),
+                                eval_duration_ms=_ns_to_ms(ollama_eval_duration_ns),
                             )
                     elif resp.status_code == 400:
                         need_retry_without_think = True
@@ -1386,6 +1516,12 @@ class LLMClient:
 
                 if need_retry_without_think:
                     retry_stream_payload = {k: v for k, v in ollama_payload.items() if k != "think"}
+                    ollama_stream_parts = []
+                    ollama_prompt_tok = None
+                    ollama_comp_tok = None
+                    ollama_done_reason = None
+                    ollama_eval_duration_ns = None
+                    first_token_at = None
                     async with client.stream("POST", ollama_chat_url, headers=target.native_headers, json=retry_stream_payload, timeout=active_profile.timeout_seconds) as resp:
                         if resp.status_code == 200:
                             try:
@@ -1396,12 +1532,15 @@ class LLMClient:
                                         chunk = json.loads(line)
                                         delta = chunk.get("message", {}).get("content")
                                         if delta:
+                                            if first_token_at is None:
+                                                first_token_at = time.monotonic()
                                             ollama_stream_parts.append(delta)
                                             yield delta
                                         if chunk.get("done"):
                                             ollama_prompt_tok = chunk.get("prompt_eval_count")
                                             ollama_comp_tok = chunk.get("eval_count")
                                             ollama_done_reason = chunk.get("done_reason")
+                                            ollama_eval_duration_ns = chunk.get("eval_duration")
                                             return
                                     except json.JSONDecodeError:
                                         continue
@@ -1413,11 +1552,19 @@ class LLMClient:
                                     profile=active_profile,
                                     provider_type=target.provider_type,
                                     provider_id=target.provider_id,
+                                    provider_name=target.provider_name,
+                                    provider_color=target.provider_color,
                                     prompt_tokens=ollama_prompt_tok,
                                     completion_tokens=ollama_comp_tok,
                                     finish_reason=ollama_done_reason,
                                     started_at=started_at,
                                     retries=1,
+                                    ttft_ms=(
+                                        max(0, int((first_token_at - started_at) * 1000))
+                                        if first_token_at is not None
+                                        else None
+                                    ),
+                                    eval_duration_ms=_ns_to_ms(ollama_eval_duration_ns),
                                 )
             except RuntimeError:
                 raise
@@ -1489,6 +1636,12 @@ class LLMClient:
 
                         resp.raise_for_status()
                         stream_ok = True
+                        oai_stream_parts = []
+                        oai_prompt_tok = None
+                        oai_comp_tok = None
+                        oai_finish_reason = None
+                        oai_cost_usd: float | None = None
+                        first_token_at: float | None = None
                         try:
                             async for line in resp.aiter_lines():
                                 if not line or not line.startswith("data:"):
@@ -1504,6 +1657,10 @@ class LLMClient:
                                             oai_prompt_tok = chunk_usage.get("prompt_tokens")
                                         if chunk_usage.get("completion_tokens") is not None:
                                             oai_comp_tok = chunk_usage.get("completion_tokens")
+                                        if chunk_usage.get("cost") is not None:
+                                            parsed_cost = _coerce_opt_cost_usd(chunk_usage.get("cost"))
+                                            if parsed_cost is not None:
+                                                oai_cost_usd = parsed_cost
                                     choices = chunk.get("choices", [])
                                     if choices:
                                         if choices[0].get("finish_reason"):
@@ -1511,6 +1668,8 @@ class LLMClient:
                                         delta = choices[0].get("delta", {})
                                         content = delta.get("content")
                                         if content:
+                                            if first_token_at is None:
+                                                first_token_at = time.monotonic()
                                             oai_stream_parts.append(content)
                                             yield content
                                 except json.JSONDecodeError:
@@ -1522,11 +1681,20 @@ class LLMClient:
                                 profile=active_profile,
                                 provider_type=target.provider_type,
                                 provider_id=target.provider_id,
+                                provider_name=target.provider_name,
+                                provider_color=target.provider_color,
+                                model_override=str(active_payload.get("model") or active_profile.model),
                                 prompt_tokens=oai_prompt_tok,
                                 completion_tokens=oai_comp_tok,
                                 finish_reason=oai_finish_reason,
                                 started_at=started_at,
                                 retries=bad_request_attempt,
+                                ttft_ms=(
+                                    max(0, int((first_token_at - started_at) * 1000))
+                                    if first_token_at is not None
+                                    else None
+                                ),
+                                cost_usd=oai_cost_usd,
                             )
                     if stream_ok:
                         break

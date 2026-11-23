@@ -497,6 +497,26 @@
   .gm-codex-proposal-grid {
     grid-template-columns: 1fr;
   }
+
+  .turn-model-pill-label {
+    display: none;
+  }
+
+  .turn-model-pill {
+    padding: 4px 8px;
+    min-height: 24px;
+  }
+
+  .turn-model-pill-anchor {
+    position: static;
+  }
+
+  .turn-model-popover {
+    left: 0;
+    right: 0;
+    width: auto;
+    max-width: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -504,6 +524,7 @@
   .inspector--overlay,
   .drawer-backdrop,
   .turn-editing-banner-pill,
+  .turn-model-popover,
   .narrator-duration-picker,
   .choices-drawer-box,
   .composer-editing-banner,

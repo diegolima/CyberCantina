@@ -1,5 +1,10 @@
 import { ProviderModelInfo } from "../types";
-import { BrowserOllamaProbeOutcome, RelayDriverResult, RelayLlmRequest } from "./types";
+import {
+  BrowserOllamaProbeOutcome,
+  extractOllamaUsage,
+  RelayDriverResult,
+  RelayLlmRequest,
+} from "./types";
 
 const EMBED_KEYWORDS = [
   "embed",
@@ -345,8 +350,7 @@ export async function runBrowserOllamaChat(
               return {
                 content: fullContent,
                 done_reason: doneReason,
-                prompt_tokens: typeof chunk?.prompt_eval_count === "number" ? chunk.prompt_eval_count : null,
-                completion_tokens: typeof chunk?.eval_count === "number" ? chunk.eval_count : null,
+                ...extractOllamaUsage(chunk),
               };
             }
           } catch {
@@ -382,8 +386,7 @@ export async function runBrowserOllamaChat(
       content,
       thinking,
       done_reason: data?.done_reason || null,
-      prompt_tokens: typeof data?.prompt_eval_count === "number" ? data.prompt_eval_count : null,
-      completion_tokens: typeof data?.eval_count === "number" ? data.eval_count : null,
+      ...extractOllamaUsage(data),
       tool_calls: toolCalls,
     };
   }
@@ -409,8 +412,7 @@ export async function runBrowserOllamaChat(
           content: retryContent,
           thinking: String(retryMsg.thinking || "").trim(),
           done_reason: retryData?.done_reason || null,
-          prompt_tokens: typeof retryData?.prompt_eval_count === "number" ? retryData.prompt_eval_count : null,
-          completion_tokens: typeof retryData?.eval_count === "number" ? retryData.eval_count : null,
+          ...extractOllamaUsage(retryData),
         };
       }
       const retryThinking = String(retryMsg.thinking || "").trim();
@@ -419,8 +421,7 @@ export async function runBrowserOllamaChat(
           content: "",
           thinking: retryThinking,
           done_reason: retryData?.done_reason || null,
-          prompt_tokens: typeof retryData?.prompt_eval_count === "number" ? retryData.prompt_eval_count : null,
-          completion_tokens: typeof retryData?.eval_count === "number" ? retryData.eval_count : null,
+          ...extractOllamaUsage(retryData),
         };
       }
     }
@@ -430,7 +431,6 @@ export async function runBrowserOllamaChat(
     content,
     thinking,
     done_reason: data?.done_reason || null,
-    prompt_tokens: typeof data?.prompt_eval_count === "number" ? data.prompt_eval_count : null,
-    completion_tokens: typeof data?.eval_count === "number" ? data.eval_count : null,
+    ...extractOllamaUsage(data),
   };
 }

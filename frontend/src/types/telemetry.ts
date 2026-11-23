@@ -1,3 +1,5 @@
+import type { ProviderColor } from "./providers";
+
 export type TelemetryPhaseKey =
   | "phase1_pre"
   | "phase3_cognition"
@@ -15,6 +17,9 @@ export interface LlmCallTelemetry {
   label: string;
   model: string;
   provider_type: string;
+  provider_id?: string | null;
+  provider_name?: string | null;
+  provider_color?: ProviderColor | null;
   prompt_tokens: number;
   completion_tokens: number;
   usage_source: TokenUsageSource;
@@ -22,6 +27,9 @@ export interface LlmCallTelemetry {
   finish_reason: string;
   retries: number;
   duration_ms: number;
+  ttft_ms?: number | null;
+  eval_duration_ms?: number | null;
+  cost_usd?: number | null;
   error?: string | null;
 }
 

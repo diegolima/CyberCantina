@@ -767,10 +767,12 @@ erDiagram
 | `frontend/src/components/chat/StandaloneArrivalCard.tsx` |
 | `frontend/src/components/chat/TurnBookmarkNoteRow.tsx` |
 | `frontend/src/components/chat/TurnCard.tsx` |
+| `frontend/src/components/chat/TurnProseModelPill.tsx` |
 | `frontend/src/components/chat/arrivalHelpers.ts` |
 | `frontend/src/components/chat/arrivalMediaHelpers.ts` |
 | `frontend/src/components/chat/chatHelpers.tsx` |
 | `frontend/src/components/chat/contextHealthHelpers.ts` |
+| `frontend/src/components/chat/proseTelemetryHelpers.ts` |
 
 #### `components/inspector`
 

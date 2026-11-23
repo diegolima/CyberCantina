@@ -125,12 +125,22 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const [customDirectiveText, setCustomDirectiveText] = useState("");
   const [activeAgentModal, setActiveAgentModal] = useState<ActiveAgentModalTarget | null>(null);
   const [isContextHealthOpen, setIsContextHealthOpen] = useState(false);
+  const [openModelPopoverTurnId, setOpenModelPopoverTurnId] = useState<string | null>(null);
+  const [inspectedTelemetryTurnId, setInspectedTelemetryTurnId] = useState<string | null>(null);
   const [highlightedTurnId, setHighlightedTurnId] = useState<string | null>(null);
   const turnFeedRef = useRef<HTMLDivElement | null>(null);
   const gmDrawerRef = useRef<HTMLElement | null>(null);
 
   const activeTelemetryTurn = useMemo(() => getActiveTurnForTelemetry(bundle), [bundle]);
   const activeTurnTelemetry = activeTelemetryTurn?.telemetry ?? null;
+  const modalTelemetryTurn = useMemo(() => {
+    if (!inspectedTelemetryTurnId) return activeTelemetryTurn;
+    return (
+      bundle.active_branch_turns.find((t) => t.id === inspectedTelemetryTurnId) ??
+      bundle.all_turn_nodes.find((t) => t.id === inspectedTelemetryTurnId) ??
+      activeTelemetryTurn
+    );
+  }, [activeTelemetryTurn, bundle.active_branch_turns, bundle.all_turn_nodes, inspectedTelemetryTurnId]);
 
   // Consolidated Popover & Tray State
   const [activePopover, setActivePopover] = useState<ComposerPopoverId>("none");
@@ -1390,6 +1400,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   };
 
   const handleSwipeRegenerate = (turn: TurnNodeRecord) => {
+    setOpenModelPopoverTurnId(null);
     if (isBusy || isDeletingTurn || !turn.parent_turn_id) return;
     const narratorOpts = inferNarratorTurnOptions(turn);
     if (narratorOpts.isNarrator) {
@@ -1422,6 +1433,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   };
 
   const handleStartEdit = (turn: TurnNodeRecord) => {
+    setOpenModelPopoverTurnId(null);
     if (isBusy || isDeletingTurn || !turn.parent_turn_id) return;
 
     // Stash current composer draft if not already in edit mode
@@ -1521,6 +1533,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   };
 
   const handleBranchFromTurn = async (turn: TurnNodeRecord) => {
+    setOpenModelPopoverTurnId(null);
     if (isBusy || isDeletingTurn) return;
     if (editingTurn) handleCancelEdit();
     await onCheckoutTurn(turn.id);
@@ -1570,7 +1583,10 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               </div>
               <ContextHealthPill
                 telemetry={activeTurnTelemetry}
-                onClick={() => setIsContextHealthOpen(true)}
+                onClick={() => {
+                  setInspectedTelemetryTurnId(null);
+                  setIsContextHealthOpen(true);
+                }}
               />
             </div>
             <div className="stage-actor-line">
@@ -1679,7 +1695,10 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               onToggleArrivalCard={handleToggleArrivalCard}
               onToggleCognition={toggleCognition}
               onToggleMemories={toggleMemories}
-              onCheckoutTurn={onCheckoutTurn}
+              onCheckoutTurn={(tid) => {
+                setOpenModelPopoverTurnId(null);
+                return onCheckoutTurn(tid);
+              }}
               onBranchFromTurn={handleBranchFromTurn}
               onStartEdit={handleStartEdit}
               onCancelEdit={handleCancelEdit}
@@ -1688,6 +1707,16 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               onOpenAgentModal={setActiveAgentModal}
               onUpdateTurnBookmark={onUpdateTurnBookmark}
               onSummarizeTurnForBookmark={onSummarizeTurnForBookmark}
+              isModelPopoverOpen={openModelPopoverTurnId === turn.id}
+              onToggleModelPopover={(tid) =>
+                setOpenModelPopoverTurnId((prev) => (prev === tid ? null : tid))
+              }
+              onCloseModelPopover={() => setOpenModelPopoverTurnId(null)}
+              onOpenContextHealthForTurn={(t) => {
+                setOpenModelPopoverTurnId(null);
+                setInspectedTelemetryTurnId(t.id);
+                setIsContextHealthOpen(true);
+              }}
             />
           );
         })}
@@ -1925,9 +1954,12 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       {/* Turn Context Telemetry & Context Health Modal */}
       <ContextHealthModal
         isOpen={isContextHealthOpen}
-        onClose={() => setIsContextHealthOpen(false)}
-        telemetry={activeTurnTelemetry}
-        turnDepth={activeTelemetryTurn?.depth_index ?? null}
+        onClose={() => {
+          setIsContextHealthOpen(false);
+          setInspectedTelemetryTurnId(null);
+        }}
+        telemetry={modalTelemetryTurn?.telemetry ?? null}
+        turnDepth={modalTelemetryTurn?.depth_index ?? null}
         onOpenSettings={onOpenSettings}
       />
     </main>

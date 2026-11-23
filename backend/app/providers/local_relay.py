@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -46,6 +47,8 @@ class RelayCompletionResult:
     done_reason: str | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    eval_duration_ms: int | None = None
+    cost_usd: float | None = None
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -54,6 +57,8 @@ class RelayStreamUsage:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     done_reason: str | None = None
+    eval_duration_ms: int | None = None
+    cost_usd: float | None = None
 
 
 def _coerce_opt_int(val: Any) -> int | None:
@@ -61,6 +66,16 @@ def _coerce_opt_int(val: Any) -> int | None:
         return None
     if isinstance(val, int) and val >= 0:
         return val
+    return None
+
+
+def _coerce_opt_float(val: Any) -> float | None:
+    if isinstance(val, bool) or val is None:
+        return None
+    if isinstance(val, (int, float)):
+        f = float(val)
+        if math.isfinite(f) and f >= 0.0:
+            return f
     return None
 
 
@@ -210,6 +225,8 @@ class LocalRelayHub:
                             prompt_tokens=_coerce_opt_int(raw.get("prompt_tokens")),
                             completion_tokens=_coerce_opt_int(raw.get("completion_tokens")),
                             done_reason=(str(raw["done_reason"]) if raw.get("done_reason") else None),
+                            eval_duration_ms=_coerce_opt_int(raw.get("eval_duration_ms")),
+                            cost_usd=_coerce_opt_float(raw.get("cost_usd")),
                         )
                     )
                 pend.queue.put_nowait(None)
@@ -223,6 +240,8 @@ class LocalRelayHub:
                         done_reason=(str(raw["done_reason"]) if raw.get("done_reason") else None),
                         prompt_tokens=_coerce_opt_int(raw.get("prompt_tokens")),
                         completion_tokens=_coerce_opt_int(raw.get("completion_tokens")),
+                        eval_duration_ms=_coerce_opt_int(raw.get("eval_duration_ms")),
+                        cost_usd=_coerce_opt_float(raw.get("cost_usd")),
                         tool_calls=tc_list,
                     )
                 )

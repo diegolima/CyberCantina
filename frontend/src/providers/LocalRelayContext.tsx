@@ -21,6 +21,7 @@ import {
 } from "../local/remoteProviderDriver";
 import {
   ContextClampNotice,
+  extractCostUsd,
   RelayLlmRequest,
   RelayProbeRequest,
   WebGpuProgress,
@@ -330,6 +331,13 @@ export const LocalRelayProvider: React.FC<{
           done_reason: result.done_reason || null,
           prompt_tokens: typeof result.prompt_tokens === "number" ? result.prompt_tokens : null,
           completion_tokens: typeof result.completion_tokens === "number" ? result.completion_tokens : null,
+          eval_duration_ms:
+            typeof result.eval_duration_ms === "number" &&
+            Number.isFinite(result.eval_duration_ms) &&
+            result.eval_duration_ms >= 0
+              ? Math.round(result.eval_duration_ms)
+              : null,
+          cost_usd: extractCostUsd(result.cost_usd),
           tool_calls: result.tool_calls,
         });
       } catch (err: any) {
