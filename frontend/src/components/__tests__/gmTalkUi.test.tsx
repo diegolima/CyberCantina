@@ -8,6 +8,7 @@ import {
   type ProfileBehaviorValues,
 } from "../auth/ProfileBehaviorCards";
 import { ChatComposer, type ChatComposerProps } from "../chat/ChatComposer";
+import { GmCodexProposalCard } from "../chat/GmCodexProposalCard";
 import { GmMentionPopover } from "../chat/GmMentionPopover";
 import { GmTalkDrawer } from "../chat/GmTalkDrawer";
 
@@ -369,5 +370,118 @@ describe("GM Talk UI components", () => {
     );
     expect(exportHtml).toContain("Include GM conversations");
     expect(exportHtml).not.toMatch(/Include GM conversations[\s\S]{0,80}checked/);
+  });
+
+  it("renders Draft Codex button on GM messages and GmCodexProposalCard states (pending, duplicates, confirmed, cancelled)", () => {
+    const baseProposal = {
+      id: "prop_1",
+      status: "pending" as const,
+      draft: {
+        title: "Aegis Mobile Scanner Arch",
+        category: "threat" as const,
+        content: "A wheeled inspection arch deployed in Sector 9; limits unconfirmed.",
+        entity_tags: ["aegis", "scanner"],
+      },
+      source_turns: [12, 14],
+      duplicate_matches: [
+        {
+          id: "lore_base_1",
+          title: "Aegis Directorate",
+          category: "faction" as const,
+          is_base_world: true,
+          match_reason: "Similar title",
+        },
+        {
+          id: "lore_camp_2",
+          title: "Aegis Scanner Note",
+          category: "artifact" as const,
+          is_base_world: false,
+          match_reason: "Shared tags: aegis",
+        },
+      ],
+      replace_lore_id: null,
+      saved_lore_id: null,
+      created_at: "2026-11-23T15:00:00Z",
+    };
+
+    const drawerWithProposalHtml = renderToStaticMarkup(
+      <GmTalkDrawer
+        campaignTitle="Sector 9 Run"
+        worldName="New Kowloon"
+        unlockLore={false}
+        isClosing={false}
+        isExpanded={false}
+        isCampaignStreaming={false}
+        messages={[
+          {
+            id: "gm_asst_1",
+            campaign_id: "camp_1",
+            anchor_turn_id: "turn_14",
+            role: "assistant",
+            content: "It was a mobile Aegis security scanner arch.",
+            mentions: [],
+            sources: [],
+            proposals: [baseProposal],
+            created_at: "2026-11-23T15:00:00Z",
+          },
+        ]}
+        isLoading={false}
+        isStreaming={false}
+        streamingText=""
+        streamingSources={[]}
+        error={null}
+        clearConfirm={false}
+        isClearing={false}
+        copiedId={null}
+        expandedSources={{}}
+        modelMeta={null}
+        onInsertAtTrigger={vi.fn()}
+        onClearChat={vi.fn()}
+        onCopyMessage={vi.fn()}
+        onToggleSources={vi.fn()}
+        onDraftCodexEntry={vi.fn()}
+        onConfirmCodexProposal={vi.fn()}
+        onCancelCodexProposal={vi.fn()}
+        onOpenCodex={vi.fn()}
+        onDismissError={vi.fn()}
+        onToggleExpanded={vi.fn()}
+        onMinimize={vi.fn()}
+      />
+    );
+
+    expect(drawerWithProposalHtml).toContain("Draft Codex");
+    expect(drawerWithProposalHtml).toContain("Proposed World Codex Entry");
+    expect(drawerWithProposalHtml).toContain("Aegis Mobile Scanner Arch");
+    expect(drawerWithProposalHtml).toContain("Grounded in Turns 12, 14");
+    expect(drawerWithProposalHtml).toContain("Similar World Codex entries already exist:");
+    expect(drawerWithProposalHtml).toContain("Aegis Directorate");
+    expect(drawerWithProposalHtml).toContain("requires GM Mode");
+    expect(drawerWithProposalHtml).toContain("Confirm &amp; Add to Codex");
+    expect(drawerWithProposalHtml).toContain("/ 2000");
+
+    const confirmedHtml = renderToStaticMarkup(
+      <GmCodexProposalCard
+        proposal={{
+          ...baseProposal,
+          status: "confirmed",
+          saved_lore_id: "lore_saved_1",
+        }}
+        unlockLore={false}
+        onOpenCodex={vi.fn()}
+      />
+    );
+    expect(confirmedHtml).toContain("Saved to World Codex");
+    expect(confirmedHtml).toContain("Open Codex");
+
+    const cancelledHtml = renderToStaticMarkup(
+      <GmCodexProposalCard
+        proposal={{
+          ...baseProposal,
+          status: "cancelled",
+        }}
+        unlockLore={false}
+      />
+    );
+    expect(cancelledHtml).toContain("Codex proposal dismissed");
   });
 });

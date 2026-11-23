@@ -40,14 +40,17 @@
 | `DELETE` | `/api/campaigns/{campaign_id}/edges/{edge_id}` | `app.routers.campaign_routes.spatial_routes.remove_campaign_edge` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `PATCH` | `/api/campaigns/{campaign_id}/edges/{edge_id}` | `app.routers.campaign_routes.spatial_routes.update_campaign_edge_distance` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/gm/chat` | `app.routers.campaign_routes.gm_routes.stream_campaign_gm_chat` | — | `frontend/src/api/gm.ts` |
+| `POST` | `/api/campaigns/{campaign_id}/gm/codex-draft` | `app.routers.campaign_routes.gm_routes.draft_campaign_gm_codex_entry` | `GmCodexDraftResponse` | `frontend/src/api/gm.ts` |
 | `GET` | `/api/campaigns/{campaign_id}/gm/mentions` | `app.routers.campaign_routes.gm_routes.search_campaign_gm_mentions` | `GmMentionsResponse` | *(backend-only / test / SSE)* |
 | `DELETE` | `/api/campaigns/{campaign_id}/gm/messages` | `app.routers.campaign_routes.gm_routes.clear_campaign_gm_messages` | `dict` | `frontend/src/api/gm.ts` |
 | `GET` | `/api/campaigns/{campaign_id}/gm/messages` | `app.routers.campaign_routes.gm_routes.get_campaign_gm_messages` | `GmMessagesResponse` | `frontend/src/api/gm.ts` |
+| `PATCH` | `/api/campaigns/{campaign_id}/gm/proposals/{proposal_id}` | `app.routers.campaign_routes.gm_routes.update_campaign_gm_proposal` | `dict` | *(backend-only / test / SSE)* |
 | `POST` | `/api/campaigns/{campaign_id}/item-equip` | `app.routers.campaign_routes.crud_and_state.toggle_campaign_item_equip` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/location-override` | `app.routers.campaign_routes.crud_and_state.override_campaign_location` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/locations` | `app.routers.campaign_routes.spatial_routes.create_campaign_linked_location` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `PUT` | `/api/campaigns/{campaign_id}/locations/{location_id}/lore` | `app.routers.campaign_routes.spatial_routes.update_campaign_location_lore` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `PUT` | `/api/campaigns/{campaign_id}/lore` | `app.routers.campaign_routes.spatial_routes.update_campaign_world_lore` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
+| `POST` | `/api/campaigns/{campaign_id}/lore/entries` | `app.routers.campaign_routes.spatial_routes.upsert_campaign_world_lore_entry` | `CampaignWorldLoreEntryUpsertResponse` | `frontend/src/api/gm.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/lore/{lore_id}/reveal` | `app.routers.campaign_routes.spatial_routes.toggle_campaign_lore_reveal` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `DELETE` | `/api/campaigns/{campaign_id}/major-events/{turn_id}` | `app.routers.campaign_routes.spatial_routes.delete_campaign_major_event` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `PATCH` | `/api/campaigns/{campaign_id}/major-events/{turn_id}` | `app.routers.campaign_routes.spatial_routes.update_campaign_major_event` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
@@ -422,6 +425,12 @@ erDiagram
 | `backend/app/engine/context/zone2_episodic.py` | Zone 2 LOD episodic memory rendering, vector recall packing, and compacted turn elevation. |
 | `backend/app/engine/context/zone4_ephemeral.py` | Zone 4 ephemeral tail frame and elapsed snapshot state projection. |
 
+#### `app.engine.gm_codex`
+
+| File | Summary |
+| :--- | :--- |
+| `backend/app/engine/gm_codex.py` | Structured World Codex entry drafting, intent detection, and duplicate checking for GM Talk. |
+
 #### `app.engine.gm_talk`
 
 | File | Summary |
@@ -742,6 +751,7 @@ erDiagram
 | `frontend/src/components/chat/ContextHealthModal.tsx` |
 | `frontend/src/components/chat/ContextHealthPill.tsx` |
 | `frontend/src/components/chat/DirectorChoicesDrawer.tsx` |
+| `frontend/src/components/chat/GmCodexProposalCard.tsx` |
 | `frontend/src/components/chat/GmMentionPopover.tsx` |
 | `frontend/src/components/chat/GmTalkDrawer.tsx` |
 | `frontend/src/components/chat/LiveStreamingTurnCard.tsx` |

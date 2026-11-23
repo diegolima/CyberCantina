@@ -7,6 +7,7 @@ from typing import Any
 PROMPT_KEY_ACTOR_ZONE1 = "actor_zone1_system"
 PROMPT_KEY_NARRATOR_ZONE1 = "narrator_zone1_system"
 PROMPT_KEY_GM_TALK_SYSTEM = "gm_talk_system"
+PROMPT_KEY_GM_CODEX_DRAFT = "gm_codex_draft"
 PROMPT_KEY_CLERK_PRE_TURN = "clerk_pre_turn_system"
 PROMPT_KEY_CHARACTER_COGNITION = "character_cognition_system"
 PROMPT_KEY_CLERK_SUMMARY = "clerk_episodic_summary_system"
@@ -27,6 +28,7 @@ ALL_PROMPT_KEYS = [
     PROMPT_KEY_ACTOR_ZONE1,
     PROMPT_KEY_NARRATOR_ZONE1,
     PROMPT_KEY_GM_TALK_SYSTEM,
+    PROMPT_KEY_GM_CODEX_DRAFT,
     PROMPT_KEY_CLERK_PRE_TURN,
     PROMPT_KEY_CHARACTER_COGNITION,
     PROMPT_KEY_CLERK_SUMMARY,
@@ -552,10 +554,25 @@ DEFAULT_GM_TALK_SYSTEM = (
     "{spoiler_policy}"
 )
 
+DEFAULT_GM_CODEX_DRAFT = (
+    "You are Neuromancer, drafting a structured World Codex entry for the campaign in {world_name}.\n\n"
+    "=== EXTRACTION CONTRACT ===\n"
+    "- Synthesize ONE concise, grounded World Codex entry from the supplied campaign context and GM conversation.\n"
+    "- Choose the best World Codex category from: history, culture, faction, figure, rumor, threat, artifact.\n"
+    "  (Hostile units, hazards, and encountered antagonists -> 'threat'; notable individuals -> 'figure'; gear, scanners, relics, or tech -> 'artifact'.)\n"
+    "- Write `content` in crisp, neutral in-universe encyclopedia prose (1-3 short paragraphs, <= 2000 chars).\n"
+    "- Preserve epistemic honesty: if capabilities, origins, or limits were not established in play, state clearly that they remain unconfirmed rather than inventing canon.\n"
+    "- NEVER include out-of-character turn numbers, 'Sources: Turns ...' lines, or Markdown headings inside `content`. Put any supporting turn numbers in `source_turns` only.\n"
+    "- Provide 3-8 concise `entity_tags` (names, aliases, locations, factions) so future retrieval matches this entry.\n\n"
+    "=== SPOILER & EPISTEMIC POLICY ===\n"
+    "{spoiler_policy}"
+)
+
 FACTORY_DEFAULT_PROMPTS: dict[str, str] = {
     PROMPT_KEY_ACTOR_ZONE1: DEFAULT_ACTOR_ZONE1_SYSTEM,
     PROMPT_KEY_NARRATOR_ZONE1: DEFAULT_NARRATOR_ZONE1_SYSTEM,
     PROMPT_KEY_GM_TALK_SYSTEM: DEFAULT_GM_TALK_SYSTEM,
+    PROMPT_KEY_GM_CODEX_DRAFT: DEFAULT_GM_CODEX_DRAFT,
     PROMPT_KEY_CLERK_PRE_TURN: DEFAULT_CLERK_PRE_TURN_SYSTEM,
     PROMPT_KEY_CHARACTER_COGNITION: DEFAULT_CHARACTER_COGNITION_SYSTEM,
     PROMPT_KEY_CLERK_SUMMARY: DEFAULT_CLERK_EPISODIC_SUMMARY_SYSTEM,
@@ -869,6 +886,20 @@ PROMPTS_METADATA = [
             {"name": "world_name", "description": "Name of the active campaign world"},
             {"name": "spoiler_policy", "description": "Dynamic spoiler gating rule based on Unlock Lore & Secrets (GM Mode)"},
         ],
+        "required_tags": [],
+    },
+    {
+        "key": PROMPT_KEY_GM_CODEX_DRAFT,
+        "title": "Neuromancer · GM Codex Entry Drafter",
+        "description": (
+            "Structured extraction prompt used by GM Talk when drafting a candidate World Codex entry "
+            "for deterministic user review and confirmation."
+        ),
+        "available_variables": [
+            {"name": "world_name", "description": "Name of the active campaign world"},
+            {"name": "spoiler_policy", "description": "Dynamic spoiler gating rule based on Unlock Lore & Secrets (GM Mode)"},
+        ],
+        # Draft extraction enforces GmWorldLoreDraftLLMOutput via constrained JSON schema.
         "required_tags": [],
     },
     {

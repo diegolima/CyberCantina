@@ -385,7 +385,7 @@ def extract_campaign_export_bundle(
         if include_gm_chat:
             raw_gm = conn.execute(
                 """
-                SELECT id, campaign_id, anchor_turn_id, role, content, mentions_json, sources_json, created_at
+                SELECT id, campaign_id, anchor_turn_id, role, content, mentions_json, sources_json, proposals_json, created_at
                 FROM gm_chat_messages
                 WHERE campaign_id = ?
                 ORDER BY created_at ASC, rowid ASC
@@ -512,6 +512,48 @@ def _remap_gm_refs_json(raw_json: Any, id_remap: dict[str, str]) -> str:
             remapped.append(copy_item)
         else:
             remapped.append(item)
+    return json.dumps(remapped)
+
+
+def _remap_gm_proposals_json(raw_json: Any, id_remap: dict[str, str]) -> str:
+    if isinstance(raw_json, str):
+        try:
+            parsed = json.loads(raw_json)
+        except Exception:
+            return "[]"
+    elif isinstance(raw_json, list):
+        parsed = raw_json
+    else:
+        return "[]"
+    if not isinstance(parsed, list):
+        return "[]"
+    remapped: list[Any] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        copy_item = dict(item)
+        copy_item["id"] = f"prop_{uuid.uuid4().hex[:12]}"
+        if copy_item.get("replace_lore_id"):
+            copy_item["replace_lore_id"] = _remap_id(str(copy_item["replace_lore_id"]), id_remap)
+        if copy_item.get("saved_lore_id"):
+            copy_item["saved_lore_id"] = _remap_id(str(copy_item["saved_lore_id"]), id_remap)
+        draft_obj = copy_item.get("draft")
+        if isinstance(draft_obj, dict) and draft_obj.get("id"):
+            draft_copy = dict(draft_obj)
+            draft_copy["id"] = _remap_id(str(draft_obj["id"]), id_remap)
+            copy_item["draft"] = draft_copy
+        dupes = copy_item.get("duplicate_matches")
+        if isinstance(dupes, list):
+            new_dupes: list[Any] = []
+            for d in dupes:
+                if isinstance(d, dict) and d.get("id"):
+                    d_copy = dict(d)
+                    d_copy["id"] = str(_remap_id(str(d["id"]), id_remap))
+                    new_dupes.append(d_copy)
+                else:
+                    new_dupes.append(d)
+            copy_item["duplicate_matches"] = new_dupes
+        remapped.append(copy_item)
     return json.dumps(remapped)
 
 
@@ -1352,9 +1394,9 @@ def ingest_campaigns_atomic(
                 conn.execute(
                     """
                     INSERT INTO gm_chat_messages (
-                        id, campaign_id, anchor_turn_id, role, content, mentions_json, sources_json, created_at
+                        id, campaign_id, anchor_turn_id, role, content, mentions_json, sources_json, proposals_json, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         f"gm_{uuid.uuid4().hex[:12]}",
@@ -1364,6 +1406,7 @@ def ingest_campaigns_atomic(
                         str(gm_row.get("content") or ""),
                         _remap_gm_refs_json(gm_row.get("mentions_json"), id_remap),
                         _remap_gm_refs_json(gm_row.get("sources_json"), id_remap),
+                        _remap_gm_proposals_json(gm_row.get("proposals_json"), id_remap),
                         str(gm_row.get("created_at") or now),
                     ),
                 )

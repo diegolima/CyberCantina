@@ -24,6 +24,8 @@ from app.routers.campaign_routes.schemas_and_gate import (
     CampaignEdgeDistanceUpdateRequest,
     CampaignLoreRevealRequest,
     CampaignMajorEventUpdateRequest,
+    CampaignWorldLoreEntryUpsertRequest,
+    CampaignWorldLoreEntryUpsertResponse,
     CampaignWorldLoreUpdateRequest,
     LinkedLocationCreateRequest,
     router,
@@ -163,6 +165,49 @@ async def update_campaign_world_lore(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/api/campaigns/{campaign_id}/lore/entries",
+    response_model=CampaignWorldLoreEntryUpsertResponse,
+)
+async def upsert_campaign_world_lore_entry(
+    campaign_id: str,
+    req: CampaignWorldLoreEntryUpsertRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignWorldLoreEntryUpsertResponse:
+    """Append a new campaign World Codex entry or update an existing one (base-world overwrite requires GM Mode)."""
+    repo = _resolve_facade_attr("get_repo", get_repo)()
+    try:
+        bundle, saved_lore_id = await repo.aupsert_campaign_world_lore_entry(
+            campaign_id,
+            req.draft,
+            replace_lore_id=req.replace_lore_id,
+            owner_id=current_user.id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    updated_proposal = None
+    if req.proposal_id:
+        updated_proposal = repo.update_gm_proposal_status(
+            campaign_id,
+            req.proposal_id,
+            "confirmed",
+            saved_lore_id=saved_lore_id,
+            replace_lore_id=req.replace_lore_id,
+            final_draft=req.draft,
+        )
+
+    return CampaignWorldLoreEntryUpsertResponse(
+        bundle=bundle,
+        saved_lore_id=saved_lore_id,
+        proposal=updated_proposal,
+    )
 
 
 @router.post(

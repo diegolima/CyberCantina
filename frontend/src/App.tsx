@@ -707,7 +707,9 @@ export const App: React.FC = () => {
         onCloseOverlay={layout.closeOverlays}
         bundle={bundle}
         worldName={campaignWorld?.name}
-        codexCount={campaignWorld?.lore_nodes.length ?? 0}
+        codexCount={
+          bundle?.world_lore_nodes?.length ?? campaignWorld?.lore_nodes.length ?? 0
+        }
         isCodexOpen={campaignWorldSheetTab === "codex"}
         onOpenCodex={() => {
           layout.closeOverlays();
@@ -798,6 +800,11 @@ export const App: React.FC = () => {
           hasInspectorAttention={Boolean(pendingLocationOverrideId)}
           onUpdateTurnBookmark={handleUpdateTurnBookmark}
           onSummarizeTurnForBookmark={handleSummarizeTurnForBookmark}
+          onCampaignBundleChange={setBundle}
+          onOpenCodex={() => {
+            layout.closeOverlays();
+            setCampaignWorldSheetTab("codex");
+          }}
         />
       ) : (
         <HomeScreen

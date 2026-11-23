@@ -6,6 +6,8 @@ import asyncio
 import logging
 
 from app.schemas.character import ItemFlag
+from app.schemas.gm import GmCodexProposal
+from app.schemas.turn import CampaignStateBundle
 from app.schemas.world import WorldLoreNodeDraft
 from app.schemas.party import LocationOverrideMoveMode
 from fastapi import APIRouter
@@ -110,6 +112,19 @@ class CampaignWorldSettingsPatchRequest(BaseModel):
 
 class CampaignWorldLoreUpdateRequest(BaseModel):
     lore_nodes: list[WorldLoreNodeDraft] = Field(default_factory=list)
+
+
+class CampaignWorldLoreEntryUpsertRequest(BaseModel):
+    draft: WorldLoreNodeDraft
+    replace_lore_id: str | None = Field(default=None, max_length=128)
+    proposal_message_id: str | None = Field(default=None, max_length=128)
+    proposal_id: str | None = Field(default=None, max_length=128)
+
+
+class CampaignWorldLoreEntryUpsertResponse(BaseModel):
+    bundle: CampaignStateBundle
+    saved_lore_id: str
+    proposal: GmCodexProposal | None = None
 
 
 class CampaignLoreRevealRequest(BaseModel):

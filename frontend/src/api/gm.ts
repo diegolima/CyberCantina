@@ -1,10 +1,15 @@
 import type {
+  CampaignWorldLoreEntryUpsertResponse,
+  GmCodexDraftResponse,
+  GmCodexProposal,
   GmMentionCategory,
   GmMentionRef,
   GmMentionsResponse,
   GmMessagesResponse,
+  GmStreamCodexProposalEvent,
   GmStreamDoneEvent,
   GmStreamMetaEvent,
+  WorldLoreNodeDraft,
 } from "../types";
 import {
   API_BASE,
@@ -17,6 +22,7 @@ import {
 export interface GmStreamCallbacks {
   onMeta?: (meta: GmStreamMetaEvent) => void;
   onToken?: (delta: string) => void;
+  onCodexProposal?: (event: GmStreamCodexProposalEvent) => void;
   onDone?: (data: GmStreamDoneEvent) => void;
   onError?: (detail: string) => void;
 }
@@ -115,6 +121,9 @@ export const gmApi = {
               callbacks.onToken?.(parsed.text);
             }
             break;
+          case "codex_proposal":
+            callbacks.onCodexProposal?.(parsed as GmStreamCodexProposalEvent);
+            break;
           case "done":
             callbacks.onDone?.(parsed as GmStreamDoneEvent);
             break;
@@ -129,4 +138,44 @@ export const gmApi = {
       }
     }
   },
+
+  draftGmCodexEntry: (
+    campaignId: string,
+    payload: { message_id?: string; instruction?: string }
+  ) =>
+    fetchJson<GmCodexDraftResponse>(
+      `${API_BASE}/campaigns/${encodeURIComponent(campaignId)}/gm/codex-draft`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    ),
+
+  saveCampaignWorldLoreEntry: (
+    campaignId: string,
+    payload: {
+      draft: WorldLoreNodeDraft;
+      replace_lore_id?: string | null;
+      proposal_message_id?: string | null;
+      proposal_id?: string | null;
+    }
+  ) =>
+    fetchJson<CampaignWorldLoreEntryUpsertResponse>(
+      `${API_BASE}/campaigns/${encodeURIComponent(campaignId)}/lore/entries`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    ),
+
+  cancelGmProposal: (campaignId: string, proposalId: string) =>
+    fetchJson<{ proposal: GmCodexProposal }>(
+      `${API_BASE}/campaigns/${encodeURIComponent(campaignId)}/gm/proposals/${encodeURIComponent(
+        proposalId
+      )}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ status: "cancelled" }),
+      }
+    ),
 };

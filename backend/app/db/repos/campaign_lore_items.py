@@ -872,6 +872,103 @@ class CampaignLoreItemsMixin:
             enforce_unlock=enforce_unlock,
         )
 
+    def get_base_world_lore_ids(self, world_id: str) -> set[str]:
+        """Return IDs of base-world authored World Codex entries (`campaign_id IS NULL`)."""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT id FROM lore_nodes
+                WHERE world_id = ? AND location_id IS NULL AND container_id IS NULL AND campaign_id IS NULL
+                """,
+                (world_id,),
+            ).fetchall()
+            return {str(r["id"]) for r in rows}
+        finally:
+            conn.close()
+
+    async def aupsert_campaign_world_lore_entry(
+        self,
+        campaign_id: str,
+        draft: WorldLoreNodeDraft,
+        *,
+        replace_lore_id: str | None = None,
+        owner_id: str | None = None,
+    ) -> tuple[CampaignStateBundle, str]:
+        """Append or update a single branch-safe campaign World Codex entry (base-world overwrite requires GM Mode)."""
+        bundle = self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
+        base_world_ids = self.get_base_world_lore_ids(bundle.campaign.world_id)
+        current_lore = list(bundle.world_lore_nodes)
+        before_ids = {ln.id for ln in current_lore}
+
+        next_drafts: list[WorldLoreNodeDraft] = []
+        replaced = False
+        for existing in current_lore:
+            if replace_lore_id and existing.id == replace_lore_id:
+                is_base_world = (
+                    existing.campaign_id is None
+                    or existing.id in base_world_ids
+                    or (existing.origin_lore_id is not None and existing.origin_lore_id in base_world_ids)
+                )
+                if is_base_world and not bundle.campaign.world_settings.unlock_lore:
+                    raise PermissionError(
+                        "Unlock Lore & Secrets (GM Mode) is required to overwrite pre-existing base-world Codex entries."
+                    )
+                next_drafts.append(
+                    WorldLoreNodeDraft(
+                        id=existing.id,
+                        title=draft.title,
+                        category=draft.category,
+                        content=draft.content,
+                        entity_tags=list(draft.entity_tags),
+                    )
+                )
+                replaced = True
+            else:
+                next_drafts.append(
+                    WorldLoreNodeDraft(
+                        id=existing.id,
+                        title=existing.title,
+                        category=existing.category,
+                        content=existing.content,
+                        entity_tags=list(existing.entity_tags),
+                    )
+                )
+
+        if replace_lore_id and not replaced:
+            raise KeyError(f"World Codex entry '{replace_lore_id}' not found on the active branch.")
+
+        if not replace_lore_id:
+            next_drafts.append(
+                WorldLoreNodeDraft(
+                    id=None,
+                    title=draft.title,
+                    category=draft.category,
+                    content=draft.content,
+                    entity_tags=list(draft.entity_tags),
+                )
+            )
+
+        updated_bundle = await self._aupdate_campaign_scoped_lore(
+            campaign_id,
+            "world",
+            None,
+            next_drafts,
+            owner_id=owner_id,
+            enforce_unlock=False,
+        )
+
+        new_ids = [ln.id for ln in updated_bundle.world_lore_nodes if ln.id not in before_ids]
+        if new_ids:
+            saved_lore_id = new_ids[-1]
+        elif replace_lore_id:
+            saved_lore_id = replace_lore_id
+        else:
+            matching = [ln.id for ln in updated_bundle.world_lore_nodes if ln.title == draft.title]
+            saved_lore_id = matching[-1] if matching else ""
+
+        return updated_bundle, saved_lore_id
+
     def update_campaign_location_lore(
         self,
         campaign_id: str,

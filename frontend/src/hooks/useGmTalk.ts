@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { gmApi } from "../api/gm";
 import type {
+  CampaignStateBundle,
   GmChatMessage,
+  GmCodexProposal,
   GmMentionCandidate,
   GmMentionCategory,
   GmMentionRef,
   GmModelRole,
   GmSourceRef,
+  WorldLoreNodeDraft,
 } from "../types";
 import {
   applyCategoryDrilldown,
@@ -28,6 +31,7 @@ export interface UseGmTalkOptions {
   unlockLore: boolean;
   isCampaignStreaming: boolean;
   textareaRef: React.RefObject<HTMLTextAreaElement>;
+  onCampaignBundleChange?: (bundle: CampaignStateBundle) => void;
 }
 
 export interface GmModelMeta {
@@ -53,6 +57,9 @@ export interface UseGmTalkReturn {
   copiedId: string | null;
   expandedSources: Record<string, boolean>;
   modelMeta: GmModelMeta | null;
+  draftingMessageId: string | null;
+  savingProposalId: string | null;
+  proposalErrors: Record<string, string>;
   draftText: string;
   pinnedMentions: GmMentionRef[];
   mentionTrigger: GmMentionTrigger | null;
@@ -82,6 +89,14 @@ export interface UseGmTalkReturn {
   handleClearChat: () => Promise<void>;
   copyMessage: (id: string, content: string) => void;
   toggleSources: (id: string) => void;
+  draftCodexEntry: (messageId: string) => Promise<void>;
+  confirmCodexProposal: (
+    messageId: string,
+    proposalId: string,
+    draft: WorldLoreNodeDraft,
+    replaceLoreId: string | null
+  ) => Promise<void>;
+  cancelCodexProposal: (messageId: string, proposalId: string) => Promise<void>;
 }
 
 export function useGmTalk({
@@ -90,6 +105,7 @@ export function useGmTalk({
   unlockLore,
   isCampaignStreaming,
   textareaRef,
+  onCampaignBundleChange,
 }: UseGmTalkOptions): UseGmTalkReturn {
   const [isOpen, setIsOpen] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
@@ -106,6 +122,9 @@ export function useGmTalk({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [expandedSources, setExpandedSources] = useState<Record<string, boolean>>({});
   const [modelMeta, setModelMeta] = useState<GmModelMeta | null>(null);
+  const [draftingMessageId, setDraftingMessageId] = useState<string | null>(null);
+  const [savingProposalId, setSavingProposalId] = useState<string | null>(null);
+  const [proposalErrors, setProposalErrors] = useState<Record<string, string>>({});
 
   const [draftText, setDraftText] = useState("");
   const [draftCursorPos, setDraftCursorPos] = useState(0);
@@ -186,6 +205,9 @@ export function useGmTalk({
     setIsClearing(false);
     setExpandedSources({});
     setModelMeta(null);
+    setDraftingMessageId(null);
+    setSavingProposalId(null);
+    setProposalErrors({});
     setDraftText("");
     setDraftCursorPos(0);
     setPinnedMentions([]);
@@ -601,6 +623,9 @@ export function useGmTalk({
       if (!isMountedRef.current) return;
       setMessages([]);
       setExpandedSources({});
+      setProposalErrors({});
+      setDraftingMessageId(null);
+      setSavingProposalId(null);
       setClearConfirm(false);
     } catch (err) {
       if (!isMountedRef.current) return;
@@ -634,6 +659,134 @@ export function useGmTalk({
     setExpandedSources((prev) => ({ ...prev, [id]: !prev[id] }));
   }, []);
 
+  const updateProposalInMessage = useCallback(
+    (messageId: string, updater: (proposals: GmCodexProposal[]) => GmCodexProposal[]) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId
+            ? { ...m, proposals: updater(m.proposals ?? []) }
+            : m
+        )
+      );
+    },
+    []
+  );
+
+  const draftCodexEntry = useCallback(
+    async (messageId: string) => {
+      if (isStreamingRef.current || isCampaignStreaming || draftingMessageId) return;
+      setDraftingMessageId(messageId);
+      setError(null);
+      try {
+        const res = await gmApi.draftGmCodexEntry(campaignId, {
+          message_id: messageId,
+        });
+        if (!isMountedRef.current) return;
+        updateProposalInMessage(res.message_id, (existing) => [
+          ...existing,
+          res.proposal,
+        ]);
+      } catch (err) {
+        if (!isMountedRef.current) return;
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Failed to draft a World Codex entry."
+        );
+      } finally {
+        if (isMountedRef.current) {
+          setDraftingMessageId(null);
+        }
+      }
+    },
+    [campaignId, draftingMessageId, isCampaignStreaming, updateProposalInMessage]
+  );
+
+  const confirmCodexProposal = useCallback(
+    async (
+      messageId: string,
+      proposalId: string,
+      draft: WorldLoreNodeDraft,
+      replaceLoreId: string | null
+    ) => {
+      if (savingProposalId) return;
+      setSavingProposalId(proposalId);
+      setProposalErrors((prev) => {
+        const next = { ...prev };
+        delete next[proposalId];
+        return next;
+      });
+      try {
+        const res = await gmApi.saveCampaignWorldLoreEntry(campaignId, {
+          draft,
+          replace_lore_id: replaceLoreId,
+          proposal_message_id: messageId,
+          proposal_id: proposalId,
+        });
+        if (!isMountedRef.current) return;
+        updateProposalInMessage(messageId, (existing) =>
+          existing.map((prop) =>
+            prop.id === proposalId
+              ? res.proposal ?? {
+                  ...prop,
+                  status: "confirmed",
+                  draft,
+                  replace_lore_id: replaceLoreId,
+                  saved_lore_id: res.saved_lore_id,
+                }
+              : prop
+          )
+        );
+        onCampaignBundleChange?.(res.bundle);
+      } catch (err) {
+        if (!isMountedRef.current) return;
+        const detail =
+          err instanceof Error
+            ? err.message
+            : "Could not save World Codex entry.";
+        setProposalErrors((prev) => ({ ...prev, [proposalId]: detail }));
+      } finally {
+        if (isMountedRef.current) {
+          setSavingProposalId(null);
+        }
+      }
+    },
+    [campaignId, onCampaignBundleChange, savingProposalId, updateProposalInMessage]
+  );
+
+  const cancelCodexProposal = useCallback(
+    async (messageId: string, proposalId: string) => {
+      if (savingProposalId) return;
+      setSavingProposalId(proposalId);
+      setProposalErrors((prev) => {
+        const next = { ...prev };
+        delete next[proposalId];
+        return next;
+      });
+      try {
+        const res = await gmApi.cancelGmProposal(campaignId, proposalId);
+        if (!isMountedRef.current) return;
+        updateProposalInMessage(messageId, (existing) =>
+          existing.map((prop) =>
+            prop.id === proposalId ? res.proposal : prop
+          )
+        );
+      } catch (err) {
+        if (!isMountedRef.current) return;
+        const detail =
+          err instanceof Error
+            ? err.message
+            : "Could not dismiss proposal.";
+        setProposalErrors((prev) => ({ ...prev, [proposalId]: detail }));
+      } finally {
+        if (isMountedRef.current) {
+          setSavingProposalId(null);
+        }
+      }
+    },
+    [campaignId, savingProposalId, updateProposalInMessage]
+  );
+
   // Keep mentionSelectedIndex clamped when candidate list shrinks
   useEffect(() => {
     const maxLen =
@@ -661,6 +814,9 @@ export function useGmTalk({
     copiedId,
     expandedSources,
     modelMeta,
+    draftingMessageId,
+    savingProposalId,
+    proposalErrors,
     draftText,
     pinnedMentions,
     mentionTrigger,
@@ -687,5 +843,8 @@ export function useGmTalk({
     handleClearChat,
     copyMessage,
     toggleSources,
+    draftCodexEntry,
+    confirmCodexProposal,
+    cancelCodexProposal,
   };
 }

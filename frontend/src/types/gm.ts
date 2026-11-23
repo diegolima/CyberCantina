@@ -1,4 +1,9 @@
+import type { CampaignStateBundle } from "./turn";
+import type { WorldLoreCategory, WorldLoreNodeDraft } from "./world";
+
 export type GmModelRole = "primary" | "clerk";
+
+export type GmCodexProposalStatus = "pending" | "confirmed" | "cancelled";
 
 export type GmMentionKind =
   | "character"
@@ -36,6 +41,41 @@ export interface GmSourceRef {
   label: string;
 }
 
+export interface GmCodexDuplicateMatch {
+  id: string;
+  title: string;
+  category: WorldLoreCategory;
+  is_base_world: boolean;
+  match_reason: string;
+}
+
+export interface GmCodexProposal {
+  id: string;
+  status: GmCodexProposalStatus;
+  draft: WorldLoreNodeDraft;
+  source_turns: number[];
+  duplicate_matches: GmCodexDuplicateMatch[];
+  replace_lore_id?: string | null;
+  saved_lore_id?: string | null;
+  created_at: string;
+}
+
+export interface GmCodexDraftResponse {
+  message_id: string;
+  proposal: GmCodexProposal;
+}
+
+export interface GmStreamCodexProposalEvent {
+  message_id: string;
+  proposal: GmCodexProposal;
+}
+
+export interface CampaignWorldLoreEntryUpsertResponse {
+  bundle: CampaignStateBundle;
+  saved_lore_id: string;
+  proposal?: GmCodexProposal | null;
+}
+
 export interface GmChatMessage {
   id: string;
   campaign_id: string;
@@ -44,6 +84,7 @@ export interface GmChatMessage {
   content: string;
   mentions: GmMentionRef[];
   sources: GmSourceRef[];
+  proposals?: GmCodexProposal[];
   created_at: string;
 }
 

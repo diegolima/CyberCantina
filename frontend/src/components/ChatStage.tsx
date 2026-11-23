@@ -97,6 +97,8 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   hasInspectorAttention = false,
   onUpdateTurnBookmark,
   onSummarizeTurnForBookmark,
+  onCampaignBundleChange,
+  onOpenCodex,
 }) => {
   const isBusy = isStreaming || isPhase4Running;
   const [inputText, setInputText] = useState("");
@@ -148,6 +150,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     unlockLore: gmUnlockLore,
     isCampaignStreaming: isBusy,
     textareaRef,
+    onCampaignBundleChange,
   });
 
   // Clicking outside the GM slide-out and reused composer minimizes GM Talk
@@ -1775,12 +1778,25 @@ export const ChatStage: React.FC<ChatStageProps> = ({
             copiedId={gmTalk.copiedId}
             expandedSources={gmTalk.expandedSources}
             modelMeta={gmTalk.modelMeta}
+            draftingMessageId={gmTalk.draftingMessageId}
+            savingProposalId={gmTalk.savingProposalId}
+            proposalErrors={gmTalk.proposalErrors}
             onInsertAtTrigger={gmTalk.insertAtTrigger}
             onClearChat={() => {
               void gmTalk.handleClearChat();
             }}
             onCopyMessage={gmTalk.copyMessage}
             onToggleSources={gmTalk.toggleSources}
+            onDraftCodexEntry={(msgId) => {
+              void gmTalk.draftCodexEntry(msgId);
+            }}
+            onConfirmCodexProposal={(msgId, propId, draft, replaceId) => {
+              void gmTalk.confirmCodexProposal(msgId, propId, draft, replaceId);
+            }}
+            onCancelCodexProposal={(msgId, propId) => {
+              void gmTalk.cancelCodexProposal(msgId, propId);
+            }}
+            onOpenCodex={onOpenCodex}
             onDismissError={gmTalk.dismissError}
             onToggleExpanded={gmTalk.toggleExpanded}
             onMinimize={gmTalk.minimize}

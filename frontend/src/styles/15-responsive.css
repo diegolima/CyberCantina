@@ -493,6 +493,10 @@
     align-items: flex-start;
     gap: 2px;
   }
+
+  .gm-codex-proposal-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

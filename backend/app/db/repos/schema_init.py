@@ -725,10 +725,18 @@ class SchemaInitMixin:
                     content TEXT NOT NULL,
                     mentions_json TEXT NOT NULL DEFAULT '[]',
                     sources_json TEXT NOT NULL DEFAULT '[]',
+                    proposals_json TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL
                 )
                 """
             )
+            gm_msg_cols = {
+                r["name"] for r in conn.execute("PRAGMA table_info(gm_chat_messages)").fetchall()
+            }
+            if "proposals_json" not in gm_msg_cols:
+                conn.execute(
+                    "ALTER TABLE gm_chat_messages ADD COLUMN proposals_json TEXT NOT NULL DEFAULT '[]'"
+                )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_gm_chat_messages_campaign ON gm_chat_messages(campaign_id, anchor_turn_id, created_at)"
             )

@@ -78,6 +78,8 @@ export interface ChatStageProps {
     turnId: string,
     signal?: AbortSignal
   ) => Promise<string>;
+  onCampaignBundleChange?: (bundle: CampaignStateBundle) => void;
+  onOpenCodex?: () => void;
 }
 
 export function renderFormattedProse(text: string): React.ReactNode {

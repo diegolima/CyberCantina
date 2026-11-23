@@ -6,10 +6,11 @@ import {
 } from "../promptRoleDefinitions";
 
 describe("promptRoleDefinitions", () => {
-  const ALL_15_PROMPTS = [
+  const ALL_16_PROMPTS = [
     "actor_zone1_system",
     "narrator_zone1_system",
     "gm_talk_system",
+    "gm_codex_draft",
     "character_cognition_system",
     "character_post_turn_system",
     "clerk_pre_turn_system",
@@ -29,18 +30,18 @@ describe("promptRoleDefinitions", () => {
     expect(roleIds).toEqual(["storytelling", "cognition", "auxiliary", "wizard"]);
   });
 
-  it("maps every one of the 15 system prompt keys to exactly one role without duplicates", () => {
+  it("maps every one of the 16 system prompt keys to exactly one role without duplicates", () => {
     const mappedKeys: string[] = [];
     for (const role of PROMPT_ROLES) {
       for (const key of role.promptKeys) {
-        expect(ALL_15_PROMPTS).toContain(key);
+        expect(ALL_16_PROMPTS).toContain(key);
         expect(mappedKeys).not.toContain(key);
         mappedKeys.push(key);
       }
     }
 
-    expect(mappedKeys.length).toBe(15);
-    for (const key of ALL_15_PROMPTS) {
+    expect(mappedKeys.length).toBe(16);
+    for (const key of ALL_16_PROMPTS) {
       expect(mappedKeys).toContain(key);
     }
   });
@@ -53,7 +54,7 @@ describe("promptRoleDefinitions", () => {
 
     expect(storytelling.promptKeys).toHaveLength(3);
     expect(cognition.promptKeys).toHaveLength(2);
-    expect(auxiliary.promptKeys).toHaveLength(6);
+    expect(auxiliary.promptKeys).toHaveLength(7);
     expect(wizard.promptKeys).toHaveLength(4);
   });
 
@@ -68,6 +69,7 @@ describe("promptRoleDefinitions", () => {
     expect(getRoleForPromptKey("clerk_pre_turn_system")).toBe("auxiliary");
     expect(getRoleForPromptKey("clerk_turn_bookmark_summary_system")).toBe("auxiliary");
     expect(getRoleForPromptKey("clerk_world_start_placement_system")).toBe("auxiliary");
+    expect(getRoleForPromptKey("gm_codex_draft")).toBe("auxiliary");
 
     expect(getRoleForPromptKey("wizard_world_system")).toBe("wizard");
     expect(getRoleForPromptKey("wizard_character_sillytavern_system")).toBe("wizard");

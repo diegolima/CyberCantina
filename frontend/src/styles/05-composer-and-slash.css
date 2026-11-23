@@ -1625,3 +1625,221 @@
   font-size: 0.69rem;
   color: var(--text-muted);
 }
+
+/* GM Codex Proposal Actions & Inline Confirmation Card */
+.gm-message-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.gm-draft-codex-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-glass-subtle);
+  background: var(--surface-glass-1);
+  color: var(--text-secondary);
+  font-size: 0.71rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+
+.gm-draft-codex-btn:hover:not(:disabled) {
+  background: var(--amber-bg-subtle);
+  border-color: var(--amber-border-subtle);
+  color: var(--amber-fg);
+}
+
+.gm-draft-codex-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.gm-codex-proposals-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.gm-codex-proposal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-dark-soft);
+  border: 1px solid var(--amber-border-subtle);
+}
+
+.gm-codex-proposal-card--confirmed {
+  border-color: var(--emerald-border);
+  background: var(--emerald-bg-subtle);
+  padding: 8px 12px;
+}
+
+.gm-codex-proposal-card--cancelled {
+  border-color: var(--border-glass-subtle);
+  background: var(--surface-glass-1);
+  color: var(--text-muted);
+  padding: 7px 12px;
+}
+
+.gm-codex-proposal-status-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 0.79rem;
+}
+
+.gm-codex-proposal-status-text {
+  color: var(--text-soft);
+}
+
+.gm-codex-open-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  font-size: 0.73rem;
+}
+
+.gm-codex-proposal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.gm-codex-proposal-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.81rem;
+  color: var(--amber-fg-soft);
+}
+
+.gm-codex-provenance-pill {
+  font-size: 0.69rem;
+  padding: 2px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-glass-2);
+  border: 1px solid var(--border-glass-subtle);
+  color: var(--text-muted);
+}
+
+.gm-codex-proposal-dupes {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--amber-bg-subtle);
+  border: 1px solid var(--amber-border-subtle);
+  font-size: 0.76rem;
+}
+
+.gm-codex-dupes-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--amber-fg);
+  font-weight: 600;
+}
+
+.gm-codex-dupes-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.gm-codex-dupe-option {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-soft);
+  cursor: pointer;
+}
+
+.gm-codex-dupe-option.is-disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.gm-codex-proposal-grid {
+  display: grid;
+  grid-template-columns: 1fr 170px;
+  gap: 8px;
+}
+
+.gm-codex-proposal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+}
+
+.gm-codex-proposal-field input[type="text"],
+.gm-codex-proposal-field select,
+.gm-codex-proposal-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.81rem;
+  padding: 6px 8px;
+}
+
+.gm-codex-proposal-field textarea {
+  resize: vertical;
+  min-height: 76px;
+  line-height: 1.45;
+}
+
+.gm-codex-field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.gm-codex-char-count {
+  font-size: 0.69rem;
+  color: var(--text-muted);
+}
+
+.gm-codex-proposal-error {
+  padding: 6px 9px;
+  border-radius: var(--radius-md);
+  background: var(--rose-bg);
+  border: 1px solid var(--rose-border);
+  color: var(--rose-fg-soft);
+  font-size: 0.75rem;
+}
+
+.gm-codex-proposal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.gm-codex-cancel-btn,
+.gm-codex-confirm-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  padding: 5px 11px;
+}

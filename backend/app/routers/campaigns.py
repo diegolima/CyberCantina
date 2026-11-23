@@ -89,6 +89,8 @@ from app.routers.campaign_routes.schemas_and_gate import (  # noqa: F401
     CampaignEdgeDistanceUpdateRequest,
     CampaignWorldSettingsPatchRequest,
     CampaignWorldLoreUpdateRequest,
+    CampaignWorldLoreEntryUpsertRequest,
+    CampaignWorldLoreEntryUpsertResponse,
     CampaignLoreRevealRequest,
     CampaignMajorEventUpdateRequest,
     TurnBookmarkUpdateRequest,
@@ -123,6 +125,7 @@ from app.routers.campaign_routes.spatial_routes import (  # noqa: F401
     remove_campaign_edge,
     update_campaign_map,
     update_campaign_world_lore,
+    upsert_campaign_world_lore_entry,
     toggle_campaign_lore_reveal,
     update_campaign_major_event,
     delete_campaign_major_event,
@@ -147,4 +150,6 @@ from app.routers.campaign_routes.gm_routes import (  # noqa: F401
     clear_campaign_gm_messages,
     search_campaign_gm_mentions,
     stream_campaign_gm_chat,
+    draft_campaign_gm_codex_entry,
+    update_campaign_gm_proposal,
 )

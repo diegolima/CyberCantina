@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from "react";
 import {
   AlertTriangle,
   AtSign,
+  BookPlus,
   Check,
   ChevronDown,
   Compass,
@@ -14,9 +15,14 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import type { GmChatMessage, GmSourceRef } from "../../types";
+import type {
+  GmChatMessage,
+  GmSourceRef,
+  WorldLoreNodeDraft,
+} from "../../types";
 import type { GmModelMeta } from "../../hooks/useGmTalk";
 import { GM_GREETING_MESSAGE, GM_NAME } from "../../utils/gmMentions";
+import { GmCodexProposalCard } from "./GmCodexProposalCard";
 import { renderFormattedProse } from "./chatHelpers";
 
 export interface GmTalkDrawerProps {
@@ -38,10 +44,22 @@ export interface GmTalkDrawerProps {
   copiedId: string | null;
   expandedSources: Record<string, boolean>;
   modelMeta: GmModelMeta | null;
+  draftingMessageId?: string | null;
+  savingProposalId?: string | null;
+  proposalErrors?: Record<string, string>;
   onInsertAtTrigger: () => void;
   onClearChat: () => void;
   onCopyMessage: (id: string, content: string) => void;
   onToggleSources: (id: string) => void;
+  onDraftCodexEntry?: (messageId: string) => void;
+  onConfirmCodexProposal?: (
+    messageId: string,
+    proposalId: string,
+    draft: WorldLoreNodeDraft,
+    replaceLoreId: string | null
+  ) => void;
+  onCancelCodexProposal?: (messageId: string, proposalId: string) => void;
+  onOpenCodex?: () => void;
   onDismissError: () => void;
   onToggleExpanded: () => void;
   onMinimize: () => void;
@@ -66,10 +84,17 @@ export const GmTalkDrawer: React.FC<GmTalkDrawerProps> = ({
   copiedId,
   expandedSources,
   modelMeta,
+  draftingMessageId = null,
+  savingProposalId = null,
+  proposalErrors = {},
   onInsertAtTrigger,
   onClearChat,
   onCopyMessage,
   onToggleSources,
+  onDraftCodexEntry,
+  onConfirmCodexProposal,
+  onCancelCodexProposal,
+  onOpenCodex,
   onDismissError,
   onToggleExpanded,
   onMinimize,
@@ -238,19 +263,45 @@ export const GmTalkDrawer: React.FC<GmTalkDrawerProps> = ({
                       )}
                     </div>
                     {!isUser && (
-                      <button
-                        type="button"
-                        className="gm-copy-btn"
-                        onClick={() => onCopyMessage(msg.id, msg.content)}
-                        title="Copy reply"
-                        aria-label="Copy Neuromancer reply"
-                      >
-                        {copiedId === msg.id ? (
-                          <Check size={12} color="var(--accent-emerald)" />
-                        ) : (
-                          <Copy size={12} />
-                        )}
-                      </button>
+                      <div className="gm-message-actions">
+                        <button
+                          type="button"
+                          className="gm-draft-codex-btn"
+                          disabled={
+                            !onDraftCodexEntry ||
+                            isStreaming ||
+                            isCampaignStreaming ||
+                            Boolean(draftingMessageId)
+                          }
+                          onClick={() => onDraftCodexEntry?.(msg.id)}
+                          title="Draft a World Codex entry from this reply"
+                          aria-label="Draft World Codex entry"
+                        >
+                          {draftingMessageId === msg.id ? (
+                            <Loader2 size={12} className="spinning" />
+                          ) : (
+                            <BookPlus size={12} />
+                          )}
+                          <span>
+                            {draftingMessageId === msg.id
+                              ? "Drafting…"
+                              : "Draft Codex"}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className="gm-copy-btn"
+                          onClick={() => onCopyMessage(msg.id, msg.content)}
+                          title="Copy reply"
+                          aria-label="Copy Neuromancer reply"
+                        >
+                          {copiedId === msg.id ? (
+                            <Check size={12} color="var(--accent-emerald)" />
+                          ) : (
+                            <Copy size={12} />
+                          )}
+                        </button>
+                      </div>
                     )}
                   </div>
 
@@ -293,6 +344,32 @@ export const GmTalkDrawer: React.FC<GmTalkDrawerProps> = ({
                           ))}
                         </div>
                       )}
+                    </div>
+                  )}
+
+                  {!isUser && msg.proposals && msg.proposals.length > 0 && (
+                    <div className="gm-codex-proposals-stack">
+                      {msg.proposals.map((prop) => (
+                        <GmCodexProposalCard
+                          key={prop.id}
+                          proposal={prop}
+                          unlockLore={unlockLore}
+                          isBusy={savingProposalId === prop.id}
+                          error={proposalErrors[prop.id] ?? null}
+                          onConfirm={(draft, replaceLoreId) =>
+                            onConfirmCodexProposal?.(
+                              msg.id,
+                              prop.id,
+                              draft,
+                              replaceLoreId
+                            )
+                          }
+                          onCancel={() =>
+                            onCancelCodexProposal?.(msg.id, prop.id)
+                          }
+                          onOpenCodex={onOpenCodex}
+                        />
+                      ))}
                     </div>
                   )}
                 </div>
