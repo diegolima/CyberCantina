@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import type { LocationContainer, LocationEdge, LocationNode } from "../../types";
 import {
   LINK_SPEED_PRESETS,
+  LINK_SPEED_PRESET_GROUPS,
   clampEdgeSpeedModifier,
   deriveTravelMinutes,
+  findMatchingSpeedPreset,
   formatBundleTravelDuration,
   formatEffectiveSpeedKmh,
   formatExitTravelPhrase,
@@ -183,8 +185,16 @@ function makeLinksFixture() {
 describe("v0.37.0 First-Class Map Links", () => {
   it("computes speed presets, clamped modifiers, speed-adjusted durations, and exit phrases", () => {
     expect(LINK_SPEED_PRESETS.map((p) => p.modifier)).toEqual([
-      0.3, 0.6, 1, 3, 10, 25, 60,
+      0.25, 0.3, 0.4, 0.6, 1, 2, 3, 5, 10, 25, 60,
     ]);
+    expect(LINK_SPEED_PRESET_GROUPS.map((g) => g.label)).toEqual([
+      "Terrain & Slow",
+      "On Foot & Mounts",
+      "Vehicles & Transit",
+    ]);
+    expect(findMatchingSpeedPreset(0.4)?.id).toBe("swim");
+    expect(findMatchingSpeedPreset(5)?.id).toBe("boat");
+    expect(findMatchingSpeedPreset(1.45)).toBeNull();
     expect(clampEdgeSpeedModifier(0.001)).toBe(0.05);
     expect(clampEdgeSpeedModifier(999)).toBe(100);
     expect(clampEdgeSpeedModifier(-5)).toBe(1);
@@ -373,6 +383,14 @@ describe("v0.37.0 First-Class Map Links", () => {
     expect(editorHtml).toContain("Grand Atrium ↔ Mire Boardwalk");
     expect(editorHtml).toContain("2.1km · ~1h 40min");
     expect(editorHtml).toContain("1.3 km/h (0.3×)");
+    expect(editorHtml).toContain('placeholder="e.g. 350m, 1.5km"');
+    expect(editorHtml).toContain('aria-label="Increase distance"');
+    expect(editorHtml).toContain('aria-label="Decrease distance"');
+    expect(editorHtml).toContain('aria-label="Speed modifier preset"');
+    expect(editorHtml).toContain("Swamp / Bog");
+    expect(editorHtml).toContain("link-inspector-card");
+    expect(editorHtml).toContain("field-input field-input--compact field-input--cyan");
+    expect(editorHtml).not.toContain('class="input"');
     expect(editorHtml).toContain("Knee-Deep Mud");
     expect(editorHtml).toContain('aria-label="Blocked link"');
     expect(editorHtml).toContain('aria-label="Secret link"');

@@ -11,22 +11,64 @@ export const MAX_EDGE_OBSTACLES = 6;
 export const MAX_EDGE_OBSTACLE_LENGTH = 48;
 export const MAX_EDGE_TRAVEL_MODE_LENGTH = 40;
 
+export type LinkSpeedPresetCategory = "terrain" | "foot" | "transit";
+
 export interface LinkSpeedPreset {
   id: string;
   label: string;
   modeLabel: string | null;
   modifier: number;
+  category: LinkSpeedPresetCategory;
+}
+
+export interface LinkSpeedPresetGroup {
+  category: LinkSpeedPresetCategory;
+  label: string;
+  items: readonly LinkSpeedPreset[];
 }
 
 export const LINK_SPEED_PRESETS: readonly LinkSpeedPreset[] = [
-  { id: "swamp", label: "Swamp / Bog", modeLabel: "Swamp / Difficult Terrain", modifier: 0.3 },
-  { id: "steep", label: "Steep / Stairs", modeLabel: "Steep Climb", modifier: 0.6 },
-  { id: "walk", label: "Walking", modeLabel: null, modifier: 1 },
-  { id: "mount", label: "Mount / Bike", modeLabel: "Mount / Bike", modifier: 3 },
-  { id: "vehicle", label: "Vehicle", modeLabel: "Vehicle", modifier: 10 },
-  { id: "rail", label: "Rail / Transit", modeLabel: "Rail", modifier: 25 },
-  { id: "air", label: "High-Speed / Air", modeLabel: "High-Speed Transit", modifier: 60 },
+  { id: "crawl", label: "Crawl / Tight", modeLabel: "Crawl / Tight", modifier: 0.25, category: "terrain" },
+  { id: "swamp", label: "Swamp / Bog", modeLabel: "Swamp / Difficult Terrain", modifier: 0.3, category: "terrain" },
+  { id: "swim", label: "Swim", modeLabel: "Swim", modifier: 0.4, category: "terrain" },
+  { id: "steep", label: "Steep / Mountain", modeLabel: "Steep Climb", modifier: 0.6, category: "terrain" },
+  { id: "walk", label: "Walking", modeLabel: null, modifier: 1, category: "foot" },
+  { id: "sprint", label: "Sprint / March", modeLabel: "Sprint / March", modifier: 2, category: "foot" },
+  { id: "mount", label: "Mount / Bike", modeLabel: "Mount / Bike", modifier: 3, category: "foot" },
+  { id: "boat", label: "Boat / Sea", modeLabel: "Boat / Sea", modifier: 5, category: "transit" },
+  { id: "vehicle", label: "Vehicle", modeLabel: "Vehicle", modifier: 10, category: "transit" },
+  { id: "rail", label: "Rail / Transit", modeLabel: "Rail", modifier: 25, category: "transit" },
+  { id: "air", label: "High-Speed / Air", modeLabel: "High-Speed Transit", modifier: 60, category: "transit" },
 ];
+
+export const LINK_SPEED_PRESET_GROUPS: readonly LinkSpeedPresetGroup[] = [
+  {
+    category: "terrain",
+    label: "Terrain & Slow",
+    items: LINK_SPEED_PRESETS.filter((p) => p.category === "terrain"),
+  },
+  {
+    category: "foot",
+    label: "On Foot & Mounts",
+    items: LINK_SPEED_PRESETS.filter((p) => p.category === "foot"),
+  },
+  {
+    category: "transit",
+    label: "Vehicles & Transit",
+    items: LINK_SPEED_PRESETS.filter((p) => p.category === "transit"),
+  },
+];
+
+/** Find the preset whose multiplier matches `speedModifier` within tolerance, or `null` for custom speeds. */
+export function findMatchingSpeedPreset(
+  speedModifier: number
+): LinkSpeedPreset | null {
+  const safeMod = clampEdgeSpeedModifier(speedModifier);
+  return (
+    LINK_SPEED_PRESETS.find((preset) => Math.abs(safeMod - preset.modifier) < 0.005) ??
+    null
+  );
+}
 
 /** Clamp a positive speed multiplier into `[0.05, 100]`, defaulting to `1`. */
 export function clampEdgeSpeedModifier(

@@ -1,10 +1,13 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
+  ChevronDown,
+  ChevronUp,
   Compass,
   Eye,
   EyeOff,
   Gauge,
+  Info,
   Lock,
   ShieldAlert,
   Trash2,
@@ -12,7 +15,7 @@ import {
 } from "lucide-react";
 import type { LocationEdge, LocationNode } from "../../types";
 import {
-  LINK_SPEED_PRESETS,
+  LINK_SPEED_PRESET_GROUPS,
   MAX_EDGE_OBSTACLES,
   MAX_EDGE_OBSTACLE_LENGTH,
   MAX_EDGE_SPEED_MODIFIER,
@@ -20,6 +23,7 @@ import {
   MIN_EDGE_SPEED_MODIFIER,
   clampEdgeDistanceMeters,
   clampEdgeSpeedModifier,
+  findMatchingSpeedPreset,
   formatDistanceCompact,
   formatEffectiveSpeedKmh,
   formatExitTravelPhrase,
@@ -111,6 +115,8 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
   );
   const [isTogglingReveal, setIsTogglingReveal] = useState(false);
   const [revealError, setRevealError] = useState<string | null>(null);
+  const [speedMenuOpen, setSpeedMenuOpen] = useState(false);
+  const speedDropdownRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!primary) return;
@@ -120,6 +126,7 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
     setPrimaryLabelDraft(primary.direction_label ?? "");
     setReciprocalLabelDraft(reciprocal?.direction_label ?? "");
     setRevealError(null);
+    setSpeedMenuOpen(false);
   }, [
     primary?.id,
     primary?.distance_meters,
@@ -129,6 +136,29 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
     reciprocal?.id,
     reciprocal?.direction_label,
   ]);
+
+  useEffect(() => {
+    if (!speedMenuOpen) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (
+        speedDropdownRef.current &&
+        !speedDropdownRef.current.contains(e.target as Node)
+      ) {
+        setSpeedMenuOpen(false);
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setSpeedMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutside);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleOutside);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [speedMenuOpen]);
 
   if (selectedEdgeBundle && selectedEdgeBundle.length > 0) {
     const bundleEdgeIds = selectedEdgeBundle.flatMap((pair) =>
@@ -407,6 +437,7 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
 
   const decStep = getAdaptiveDistanceStep(Math.max(1, previewMeters - 1));
   const incStep = getAdaptiveDistanceStep(previewMeters);
+  const matchedPreset = findMatchingSpeedPreset(previewSpeed);
   const delCheck = canDeleteEdge ? canDeleteEdge(primary.id) : { allowed: true };
 
   return (
@@ -502,30 +533,26 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
       </div>
 
       {/* Distance */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        <label style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>
-          Distance (meters or e.g. 1.5km)
-        </label>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <button
-            type="button"
-            className="btn"
-            disabled={isMutatingLocked}
-            aria-label="Decrease distance"
-            title={`Decrease (-${decStep}m, Shift -1m)`}
-            style={{ padding: "4px 9px", fontSize: "0.8rem" }}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={(e) => commitSteppedDistance(-1, e.shiftKey)}
+      <div className="link-distance-row">
+        <label htmlFor="link-distance-input" className="link-inspector-label">
+          Distance
+          <span
+            className="link-info-tip"
+            title={`Accepts meters or km (e.g. 1.5km) · ▲ +${incStep}m / ▼ -${decStep}m · Shift for ±1m`}
+            aria-label="Distance format help: accepts meters or km such as 1.5km"
           >
-            −
-          </button>
+            <Info size={12} />
+          </span>
+        </label>
+        <div className="link-distance-control">
           <input
+            id="link-distance-input"
             type="text"
             inputMode="decimal"
             aria-label="Link distance"
-            className="input"
+            placeholder="e.g. 350m, 1.5km"
+            className="field-input field-input--compact field-input--cyan link-distance-input"
             disabled={isMutatingLocked}
-            style={{ flex: 1, fontSize: "0.78rem", textAlign: "center" }}
             value={distanceDraft}
             onChange={(e) =>
               setDistanceDraft(sanitizeEdgeDistanceInput(e.target.value))
@@ -544,85 +571,59 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
               }
             }}
           />
-          <button
-            type="button"
-            className="btn"
-            disabled={isMutatingLocked}
-            aria-label="Increase distance"
-            title={`Increase (+${incStep}m, Shift +1m)`}
-            style={{ padding: "4px 9px", fontSize: "0.8rem" }}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={(e) => commitSteppedDistance(1, e.shiftKey)}
-          >
-            +
-          </button>
+          <div className="link-distance-steppers">
+            <button
+              type="button"
+              className="link-distance-step-btn"
+              disabled={isMutatingLocked}
+              aria-label="Increase distance"
+              title={`Increase (+${incStep}m, Shift +1m)`}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={(e) => commitSteppedDistance(1, e.shiftKey)}
+            >
+              <ChevronUp size={11} />
+            </button>
+            <button
+              type="button"
+              className="link-distance-step-btn"
+              disabled={isMutatingLocked}
+              aria-label="Decrease distance"
+              title={`Decrease (-${decStep}m, Shift -1m)`}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={(e) => commitSteppedDistance(-1, e.shiftKey)}
+            >
+              <ChevronDown size={11} />
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Speed Modifier + Presets + Travel Mode */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
-        >
-          <label
-            style={{
-              fontSize: "0.7rem",
-              color: "var(--text-muted)",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
-            }}
-          >
-            <Gauge size={11} /> Speed Modifier &amp; Mode
+      {/* Speed Modifier + Grouped Presets + Travel Mode */}
+      <div className="link-inspector-field">
+        <div className="link-inspector-label-row">
+          <label htmlFor="link-speed-input" className="link-inspector-label">
+            <Gauge size={11} /> Speed Modifier
+            <span
+              className="link-info-tip"
+              title="0.05× – 100× (1× = 4.2 km/h)"
+              aria-label="Speed modifier range: 0.05x to 100x, where 1x equals 4.2 kilometers per hour"
+            >
+              <Info size={12} />
+            </span>
           </label>
-          <span style={{ fontSize: "0.66rem", color: "var(--text-muted)" }}>
-            0.05× – 100× (1× = 4.2 km/h)
-          </span>
         </div>
 
-        <div className="link-speed-presets" role="group" aria-label="Speed presets">
-          {LINK_SPEED_PRESETS.map((preset) => {
-            const isActive =
-              Math.abs((primary.speed_modifier ?? 1) - preset.modifier) < 0.005;
-            return (
-              <button
-                key={preset.id}
-                type="button"
-                disabled={isMutatingLocked}
-                className={`link-preset-chip ${
-                  isActive ? "link-preset-chip--active" : ""
-                }`}
-                onClick={() => {
-                  setSpeedDraft(String(preset.modifier));
-                  setTravelModeDraft(preset.modeLabel ?? "");
-                  onPatchEdgePair?.(primary.id, {
-                    speed_modifier: preset.modifier,
-                    travel_mode: preset.modeLabel,
-                  });
-                }}
-              >
-                <span>{preset.label}</span>
-                <strong>{preset.modifier}×</strong>
-              </button>
-            );
-          })}
-        </div>
-
-        <div style={{ display: "flex", gap: 6 }}>
-          <div style={{ width: 88, flexShrink: 0 }}>
+        <div className="link-speed-row">
+          <div className="link-speed-value-wrap">
             <input
+              id="link-speed-input"
               type="number"
               step="0.1"
               min={MIN_EDGE_SPEED_MODIFIER}
               max={MAX_EDGE_SPEED_MODIFIER}
               aria-label="Speed modifier"
-              className="input"
+              className="field-input field-input--compact field-input--cyan link-speed-number"
               disabled={isMutatingLocked}
-              style={{ width: "100%", fontSize: "0.76rem" }}
               value={speedDraft}
               onChange={(e) => setSpeedDraft(e.target.value)}
               onBlur={commitSpeedDraft}
@@ -633,60 +634,128 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
                 }
               }}
             />
+            <span className="link-speed-unit">×</span>
           </div>
-          <div style={{ flex: 1, display: "flex", gap: 4 }}>
-            <input
-              type="text"
-              maxLength={MAX_EDGE_TRAVEL_MODE_LENGTH}
-              aria-label="Travel mode"
-              className="input"
+
+          <div className="link-speed-dropdown" ref={speedDropdownRef}>
+            <button
+              type="button"
+              className={`link-speed-trigger ${speedMenuOpen ? "open" : ""}`}
               disabled={isMutatingLocked}
-              placeholder="Travel mode (optional, e.g. Mag-Lev)"
-              style={{ flex: 1, fontSize: "0.76rem" }}
-              value={travelModeDraft}
-              onChange={(e) => setTravelModeDraft(e.target.value)}
-              onBlur={commitTravelModeDraft}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  commitTravelModeDraft();
-                }
+              aria-haspopup="listbox"
+              aria-expanded={speedMenuOpen}
+              aria-label="Speed modifier preset"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!isMutatingLocked) setSpeedMenuOpen((prev) => !prev);
               }}
-            />
-            {travelModeDraft && !isMutatingLocked && (
-              <button
-                type="button"
-                className="btn"
-                title="Clear travel mode"
-                aria-label="Clear travel mode"
-                style={{ padding: "2px 6px" }}
-                onClick={() => {
-                  setTravelModeDraft("");
-                  onPatchEdgePair?.(primary.id, { travel_mode: null });
-                }}
+            >
+              <span className="link-speed-trigger-label">
+                {matchedPreset ? matchedPreset.label : "Custom"}
+              </span>
+              {matchedPreset && (
+                <span className="link-speed-trigger-mod">
+                  {matchedPreset.modifier}×
+                </span>
+              )}
+              <ChevronDown
+                size={13}
+                className={`link-speed-chevron ${speedMenuOpen ? "rotate" : ""}`}
+              />
+            </button>
+
+            {speedMenuOpen && !isMutatingLocked && (
+              <div
+                className="ui-popover link-speed-popover"
+                role="listbox"
+                aria-label="Speed modifier presets"
+                onClick={(e) => e.stopPropagation()}
               >
-                <X size={11} />
-              </button>
+                {LINK_SPEED_PRESET_GROUPS.map((group) => (
+                  <div key={group.category} role="group" aria-label={group.label}>
+                    <div className="link-speed-group-label">{group.label}</div>
+                    {group.items.map((preset) => {
+                      const isActive = matchedPreset?.id === preset.id;
+                      return (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          role="option"
+                          aria-selected={isActive}
+                          className={`link-speed-option ${
+                            isActive ? "link-speed-option--active" : ""
+                          }`}
+                          onClick={() => {
+                            setSpeedDraft(String(preset.modifier));
+                            setTravelModeDraft(preset.modeLabel ?? "");
+                            setSpeedMenuOpen(false);
+                            onPatchEdgePair?.(primary.id, {
+                              speed_modifier: preset.modifier,
+                              travel_mode: preset.modeLabel,
+                            });
+                          }}
+                        >
+                          <span>{preset.label}</span>
+                          <span className="link-speed-option-mod">
+                            {preset.modifier}×
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
             )}
           </div>
+        </div>
+
+        <div className="link-mode-row">
+          <input
+            type="text"
+            maxLength={MAX_EDGE_TRAVEL_MODE_LENGTH}
+            aria-label="Travel mode"
+            className="field-input field-input--compact field-input--cyan"
+            disabled={isMutatingLocked}
+            placeholder="Mode label (optional, e.g. Mag-Lev Rail)"
+            value={travelModeDraft}
+            onChange={(e) => setTravelModeDraft(e.target.value)}
+            onBlur={commitTravelModeDraft}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commitTravelModeDraft();
+              }
+            }}
+          />
+          {travelModeDraft && !isMutatingLocked && (
+            <button
+              type="button"
+              className="btn link-mode-clear-btn"
+              title="Clear travel mode"
+              aria-label="Clear travel mode"
+              onClick={() => {
+                setTravelModeDraft("");
+                onPatchEdgePair?.(primary.id, { travel_mode: null });
+              }}
+            >
+              <X size={11} />
+            </button>
+          )}
         </div>
       </div>
 
       {/* Direction Labels */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <label style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>
-          Passage Labels
-        </label>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <span style={{ fontSize: "0.66rem", color: "var(--text-muted)" }}>
+      <div className="link-inspector-card">
+        <span className="link-inspector-label">Passage Labels</span>
+        <div className="link-passage-field">
+          <span className="link-passage-sub">
             {fromName} → {toName}
           </span>
           <input
             type="text"
             aria-label="Forward direction label"
-            className="input"
+            className="field-input field-input--compact field-input--cyan"
             disabled={isMutatingLocked}
-            style={{ fontSize: "0.76rem" }}
             value={primaryLabelDraft}
             onChange={(e) => setPrimaryLabelDraft(e.target.value)}
             onBlur={commitPrimaryLabel}
@@ -699,16 +768,15 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
           />
         </div>
         {reciprocal && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <span style={{ fontSize: "0.66rem", color: "var(--text-muted)" }}>
+          <div className="link-passage-field">
+            <span className="link-passage-sub">
               {toName} → {fromName}
             </span>
             <input
               type="text"
               aria-label="Return direction label"
-              className="input"
+              className="field-input field-input--compact field-input--cyan"
               disabled={isMutatingLocked}
-              style={{ fontSize: "0.76rem" }}
               value={reciprocalLabelDraft}
               onChange={(e) => setReciprocalLabelDraft(e.target.value)}
               onBlur={commitReciprocalLabel}
@@ -724,10 +792,8 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
       </div>
 
       {/* Obstacles */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        <label style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>
-          Obstacles
-        </label>
+      <div className="link-inspector-field">
+        <label className="link-inspector-label">Obstacles</label>
         <TagChipsInput
           value={primary.obstacles ?? []}
           onChange={(next) =>
@@ -742,30 +808,16 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
       </div>
 
       {/* Access & Visibility Toggles */}
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 7,
-          padding: "8px 10px",
-          borderRadius: 6,
-          background: "var(--bg-panel)",
-          border: "1px solid var(--border-subtle)",
-        }}
-      >
+      <div className="link-inspector-card">
         <label
-          style={{
-            display: "flex",
-            alignItems: "flex-start",
-            gap: 8,
-            fontSize: "0.75rem",
-            color: "var(--text-secondary)",
-            cursor: isMutatingLocked ? "not-allowed" : "pointer",
-          }}
+          className={`link-toggle-row ${
+            isMutatingLocked ? "link-toggle-row--disabled" : ""
+          }`}
         >
           <input
             type="checkbox"
             aria-label="Blocked link"
+            className="link-toggle-checkbox link-toggle-checkbox--rose"
             checked={Boolean(primary.is_blocked)}
             disabled={isMutatingLocked}
             onChange={(e) =>
@@ -773,10 +825,10 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
             }
           />
           <span>
-            <strong style={{ color: primary.is_blocked ? "#fda4af" : "inherit" }}>
+            <strong style={{ color: primary.is_blocked ? "var(--rose-fg)" : "inherit" }}>
               Blocked
             </strong>
-            <div style={{ fontSize: "0.66rem", color: "var(--text-muted)" }}>
+            <div className="link-toggle-desc">
               Shows a barricade cue and triggers an obstacle check on quick exits.
             </div>
           </span>
@@ -784,18 +836,14 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
 
         {canEditSecret ? (
           <label
-            style={{
-              display: "flex",
-              alignItems: "flex-start",
-              gap: 8,
-              fontSize: "0.75rem",
-              color: "var(--text-secondary)",
-              cursor: isMutatingLocked ? "not-allowed" : "pointer",
-            }}
+            className={`link-toggle-row ${
+              isMutatingLocked ? "link-toggle-row--disabled" : ""
+            }`}
           >
             <input
               type="checkbox"
               aria-label="Secret link"
+              className="link-toggle-checkbox link-toggle-checkbox--violet"
               checked={Boolean(primary.is_secret)}
               disabled={isMutatingLocked}
               onChange={(e) =>
@@ -803,10 +851,10 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
               }
             />
             <span>
-              <strong style={{ color: primary.is_secret ? "#c4b5fd" : "inherit" }}>
+              <strong style={{ color: primary.is_secret ? "var(--violet-fg)" : "inherit" }}>
                 Secret
               </strong>
-              <div style={{ fontSize: "0.66rem", color: "var(--text-muted)" }}>
+              <div className="link-toggle-desc">
                 Hidden from players, exits, and narrator prompts until discovered.
               </div>
             </span>

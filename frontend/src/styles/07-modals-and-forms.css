@@ -185,6 +185,17 @@
   box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.18);
 }
 
+.field-input--compact {
+  padding: 5px 8px;
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.field-input--cyan:focus {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 0 2px var(--cyan-bg);
+}
+
 .field-input[aria-invalid="true"],
 .field-input.invalid,
 .form-input[aria-invalid="true"],
