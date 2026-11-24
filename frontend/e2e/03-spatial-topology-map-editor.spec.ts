@@ -55,19 +55,19 @@ test.describe("03 - Interactive SVG Map Topology Canvas (SpatialTopologyView)", 
     // Ripperdoc Clinic node must NOT be deleted when an input is focused
     await expect(clinicNode).toBeVisible();
 
-    // 3. Click "350m" badge to toggle walking-time preview ("~5 min"), then click back and double-click to edit
+    // 3. Shift-click "350m" badge to toggle walking-time preview ("~5 min"), Shift-click back, and double-click to edit
     const badge350m = page
       .locator('g[data-layer="edge-badges"] > g', { hasText: "350m" })
       .first();
     await expect(badge350m).toBeVisible();
-    await badge350m.click();
+    await badge350m.click({ modifiers: ["Shift"] });
     const badge5min = page
       .locator('g[data-layer="edge-badges"] > g[data-badge-mode="time"]', {
         hasText: "~5 min",
       })
       .first();
     await expect(badge5min).toBeVisible();
-    await badge5min.click();
+    await badge5min.click({ modifiers: ["Shift"] });
     await expect(badge350m).toBeVisible();
     await badge350m.dblclick();
 
