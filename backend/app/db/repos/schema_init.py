@@ -408,6 +408,7 @@ class SchemaInitMixin:
                         environmental_tags_json TEXT NOT NULL DEFAULT '[]',
                         ui_x REAL NULL,
                         ui_y REAL NULL,
+                        ghost_coords_json TEXT NOT NULL DEFAULT '{}',
                         icon TEXT NULL,
                         created_at TEXT NOT NULL DEFAULT ''
                     )
@@ -1191,6 +1192,10 @@ class SchemaInitMixin:
                 conn.execute(
                     "ALTER TABLE location_containers ADD COLUMN image_media_id TEXT NULL REFERENCES media_assets(id) ON DELETE SET NULL"
                 )
+            if "ghost_coords_json" not in cont_cols:
+                conn.execute(
+                    "ALTER TABLE location_containers ADD COLUMN ghost_coords_json TEXT NOT NULL DEFAULT '{}'"
+                )
 
             cs_cols = {
                 r["name"]
@@ -1640,12 +1645,13 @@ class SchemaInitMixin:
                             environmental_tags_json TEXT NOT NULL DEFAULT '[]',
                             ui_x REAL NULL,
                             ui_y REAL NULL,
+                            ghost_coords_json TEXT NOT NULL DEFAULT '{}',
                             icon TEXT NULL,
                             image_media_id TEXT NULL REFERENCES media_assets(id) ON DELETE SET NULL,
                             created_at TEXT NOT NULL
                         )
                         """,
-                        "id, world_id, created_at_turn_id, parent_container_id, depth, name, description, environmental_tags_json, ui_x, ui_y, icon, image_media_id, created_at",
+                        "id, world_id, created_at_turn_id, parent_container_id, depth, name, description, environmental_tags_json, ui_x, ui_y, ghost_coords_json, icon, image_media_id, created_at",
                     ),
                     (
                         "location_nodes",

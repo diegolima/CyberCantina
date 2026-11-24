@@ -68,6 +68,7 @@ from app.schemas.world import (
     extract_world_unsupported_fields,
     find_nested_world_unsupported_keys,
     normalize_lore_category,
+    remap_ghost_coords_dict,
 )
 from app.security.log_sanitize import sanitize_log_value
 from app.security.media_path import safe_resolve_staging_file_path
@@ -1967,6 +1968,12 @@ async def commit_staged_import(
                             (vid_id, user_id, vid_fname, vid_label, vid_mime, vid_bytes, parent_img_id, vid_dur, vid_w, vid_h, vid_created),
                         )
 
+                    for loc in w.get("locations", []):
+                        old_loc_id = loc.get("id")
+                        new_loc_id = f"loc_{uuid.uuid4().hex[:10]}"
+                        if old_loc_id:
+                            id_remap[old_loc_id] = new_loc_id
+
                     raw_containers = sorted(
                         w.get("containers", []),
                         key=lambda c: int(c.get("depth", 1)),
@@ -1988,13 +1995,18 @@ async def commit_staged_import(
                             else None
                         )
                         c_depth = int(cont.get("depth", 1))
+                        ghost_coords_json = json.dumps(
+                            remap_ghost_coords_dict(
+                                cont.get("ghost_coords") or {}, id_remap
+                            )
+                        )
                         conn.execute(
                             """
                             INSERT INTO location_containers (
                                 id, world_id, created_at_turn_id, parent_container_id, depth, name,
-                                description, environmental_tags_json, ui_x, ui_y, icon, image_media_id, created_at
+                                description, environmental_tags_json, ui_x, ui_y, ghost_coords_json, icon, image_media_id, created_at
                             )
-                            VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                             (
                                 new_cont_id,
@@ -2006,6 +2018,7 @@ async def commit_staged_import(
                                 json.dumps(cont.get("environmental_tags", [])),
                                 cont.get("ui_x"),
                                 cont.get("ui_y"),
+                                ghost_coords_json,
                                 cont.get("icon"),
                                 mapped_cont_media,
                                 cont.get("created_at") or now,
@@ -2061,9 +2074,11 @@ async def commit_staged_import(
 
                     for loc in w.get("locations", []):
                         old_loc_id = loc.get("id")
-                        new_loc_id = f"loc_{uuid.uuid4().hex[:10]}"
-                        if old_loc_id:
-                            id_remap[old_loc_id] = new_loc_id
+                        new_loc_id = (
+                            id_remap[old_loc_id]
+                            if old_loc_id and old_loc_id in id_remap
+                            else f"loc_{uuid.uuid4().hex[:10]}"
+                        )
                         old_loc_cont_id = loc.get("container_id")
                         mapped_loc_cont_id = (
                             id_remap.get(old_loc_cont_id) if old_loc_cont_id else None

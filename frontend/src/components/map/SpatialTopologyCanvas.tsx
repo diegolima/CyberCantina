@@ -2031,7 +2031,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                         shouldDeferNodeDragToTapFirst({
                           pointerType: e.pointerType,
                           isSelected,
-                          isMutatingLocked: false,
+                          isMutatingLocked,
                         })
                       ) {
                         pendingTapTargetRef.current = {

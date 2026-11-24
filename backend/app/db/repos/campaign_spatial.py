@@ -43,6 +43,7 @@ from app.schemas.world import (
     normalize_compass_direction,
     normalize_edge_obstacles,
     normalize_edge_speed_modifier,
+    parse_ghost_coords_json,
     normalize_edge_travel_mode,
 )
 from app.db.repos.campaign_map_update import CampaignMapUpdateMixin
@@ -1102,6 +1103,8 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                     cont.environmental_tags = [
                         str(t) for t in meta["environmental_tags"] if str(t).strip()
                     ]
+                if "ghost_coords" in meta and isinstance(meta["ghost_coords"], dict):
+                    cont.ghost_coords = parse_ghost_coords_json(meta["ghost_coords"])
             elif etype == "location" and eid in loc_by_id:
                 if meta.get("superseded"):
                     superseded_loc_ids.add(eid)
@@ -1267,6 +1270,11 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
             environmental_tags=json.loads(r["environmental_tags_json"] or "[]"),
             ui_x=r["ui_x"] if "ui_x" in keys else None,
             ui_y=r["ui_y"] if "ui_y" in keys else None,
+            ghost_coords=(
+                parse_ghost_coords_json(r["ghost_coords_json"])
+                if "ghost_coords_json" in keys
+                else {}
+            ),
             icon=r["icon"] if "icon" in keys else None,
             image_media_id=r["image_media_id"] if "image_media_id" in keys else None,
         )

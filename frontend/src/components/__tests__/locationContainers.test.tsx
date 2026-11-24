@@ -17,7 +17,11 @@ import {
   resolveInitialMapFocus,
 } from "../SpatialTopologyView";
 import { computeEdgeClippedSegment } from "../map/mapGeometry";
-import { filterEdgesAfterDeletion } from "../map/topologyProjection";
+import {
+  areGraphSnapshotsEqual,
+  cloneGraph,
+  filterEdgesAfterDeletion,
+} from "../map/topologyProjection";
 import { MapDetailsDrawer } from "../map/MapDetailsDrawer";
 import {
   draftToWorldRecord,
@@ -838,5 +842,167 @@ describe("Location Containers Frontend Architecture", () => {
     expect(ghostDrawerHtml).toContain("Remove link from Main Floor");
     expect(ghostDrawerHtml).toContain("Remove link from VIP Booth");
     expect(ghostDrawerHtml).not.toContain("Entry/Exit Portal");
+  });
+
+  it("places cramped ghost nodes without overlapping sibling locations and keeps pinned ghost coords stable", () => {
+    const portal: LocationNode = {
+      id: "loc_eastway",
+      world_id: "w1",
+      container_id: "cont_eastway",
+      is_entry_exit: true,
+      name: "Eastway Entrance",
+      summary: "Gatehouse",
+      description: "Gatehouse",
+      environmental_tags: [],
+      is_starting_location: true,
+      ui_x: 0,
+      ui_y: 0,
+    };
+    const dirs = ["N", "E", "SE", "W"] as const;
+    const siblingLocs: LocationNode[] = dirs.map((d, i) => ({
+      id: `loc_inner_${i}`,
+      world_id: "w1",
+      container_id: "cont_eastway",
+      is_entry_exit: false,
+      name: `Inner ${i}`,
+      summary: "Room",
+      description: "Room",
+      environmental_tags: [],
+      is_starting_location: false,
+      ui_x: d === "E" ? 175 : d === "W" ? -175 : d === "SE" ? 124 : 0,
+      ui_y: d === "N" ? -175 : d === "SE" ? 124 : 0,
+    }));
+
+    const ghostDirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"] as const;
+    const ghostNodes = ghostDirs.map((d, i) => ({
+      destination: {
+        id: `loc_ext_${i}`,
+        world_id: "w1",
+        container_id: `cont_ext_${i}`,
+        is_entry_exit: true,
+        name: `External ${d}`,
+        summary: "Outside",
+        description: "Outside",
+        environmental_tags: [],
+        is_starting_location: false,
+      },
+      destinationContainerName: `District ${d}`,
+      connectedPortalIds: ["loc_eastway"],
+    }));
+    const ghostEdges = ghostDirs.map((d, i) => ({
+      id: `ghost:e_${i}`,
+      portalLocationId: "loc_eastway",
+      externalLocationId: `loc_ext_${i}`,
+      sourceNodeId: "loc_eastway",
+      targetNodeId: `loc_ext_${i}`,
+      direction_label: `To External ${d}`,
+      compass_direction: d,
+      distance_meters: 140,
+      speed_modifier: 1,
+      obstacles: [],
+      is_blocked: false,
+      is_secret: false,
+      isUndiscoveredSecret: false,
+      rawEdge: {
+        id: `e_${i}`,
+        world_id: "w1",
+        from_location_id: "loc_eastway",
+        to_location_id: `loc_ext_${i}`,
+        direction_label: `To External ${d}`,
+        compass_direction: d,
+        distance_meters: 140,
+        speed_modifier: 1,
+        obstacles: [],
+        is_blocked: false,
+        is_secret: false,
+      },
+    }));
+
+    const visibleCoords: Record<string, { x: number; y: number }> = {
+      [portal.id]: { x: 0, y: 0 },
+    };
+    const visibleFootprints: Record<string, { halfW: number; halfH: number }> = {
+      [portal.id]: { halfW: 54, halfH: 34 },
+    };
+    for (const s of siblingLocs) {
+      visibleCoords[s.id] = { x: s.ui_x!, y: s.ui_y! };
+      visibleFootprints[s.id] = { halfW: 54, halfH: 34 };
+    }
+
+    const pinnedCoords = { loc_ext_6: { x: -320, y: 15 } };
+    const placed = computeGhostNodeCoords(
+      ghostNodes,
+      ghostEdges,
+      visibleCoords,
+      pinnedCoords,
+      visibleFootprints
+    );
+
+    // Pinned ghost stays exact even when West sibling sits at (-175, 0)
+    expect(placed.loc_ext_6).toEqual({ x: -320, y: 15 });
+
+    // No unpinned ghost card overlaps any visible location or any other ghost card
+    const ghostBoxes = ghostNodes.map((g) => ({
+      id: g.destination.id,
+      x: placed[g.destination.id].x,
+      y: placed[g.destination.id].y,
+      halfW: 66,
+      halfH: 21,
+    }));
+    for (const gb of ghostBoxes) {
+      for (const [visId, vp] of Object.entries(visibleCoords)) {
+        const fp = visibleFootprints[visId];
+        const overlapX = gb.halfW + fp.halfW - Math.abs(gb.x - vp.x);
+        const overlapY = gb.halfH + fp.halfH - Math.abs(gb.y - vp.y);
+        expect(overlapX > 0 && overlapY > 0).toBe(false);
+      }
+      for (const other of ghostBoxes) {
+        if (other.id === gb.id) continue;
+        const overlapX = gb.halfW + other.halfW - Math.abs(gb.x - other.x);
+        const overlapY = gb.halfH + other.halfH - Math.abs(gb.y - other.y);
+        expect(overlapX > 0 && overlapY > 0).toBe(false);
+      }
+    }
+
+    // Moving a sibling location does not bounce the saved/pinned ghost coordinate
+    const movedVisibleCoords = {
+      ...visibleCoords,
+      loc_inner_3: { x: -240, y: 10 },
+    };
+    const placedAfterMove = computeGhostNodeCoords(
+      ghostNodes,
+      ghostEdges,
+      movedVisibleCoords,
+      pinnedCoords,
+      visibleFootprints
+    );
+    expect(placedAfterMove.loc_ext_6).toEqual({ x: -320, y: 15 });
+
+    // cloneGraph deep-copies ghost_coords and areGraphSnapshotsEqual tracks changes
+    const baseGraph = cloneGraph(
+      [
+        {
+          id: "cont_eastway",
+          world_id: "w1",
+          depth: 1,
+          name: "Eastway",
+          description: "",
+          environmental_tags: [],
+          ghost_coords: { loc_ext_6: { x: -320, y: 15 } },
+        },
+      ],
+      [portal],
+      []
+    );
+    const editedGraph = cloneGraph(
+      baseGraph.containers,
+      baseGraph.locations,
+      baseGraph.edges
+    );
+    editedGraph.containers[0].ghost_coords!.loc_ext_6.x = 120;
+    expect(baseGraph.containers[0].ghost_coords!.loc_ext_6.x).toBe(-320);
+    expect(areGraphSnapshotsEqual(baseGraph, editedGraph)).toBe(false);
+    editedGraph.containers[0].ghost_coords!.loc_ext_6.x = -320;
+    expect(areGraphSnapshotsEqual(baseGraph, editedGraph)).toBe(true);
   });
 });

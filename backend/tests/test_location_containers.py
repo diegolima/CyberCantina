@@ -32,11 +32,13 @@ from app.engine.phase2_context import (
 from app.engine.phase3_cognition import run_character_cognition_agent
 from app.schemas.character import CognitionBlock
 from app.schemas.turn import (
+    CampaignMapUpdatePayload,
     DiceRollResult,
     ImprovisedLocationSpec,
     PreTurnAnalysis,
 )
 from app.schemas.world import (
+    GhostCoord,
     LocationContainer,
     LocationEdge,
     LocationNode,
@@ -1605,4 +1607,122 @@ def test_location_container_ops_preserve_world_unsupported_fields(empty_repo: Ca
         owner_id="user_container_ext",
     )
     assert after_convert.unsupported_fields == ext_payload
+
+
+def test_container_ghost_coords_persist_across_world_campaign_and_zcc_roundtrip(
+    authed_client: tuple[TestClient, CantinaRepository],
+) -> None:
+    """Per-container ghost_coords save without mutating target locations, survive CoW/campaign overrides, and remap in .zcc import."""
+    client, empty_repo = authed_client
+    owner_id = "user_container_admin"
+    world = _create_hierarchical_world(empty_repo, owner_id=owner_id)
+    club = next(c for c in world.containers if c.name == "Afterlife Club")
+    ext_loc = next(loc for loc in world.locations if loc.name == "Salt Flats Outpost")
+    orig_ext_x, orig_ext_y = ext_loc.ui_x, ext_loc.ui_y
+
+    # 1. In-place world update saves ghost_coords on Afterlife Club without changing target location coords
+    updated_containers = [
+        c.model_copy(
+            update={"ghost_coords": {ext_loc.id: GhostCoord(x=245.0, y=-110.0)}}
+        )
+        if c.id == club.id
+        else c
+        for c in world.containers
+    ]
+    saved = empty_repo.update_world(
+        world.id,
+        WorldUpdatePayload(
+            name=world.name,
+            global_rules=world.global_rules,
+            containers=updated_containers,
+            locations=world.locations,
+            edges=world.edges,
+            lore_nodes=world.lore_nodes,
+        ),
+        owner_id=owner_id,
+    )
+    saved_club = next(c for c in saved.containers if c.id == club.id)
+    saved_ext = next(loc for loc in saved.locations if loc.id == ext_loc.id)
+    assert saved_club.ghost_coords == {ext_loc.id: GhostCoord(x=245.0, y=-110.0)}
+    assert (saved_ext.ui_x, saved_ext.ui_y) == (orig_ext_x, orig_ext_y)
+
+    # 2. .zcc export + import remaps location ID keys inside ghost_coords
+    export_resp = client.get(f"/api/export/world/{saved.id}")
+    assert export_resp.status_code == 200, export_resp.text
+    inspect_resp = client.post(
+        "/api/import/inspect",
+        files={
+            "file": (
+                "ghost_world.zcc",
+                export_resp.content,
+                "application/octet-stream",
+            )
+        },
+    )
+    assert inspect_resp.status_code == 200, inspect_resp.text
+    token = inspect_resp.json()["staged_token"]
+    commit_resp = client.post(
+        "/api/import/commit",
+        json={"staged_token": token, "default_conflict_strategy": "copy"},
+    )
+    assert commit_resp.status_code == 200, commit_resp.text
+
+    all_worlds = empty_repo.list_worlds(owner_id=owner_id)
+    imported_world_summary = next(w for w in all_worlds if w.id != saved.id)
+    imp_world = empty_repo.get_world(imported_world_summary.id, owner_id=owner_id)
+    assert imp_world is not None
+    imp_club = next(c for c in imp_world.containers if c.name == "Afterlife Club")
+    imp_ext = next(loc for loc in imp_world.locations if loc.name == "Salt Flats Outpost")
+    assert imp_ext.id != ext_loc.id
+    assert imp_club.ghost_coords == {imp_ext.id: GhostCoord(x=245.0, y=-110.0)}
+
+    # 3. Campaign map update persists ghost_coords overrides and allows resetting back to {}
+    char = seed_character(empty_repo, owner_id=owner_id, name="Ghost Tester")
+    camp = empty_repo.create_campaign(
+        name="Ghost Map Run",
+        world_id=saved.id,
+        character_id=char.id,
+        owner_id=owner_id,
+    )
+    bundle = empty_repo.get_campaign_state_bundle(camp.id, owner_id=owner_id)
+    assert bundle is not None
+    camp_club = next(c for c in bundle.containers if c.id == club.id)
+    assert camp_club.ghost_coords == {ext_loc.id: GhostCoord(x=245.0, y=-110.0)}
+
+    override_containers = [
+        c.model_copy(
+            update={"ghost_coords": {ext_loc.id: GhostCoord(x=-180.0, y=95.0)}}
+        )
+        if c.id == club.id
+        else c
+        for c in bundle.containers
+    ]
+    after_move = empty_repo.update_campaign_map(
+        camp.id,
+        CampaignMapUpdatePayload(
+            containers=override_containers,
+            locations=bundle.visible_locations,
+            edges=bundle.visible_edges,
+        ),
+        owner_id=owner_id,
+    )
+    moved_club = next(c for c in after_move.containers if c.id == club.id)
+    assert moved_club.ghost_coords == {ext_loc.id: GhostCoord(x=-180.0, y=95.0)}
+
+    reset_containers = [
+        c.model_copy(update={"ghost_coords": {}}) if c.id == club.id else c
+        for c in after_move.containers
+    ]
+    after_reset = empty_repo.update_campaign_map(
+        camp.id,
+        CampaignMapUpdatePayload(
+            containers=reset_containers,
+            locations=after_move.visible_locations,
+            edges=after_move.visible_edges,
+        ),
+        owner_id=owner_id,
+    )
+    reset_club = next(c for c in after_reset.containers if c.id == club.id)
+    assert reset_club.ghost_coords == {}
+
 

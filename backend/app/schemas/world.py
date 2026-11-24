@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Iterable, Sequence
 from typing import Any, Final, Literal
@@ -894,6 +895,77 @@ class WorldWizardDraft(BaseModel):
     lore_nodes: list[WorldLoreNodeDraft]
 
 
+class GhostCoord(BaseModel):
+    """Saved canvas coordinates for an external ghost destination inside a container view."""
+
+    x: float
+    y: float
+
+    @model_validator(mode="after")
+    def _validate_finite(self) -> "GhostCoord":
+        if not (math.isfinite(self.x) and math.isfinite(self.y)):
+            raise ValueError("Ghost coordinates must be finite numbers.")
+        return self
+
+
+def coerce_ghost_coords_map(raw: Any) -> dict[str, dict[str, float]]:
+    """Normalize a raw ghost_coords mapping, keeping only valid finite {x, y} entries."""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict[str, float]] = {}
+    for k, v in raw.items():
+        if not isinstance(k, str):
+            continue
+        loc_id = k.strip()
+        if not loc_id:
+            continue
+        if isinstance(v, GhostCoord):
+            rx, ry = v.x, v.y
+        elif isinstance(v, dict):
+            rx, ry = v.get("x"), v.get("y")
+        else:
+            continue
+        if isinstance(rx, bool) or isinstance(ry, bool):
+            continue
+        try:
+            fx = float(rx)
+            fy = float(ry)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(fx) and math.isfinite(fy):
+            out[loc_id] = {"x": fx, "y": fy}
+    return out
+
+
+def parse_ghost_coords_json(raw: Any) -> dict[str, GhostCoord]:
+    """Parse a JSON string or dict into validated GhostCoord entries."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw or "{}")
+        except Exception:
+            return {}
+    normalized = coerce_ghost_coords_map(raw)
+    return {k: GhostCoord(x=v["x"], y=v["y"]) for k, v in normalized.items()}
+
+
+def remap_ghost_coords_dict(
+    raw: Any,
+    id_remap: dict[str, str],
+    valid_ids: set[str] | None = None,
+) -> dict[str, dict[str, float]]:
+    """Remap ghost coordinate location ID keys using `id_remap`, optionally pruning deleted IDs."""
+    normalized = coerce_ghost_coords_map(
+        json.loads(raw or "{}") if isinstance(raw, str) else raw
+    )
+    out: dict[str, dict[str, float]] = {}
+    for old_id, pt in normalized.items():
+        mapped = id_remap.get(old_id, old_id)
+        if valid_ids is not None and mapped not in valid_ids:
+            continue
+        out[mapped] = pt
+    return out
+
+
 class LocationContainerDraft(BaseModel):
     """User-authored spatial container draft preserved across World Wizard review -> commit."""
 
@@ -905,8 +977,14 @@ class LocationContainerDraft(BaseModel):
     environmental_tags: list[str] = Field(default_factory=list)
     ui_x: float | None = None
     ui_y: float | None = None
+    ghost_coords: dict[str, GhostCoord] = Field(default_factory=dict)
     icon: str | None = None
     lore_nodes: list[LocationLoreNodeDraft] = Field(default_factory=list)
+
+    @field_validator("ghost_coords", mode="before")
+    @classmethod
+    def _validate_ghost_coords(cls, v: Any) -> dict[str, dict[str, float]]:
+        return coerce_ghost_coords_map(v)
 
     @field_validator("name", mode="before")
     @classmethod
@@ -1064,6 +1142,7 @@ class LocationContainer(BaseModel):
     environmental_tags: list[str] = Field(default_factory=list)
     ui_x: float | None = None
     ui_y: float | None = None
+    ghost_coords: dict[str, GhostCoord] = Field(default_factory=dict)
     icon: str | None = None
     image_media_id: str | None = None
     image_url: str | None = None
@@ -1074,6 +1153,11 @@ class LocationContainer(BaseModel):
         default_factory=list,
         description="Scoped lore entries (strictly allowed only on depth=1 containers).",
     )
+
+    @field_validator("ghost_coords", mode="before")
+    @classmethod
+    def _validate_ghost_coords(cls, v: Any) -> dict[str, dict[str, float]]:
+        return coerce_ghost_coords_map(v)
 
     @field_validator("name", mode="before")
     @classmethod

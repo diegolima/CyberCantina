@@ -1311,7 +1311,7 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
             lineHeight: 1.4,
           }}
         >
-          Drag this ghost stub on the canvas to organize your view without moving its real position. Narrative fields are read-only outside its home container.
+          Drag this ghost stub on the canvas to save its position in this view without moving its real coordinates. Narrative fields are read-only outside its home container.
         </div>
 
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -1330,7 +1330,7 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
               <LogIn size={13} /> Jump to {selectedGhost.destinationContainerName}
             </button>
           )}
-          {hasGhostOverride && onResetGhostCoords && (
+          {hasGhostOverride && !isMutatingLocked && onResetGhostCoords && (
             <button
               type="button"
               className="btn"

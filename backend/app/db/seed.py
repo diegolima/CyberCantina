@@ -27,6 +27,7 @@ from app.schemas.world import (
     WorldGlobalRules,
     extract_edge_distance_meters,
     extract_edge_link_fields,
+    remap_ghost_coords_dict,
 )
 from app.security.media_path import (
     PathTraversalError,
@@ -529,6 +530,10 @@ def _seed_green_lie_world_for_user(
             new_c_id = f"cont_{uuid.uuid4().hex[:10]}"
             id_remap[old_c_id] = new_c_id
 
+        for loc in w_data.get("locations", []):
+            old_loc_id = str(loc["id"])
+            id_remap[old_loc_id] = f"loc_{uuid.uuid4().hex[:10]}"
+
         for cont in containers:
             old_c_id = str(cont["id"])
             new_c_id = id_remap[old_c_id]
@@ -542,13 +547,16 @@ def _seed_green_lie_world_for_user(
                 if cont.get("image_media_id")
                 else None
             )
+            ghost_coords_json = json.dumps(
+                remap_ghost_coords_dict(cont.get("ghost_coords") or {}, id_remap)
+            )
             conn.execute(
                 """
                 INSERT INTO location_containers (
                     id, world_id, created_at_turn_id, parent_container_id, depth, name,
-                    description, environmental_tags_json, ui_x, ui_y, icon, image_media_id, created_at
+                    description, environmental_tags_json, ui_x, ui_y, ghost_coords_json, icon, image_media_id, created_at
                 )
-                VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     new_c_id,
@@ -560,6 +568,7 @@ def _seed_green_lie_world_for_user(
                     json.dumps(cont.get("environmental_tags") or []),
                     cont.get("ui_x"),
                     cont.get("ui_y"),
+                    ghost_coords_json,
                     cont.get("icon"),
                     img_id,
                     now,
@@ -612,8 +621,7 @@ def _seed_green_lie_world_for_user(
         # Insert locations + location-scoped lore
         for loc in w_data.get("locations", []):
             old_loc_id = str(loc["id"])
-            new_loc_id = f"loc_{uuid.uuid4().hex[:10]}"
-            id_remap[old_loc_id] = new_loc_id
+            new_loc_id = id_remap[old_loc_id]
             cont_id = (
                 id_remap.get(str(loc["container_id"]))
                 if loc.get("container_id")

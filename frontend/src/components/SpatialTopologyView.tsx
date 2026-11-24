@@ -31,6 +31,8 @@ import {
   StandaloneContainerCreateState,
 } from "./map/MapDialogs";
 import {
+  CONTAINER_CARD_HALF_H,
+  CONTAINER_CARD_HALF_W,
   computeEdgeClippedSegment,
   isEditableKeyboardTarget,
   type NodeShapeDescriptor,
@@ -58,6 +60,7 @@ import {
   COMPASS_ORDER,
   CONTAINER_DEPTH_LABELS,
   OPPOSITE_COMPASS,
+  areGraphSnapshotsEqual,
   buildContainerBreadcrumb,
   buildContainerBreadcrumbChain,
   clientToWorldPoint,
@@ -257,6 +260,15 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     : internalDirty;
   const effectiveSaving = externalSaving || internalSaving;
 
+  const propBaseline = useMemo<GraphSnapshot>(
+    () => ({
+      containers: propContainers,
+      locations: propLocations,
+      edges: propEdges,
+    }),
+    [propContainers, propLocations, propEdges]
+  );
+
   const commitNextGraph = useCallback(
     (next: GraphSnapshot, pushUndo = true) => {
       if (pushUndo) {
@@ -265,7 +277,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
           workingLocations,
           workingEdges
         );
-        setUndoStack((prev) => [...prev.slice(-19), snapshotBefore]);
+        setUndoStack((prev) => [...prev.slice(-49), snapshotBefore]);
       }
       setSaveError(null);
       if (isControlledExternally && onChangeGraph) {
@@ -295,10 +307,16 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       onChangeGraph(prev);
     } else {
       setDraft(prev);
-      setInternalDirty(nextStack.length > 0);
+      setInternalDirty(!areGraphSnapshotsEqual(prev, propBaseline));
     }
     setStatusNotice("Reverted last map action.");
-  }, [undoStack, isMutatingLocked, isControlledExternally, onChangeGraph]);
+  }, [
+    undoStack,
+    isMutatingLocked,
+    isControlledExternally,
+    onChangeGraph,
+    propBaseline,
+  ]);
 
   // Resolve initial container scope and viewport center once on mount
   const [initialFocus] = useState<InitialMapFocus>(() =>
@@ -357,9 +375,6 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     setSelectedGhostLocId(null);
     setSelectedEdgeState(null);
   }, []);
-  const [ghostCoordsByView, setGhostCoordsByView] = useState<
-    Record<string, Record<string, { x: number; y: number }>>
-  >({});
   const [currentContainerId, setCurrentContainerId] = useState<string | null>(
     initialFocus.currentContainerId
   );
@@ -670,7 +685,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     reachabilityReport.unreachableIds.length > 0 ||
     containerValidationErrors.length > 0;
 
-  const fullMapCoords = useMemo(() => {
+  const settledFullMapCoords = useMemo(() => {
     const pseudoNodes: LocationNode[] = [
       ...projectedTopology.visibleLocations,
       ...projectedTopology.visibleSupernodes.map((sn) => ({
@@ -693,25 +708,49 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         to_location_id: pe.targetNodeId,
       })
     );
-    const computed = computeFullMapCoords(
+    return computeFullMapCoords(
       pseudoNodes,
       pseudoEdges,
       projectedTopology.anchorNodeId
     );
-    if (nodeDrag && nodeDrag.hasMoved && nodeDrag.kind !== "ghost") {
-      computed[nodeDrag.id] = { x: nodeDrag.currX, y: nodeDrag.currY };
-    }
-    return computed;
-  }, [projectedTopology, nodeDrag]);
+  }, [projectedTopology]);
 
-  const ghostViewKey = currentContainerId ?? "__root__";
-  const currentGhostOverrides = ghostCoordsByView[ghostViewKey];
+  const fullMapCoords = useMemo(() => {
+    if (nodeDrag && nodeDrag.hasMoved && nodeDrag.kind !== "ghost") {
+      return {
+        ...settledFullMapCoords,
+        [nodeDrag.id]: { x: nodeDrag.currX, y: nodeDrag.currY },
+      };
+    }
+    return settledFullMapCoords;
+  }, [settledFullMapCoords, nodeDrag]);
+
+  const visibleFootprints = useMemo(() => {
+    const map: Record<string, { halfW: number; halfH: number }> = {};
+    for (const loc of projectedTopology.visibleLocations) {
+      map[loc.id] = { halfW: 54, halfH: 34 };
+    }
+    for (const sn of projectedTopology.visibleSupernodes) {
+      map[sn.container.id] = {
+        halfW: CONTAINER_CARD_HALF_W + 6,
+        halfH: CONTAINER_CARD_HALF_H + 8,
+      };
+    }
+    return map;
+  }, [projectedTopology.visibleLocations, projectedTopology.visibleSupernodes]);
+
+  const currentScopeContainer = currentContainerId
+    ? containerMap.get(currentContainerId) ?? null
+    : null;
+  const currentGhostOverrides = currentScopeContainer?.ghost_coords;
+
   const ghostCoords = useMemo(() => {
     const computed = computeGhostNodeCoords(
       projectedTopology.ghostExternalNodes,
       projectedTopology.ghostEdges,
-      fullMapCoords,
-      currentGhostOverrides
+      settledFullMapCoords,
+      currentGhostOverrides,
+      visibleFootprints
     );
     if (nodeDrag && nodeDrag.hasMoved && nodeDrag.kind === "ghost") {
       computed[nodeDrag.id] = { x: nodeDrag.currX, y: nodeDrag.currY };
@@ -720,35 +759,11 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   }, [
     projectedTopology.ghostExternalNodes,
     projectedTopology.ghostEdges,
-    fullMapCoords,
+    settledFullMapCoords,
     currentGhostOverrides,
+    visibleFootprints,
     nodeDrag,
   ]);
-
-  const handleMoveGhostNode = useCallback(
-    (externalLocId: string, x: number, y: number) => {
-      setGhostCoordsByView((prev) => ({
-        ...prev,
-        [ghostViewKey]: {
-          ...(prev[ghostViewKey] ?? {}),
-          [externalLocId]: { x, y },
-        },
-      }));
-    },
-    [ghostViewKey]
-  );
-
-  const handleResetGhostCoords = useCallback(
-    (externalLocId: string) => {
-      setGhostCoordsByView((prev) => {
-        const viewMap = prev[ghostViewKey];
-        if (!viewMap || !viewMap[externalLocId]) return prev;
-        const { [externalLocId]: _removed, ...rest } = viewMap;
-        return { ...prev, [ghostViewKey]: rest };
-      });
-    },
-    [ghostViewKey]
-  );
 
   const activeNeighborIds = useMemo(() => {
     if (!activeLoc) return new Set<string>();
@@ -1060,6 +1075,46 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     setPromotionPrompt,
   });
 
+  const handleMoveGhostNode = useCallback(
+    (externalLocId: string, x: number, y: number) => {
+      if (!currentContainerId || isMutatingLocked) return;
+      const targetCont = containerMap.get(currentContainerId);
+      if (!targetCont) return;
+      const roundedX = Math.round(x);
+      const roundedY = Math.round(y);
+      const prevCoord = targetCont.ghost_coords?.[externalLocId];
+      if (
+        prevCoord &&
+        Math.round(prevCoord.x) === roundedX &&
+        Math.round(prevCoord.y) === roundedY
+      ) {
+        return;
+      }
+      patchContainer(
+        currentContainerId,
+        {
+          ghost_coords: {
+            ...(targetCont.ghost_coords ?? {}),
+            [externalLocId]: { x: roundedX, y: roundedY },
+          },
+        },
+        true
+      );
+    },
+    [currentContainerId, isMutatingLocked, containerMap, patchContainer]
+  );
+
+  const handleResetGhostCoords = useCallback(
+    (externalLocId: string) => {
+      if (!currentContainerId || isMutatingLocked) return;
+      const targetCont = containerMap.get(currentContainerId);
+      if (!targetCont?.ghost_coords?.[externalLocId]) return;
+      const { [externalLocId]: _removed, ...rest } = targetCont.ghost_coords;
+      patchContainer(currentContainerId, { ghost_coords: rest }, true);
+    },
+    [currentContainerId, isMutatingLocked, containerMap, patchContainer]
+  );
+
   const emptyCanvasExistingTargets = useMemo<ExistingLinkTargetOption[]>(() => {
     if (!emptyCanvasModal) return [];
     const sourceLoc = resolveNodeConnectionEndpoint({
@@ -1166,16 +1221,6 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (
-        e.key !== "Delete" ||
-        e.repeat ||
-        e.ctrlKey ||
-        e.metaKey ||
-        e.altKey ||
-        e.shiftKey
-      ) {
-        return;
-      }
       if (isMutatingLocked || effectiveSaving || hasBlockingOverlayOpen) {
         return;
       }
@@ -1184,6 +1229,31 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         isEditableKeyboardTarget(
           typeof document !== "undefined" ? document.activeElement : null
         )
+      ) {
+        return;
+      }
+
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        !e.altKey &&
+        !e.shiftKey &&
+        e.key.toLowerCase() === "z" &&
+        !e.repeat
+      ) {
+        if (undoStack.length > 0) {
+          e.preventDefault();
+          handleUndo();
+        }
+        return;
+      }
+
+      if (
+        e.key !== "Delete" ||
+        e.repeat ||
+        e.ctrlKey ||
+        e.metaKey ||
+        e.altKey ||
+        e.shiftKey
       ) {
         return;
       }
@@ -1245,6 +1315,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     handleDeleteEdge,
     handleDeleteContainer,
     handleDeleteLocation,
+    undoStack.length,
+    handleUndo,
   ]);
 
   const handleCloseClick = () => {
@@ -1695,9 +1767,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             onSelect={(iconKey) => {
               if (!iconBrowserTarget) return;
               if (iconBrowserTarget.targetKind === "container") {
-                patchContainer(iconBrowserTarget.targetId, { icon: iconKey });
+                patchContainer(iconBrowserTarget.targetId, { icon: iconKey }, true);
               } else {
-                patchLocation(iconBrowserTarget.targetId, { icon: iconKey });
+                patchLocation(iconBrowserTarget.targetId, { icon: iconKey }, true);
               }
             }}
             onClose={() => setIconBrowserTarget(null)}

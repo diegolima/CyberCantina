@@ -141,6 +141,7 @@ CREATE TABLE IF NOT EXISTS location_containers (
     environmental_tags_json TEXT NOT NULL DEFAULT '[]',
     ui_x REAL NULL,
     ui_y REAL NULL,
+    ghost_coords_json TEXT NOT NULL DEFAULT '{}',
     icon TEXT NULL,
     image_media_id TEXT NULL REFERENCES media_assets(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL

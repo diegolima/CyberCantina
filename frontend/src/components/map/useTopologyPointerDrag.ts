@@ -110,6 +110,48 @@ export function hitTestTopologyPortAt(
   return bodyHit ? { kind: bodyHit.kind, id: bodyHit.id } : null;
 }
 
+/** Persist a discrete open-canvas node drop with undo support when coordinates changed. */
+export function commitCanvasDropCoordinates(params: {
+  kind: "location" | "container";
+  id: string;
+  x: number;
+  y: number;
+  locationMap: Map<string, LocationNode>;
+  containerMap: Map<string, LocationContainer>;
+  patchLocation: (
+    locId: string,
+    patch: Partial<LocationNode>,
+    pushUndo?: boolean
+  ) => void;
+  patchContainer: (
+    contId: string,
+    patch: Partial<LocationContainer>,
+    pushUndo?: boolean
+  ) => void;
+}): boolean {
+  const {
+    kind,
+    id,
+    x,
+    y,
+    locationMap,
+    containerMap,
+    patchLocation,
+    patchContainer,
+  } = params;
+  const prev =
+    kind === "location" ? locationMap.get(id) : containerMap.get(id);
+  if (prev && prev.ui_x === x && prev.ui_y === y) {
+    return false;
+  }
+  if (kind === "location") {
+    patchLocation(id, { ui_x: x, ui_y: y }, true);
+  } else {
+    patchContainer(id, { ui_x: x, ui_y: y }, true);
+  }
+  return true;
+}
+
 export interface UseTopologyPointerDragParams {
   nodeDrag: NodeDragState | null;
   setNodeDrag: React.Dispatch<React.SetStateAction<NodeDragState | null>>;
@@ -141,8 +183,16 @@ export interface UseTopologyPointerDragParams {
     id: string,
     targetContainerId: string | null
   ) => void;
-  patchLocation: (locId: string, patch: Partial<LocationNode>) => void;
-  patchContainer: (contId: string, patch: Partial<LocationContainer>) => void;
+  patchLocation: (
+    locId: string,
+    patch: Partial<LocationNode>,
+    pushUndo?: boolean
+  ) => void;
+  patchContainer: (
+    contId: string,
+    patch: Partial<LocationContainer>,
+    pushUndo?: boolean
+  ) => void;
   initiateConnection: (params: {
     sourceKind: "location" | "container";
     sourceId: string;
@@ -404,18 +454,17 @@ export function useTopologyPointerDrag({
           }
         }
 
-        // Dropped onto open canvas -> persist new coordinates
-        if (nodeDrag.kind === "location") {
-          patchLocation(nodeDrag.id, {
-            ui_x: nodeDrag.currX,
-            ui_y: nodeDrag.currY,
-          });
-        } else {
-          patchContainer(nodeDrag.id, {
-            ui_x: nodeDrag.currX,
-            ui_y: nodeDrag.currY,
-          });
-        }
+        // Dropped onto open canvas -> persist new coordinates with undo support
+        commitCanvasDropCoordinates({
+          kind: nodeDrag.kind,
+          id: nodeDrag.id,
+          x: nodeDrag.currX,
+          y: nodeDrag.currY,
+          locationMap,
+          containerMap,
+          patchLocation,
+          patchContainer,
+        });
         setNodeDrag(null);
       }
 

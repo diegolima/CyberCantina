@@ -21,6 +21,7 @@ from app.schemas.world import (
     extract_edge_distance_meters,
     extract_edge_link_fields,
     normalize_lore_category,
+    remap_ghost_coords_dict,
 )
 from app.security.log_sanitize import sanitize_log_value
 
@@ -978,13 +979,19 @@ def ingest_campaigns_atomic(
                 mapped_ct = id_remap.get(str(old_ct)) if old_ct else None
                 old_img = cont.get("image_media_id")
                 mapped_img = id_remap.get(str(old_img)) if old_img else None
+                raw_ghost = cont.get("ghost_coords_json")
+                if raw_ghost is None:
+                    raw_ghost = cont.get("ghost_coords") or {}
+                ghost_coords_json = json.dumps(
+                    remap_ghost_coords_dict(raw_ghost, id_remap)
+                )
                 conn.execute(
                     """
                     INSERT INTO location_containers (
                         id, world_id, created_at_turn_id, parent_container_id, depth, name,
-                        description, environmental_tags_json, ui_x, ui_y, icon, image_media_id, created_at
+                        description, environmental_tags_json, ui_x, ui_y, ghost_coords_json, icon, image_media_id, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         new_cont_id,
@@ -997,6 +1004,7 @@ def ingest_campaigns_atomic(
                         str(cont.get("environmental_tags_json") or "[]"),
                         cont.get("ui_x"),
                         cont.get("ui_y"),
+                        ghost_coords_json,
                         cont.get("icon"),
                         mapped_img,
                         str(cont.get("created_at") or now),
@@ -1118,6 +1126,17 @@ def ingest_campaigns_atomic(
                     continue
                 old_pid = ov.get("parent_id")
                 mapped_pid = id_remap.get(str(old_pid)) if old_pid else None
+                raw_meta_json = ov.get("metadata_override_json")
+                if ov.get("entity_type") == "container" and isinstance(raw_meta_json, str) and raw_meta_json:
+                    try:
+                        parsed_meta = json.loads(raw_meta_json)
+                        if isinstance(parsed_meta, dict) and isinstance(parsed_meta.get("ghost_coords"), dict):
+                            parsed_meta["ghost_coords"] = remap_ghost_coords_dict(
+                                parsed_meta["ghost_coords"], id_remap
+                            )
+                            raw_meta_json = json.dumps(parsed_meta)
+                    except Exception:
+                        pass
                 conn.execute(
                     """
                     INSERT INTO campaign_spatial_overrides (
@@ -1136,7 +1155,7 @@ def ingest_campaigns_atomic(
                         ov.get("ui_x"),
                         ov.get("ui_y"),
                         ov.get("icon"),
-                        ov.get("metadata_override_json"),
+                        raw_meta_json,
                     ),
                 )
 

@@ -916,6 +916,21 @@ export interface GraphSnapshot {
   edges: LocationEdge[];
 }
 
+export function cloneGhostCoords(
+  raw?: Record<string, { x: number; y: number }> | null
+): Record<string, { x: number; y: number }> | undefined {
+  if (!raw) return undefined;
+  const entries = Object.entries(raw);
+  if (entries.length === 0) return {};
+  const out: Record<string, { x: number; y: number }> = {};
+  for (const [k, v] of entries) {
+    if (v && Number.isFinite(v.x) && Number.isFinite(v.y)) {
+      out[k] = { x: v.x, y: v.y };
+    }
+  }
+  return out;
+}
+
 export function cloneGraph(
   containers: LocationContainer[],
   locations: LocationNode[],
@@ -925,6 +940,7 @@ export function cloneGraph(
     containers: containers.map((c) => ({
       ...c,
       environmental_tags: [...(c.environmental_tags ?? [])],
+      ghost_coords: cloneGhostCoords(c.ghost_coords),
       lore_nodes: (c.lore_nodes ?? []).map((ln) => ({
         ...ln,
         entity_tags: [...(ln.entity_tags ?? [])],
@@ -943,6 +959,104 @@ export function cloneGraph(
       obstacles: [...(e.obstacles ?? [])],
     })),
   };
+}
+
+function areGhostCoordsEqual(
+  a?: Record<string, { x: number; y: number }> | null,
+  b?: Record<string, { x: number; y: number }> | null
+): boolean {
+  const aKeys = Object.keys(a ?? {});
+  const bKeys = Object.keys(b ?? {});
+  if (aKeys.length !== bKeys.length) return false;
+  for (const k of aKeys) {
+    const av = a?.[k];
+    const bv = b?.[k];
+    if (!av || !bv || av.x !== bv.x || av.y !== bv.y) return false;
+  }
+  return true;
+}
+
+export function areGraphSnapshotsEqual(a: GraphSnapshot, b: GraphSnapshot): boolean {
+  if (
+    a.containers.length !== b.containers.length ||
+    a.locations.length !== b.locations.length ||
+    a.edges.length !== b.edges.length
+  ) {
+    return false;
+  }
+  const sortById = <T extends { id: string }>(arr: T[]): T[] =>
+    [...arr].sort((x, y) => x.id.localeCompare(y.id));
+
+  const ac = sortById(a.containers);
+  const bc = sortById(b.containers);
+  for (let i = 0; i < ac.length; i++) {
+    const x = ac[i];
+    const y = bc[i];
+    if (
+      x.id !== y.id ||
+      (x.parent_container_id ?? null) !== (y.parent_container_id ?? null) ||
+      x.depth !== y.depth ||
+      x.name !== y.name ||
+      x.description !== y.description ||
+      (x.ui_x ?? null) !== (y.ui_x ?? null) ||
+      (x.ui_y ?? null) !== (y.ui_y ?? null) ||
+      (x.icon ?? null) !== (y.icon ?? null) ||
+      !areGhostCoordsEqual(x.ghost_coords, y.ghost_coords) ||
+      JSON.stringify(x.environmental_tags ?? []) !== JSON.stringify(y.environmental_tags ?? []) ||
+      JSON.stringify(x.lore_nodes ?? []) !== JSON.stringify(y.lore_nodes ?? [])
+    ) {
+      return false;
+    }
+  }
+
+  const al = sortById(a.locations);
+  const bl = sortById(b.locations);
+  for (let i = 0; i < al.length; i++) {
+    const x = al[i];
+    const y = bl[i];
+    if (
+      x.id !== y.id ||
+      (x.container_id ?? null) !== (y.container_id ?? null) ||
+      Boolean(x.is_entry_exit) !== Boolean(y.is_entry_exit) ||
+      Boolean(x.is_starting_location) !== Boolean(y.is_starting_location) ||
+      Boolean(x.is_hub) !== Boolean(y.is_hub) ||
+      x.name !== y.name ||
+      x.summary !== y.summary ||
+      x.description !== y.description ||
+      (x.starting_message ?? "") !== (y.starting_message ?? "") ||
+      (x.ui_x ?? null) !== (y.ui_x ?? null) ||
+      (x.ui_y ?? null) !== (y.ui_y ?? null) ||
+      (x.icon ?? null) !== (y.icon ?? null) ||
+      JSON.stringify(x.environmental_tags ?? []) !== JSON.stringify(y.environmental_tags ?? []) ||
+      JSON.stringify(x.lore_nodes ?? []) !== JSON.stringify(y.lore_nodes ?? [])
+    ) {
+      return false;
+    }
+  }
+
+  const ae = sortById(a.edges);
+  const be = sortById(b.edges);
+  for (let i = 0; i < ae.length; i++) {
+    const x = ae[i];
+    const y = be[i];
+    if (
+      x.id !== y.id ||
+      x.from_location_id !== y.from_location_id ||
+      x.to_location_id !== y.to_location_id ||
+      x.direction_label !== y.direction_label ||
+      (x.compass_direction ?? null) !== (y.compass_direction ?? null) ||
+      x.distance_meters !== y.distance_meters ||
+      (x.speed_modifier ?? 1) !== (y.speed_modifier ?? 1) ||
+      (x.travel_mode ?? null) !== (y.travel_mode ?? null) ||
+      Boolean(x.is_blocked) !== Boolean(y.is_blocked) ||
+      Boolean(x.is_secret) !== Boolean(y.is_secret) ||
+      JSON.stringify(x.obstacles ?? []) !== JSON.stringify(y.obstacles ?? [])
+    ) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 export function clientToWorldPoint(
@@ -1339,24 +1453,58 @@ export function resolveInitialMapFocus(
   };
 }
 
+interface OccupiedFootprintBox {
+  x: number;
+  y: number;
+  halfW: number;
+  halfH: number;
+}
+
+const DEFAULT_VISIBLE_FOOTPRINT = { halfW: 54, halfH: 34 };
+const GHOST_FOOTPRINT = { halfW: 68, halfH: 23 };
+const GHOST_BOX_PAD = 14;
+
+function computeBoxOverlapArea(
+  ax: number,
+  ay: number,
+  aHalfW: number,
+  aHalfH: number,
+  b: OccupiedFootprintBox,
+  pad: number = GHOST_BOX_PAD
+): number {
+  const ox = aHalfW + b.halfW + pad - Math.abs(ax - b.x);
+  if (ox <= 0) return 0;
+  const oy = aHalfH + b.halfH + pad - Math.abs(ay - b.y);
+  if (oy <= 0) return 0;
+  return ox * oy;
+}
+
 /**
  * Compute per-view coordinates for external ghost nodes using directional
- * projection from connected portals (or ephemeral per-view drag overrides),
- * pushed away from visible nodes and previously placed ghosts.
+ * projection from connected portals (or saved per-container overrides),
+ * using box-aware ring/angle search so cramped layouts stay overlap-free
+ * and pinned ghost nodes never bounce when visible nodes move.
  */
 export function computeGhostNodeCoords(
   ghostNodes: ProjectedGhostExternalNode[],
   ghostEdges: ProjectedGhostEdge[],
   visibleCoords: Record<string, { x: number; y: number }>,
-  overrides?: Record<string, { x: number; y: number }>
+  overrides?: Record<string, { x: number; y: number }>,
+  visibleFootprints?: Record<string, { halfW: number; halfH: number }>
 ): Record<string, { x: number; y: number }> {
   const result: Record<string, { x: number; y: number }> = {};
   if (ghostNodes.length === 0) return result;
 
-  const occupied: Array<{ x: number; y: number }> = Object.values(visibleCoords);
-  const offsetDist = 148;
-  const minClearance = 108;
+  const occupiedBoxes: OccupiedFootprintBox[] = Object.entries(visibleCoords).map(
+    ([id, pt]) => {
+      const fp = visibleFootprints?.[id] ?? DEFAULT_VISIBLE_FOOTPRINT;
+      return { x: pt.x, y: pt.y, halfW: fp.halfW, halfH: fp.halfH };
+    }
+  );
 
+  // Pass 1: Lock all saved/pinned ghost overrides first so they never move or
+  // cause unpinned ghosts to collide with them.
+  const unpinned: Array<{ ghost: ProjectedGhostExternalNode; index: number }> = [];
   for (let gIdx = 0; gIdx < ghostNodes.length; gIdx++) {
     const ghost = ghostNodes[gIdx];
     const extId = ghost.destination.id;
@@ -1368,15 +1516,44 @@ export function computeGhostNodeCoords(
       typeof override.y === "number" &&
       Number.isFinite(override.y)
     ) {
-      result[extId] = { x: Math.round(override.x), y: Math.round(override.y) };
-      occupied.push(result[extId]);
-      continue;
+      const pinned = { x: Math.round(override.x), y: Math.round(override.y) };
+      result[extId] = pinned;
+      occupiedBoxes.push({
+        x: pinned.x,
+        y: pinned.y,
+        halfW: GHOST_FOOTPRINT.halfW,
+        halfH: GHOST_FOOTPRINT.halfH,
+      });
+    } else {
+      unpinned.push({ ghost, index: gIdx });
     }
+  }
 
+  // Pass 2: Place remaining auto-placed ghosts on a box-aware outer ring /
+  // angular sweep around their portal anchor.
+  const preferredOffsetDist = 210;
+  const candidateRadii = [210, 275, 160, 340, 410];
+  const candidateAnglesDeg = [
+    0, 18, -18, 36, -36, 54, -54, 72, -72, 90, -90, 115, -115, 145, -145, 180,
+  ];
+  const candidateOffsets: Array<{ radius: number; deg: number; score: number }> = [];
+  for (const radius of candidateRadii) {
+    for (const deg of candidateAnglesDeg) {
+      candidateOffsets.push({
+        radius,
+        deg,
+        score: Math.abs(deg) * 2.4 + Math.abs(radius - preferredOffsetDist) * 0.45,
+      });
+    }
+  }
+  candidateOffsets.sort((a, b) => a.score - b.score);
+
+  for (const { ghost, index: gIdx } of unpinned) {
+    const extId = ghost.destination.id;
     const attachedEdges = ghostEdges.filter(
       (ge) => ge.externalLocationId === extId
     );
-    const candidateTargets: Array<{ x: number; y: number }> = [];
+    const portalAnchors: Array<{ x: number; y: number; vx: number; vy: number }> = [];
     const seenPortal = new Set<string>();
 
     for (const ge of attachedEdges) {
@@ -1393,49 +1570,96 @@ export function computeGhostNodeCoords(
           ? rawDir
           : OPPOSITE_COMPASS[rawDir];
       const angle = COMPASS_ANGLES[outwardDir];
-      candidateTargets.push({
-        x: pPt.x + Math.cos(angle) * offsetDist,
-        y: pPt.y + Math.sin(angle) * offsetDist,
+      portalAnchors.push({
+        x: pPt.x,
+        y: pPt.y,
+        vx: Math.cos(angle),
+        vy: Math.sin(angle),
       });
     }
 
-    let gx = 0;
-    let gy = 0;
-    if (candidateTargets.length > 0) {
-      for (const ct of candidateTargets) {
-        gx += ct.x;
-        gy += ct.y;
+    let anchorX = 0;
+    let anchorY = 0;
+    let baseAngle = -Math.PI / 4 + gIdx * (Math.PI / 3);
+    if (portalAnchors.length > 0) {
+      let sumVx = 0;
+      let sumVy = 0;
+      for (const pa of portalAnchors) {
+        anchorX += pa.x;
+        anchorY += pa.y;
+        sumVx += pa.vx;
+        sumVy += pa.vy;
       }
-      gx /= candidateTargets.length;
-      gy /= candidateTargets.length;
-    } else {
-      const fallbackAngle = -Math.PI / 4 + gIdx * (Math.PI / 3);
-      gx = Math.cos(fallbackAngle) * offsetDist;
-      gy = Math.sin(fallbackAngle) * offsetDist;
+      anchorX /= portalAnchors.length;
+      anchorY /= portalAnchors.length;
+      if (Math.hypot(sumVx, sumVy) > 1e-4) {
+        baseAngle = Math.atan2(sumVy, sumVx);
+      }
     }
 
-    // Light collision avoidance against visible nodes and earlier ghosts
-    for (let step = 0; step < 12; step++) {
-      let overlap = false;
-      for (const occ of occupied) {
-        const dx = gx - occ.x;
-        const dy = gy - occ.y;
-        const dist = Math.hypot(dx, dy);
-        if (dist < minClearance) {
-          overlap = true;
-          const angle =
-            dist > 1
-              ? Math.atan2(dy, dx)
-              : -Math.PI / 4 + (step + gIdx) * (Math.PI / 4);
-          gx += Math.cos(angle) * (minClearance - dist + 18);
-          gy += Math.sin(angle) * (minClearance - dist + 18);
-        }
+    let gx = anchorX + Math.cos(baseAngle) * preferredOffsetDist;
+    let gy = anchorY + Math.sin(baseAngle) * preferredOffsetDist;
+    let bestOverlap = Infinity;
+    let foundClean = false;
+
+    for (const cand of candidateOffsets) {
+      const angle = baseAngle + (cand.deg * Math.PI) / 180;
+      const cx = anchorX + Math.cos(angle) * cand.radius;
+      const cy = anchorY + Math.sin(angle) * cand.radius;
+      let overlapSum = 0;
+      for (const box of occupiedBoxes) {
+        overlapSum += computeBoxOverlapArea(
+          cx,
+          cy,
+          GHOST_FOOTPRINT.halfW,
+          GHOST_FOOTPRINT.halfH,
+          box
+        );
       }
-      if (!overlap) break;
+      if (overlapSum === 0) {
+        gx = cx;
+        gy = cy;
+        foundClean = true;
+        break;
+      }
+      if (overlapSum < bestOverlap) {
+        bestOverlap = overlapSum;
+        gx = cx;
+        gy = cy;
+      }
+    }
+
+    // Fallback AABB separation pass if every candidate ring was saturated
+    if (!foundClean) {
+      for (let step = 0; step < 16; step++) {
+        let moved = false;
+        for (const box of occupiedBoxes) {
+          const dx = gx - box.x;
+          const dy = gy - box.y;
+          const reqX = GHOST_FOOTPRINT.halfW + box.halfW + GHOST_BOX_PAD;
+          const reqY = GHOST_FOOTPRINT.halfH + box.halfH + GHOST_BOX_PAD;
+          const ox = reqX - Math.abs(dx);
+          const oy = reqY - Math.abs(dy);
+          if (ox > 0 && oy > 0) {
+            moved = true;
+            if (ox < oy) {
+              gx += (dx >= 0 ? 1 : -1) * (ox + 6);
+            } else {
+              gy += (dy >= 0 ? 1 : -1) * (oy + 6);
+            }
+          }
+        }
+        if (!moved) break;
+      }
     }
 
     result[extId] = { x: Math.round(gx), y: Math.round(gy) };
-    occupied.push(result[extId]);
+    occupiedBoxes.push({
+      x: result[extId].x,
+      y: result[extId].y,
+      halfW: GHOST_FOOTPRINT.halfW,
+      halfH: GHOST_FOOTPRINT.halfH,
+    });
   }
 
   return result;

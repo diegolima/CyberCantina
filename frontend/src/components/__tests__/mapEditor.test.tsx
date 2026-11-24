@@ -76,7 +76,10 @@ import {
   buildBidirectionalEdgePair,
   resolveNodeConnectionEndpoint,
 } from "../map/useTopologyMutations";
-import { hitTestTopologyPortAt } from "../map/useTopologyPointerDrag";
+import {
+  commitCanvasDropCoordinates,
+  hitTestTopologyPortAt,
+} from "../map/useTopologyPointerDrag";
 import {
   MAP_ICON_CATEGORIES,
   MAP_ICON_OPTIONS,
@@ -2552,5 +2555,109 @@ describe("Interactive Map Editor & Mini-Map", () => {
     );
     // vbX = (10 + 5) * 2 = 30, vbY = (20 - 10) * 2 = 20 -> +440-100 = 370, +310-50 = 280
     expect(mapped).toEqual({ x: 370, y: 280 });
+  });
+
+  it("pushes undo snapshots when dropping moved locations/containers onto open canvas and skips no-op drops", () => {
+    const locCalls: Array<{ id: string; patch: Partial<LocationNode>; pushUndo?: boolean }> = [];
+    const contCalls: Array<{ id: string; patch: Partial<LocationContainer>; pushUndo?: boolean }> = [];
+    const autoLoc: LocationNode = {
+      id: "loc_auto",
+      world_id: "w1",
+      name: "The Catwalk",
+      summary: "Alley",
+      description: "Alley",
+      environmental_tags: [],
+      is_starting_location: true,
+      ui_x: null,
+      ui_y: null,
+    };
+    const pinnedLoc: LocationNode = {
+      ...autoLoc,
+      id: "loc_pinned",
+      ui_x: 120,
+      ui_y: -40,
+    };
+    const cont: LocationContainer = {
+      id: "cont_1",
+      world_id: "w1",
+      depth: 1,
+      name: "The Neon Rust",
+      description: "",
+      environmental_tags: [],
+      ui_x: 50,
+      ui_y: 80,
+    };
+    const locationMap = new Map([
+      [autoLoc.id, autoLoc],
+      [pinnedLoc.id, pinnedLoc],
+    ]);
+    const containerMap = new Map([[cont.id, cont]]);
+    const patchLocation = (
+      id: string,
+      patch: Partial<LocationNode>,
+      pushUndo?: boolean
+    ) => {
+      locCalls.push({ id, patch, pushUndo });
+    };
+    const patchContainer = (
+      id: string,
+      patch: Partial<LocationContainer>,
+      pushUndo?: boolean
+    ) => {
+      contCalls.push({ id, patch, pushUndo });
+    };
+
+    // Moving an auto-placed location (null -> coords) pushes undo
+    expect(
+      commitCanvasDropCoordinates({
+        kind: "location",
+        id: "loc_auto",
+        x: 200,
+        y: -60,
+        locationMap,
+        containerMap,
+        patchLocation,
+        patchContainer,
+      })
+    ).toBe(true);
+    expect(locCalls[0]).toEqual({
+      id: "loc_auto",
+      patch: { ui_x: 200, ui_y: -60 },
+      pushUndo: true,
+    });
+
+    // Dropping a pinned location back at its exact same coords is a no-op
+    expect(
+      commitCanvasDropCoordinates({
+        kind: "location",
+        id: "loc_pinned",
+        x: 120,
+        y: -40,
+        locationMap,
+        containerMap,
+        patchLocation,
+        patchContainer,
+      })
+    ).toBe(false);
+    expect(locCalls).toHaveLength(1);
+
+    // Moving a container to new coords pushes undo
+    expect(
+      commitCanvasDropCoordinates({
+        kind: "container",
+        id: "cont_1",
+        x: 90,
+        y: 110,
+        locationMap,
+        containerMap,
+        patchLocation,
+        patchContainer,
+      })
+    ).toBe(true);
+    expect(contCalls[0]).toEqual({
+      id: "cont_1",
+      patch: { ui_x: 90, ui_y: 110 },
+      pushUndo: true,
+    });
   });
 });

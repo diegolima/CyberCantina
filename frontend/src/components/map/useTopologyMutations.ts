@@ -254,7 +254,7 @@ export function useTopologyMutations({
   setPromotionPrompt,
 }: UseTopologyMutationsParams) {
   const patchLocation = useCallback(
-    (locId: string, patch: Partial<LocationNode>) => {
+    (locId: string, patch: Partial<LocationNode>, pushUndo = false) => {
       const oldLoc = locationMap.get(locId);
       const nextLocs = workingLocations.map((l) =>
         l.id === locId ? { ...l, ...patch } : l
@@ -274,14 +274,14 @@ export function useTopologyMutations({
           locations: nextLocs,
           edges: nextEdges,
         },
-        false
+        pushUndo
       );
     },
     [locationMap, workingLocations, workingContainers, workingEdges, commitNextGraph]
   );
 
   const patchContainer = useCallback(
-    (contId: string, patch: Partial<LocationContainer>) => {
+    (contId: string, patch: Partial<LocationContainer>, pushUndo = false) => {
       const nextConts = workingContainers.map((c) =>
         c.id === contId ? { ...c, ...patch } : c
       );
@@ -291,7 +291,7 @@ export function useTopologyMutations({
           locations: workingLocations,
           edges: workingEdges,
         },
-        false
+        pushUndo
       );
     },
     [workingContainers, workingLocations, workingEdges, commitNextGraph]
@@ -300,12 +300,16 @@ export function useTopologyMutations({
   const resetCoordinates = useCallback(
     (kind: "location" | "container", id: string) => {
       if (kind === "location") {
-        patchLocation(id, { ui_x: null, ui_y: null });
+        const prev = locationMap.get(id);
+        if (prev && prev.ui_x == null && prev.ui_y == null) return;
+        patchLocation(id, { ui_x: null, ui_y: null }, true);
       } else {
-        patchContainer(id, { ui_x: null, ui_y: null });
+        const prev = containerMap.get(id);
+        if (prev && prev.ui_x == null && prev.ui_y == null) return;
+        patchContainer(id, { ui_x: null, ui_y: null }, true);
       }
     },
-    [patchLocation, patchContainer]
+    [locationMap, containerMap, patchLocation, patchContainer]
   );
 
   const availableContainerDepthsHere = useMemo<Array<1 | 2 | 3 | 4>>(() => {

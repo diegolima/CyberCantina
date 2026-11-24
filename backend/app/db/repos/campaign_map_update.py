@@ -19,6 +19,8 @@ from app.schemas.world import (
     normalize_edge_obstacles,
     normalize_edge_speed_modifier,
     normalize_edge_travel_mode,
+    parse_ghost_coords_json,
+    remap_ghost_coords_dict,
     validate_world_reachability,
 )
 from app.db.repos.base import (
@@ -236,6 +238,18 @@ class CampaignMapUpdateMixin:
                 )
             )
 
+        valid_mapped_loc_ids = {l.id for l in new_locs}
+        for cid, nc in list(new_cont_map.items()):
+            remapped_ghost = parse_ghost_coords_json(
+                remap_ghost_coords_dict(
+                    nc.ghost_coords,
+                    loc_id_remap,
+                    valid_ids=valid_mapped_loc_ids,
+                )
+            )
+            if remapped_ghost != nc.ghost_coords:
+                new_cont_map[cid] = nc.model_copy(update={"ghost_coords": remapped_ghost})
+
         now = utc_now_iso()
         conn = self._connect()
         try:
@@ -266,13 +280,16 @@ class CampaignMapUpdateMixin:
             ]
             new_conts_to_insert.sort(key=lambda c: c.depth, reverse=True)
             for nc in new_conts_to_insert:
+                ghost_coords_json = json.dumps(
+                    {k: {"x": v.x, "y": v.y} for k, v in nc.ghost_coords.items()}
+                )
                 conn.execute(
                     """
                     INSERT INTO location_containers (
                         id, world_id, created_at_turn_id, parent_container_id, depth,
-                        name, description, environmental_tags_json, ui_x, ui_y, icon, created_at
+                        name, description, environmental_tags_json, ui_x, ui_y, ghost_coords_json, icon, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         nc.id,
@@ -285,6 +302,7 @@ class CampaignMapUpdateMixin:
                         json.dumps(nc.environmental_tags),
                         nc.ui_x,
                         nc.ui_y,
+                        ghost_coords_json,
                         nc.icon,
                         now,
                     ),
@@ -301,15 +319,20 @@ class CampaignMapUpdateMixin:
                     or list(nc.environmental_tags) != list(orig_c.environmental_tags)
                     or nc.ui_x != orig_c.ui_x
                     or nc.ui_y != orig_c.ui_y
+                    or nc.ghost_coords != orig_c.ghost_coords
                     or nc.icon != orig_c.icon
                 )
                 if orig_c.created_at_turn_id == leaf_turn_id:
                     if changed:
+                        ghost_coords_json = json.dumps(
+                            {k: {"x": v.x, "y": v.y} for k, v in nc.ghost_coords.items()}
+                        )
                         conn.execute(
                             """
                             UPDATE location_containers
                             SET parent_container_id = ?, name = ?, description = ?,
-                                environmental_tags_json = ?, ui_x = ?, ui_y = ?, icon = ?
+                                environmental_tags_json = ?, ui_x = ?, ui_y = ?,
+                                ghost_coords_json = ?, icon = ?
                             WHERE id = ?
                             """,
                             (
@@ -319,6 +342,7 @@ class CampaignMapUpdateMixin:
                                 json.dumps(nc.environmental_tags),
                                 nc.ui_x,
                                 nc.ui_y,
+                                ghost_coords_json,
                                 nc.icon,
                                 nc.id,
                             ),
@@ -332,6 +356,10 @@ class CampaignMapUpdateMixin:
                         meta_dict["description"] = nc.description
                     if list(nc.environmental_tags) != list(raw_c.environmental_tags):
                         meta_dict["environmental_tags"] = list(nc.environmental_tags)
+                    if nc.ghost_coords != raw_c.ghost_coords or orig_c.ghost_coords != raw_c.ghost_coords:
+                        meta_dict["ghost_coords"] = {
+                            k: {"x": v.x, "y": v.y} for k, v in nc.ghost_coords.items()
+                        }
                     conn.execute(
                         """
                         INSERT OR REPLACE INTO campaign_spatial_overrides (

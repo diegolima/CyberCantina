@@ -27,6 +27,7 @@ from app.schemas.world import (
     normalize_edge_speed_modifier,
     normalize_edge_travel_mode,
     pick_available_compass_direction,
+    remap_ghost_coords_dict,
     sanitize_world_unsupported_fields,
 )
 from app.db.repos.base import (
@@ -249,6 +250,11 @@ class WorldsMixin:
                 ),
             )
 
+            key_to_loc_id: dict[str, str] = {
+                loc.key: f"loc_{uuid.uuid4().hex[:10]}" for loc in draft.locations
+            }
+            valid_loc_ids = set(key_to_loc_id.values())
+
             cont_id_map: dict[str, str] = {}
             for cont in sorted_containers:
                 new_cont_id = f"cont_{uuid.uuid4().hex[:10]}"
@@ -260,13 +266,20 @@ class WorldsMixin:
                         raise ValueError(
                             f"Container '{cont.name}' references missing parent '{cont.parent_container_id}'."
                         )
+                ghost_coords_json = json.dumps(
+                    remap_ghost_coords_dict(
+                        getattr(cont, "ghost_coords", {}),
+                        key_to_loc_id,
+                        valid_ids=valid_loc_ids,
+                    )
+                )
                 conn.execute(
                     """
                     INSERT INTO location_containers (
                         id, world_id, created_at_turn_id, parent_container_id, depth, name,
-                        description, environmental_tags_json, ui_x, ui_y, icon, created_at
+                        description, environmental_tags_json, ui_x, ui_y, ghost_coords_json, icon, created_at
                     )
-                    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         new_cont_id,
@@ -278,17 +291,16 @@ class WorldsMixin:
                         json.dumps(cont.environmental_tags),
                         cont.ui_x,
                         cont.ui_y,
+                        ghost_coords_json,
                         cont.icon,
                         now,
                     ),
                 )
 
             has_start = any(loc.is_starting_location for loc in draft.locations)
-            key_to_loc_id: dict[str, str] = {}
             key_to_loc_name: dict[str, str] = {}
             for idx, loc in enumerate(draft.locations):
-                loc_id = f"loc_{uuid.uuid4().hex[:10]}"
-                key_to_loc_id[loc.key] = loc_id
+                loc_id = key_to_loc_id[loc.key]
                 key_to_loc_name[loc.key] = loc.name
                 is_start = 1 if (loc.is_starting_location or (not has_start and idx == 0)) else 0
                 is_hub = 1 if getattr(loc, "is_hub", False) else 0
@@ -931,6 +943,22 @@ class WorldsMixin:
                     (target_world_id, world_id),
                 )
 
+            existing_taken_loc_ids = {
+                r["id"] for r in conn.execute("SELECT id FROM location_nodes").fetchall()
+            }
+            loc_id_map: dict[str, str] = {}
+            for loc in base_locations:
+                can_reuse_loc = (
+                    reuse_ids
+                    and bool(loc.id)
+                    and not loc.id.startswith("new_")
+                    and loc.id not in existing_taken_loc_ids
+                )
+                new_loc_id = loc.id if can_reuse_loc else f"loc_{uuid.uuid4().hex[:10]}"
+                existing_taken_loc_ids.add(new_loc_id)
+                loc_id_map[loc.id] = new_loc_id
+            valid_new_loc_ids = set(loc_id_map.values())
+
             cont_id_map: dict[str, str] = {}
             for cont in sorted_containers:
                 can_reuse_cont = (
@@ -952,13 +980,20 @@ class WorldsMixin:
                     if cont.image_media_id and cont.image_media_id in valid_image_media_ids
                     else None
                 )
+                ghost_coords_json = json.dumps(
+                    remap_ghost_coords_dict(
+                        getattr(cont, "ghost_coords", {}),
+                        loc_id_map,
+                        valid_ids=valid_new_loc_ids,
+                    )
+                )
                 conn.execute(
                     """
                     INSERT INTO location_containers (
                         id, world_id, created_at_turn_id, parent_container_id, depth, name,
-                        description, environmental_tags_json, ui_x, ui_y, icon, image_media_id, created_at
+                        description, environmental_tags_json, ui_x, ui_y, ghost_coords_json, icon, image_media_id, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         new_cont_id,
@@ -971,26 +1006,15 @@ class WorldsMixin:
                         json.dumps(cont.environmental_tags),
                         cont.ui_x,
                         cont.ui_y,
+                        ghost_coords_json,
                         cont.icon,
                         cont_media_id,
                         now,
                     ),
                 )
 
-            existing_taken_loc_ids = {
-                r["id"] for r in conn.execute("SELECT id FROM location_nodes").fetchall()
-            }
-            loc_id_map: dict[str, str] = {}
             for idx, loc in enumerate(base_locations):
-                can_reuse_loc = (
-                    reuse_ids
-                    and bool(loc.id)
-                    and not loc.id.startswith("new_")
-                    and loc.id not in existing_taken_loc_ids
-                )
-                new_loc_id = loc.id if can_reuse_loc else f"loc_{uuid.uuid4().hex[:10]}"
-                existing_taken_loc_ids.add(new_loc_id)
-                loc_id_map[loc.id] = new_loc_id
+                new_loc_id = loc_id_map[loc.id]
                 is_start = 1 if (loc.is_starting_location or (not has_start and idx == 0)) else 0
                 is_hub = 1 if getattr(loc, "is_hub", False) else 0
                 is_portal = 1 if getattr(loc, "is_entry_exit", False) else 0

@@ -90,6 +90,7 @@ export interface LocationContainer {
   environmental_tags: string[];
   ui_x?: number | null;
   ui_y?: number | null;
+  ghost_coords?: Record<string, { x: number; y: number }>;
   icon?: string | null;
   image_media_id?: string | null;
   image_url?: string | null;
@@ -178,6 +179,7 @@ export interface LocationContainerDraft {
   environmental_tags: string[];
   ui_x?: number | null;
   ui_y?: number | null;
+  ghost_coords?: Record<string, { x: number; y: number }>;
   icon?: string | null;
   lore_nodes?: LocationLoreNodeDraft[];
 }
