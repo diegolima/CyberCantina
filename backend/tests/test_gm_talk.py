@@ -142,7 +142,7 @@ def _seed_rich_campaign(
                 to_key="vault",
                 direction_label="Hatch Down",
                 compass_direction="S",
-                travel_minutes=2,
+                distance_meters=140,
             )
         ],
         lore_nodes=[

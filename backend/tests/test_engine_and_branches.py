@@ -85,7 +85,7 @@ def _seed_engine_scenario(repo: CantinaRepository) -> tuple[str, str, str]:
                 reverse_direction_label="Curtain back to the main bar",
                 compass_direction="N",
                 reverse_compass_direction="S",
-                travel_minutes=1,
+                distance_meters=70,
             ),
             LocationEdgeDraft(
                 from_key="main_bar",
@@ -94,7 +94,7 @@ def _seed_engine_scenario(repo: CantinaRepository) -> tuple[str, str, str]:
                 reverse_direction_label="Spiral stairs down to the main floor",
                 compass_direction="E",
                 reverse_compass_direction="W",
-                travel_minutes=1,
+                distance_meters=70,
             ),
             LocationEdgeDraft(
                 from_key="main_bar",
@@ -103,7 +103,7 @@ def _seed_engine_scenario(repo: CantinaRepository) -> tuple[str, str, str]:
                 reverse_direction_label="Reinforced cantina rear door",
                 compass_direction="W",
                 reverse_compass_direction="E",
-                travel_minutes=2,
+                distance_meters=140,
             ),
             LocationEdgeDraft(
                 from_key="backroom_clinic",
@@ -112,7 +112,7 @@ def _seed_engine_scenario(repo: CantinaRepository) -> tuple[str, str, str]:
                 reverse_direction_label="Ladder up to the Ripperdoc bay",
                 compass_direction="N",
                 reverse_compass_direction="S",
-                travel_minutes=3,
+                distance_meters=210,
                 is_locked_or_hidden=True,
             ),
         ],
@@ -1452,7 +1452,7 @@ async def test_max_eight_neighbors_and_passage_hub_reconnection(
                 compass_direction=cdir,  # type: ignore[arg-type]
                 entry_direction_label=f"{cdir} Doorway {idx + 4}",
                 return_direction_label="Back to Main Floor",
-                travel_minutes=1,
+                distance_meters=20,
             ),
             valid_turn_ids={root_turn_id},
         )
@@ -1487,7 +1487,7 @@ async def test_max_eight_neighbors_and_passage_hub_reconnection(
             compass_direction="N",
             entry_direction_label="Armored North Bulkhead",
             return_direction_label="Vault Door South",
-            travel_minutes=2,
+            distance_meters=140,
         ),
         valid_turn_ids=branch_turn_ids,
     )
@@ -1525,7 +1525,7 @@ async def test_max_eight_neighbors_and_passage_hub_reconnection(
             compass_direction="N",
             entry_direction_label="Grated Generator Door",
             return_direction_label="Back to North Passage",
-            travel_minutes=1,
+            distance_meters=20,
         ),
         valid_turn_ids=branch_turn_ids,
     )
@@ -1696,7 +1696,7 @@ async def test_manual_linked_location_creation_is_branch_bound(
         description="Shelves of contraband suppressants behind a false wall.",
         environmental_tags=["shelves", "cold light"],
         compass_direction="E",
-        travel_minutes=5,
+        distance_meters=350,
     )
     new_loc = next(l for l in bundle.visible_locations if l.name == "Hidden Pharmacy")
     assert new_loc.environmental_tags == ["shelves", "cold light"]
@@ -1705,7 +1705,7 @@ async def test_manual_linked_location_creation_is_branch_bound(
         if e.from_location_id == clinic.id and e.to_location_id == new_loc.id
     )
     assert edge.compass_direction == "E"
-    assert edge.travel_minutes == 5
+    assert edge.distance_meters == 350
     assert any(
         e.from_location_id == new_loc.id and e.to_location_id == clinic.id
         for e in bundle.visible_edges
@@ -2400,7 +2400,7 @@ def _seed_improvised_location_active_in_campaign(
         description="A newly discovered improvised room.",
         environmental_tags=["improvised"],
         compass_direction="N",
-        travel_minutes=2,
+        distance_meters=140,
     )
     improv_loc = next(
         loc for loc in bundle_1.visible_locations if loc.name == f"Improvised Bungalow {suffix}"

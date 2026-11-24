@@ -46,7 +46,7 @@ def create_campaign_linked_location(
             description=req.description,
             environmental_tags=req.environmental_tags,
             compass_direction=req.compass_direction,
-            travel_minutes=req.travel_minutes,
+            distance_meters=req.distance_meters,
             owner_id=current_user.id,
         )
     except KeyError as exc:
@@ -69,7 +69,7 @@ def connect_campaign_locations(
             to_location_id=req.to_location_id,
             direction_label=req.direction_label,
             compass_direction=req.compass_direction,
-            travel_minutes=req.travel_minutes,
+            distance_meters=req.distance_meters,
             bidirectional=req.bidirectional,
             owner_id=current_user.id,
         )
@@ -86,12 +86,12 @@ def update_campaign_edge_distance(
     req: CampaignEdgeDistanceUpdateRequest,
     current_user: UserProfile = Depends(get_current_user),
 ) -> CampaignStateBundle:
-    """Update distance (travel_minutes) of an existing edge on the active timeline."""
+    """Update distance (distance_meters) of an existing edge on the active timeline."""
     try:
         return _resolve_facade_attr("get_repo", get_repo)().update_campaign_edge_distance(
             campaign_id,
             edge_id=edge_id,
-            travel_minutes=req.travel_minutes,
+            distance_meters=req.distance_meters,
             update_reciprocal=req.update_reciprocal,
             owner_id=current_user.id,
         )

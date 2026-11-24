@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 from app.db.vector_store import combine_entry_text
 from app.schemas.world import (
+    MAX_EDGE_DISTANCE_METERS,
     OPPOSITE_COMPASS,
     LocationContainer,
     LocationEdge,
@@ -389,7 +390,7 @@ class WorldsMixin:
                     """
                     INSERT INTO location_edges (
                         id, world_id, from_location_id, to_location_id,
-                        direction_label, compass_direction, travel_minutes, is_locked_or_hidden, created_at_turn_id
+                        direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
                     """,
@@ -400,7 +401,7 @@ class WorldsMixin:
                         to_id,
                         fwd_label,
                         fwd_dir,
-                        edge.travel_minutes,
+                        max(1, min(MAX_EDGE_DISTANCE_METERS, int(edge.distance_meters))),
                         1 if edge.is_locked_or_hidden else 0,
                     ),
                 )
@@ -419,7 +420,7 @@ class WorldsMixin:
                         """
                         INSERT INTO location_edges (
                             id, world_id, from_location_id, to_location_id,
-                            direction_label, compass_direction, travel_minutes, is_locked_or_hidden, created_at_turn_id
+                            direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
                         )
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
                         """,
@@ -430,7 +431,7 @@ class WorldsMixin:
                             from_id,
                             rev_label,
                             rev_dir,
-                            edge.travel_minutes,
+                            max(1, min(MAX_EDGE_DISTANCE_METERS, int(edge.distance_meters))),
                             1 if edge.is_locked_or_hidden else 0,
                         ),
                     )
@@ -1037,7 +1038,7 @@ class WorldsMixin:
                     """
                     INSERT INTO location_edges (
                         id, world_id, from_location_id, to_location_id,
-                        direction_label, compass_direction, travel_minutes, is_locked_or_hidden, created_at_turn_id
+                        direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
                     """,
@@ -1048,7 +1049,7 @@ class WorldsMixin:
                         to_id,
                         edge.direction_label,
                         cdir,
-                        edge.travel_minutes,
+                        max(1, min(MAX_EDGE_DISTANCE_METERS, int(edge.distance_meters))),
                         1 if edge.is_locked_or_hidden else 0,
                     ),
                 )

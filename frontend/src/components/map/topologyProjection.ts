@@ -4,6 +4,22 @@ import type {
   LocationEdge,
   LocationNode,
 } from "../../types";
+export {
+  DEFAULT_EXTERIOR_DISTANCE_METERS,
+  DEFAULT_FALLBACK_DISTANCE_METERS,
+  DEFAULT_INTERIOR_DISTANCE_METERS,
+  MAX_EDGE_DISTANCE_METERS,
+  WALKING_METERS_PER_MINUTE,
+  clampEdgeDistanceMeters,
+  deriveWalkingMinutes,
+  formatBundleWalkingDuration,
+  formatDistanceCompact,
+  formatWalkingDuration,
+  getAdaptiveDistanceStep,
+  parseCommittedEdgeDistance,
+  sanitizeEdgeDistanceInput,
+  stepEdgeDistanceDraft,
+} from "../../utils/spatialDistance";
 
 export interface NodeDragState {
   kind: "location" | "container" | "ghost";
@@ -242,7 +258,7 @@ export interface ProjectedTopologyEdge {
   targetNodeId: string;
   direction_label: string;
   compass_direction?: CompassDirection | null;
-  travel_minutes: number;
+  distance_meters: number;
   is_locked_or_hidden: boolean;
   isAggregated: boolean;
   containsLockedEdge: boolean;
@@ -270,7 +286,7 @@ export interface ProjectedGhostEdge {
   targetNodeId: string;
   direction_label: string;
   compass_direction?: CompassDirection | null;
-  travel_minutes: number;
+  distance_meters: number;
   is_locked_or_hidden: boolean;
   rawEdge: LocationEdge;
 }
@@ -479,7 +495,7 @@ export function projectTopologyForDepth(
       targetNodeId: isOutgoingFromPortal ? extLoc.id : portalLocId,
       direction_label: edge.direction_label,
       compass_direction: edge.compass_direction,
-      travel_minutes: edge.travel_minutes,
+      distance_meters: edge.distance_meters,
       is_locked_or_hidden: edge.is_locked_or_hidden,
       rawEdge: edge,
     });
@@ -531,7 +547,7 @@ export function projectTopologyForDepth(
         targetNodeId: toVis.id,
         direction_label: edge.direction_label,
         compass_direction: edge.compass_direction,
-        travel_minutes: edge.travel_minutes,
+        distance_meters: edge.distance_meters,
         is_locked_or_hidden: edge.is_locked_or_hidden,
         isAggregated: false,
         containsLockedEdge: edge.is_locked_or_hidden,
@@ -552,7 +568,7 @@ export function projectTopologyForDepth(
 
   for (const [groupKey, group] of aggregatedGroups.entries()) {
     const first = group.edges[0];
-    const minMinutes = Math.min(...group.edges.map((e) => e.travel_minutes));
+    const minMeters = Math.min(...group.edges.map((e) => e.distance_meters));
     const anyLocked = group.edges.some((e) => e.is_locked_or_hidden);
     projectedEdges.push({
       id: `agg:${groupKey}`,
@@ -563,7 +579,7 @@ export function projectTopologyForDepth(
           ? `${group.edges.length} passages`
           : first.direction_label,
       compass_direction: first.compass_direction,
-      travel_minutes: minMinutes,
+      distance_meters: minMeters,
       is_locked_or_hidden: anyLocked,
       isAggregated: true,
       containsLockedEdge: anyLocked,
@@ -744,7 +760,7 @@ export interface PromotionPromptState {
   chosenTargetLocationId: string;
   direction: CompassDirection;
   explicitTargetSlot?: CompassDirection;
-  travelMinutes: number;
+  distanceMeters: number;
   bidirectional: boolean;
   candidates: PromotionCandidate[];
 }
@@ -901,17 +917,6 @@ export function makeUniqueId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-/**
- * Keep only ASCII numeric digits for controlled inline/popover travel-minute drafts.
- */
-export function sanitizeEdgeMinutesInput(raw: string): string {
-  return raw.replace(/[^\d]/g, "");
-}
-
-/**
- * Resolve modal-tracked edges against live workingEdges so distance/lock updates
- * immediately reflect inside MultiEdgePopover.
- */
 export function resolveLiveEdgeModalEdges(
   modalEdges: LocationEdge[] | null,
   workingEdges: LocationEdge[]
@@ -922,34 +927,6 @@ export function resolveLiveEdgeModalEdges(
     .map((edge) => byId.get(edge.id))
     .filter((edge): edge is LocationEdge => Boolean(edge));
   return resolved.length > 0 ? resolved : null;
-}
-
-/**
- * Clamp and step an inline edge travel-minutes draft string by `delta`,
- * falling back to `fallbackMinutes` when the draft is blank/non-numeric.
- */
-export function stepEdgeMinutesDraft(
-  rawDraft: string,
-  delta: number,
-  fallbackMinutes = 1
-): string {
-  const parsed = parseInt(rawDraft.trim(), 10);
-  const base = Number.isFinite(parsed)
-    ? parsed
-    : Math.max(1, Math.min(240, Math.round(fallbackMinutes) || 1));
-  return String(Math.max(1, Math.min(240, base + delta)));
-}
-
-/**
- * Resolve an inline edge travel-minutes draft on commit. Returns null when
- * blank/invalid so callers can preserve the edge's existing duration.
- */
-export function parseCommittedEdgeMinutes(rawDraft: string): number | null {
-  const trimmed = rawDraft.trim();
-  if (!trimmed) return null;
-  const parsed = parseInt(trimmed, 10);
-  if (!Number.isFinite(parsed)) return null;
-  return Math.max(1, Math.min(240, parsed));
 }
 
 /**
@@ -1023,7 +1000,8 @@ export function syncEdgeLabelsForLocationRename(
 export interface BidirectionalProjectedBundle {
   allEdges: LocationEdge[];
   passagePairCount: number;
-  minTravelMinutes: number;
+  minDistanceMeters: number;
+  maxDistanceMeters: number;
   containsLockedEdge: boolean;
 }
 
@@ -1034,7 +1012,7 @@ export interface BidirectionalProjectedBundle {
 export function resolveBidirectionalProjectedBundle(
   edge: Pick<
     ProjectedTopologyEdge,
-    "sourceNodeId" | "targetNodeId" | "rawEdge" | "groupedEdges" | "travel_minutes" | "containsLockedEdge"
+    "sourceNodeId" | "targetNodeId" | "rawEdge" | "groupedEdges" | "distance_meters" | "containsLockedEdge"
   >,
   projectedEdges: ProjectedTopologyEdge[]
 ): BidirectionalProjectedBundle {
@@ -1071,15 +1049,20 @@ export function resolveBidirectionalProjectedBundle(
   });
 
   const pairKeys = new Set<string>();
-  let minTravelMinutes = edge.travel_minutes;
+  let minDistanceMeters = edge.distance_meters;
+  let maxDistanceMeters = edge.distance_meters;
   let containsLockedEdge = edge.containsLockedEdge;
   if (allEdges.length > 0) {
-    minTravelMinutes = Infinity;
+    minDistanceMeters = Infinity;
+    maxDistanceMeters = 0;
     containsLockedEdge = false;
     for (const item of allEdges) {
       pairKeys.add([item.from_location_id, item.to_location_id].sort().join("<->"));
-      if (item.travel_minutes < minTravelMinutes) {
-        minTravelMinutes = item.travel_minutes;
+      if (item.distance_meters < minDistanceMeters) {
+        minDistanceMeters = item.distance_meters;
+      }
+      if (item.distance_meters > maxDistanceMeters) {
+        maxDistanceMeters = item.distance_meters;
       }
       if (item.is_locked_or_hidden) {
         containsLockedEdge = true;
@@ -1090,9 +1073,11 @@ export function resolveBidirectionalProjectedBundle(
   return {
     allEdges,
     passagePairCount: pairKeys.size || 1,
-    minTravelMinutes: Number.isFinite(minTravelMinutes)
-      ? minTravelMinutes
-      : edge.travel_minutes,
+    minDistanceMeters: Number.isFinite(minDistanceMeters)
+      ? minDistanceMeters
+      : edge.distance_meters,
+    maxDistanceMeters:
+      maxDistanceMeters > 0 ? maxDistanceMeters : edge.distance_meters,
     containsLockedEdge,
   };
 }

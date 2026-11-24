@@ -88,6 +88,8 @@ from app.schemas.world import (
     LocationNode,
     LoreNode,
     NeighborLocationView,
+    format_distance_meters,
+    format_walking_duration,
     normalize_and_validate_entity_tags,
 )
 
@@ -275,7 +277,8 @@ async def run_phase5_post_turn_clerk(
         ]
 
     neighbor_options = "\n".join(
-        f"- [{n.compass_direction or 'N'}] id='{n.destination.id}': {n.destination.name} (via {n.direction_label}, {n.travel_minutes}m)"
+        f"- [{n.compass_direction or 'N'}] id='{n.destination.id}': {n.destination.name} "
+        f"(via {n.direction_label}, {format_distance_meters(n.distance_meters)}, {format_walking_duration(n.distance_meters)} walk)"
         for n in neighbors
     ) or "None"
     existing_flags_str = (

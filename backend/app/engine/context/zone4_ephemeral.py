@@ -36,6 +36,8 @@ from app.schemas.world import (
     LocationNode,
     NeighborLocationView,
     WorldRecord,
+    format_distance_meters,
+    format_walking_duration,
 )
 
 from app.engine.context.lore_scope import (
@@ -216,7 +218,7 @@ def build_zone4_ephemeral_tail_frame(
     """Zone 4: Dynamic turn-specific context injected at the tail of the prompt."""
     exits_text = "\n".join(
         f"  - [{n.compass_direction or 'N'}] {n.direction_label} -> {n.destination.name} ({n.destination.summary}) "
-        f"[{n.travel_minutes} min{' | LOCKED/HIDDEN' if n.is_locked_or_hidden else ''}]"
+        f"[{format_distance_meters(n.distance_meters)}, {format_walking_duration(n.distance_meters)} walk{' | LOCKED/HIDDEN' if n.is_locked_or_hidden else ''}]"
         for n in neighbors
     ) or "  - None visible"
 

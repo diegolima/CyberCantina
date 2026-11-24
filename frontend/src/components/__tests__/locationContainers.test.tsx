@@ -160,7 +160,7 @@ function makeHierarchyFixture() {
       to_location_id: "loc_vip",
       direction_label: "VIP Stairs",
       compass_direction: "E",
-      travel_minutes: 1,
+      distance_meters: 20,
       is_locked_or_hidden: false,
     },
     {
@@ -170,7 +170,7 @@ function makeHierarchyFixture() {
       to_location_id: "loc_highway",
       direction_label: "Street Stairs",
       compass_direction: "W",
-      travel_minutes: 2,
+      distance_meters: 140,
       is_locked_or_hidden: false,
     },
     {
@@ -180,7 +180,7 @@ function makeHierarchyFixture() {
       to_location_id: "loc_badlands",
       direction_label: "Dusty Interstate",
       compass_direction: "S",
-      travel_minutes: 20,
+      distance_meters: 1400,
       is_locked_or_hidden: true,
     },
   ];
@@ -335,7 +335,7 @@ describe("Location Containers Frontend Architecture", () => {
           to_location_id: "loc_foyer",
           direction_label: "Club Entrance",
           compass_direction: "S" as const,
-          travel_minutes: 1,
+          distance_meters: 70,
           is_locked_or_hidden: false,
         })),
       ]
@@ -672,7 +672,7 @@ describe("Location Containers Frontend Architecture", () => {
         to_location_id: "loc_highway",
         direction_label: "Fire escape down to overpass",
         compass_direction: "NE",
-        travel_minutes: 3,
+        distance_meters: 210,
         is_locked_or_hidden: false,
       },
     ];

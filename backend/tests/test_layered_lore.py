@@ -631,7 +631,7 @@ def test_campaign_cow_isolation_world_fork_remapping_and_vector_cleanup(
                 direction_label="Lift to Hydroponics",
                 reverse_direction_label="Lift to Docking Ring",
                 compass_direction="N",
-                travel_minutes=4,
+                distance_meters=280,
                 bidirectional=True,
             )
         ],
@@ -837,7 +837,7 @@ def test_branch_timeline_visibility_for_improvised_location_lore(
         description="Condensation drips down copper busbars.",
         environmental_tags=["copper", "relay"],
         compass_direction="W",
-        travel_minutes=3,
+        distance_meters=210,
     )
     improv_loc = next(
         l for l in bundle_with_room.visible_locations if l.name == "Rusted Relay Vault"

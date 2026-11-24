@@ -151,7 +151,7 @@ def _seed_tools_campaign(repo: CantinaRepository, owner_id: str) -> dict[str, An
                 to_key="vault",
                 direction_label="Hatch Down",
                 compass_direction="S",
-                travel_minutes=2,
+                distance_meters=140,
             )
         ],
         lore_nodes=[

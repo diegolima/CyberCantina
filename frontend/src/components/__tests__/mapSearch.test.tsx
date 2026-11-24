@@ -120,7 +120,7 @@ function makeSearchFixture(): {
       to_location_id: "loc_courtyard_harbor",
       direction_label: "North into Market",
       compass_direction: "N",
-      travel_minutes: 2,
+      distance_meters: 140,
       is_locked_or_hidden: false,
     },
     {
@@ -130,7 +130,7 @@ function makeSearchFixture(): {
       to_location_id: "loc_market_sq",
       direction_label: "South to Square",
       compass_direction: "S",
-      travel_minutes: 2,
+      distance_meters: 140,
       is_locked_or_hidden: false,
     },
   ];

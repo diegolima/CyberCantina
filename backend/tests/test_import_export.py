@@ -97,7 +97,7 @@ def test_bundle_export_and_import_roundtrip(client_and_repo, tmp_path):
                 to_key="loc_spire",
                 direction_label="monorail express",
                 compass_direction="N",
-                travel_minutes=15,
+                distance_meters=1050,
                 is_locked_or_hidden=False,
             )
         ],

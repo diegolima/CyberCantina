@@ -242,7 +242,7 @@ function buildInitialState(options: CantinaApiMockOptions = {}) {
       to_location_id: "loc_clinic",
       direction_label: "Back Surgery Door",
       compass_direction: "E",
-      travel_minutes: 5,
+      distance_meters: 350,
       is_locked_or_hidden: false,
     },
     {
@@ -252,7 +252,7 @@ function buildInitialState(options: CantinaApiMockOptions = {}) {
       to_location_id: "loc_main_floor",
       direction_label: "Cantina Main Floor",
       compass_direction: "W",
-      travel_minutes: 5,
+      distance_meters: 350,
       is_locked_or_hidden: false,
     },
     {
@@ -262,7 +262,7 @@ function buildInitialState(options: CantinaApiMockOptions = {}) {
       to_location_id: "loc_tunnels",
       direction_label: "Service Hatch",
       compass_direction: "S",
-      travel_minutes: 15,
+      distance_meters: 1050,
       is_locked_or_hidden: false,
     },
     {
@@ -272,7 +272,7 @@ function buildInitialState(options: CantinaApiMockOptions = {}) {
       to_location_id: "loc_main_floor",
       direction_label: "Cantina Ladder",
       compass_direction: "N",
-      travel_minutes: 15,
+      distance_meters: 1050,
       is_locked_or_hidden: false,
     },
   ];
@@ -603,7 +603,7 @@ function buildInitialState(options: CantinaApiMockOptions = {}) {
         destination: locations[1],
         direction_label: "Back Surgery Door",
         compass_direction: "E",
-        travel_minutes: 5,
+        distance_meters: 350,
         is_locked_or_hidden: false,
       },
       {
@@ -611,7 +611,7 @@ function buildInitialState(options: CantinaApiMockOptions = {}) {
         destination: locations[2],
         direction_label: "Service Hatch",
         compass_direction: "S",
-        travel_minutes: 15,
+        distance_meters: 1050,
         is_locked_or_hidden: false,
       },
     ],

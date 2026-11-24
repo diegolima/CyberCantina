@@ -286,7 +286,7 @@ def test_create_world_from_draft_resolves_location_names_for_blank_edge_labels(
                 direction_label="",
                 reverse_direction_label="",
                 compass_direction="S",
-                travel_minutes=3,
+                distance_meters=210,
                 bidirectional=True,
             )
         ],

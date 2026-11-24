@@ -26,7 +26,12 @@ from app.schemas.turn import (
 )
 from app.db.repos.arrival_descriptions import build_first_visit_arrival_bundle
 from app.schemas.world import (
+    DEFAULT_EXTERIOR_DISTANCE_METERS,
+    DEFAULT_FALLBACK_DISTANCE_METERS,
+    DEFAULT_INTERIOR_DISTANCE_METERS,
+    MAX_EDGE_DISTANCE_METERS,
     OPPOSITE_COMPASS,
+    WALKING_METERS_PER_MINUTE,
     LocationContainer,
     LocationEdge,
     LocationNode,
@@ -373,7 +378,7 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
         description: str,
         environmental_tags: list[str],
         compass_direction: str,
-        travel_minutes: int,
+        distance_meters: int | None = None,
         summary: str | None = None,
         owner_id: str | None = None,
     ) -> CampaignStateBundle:
@@ -402,6 +407,16 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
         cdir = normalize_compass_direction(compass_direction)
         from_loc = self.get_location(from_location_id)
         tags = [t.strip() for t in environmental_tags if t.strip()]
+        default_meters = (
+            DEFAULT_INTERIOR_DISTANCE_METERS
+            if from_loc.container_id
+            else DEFAULT_FALLBACK_DISTANCE_METERS
+        )
+        resolved_meters = (
+            default_meters
+            if distance_meters is None
+            else max(1, min(MAX_EDGE_DISTANCE_METERS, int(distance_meters)))
+        )
         spec = ImprovisedLocationSpec(
             name=clean_name,
             summary=(summary or clean_desc.split(".")[0].strip() or clean_name)[:200],
@@ -410,7 +425,7 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
             entry_direction_label=f"Passage to {clean_name}",
             return_direction_label=f"Back to {from_loc.name}",
             compass_direction=cdir,
-            travel_minutes=max(1, min(240, travel_minutes)),
+            distance_meters=resolved_meters,
         )
         self.add_improvised_location(
             world_id=campaign.world_id,
@@ -428,7 +443,7 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
         from_location_id: str,
         to_location_id: str,
         compass_direction: str = "N",
-        travel_minutes: int = 1,
+        distance_meters: int | None = None,
         direction_label: str | None = None,
         bidirectional: bool = True,
         owner_id: str | None = None,
@@ -441,7 +456,6 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
         if from_location_id == to_location_id:
             raise ValueError("Cannot connect a location to itself")
 
-        travel_minutes = max(1, min(240, int(travel_minutes)))
         cdir = normalize_compass_direction(compass_direction)
 
         branch_turns = self.get_branch_turn_chain(campaign.active_leaf_turn_id)
@@ -460,6 +474,20 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
 
         from_loc = next(loc for loc in world.locations if loc.id == from_location_id)
         to_loc = next(loc for loc in world.locations if loc.id == to_location_id)
+
+        if distance_meters is None:
+            if from_loc.container_id and from_loc.container_id == to_loc.container_id:
+                resolved_meters = DEFAULT_INTERIOR_DISTANCE_METERS
+            elif (
+                from_loc.container_id != to_loc.container_id
+                or from_loc.is_hub
+                or to_loc.is_hub
+            ):
+                resolved_meters = DEFAULT_EXTERIOR_DISTANCE_METERS
+            else:
+                resolved_meters = DEFAULT_FALLBACK_DISTANCE_METERS
+        else:
+            resolved_meters = max(1, min(MAX_EDGE_DISTANCE_METERS, int(distance_meters)))
 
         # Check if an edge already exists from from_location_id to to_location_id
         for e in world.edges:
@@ -481,7 +509,7 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                 """
                 INSERT INTO location_edges (
                     id, world_id, from_location_id, to_location_id,
-                    direction_label, compass_direction, travel_minutes,
+                    direction_label, compass_direction, distance_meters,
                     is_locked_or_hidden, created_at_turn_id
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
@@ -493,7 +521,7 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                     to_location_id,
                     fwd_label,
                     cdir,
-                    travel_minutes,
+                    resolved_meters,
                     campaign.active_leaf_turn_id,
                 ),
             )
@@ -510,7 +538,7 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                         """
                         INSERT INTO location_edges (
                             id, world_id, from_location_id, to_location_id,
-                            direction_label, compass_direction, travel_minutes,
+                            direction_label, compass_direction, distance_meters,
                             is_locked_or_hidden, created_at_turn_id
                         )
                         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
@@ -522,7 +550,7 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                             from_location_id,
                             f"Return passage to {from_loc.name}",
                             rev_dir,
-                            travel_minutes,
+                            resolved_meters,
                             campaign.active_leaf_turn_id,
                         ),
                     )
@@ -538,16 +566,16 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
         campaign_id: str,
         *,
         edge_id: str,
-        travel_minutes: int,
+        distance_meters: int,
         update_reciprocal: bool = True,
         owner_id: str | None = None,
     ) -> CampaignStateBundle:
-        """Update distance (travel_minutes) of an existing edge on the active timeline."""
+        """Update distance (distance_meters) of an existing edge on the active timeline."""
         campaign = self.get_campaign(campaign_id, owner_id=owner_id)
         if not campaign.active_leaf_turn_id:
             raise ValueError(f"Campaign '{campaign_id}' has no active turn")
 
-        travel_minutes = max(1, min(240, int(travel_minutes)))
+        distance_meters = max(1, min(MAX_EDGE_DISTANCE_METERS, int(distance_meters)))
 
         branch_turns = self.get_branch_turn_chain(campaign.active_leaf_turn_id)
         valid_turn_ids = {t.id for t in branch_turns}
@@ -572,8 +600,8 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
             for edge in edges_to_update:
                 if edge.created_at_turn_id == campaign.active_leaf_turn_id:
                     conn.execute(
-                        "UPDATE location_edges SET travel_minutes = ? WHERE id = ?",
-                        (travel_minutes, edge.id),
+                        "UPDATE location_edges SET distance_meters = ? WHERE id = ?",
+                        (distance_meters, edge.id),
                     )
                 else:
                     conn.execute(
@@ -585,7 +613,7 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                         """
                         INSERT INTO location_edges (
                             id, world_id, from_location_id, to_location_id,
-                            direction_label, compass_direction, travel_minutes,
+                            direction_label, compass_direction, distance_meters,
                             is_locked_or_hidden, created_at_turn_id
                         )
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -597,7 +625,7 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                             edge.to_location_id,
                             edge.direction_label,
                             edge.compass_direction,
-                            travel_minutes,
+                            distance_meters,
                             1 if edge.is_locked_or_hidden else 0,
                             campaign.active_leaf_turn_id,
                         ),
@@ -952,6 +980,18 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
         keys = r.keys()
         raw_cdir = r["compass_direction"] if "compass_direction" in keys else None
         cdir = normalize_compass_direction(raw_cdir, r["direction_label"])
+        if "distance_meters" in keys and r["distance_meters"] is not None:
+            distance_meters = max(1, min(MAX_EDGE_DISTANCE_METERS, int(r["distance_meters"])))
+        elif "travel_minutes" in keys and r["travel_minutes"] is not None:
+            distance_meters = max(
+                1,
+                min(
+                    MAX_EDGE_DISTANCE_METERS,
+                    int(r["travel_minutes"]) * WALKING_METERS_PER_MINUTE,
+                ),
+            )
+        else:
+            distance_meters = DEFAULT_FALLBACK_DISTANCE_METERS
         return LocationEdge(
             id=r["id"],
             world_id=r["world_id"],
@@ -959,7 +999,7 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
             to_location_id=r["to_location_id"],
             direction_label=r["direction_label"],
             compass_direction=cdir,
-            travel_minutes=r["travel_minutes"],
+            distance_meters=distance_meters,
             is_locked_or_hidden=bool(r["is_locked_or_hidden"]),
             created_at_turn_id=r["created_at_turn_id"],
             superseded_at_turn_id=r["superseded_at_turn_id"] if "superseded_at_turn_id" in keys else None,

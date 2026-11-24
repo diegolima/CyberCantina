@@ -1109,7 +1109,7 @@ async def test_independent_character_spatial_transitions(
                     environmental_tags=["coolant mist", "rusted catwalk"],
                     direction_label="Down through the pried floor grate",
                     compass_direction="S",
-                    travel_minutes=2,
+                    distance_meters=140,
                 ),
             )
         if response_model is CharacterAgentDelta:

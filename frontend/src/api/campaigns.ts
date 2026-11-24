@@ -206,7 +206,7 @@ export const campaignsApi = {
       from_location_id: string;
       name: string;
       compass_direction: string;
-      travel_minutes: number;
+      distance_meters: number;
       description: string;
       environmental_tags: string[];
     }
@@ -223,7 +223,7 @@ export const campaignsApi = {
       to_location_id: string;
       direction_label?: string;
       compass_direction: string;
-      travel_minutes: number;
+      distance_meters: number;
       bidirectional?: boolean;
     }
   ) =>
@@ -235,7 +235,7 @@ export const campaignsApi = {
   updateCampaignEdgeDistance: (
     campaignId: string,
     edgeId: string,
-    travelMinutes: number,
+    distanceMeters: number,
     updateReciprocal: boolean = true
   ) =>
     fetchJson<CampaignStateBundle>(
@@ -243,7 +243,7 @@ export const campaignsApi = {
       {
         method: "PATCH",
         body: JSON.stringify({
-          travel_minutes: travelMinutes,
+          distance_meters: distanceMeters,
           update_reciprocal: updateReciprocal,
         }),
       }

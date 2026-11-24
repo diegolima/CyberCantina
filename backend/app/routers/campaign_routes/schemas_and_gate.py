@@ -8,14 +8,20 @@ import logging
 from app.schemas.character import ItemFlag
 from app.schemas.gm import GmCodexProposal
 from app.schemas.turn import CampaignStateBundle
-from app.schemas.world import WorldLoreNodeDraft
+from app.schemas.world import (
+    DEFAULT_INTERIOR_DISTANCE_METERS,
+    MAX_EDGE_DISTANCE_METERS,
+    WALKING_METERS_PER_MINUTE,
+    WorldLoreNodeDraft,
+)
 from app.schemas.party import LocationOverrideMoveMode
 from fastapi import APIRouter
 from pydantic import (
     BaseModel,
     Field,
+    model_validator,
 )
-from typing import Literal
+from typing import Any, Literal
 
 
 def _resolve_facade_attr(name: str, default: object):
@@ -82,13 +88,42 @@ class ItemEquipToggleRequest(BaseModel):
     lore_id: str | None = None
 
 
+def _coerce_legacy_api_distance(data: Any) -> Any:
+    if not isinstance(data, dict):
+        return data
+    if data.get("distance_meters") is None and data.get("travel_minutes") is not None:
+        out = dict(data)
+        raw_min = out.pop("travel_minutes")
+        try:
+            out["distance_meters"] = max(
+                1,
+                min(
+                    MAX_EDGE_DISTANCE_METERS,
+                    int(round(float(raw_min) * WALKING_METERS_PER_MINUTE)),
+                ),
+            )
+        except (TypeError, ValueError):
+            out["distance_meters"] = raw_min
+        return out
+    return data
+
+
 class LinkedLocationCreateRequest(BaseModel):
     from_location_id: str
     name: str
     compass_direction: str
-    travel_minutes: int = 2
+    distance_meters: int = Field(
+        default=DEFAULT_INTERIOR_DISTANCE_METERS,
+        ge=1,
+        le=MAX_EDGE_DISTANCE_METERS,
+    )
     description: str
     environmental_tags: list[str] = []
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_distance(cls, data: Any) -> Any:
+        return _coerce_legacy_api_distance(data)
 
 
 class CampaignEdgeCreateRequest(BaseModel):
@@ -96,13 +131,27 @@ class CampaignEdgeCreateRequest(BaseModel):
     to_location_id: str
     direction_label: str | None = None
     compass_direction: str = "N"
-    travel_minutes: int = 1
+    distance_meters: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAX_EDGE_DISTANCE_METERS,
+    )
     bidirectional: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_distance(cls, data: Any) -> Any:
+        return _coerce_legacy_api_distance(data)
 
 
 class CampaignEdgeDistanceUpdateRequest(BaseModel):
-    travel_minutes: int
+    distance_meters: int = Field(ge=1, le=MAX_EDGE_DISTANCE_METERS)
     update_reciprocal: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_distance(cls, data: Any) -> Any:
+        return _coerce_legacy_api_distance(data)
 
 
 class CampaignWorldSettingsPatchRequest(BaseModel):

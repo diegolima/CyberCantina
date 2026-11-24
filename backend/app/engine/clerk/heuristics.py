@@ -18,8 +18,11 @@ from app.schemas.turn import (
     WorldPostTurnDelta,
 )
 from app.schemas.world import (
+    DEFAULT_EXTERIOR_DISTANCE_METERS,
+    DEFAULT_INTERIOR_DISTANCE_METERS,
     LocationNode,
     NeighborLocationView,
+    derive_walking_minutes,
     normalize_compass_direction,
 )
 
@@ -89,7 +92,10 @@ def _heuristic_spatial_and_inventory_delta(
                 and pre_turn.target_location_hint.lower() in nb.destination.name.lower()
             ):
                 return PostTurnStateDelta(
-                    elapsed_minutes=max(2, nb.travel_minutes + 1),
+                    elapsed_minutes=min(
+                        MAX_TURN_ELAPSED_MINUTES_SANITY,
+                        max(2, derive_walking_minutes(nb.distance_meters) + 1),
+                    ),
                     transition_type="move_existing",
                     target_location_id=nb.destination.id,
                     notable_event_summary=(
@@ -104,7 +110,10 @@ def _heuristic_spatial_and_inventory_delta(
             dest_words = [w.lower() for w in nb.destination.name.split() if len(w) > 3]
             if any(w in combined for w in dest_words):
                 return PostTurnStateDelta(
-                    elapsed_minutes=max(2, nb.travel_minutes + 1),
+                    elapsed_minutes=min(
+                        MAX_TURN_ELAPSED_MINUTES_SANITY,
+                        max(2, derive_walking_minutes(nb.distance_meters) + 1),
+                    ),
                     transition_type="move_existing",
                     target_location_id=nb.destination.id,
                     notable_event_summary=(
@@ -146,7 +155,11 @@ def _heuristic_spatial_and_inventory_delta(
                 entry_direction_label=f"Passage to {room_name}",
                 return_direction_label=f"Doorway back to {active_location.name}",
                 compass_direction=inferred_dir,
-                travel_minutes=2,
+                distance_meters=(
+                    DEFAULT_EXTERIOR_DISTANCE_METERS
+                    if is_exterior_heuristic
+                    else DEFAULT_INTERIOR_DISTANCE_METERS
+                ),
                 is_exterior=is_exterior_heuristic,
             ),
             notable_event_summary=f"Discovered and entered {room_name} from {active_location.name}.",

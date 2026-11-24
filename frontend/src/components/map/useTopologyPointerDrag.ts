@@ -18,6 +18,9 @@ import { isValidContainerDrop } from "./mapValidation";
 import {
   COMPASS_ANGLES,
   COMPASS_ORDER,
+  DEFAULT_EXTERIOR_DISTANCE_METERS,
+  DEFAULT_FALLBACK_DISTANCE_METERS,
+  DEFAULT_INTERIOR_DISTANCE_METERS,
   clientToWorldPoint,
   type LinkDragState,
   type NodeDragState,
@@ -452,10 +455,20 @@ export function useTopologyPointerDrag({
           Math.hypot(linkDrag.currX - linkDrag.startX, linkDrag.currY - linkDrag.startY) >
           14
         ) {
+          const srcLoc =
+            linkDrag.sourceKind === "location"
+              ? locationMap.get(linkDrag.sourceId)
+              : undefined;
           const srcName =
             linkDrag.sourceKind === "location"
-              ? locationMap.get(linkDrag.sourceId)?.name ?? "Location"
+              ? srcLoc?.name ?? "Location"
               : containerMap.get(linkDrag.sourceId)?.name ?? "Container";
+          const defaultDistanceMeters =
+            linkDrag.sourceKind === "container"
+              ? DEFAULT_EXTERIOR_DISTANCE_METERS
+              : srcLoc?.container_id
+              ? DEFAULT_INTERIOR_DISTANCE_METERS
+              : DEFAULT_FALLBACK_DISTANCE_METERS;
           setEmptyCanvasModal({
             sourceKind: linkDrag.sourceKind,
             sourceId: linkDrag.sourceId,
@@ -465,6 +478,7 @@ export function useTopologyPointerDrag({
             dropY: Math.round(wpt.y),
             canCreateContainer: canAddContainerHere,
             availableDepths: availableContainerDepthsHere,
+            defaultDistanceMeters,
           });
         }
         setLinkDrag(null);

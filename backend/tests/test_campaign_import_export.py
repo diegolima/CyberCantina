@@ -68,7 +68,7 @@ def _build_rich_campaign(repo: CantinaRepository, owner_id: str) -> dict[str, st
                     from_key="harbor_gate",
                     to_key="warehouse_9",
                     direction_label="north",
-                    travel_minutes=5,
+                    distance_meters=350,
                 )
             ],
             lore_nodes=[

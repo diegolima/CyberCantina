@@ -116,10 +116,10 @@ def _seed_world_and_char(
         conn.execute(
             """
             INSERT INTO location_edges (
-                id, world_id, from_location_id, to_location_id, direction_label, compass_direction, travel_minutes, is_locked_or_hidden
+                id, world_id, from_location_id, to_location_id, direction_label, compass_direction, distance_meters, is_locked_or_hidden
             )
-            VALUES (?, ?, ?, ?, 'Enter warehouse', 'N', 2, 0),
-                   (?, ?, ?, ?, 'Back to pier', 'S', 2, 0)
+            VALUES (?, ?, ?, ?, 'Enter warehouse', 'N', 140, 0),
+                   (?, ?, ?, ?, 'Back to pier', 'S', 140, 0)
             """,
             (
                 f"edge_fwd_{w_id}",

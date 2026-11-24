@@ -10,6 +10,7 @@ from app.schemas.turn import (
     CampaignStateBundle,
 )
 from app.schemas.world import (
+    MAX_EDGE_DISTANCE_METERS,
     LocationContainer,
     LocationEdge,
     LocationNode,
@@ -515,7 +516,7 @@ class CampaignMapUpdateMixin:
                         or sub_e.to_location_id != orig_e.to_location_id
                         or sub_e.direction_label.strip() != orig_e.direction_label.strip()
                         or sub_cdir != orig_cdir
-                        or int(sub_e.travel_minutes) != int(orig_e.travel_minutes)
+                        or int(sub_e.distance_meters) != int(orig_e.distance_meters)
                         or bool(sub_e.is_locked_or_hidden) != bool(orig_e.is_locked_or_hidden)
                     )
                     if edge_changed:
@@ -524,7 +525,7 @@ class CampaignMapUpdateMixin:
                                 """
                                 UPDATE location_edges
                                 SET from_location_id = ?, to_location_id = ?, direction_label = ?,
-                                    compass_direction = ?, travel_minutes = ?, is_locked_or_hidden = ?
+                                    compass_direction = ?, distance_meters = ?, is_locked_or_hidden = ?
                                 WHERE id = ?
                                 """,
                                 (
@@ -532,7 +533,7 @@ class CampaignMapUpdateMixin:
                                     sub_e.to_location_id,
                                     sub_e.direction_label.strip() or f"To {sub_e.to_location_id}",
                                     sub_cdir,
-                                    max(0, int(sub_e.travel_minutes)),
+                                    max(1, min(MAX_EDGE_DISTANCE_METERS, int(sub_e.distance_meters))),
                                     1 if sub_e.is_locked_or_hidden else 0,
                                     orig_eid,
                                 ),
@@ -550,7 +551,7 @@ class CampaignMapUpdateMixin:
                     """
                     INSERT INTO location_edges (
                         id, world_id, from_location_id, to_location_id, direction_label,
-                        compass_direction, travel_minutes, is_locked_or_hidden, created_at_turn_id
+                        compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
@@ -561,7 +562,7 @@ class CampaignMapUpdateMixin:
                         ne.to_location_id,
                         ne.direction_label.strip() or "Passage",
                         cdir,
-                        max(0, int(ne.travel_minutes)),
+                        max(1, min(MAX_EDGE_DISTANCE_METERS, int(ne.distance_meters))),
                         1 if ne.is_locked_or_hidden else 0,
                         leaf_turn_id,
                     ),

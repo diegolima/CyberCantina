@@ -516,7 +516,7 @@ def test_world_wizard_draft_with_sole_webgpu_provider_and_new_user(env, monkeypa
                                 "direction_label": "Bulkhead hatch",
                                 "reverse_direction_label": "Back to cantina",
                                 "compass_direction": "N",
-                                "travel_minutes": 2,
+                                "distance_meters": 140,
                                 "bidirectional": True,
                             }
                         ],

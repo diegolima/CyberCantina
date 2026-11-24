@@ -20,6 +20,10 @@ import type {
 import { LocationOverrideButton } from "./LocationOverrideButton";
 import { resolveMapIconComponent } from "../map/mapIcons";
 import {
+  formatDistanceCompact,
+  formatWalkingDuration,
+} from "../../utils/spatialDistance";
+import {
   computeBoundaryMarkerTicks,
   doesEdgeCrossContainer,
   ENVELOPE_ARM_RADIUS,
@@ -361,7 +365,7 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
                   fontWeight="700"
                   style={HALO_TEXT_STYLE}
                 >
-                  {nb.slot} · {nb.travel_minutes}m
+                  {nb.slot} · {formatDistanceCompact(nb.distance_meters)}
                 </text>
               </g>
             );
@@ -717,7 +721,10 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
           {selectedNeighbor && (
             <div className="selected-exit-meta">
               <span>[{selectedNeighbor.slot}]</span>
-              <span>{selectedNeighbor.travel_minutes}m</span>
+              <span>
+                {formatDistanceCompact(selectedNeighbor.distance_meters)} (
+                {formatWalkingDuration(selectedNeighbor.distance_meters)})
+              </span>
               <span>via {selectedNeighbor.direction_label}</span>
               {selectedNeighbor.is_locked_or_hidden && (
                 <span style={{ color: "var(--accent-rose)" }}>
@@ -765,7 +772,8 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
                     [{nb.slot}] → {nb.destination.name}
                   </span>
                   <span style={{ color: "var(--text-muted)", fontSize: "0.72rem" }}>
-                    {nb.travel_minutes}m
+                    {formatDistanceCompact(nb.distance_meters)} (
+                    {formatWalkingDuration(nb.distance_meters)})
                   </span>
                 </div>
                 <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>

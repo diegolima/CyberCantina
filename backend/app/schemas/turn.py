@@ -46,6 +46,9 @@ from app.schemas.party import (
 from app.schemas.persona import PersonaRecord
 from app.schemas.telemetry import TurnTelemetry
 from app.schemas.world import (
+    DEFAULT_EXTERIOR_DISTANCE_METERS,
+    DEFAULT_INTERIOR_DISTANCE_METERS,
+    MAX_EDGE_DISTANCE_METERS,
     CompassDirection,
     LocationContainer,
     LocationEdge,
@@ -53,6 +56,7 @@ from app.schemas.world import (
     LoreNode,
     NeighborLocationView,
     normalize_compass_direction,
+    resolve_legacy_edge_distance_meters,
     validate_container_hierarchy_integrity,
     validate_world_reachability,
 )
@@ -436,11 +440,33 @@ class ImprovisedLocationSpec(BaseModel):
     entry_direction_label: str = "Doorway"
     return_direction_label: str = "Back the way you came"
     compass_direction: CompassDirection = "N"
-    travel_minutes: int = Field(default=1, ge=1, le=240)
+    distance_meters: int = Field(
+        default=DEFAULT_INTERIOR_DISTANCE_METERS,
+        ge=1,
+        le=MAX_EDGE_DISTANCE_METERS,
+        description=(
+            "Physical distance in meters along the passage "
+            "(10-60 for interior rooms, 80-500 for nearby exterior streets/courtyards)."
+        ),
+    )
     is_exterior: bool = Field(
         default=False,
         description="True if the newly explored location is outside the current building/compound; False if exploring deeper inside.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_distance(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        is_ext = bool(data.get("is_exterior"))
+        fallback = (
+            DEFAULT_EXTERIOR_DISTANCE_METERS if is_ext else DEFAULT_INTERIOR_DISTANCE_METERS
+        )
+        resolved = resolve_legacy_edge_distance_meters(data, fallback=fallback)
+        if isinstance(resolved, dict) and "distance_meters" not in resolved:
+            resolved["distance_meters"] = fallback
+        return resolved
 
     @field_validator("compass_direction", mode="before")
     @classmethod

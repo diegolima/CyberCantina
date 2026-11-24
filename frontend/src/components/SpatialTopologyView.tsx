@@ -1129,7 +1129,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         destinationContainerName: ext.destinationContainerName ?? "World Root",
         directionLabel: ext.edge.direction_label,
         compassDirection: ext.edge.compass_direction,
-        travelMinutes: ext.edge.travel_minutes,
+        distanceMeters: ext.edge.distance_meters,
         isLockedOrHidden: ext.edge.is_locked_or_hidden,
       })
     );
@@ -1435,7 +1435,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                 edgeId,
                 midX: clipped.midX,
                 midY: clipped.midY,
-                value: String(edge.travel_minutes),
+                value: String(edge.distance_meters),
               });
             }}
             onEditEdgeDetails={openEdgeDetailsPopover}

@@ -90,7 +90,7 @@ def _seed_solo_test_scenario(empty_repo: CantinaRepository):
                 reverse_direction_label="Door to Main Floor",
                 compass_direction="E",
                 reverse_compass_direction="W",
-                travel_minutes=2,
+                distance_meters=140,
             ),
             LocationEdgeDraft(
                 from_key="clinic",
@@ -99,7 +99,7 @@ def _seed_solo_test_scenario(empty_repo: CantinaRepository):
                 reverse_direction_label="Ladder to Backroom Clinic",
                 compass_direction="N",
                 reverse_compass_direction="S",
-                travel_minutes=3,
+                distance_meters=210,
             ),
         ],
         lore_nodes=[

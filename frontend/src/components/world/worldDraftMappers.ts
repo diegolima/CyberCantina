@@ -22,6 +22,7 @@ import {
   pickCompassSlot,
 } from "../SpatialTopologyView";
 import { inferMapIconKey } from "../map/mapIcons";
+import { DEFAULT_FALLBACK_DISTANCE_METERS } from "../../utils/spatialDistance";
 
 export function mapDraftToNodesAndEdges(
   draft: {
@@ -132,7 +133,7 @@ export function mapDraftToNodesAndEdges(
         to_location_id: toId,
         direction_label: edge.direction_label || "Passage",
         compass_direction: fwdDir,
-        travel_minutes: edge.travel_minutes ?? 1,
+        distance_meters: edge.distance_meters ?? DEFAULT_FALLBACK_DISTANCE_METERS,
         is_locked_or_hidden: Boolean(edge.is_locked_or_hidden),
       });
     }
@@ -155,7 +156,7 @@ export function mapDraftToNodesAndEdges(
         direction_label:
           edge.reverse_direction_label || `Return to ${fromLocName}`,
         compass_direction: revDir,
-        travel_minutes: edge.travel_minutes ?? 1,
+        distance_meters: edge.distance_meters ?? DEFAULT_FALLBACK_DISTANCE_METERS,
         is_locked_or_hidden: Boolean(edge.is_locked_or_hidden),
       });
     }
@@ -303,7 +304,7 @@ export function worldStateToDraft(state: {
       direction_label: edge.direction_label,
       reverse_direction_label: "",
       compass_direction: edge.compass_direction ?? null,
-      travel_minutes: edge.travel_minutes,
+      distance_meters: edge.distance_meters,
       is_locked_or_hidden: Boolean(edge.is_locked_or_hidden),
       bidirectional: false,
     })),

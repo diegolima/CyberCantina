@@ -63,6 +63,7 @@ from app.schemas.world import (
     CANONICAL_WORLD_RECORD_KEYS,
     WorldGlobalRules,
     WorldRecord,
+    extract_edge_distance_meters,
     extract_world_unsupported_fields,
     find_nested_world_unsupported_keys,
     normalize_lore_category,
@@ -2196,7 +2197,7 @@ async def commit_staged_import(
                             """
                             INSERT INTO location_edges (
                                 id, world_id, from_location_id, to_location_id,
-                                direction_label, compass_direction, travel_minutes, is_locked_or_hidden,
+                                direction_label, compass_direction, distance_meters, is_locked_or_hidden,
                                 created_at_turn_id, superseded_at_turn_id
                             )
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
@@ -2208,7 +2209,7 @@ async def commit_staged_import(
                                 to_id,
                                 edge.get("direction_label", "forward"),
                                 edge.get("compass_direction"),
-                                edge.get("travel_minutes", 1),
+                                extract_edge_distance_meters(edge),
                                 1 if edge.get("is_locked_or_hidden") else 0,
                             ),
                         )

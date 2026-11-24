@@ -169,7 +169,7 @@ def seed_linear_world(
                 reverse_direction_label=f"Passage back to {names[idx]}",
                 compass_direction=compass,
                 reverse_compass_direction=rev,
-                travel_minutes=2,
+                distance_meters=140,
                 is_locked_or_hidden=(idx in locked_edges),
             )
         )

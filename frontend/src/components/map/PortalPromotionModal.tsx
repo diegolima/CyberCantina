@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { DoorOpen, X } from "lucide-react";
 import type {
   CompassDirection,
@@ -8,8 +8,13 @@ import type {
 } from "../../types";
 import { TargetEdgeSelector } from "./TargetEdgeSelector";
 import {
+  DEFAULT_EXTERIOR_DISTANCE_METERS,
+  clampEdgeDistanceMeters,
   computePromotionCandidates,
+  formatWalkingDuration,
   getLocationOccupiedPorts,
+  parseCommittedEdgeDistance,
+  sanitizeEdgeDistanceInput,
   type PromotionPromptState,
 } from "./topologyProjection";
 
@@ -24,7 +29,7 @@ export interface PortalPromotionModalProps {
     fromLoc: LocationNode,
     toLoc: LocationNode,
     direction: CompassDirection,
-    travelMinutes: number,
+    distanceMeters: number,
     bidirectional: boolean,
     promoteIds: Set<string>,
     explicitTargetSlot?: CompassDirection
@@ -40,8 +45,32 @@ export const PortalPromotionModal: React.FC<PortalPromotionModalProps> = ({
   onChangePrompt,
   onConfirm,
 }) => {
+  const [distanceDraft, setDistanceDraft] = useState(
+    String(DEFAULT_EXTERIOR_DISTANCE_METERS)
+  );
+  const promptMeters = promotionPrompt?.distanceMeters;
+
+  useEffect(() => {
+    if (promptMeters !== undefined) {
+      setDistanceDraft(
+        String(
+          clampEdgeDistanceMeters(
+            promptMeters,
+            DEFAULT_EXTERIOR_DISTANCE_METERS
+          )
+        )
+      );
+    }
+  }, [promptMeters]);
+
   if (!promotionPrompt) return null;
   const setPromotionPrompt = onChangePrompt;
+  const resolvedMeters =
+    parseCommittedEdgeDistance(distanceDraft) ??
+    clampEdgeDistanceMeters(
+      promotionPrompt.distanceMeters,
+      DEFAULT_EXTERIOR_DISTANCE_METERS
+    );
   const projectedTopology = { dynamicPortalIds };
   const occupiedPorts = getLocationOccupiedPorts(
     promotionPrompt.toLocation.id,
@@ -170,22 +199,26 @@ export const PortalPromotionModal: React.FC<PortalPromotionModalProps> = ({
                   )}
 
                   <div className="field-group" style={{ gap: 4 }}>
-                    <label style={{ fontSize: "0.72rem" }}>Minutes</label>
+                    <label style={{ fontSize: "0.72rem" }}>
+                      Distance (m) · {formatWalkingDuration(resolvedMeters)}
+                    </label>
                     <input
-                      type="number"
-                      min={1}
-                      max={240}
+                      type="text"
+                      inputMode="decimal"
                       className="field-input"
-                      value={promotionPrompt.travelMinutes}
-                      onChange={(e) =>
-                        setPromotionPrompt({
-                          ...promotionPrompt,
-                          travelMinutes: Math.max(
-                            1,
-                            Math.min(240, parseInt(e.target.value, 10) || 1)
-                          ),
-                        })
-                      }
+                      placeholder="e.g. 100 or 1.5km"
+                      value={distanceDraft}
+                      onChange={(e) => {
+                        const sanitized = sanitizeEdgeDistanceInput(e.target.value);
+                        setDistanceDraft(sanitized);
+                        const parsed = parseCommittedEdgeDistance(sanitized);
+                        if (parsed !== null) {
+                          setPromotionPrompt({
+                            ...promotionPrompt,
+                            distanceMeters: parsed,
+                          });
+                        }
+                      }}
                     />
                   </div>
                 </div>
@@ -282,7 +315,7 @@ export const PortalPromotionModal: React.FC<PortalPromotionModalProps> = ({
                         promotionPrompt.fromLocation,
                         promotionPrompt.toLocation,
                         promotionPrompt.direction,
-                        Math.max(1, Math.min(240, promotionPrompt.travelMinutes || 2)),
+                        resolvedMeters,
                         promotionPrompt.bidirectional,
                         new Set(
                           promotionPrompt.candidates

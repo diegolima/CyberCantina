@@ -1376,7 +1376,7 @@
       "to_location_id": "loc_2dd0be16ea",
       "direction_label": "Passage to Aetheris Terminal",
       "compass_direction": "N",
-      "travel_minutes": 10,
+      "distance_meters": 700,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1388,7 +1388,7 @@
       "to_location_id": "loc_05ec735850",
       "direction_label": "Return to The Oculus Concourse",
       "compass_direction": "S",
-      "travel_minutes": 10,
+      "distance_meters": 700,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1400,7 +1400,7 @@
       "to_location_id": "loc_05ec735850",
       "direction_label": "Passage to The Oculus Concourse",
       "compass_direction": "N",
-      "travel_minutes": 10,
+      "distance_meters": 700,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1412,7 +1412,7 @@
       "to_location_id": "loc_6b7b3f36f5",
       "direction_label": "Return to The Meridian Gate",
       "compass_direction": "S",
-      "travel_minutes": 10,
+      "distance_meters": 700,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1424,7 +1424,7 @@
       "to_location_id": "loc_6b7b3f36f5",
       "direction_label": "Passage to The Meridian Gate",
       "compass_direction": "N",
-      "travel_minutes": 25,
+      "distance_meters": 1750,
       "is_locked_or_hidden": true,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1436,7 +1436,7 @@
       "to_location_id": "loc_c96947af5a",
       "direction_label": "Return to Grand Central Mag-Lev",
       "compass_direction": "S",
-      "travel_minutes": 25,
+      "distance_meters": 1750,
       "is_locked_or_hidden": true,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1448,7 +1448,7 @@
       "to_location_id": "loc_c96947af5a",
       "direction_label": "Passage to Grand Central Mag-Lev",
       "compass_direction": "N",
-      "travel_minutes": 15,
+      "distance_meters": 1050,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1460,7 +1460,7 @@
       "to_location_id": "loc_bc74955e11",
       "direction_label": "Return to Terminus Plaza",
       "compass_direction": "S",
-      "travel_minutes": 15,
+      "distance_meters": 1050,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1472,7 +1472,7 @@
       "to_location_id": "loc_bc74955e11",
       "direction_label": "Passage to Terminus Plaza",
       "compass_direction": "NE",
-      "travel_minutes": 15,
+      "distance_meters": 1050,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1484,7 +1484,7 @@
       "to_location_id": "loc_720f370489",
       "direction_label": "Return to The Iron Yard",
       "compass_direction": "SW",
-      "travel_minutes": 15,
+      "distance_meters": 1050,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1496,7 +1496,7 @@
       "to_location_id": "loc_720f370489",
       "direction_label": "Passage to The Iron Yard",
       "compass_direction": "NW",
-      "travel_minutes": 15,
+      "distance_meters": 1050,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1508,7 +1508,7 @@
       "to_location_id": "loc_a52959a25f",
       "direction_label": "Return to The Valve Station",
       "compass_direction": "SE",
-      "travel_minutes": 15,
+      "distance_meters": 1050,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1520,7 +1520,7 @@
       "to_location_id": "loc_bc74955e11",
       "direction_label": "Passage to Terminus Plaza",
       "compass_direction": "N",
-      "travel_minutes": 20,
+      "distance_meters": 1400,
       "is_locked_or_hidden": true,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1532,7 +1532,7 @@
       "to_location_id": "loc_a52959a25f",
       "direction_label": "Return to The Valve Station",
       "compass_direction": "S",
-      "travel_minutes": 20,
+      "distance_meters": 1400,
       "is_locked_or_hidden": true,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1544,7 +1544,7 @@
       "to_location_id": "loc_a52959a25f",
       "direction_label": "Passage to The Valve Station",
       "compass_direction": "N",
-      "travel_minutes": 20,
+      "distance_meters": 1400,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1556,7 +1556,7 @@
       "to_location_id": "loc_2a6b007f09",
       "direction_label": "Return to The Scrap-Hoist",
       "compass_direction": "S",
-      "travel_minutes": 20,
+      "distance_meters": 1400,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1568,7 +1568,7 @@
       "to_location_id": "loc_2a6b007f09",
       "direction_label": "Passage to The Scrap-Hoist",
       "compass_direction": "N",
-      "travel_minutes": 15,
+      "distance_meters": 1050,
       "is_locked_or_hidden": true,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1580,7 +1580,7 @@
       "to_location_id": "loc_ee44813d29",
       "direction_label": "Return to The Sluice",
       "compass_direction": "S",
-      "travel_minutes": 15,
+      "distance_meters": 1050,
       "is_locked_or_hidden": true,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1592,7 +1592,7 @@
       "to_location_id": "loc_a6c05b9bf2",
       "direction_label": "Passage to The Chop-Cathedral",
       "compass_direction": "E",
-      "travel_minutes": 5,
+      "distance_meters": 350,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1604,7 +1604,7 @@
       "to_location_id": "loc_6641db4f26",
       "direction_label": "Return to Main Floor",
       "compass_direction": "W",
-      "travel_minutes": 5,
+      "distance_meters": 350,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1616,7 +1616,7 @@
       "to_location_id": "loc_acaa5b3684",
       "direction_label": "Passage to The Green-Sump",
       "compass_direction": "SE",
-      "travel_minutes": 3,
+      "distance_meters": 210,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1628,7 +1628,7 @@
       "to_location_id": "loc_6641db4f26",
       "direction_label": "Return to Main Floor",
       "compass_direction": "NW",
-      "travel_minutes": 3,
+      "distance_meters": 210,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1640,7 +1640,7 @@
       "to_location_id": "loc_a6c05b9bf2",
       "direction_label": "Passage to The Chop-Cathedral",
       "compass_direction": "N",
-      "travel_minutes": 2,
+      "distance_meters": 140,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1652,7 +1652,7 @@
       "to_location_id": "loc_acaa5b3684",
       "direction_label": "Return to The Green-Sump",
       "compass_direction": "S",
-      "travel_minutes": 2,
+      "distance_meters": 140,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1664,7 +1664,7 @@
       "to_location_id": "loc_6c7156f7af",
       "direction_label": "Passage to The Pillory",
       "compass_direction": "E",
-      "travel_minutes": 5,
+      "distance_meters": 350,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1676,7 +1676,7 @@
       "to_location_id": "loc_acaa5b3684",
       "direction_label": "Return to The Green-Sump",
       "compass_direction": "W",
-      "travel_minutes": 5,
+      "distance_meters": 350,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1688,7 +1688,7 @@
       "to_location_id": "loc_71cd4e9e2c",
       "direction_label": "Passage to The Ticker",
       "compass_direction": "E",
-      "travel_minutes": 4,
+      "distance_meters": 280,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1700,7 +1700,7 @@
       "to_location_id": "loc_a6c05b9bf2",
       "direction_label": "Return to The Chop-Cathedral",
       "compass_direction": "W",
-      "travel_minutes": 4,
+      "distance_meters": 280,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1712,7 +1712,7 @@
       "to_location_id": "loc_921c884147",
       "direction_label": "Passage to Drowned Reliquary",
       "compass_direction": "S",
-      "travel_minutes": 5,
+      "distance_meters": 350,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1724,7 +1724,7 @@
       "to_location_id": "loc_acaa5b3684",
       "direction_label": "Return to The Green-Sump",
       "compass_direction": "N",
-      "travel_minutes": 5,
+      "distance_meters": 350,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1736,7 +1736,7 @@
       "to_location_id": "loc_ecd5b4c5ae",
       "direction_label": "Passage to The Mid-Web",
       "compass_direction": "N",
-      "travel_minutes": 5,
+      "distance_meters": 350,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1748,7 +1748,7 @@
       "to_location_id": "loc_6641db4f26",
       "direction_label": "Return to Main Floor",
       "compass_direction": "S",
-      "travel_minutes": 5,
+      "distance_meters": 350,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1760,7 +1760,7 @@
       "to_location_id": "loc_8c4cdd2321",
       "direction_label": "Passage to Tunnel 1-M",
       "compass_direction": "N",
-      "travel_minutes": 5,
+      "distance_meters": 350,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1772,7 +1772,7 @@
       "to_location_id": "loc_a6c05b9bf2",
       "direction_label": "Return to The Chop-Cathedral",
       "compass_direction": "S",
-      "travel_minutes": 5,
+      "distance_meters": 350,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1784,7 +1784,7 @@
       "to_location_id": "loc_a6c05b9bf2",
       "direction_label": "Passage to The Chop-Cathedral",
       "compass_direction": "SE",
-      "travel_minutes": 10,
+      "distance_meters": 700,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1796,7 +1796,7 @@
       "to_location_id": "loc_ecd5b4c5ae",
       "direction_label": "Return to The Mid-Web",
       "compass_direction": "NW",
-      "travel_minutes": 10,
+      "distance_meters": 700,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1808,7 +1808,7 @@
       "to_location_id": "loc_78dab3b4ad",
       "direction_label": "Passage to The Damp",
       "compass_direction": "SW",
-      "travel_minutes": 3,
+      "distance_meters": 210,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1820,7 +1820,7 @@
       "to_location_id": "loc_ecd5b4c5ae",
       "direction_label": "Return to The Mid-Web",
       "compass_direction": "NE",
-      "travel_minutes": 3,
+      "distance_meters": 210,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1832,7 +1832,7 @@
       "to_location_id": "loc_3d441c1bc1",
       "direction_label": "Passage to The Dripline",
       "compass_direction": "NE",
-      "travel_minutes": 3,
+      "distance_meters": 210,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1844,7 +1844,7 @@
       "to_location_id": "loc_ecd5b4c5ae",
       "direction_label": "Return to The Mid-Web",
       "compass_direction": "SW",
-      "travel_minutes": 3,
+      "distance_meters": 210,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1856,7 +1856,7 @@
       "to_location_id": "loc_20d37ea33e",
       "direction_label": "Passage to The Perch",
       "compass_direction": "N",
-      "travel_minutes": 1,
+      "distance_meters": 70,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1868,7 +1868,7 @@
       "to_location_id": "loc_3d441c1bc1",
       "direction_label": "Return to The Dripline",
       "compass_direction": "S",
-      "travel_minutes": 1,
+      "distance_meters": 70,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1880,7 +1880,7 @@
       "to_location_id": "loc_1675a69f8f",
       "direction_label": "Passage to Unit 4B-12",
       "compass_direction": "NW",
-      "travel_minutes": 1,
+      "distance_meters": 70,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1892,7 +1892,7 @@
       "to_location_id": "loc_ecd5b4c5ae",
       "direction_label": "Return to The Mid-Web",
       "compass_direction": "SE",
-      "travel_minutes": 1,
+      "distance_meters": 70,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1904,7 +1904,7 @@
       "to_location_id": "loc_c23b5c0636",
       "direction_label": "Passage to Unit 09-L00",
       "compass_direction": "W",
-      "travel_minutes": 1,
+      "distance_meters": 70,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1916,7 +1916,7 @@
       "to_location_id": "loc_78dab3b4ad",
       "direction_label": "Return to The Damp",
       "compass_direction": "E",
-      "travel_minutes": 1,
+      "distance_meters": 70,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1928,7 +1928,7 @@
       "to_location_id": "loc_d0526a8187",
       "direction_label": "Passage to The Catwalk",
       "compass_direction": "W",
-      "travel_minutes": 1,
+      "distance_meters": 70,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1940,7 +1940,7 @@
       "to_location_id": "loc_6641db4f26",
       "direction_label": "Return to Main Floor",
       "compass_direction": "E",
-      "travel_minutes": 1,
+      "distance_meters": 70,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1952,7 +1952,7 @@
       "to_location_id": "loc_b669c0904e",
       "direction_label": "Passage to The Sump-Well",
       "compass_direction": "NW",
-      "travel_minutes": 4,
+      "distance_meters": 280,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1964,7 +1964,7 @@
       "to_location_id": "loc_6641db4f26",
       "direction_label": "Return to Main Floor",
       "compass_direction": "SE",
-      "travel_minutes": 4,
+      "distance_meters": 280,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1976,7 +1976,7 @@
       "to_location_id": "loc_6641db4f26",
       "direction_label": "Passage to Main Floor",
       "compass_direction": "E",
-      "travel_minutes": 1,
+      "distance_meters": 70,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -1988,7 +1988,7 @@
       "to_location_id": "loc_748001cd07",
       "direction_label": "Return to The Cage-Walk",
       "compass_direction": "SW",
-      "travel_minutes": 1,
+      "distance_meters": 70,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2000,7 +2000,7 @@
       "to_location_id": "loc_62d493be44",
       "direction_label": "Passage to Tunnel 2-M",
       "compass_direction": "N",
-      "travel_minutes": 3,
+      "distance_meters": 210,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2012,7 +2012,7 @@
       "to_location_id": "loc_8c4cdd2321",
       "direction_label": "Return to Tunnel 1-M",
       "compass_direction": "S",
-      "travel_minutes": 3,
+      "distance_meters": 210,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2024,7 +2024,7 @@
       "to_location_id": "loc_0d37ae78c0",
       "direction_label": "Passage to Tunnel 2-N",
       "compass_direction": "W",
-      "travel_minutes": 20,
+      "distance_meters": 1400,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2036,7 +2036,7 @@
       "to_location_id": "loc_acaa5b3684",
       "direction_label": "Return to The Green-Sump",
       "compass_direction": "E",
-      "travel_minutes": 20,
+      "distance_meters": 1400,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2048,7 +2048,7 @@
       "to_location_id": "loc_b669c0904e",
       "direction_label": "Passage to The Sump-Well",
       "compass_direction": "S",
-      "travel_minutes": 10,
+      "distance_meters": 700,
       "is_locked_or_hidden": true,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2060,7 +2060,7 @@
       "to_location_id": "loc_b87b38e828",
       "direction_label": "Return to Tunnel 1-L",
       "compass_direction": "N",
-      "travel_minutes": 10,
+      "distance_meters": 700,
       "is_locked_or_hidden": true,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2072,7 +2072,7 @@
       "to_location_id": "loc_8c4cdd2321",
       "direction_label": "Passage to Tunnel 1-M",
       "compass_direction": "E",
-      "travel_minutes": 2,
+      "distance_meters": 140,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2084,7 +2084,7 @@
       "to_location_id": "loc_b87b38e828",
       "direction_label": "Return to Tunnel 1-L",
       "compass_direction": "W",
-      "travel_minutes": 2,
+      "distance_meters": 140,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2096,7 +2096,7 @@
       "to_location_id": "loc_b87b38e828",
       "direction_label": "Passage to Tunnel 1-L",
       "compass_direction": "E",
-      "travel_minutes": 2,
+      "distance_meters": 140,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2108,7 +2108,7 @@
       "to_location_id": "loc_b6e86e4859",
       "direction_label": "Return to Tunnel 1-K",
       "compass_direction": "W",
-      "travel_minutes": 2,
+      "distance_meters": 140,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2120,7 +2120,7 @@
       "to_location_id": "loc_0d37ae78c0",
       "direction_label": "Passage to Tunnel 2-N",
       "compass_direction": "SE",
-      "travel_minutes": 30,
+      "distance_meters": 2100,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2132,7 +2132,7 @@
       "to_location_id": "loc_62d493be44",
       "direction_label": "Return to Tunnel 2-M",
       "compass_direction": "NW",
-      "travel_minutes": 30,
+      "distance_meters": 2100,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2144,7 +2144,7 @@
       "to_location_id": "loc_ed7627a268",
       "direction_label": "Passage to Tunnel 1-N",
       "compass_direction": "SE",
-      "travel_minutes": 40,
+      "distance_meters": 2800,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2156,7 +2156,7 @@
       "to_location_id": "loc_8c4cdd2321",
       "direction_label": "Return to Tunnel 1-M",
       "compass_direction": "NW",
-      "travel_minutes": 40,
+      "distance_meters": 2800,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2168,7 +2168,7 @@
       "to_location_id": "loc_ed7627a268",
       "direction_label": "Passage to Tunnel 1-N",
       "compass_direction": "NW",
-      "travel_minutes": 2,
+      "distance_meters": 140,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2180,7 +2180,7 @@
       "to_location_id": "loc_6c7156f7af",
       "direction_label": "Return to The Pillory",
       "compass_direction": "SE",
-      "travel_minutes": 2,
+      "distance_meters": 140,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2192,7 +2192,7 @@
       "to_location_id": "loc_f97a71445f",
       "direction_label": "Passage to Tunnel 3-M",
       "compass_direction": "N",
-      "travel_minutes": 5,
+      "distance_meters": 350,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2204,7 +2204,7 @@
       "to_location_id": "loc_62d493be44",
       "direction_label": "Return to Tunnel 2-M",
       "compass_direction": "S",
-      "travel_minutes": 5,
+      "distance_meters": 350,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2216,7 +2216,7 @@
       "to_location_id": "loc_90fc7e4119",
       "direction_label": "Passage to Tunnel 2-L",
       "compass_direction": "W",
-      "travel_minutes": 3,
+      "distance_meters": 210,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2228,7 +2228,7 @@
       "to_location_id": "loc_62d493be44",
       "direction_label": "Return to Tunnel 2-M",
       "compass_direction": "E",
-      "travel_minutes": 3,
+      "distance_meters": 210,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2240,7 +2240,7 @@
       "to_location_id": "loc_b87b38e828",
       "direction_label": "Passage to Tunnel 1-L",
       "compass_direction": "S",
-      "travel_minutes": 3,
+      "distance_meters": 210,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2252,7 +2252,7 @@
       "to_location_id": "loc_90fc7e4119",
       "direction_label": "Return to Tunnel 2-L",
       "compass_direction": "N",
-      "travel_minutes": 3,
+      "distance_meters": 210,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2264,7 +2264,7 @@
       "to_location_id": "loc_c45e0c0b33",
       "direction_label": "Passage to Tunnel 4-M",
       "compass_direction": "N",
-      "travel_minutes": 5,
+      "distance_meters": 350,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2276,7 +2276,7 @@
       "to_location_id": "loc_f97a71445f",
       "direction_label": "Return to Tunnel 3-M",
       "compass_direction": "S",
-      "travel_minutes": 5,
+      "distance_meters": 350,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2288,7 +2288,7 @@
       "to_location_id": "loc_e9c19dcd0e",
       "direction_label": "Passage to Tunnel 3-L",
       "compass_direction": "W",
-      "travel_minutes": 20,
+      "distance_meters": 1400,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2300,7 +2300,7 @@
       "to_location_id": "loc_f97a71445f",
       "direction_label": "Return to Tunnel 3-M",
       "compass_direction": "E",
-      "travel_minutes": 20,
+      "distance_meters": 1400,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2312,7 +2312,7 @@
       "to_location_id": "loc_e9c19dcd0e",
       "direction_label": "Passage to Tunnel 3-L",
       "compass_direction": "NE",
-      "travel_minutes": 35,
+      "distance_meters": 2450,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2324,7 +2324,7 @@
       "to_location_id": "loc_b6e86e4859",
       "direction_label": "Return to Tunnel 1-K",
       "compass_direction": "SW",
-      "travel_minutes": 35,
+      "distance_meters": 2450,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2336,7 +2336,7 @@
       "to_location_id": "loc_f60efd7d34",
       "direction_label": "Passage to Tunnel 1-O",
       "compass_direction": "E",
-      "travel_minutes": 15,
+      "distance_meters": 1050,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2348,7 +2348,7 @@
       "to_location_id": "loc_ed7627a268",
       "direction_label": "Return to Tunnel 1-N",
       "compass_direction": "W",
-      "travel_minutes": 15,
+      "distance_meters": 1050,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2360,7 +2360,7 @@
       "to_location_id": "loc_f60efd7d34",
       "direction_label": "Passage to Tunnel 1-O",
       "compass_direction": "NE",
-      "travel_minutes": 5,
+      "distance_meters": 350,
       "is_locked_or_hidden": true,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2372,7 +2372,7 @@
       "to_location_id": "loc_921c884147",
       "direction_label": "Return to Drowned Reliquary",
       "compass_direction": "SW",
-      "travel_minutes": 5,
+      "distance_meters": 350,
       "is_locked_or_hidden": true,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2384,7 +2384,7 @@
       "to_location_id": "loc_c45e0c0b33",
       "direction_label": "Passage to Tunnel 4-M",
       "compass_direction": "S",
-      "travel_minutes": 10,
+      "distance_meters": 700,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2396,7 +2396,7 @@
       "to_location_id": "loc_ee44813d29",
       "direction_label": "Return to The Sluice",
       "compass_direction": "N",
-      "travel_minutes": 10,
+      "distance_meters": 700,
       "is_locked_or_hidden": false,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2408,7 +2408,7 @@
       "to_location_id": "loc_c45e0c0b33",
       "direction_label": "Passage to Tunnel 4-M",
       "compass_direction": "N",
-      "travel_minutes": 60,
+      "distance_meters": 4200,
       "is_locked_or_hidden": true,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null
@@ -2420,7 +2420,7 @@
       "to_location_id": "loc_ecd5b4c5ae",
       "direction_label": "Return to The Mid-Web",
       "compass_direction": "SW",
-      "travel_minutes": 60,
+      "distance_meters": 4200,
       "is_locked_or_hidden": true,
       "created_at_turn_id": null,
       "superseded_at_turn_id": null

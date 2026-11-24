@@ -247,7 +247,7 @@ def _create_hierarchical_world(
             to_location_id=vip.id,
             direction_label="Behind velvet ropes",
             compass_direction="N",
-            travel_minutes=1,
+            distance_meters=70,
         ),
         LocationEdge(
             id="new_e2",
@@ -256,7 +256,7 @@ def _create_hierarchical_world(
             to_location_id=foyer.id,
             direction_label="Out to Main Floor",
             compass_direction="S",
-            travel_minutes=1,
+            distance_meters=70,
         ),
         LocationEdge(
             id="new_e3",
@@ -265,7 +265,7 @@ def _create_hierarchical_world(
             to_location_id=highway.id,
             direction_label="Stairs to street",
             compass_direction="S",
-            travel_minutes=2,
+            distance_meters=140,
         ),
         LocationEdge(
             id="new_e4",
@@ -274,7 +274,7 @@ def _create_hierarchical_world(
             to_location_id=foyer.id,
             direction_label="Down into Afterlife",
             compass_direction="N",
-            travel_minutes=2,
+            distance_meters=140,
         ),
         LocationEdge(
             id="new_e5",
@@ -283,7 +283,7 @@ def _create_hierarchical_world(
             to_location_id=lounge.id,
             direction_label="Eastbound to Lizzies",
             compass_direction="E",
-            travel_minutes=4,
+            distance_meters=280,
         ),
         LocationEdge(
             id="new_e6",
@@ -292,7 +292,7 @@ def _create_hierarchical_world(
             to_location_id=highway.id,
             direction_label="Out to Watson Overpass",
             compass_direction="W",
-            travel_minutes=4,
+            distance_meters=280,
         ),
         LocationEdge(
             id="new_e7",
@@ -301,7 +301,7 @@ def _create_hierarchical_world(
             to_location_id=badlands.id,
             direction_label="Outer highway",
             compass_direction="W",
-            travel_minutes=15,
+            distance_meters=1050,
         ),
         LocationEdge(
             id="new_e8",
@@ -310,7 +310,7 @@ def _create_hierarchical_world(
             to_location_id=highway.id,
             direction_label="City approach",
             compass_direction="E",
-            travel_minutes=15,
+            distance_meters=1050,
         ),
     ]
 

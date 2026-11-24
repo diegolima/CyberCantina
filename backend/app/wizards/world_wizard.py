@@ -10,6 +10,8 @@ from app.config import ModelProfile, settings
 from app.engine.llm_client import llm_client
 from app.prompts import get_default_prompt, render_template
 from app.schemas.world import (
+    DEFAULT_EXTERIOR_DISTANCE_METERS,
+    DEFAULT_INTERIOR_DISTANCE_METERS,
     LocationEdgeDraft,
     LocationNodeDraft,
     LoreNodeDraft,
@@ -189,7 +191,7 @@ def _fallback_world_expansion(seed: WorldWizardSeed) -> WorldWizardDraft:
                 direction_label="Reinforced side door",
                 reverse_direction_label="Door back to the main hub",
                 compass_direction="E",
-                travel_minutes=1,
+                distance_meters=DEFAULT_INTERIOR_DISTANCE_METERS,
             ),
             LocationEdgeDraft(
                 from_key="hub_center",
@@ -197,7 +199,7 @@ def _fallback_world_expansion(seed: WorldWizardSeed) -> WorldWizardDraft:
                 direction_label="Main entrance threshold",
                 reverse_direction_label="Entrance into the hub",
                 compass_direction="S",
-                travel_minutes=2,
+                distance_meters=DEFAULT_EXTERIOR_DISTANCE_METERS,
             ),
             LocationEdgeDraft(
                 from_key="hub_center",
@@ -205,7 +207,7 @@ def _fallback_world_expansion(seed: WorldWizardSeed) -> WorldWizardDraft:
                 direction_label="Narrow staircase up",
                 reverse_direction_label="Staircase down to the main floor",
                 compass_direction="N",
-                travel_minutes=1,
+                distance_meters=DEFAULT_INTERIOR_DISTANCE_METERS,
             ),
         ],
         lore_nodes=[
@@ -338,7 +340,7 @@ def _fallback_map_reimagine(req: WorldMapReimagineRequest) -> WorldMapDraft:
             direction_label="Primary transit arch",
             reverse_direction_label="Back to central hub",
             compass_direction="E",
-            travel_minutes=1,
+            distance_meters=DEFAULT_INTERIOR_DISTANCE_METERS,
             bidirectional=True,
         ),
         LocationEdgeDraft(
@@ -347,7 +349,7 @@ def _fallback_map_reimagine(req: WorldMapReimagineRequest) -> WorldMapDraft:
             direction_label="Secured perimeter corridor",
             reverse_direction_label="Back to central hub",
             compass_direction="N",
-            travel_minutes=2,
+            distance_meters=DEFAULT_EXTERIOR_DISTANCE_METERS,
             bidirectional=True,
         ),
     ]
@@ -372,7 +374,7 @@ def _fallback_map_reimagine(req: WorldMapReimagineRequest) -> WorldMapDraft:
                 direction_label="Access stairwell down",
                 reverse_direction_label="Stairwell up to hub",
                 compass_direction="S",
-                travel_minutes=1,
+                distance_meters=DEFAULT_INTERIOR_DISTANCE_METERS,
                 bidirectional=True,
             )
         )

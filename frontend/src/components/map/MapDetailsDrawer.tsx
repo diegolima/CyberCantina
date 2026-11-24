@@ -33,6 +33,10 @@ import { LocationOverrideButton } from "../inspector/LocationOverrideButton";
 import { ImageLightboxModal } from "../shared/ImageLightboxModal";
 import { useMagicWand } from "../../hooks/useMagicWand";
 import { MagicWandButton } from "../MagicWandButton";
+import {
+  formatDistanceCompact,
+  formatWalkingDuration,
+} from "../../utils/spatialDistance";
 import { TagChipsInput, normalizeTagList } from "../TagChipsInput";
 import {
   MAP_ICON_CATEGORIES,
@@ -73,7 +77,7 @@ export interface ExternalPortalEntry {
   destinationContainerName: string;
   directionLabel?: string;
   compassDirection?: string | null;
-  travelMinutes: number;
+  distanceMeters: number;
   isLockedOrHidden: boolean;
 }
 
@@ -1320,7 +1324,9 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
               >
                 <div style={{ minWidth: 0 }}>
                   <div>
-                    {portalLoc?.name ?? ge.portalLocationId} ({ge.travel_minutes}m
+                    {portalLoc?.name ?? ge.portalLocationId} (
+                    {formatDistanceCompact(ge.distance_meters)} ·{" "}
+                    {formatWalkingDuration(ge.distance_meters)}
                     {ge.is_locked_or_hidden ? " 🔒" : ""})
                   </div>
                   {ge.direction_label && (
@@ -2214,8 +2220,10 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
             >
               <div style={{ minWidth: 0 }}>
                 <span>
-                  [{ext.compassDirection || "?"}] → {ext.destinationName} ({ext.destinationContainerName},{" "}
-                  {ext.travelMinutes}m)
+                  [{ext.compassDirection || "?"}] → {ext.destinationName} (
+                  {ext.destinationContainerName},{" "}
+                  {formatDistanceCompact(ext.distanceMeters)} ·{" "}
+                  {formatWalkingDuration(ext.distanceMeters)})
                 </span>
                 {ext.directionLabel && (
                   <div

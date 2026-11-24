@@ -8,6 +8,8 @@ import uuid
 from app.schemas.turn import ImprovisedLocationSpec
 from app.schemas.world import (
     COMPASS_PASSAGE_NAMES,
+    DEFAULT_INTERIOR_DISTANCE_METERS,
+    MAX_EDGE_DISTANCE_METERS,
     OPPOSITE_COMPASS,
     LocationContainer,
     LocationNode,
@@ -248,7 +250,7 @@ class WorldLocationsMixin:
                     e.id AS edge_id,
                     e.direction_label,
                     e.compass_direction,
-                    e.travel_minutes,
+                    e.distance_meters,
                     e.is_locked_or_hidden,
                     e.created_at_turn_id AS edge_turn_id,
                     e.superseded_at_turn_id AS edge_superseded_turn_id,
@@ -284,7 +286,7 @@ class WorldLocationsMixin:
                         edge_id=r["edge_id"],
                         direction_label=r["direction_label"],
                         compass_direction=cdir,
-                        travel_minutes=r["travel_minutes"],
+                        distance_meters=r["distance_meters"],
                         is_locked_or_hidden=bool(r["is_locked_or_hidden"]),
                         destination=dest,
                     )
@@ -411,7 +413,7 @@ class WorldLocationsMixin:
                     """
                     INSERT INTO location_edges (
                         id, world_id, from_location_id, to_location_id,
-                        direction_label, compass_direction, travel_minutes, is_locked_or_hidden, created_at_turn_id
+                        direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
                     """,
@@ -422,7 +424,7 @@ class WorldLocationsMixin:
                         new_loc_id,
                         spec.entry_direction_label,
                         assigned_dir,
-                        spec.travel_minutes,
+                        max(1, min(MAX_EDGE_DISTANCE_METERS, int(spec.distance_meters))),
                         created_at_turn_id,
                     ),
                 )
@@ -430,7 +432,7 @@ class WorldLocationsMixin:
                     """
                     INSERT INTO location_edges (
                         id, world_id, from_location_id, to_location_id,
-                        direction_label, compass_direction, travel_minutes, is_locked_or_hidden, created_at_turn_id
+                        direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
                     """,
@@ -441,7 +443,7 @@ class WorldLocationsMixin:
                         from_location_id,
                         spec.return_direction_label,
                         rev_dir,
-                        spec.travel_minutes,
+                        max(1, min(MAX_EDGE_DISTANCE_METERS, int(spec.distance_meters))),
                         created_at_turn_id,
                     ),
                 )
@@ -525,9 +527,9 @@ class WorldLocationsMixin:
                 """
                 INSERT INTO location_edges (
                     id, world_id, from_location_id, to_location_id,
-                    direction_label, compass_direction, travel_minutes, is_locked_or_hidden, created_at_turn_id
+                    direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
                 """,
                 (
                     f"edge_{uuid.uuid4().hex[:10]}",
@@ -536,6 +538,7 @@ class WorldLocationsMixin:
                     hub_id,
                     f"Passage to {hub_name}",
                     target_dir,
+                    DEFAULT_INTERIOR_DISTANCE_METERS,
                     created_at_turn_id,
                 ),
             )
@@ -543,9 +546,9 @@ class WorldLocationsMixin:
                 """
                 INSERT INTO location_edges (
                     id, world_id, from_location_id, to_location_id,
-                    direction_label, compass_direction, travel_minutes, is_locked_or_hidden, created_at_turn_id
+                    direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
                 """,
                 (
                     f"edge_{uuid.uuid4().hex[:10]}",
@@ -554,6 +557,7 @@ class WorldLocationsMixin:
                     from_location_id,
                     f"Back to {from_loc.name}",
                     hub_back_dir,
+                    DEFAULT_INTERIOR_DISTANCE_METERS,
                     created_at_turn_id,
                 ),
             )
@@ -594,7 +598,7 @@ class WorldLocationsMixin:
                     """
                     INSERT INTO location_edges (
                         id, world_id, from_location_id, to_location_id,
-                        direction_label, compass_direction, travel_minutes, is_locked_or_hidden, created_at_turn_id
+                        direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
@@ -605,7 +609,7 @@ class WorldLocationsMixin:
                         old_dest_id,
                         old_nb.direction_label,
                         old_slot,
-                        old_nb.travel_minutes,
+                        old_nb.distance_meters,
                         1 if old_nb.is_locked_or_hidden else 0,
                         created_at_turn_id,
                     ),
@@ -614,7 +618,7 @@ class WorldLocationsMixin:
                     """
                     INSERT INTO location_edges (
                         id, world_id, from_location_id, to_location_id,
-                        direction_label, compass_direction, travel_minutes, is_locked_or_hidden, created_at_turn_id
+                        direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
@@ -625,7 +629,7 @@ class WorldLocationsMixin:
                         hub_id,
                         f"Return to {hub_name}",
                         OPPOSITE_COMPASS[old_slot],
-                        old_nb.travel_minutes,
+                        old_nb.distance_meters,
                         1 if old_nb.is_locked_or_hidden else 0,
                         created_at_turn_id,
                     ),
@@ -657,7 +661,7 @@ class WorldLocationsMixin:
                 """
                 INSERT INTO location_edges (
                     id, world_id, from_location_id, to_location_id,
-                    direction_label, compass_direction, travel_minutes, is_locked_or_hidden, created_at_turn_id
+                    direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
                 """,
@@ -668,7 +672,7 @@ class WorldLocationsMixin:
                     new_loc_id,
                     spec.entry_direction_label,
                     new_slot,
-                    spec.travel_minutes,
+                    max(1, min(MAX_EDGE_DISTANCE_METERS, int(spec.distance_meters))),
                     created_at_turn_id,
                 ),
             )
@@ -676,7 +680,7 @@ class WorldLocationsMixin:
                 """
                 INSERT INTO location_edges (
                     id, world_id, from_location_id, to_location_id,
-                    direction_label, compass_direction, travel_minutes, is_locked_or_hidden, created_at_turn_id
+                    direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
                 """,
@@ -687,7 +691,7 @@ class WorldLocationsMixin:
                     hub_id,
                     spec.return_direction_label,
                     OPPOSITE_COMPASS[new_slot],
-                    spec.travel_minutes,
+                    max(1, min(MAX_EDGE_DISTANCE_METERS, int(spec.distance_meters))),
                     created_at_turn_id,
                 ),
             )

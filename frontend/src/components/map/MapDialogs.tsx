@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUpRight,
-  Clock,
   FolderPlus,
   GitBranch,
   Layers,
@@ -11,6 +10,7 @@ import {
   MapPin,
   Pencil,
   RotateCcw,
+  Ruler,
   Search,
   Sparkles,
   Star,
@@ -39,9 +39,15 @@ import {
 } from "./mapIcons";
 import {
   CONTAINER_DEPTH_LABELS,
-  parseCommittedEdgeMinutes,
-  sanitizeEdgeMinutesInput,
-  stepEdgeMinutesDraft,
+  DEFAULT_EXTERIOR_DISTANCE_METERS,
+  DEFAULT_FALLBACK_DISTANCE_METERS,
+  DEFAULT_INTERIOR_DISTANCE_METERS,
+  clampEdgeDistanceMeters,
+  formatDistanceCompact,
+  formatWalkingDuration,
+  parseCommittedEdgeDistance,
+  sanitizeEdgeDistanceInput,
+  stepEdgeDistanceDraft,
 } from "./topologyProjection";
 
 export interface PassageHubCollisionState {
@@ -54,7 +60,7 @@ export interface PassageHubCollisionState {
   collidingSide: "source" | "target" | "both";
   occupiedByName: string;
   suggestedHubName: string;
-  travelMinutes: number;
+  distanceMeters: number;
   x: number;
   y: number;
   promoteIds?: string[];
@@ -63,7 +69,7 @@ export interface PassageHubCollisionState {
 export interface PassageHubCollisionModalProps {
   state: PassageHubCollisionState | null;
   onCancel: () => void;
-  onConfirm: (hubName: string, travelMinutes: number) => void;
+  onConfirm: (hubName: string, distanceMeters: number) => void;
 }
 
 export const PassageHubCollisionModal: React.FC<PassageHubCollisionModalProps> = ({
@@ -72,16 +78,31 @@ export const PassageHubCollisionModal: React.FC<PassageHubCollisionModalProps> =
   onConfirm,
 }) => {
   const [hubName, setHubName] = useState("");
-  const [minutes, setMinutes] = useState("2");
+  const [distanceDraft, setDistanceDraft] = useState(
+    String(DEFAULT_FALLBACK_DISTANCE_METERS)
+  );
 
   useEffect(() => {
     if (state) {
       setHubName(state.suggestedHubName);
-      setMinutes(String(Math.max(1, state.travelMinutes || 2)));
+      setDistanceDraft(
+        String(
+          clampEdgeDistanceMeters(
+            state.distanceMeters,
+            DEFAULT_FALLBACK_DISTANCE_METERS
+          )
+        )
+      );
     }
   }, [state]);
 
   if (!state) return null;
+  const parsedHubMeters =
+    parseCommittedEdgeDistance(distanceDraft) ??
+    clampEdgeDistanceMeters(
+      state.distanceMeters,
+      DEFAULT_FALLBACK_DISTANCE_METERS
+    );
 
   return (
     <div
@@ -162,14 +183,18 @@ export const PassageHubCollisionModal: React.FC<PassageHubCollisionModalProps> =
             />
           </div>
           <div className="field-group" style={{ gap: 4 }}>
-            <label style={{ fontSize: "0.72rem" }}>Minutes</label>
+            <label style={{ fontSize: "0.72rem" }}>
+              Distance (m) · {formatWalkingDuration(parsedHubMeters)}
+            </label>
             <input
-              type="number"
-              min={1}
-              max={240}
+              type="text"
+              inputMode="decimal"
               className="field-input"
-              value={minutes}
-              onChange={(e) => setMinutes(e.target.value)}
+              placeholder="e.g. 50 or 1.5km"
+              value={distanceDraft}
+              onChange={(e) =>
+                setDistanceDraft(sanitizeEdgeDistanceInput(e.target.value))
+              }
             />
           </div>
         </div>
@@ -187,12 +212,7 @@ export const PassageHubCollisionModal: React.FC<PassageHubCollisionModalProps> =
             type="button"
             className="btn"
             disabled={!hubName.trim()}
-            onClick={() =>
-              onConfirm(
-                hubName.trim(),
-                Math.max(1, Math.min(240, parseInt(minutes, 10) || 2))
-              )
-            }
+            onClick={() => onConfirm(hubName.trim(), parsedHubMeters)}
             style={{
               padding: "5px 12px",
               fontSize: "0.75rem",
@@ -219,6 +239,7 @@ export interface EmptyCanvasLinkState {
   dropY: number;
   canCreateContainer: boolean;
   availableDepths: Array<1 | 2 | 3 | 4>;
+  defaultDistanceMeters?: number;
 }
 
 export interface ExistingLinkTargetOption {
@@ -236,12 +257,12 @@ export interface EmptyCanvasCreateModalProps {
   onCreate: (opts: {
     kind: "location" | "hub" | "container";
     name: string;
-    travelMinutes: number;
+    distanceMeters: number;
     containerDepth?: 1 | 2 | 3 | 4;
   }) => void;
   onLinkExisting?: (opts: {
     targetLocationId: string;
-    travelMinutes: number;
+    distanceMeters: number;
     targetSlot?: CompassDirection;
   }) => void;
 }
@@ -257,7 +278,10 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
     "location"
   );
   const [name, setName] = useState("");
-  const [minutes, setMinutes] = useState("2");
+  const [distanceDraft, setDistanceDraft] = useState(
+    String(DEFAULT_INTERIOR_DISTANCE_METERS)
+  );
+  const [distanceDirty, setDistanceDirty] = useState(false);
   const [depth, setDepth] = useState<1 | 2 | 3 | 4>(1);
   const [existingQuery, setExistingQuery] = useState("");
   const [selectedExistingId, setSelectedExistingId] = useState<string>("");
@@ -267,13 +291,37 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
     if (state) {
       setKind("location");
       setName("");
-      setMinutes("2");
+      setDistanceDraft(
+        String(
+          clampEdgeDistanceMeters(
+            state.defaultDistanceMeters ?? DEFAULT_INTERIOR_DISTANCE_METERS,
+            DEFAULT_INTERIOR_DISTANCE_METERS
+          )
+        )
+      );
+      setDistanceDirty(false);
       setDepth(state.availableDepths[0] ?? 1);
       setExistingQuery("");
       setSelectedExistingId("");
       setTargetSlot(undefined);
     }
   }, [state]);
+
+  useEffect(() => {
+    if (!state || distanceDirty) return;
+    if (kind === "container") {
+      setDistanceDraft(String(DEFAULT_EXTERIOR_DISTANCE_METERS));
+    } else if (kind === "location" || kind === "hub") {
+      setDistanceDraft(
+        String(
+          clampEdgeDistanceMeters(
+            state.defaultDistanceMeters ?? DEFAULT_INTERIOR_DISTANCE_METERS,
+            DEFAULT_INTERIOR_DISTANCE_METERS
+          )
+        )
+      );
+    }
+  }, [kind, state, distanceDirty]);
 
   const filteredExistingTargets = useMemo(() => {
     const q = existingQuery.trim().toLowerCase();
@@ -308,7 +356,13 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
       ? "New District or Building"
       : "New Location Name";
 
-  const parsedMinutes = Math.max(1, Math.min(240, parseInt(minutes, 10) || 2));
+  const contextDefaultMeters =
+    kind === "container"
+      ? DEFAULT_EXTERIOR_DISTANCE_METERS
+      : state.defaultDistanceMeters ?? DEFAULT_FALLBACK_DISTANCE_METERS;
+  const parsedDistanceMeters =
+    parseCommittedEdgeDistance(distanceDraft) ??
+    clampEdgeDistanceMeters(contextDefaultMeters, contextDefaultMeters);
 
   return (
     <div
@@ -481,14 +535,19 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
                 </div>
               </div>
               <div className="field-group" style={{ gap: 4 }}>
-                <label style={{ fontSize: "0.72rem" }}>Minutes</label>
+                <label style={{ fontSize: "0.72rem" }}>
+                  Distance (m) · {formatWalkingDuration(parsedDistanceMeters)}
+                </label>
                 <input
-                  type="number"
-                  min={1}
-                  max={240}
+                  type="text"
+                  inputMode="decimal"
                   className="field-input"
-                  value={minutes}
-                  onChange={(e) => setMinutes(e.target.value)}
+                  placeholder="e.g. 50 or 1.5km"
+                  value={distanceDraft}
+                  onChange={(e) => {
+                    setDistanceDirty(true);
+                    setDistanceDraft(sanitizeEdgeDistanceInput(e.target.value));
+                  }}
                 />
               </div>
             </div>
@@ -670,14 +729,19 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
               </div>
             )}
             <div className="field-group" style={{ gap: 4 }}>
-              <label style={{ fontSize: "0.72rem" }}>Minutes</label>
+              <label style={{ fontSize: "0.72rem" }}>
+                Distance (m) · {formatWalkingDuration(parsedDistanceMeters)}
+              </label>
               <input
-                type="number"
-                min={1}
-                max={240}
+                type="text"
+                inputMode="decimal"
                 className="field-input"
-                value={minutes}
-                onChange={(e) => setMinutes(e.target.value)}
+                placeholder="e.g. 20 or 1.5km"
+                value={distanceDraft}
+                onChange={(e) => {
+                  setDistanceDirty(true);
+                  setDistanceDraft(sanitizeEdgeDistanceInput(e.target.value));
+                }}
               />
             </div>
           </div>
@@ -702,7 +766,7 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
                 if (!selectedExisting || !onLinkExisting) return;
                 onLinkExisting({
                   targetLocationId: selectedExisting.location.id,
-                  travelMinutes: parsedMinutes,
+                  distanceMeters: parsedDistanceMeters,
                   targetSlot,
                 });
               }}
@@ -718,7 +782,7 @@ export const EmptyCanvasCreateModal: React.FC<EmptyCanvasCreateModalProps> = ({
                 onCreate({
                   kind,
                   name: name.trim() || placeholder,
-                  travelMinutes: parsedMinutes,
+                  distanceMeters: parsedDistanceMeters,
                   containerDepth: kind === "container" ? depth : undefined,
                 })
               }
@@ -1498,7 +1562,8 @@ export const MapContextMenu: React.FC<MapContextMenuProps> = ({
                 marginBottom: 2,
               }}
             >
-              Passage ({edge.travel_minutes}m)
+              Passage ({formatDistanceCompact(edge.distance_meters)} ·{" "}
+              {formatWalkingDuration(edge.distance_meters)})
             </div>
             {onEditEdgeDetails && (
               <button
@@ -1521,8 +1586,8 @@ export const MapContextMenu: React.FC<MapContextMenuProps> = ({
                 onClose();
               }}
             >
-              <Clock size={13} color="#22d3ee" />
-              <span>Edit Travel Minutes</span>
+              <Ruler size={13} color="#22d3ee" />
+              <span>Edit Distance</span>
             </button>
             <button
               type="button"
@@ -1561,12 +1626,12 @@ export interface MultiEdgePopoverProps {
   locationMap: Map<string, LocationNode>;
   isMutatingLocked?: boolean;
   onClose: () => void;
-  onUpdateDistance: (edgeId: string, minutes: number) => void;
+  onUpdateDistance: (edgeId: string, distanceMeters: number) => void;
   onUpdateLabel?: (edgeId: string, directionLabel: string) => void;
   onCommitEdgeEdits?: (
     updates: Array<{
       edgeId: string;
-      travelMinutes?: number;
+      distanceMeters?: number;
       directionLabel?: string;
     }>
   ) => void;
@@ -1585,10 +1650,10 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
   onToggleLocked,
   onDeleteEdge,
 }) => {
-  const [draftMinutesById, setDraftMinutesById] = useState<
+  const [draftDistanceById, setDraftDistanceById] = useState<
     Record<string, string>
   >({});
-  const lastSyncedMinutesRef = useRef<Record<string, number>>({});
+  const lastSyncedDistanceRef = useRef<Record<string, number>>({});
   const [draftLabelsById, setDraftLabelsById] = useState<
     Record<string, string>
   >({});
@@ -1596,25 +1661,25 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
 
   useEffect(() => {
     if (!edges || edges.length === 0) {
-      setDraftMinutesById({});
-      lastSyncedMinutesRef.current = {};
+      setDraftDistanceById({});
+      lastSyncedDistanceRef.current = {};
       setDraftLabelsById({});
       lastSyncedLabelsRef.current = {};
       return;
     }
-    setDraftMinutesById((prev) => {
+    setDraftDistanceById((prev) => {
       const next: Record<string, string> = {};
       const nextSynced: Record<string, number> = {};
       for (const edge of edges) {
-        const prevSynced = lastSyncedMinutesRef.current[edge.id];
-        if (prev[edge.id] === undefined || prevSynced !== edge.travel_minutes) {
-          next[edge.id] = String(edge.travel_minutes);
+        const prevSynced = lastSyncedDistanceRef.current[edge.id];
+        if (prev[edge.id] === undefined || prevSynced !== edge.distance_meters) {
+          next[edge.id] = String(edge.distance_meters);
         } else {
           next[edge.id] = prev[edge.id];
         }
-        nextSynced[edge.id] = edge.travel_minutes;
+        nextSynced[edge.id] = edge.distance_meters;
       }
-      lastSyncedMinutesRef.current = nextSynced;
+      lastSyncedDistanceRef.current = nextSynced;
       return next;
     });
     setDraftLabelsById((prev) => {
@@ -1636,17 +1701,17 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
 
   if (!edges || edges.length === 0) return null;
 
-  const commitRowMinutes = (edge: LocationEdge, explicitDraft?: string) => {
+  const commitRowDistance = (edge: LocationEdge, explicitDraft?: string) => {
     if (isMutatingLocked) return;
     const rawDraft =
-      explicitDraft ?? draftMinutesById[edge.id] ?? String(edge.travel_minutes);
-    const committed = parseCommittedEdgeMinutes(rawDraft);
-    const normalized = committed ?? edge.travel_minutes;
-    if (committed !== null && committed !== edge.travel_minutes) {
+      explicitDraft ?? draftDistanceById[edge.id] ?? String(edge.distance_meters);
+    const committed = parseCommittedEdgeDistance(rawDraft);
+    const normalized = committed ?? edge.distance_meters;
+    if (committed !== null && committed !== edge.distance_meters) {
       onUpdateDistance(edge.id, committed);
     }
-    lastSyncedMinutesRef.current[edge.id] = normalized;
-    setDraftMinutesById((prev) => ({
+    lastSyncedDistanceRef.current[edge.id] = normalized;
+    setDraftDistanceById((prev) => ({
       ...prev,
       [edge.id]: String(normalized),
     }));
@@ -1672,16 +1737,16 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
     if (!isMutatingLocked) {
       const batchUpdates: Array<{
         edgeId: string;
-        travelMinutes?: number;
+        distanceMeters?: number;
         directionLabel?: string;
       }> = [];
       for (const edge of edges) {
-        const minDraft = draftMinutesById[edge.id];
-        const committedMin =
-          minDraft !== undefined ? parseCommittedEdgeMinutes(minDraft) : null;
-        const nextMin =
-          committedMin !== null && committedMin !== edge.travel_minutes
-            ? committedMin
+        const distDraft = draftDistanceById[edge.id];
+        const committedDist =
+          distDraft !== undefined ? parseCommittedEdgeDistance(distDraft) : null;
+        const nextDist =
+          committedDist !== null && committedDist !== edge.distance_meters
+            ? committedDist
             : undefined;
 
         const lblDraft = draftLabelsById[edge.id];
@@ -1691,10 +1756,10 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
             ? trimmedLbl
             : undefined;
 
-        if (nextMin !== undefined || nextLbl !== undefined) {
+        if (nextDist !== undefined || nextLbl !== undefined) {
           batchUpdates.push({
             edgeId: edge.id,
-            travelMinutes: nextMin,
+            distanceMeters: nextDist,
             directionLabel: nextLbl,
           });
         }
@@ -1704,8 +1769,8 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
           onCommitEdgeEdits(batchUpdates);
         } else {
           for (const upd of batchUpdates) {
-            if (upd.travelMinutes !== undefined) {
-              onUpdateDistance(upd.edgeId, upd.travelMinutes);
+            if (upd.distanceMeters !== undefined) {
+              onUpdateDistance(upd.edgeId, upd.distanceMeters);
             }
             if (upd.directionLabel !== undefined) {
               onUpdateLabel?.(upd.edgeId, upd.directionLabel);
@@ -1780,15 +1845,17 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
             const fromName = locationMap.get(e.from_location_id)?.name ?? e.from_location_id;
             const toName = locationMap.get(e.to_location_id)?.name ?? e.to_location_id;
             const draftValue =
-              draftMinutesById[e.id] ?? String(e.travel_minutes);
+              draftDistanceById[e.id] ?? String(e.distance_meters);
             const draftLabel =
               draftLabelsById[e.id] ?? e.direction_label;
+            const previewMeters =
+              parseCommittedEdgeDistance(draftValue) ?? e.distance_meters;
             return (
               <div
                 key={e.id}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1fr 68px auto auto",
+                  gridTemplateColumns: "1fr 84px auto auto",
                   gap: 6,
                   alignItems: "center",
                   background: "var(--bg-panel)",
@@ -1850,63 +1917,73 @@ export const MultiEdgePopover: React.FC<MultiEdgePopoverProps> = ({
                     />
                   </div>
                 </div>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  aria-label={`Travel minutes for ${fromName} to ${toName}`}
-                  className="field-input"
-                  disabled={isMutatingLocked}
-                  style={{
-                    padding: "3px 6px",
-                    fontSize: "0.73rem",
-                    textAlign: "center",
-                  }}
-                  value={draftValue}
-                  onChange={(ev) => {
-                    const digitsOnly = sanitizeEdgeMinutesInput(ev.target.value);
-                    setDraftMinutesById((prev) => ({
-                      ...prev,
-                      [e.id]: digitsOnly,
-                    }));
-                  }}
-                  onBlur={() => commitRowMinutes(e)}
-                  onKeyDown={(ev) => {
-                    if (ev.key === "Enter") {
-                      ev.preventDefault();
-                      ev.stopPropagation();
-                      commitRowMinutes(e);
-                    } else if (ev.key === "Escape") {
-                      ev.preventDefault();
-                      ev.stopPropagation();
-                      setDraftMinutesById((prev) => ({
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    aria-label={`Distance (meters) for ${fromName} to ${toName}`}
+                    className="field-input"
+                    disabled={isMutatingLocked}
+                    style={{
+                      padding: "3px 6px",
+                      fontSize: "0.73rem",
+                      textAlign: "center",
+                      width: "100%",
+                    }}
+                    title="Enter meters (e.g. 350) or km (e.g. 1.5km). ArrowUp/Down adapts step size (Shift for ±1m)."
+                    value={draftValue}
+                    onChange={(ev) => {
+                      const sanitized = sanitizeEdgeDistanceInput(ev.target.value);
+                      setDraftDistanceById((prev) => ({
                         ...prev,
-                        [e.id]: String(e.travel_minutes),
+                        [e.id]: sanitized,
                       }));
-                    } else if (ev.key === "ArrowUp") {
-                      ev.preventDefault();
-                      const stepped = stepEdgeMinutesDraft(
-                        draftValue,
-                        1,
-                        e.travel_minutes
-                      );
-                      setDraftMinutesById((prev) => ({
-                        ...prev,
-                        [e.id]: stepped,
-                      }));
-                    } else if (ev.key === "ArrowDown") {
-                      ev.preventDefault();
-                      const stepped = stepEdgeMinutesDraft(
-                        draftValue,
-                        -1,
-                        e.travel_minutes
-                      );
-                      setDraftMinutesById((prev) => ({
-                        ...prev,
-                        [e.id]: stepped,
-                      }));
-                    }
-                  }}
-                />
+                    }}
+                    onBlur={() => commitRowDistance(e)}
+                    onKeyDown={(ev) => {
+                      if (ev.key === "Enter") {
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                        commitRowDistance(e);
+                      } else if (ev.key === "Escape") {
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                        setDraftDistanceById((prev) => ({
+                          ...prev,
+                          [e.id]: String(e.distance_meters),
+                        }));
+                      } else if (ev.key === "ArrowUp") {
+                        ev.preventDefault();
+                        const stepped = stepEdgeDistanceDraft(
+                          draftValue,
+                          1,
+                          e.distance_meters,
+                          ev.shiftKey
+                        );
+                        setDraftDistanceById((prev) => ({
+                          ...prev,
+                          [e.id]: stepped,
+                        }));
+                      } else if (ev.key === "ArrowDown") {
+                        ev.preventDefault();
+                        const stepped = stepEdgeDistanceDraft(
+                          draftValue,
+                          -1,
+                          e.distance_meters,
+                          ev.shiftKey
+                        );
+                        setDraftDistanceById((prev) => ({
+                          ...prev,
+                          [e.id]: stepped,
+                        }));
+                      }
+                    }}
+                  />
+                  <span style={{ fontSize: "0.63rem", color: "var(--text-muted)" }}>
+                    {formatDistanceCompact(previewMeters)} ·{" "}
+                    {formatWalkingDuration(previewMeters)}
+                  </span>
+                </div>
                 <button
                   type="button"
                   className="btn"

@@ -17,7 +17,7 @@ from app.db.vector_math import (
     current_embedding_fingerprint,
     embed_text_sync,
 )
-from app.schemas.world import normalize_lore_category
+from app.schemas.world import extract_edge_distance_meters, normalize_lore_category
 from app.security.log_sanitize import sanitize_log_value
 
 logger = logging.getLogger("cybercantina.import_export.campaign")
@@ -1054,7 +1054,7 @@ def ingest_campaigns_atomic(
                     """
                     INSERT INTO location_edges (
                         id, world_id, from_location_id, to_location_id,
-                        direction_label, compass_direction, travel_minutes,
+                        direction_label, compass_direction, distance_meters,
                         is_locked_or_hidden, created_at_turn_id, superseded_at_turn_id
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1066,7 +1066,7 @@ def ingest_campaigns_atomic(
                         to_id,
                         str(edge.get("direction_label") or "forward"),
                         edge.get("compass_direction"),
-                        int(edge.get("travel_minutes") or 1),
+                        extract_edge_distance_meters(edge),
                         1 if edge.get("is_locked_or_hidden") else 0,
                         mapped_ct,
                         mapped_sup,

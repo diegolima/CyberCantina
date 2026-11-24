@@ -67,7 +67,7 @@ function makeFixture(): {
       to_location_id: "loc_cellar",
       direction_label: "Cellar stairs",
       compass_direction: "E",
-      travel_minutes: 2,
+      distance_meters: 140,
       is_locked_or_hidden: false,
     },
     {
@@ -77,7 +77,7 @@ function makeFixture(): {
       to_location_id: "loc_start",
       direction_label: "Upstairs",
       compass_direction: "W",
-      travel_minutes: 2,
+      distance_meters: 140,
       is_locked_or_hidden: false,
     },
   ];

@@ -181,7 +181,7 @@ def _seed_nested_world_and_character(
             to_location_id=loc_cellar.id,
             direction_label="Down to Cellar",
             compass_direction="S",
-            travel_minutes=1,
+            distance_meters=70,
         ),
         LocationEdge(
             id=f"e2_{w_id}",
@@ -190,7 +190,7 @@ def _seed_nested_world_and_character(
             to_location_id=loc_start.id,
             direction_label="Up to Foyer",
             compass_direction="N",
-            travel_minutes=1,
+            distance_meters=70,
         ),
         LocationEdge(
             id=f"e3_{w_id}",
@@ -199,7 +199,7 @@ def _seed_nested_world_and_character(
             to_location_id=loc_vault_hall.id,
             direction_label="Into Tide Vault",
             compass_direction="E",
-            travel_minutes=4,
+            distance_meters=280,
         ),
         LocationEdge(
             id=f"e4_{w_id}",
@@ -208,7 +208,7 @@ def _seed_nested_world_and_character(
             to_location_id=loc_start.id,
             direction_label="Back to Foyer",
             compass_direction="W",
-            travel_minutes=4,
+            distance_meters=280,
         ),
         LocationEdge(
             id=f"e5_{w_id}",
@@ -217,7 +217,7 @@ def _seed_nested_world_and_character(
             to_location_id=loc_stub_room.id,
             direction_label="To Shed",
             compass_direction="W",
-            travel_minutes=1,
+            distance_meters=70,
         ),
         LocationEdge(
             id=f"e6_{w_id}",
@@ -226,7 +226,7 @@ def _seed_nested_world_and_character(
             to_location_id=loc_start.id,
             direction_label="Back",
             compass_direction="E",
-            travel_minutes=1,
+            distance_meters=70,
         ),
     ]
 

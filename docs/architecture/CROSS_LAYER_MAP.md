@@ -964,4 +964,5 @@ erDiagram
 | `frontend/src/utils/partyHelpers.ts` |
 | `frontend/src/utils/profilePreferences.ts` |
 | `frontend/src/utils/slashCommands.ts` |
+| `frontend/src/utils/spatialDistance.ts` |
 | `frontend/src/utils/unsupportedFields.ts` |

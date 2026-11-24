@@ -147,7 +147,7 @@ export interface ImprovisedLocationSpec {
   description: string;
   direction_label: string;
   compass_direction: CompassDirection;
-  travel_minutes: number;
+  distance_meters: number;
   environmental_tags: string[];
 }
 

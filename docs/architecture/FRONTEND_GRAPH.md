@@ -88,6 +88,7 @@ flowchart TD
     b_7 --> b_12
     b_7 --> b_16
     b_7 --> b_20
+    b_7 --> b_21
     b_8 --> b_11
     b_8 --> b_17
     b_8 --> b_20
@@ -132,7 +133,7 @@ flowchart TD
 | `components/character` | 12 | `api`, `components (root)`, `components/shared`, `types`, `utils` |
 | `components/chat` | 20 | `components (root)`, `components/inspector`, `components/shared`, `components/world`, `hooks`, `types`, `utils` |
 | `components/inspector` | 13 | `components (root)`, `components/map`, `components/shared`, `types`, `utils` |
-| `components/map` | 15 | `components (root)`, `components/inspector`, `components/shared`, `hooks`, `types` |
+| `components/map` | 15 | `components (root)`, `components/inspector`, `components/shared`, `hooks`, `types`, `utils` |
 | `components/models` | 12 | `components/providers`, `local`, `types` |
 | `components/party` | 1 | `types`, `utils` |
 | `components/prompts` | 3 | *(leaf)* |
@@ -146,4 +147,4 @@ flowchart TD
 | `main` | 1 | `App`, `styles.css` |
 | `providers` | 1 | `api`, `local`, `types` |
 | `types` | 16 | *(leaf)* |
-| `utils` | 14 | `types` |
+| `utils` | 15 | `types` |

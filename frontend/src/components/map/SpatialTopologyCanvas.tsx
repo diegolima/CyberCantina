@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Crosshair,
@@ -60,11 +60,16 @@ import {
 import {
   COMPASS_ANGLES,
   COMPASS_ORDER,
+  DEFAULT_FALLBACK_DISTANCE_METERS,
   clientToWorldPoint,
-  parseCommittedEdgeMinutes,
+  formatBundleWalkingDuration,
+  formatDistanceCompact,
+  formatWalkingDuration,
+  getAdaptiveDistanceStep,
+  parseCommittedEdgeDistance,
   resolveBidirectionalProjectedBundle,
-  sanitizeEdgeMinutesInput,
-  stepEdgeMinutesDraft,
+  sanitizeEdgeDistanceInput,
+  stepEdgeDistanceDraft,
   worldPointToWrapperPoint,
   type LinkDragState,
   type NodeDragState,
@@ -118,7 +123,7 @@ export interface SpatialTopologyCanvasProps {
   setContextMenu: React.Dispatch<React.SetStateAction<MapContextMenuState | null>>;
   setMultiEdgeModalEdges: React.Dispatch<React.SetStateAction<LocationEdge[] | null>>;
   openContextMenuAt: (e: React.MouseEvent, target: MapContextMenuState["target"]) => void;
-  handleUpdateEdgeDistance: (edgeId: string, minutes: number) => void;
+  handleUpdateEdgeDistance: (edgeId: string, distanceMeters: number) => void;
   handleDeleteEdge: (edgeId: string) => void;
   handleDeleteEdgeGroup: (edgeIds: string[]) => void;
   drillIntoContainer: (contId: string | null) => void;
@@ -191,6 +196,21 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
   const [showMobileLegend, setShowMobileLegend] = useState(false);
   const [showMobileAddMenu, setShowMobileAddMenu] = useState(false);
   const [hoveredEdgePairKey, setHoveredEdgePairKey] = useState<string | null>(null);
+  const [previewTimePairKeys, setPreviewTimePairKeys] = useState<Set<string>>(
+    () => new Set()
+  );
+  const lastTouchEdgePreviewAtRef = useRef<number>(0);
+  const toggleBadgeTimePreview = useCallback((pairKey: string) => {
+    setPreviewTimePairKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(pairKey)) {
+        next.delete(pairKey);
+      } else {
+        next.add(pairKey);
+      }
+      return next;
+    });
+  }, []);
   const [viewBox, setViewBox] = useState<MapViewBox>(() => ({
     x: -DEFAULT_MAP_VIEWBOX_W / 2,
     y: -DEFAULT_MAP_VIEWBOX_H / 2,
@@ -211,6 +231,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
   const pendingTapTargetRef = useRef<
     | { kind: "location" | "container" | "ghost"; id: string }
     | { kind: "edge"; openEditor: () => void }
+    | { kind: "edge-preview"; pairKey: string }
     | null
   >(null);
   const activeTouchPointersRef = useRef<Map<number, { clientX: number; clientY: number }>>(
@@ -424,6 +445,9 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
             setSelectedGhostLocId?.(pendingTap.id);
           } else if (pendingTap.kind === "edge") {
             pendingTap.openEditor();
+          } else if (pendingTap.kind === "edge-preview") {
+            lastTouchEdgePreviewAtRef.current = Date.now();
+            toggleBadgeTimePreview(pendingTap.pairKey);
           }
         } else {
           // Empty canvas tap: check touch double-tap focal zoom, else deselect
@@ -529,7 +553,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
     const buildEdgeRenderItem = (params: {
       edge: Pick<
         LocationEdge,
-        "id" | "travel_minutes" | "is_locked_or_hidden" | "direction_label"
+        "id" | "distance_meters" | "is_locked_or_hidden" | "direction_label"
       > & {
         sourceNodeId: string;
         targetNodeId: string;
@@ -538,6 +562,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
         rawEdge: LocationEdge;
         groupedEdges?: LocationEdge[];
         passagePairCount?: number;
+        maxDistanceMeters?: number;
       };
       p1: { x: number; y: number } | undefined;
       p2: { x: number; y: number } | undefined;
@@ -554,27 +579,49 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
       const clipped = computeEdgeClippedSegment(p1, shape1, p2, shape2);
       const passagePairCount =
         edge.passagePairCount ?? (edge.groupedEdges?.length ?? 0);
-      const labelText = `${edge.travel_minutes}m${
-        edge.isAggregated && passagePairCount > 1 ? ` · ${passagePairCount}` : ""
-      }${edge.containsLockedEdge ? " 🔒" : ""}`;
+      const aggSuffix =
+        edge.isAggregated && passagePairCount > 1 ? ` · ${passagePairCount}` : "";
+      const lockSuffix = edge.containsLockedEdge ? " 🔒" : "";
+      const distanceLabelText = `${formatDistanceCompact(edge.distance_meters)}${aggSuffix}${lockSuffix}`;
+      const timeDurationText =
+        edge.isAggregated &&
+        passagePairCount > 1 &&
+        edge.maxDistanceMeters !== undefined
+          ? formatBundleWalkingDuration(edge.distance_meters, edge.maxDistanceMeters)
+          : formatWalkingDuration(edge.distance_meters);
+      const timeLabelText = `${timeDurationText}${aggSuffix}${lockSuffix}`;
+      const isTimePreview = previewTimePairKeys.has(pairKey);
+      const labelText = isTimePreview ? timeLabelText : distanceLabelText;
       const badgeWidth = computeDistanceBadgeWidth(labelText);
+      const hitWidth = Math.max(
+        badgeWidth,
+        computeDistanceBadgeWidth(
+          isTimePreview ? distanceLabelText : timeLabelText
+        )
+      );
       const hoverTitle =
         edge.isAggregated && edge.groupedEdges && edge.groupedEdges.length > 1
-          ? `${passagePairCount > 1 ? `${passagePairCount} boundary passages: ` : ""}${edge.groupedEdges
-              .map((ge) => ge.direction_label)
-              .join(" · ")}`
-          : `${edge.direction_label} (${edge.travel_minutes}m${
+          ? `${
+              passagePairCount > 1 ? `${passagePairCount} boundary passages (` : "("
+            }${formatDistanceCompact(edge.distance_meters)} · ${timeDurationText}${
               edge.containsLockedEdge ? " · locked" : ""
-            })`;
+            }): ${edge.groupedEdges
+              .map((ge) => ge.direction_label)
+              .join(" · ")} — click badge for walk time`
+          : `${edge.direction_label} (${formatDistanceCompact(edge.distance_meters)} · ${formatWalkingDuration(edge.distance_meters)}${
+              edge.containsLockedEdge ? " · locked" : ""
+            }) — click badge for walk time`;
       return {
         edge,
         clipped,
         isDirect,
         showLabel,
         labelText,
+        isTimePreview,
         hoverTitle,
         passagePairCount,
         badgeWidth,
+        hitWidth,
         pairKey,
         isGhost,
       };
@@ -602,7 +649,8 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
       const effectiveEdge = bundle
         ? {
             ...edge,
-            travel_minutes: bundle.minTravelMinutes,
+            distance_meters: bundle.minDistanceMeters,
+            maxDistanceMeters: bundle.maxDistanceMeters,
             containsLockedEdge: bundle.containsLockedEdge,
             groupedEdges: bundle.allEdges,
             passagePairCount: bundle.passagePairCount,
@@ -677,6 +725,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
     selectedContainer?.id,
     selectedLocation?.id,
     selectedGhostLocId,
+    previewTimePairKeys,
   ]);
 
   const activeInlineEdge = useMemo(() => {
@@ -690,7 +739,9 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
       ...inlineEdgeEdit,
       midX: match ? match.clipped.midX : inlineEdgeEdit.midX,
       midY: match ? match.clipped.midY : inlineEdgeEdit.midY,
-      fallbackMinutes: match ? match.edge.travel_minutes : 1,
+      fallbackMeters: match
+        ? match.edge.distance_meters
+        : DEFAULT_FALLBACK_DISTANCE_METERS,
       pairKey: match?.pairKey ?? null,
     };
   }, [inlineEdgeEdit, renderedEdges]);
@@ -699,9 +750,18 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
     ev: React.MouseEvent,
     edge: (typeof renderedEdges)[number]["edge"],
     clipped: (typeof renderedEdges)[number]["clipped"],
-    passagePairCount: number
+    passagePairCount: number,
+    pairKey?: string
   ) => {
     ev.stopPropagation();
+    if (pairKey) {
+      setPreviewTimePairKeys((prev) => {
+        if (!prev.has(pairKey)) return prev;
+        const next = new Set(prev);
+        next.delete(pairKey);
+        return next;
+      });
+    }
     if (
       edge.isAggregated &&
       edge.groupedEdges &&
@@ -714,7 +774,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
         edgeId: edge.rawEdge.id,
         midX: clipped.midX,
         midY: clipped.midY,
-        value: String(edge.travel_minutes),
+        value: String(edge.distance_meters),
       });
     }
   };
@@ -729,23 +789,24 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
 
   const commitInlineEdgeEdit = () => {
     if (!activeInlineEdge) return;
-    const committed = parseCommittedEdgeMinutes(activeInlineEdge.value);
+    const committed = parseCommittedEdgeDistance(activeInlineEdge.value);
     if (committed !== null) {
       handleUpdateEdgeDistance(activeInlineEdge.edgeId, committed);
     }
     setInlineEdgeEdit(null);
   };
 
-  const stepInlineEdgeEdit = (delta: number) => {
+  const stepInlineEdgeEdit = (direction: 1 | -1, fine = false) => {
     if (!activeInlineEdge) return;
     setInlineEdgeEdit((prev) =>
       prev
         ? {
             ...prev,
-            value: stepEdgeMinutesDraft(
+            value: stepEdgeDistanceDraft(
               prev.value,
-              delta,
-              activeInlineEdge.fallbackMinutes
+              direction,
+              activeInlineEdge.fallbackMeters,
+              fine
             ),
           }
         : null
@@ -767,14 +828,26 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
     : null;
   const wrapRectForClamp = wrapEl?.getBoundingClientRect();
   const clampedOverlayPos =
-    inlineOverlayPoint && wrapRectForClamp && wrapRectForClamp.width > 120
+    inlineOverlayPoint && wrapRectForClamp && wrapRectForClamp.width > 180
       ? {
-          left: Math.max(58, Math.min(wrapRectForClamp.width - 58, inlineOverlayPoint.x)),
+          left: Math.max(86, Math.min(wrapRectForClamp.width - 86, inlineOverlayPoint.x)),
           top: Math.max(20, Math.min(wrapRectForClamp.height - 20, inlineOverlayPoint.y)),
         }
       : inlineOverlayPoint
       ? { left: inlineOverlayPoint.x, top: inlineOverlayPoint.y }
       : null;
+
+  const parsedInlineMeters = activeInlineEdge
+    ? parseCommittedEdgeDistance(activeInlineEdge.value)
+    : null;
+  const activeInlinePreviewMeters =
+    parsedInlineMeters ??
+    activeInlineEdge?.fallbackMeters ??
+    DEFAULT_FALLBACK_DISTANCE_METERS;
+  const inlineDecStep = getAdaptiveDistanceStep(
+    Math.max(1, activeInlinePreviewMeters - 1)
+  );
+  const inlineIncStep = getAdaptiveDistanceStep(activeInlinePreviewMeters);
 
   const canvasCursor = resolveCanvasCursor({
     isNodeDragging: Boolean(nodeDrag?.hasMoved),
@@ -940,7 +1013,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                         })
                       }
                       onDoubleClick={(ev) =>
-                        openEdgeEditor(ev, edge, clipped, passagePairCount)
+                        openEdgeEditor(ev, edge, clipped, passagePairCount, pairKey)
                       }
                     >
                       <title>{hoverTitle}</title>
@@ -1017,9 +1090,11 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     isDirect,
                     showLabel,
                     labelText,
+                    isTimePreview,
                     hoverTitle,
                     passagePairCount,
                     badgeWidth,
+                    hitWidth,
                     pairKey,
                   }) => {
                     if (!showLabel) return null;
@@ -1033,37 +1108,51 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     return (
                       <g
                         key={`badge-${edge.id}`}
+                        data-badge-mode={isTimePreview ? "time" : "distance"}
                         style={{ cursor: isPanning ? "grabbing" : "pointer" }}
                         onPointerDown={(ev) => {
                           if (ev.button !== 0) return;
-                          if (
-                            (ev.pointerType === "touch" || isMobileViewport) &&
-                            mode === "editor" &&
-                            !isMutatingLocked
-                          ) {
-                            pendingTapTargetRef.current = {
-                              kind: "edge",
-                              openEditor: () => {
-                                if (
-                                  edge.isAggregated &&
-                                  edge.groupedEdges &&
-                                  edge.groupedEdges.length > 1 &&
-                                  passagePairCount > 1
-                                ) {
-                                  setMultiEdgeModalEdges(edge.groupedEdges);
-                                } else {
-                                  setInlineEdgeEdit({
-                                    edgeId: edge.rawEdge.id,
-                                    midX: clipped.midX,
-                                    midY: clipped.midY,
-                                    value: String(edge.travel_minutes),
-                                  });
-                                }
-                              },
-                            };
-                          } else if (ev.pointerType !== "touch") {
+                          if (ev.pointerType === "touch" || isMobileViewport) {
+                            if (mode === "editor" && !isMutatingLocked) {
+                              pendingTapTargetRef.current = {
+                                kind: "edge",
+                                openEditor: () => {
+                                  if (
+                                    edge.isAggregated &&
+                                    edge.groupedEdges &&
+                                    edge.groupedEdges.length > 1 &&
+                                    passagePairCount > 1
+                                  ) {
+                                    setMultiEdgeModalEdges(edge.groupedEdges);
+                                  } else {
+                                    setInlineEdgeEdit({
+                                      edgeId: edge.rawEdge.id,
+                                      midX: clipped.midX,
+                                      midY: clipped.midY,
+                                      value: String(edge.distance_meters),
+                                    });
+                                  }
+                                },
+                              };
+                            } else {
+                              pendingTapTargetRef.current = {
+                                kind: "edge-preview",
+                                pairKey,
+                              };
+                            }
+                          } else {
                             ev.stopPropagation();
                           }
+                        }}
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          if (
+                            isPanning ||
+                            Date.now() - lastTouchEdgePreviewAtRef.current < 400
+                          ) {
+                            return;
+                          }
+                          toggleBadgeTimePreview(pairKey);
                         }}
                         onMouseEnter={() => {
                           if (isEditorQuickDeleteEnabled) enterEdgeHover(pairKey);
@@ -1082,10 +1171,17 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                           })
                         }
                         onDoubleClick={(ev) =>
-                          openEdgeEditor(ev, edge, clipped, passagePairCount)
+                          openEdgeEditor(ev, edge, clipped, passagePairCount, pairKey)
                         }
                       >
                         <title>{hoverTitle}</title>
+                        <rect
+                          x={clipped.midX - hitWidth / 2}
+                          y={clipped.midY - 9}
+                          width={hitWidth}
+                          height={16}
+                          fill="transparent"
+                        />
                         <rect
                           x={clipped.midX - badgeWidth / 2}
                           y={clipped.midY - 9}
@@ -1094,14 +1190,26 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                           rx={4}
                           fill="#0b0e14"
                           fillOpacity={1}
-                          stroke={isDirect ? "#0891b2" : "#334155"}
+                          stroke={
+                            isTimePreview
+                              ? "#f59e0b"
+                              : isDirect
+                              ? "#0891b2"
+                              : "#334155"
+                          }
                           strokeWidth={1}
                         />
                         <text
                           x={clipped.midX}
                           y={clipped.midY + 2}
                           textAnchor="middle"
-                          fill={isDirect ? "#67e8f9" : "#94a3b8"}
+                          fill={
+                            isTimePreview
+                              ? "#fde68a"
+                              : isDirect
+                              ? "#67e8f9"
+                              : "#94a3b8"
+                          }
                           fontSize="8.2"
                           fontWeight="600"
                         >
@@ -1916,12 +2024,12 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
             </g>
           </svg>
 
-          {/* HTML Overlay Inline Link Travel-Time Editor */}
+          {/* HTML Overlay Inline Link Distance Editor */}
           {activeInlineEdge && (
             <div
               data-layer="inline-edge-editor"
               role="group"
-              aria-label="Edit link travel time"
+              aria-label="Edit link distance"
               onMouseDown={(ev) => ev.stopPropagation()}
               onPointerDown={(ev) => ev.stopPropagation()}
               onClick={(ev) => ev.stopPropagation()}
@@ -1951,8 +2059,8 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
               <button
                 type="button"
                 className="map-inline-edge-stepper"
-                aria-label="Decrease travel minutes"
-                title="Decrease (-1m)"
+                aria-label="Decrease distance"
+                title={`Decrease (-${inlineDecStep}m, Shift -1m)`}
                 onMouseDown={(ev) => {
                   ev.preventDefault();
                   ev.stopPropagation();
@@ -1960,7 +2068,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                 onPointerDown={(ev) => ev.stopPropagation()}
                 onClick={(ev) => {
                   ev.stopPropagation();
-                  stepInlineEdgeEdit(-1);
+                  stepInlineEdgeEdit(-1, ev.shiftKey);
                 }}
               >
                 −
@@ -1968,14 +2076,15 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
               <input
                 ref={inlineInputRef}
                 type="text"
-                inputMode="numeric"
+                inputMode="decimal"
                 className="map-inline-edge-input"
-                aria-label="Travel minutes"
+                aria-label="Distance in meters"
+                title="Enter meters (e.g. 350) or km (e.g. 1.5km)"
                 value={activeInlineEdge.value}
                 onChange={(ev) => {
-                  const digitsOnly = sanitizeEdgeMinutesInput(ev.target.value);
+                  const sanitized = sanitizeEdgeDistanceInput(ev.target.value);
                   setInlineEdgeEdit((prev) =>
-                    prev ? { ...prev, value: digitsOnly } : null
+                    prev ? { ...prev, value: sanitized } : null
                   );
                 }}
                 onKeyDown={(ev) => {
@@ -1989,10 +2098,10 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     setInlineEdgeEdit(null);
                   } else if (ev.key === "ArrowUp") {
                     ev.preventDefault();
-                    stepInlineEdgeEdit(1);
+                    stepInlineEdgeEdit(1, ev.shiftKey);
                   } else if (ev.key === "ArrowDown") {
                     ev.preventDefault();
-                    stepInlineEdgeEdit(-1);
+                    stepInlineEdgeEdit(-1, ev.shiftKey);
                   }
                 }}
               />
@@ -2006,11 +2115,14 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
               >
                 m
               </span>
+              <span className="map-inline-edge-walk-hint">
+                {formatWalkingDuration(activeInlinePreviewMeters)}
+              </span>
               <button
                 type="button"
                 className="map-inline-edge-stepper"
-                aria-label="Increase travel minutes"
-                title="Increase (+1m)"
+                aria-label="Increase distance"
+                title={`Increase (+${inlineIncStep}m, Shift +1m)`}
                 onMouseDown={(ev) => {
                   ev.preventDefault();
                   ev.stopPropagation();
@@ -2018,7 +2130,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                 onPointerDown={(ev) => ev.stopPropagation()}
                 onClick={(ev) => {
                   ev.stopPropagation();
-                  stepInlineEdgeEdit(1);
+                  stepInlineEdgeEdit(1, ev.shiftKey);
                 }}
               >
                 +
@@ -2154,7 +2266,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                 <Layers size={11} color="#fbbf24" /> Container
               </span>
               <span className="map-legend-hint">
-                Drag nodes · Middle-drag to pan · Drag ports to link · Double-click distance · Right-click for actions
+                Drag nodes · Middle-drag to pan · Drag ports to link · Click badge for walk time · Double-click to edit · Right-click for actions
               </span>
             </div>
 

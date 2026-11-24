@@ -4,11 +4,124 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.unsupported import sanitize_unsupported_fields_dict
+
+WALKING_METERS_PER_MINUTE: Final[int] = 70
+MAX_EDGE_DISTANCE_METERS: Final[int] = 100_000_000
+DEFAULT_INTERIOR_DISTANCE_METERS: Final[int] = 20
+DEFAULT_EXTERIOR_DISTANCE_METERS: Final[int] = 100
+DEFAULT_FALLBACK_DISTANCE_METERS: Final[int] = 50
+
+
+def coerce_edge_distance_meters(
+    value: Any,
+    *,
+    fallback: int = DEFAULT_FALLBACK_DISTANCE_METERS,
+) -> int:
+    """Coerce a raw distance value into a bounded positive integer meter count."""
+    if value is None or isinstance(value, bool):
+        return max(1, min(MAX_EDGE_DISTANCE_METERS, int(fallback)))
+    try:
+        if isinstance(value, str):
+            raw = value.strip().lower()
+            if not raw:
+                return max(1, min(MAX_EDGE_DISTANCE_METERS, int(fallback)))
+            if raw.endswith("km"):
+                parsed = float(raw[:-2].strip()) * 1000.0
+            elif raw.endswith("k"):
+                parsed = float(raw[:-1].strip()) * 1000.0
+            elif raw.endswith("m"):
+                parsed = float(raw[:-1].strip())
+            else:
+                parsed = float(raw)
+        else:
+            parsed = float(value)
+    except (TypeError, ValueError):
+        return max(1, min(MAX_EDGE_DISTANCE_METERS, int(fallback)))
+    if not (parsed == parsed) or parsed == float("inf") or parsed == float("-inf"):
+        return max(1, min(MAX_EDGE_DISTANCE_METERS, int(fallback)))
+    return max(1, min(MAX_EDGE_DISTANCE_METERS, int(round(parsed))))
+
+
+def resolve_legacy_edge_distance_meters(
+    data: Any,
+    *,
+    fallback: int = DEFAULT_FALLBACK_DISTANCE_METERS,
+) -> Any:
+    """Normalize dict payloads carrying `distance_meters` or legacy `travel_minutes`."""
+    if not isinstance(data, dict):
+        return data
+    out = dict(data)
+    raw_dist = out.get("distance_meters")
+    if raw_dist is not None and not (isinstance(raw_dist, str) and not raw_dist.strip()):
+        out["distance_meters"] = coerce_edge_distance_meters(raw_dist, fallback=fallback)
+        out.pop("travel_minutes", None)
+        return out
+    if "travel_minutes" in out and out.get("travel_minutes") is not None:
+        raw_min = out.pop("travel_minutes")
+        try:
+            minutes = float(raw_min)
+            if not (minutes == minutes) or minutes == float("inf") or minutes == float("-inf"):
+                meters = fallback
+            else:
+                meters = max(1, int(round(minutes * WALKING_METERS_PER_MINUTE)))
+        except (TypeError, ValueError):
+            meters = fallback
+        out["distance_meters"] = max(1, min(MAX_EDGE_DISTANCE_METERS, meters))
+        return out
+    out.pop("travel_minutes", None)
+    if "distance_meters" in out:
+        out["distance_meters"] = max(1, min(MAX_EDGE_DISTANCE_METERS, int(fallback)))
+    return out
+
+
+def extract_edge_distance_meters(
+    edge: dict[str, Any],
+    *,
+    fallback: int = DEFAULT_FALLBACK_DISTANCE_METERS,
+) -> int:
+    """Resolve `distance_meters` from a dict, converting legacy `travel_minutes` (* 70) once."""
+    normalized = resolve_legacy_edge_distance_meters(edge, fallback=fallback)
+    return coerce_edge_distance_meters(
+        normalized.get("distance_meters"), fallback=fallback
+    )
+
+
+def derive_walking_minutes(distance_meters: int) -> int:
+    """Derive rounded integer walking minutes from meters at 70 m/min (min 1)."""
+    safe_meters = max(1, int(distance_meters))
+    return max(1, int(safe_meters / WALKING_METERS_PER_MINUTE + 0.5))
+
+
+def format_distance_meters(distance_meters: int) -> str:
+    """Format meters compactly (`350m`, `1.4km`, `2km`, `125km`)."""
+    safe_meters = max(1, int(distance_meters))
+    if safe_meters < 1000:
+        return f"{safe_meters}m"
+    if safe_meters < 100_000:
+        km = round(safe_meters / 1000.0, 1)
+        if km.is_integer():
+            return f"{int(km)}km"
+        return f"{km:.1f}km"
+    return f"{int(round(safe_meters / 1000.0))}km"
+
+
+def format_walking_duration(distance_meters: int) -> str:
+    """Format canonical walking duration (`< 1 min`, `~5 min`, `~1h 15min`)."""
+    safe_meters = max(1, int(distance_meters))
+    if safe_meters < 35:
+        return "< 1 min"
+    mins = derive_walking_minutes(safe_meters)
+    if mins < 60:
+        return f"~{mins} min"
+    hours, rem = divmod(mins, 60)
+    if rem == 0:
+        return f"~{hours}h"
+    return f"~{hours}h {rem}min"
 
 CompassDirection = Literal["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 SharedLoreCategory = Literal["history", "culture", "faction", "rumor"]
@@ -511,9 +624,21 @@ class LocationEdgeDraft(BaseModel):
         default=None,
         description="Compass slot (N, NE, E, SE, S, SW, W, NW) from source to target.",
     )
-    travel_minutes: int = Field(default=1, ge=0, le=1440)
+    distance_meters: int = Field(
+        default=DEFAULT_FALLBACK_DISTANCE_METERS,
+        ge=1,
+        le=MAX_EDGE_DISTANCE_METERS,
+        description="Physical separation in meters along this path (10-60 indoor rooms, 80-500 streets/courtyards, 500-5000+ overland).",
+    )
     is_locked_or_hidden: bool = Field(default=False)
     bidirectional: bool = Field(default=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_distance(cls, data: Any) -> Any:
+        return resolve_legacy_edge_distance_meters(
+            data, fallback=DEFAULT_FALLBACK_DISTANCE_METERS
+        )
 
 
 class WorldWizardSeed(BaseModel):
@@ -827,10 +952,21 @@ class LocationEdge(BaseModel):
     to_location_id: str
     direction_label: str
     compass_direction: CompassDirection | None = None
-    travel_minutes: int = 1
+    distance_meters: int = Field(
+        default=DEFAULT_FALLBACK_DISTANCE_METERS,
+        ge=1,
+        le=MAX_EDGE_DISTANCE_METERS,
+    )
     is_locked_or_hidden: bool = False
     created_at_turn_id: str | None = None
     superseded_at_turn_id: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_distance(cls, data: Any) -> Any:
+        return resolve_legacy_edge_distance_meters(
+            data, fallback=DEFAULT_FALLBACK_DISTANCE_METERS
+        )
 
 
 class NeighborLocationView(BaseModel):
@@ -839,9 +975,16 @@ class NeighborLocationView(BaseModel):
     edge_id: str
     direction_label: str
     compass_direction: CompassDirection | None = None
-    travel_minutes: int
+    distance_meters: int = Field(ge=1, le=MAX_EDGE_DISTANCE_METERS)
     is_locked_or_hidden: bool
     destination: LocationNode
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_distance(cls, data: Any) -> Any:
+        return resolve_legacy_edge_distance_meters(
+            data, fallback=DEFAULT_FALLBACK_DISTANCE_METERS
+        )
 
 
 def _enforce_world_level_lore_nodes(nodes: list[LoreNode]) -> list[LoreNode]:
@@ -1079,7 +1222,8 @@ CANONICAL_EDGE_KEYS: frozenset[str] = frozenset(
         "to_location_id",
         "direction_label",
         "compass_direction",
-        "travel_minutes",
+        "distance_meters",
+        "travel_minutes",  # Legacy v0.35.x key auto-converted (* 70) on import without spurious warnings
         "is_locked_or_hidden",
         "created_at_turn_id",
         "superseded_at_turn_id",

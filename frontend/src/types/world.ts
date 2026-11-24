@@ -132,7 +132,7 @@ export interface LocationEdge {
   to_location_id: string;
   direction_label: string;
   compass_direction?: CompassDirection | null;
-  travel_minutes: number;
+  distance_meters: number;
   is_locked_or_hidden: boolean;
   created_at_turn_id?: string | null;
   superseded_at_turn_id?: string | null;
@@ -142,7 +142,7 @@ export interface NeighborLocationView {
   edge_id: string;
   direction_label: string;
   compass_direction?: CompassDirection | null;
-  travel_minutes: number;
+  distance_meters: number;
   is_locked_or_hidden: boolean;
   destination: LocationNode;
 }
@@ -197,7 +197,7 @@ export interface LocationEdgeDraft {
   direction_label: string;
   reverse_direction_label: string;
   compass_direction?: CompassDirection | null;
-  travel_minutes: number;
+  distance_meters: number;
   is_locked_or_hidden: boolean;
   bidirectional: boolean;
 }

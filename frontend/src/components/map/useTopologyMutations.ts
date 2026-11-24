@@ -20,7 +20,11 @@ import {
   validateVisitedAncestorContainment,
 } from "./mapValidation";
 import {
+  DEFAULT_EXTERIOR_DISTANCE_METERS,
+  DEFAULT_FALLBACK_DISTANCE_METERS,
+  DEFAULT_INTERIOR_DISTANCE_METERS,
   OPPOSITE_COMPASS,
+  clampEdgeDistanceMeters,
   compassFromVector,
   computePromotionCandidates,
   filterEdgesAfterDeletion,
@@ -83,7 +87,7 @@ export function buildBidirectionalEdgePair(params: {
   toLoc: LocationNode;
   direction: CompassDirection;
   targetDirection?: CompassDirection;
-  travelMinutes: number;
+  distanceMeters: number;
   bidirectional: boolean;
 }): LocationEdge[] {
   const {
@@ -92,7 +96,7 @@ export function buildBidirectionalEdgePair(params: {
     toLoc,
     direction,
     targetDirection,
-    travelMinutes,
+    distanceMeters,
     bidirectional,
   } = params;
   const revSlot = targetDirection ?? OPPOSITE_COMPASS[direction];
@@ -104,7 +108,7 @@ export function buildBidirectionalEdgePair(params: {
       to_location_id: toLoc.id,
       direction_label: `Passage to ${toLoc.name}`,
       compass_direction: direction,
-      travel_minutes: travelMinutes,
+      distance_meters: distanceMeters,
       is_locked_or_hidden: false,
     },
   ];
@@ -116,7 +120,7 @@ export function buildBidirectionalEdgePair(params: {
       to_location_id: fromLoc.id,
       direction_label: `Return to ${fromLoc.name}`,
       compass_direction: revSlot,
-      travel_minutes: travelMinutes,
+      distance_meters: distanceMeters,
       is_locked_or_hidden: false,
     });
   }
@@ -449,7 +453,7 @@ export function useTopologyMutations({
       fromLoc: LocationNode,
       toLoc: LocationNode,
       direction: CompassDirection,
-      travelMinutes: number,
+      distanceMeters: number,
       bidirectional: boolean,
       promoteIds: Set<string>,
       overrideLocations?: LocationNode[],
@@ -471,7 +475,7 @@ export function useTopologyMutations({
         toLoc,
         direction,
         targetDirection,
-        travelMinutes,
+        distanceMeters,
         bidirectional,
       });
 
@@ -494,9 +498,8 @@ export function useTopologyMutations({
       targetKind: "location" | "container";
       targetId: string;
       explicitTargetSlot?: CompassDirection;
-      travelMinutes?: number;
+      distanceMeters?: number;
     }) => {
-      const minutes = Math.max(1, Math.min(240, opts.travelMinutes ?? 2));
       const srcInfo = resolveNodeConnectionEndpoint({
         kind: opts.sourceKind,
         id: opts.sourceId,
@@ -522,6 +525,22 @@ export function useTopologyMutations({
         return;
       }
       if (srcInfo.loc.id === tgtInfo.loc.id) return;
+
+      const defaultMeters =
+        srcInfo.loc.container_id &&
+        srcInfo.loc.container_id === tgtInfo.loc.container_id
+          ? DEFAULT_INTERIOR_DISTANCE_METERS
+          : srcInfo.loc.container_id !== tgtInfo.loc.container_id ||
+            opts.sourceKind === "container" ||
+            opts.targetKind === "container" ||
+            srcInfo.loc.is_hub ||
+            tgtInfo.loc.is_hub
+          ? DEFAULT_EXTERIOR_DISTANCE_METERS
+          : DEFAULT_FALLBACK_DISTANCE_METERS;
+      const distanceMeters = clampEdgeDistanceMeters(
+        opts.distanceMeters ?? defaultMeters,
+        defaultMeters
+      );
 
       // Avoid duplicate identical direct edges
       const alreadyConnected = workingEdges.some(
@@ -596,7 +615,7 @@ export function useTopologyMutations({
           suggestedHubName: `${
             collidingSide === "target" ? tgtInfo.loc.name : srcInfo.loc.name
           } — Junction`,
-          travelMinutes: minutes,
+          distanceMeters,
           x: Math.round((srcPt.x + tgtPt.x) / 2),
           y: Math.round((srcPt.y + tgtPt.y) / 2),
         });
@@ -615,7 +634,7 @@ export function useTopologyMutations({
           chosenTargetLocationId: tgtInfo.loc.id,
           direction: opts.sourceSlot,
           explicitTargetSlot: opts.explicitTargetSlot,
-          travelMinutes: minutes,
+          distanceMeters,
           bidirectional: true,
           candidates,
         });
@@ -626,7 +645,7 @@ export function useTopologyMutations({
         srcInfo.loc,
         tgtInfo.loc,
         opts.sourceSlot,
-        minutes,
+        distanceMeters,
         true,
         new Set(),
         undefined,
@@ -656,7 +675,7 @@ export function useTopologyMutations({
       fromLoc: LocationNode,
       toLoc: LocationNode,
       direction: CompassDirection,
-      travelMinutes: number,
+      distanceMeters: number,
       bidirectional: boolean,
       promoteIds: Set<string>,
       explicitTargetSlot?: CompassDirection
@@ -694,7 +713,7 @@ export function useTopologyMutations({
           collidingSide: "target",
           occupiedByName: occOther,
           suggestedHubName: `${toLoc.name} — Junction`,
-          travelMinutes,
+          distanceMeters,
           x: Math.round((srcPt.x + tgtPt.x) / 2),
           y: Math.round((srcPt.y + tgtPt.y) / 2),
           promoteIds: promoteIds.size > 0 ? Array.from(promoteIds) : undefined,
@@ -706,7 +725,7 @@ export function useTopologyMutations({
         fromLoc,
         toLoc,
         direction,
-        travelMinutes,
+        distanceMeters,
         bidirectional,
         promoteIds,
         undefined,
@@ -727,7 +746,7 @@ export function useTopologyMutations({
 
   // Confirm Passage Hub insertion on colliding port
   const handleConfirmHubCollision = useCallback(
-    (hubName: string, travelMinutes: number) => {
+    (hubName: string, distanceMeters: number) => {
       if (!hubCollisionModal) return;
       const st = hubCollisionModal;
       const srcLoc = locationMap.get(st.sourceNodeId);
@@ -799,7 +818,7 @@ export function useTopologyMutations({
             to_location_id: hubId,
             direction_label: `To ${hubName}`,
             compass_direction: anchorSlot,
-            travel_minutes: 1,
+            distance_meters: DEFAULT_INTERIOR_DISTANCE_METERS,
             is_locked_or_hidden: false,
           },
           {
@@ -809,7 +828,7 @@ export function useTopologyMutations({
             to_location_id: anchorNode.id,
             direction_label: `Return to ${anchorNode.name}`,
             compass_direction: backToAnchorSlot,
-            travel_minutes: 1,
+            distance_meters: DEFAULT_INTERIOR_DISTANCE_METERS,
             is_locked_or_hidden: false,
           }
         );
@@ -827,7 +846,7 @@ export function useTopologyMutations({
             direction_label:
               existingFwd.direction_label || `To ${oldDest?.name ?? "Wing"}`,
             compass_direction: slotToOldDest,
-            travel_minutes: existingFwd.travel_minutes,
+            distance_meters: existingFwd.distance_meters,
             is_locked_or_hidden: existingFwd.is_locked_or_hidden,
           },
           {
@@ -837,7 +856,7 @@ export function useTopologyMutations({
             to_location_id: hubId,
             direction_label: `Return to ${hubName}`,
             compass_direction: origRevSlot,
-            travel_minutes: existingFwd.travel_minutes,
+            distance_meters: existingFwd.distance_meters,
             is_locked_or_hidden: existingFwd.is_locked_or_hidden,
           }
         );
@@ -850,7 +869,7 @@ export function useTopologyMutations({
             to_location_id: hubId,
             direction_label: `To ${hubName}`,
             compass_direction: anchorSlot,
-            travel_minutes: 1,
+            distance_meters: DEFAULT_INTERIOR_DISTANCE_METERS,
             is_locked_or_hidden: false,
           },
           {
@@ -860,7 +879,7 @@ export function useTopologyMutations({
             to_location_id: anchorNode.id,
             direction_label: `Return to ${anchorNode.name}`,
             compass_direction: backToAnchorSlot,
-            travel_minutes: 1,
+            distance_meters: DEFAULT_INTERIOR_DISTANCE_METERS,
             is_locked_or_hidden: false,
           }
         );
@@ -881,7 +900,7 @@ export function useTopologyMutations({
           to_location_id: peerNode.id,
           direction_label: `To ${peerNode.name}`,
           compass_direction: slotToPeer,
-          travel_minutes: travelMinutes,
+          distance_meters: distanceMeters,
           is_locked_or_hidden: false,
         },
         {
@@ -891,7 +910,7 @@ export function useTopologyMutations({
           to_location_id: hubId,
           direction_label: `To ${hubName}`,
           compass_direction: slotFromPeer,
-          travel_minutes: travelMinutes,
+          distance_meters: distanceMeters,
           is_locked_or_hidden: false,
         }
       );
@@ -942,7 +961,7 @@ export function useTopologyMutations({
     (opts: {
       kind: "location" | "hub" | "container";
       name: string;
-      travelMinutes: number;
+      distanceMeters: number;
       containerDepth?: 1 | 2 | 3 | 4;
     }) => {
       if (!emptyCanvasModal) return;
@@ -1013,7 +1032,7 @@ export function useTopologyMutations({
           updatedSource,
           portalLoc,
           st.sourceSlot,
-          opts.travelMinutes,
+          clampEdgeDistanceMeters(opts.distanceMeters, DEFAULT_EXTERIOR_DISTANCE_METERS),
           true,
           new Set(),
           nextLocs,
@@ -1054,7 +1073,12 @@ export function useTopologyMutations({
         sourceLoc,
         newLoc,
         st.sourceSlot,
-        opts.travelMinutes,
+        clampEdgeDistanceMeters(
+          opts.distanceMeters,
+          currentContainerId
+            ? DEFAULT_INTERIOR_DISTANCE_METERS
+            : DEFAULT_FALLBACK_DISTANCE_METERS
+        ),
         true,
         new Set(),
         [...workingLocations, newLoc],
@@ -1081,7 +1105,7 @@ export function useTopologyMutations({
   const handleLinkExistingFromEmptyCanvas = useCallback(
     (opts: {
       targetLocationId: string;
-      travelMinutes: number;
+      distanceMeters: number;
       targetSlot?: CompassDirection;
     }) => {
       if (!emptyCanvasModal) return;
@@ -1094,7 +1118,7 @@ export function useTopologyMutations({
         targetKind: "location",
         targetId: opts.targetLocationId,
         explicitTargetSlot: opts.targetSlot,
-        travelMinutes: opts.travelMinutes,
+        distanceMeters: opts.distanceMeters,
       });
     },
     [emptyCanvasModal, setEmptyCanvasModal, initiateConnection]
@@ -1502,17 +1526,20 @@ export function useTopologyMutations({
   );
 
   const handleUpdateEdgeDistance = useCallback(
-    (edgeId: string, minutes: number) => {
+    (edgeId: string, distanceMeters: number) => {
       const target = workingEdges.find((e) => e.id === edgeId);
       if (!target) return;
-      const clamped = Math.max(1, Math.min(240, Math.round(minutes) || 1));
+      const clamped = clampEdgeDistanceMeters(
+        distanceMeters,
+        target.distance_meters
+      );
       const nextEdges = workingEdges.map((e) => {
         if (
           e.id === edgeId ||
           (e.from_location_id === target.to_location_id &&
             e.to_location_id === target.from_location_id)
         ) {
-          return { ...e, travel_minutes: clamped };
+          return { ...e, distance_meters: clamped };
         }
         return e;
       });
@@ -1571,7 +1598,7 @@ export function useTopologyMutations({
     (
       updates: Array<{
         edgeId: string;
-        travelMinutes?: number;
+        distanceMeters?: number;
         directionLabel?: string;
       }>
     ) => {
@@ -1583,20 +1610,20 @@ export function useTopologyMutations({
         const target = nextEdges.find((e) => e.id === upd.edgeId);
         if (!target) continue;
 
-        if (upd.travelMinutes !== undefined) {
-          const clamped = Math.max(
-            1,
-            Math.min(240, Math.round(upd.travelMinutes) || 1)
+        if (upd.distanceMeters !== undefined) {
+          const clamped = clampEdgeDistanceMeters(
+            upd.distanceMeters,
+            target.distance_meters
           );
           nextEdges = nextEdges.map((e) => {
             if (
               (e.id === upd.edgeId ||
                 (e.from_location_id === target.to_location_id &&
                   e.to_location_id === target.from_location_id)) &&
-              e.travel_minutes !== clamped
+              e.distance_meters !== clamped
             ) {
               changed = true;
-              return { ...e, travel_minutes: clamped };
+              return { ...e, distance_meters: clamped };
             }
             return e;
           });

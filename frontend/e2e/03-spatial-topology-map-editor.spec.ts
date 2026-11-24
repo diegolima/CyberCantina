@@ -55,54 +55,63 @@ test.describe("03 - Interactive SVG Map Topology Canvas (SpatialTopologyView)", 
     // Ripperdoc Clinic node must NOT be deleted when an input is focused
     await expect(clinicNode).toBeVisible();
 
-    // 3. Double-click the "5m" edge distance badge to open the screen-space HTML inline editor overlay
-    const badge5m = page
-      .locator('g[data-layer="edge-badges"] > g', { hasText: "5m" })
+    // 3. Click "350m" badge to toggle walking-time preview ("~5 min"), then click back and double-click to edit
+    const badge350m = page
+      .locator('g[data-layer="edge-badges"] > g', { hasText: "350m" })
       .first();
-    await expect(badge5m).toBeVisible();
-    await badge5m.dblclick();
+    await expect(badge350m).toBeVisible();
+    await badge350m.click();
+    const badge5min = page
+      .locator('g[data-layer="edge-badges"] > g[data-badge-mode="time"]', {
+        hasText: "~5 min",
+      })
+      .first();
+    await expect(badge5min).toBeVisible();
+    await badge5min.click();
+    await expect(badge350m).toBeVisible();
+    await badge350m.dblclick();
 
     const inlineOverlay = page.locator('[data-layer="inline-edge-editor"]');
     await expect(inlineOverlay).toBeVisible();
 
-    const minutesInput = inlineOverlay.getByLabel("Travel minutes", {
+    const distanceInput = inlineOverlay.getByLabel("Distance in meters", {
       exact: true,
     });
-    await expect(minutesInput).toBeFocused();
-    await expect(minutesInput).toHaveValue("5");
+    await expect(distanceInput).toBeFocused();
+    await expect(distanceInput).toHaveValue("350");
 
-    // Click "+1m" stepper button (onMouseDown preventDefault keeps overlay alive)
-    await inlineOverlay.getByLabel("Increase travel minutes").click();
-    await expect(minutesInput).toHaveValue("6");
+    // Click "+25m" adaptive stepper button (onMouseDown preventDefault keeps overlay alive)
+    await inlineOverlay.getByLabel("Increase distance").click();
+    await expect(distanceInput).toHaveValue("375");
 
-    // Type "12" and press Enter to commit
-    await minutesInput.fill("12");
-    await minutesInput.press("Enter");
+    // Type "1.5km" shorthand (>240m uncapped) and press Enter to commit
+    await distanceInput.fill("1.5km");
+    await distanceInput.press("Enter");
     await expect(inlineOverlay).toBeHidden();
 
-    // Verify badge updated to "12m" and Undo stack recorded 1 snapshot
-    const badge12m = page
-      .locator('g[data-layer="edge-badges"] > g', { hasText: "12m" })
+    // Verify badge updated to "1.5km" and Undo stack recorded 1 snapshot
+    const badge15km = page
+      .locator('g[data-layer="edge-badges"] > g', { hasText: "1.5km" })
       .first();
-    await expect(badge12m).toBeVisible();
+    await expect(badge15km).toBeVisible();
     await expect(
       page.getByRole("button", { name: /Undo \(1\)/i })
     ).toBeVisible();
 
-    // 4. Hover the "12m" distance badge in editor mode and click the top-right "X" quick-delete button
-    await badge12m.hover();
+    // 4. Hover the "1.5km" distance badge in editor mode and click the top-right "X" quick-delete button
+    await badge15km.hover();
     const quickDeleteBtn = page.locator("[data-edge-quick-delete]").first();
     await expect(quickDeleteBtn).toBeVisible();
     await quickDeleteBtn.click();
 
     // Edge is removed immediately without a confirmation modal; Undo count becomes 2
-    await expect(badge12m).toBeHidden();
+    await expect(badge15km).toBeHidden();
     const undoBtn = page.getByRole("button", { name: /Undo \(2\)/i });
     await expect(undoBtn).toBeVisible();
 
     // 5. Click Undo to restore the deleted edge in a single snapshot
     await undoBtn.click();
-    await expect(badge12m).toBeVisible();
+    await expect(badge15km).toBeVisible();
     await expect(page.getByText("Reverted last map action.")).toBeVisible();
 
     mock.assertNoPageErrors();

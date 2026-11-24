@@ -41,6 +41,10 @@ import {
   type GmMentionTrigger,
 } from "../../utils/gmMentions";
 import {
+  formatDistanceCompact,
+  formatWalkingDuration,
+} from "../../utils/spatialDistance";
+import {
   findNextEnabledIndex,
   getSlashCommandSpec,
   isExactZeroArgCommandText,
@@ -1106,7 +1110,9 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                           <div className="composer-flyout-item-text">
                             <strong>{nb.destination.name}</strong>
                             <span>
-                              via {nb.direction_label} • {nb.travel_minutes}m
+                              via {nb.direction_label} •{" "}
+                              {formatDistanceCompact(nb.distance_meters)} (
+                              {formatWalkingDuration(nb.distance_meters)})
                             </span>
                           </div>
                           {nb.is_locked_or_hidden && (

@@ -10,6 +10,8 @@ import uuid
 from pathlib import Path
 from app.prompts import BUILTIN_PRESETS
 from app.schemas.world import (
+    DEFAULT_FALLBACK_DISTANCE_METERS,
+    WALKING_METERS_PER_MINUTE,
     normalize_and_validate_entity_tags,
     normalize_compass_direction,
     normalize_lore_category,
@@ -206,6 +208,79 @@ class SchemaInitMixin:
 
             conn.execute("DROP TABLE lore_nodes;")
             conn.execute("ALTER TABLE lore_nodes_migrated RENAME TO lore_nodes;")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON;")
+
+    @staticmethod
+    def _migrate_location_edges_to_distance_meters(conn: sqlite3.Connection) -> None:
+        """Idempotently migrate legacy `location_edges.travel_minutes` (* 70) to `distance_meters`."""
+        edge_cols = {
+            r["name"]
+            for r in conn.execute("PRAGMA table_info(location_edges)").fetchall()
+        }
+        if not edge_cols or ("distance_meters" in edge_cols and "travel_minutes" not in edge_cols):
+            return
+
+        has_distance = "distance_meters" in edge_cols
+        has_minutes = "travel_minutes" in edge_cols
+
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = OFF;")
+        try:
+            conn.execute("BEGIN IMMEDIATE;")
+            conn.execute("DROP TABLE IF EXISTS location_edges_migrated;")
+            conn.execute(
+                f"""
+                CREATE TABLE location_edges_migrated (
+                    id TEXT PRIMARY KEY,
+                    world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+                    from_location_id TEXT NOT NULL REFERENCES location_nodes(id) ON DELETE CASCADE,
+                    to_location_id TEXT NOT NULL REFERENCES location_nodes(id) ON DELETE CASCADE,
+                    direction_label TEXT NOT NULL,
+                    compass_direction TEXT NULL,
+                    distance_meters INTEGER NOT NULL DEFAULT {DEFAULT_FALLBACK_DISTANCE_METERS},
+                    is_locked_or_hidden INTEGER NOT NULL DEFAULT 0,
+                    created_at_turn_id TEXT NULL,
+                    superseded_at_turn_id TEXT NULL
+                );
+                """
+            )
+            if has_distance and has_minutes:
+                distance_expr = (
+                    f"MAX(1, COALESCE(distance_meters, COALESCE(travel_minutes, 1) * {WALKING_METERS_PER_MINUTE}))"
+                )
+            elif has_distance:
+                distance_expr = f"MAX(1, COALESCE(distance_meters, {DEFAULT_FALLBACK_DISTANCE_METERS}))"
+            elif has_minutes:
+                distance_expr = (
+                    f"MAX(1, COALESCE(travel_minutes, 1) * {WALKING_METERS_PER_MINUTE})"
+                )
+            else:
+                distance_expr = str(DEFAULT_FALLBACK_DISTANCE_METERS)
+
+            conn.execute(
+                f"""
+                INSERT INTO location_edges_migrated (
+                    id, world_id, from_location_id, to_location_id,
+                    direction_label, compass_direction, distance_meters,
+                    is_locked_or_hidden, created_at_turn_id, superseded_at_turn_id
+                )
+                SELECT
+                    id, world_id, from_location_id, to_location_id,
+                    direction_label, compass_direction, {distance_expr},
+                    COALESCE(is_locked_or_hidden, 0), created_at_turn_id, superseded_at_turn_id
+                FROM location_edges;
+                """
+            )
+            conn.execute("DROP TABLE location_edges;")
+            conn.execute("ALTER TABLE location_edges_migrated RENAME TO location_edges;")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_location_edges_from ON location_edges(from_location_id);"
+            )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -1087,6 +1162,7 @@ class SchemaInitMixin:
                 conn.execute(
                     "ALTER TABLE location_edges ADD COLUMN superseded_at_turn_id TEXT NULL"
                 )
+            self._migrate_location_edges_to_distance_meters(conn)
 
             vec_cols = {
                 r["name"]
