@@ -224,6 +224,11 @@ export const campaignsApi = {
       direction_label?: string;
       compass_direction: string;
       distance_meters: number;
+      speed_modifier?: number;
+      travel_mode?: string | null;
+      obstacles?: string[];
+      is_blocked?: boolean;
+      is_secret?: boolean;
       bidirectional?: boolean;
     }
   ) =>
@@ -232,20 +237,50 @@ export const campaignsApi = {
       body: JSON.stringify(payload),
     }),
 
+  updateCampaignEdge: (
+    campaignId: string,
+    edgeId: string,
+    payload: {
+      distance_meters?: number;
+      speed_modifier?: number;
+      travel_mode?: string | null;
+      obstacles?: string[];
+      is_blocked?: boolean;
+      is_secret?: boolean;
+      direction_label?: string;
+      reciprocal_direction_label?: string;
+      update_reciprocal?: boolean;
+    }
+  ) =>
+    fetchJson<CampaignStateBundle>(
+      `${API_BASE}/campaigns/${campaignId}/edges/${edgeId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      }
+    ),
+
   updateCampaignEdgeDistance: (
     campaignId: string,
     edgeId: string,
     distanceMeters: number,
     updateReciprocal: boolean = true
   ) =>
+    campaignsApi.updateCampaignEdge(campaignId, edgeId, {
+      distance_meters: distanceMeters,
+      update_reciprocal: updateReciprocal,
+    }),
+
+  toggleCampaignEdgeReveal: (
+    campaignId: string,
+    edgeId: string,
+    revealed: boolean
+  ) =>
     fetchJson<CampaignStateBundle>(
-      `${API_BASE}/campaigns/${campaignId}/edges/${edgeId}`,
+      `${API_BASE}/campaigns/${campaignId}/edges/${edgeId}/reveal`,
       {
-        method: "PATCH",
-        body: JSON.stringify({
-          distance_meters: distanceMeters,
-          update_reciprocal: updateReciprocal,
-        }),
+        method: "POST",
+        body: JSON.stringify({ revealed }),
       }
     ),
 

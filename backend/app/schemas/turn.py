@@ -58,7 +58,6 @@ from app.schemas.world import (
     normalize_compass_direction,
     resolve_legacy_edge_distance_meters,
     validate_container_hierarchy_integrity,
-    validate_world_reachability,
 )
 
 
@@ -390,6 +389,7 @@ class WorldStateSnapshot(BaseModel):
     visited_location_ids: list[str] = Field(default_factory=list)
     visited_container_ids: list[str] = Field(default_factory=list)
     revealed_lore_ids: list[str] = Field(default_factory=list)
+    revealed_edge_ids: list[str] = Field(default_factory=list)
     parties: list[PartyRecord] = Field(default_factory=list)
 
 
@@ -1210,10 +1210,6 @@ class CampaignMapUpdatePayload(BaseModel):
             world_id=None,
             containers=self.containers,
             locations=self.locations,
-        )
-        validate_world_reachability(
-            locations=self.locations,
-            edges=self.edges,
         )
         return self
 

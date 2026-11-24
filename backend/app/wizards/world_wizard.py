@@ -270,6 +270,7 @@ async def generate_world_draft(
             _WizardWorldLLMOutput,
             profile=actor_prof,
             max_tokens=4096,
+            required_properties=list(_WizardWorldLLMOutput.model_fields.keys()),
         )
         draft = (
             raw_draft.to_strict_draft()
@@ -416,6 +417,7 @@ async def reimagine_world_map(
             _WizardMapLLMOutput,
             profile=actor_prof,
             max_tokens=4096,
+            required_properties=list(_WizardMapLLMOutput.model_fields.keys()),
         )
         draft = (
             raw_map.to_strict_draft()

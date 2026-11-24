@@ -21,6 +21,7 @@ from app.engine.gm_talk import (
     _format_character_detail,
     _format_turn_prose_snippet,
     _is_lore_visible,
+    _visible_location_exits_for_gm,
     strip_reasoning_blocks,
 )
 from app.engine.llm_client import ToolsUnsupportedError, llm_client
@@ -446,6 +447,7 @@ async def execute_gm_tool(
                             "summary": loc.summary,
                             "description": loc.description,
                             "environmental_tags": list(loc.environmental_tags),
+                            "connections": _visible_location_exits_for_gm(loc.id, vis),
                             "local_lore": permitted_lore,
                         },
                         sources,

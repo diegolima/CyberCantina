@@ -45,6 +45,7 @@ from app.engine.parties import (
 )
 from app.engine.phase2_context import resolve_character_previous_state
 from app.engine.world_clock import (
+    advance_world_timestamp,
     describe_world_timestamp,
     extract_world_date_label,
     resolve_bounded_turn_elapsed_minutes,
@@ -55,6 +56,7 @@ from app.prompts import (
     render_template,
 )
 from app.schemas.affective import (
+    MAX_TURN_ELAPSED_MINUTES_SANITY,
     AffectiveCareState,
     VisibilityScope,
 )
@@ -85,12 +87,15 @@ from app.schemas.turn import (
     WorldStateSnapshot,
 )
 from app.schemas.world import (
+    WALKING_METERS_PER_MINUTE,
     LocationNode,
     LoreNode,
     NeighborLocationView,
+    derive_travel_minutes,
     format_distance_meters,
-    format_walking_duration,
+    format_exit_travel_phrase,
     normalize_and_validate_entity_tags,
+    normalize_edge_speed_modifier,
 )
 
 from app.engine.clerk.episodic import (
@@ -185,6 +190,7 @@ async def run_phase5_post_turn_clerk(
     summary_prompt_template: str | None = None,
     persona_snapshot: PersonaRecord | None = None,
     current_player_state: PersonaTurnStateSnapshot | None = None,
+    newly_discovered_edge_ids: set[str] | None = None,
     on_progress: Phase5ProgressCallback | Phase4ProgressCallback | None = None,
 ) -> tuple[TurnNodeRecord, list[EpisodicChunkRecord]]:
     """Phase 5: Async Post-Turn Global World Clerk + Character State Agents & Arbitration."""
@@ -276,11 +282,21 @@ async def run_phase5_post_turn_clerk(
             s for s in raw_shards if repo._is_shard_active_on_branch(s, valid_turn_ids)
         ]
 
-    neighbor_options = "\n".join(
-        f"- [{n.compass_direction or 'N'}] id='{n.destination.id}': {n.destination.name} "
-        f"(via {n.direction_label}, {format_distance_meters(n.distance_meters)}, {format_walking_duration(n.distance_meters)} walk)"
-        for n in neighbors
-    ) or "None"
+    def _format_clerk_neighbor_line(n: NeighborLocationView) -> str:
+        meta = [
+            format_distance_meters(n.distance_meters),
+            format_exit_travel_phrase(n.distance_meters, n.speed_modifier, n.travel_mode),
+        ]
+        if n.obstacles:
+            meta.append(f"obstacles: {', '.join(n.obstacles)}")
+        if n.is_blocked:
+            meta.append("BLOCKED")
+        return (
+            f"- [{n.compass_direction or 'N'}] id='{n.destination.id}': {n.destination.name} "
+            f"(via {n.direction_label}; {'; '.join(meta)})"
+        )
+
+    neighbor_options = "\n".join(_format_clerk_neighbor_line(n) for n in neighbors) or "None"
     existing_flags_str = (
         ", ".join(completed_turn.world_snapshot.scene_flags)
         if completed_turn.world_snapshot.scene_flags
@@ -587,8 +603,13 @@ async def run_phase5_post_turn_clerk(
     # 1. Resolve new active location (stay, move_existing, or improvise_new)
     new_location_id = active_location.id
     valid_neighbor_ids = {n.destination.id for n in neighbors}
+    moved_neighbor: NeighborLocationView | None = None
     if world_delta.transition_type == "move_existing" and world_delta.target_location_id in valid_neighbor_ids:
         new_location_id = world_delta.target_location_id  # type: ignore[assignment]
+        moved_neighbor = next(
+            (n for n in neighbors if n.destination.id == new_location_id),
+            None,
+        )
     elif world_delta.transition_type == "improvise_new" and world_delta.improvised_location is not None:
         created_loc = repo.add_improvised_location(
             world_id=world_id,
@@ -600,10 +621,23 @@ async def run_phase5_post_turn_clerk(
         new_location_id = created_loc.id
         world_delta.target_location_id = created_loc.id
 
-    # 2. Advance World Clock & Merge Scene Flags
+    # 2. Advance World Clock & Merge Scene Flags (anchoring movement to link speed/distance floor)
+    min_travel_minutes = 0
+    if moved_neighbor is not None:
+        eff_speed = normalize_edge_speed_modifier(moved_neighbor.speed_modifier)
+        raw_travel_minutes = moved_neighbor.distance_meters / (
+            WALKING_METERS_PER_MINUTE * eff_speed
+        )
+        if raw_travel_minutes >= 0.5:
+            min_travel_minutes = min(
+                MAX_TURN_ELAPSED_MINUTES_SANITY,
+                derive_travel_minutes(moved_neighbor.distance_meters, eff_speed),
+            )
+
+    requested_elapsed_minutes = max(int(world_delta.elapsed_minutes), min_travel_minutes)
     new_timestamp = resolve_turn_timestamp(
         current_timestamp,
-        world_delta.elapsed_minutes,
+        requested_elapsed_minutes,
         world_delta.new_world_timestamp,
     )
     is_static_describe = (
@@ -617,10 +651,13 @@ async def run_phase5_post_turn_clerk(
         else resolve_bounded_turn_elapsed_minutes(
             prev_timestamp=current_timestamp,
             new_timestamp=new_timestamp,
-            clerk_elapsed_minutes=world_delta.elapsed_minutes,
+            clerk_elapsed_minutes=requested_elapsed_minutes,
             raw_turn_text=f"{completed_turn.user_message}\n{completed_turn.raw_prose}",
         )
     )
+    if not is_static_describe and turn_elapsed < min_travel_minutes:
+        turn_elapsed = min_travel_minutes
+        new_timestamp = advance_world_timestamp(current_timestamp, turn_elapsed)
     new_campaign_elapsed = prior_elapsed + turn_elapsed
 
     location_changed = new_location_id != active_location.id
@@ -701,6 +738,46 @@ async def run_phase5_post_turn_clerk(
                 newly_revealed_ids.append(canon_id)
     merged_revealed_lore_ids = list(dict.fromkeys([*prior_revealed_ids, *newly_revealed_ids]))
 
+    # Reconcile discovered secret links pairwise onto snapshot
+    prior_revealed_edge_ids = [
+        *(
+            prior_branch_turns[-1].world_snapshot.revealed_edge_ids
+            if prior_branch_turns
+            else []
+        ),
+        *(completed_turn.world_snapshot.revealed_edge_ids or []),
+    ]
+    discovered_edge_pair_ids: list[str] = []
+    if newly_discovered_edge_ids:
+        discovered_dest_ids = {
+            n.destination.id for n in neighbors if n.edge_id in newly_discovered_edge_ids
+        }
+        discovered_edge_pair_ids.extend(sorted(newly_discovered_edge_ids))
+        try:
+            world_edges_ref = (
+                world_rec.edges
+                if "world_rec" in locals() and world_rec is not None
+                else (
+                    world_for_secrets.edges
+                    if "world_for_secrets" in locals() and world_for_secrets is not None
+                    else repo.get_world(world_id, valid_turn_ids=valid_turn_ids, campaign_id=campaign_id).edges
+                )
+            )
+            for edge in world_edges_ref:
+                if edge.id in newly_discovered_edge_ids:
+                    discovered_edge_pair_ids.append(edge.id)
+                elif (
+                    edge.from_location_id in discovered_dest_ids
+                    and edge.to_location_id == active_location.id
+                    and edge.is_secret
+                ):
+                    discovered_edge_pair_ids.append(edge.id)
+        except Exception:
+            pass
+    merged_revealed_edge_ids = list(
+        dict.fromkeys([*prior_revealed_edge_ids, *discovered_edge_pair_ids])
+    )
+
     updated_world_snapshot = WorldStateSnapshot(
         turn_id=completed_turn.id,
         world_timestamp=new_timestamp,
@@ -710,6 +787,7 @@ async def run_phase5_post_turn_clerk(
         visited_location_ids=merged_visited,
         visited_container_ids=merged_visited_containers,
         revealed_lore_ids=merged_revealed_lore_ids,
+        revealed_edge_ids=merged_revealed_edge_ids,
         parties=list(completed_turn.world_snapshot.parties or []),
     )
 
@@ -1200,8 +1278,8 @@ async def run_phase5_post_turn_clerk(
             )
 
     composite_post_turn = PostTurnStateDelta(
-        elapsed_minutes=world_delta.elapsed_minutes,
-        new_world_timestamp=world_delta.new_world_timestamp,
+        elapsed_minutes=turn_elapsed if moved_neighbor is not None else world_delta.elapsed_minutes,
+        new_world_timestamp=new_timestamp if moved_neighbor is not None and turn_elapsed >= min_travel_minutes else world_delta.new_world_timestamp,
         transition_type=world_delta.transition_type,
         target_location_id=world_delta.target_location_id,
         improvised_location=world_delta.improvised_location,

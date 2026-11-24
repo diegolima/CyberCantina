@@ -39,6 +39,7 @@
 | `POST` | `/api/campaigns/{campaign_id}/edges` | `app.routers.campaign_routes.spatial_routes.connect_campaign_locations` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `DELETE` | `/api/campaigns/{campaign_id}/edges/{edge_id}` | `app.routers.campaign_routes.spatial_routes.remove_campaign_edge` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `PATCH` | `/api/campaigns/{campaign_id}/edges/{edge_id}` | `app.routers.campaign_routes.spatial_routes.update_campaign_edge_distance` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
+| `POST` | `/api/campaigns/{campaign_id}/edges/{edge_id}/reveal` | `app.routers.campaign_routes.spatial_routes.toggle_campaign_edge_reveal` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/gm/chat` | `app.routers.campaign_routes.gm_routes.stream_campaign_gm_chat` | — | `frontend/src/api/gm.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/gm/codex-draft` | `app.routers.campaign_routes.gm_routes.draft_campaign_gm_codex_entry` | `GmCodexDraftResponse` | `frontend/src/api/gm.ts` |
 | `GET` | `/api/campaigns/{campaign_id}/gm/mentions` | `app.routers.campaign_routes.gm_routes.search_campaign_gm_mentions` | `GmMentionsResponse` | *(backend-only / test / SSE)* |
@@ -798,6 +799,7 @@ erDiagram
 | :--- |
 | `frontend/src/components/map/MapDetailsDrawer.tsx` |
 | `frontend/src/components/map/MapDialogs.tsx` |
+| `frontend/src/components/map/MapLinkInspectorSection.tsx` |
 | `frontend/src/components/map/MapLoreSection.tsx` |
 | `frontend/src/components/map/MapPaletteBar.tsx` |
 | `frontend/src/components/map/PortalPromotionModal.tsx` |

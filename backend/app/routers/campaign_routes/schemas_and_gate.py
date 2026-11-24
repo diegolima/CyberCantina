@@ -11,6 +11,9 @@ from app.schemas.turn import CampaignStateBundle
 from app.schemas.world import (
     DEFAULT_INTERIOR_DISTANCE_METERS,
     MAX_EDGE_DISTANCE_METERS,
+    MAX_EDGE_SPEED_MODIFIER,
+    MAX_EDGE_TRAVEL_MODE_LENGTH,
+    MIN_EDGE_SPEED_MODIFIER,
     WALKING_METERS_PER_MINUTE,
     WorldLoreNodeDraft,
 )
@@ -136,6 +139,15 @@ class CampaignEdgeCreateRequest(BaseModel):
         ge=1,
         le=MAX_EDGE_DISTANCE_METERS,
     )
+    speed_modifier: float = Field(
+        default=1.0,
+        ge=MIN_EDGE_SPEED_MODIFIER,
+        le=MAX_EDGE_SPEED_MODIFIER,
+    )
+    travel_mode: str | None = Field(default=None, max_length=MAX_EDGE_TRAVEL_MODE_LENGTH)
+    obstacles: list[str] = Field(default_factory=list)
+    is_blocked: bool = False
+    is_secret: bool = False
     bidirectional: bool = True
 
     @model_validator(mode="before")
@@ -145,13 +157,31 @@ class CampaignEdgeCreateRequest(BaseModel):
 
 
 class CampaignEdgeDistanceUpdateRequest(BaseModel):
-    distance_meters: int = Field(ge=1, le=MAX_EDGE_DISTANCE_METERS)
+    distance_meters: int | None = Field(
+        default=None, ge=1, le=MAX_EDGE_DISTANCE_METERS
+    )
+    speed_modifier: float | None = Field(
+        default=None, ge=MIN_EDGE_SPEED_MODIFIER, le=MAX_EDGE_SPEED_MODIFIER
+    )
+    travel_mode: str | None = Field(default=None, max_length=MAX_EDGE_TRAVEL_MODE_LENGTH)
+    obstacles: list[str] | None = None
+    is_blocked: bool | None = None
+    is_secret: bool | None = None
+    direction_label: str | None = Field(default=None, max_length=120)
+    reciprocal_direction_label: str | None = Field(default=None, max_length=120)
     update_reciprocal: bool = True
 
     @model_validator(mode="before")
     @classmethod
     def _coerce_legacy_distance(cls, data: Any) -> Any:
         return _coerce_legacy_api_distance(data)
+
+
+CampaignEdgeUpdateRequest = CampaignEdgeDistanceUpdateRequest
+
+
+class CampaignEdgeRevealRequest(BaseModel):
+    revealed: bool
 
 
 class CampaignWorldSettingsPatchRequest(BaseModel):

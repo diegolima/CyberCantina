@@ -1077,7 +1077,12 @@ export const ChatStage: React.FC<ChatStageProps> = ({
 
     onSendTurn({
       userMessage: formatQuickExitMessage(nb, coLocatedPartyNpcs.length > 0),
-      diceMode: diceMode === "forced" ? "forced" : (nb.is_locked_or_hidden ? "auto" : "disabled"),
+      diceMode:
+        diceMode === "forced"
+          ? "forced"
+          : nb.is_blocked || (nb.obstacles?.length ?? 0) > 0
+            ? "auto"
+            : "disabled",
       manualDiceOverride: diceMode === "forced" && forcedVal && !isNaN(forcedVal) ? forcedVal : null,
     });
   };

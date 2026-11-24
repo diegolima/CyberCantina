@@ -762,7 +762,8 @@ def test_metric_helpers_heuristics_and_prompt_formatting(spatial_scenario) -> No
         direction_label="Plaza Walkway",
         compass_direction="E",
         distance_meters=700,
-        is_locked_or_hidden=False,
+        is_blocked=False,
+        is_secret=False,
         destination=clinic_loc,
     )
     nb_20 = NeighborLocationView(
@@ -770,7 +771,8 @@ def test_metric_helpers_heuristics_and_prompt_formatting(spatial_scenario) -> No
         direction_label="Curtain",
         compass_direction="N",
         distance_meters=20,
-        is_locked_or_hidden=False,
+        is_blocked=False,
+        is_secret=False,
         destination=clinic_loc,
     )
     nb_huge = NeighborLocationView(
@@ -778,7 +780,8 @@ def test_metric_helpers_heuristics_and_prompt_formatting(spatial_scenario) -> No
         direction_label="Desert Highway",
         compass_direction="S",
         distance_meters=5_000_000,
-        is_locked_or_hidden=False,
+        is_blocked=False,
+        is_secret=False,
         destination=clinic_loc,
     )
     move_pre = PreTurnAnalysis(spatial_intent="move_known", target_location_hint="Ripperdoc")
@@ -839,7 +842,8 @@ def test_metric_helpers_heuristics_and_prompt_formatting(spatial_scenario) -> No
         direction_label="Covered Walkway",
         compass_direction="E",
         distance_meters=350,
-        is_locked_or_hidden=False,
+        is_blocked=False,
+        is_secret=False,
         destination=clinic_loc,
     )
     z4_prompt = build_zone4_ephemeral_tail_frame(
@@ -853,8 +857,8 @@ def test_metric_helpers_heuristics_and_prompt_formatting(spatial_scenario) -> No
         pre_turn=PreTurnAnalysis(),
         established_cognition=CognitionBlock(skipped=True),
     )
-    assert "[350m, ~5 min walk]" in z4_prompt
-    assert "[20m, < 1 min walk]" in z4_prompt
+    assert "[350m; ~5 min walk]" in z4_prompt
+    assert "[20m; < 1 min walk]" in z4_prompt
     assert "travel_minutes" not in get_default_prompt("clerk_post_turn_system")
 
 

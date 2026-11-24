@@ -21,7 +21,7 @@ import { LocationOverrideButton } from "./LocationOverrideButton";
 import { resolveMapIconComponent } from "../map/mapIcons";
 import {
   formatDistanceCompact,
-  formatWalkingDuration,
+  formatExitTravelPhrase,
 } from "../../utils/spatialDistance";
 import {
   computeBoundaryMarkerTicks,
@@ -322,9 +322,9 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
                   y1={miniMapCenter.y}
                   x2={p2.x}
                   y2={p2.y}
-                  stroke={crossesContainer ? "#22d3ee" : "#06b6d4"}
+                  stroke={nb.is_blocked ? "#fb7185" : crossesContainer ? "#22d3ee" : "#06b6d4"}
                   strokeWidth={2}
-                  strokeDasharray={nb.is_locked_or_hidden ? "4 3" : undefined}
+                  strokeDasharray={nb.is_blocked ? "4 3" : undefined}
                 />
                 {ticks && (
                   <g>
@@ -723,12 +723,22 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
               <span>[{selectedNeighbor.slot}]</span>
               <span>
                 {formatDistanceCompact(selectedNeighbor.distance_meters)} (
-                {formatWalkingDuration(selectedNeighbor.distance_meters)})
+                {formatExitTravelPhrase(
+                  selectedNeighbor.distance_meters,
+                  selectedNeighbor.speed_modifier,
+                  selectedNeighbor.travel_mode
+                )}
+                )
               </span>
               <span>via {selectedNeighbor.direction_label}</span>
-              {selectedNeighbor.is_locked_or_hidden && (
+              {selectedNeighbor.is_blocked && (
                 <span style={{ color: "var(--accent-rose)" }}>
-                  <Lock size={10} style={{ display: "inline" }} /> Hidden/Locked
+                  <Lock size={10} style={{ display: "inline" }} /> Blocked
+                </span>
+              )}
+              {(selectedNeighbor.obstacles?.length ?? 0) > 0 && (
+                <span style={{ color: "var(--accent-amber)" }}>
+                  · Obstacles: {selectedNeighbor.obstacles.join(", ")}
                 </span>
               )}
             </div>
@@ -773,14 +783,24 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
                   </span>
                   <span style={{ color: "var(--text-muted)", fontSize: "0.72rem" }}>
                     {formatDistanceCompact(nb.distance_meters)} (
-                    {formatWalkingDuration(nb.distance_meters)})
+                    {formatExitTravelPhrase(
+                      nb.distance_meters,
+                      nb.speed_modifier,
+                      nb.travel_mode
+                    )}
+                    )
                   </span>
                 </div>
                 <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
                   Via: {nb.direction_label}{" "}
-                  {nb.is_locked_or_hidden && (
+                  {nb.is_blocked && (
                     <span style={{ color: "var(--accent-rose)" }}>
-                      <Lock size={10} style={{ display: "inline" }} /> Hidden/Locked
+                      <Lock size={10} style={{ display: "inline" }} /> Blocked
+                    </span>
+                  )}
+                  {(nb.obstacles?.length ?? 0) > 0 && (
+                    <span style={{ color: "var(--accent-amber)", marginLeft: 4 }}>
+                      · {nb.obstacles.join(", ")}
                     </span>
                   )}
                 </div>

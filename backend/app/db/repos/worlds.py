@@ -23,6 +23,9 @@ from app.schemas.world import (
     WorldWizardDraft,
     extract_world_unsupported_fields,
     normalize_compass_direction,
+    normalize_edge_obstacles,
+    normalize_edge_speed_modifier,
+    normalize_edge_travel_mode,
     pick_available_compass_direction,
     sanitize_world_unsupported_fields,
 )
@@ -386,13 +389,20 @@ class WorldsMixin:
                     edge.direction_label.strip()
                     or f"Passage to {key_to_loc_name.get(edge.to_key, edge.to_key)}"
                 )
+                fwd_speed = normalize_edge_speed_modifier(edge.speed_modifier)
+                fwd_mode = normalize_edge_travel_mode(edge.travel_mode)
+                fwd_obs_json = json.dumps(normalize_edge_obstacles(edge.obstacles))
+                fwd_blocked = 1 if edge.is_blocked else 0
+                fwd_secret = 1 if edge.is_secret else 0
                 conn.execute(
                     """
                     INSERT INTO location_edges (
                         id, world_id, from_location_id, to_location_id,
-                        direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
+                        direction_label, compass_direction, distance_meters,
+                        speed_modifier, travel_mode, obstacles_json,
+                        is_blocked, is_secret, created_at_turn_id
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                     """,
                     (
                         edge_id,
@@ -402,7 +412,11 @@ class WorldsMixin:
                         fwd_label,
                         fwd_dir,
                         max(1, min(MAX_EDGE_DISTANCE_METERS, int(edge.distance_meters))),
-                        1 if edge.is_locked_or_hidden else 0,
+                        fwd_speed,
+                        fwd_mode,
+                        fwd_obs_json,
+                        fwd_blocked,
+                        fwd_secret,
                     ),
                 )
                 if edge.bidirectional:
@@ -420,9 +434,11 @@ class WorldsMixin:
                         """
                         INSERT INTO location_edges (
                             id, world_id, from_location_id, to_location_id,
-                            direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
+                            direction_label, compass_direction, distance_meters,
+                            speed_modifier, travel_mode, obstacles_json,
+                            is_blocked, is_secret, created_at_turn_id
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                         """,
                         (
                             rev_id,
@@ -432,7 +448,11 @@ class WorldsMixin:
                             rev_label,
                             rev_dir,
                             max(1, min(MAX_EDGE_DISTANCE_METERS, int(edge.distance_meters))),
-                            1 if edge.is_locked_or_hidden else 0,
+                            fwd_speed,
+                            fwd_mode,
+                            fwd_obs_json,
+                            fwd_blocked,
+                            fwd_secret,
                         ),
                     )
 
@@ -1038,9 +1058,11 @@ class WorldsMixin:
                     """
                     INSERT INTO location_edges (
                         id, world_id, from_location_id, to_location_id,
-                        direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
+                        direction_label, compass_direction, distance_meters,
+                        speed_modifier, travel_mode, obstacles_json,
+                        is_blocked, is_secret, created_at_turn_id
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                     """,
                     (
                         new_edge_id,
@@ -1050,7 +1072,11 @@ class WorldsMixin:
                         edge.direction_label,
                         cdir,
                         max(1, min(MAX_EDGE_DISTANCE_METERS, int(edge.distance_meters))),
-                        1 if edge.is_locked_or_hidden else 0,
+                        normalize_edge_speed_modifier(edge.speed_modifier),
+                        normalize_edge_travel_mode(edge.travel_mode),
+                        json.dumps(normalize_edge_obstacles(edge.obstacles)),
+                        1 if edge.is_blocked else 0,
+                        1 if edge.is_secret else 0,
                     ),
                 )
 

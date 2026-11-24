@@ -68,7 +68,11 @@ function makeFixture(): {
       direction_label: "Cellar stairs",
       compass_direction: "E",
       distance_meters: 140,
-      is_locked_or_hidden: false,
+      speed_modifier: 1,
+      travel_mode: null,
+      obstacles: [],
+      is_blocked: false,
+      is_secret: false,
     },
     {
       id: "e2",
@@ -78,7 +82,11 @@ function makeFixture(): {
       direction_label: "Upstairs",
       compass_direction: "W",
       distance_meters: 140,
-      is_locked_or_hidden: false,
+      speed_modifier: 1,
+      travel_mode: null,
+      obstacles: [],
+      is_blocked: false,
+      is_secret: false,
     },
   ];
   return { containers, locations, edges };

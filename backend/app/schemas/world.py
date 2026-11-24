@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.schemas.character import sanitize_character_markup
 from app.schemas.unsupported import sanitize_unsupported_fields_dict
 
 WALKING_METERS_PER_MINUTE: Final[int] = 70
@@ -15,6 +17,12 @@ MAX_EDGE_DISTANCE_METERS: Final[int] = 100_000_000
 DEFAULT_INTERIOR_DISTANCE_METERS: Final[int] = 20
 DEFAULT_EXTERIOR_DISTANCE_METERS: Final[int] = 100
 DEFAULT_FALLBACK_DISTANCE_METERS: Final[int] = 50
+MIN_EDGE_SPEED_MODIFIER: Final[float] = 0.05
+MAX_EDGE_SPEED_MODIFIER: Final[float] = 100.0
+DEFAULT_EDGE_SPEED_MODIFIER: Final[float] = 1.0
+MAX_EDGE_OBSTACLES: Final[int] = 6
+MAX_EDGE_OBSTACLE_LENGTH: Final[int] = 48
+MAX_EDGE_TRAVEL_MODE_LENGTH: Final[int] = 40
 
 
 def coerce_edge_distance_meters(
@@ -91,10 +99,178 @@ def extract_edge_distance_meters(
     )
 
 
+def normalize_edge_speed_modifier(
+    raw: Any,
+    *,
+    fallback: float = DEFAULT_EDGE_SPEED_MODIFIER,
+) -> float:
+    """Clamp a link speed multiplier into `[0.05, 100.0]`, falling back to `1.0`."""
+    safe_fallback = max(
+        MIN_EDGE_SPEED_MODIFIER, min(MAX_EDGE_SPEED_MODIFIER, float(fallback))
+    )
+    if raw is None or isinstance(raw, bool):
+        return round(safe_fallback, 4)
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError):
+        return round(safe_fallback, 4)
+    if (
+        not (parsed == parsed)
+        or parsed == float("inf")
+        or parsed == float("-inf")
+        or parsed <= 0.0
+    ):
+        return round(safe_fallback, 4)
+    return round(
+        max(MIN_EDGE_SPEED_MODIFIER, min(MAX_EDGE_SPEED_MODIFIER, parsed)), 4
+    )
+
+
+def normalize_edge_travel_mode(raw: Any) -> str | None:
+    """Sanitize an optional link travel mode label (max 40 chars, None if blank)."""
+    if raw is None or isinstance(raw, bool):
+        return None
+    cleaned = sanitize_character_markup(
+        str(raw), preserve_italics=False, single_line=True
+    )[:MAX_EDGE_TRAVEL_MODE_LENGTH].strip()
+    return cleaned or None
+
+
+def normalize_edge_obstacles(raw: Any) -> list[str]:
+    """Sanitize, deduplicate case-insensitively, and cap link obstacle chips (max 6)."""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        items: Sequence[Any] = [part for part in raw.split(",")]
+    elif isinstance(raw, (list, tuple, set)):
+        items = list(raw)
+    else:
+        return []
+
+    cleaned: list[str] = []
+    seen_lower: set[str] = set()
+    for item in items:
+        if item is None or isinstance(item, bool):
+            continue
+        chip = sanitize_character_markup(
+            str(item), preserve_italics=False, single_line=True
+        )[:MAX_EDGE_OBSTACLE_LENGTH].strip()
+        if not chip:
+            continue
+        low = chip.casefold()
+        if low in seen_lower:
+            continue
+        seen_lower.add(low)
+        cleaned.append(chip)
+        if len(cleaned) >= MAX_EDGE_OBSTACLES:
+            break
+    return cleaned
+
+
+def resolve_legacy_edge_flags(data: Any) -> Any:
+    """Normalize first-class link properties and map legacy `is_locked_or_hidden` -> `is_blocked`."""
+    if not isinstance(data, dict):
+        return data
+    out = dict(data)
+    if "speed_modifier" in out:
+        out["speed_modifier"] = normalize_edge_speed_modifier(out.get("speed_modifier"))
+    if "travel_mode" in out:
+        out["travel_mode"] = normalize_edge_travel_mode(out.get("travel_mode"))
+    if "obstacles" in out:
+        out["obstacles"] = normalize_edge_obstacles(out.get("obstacles"))
+    elif "obstacles_json" in out:
+        raw_obs_json = out.get("obstacles_json")
+        if isinstance(raw_obs_json, str):
+            try:
+                parsed_obs = json.loads(raw_obs_json or "[]")
+            except Exception:
+                parsed_obs = []
+        else:
+            parsed_obs = raw_obs_json
+        out["obstacles"] = normalize_edge_obstacles(parsed_obs)
+
+    has_legacy = "is_locked_or_hidden" in out
+    legacy_val = out.pop("is_locked_or_hidden", None)
+    if has_legacy and "is_blocked" not in out and "is_secret" not in out:
+        out["is_blocked"] = bool(legacy_val)
+        out["is_secret"] = False
+
+    if out.get("is_blocked") is None:
+        out["is_blocked"] = False
+    else:
+        out["is_blocked"] = bool(out["is_blocked"])
+    if out.get("is_secret") is None:
+        out["is_secret"] = False
+    else:
+        out["is_secret"] = bool(out["is_secret"])
+    return out
+
+
+def extract_edge_link_fields(
+    edge: dict[str, Any],
+) -> tuple[float, str | None, list[str], bool, bool]:
+    """Extract normalized `(speed_modifier, travel_mode, obstacles, is_blocked, is_secret)` from raw dicts."""
+    normalized = resolve_legacy_edge_flags(edge)
+    return (
+        normalize_edge_speed_modifier(normalized.get("speed_modifier")),
+        normalize_edge_travel_mode(normalized.get("travel_mode")),
+        normalize_edge_obstacles(normalized.get("obstacles")),
+        bool(normalized.get("is_blocked", False)),
+        bool(normalized.get("is_secret", False)),
+    )
+
+
+def canonical_edge_pair_key(from_location_id: str, to_location_id: str) -> tuple[str, str]:
+    """Return canonical unordered endpoint pair `(min_id, max_id)` for bidirectional link matching."""
+    return (
+        (from_location_id, to_location_id)
+        if from_location_id <= to_location_id
+        else (to_location_id, from_location_id)
+    )
+
+
+def resolve_revealed_edge_pairs(
+    edges: Iterable["LocationEdge"],
+    revealed_edge_ids: Iterable[str],
+) -> set[tuple[str, str]]:
+    """Derive canonical endpoint pairs for any edge whose ID is in `revealed_edge_ids`."""
+    id_set = {str(eid) for eid in revealed_edge_ids if eid}
+    if not id_set:
+        return set()
+    return {
+        canonical_edge_pair_key(edge.from_location_id, edge.to_location_id)
+        for edge in edges
+        if edge.id in id_set
+    }
+
+
+def is_edge_revealed(
+    edge_id: str,
+    from_location_id: str,
+    to_location_id: str,
+    revealed_ids: set[str],
+    revealed_pairs: set[tuple[str, str]],
+) -> bool:
+    """Return True when an edge is revealed directly by ID or symmetrically by endpoint pair."""
+    return (
+        edge_id in revealed_ids
+        or canonical_edge_pair_key(from_location_id, to_location_id) in revealed_pairs
+    )
+
+
+def derive_travel_minutes(
+    distance_meters: int,
+    speed_modifier: float = DEFAULT_EDGE_SPEED_MODIFIER,
+) -> int:
+    """Derive rounded integer travel minutes from meters and speed_modifier (min 1)."""
+    safe_meters = max(1, int(distance_meters))
+    safe_mod = normalize_edge_speed_modifier(speed_modifier)
+    return max(1, int(safe_meters / (WALKING_METERS_PER_MINUTE * safe_mod) + 0.5))
+
+
 def derive_walking_minutes(distance_meters: int) -> int:
     """Derive rounded integer walking minutes from meters at 70 m/min (min 1)."""
-    safe_meters = max(1, int(distance_meters))
-    return max(1, int(safe_meters / WALKING_METERS_PER_MINUTE + 0.5))
+    return derive_travel_minutes(distance_meters, DEFAULT_EDGE_SPEED_MODIFIER)
 
 
 def format_distance_meters(distance_meters: int) -> str:
@@ -110,18 +286,43 @@ def format_distance_meters(distance_meters: int) -> str:
     return f"{int(round(safe_meters / 1000.0))}km"
 
 
-def format_walking_duration(distance_meters: int) -> str:
-    """Format canonical walking duration (`< 1 min`, `~5 min`, `~1h 15min`)."""
+def format_travel_duration(
+    distance_meters: int,
+    speed_modifier: float = DEFAULT_EDGE_SPEED_MODIFIER,
+) -> str:
+    """Format speed-adjusted travel duration (`< 1 min`, `~5 min`, `~1h 15min`)."""
     safe_meters = max(1, int(distance_meters))
-    if safe_meters < 35:
+    safe_mod = normalize_edge_speed_modifier(speed_modifier)
+    if (safe_meters / (WALKING_METERS_PER_MINUTE * safe_mod)) < 0.5:
         return "< 1 min"
-    mins = derive_walking_minutes(safe_meters)
+    mins = derive_travel_minutes(safe_meters, safe_mod)
     if mins < 60:
         return f"~{mins} min"
     hours, rem = divmod(mins, 60)
     if rem == 0:
         return f"~{hours}h"
     return f"~{hours}h {rem}min"
+
+
+def format_walking_duration(distance_meters: int) -> str:
+    """Format canonical walking duration (`< 1 min`, `~5 min`, `~1h 15min`)."""
+    return format_travel_duration(distance_meters, DEFAULT_EDGE_SPEED_MODIFIER)
+
+
+def format_exit_travel_phrase(
+    distance_meters: int,
+    speed_modifier: float = DEFAULT_EDGE_SPEED_MODIFIER,
+    travel_mode: str | None = None,
+) -> str:
+    """Format mode-aware travel phrase for prompts and UI (`~5 min walk`, `~2 min via Rail`, `~18 min travel`)."""
+    safe_mod = normalize_edge_speed_modifier(speed_modifier)
+    dur = format_travel_duration(distance_meters, safe_mod)
+    mode = normalize_edge_travel_mode(travel_mode)
+    if mode:
+        return f"{dur} via {mode}"
+    if abs(safe_mod - DEFAULT_EDGE_SPEED_MODIFIER) < 0.01:
+        return f"{dur} walk"
+    return f"{dur} travel"
 
 CompassDirection = Literal["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 SharedLoreCategory = Literal["history", "culture", "faction", "rumor"]
@@ -611,6 +812,12 @@ class LocationNodeDraft(BaseModel):
 class LocationEdgeDraft(BaseModel):
     """Directed or bidirectional connection between two locations."""
 
+    model_config = ConfigDict(
+        json_schema_extra=lambda schema: schema.update(
+            required=list(schema.get("properties", {}).keys())
+        )
+    )
+
     from_key: str = Field(description="Source location slug key.")
     to_key: str = Field(description="Target location slug key.")
     direction_label: str = Field(
@@ -630,15 +837,38 @@ class LocationEdgeDraft(BaseModel):
         le=MAX_EDGE_DISTANCE_METERS,
         description="Physical separation in meters along this path (10-60 indoor rooms, 80-500 streets/courtyards, 500-5000+ overland).",
     )
-    is_locked_or_hidden: bool = Field(default=False)
+    speed_modifier: float = Field(
+        default=DEFAULT_EDGE_SPEED_MODIFIER,
+        ge=MIN_EDGE_SPEED_MODIFIER,
+        le=MAX_EDGE_SPEED_MODIFIER,
+        description="Traversal speed multiplier relative to 70 m/min walking (0.05-100.0, e.g. 0.3 swamp, 1.0 walk, 10 vehicle, 25 rail).",
+    )
+    travel_mode: str | None = Field(
+        default=None,
+        max_length=MAX_EDGE_TRAVEL_MODE_LENGTH,
+        description="Optional short mode label when speed_modifier differs from normal walking (e.g. 'Mag-Lev Rail', 'Flooded Tunnel').",
+    )
+    obstacles: list[str] = Field(
+        default_factory=list,
+        description="Up to 6 concise hazard or obstacle keywords along this link (e.g. ['laser grid', 'customs checkpoint']).",
+    )
+    is_blocked: bool = Field(
+        default=False,
+        description="Whether this link is currently barred, sealed, or checkpoint-blocked.",
+    )
+    is_secret: bool = Field(
+        default=False,
+        description="Whether this link is hidden from players until discovered via search/roll or GM reveal.",
+    )
     bidirectional: bool = Field(default=True)
 
     @model_validator(mode="before")
     @classmethod
-    def _coerce_legacy_distance(cls, data: Any) -> Any:
-        return resolve_legacy_edge_distance_meters(
+    def _coerce_legacy_edge_inputs(cls, data: Any) -> Any:
+        normalized = resolve_legacy_edge_distance_meters(
             data, fallback=DEFAULT_FALLBACK_DISTANCE_METERS
         )
+        return resolve_legacy_edge_flags(normalized)
 
 
 class WorldWizardSeed(BaseModel):
@@ -957,16 +1187,28 @@ class LocationEdge(BaseModel):
         ge=1,
         le=MAX_EDGE_DISTANCE_METERS,
     )
-    is_locked_or_hidden: bool = False
+    speed_modifier: float = Field(
+        default=DEFAULT_EDGE_SPEED_MODIFIER,
+        ge=MIN_EDGE_SPEED_MODIFIER,
+        le=MAX_EDGE_SPEED_MODIFIER,
+    )
+    travel_mode: str | None = Field(
+        default=None,
+        max_length=MAX_EDGE_TRAVEL_MODE_LENGTH,
+    )
+    obstacles: list[str] = Field(default_factory=list)
+    is_blocked: bool = False
+    is_secret: bool = False
     created_at_turn_id: str | None = None
     superseded_at_turn_id: str | None = None
 
     @model_validator(mode="before")
     @classmethod
-    def _coerce_legacy_distance(cls, data: Any) -> Any:
-        return resolve_legacy_edge_distance_meters(
+    def _coerce_legacy_edge_inputs(cls, data: Any) -> Any:
+        normalized = resolve_legacy_edge_distance_meters(
             data, fallback=DEFAULT_FALLBACK_DISTANCE_METERS
         )
+        return resolve_legacy_edge_flags(normalized)
 
 
 class NeighborLocationView(BaseModel):
@@ -976,15 +1218,27 @@ class NeighborLocationView(BaseModel):
     direction_label: str
     compass_direction: CompassDirection | None = None
     distance_meters: int = Field(ge=1, le=MAX_EDGE_DISTANCE_METERS)
-    is_locked_or_hidden: bool
+    speed_modifier: float = Field(
+        default=DEFAULT_EDGE_SPEED_MODIFIER,
+        ge=MIN_EDGE_SPEED_MODIFIER,
+        le=MAX_EDGE_SPEED_MODIFIER,
+    )
+    travel_mode: str | None = Field(
+        default=None,
+        max_length=MAX_EDGE_TRAVEL_MODE_LENGTH,
+    )
+    obstacles: list[str] = Field(default_factory=list)
+    is_blocked: bool = False
+    is_secret: bool = False
     destination: LocationNode
 
     @model_validator(mode="before")
     @classmethod
-    def _coerce_legacy_distance(cls, data: Any) -> Any:
-        return resolve_legacy_edge_distance_meters(
+    def _coerce_legacy_edge_inputs(cls, data: Any) -> Any:
+        normalized = resolve_legacy_edge_distance_meters(
             data, fallback=DEFAULT_FALLBACK_DISTANCE_METERS
         )
+        return resolve_legacy_edge_flags(normalized)
 
 
 def _enforce_world_level_lore_nodes(nodes: list[LoreNode]) -> list[LoreNode]:
@@ -1224,7 +1478,12 @@ CANONICAL_EDGE_KEYS: frozenset[str] = frozenset(
         "compass_direction",
         "distance_meters",
         "travel_minutes",  # Legacy v0.35.x key auto-converted (* 70) on import without spurious warnings
-        "is_locked_or_hidden",
+        "speed_modifier",
+        "travel_mode",
+        "obstacles",
+        "is_blocked",
+        "is_secret",
+        "is_locked_or_hidden",  # Legacy v0.36.x key auto-converted to is_blocked without spurious warnings
         "created_at_turn_id",
         "superseded_at_turn_id",
     }

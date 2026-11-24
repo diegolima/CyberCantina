@@ -23,7 +23,11 @@ from app.schemas.character import (
     MemoryShard,
     VoiceAnchor,
 )
-from app.schemas.world import WorldGlobalRules, extract_edge_distance_meters
+from app.schemas.world import (
+    WorldGlobalRules,
+    extract_edge_distance_meters,
+    extract_edge_link_fields,
+)
 from app.security.media_path import (
     PathTraversalError,
     safe_resolve_asset_file_path,
@@ -737,14 +741,18 @@ def _seed_green_lie_world_for_user(
             if not from_id or not to_id:
                 continue
             distance_meters = extract_edge_distance_meters(edge)
+            speed_modifier, travel_mode, obstacles, is_blocked, is_secret = (
+                extract_edge_link_fields(edge)
+            )
             conn.execute(
                 """
                 INSERT INTO location_edges (
                     id, world_id, from_location_id, to_location_id,
                     direction_label, compass_direction, distance_meters,
-                    is_locked_or_hidden, created_at_turn_id, superseded_at_turn_id
+                    speed_modifier, travel_mode, obstacles_json,
+                    is_blocked, is_secret, created_at_turn_id, superseded_at_turn_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
                 """,
                 (
                     f"edge_{uuid.uuid4().hex[:10]}",
@@ -754,7 +762,11 @@ def _seed_green_lie_world_for_user(
                     str(edge.get("direction_label") or "forward"),
                     edge.get("compass_direction"),
                     distance_meters,
-                    1 if edge.get("is_locked_or_hidden") else 0,
+                    speed_modifier,
+                    travel_mode,
+                    json.dumps(obstacles),
+                    1 if is_blocked else 0,
+                    1 if is_secret else 0,
                 ),
             )
 

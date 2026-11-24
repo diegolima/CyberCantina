@@ -64,6 +64,7 @@ from app.schemas.world import (
     WorldGlobalRules,
     WorldRecord,
     extract_edge_distance_meters,
+    extract_edge_link_fields,
     extract_world_unsupported_fields,
     find_nested_world_unsupported_keys,
     normalize_lore_category,
@@ -2193,14 +2194,18 @@ async def commit_staged_import(
                             id_remap[str(old_edge_id)] = new_edge_id
                         from_id = id_remap.get(edge.get("from_location_id", ""), edge.get("from_location_id"))
                         to_id = id_remap.get(edge.get("to_location_id", ""), edge.get("to_location_id"))
+                        speed_modifier, travel_mode, obstacles, is_blocked, is_secret = (
+                            extract_edge_link_fields(edge)
+                        )
                         conn.execute(
                             """
                             INSERT INTO location_edges (
                                 id, world_id, from_location_id, to_location_id,
-                                direction_label, compass_direction, distance_meters, is_locked_or_hidden,
-                                created_at_turn_id, superseded_at_turn_id
+                                direction_label, compass_direction, distance_meters,
+                                speed_modifier, travel_mode, obstacles_json,
+                                is_blocked, is_secret, created_at_turn_id, superseded_at_turn_id
                             )
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
                             """,
                             (
                                 new_edge_id,
@@ -2210,7 +2215,11 @@ async def commit_staged_import(
                                 edge.get("direction_label", "forward"),
                                 edge.get("compass_direction"),
                                 extract_edge_distance_meters(edge),
-                                1 if edge.get("is_locked_or_hidden") else 0,
+                                speed_modifier,
+                                travel_mode,
+                                json.dumps(obstacles),
+                                1 if is_blocked else 0,
+                                1 if is_secret else 0,
                             ),
                         )
 

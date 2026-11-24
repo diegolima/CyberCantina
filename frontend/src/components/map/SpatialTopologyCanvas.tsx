@@ -3,9 +3,11 @@ import {
   AlertTriangle,
   Crosshair,
   DoorOpen,
+  EyeOff,
   GitBranch,
   HelpCircle,
   Layers,
+  Lock,
   MapPin,
   Plus,
   RotateCcw,
@@ -61,10 +63,12 @@ import {
   COMPASS_ANGLES,
   COMPASS_ORDER,
   DEFAULT_FALLBACK_DISTANCE_METERS,
+  canonicalEdgePairKey,
   clientToWorldPoint,
-  formatBundleWalkingDuration,
+  formatBundleTravelDuration,
   formatDistanceCompact,
-  formatWalkingDuration,
+  formatExitTravelPhrase,
+  formatTravelDuration,
   getAdaptiveDistanceStep,
   parseCommittedEdgeDistance,
   resolveBidirectionalProjectedBundle,
@@ -74,6 +78,7 @@ import {
   type LinkDragState,
   type NodeDragState,
   type ProjectedDepthTopology,
+  type SelectedEdgeState,
 } from "./topologyProjection";
 
 export interface SpatialTopologyCanvasProps {
@@ -120,8 +125,11 @@ export interface SpatialTopologyCanvasProps {
   setSelectedLocId: React.Dispatch<React.SetStateAction<string | null>>;
   setSelectedContainerId: React.Dispatch<React.SetStateAction<string | null>>;
   setSelectedGhostLocId?: React.Dispatch<React.SetStateAction<string | null>>;
+  selectedEdgeState?: SelectedEdgeState | null;
+  onSelectEdgePair?: (edgeId: string) => void;
+  onSelectEdgeBundle?: (edgeIds: string[]) => void;
+  onClearEdgeSelection?: () => void;
   setContextMenu: React.Dispatch<React.SetStateAction<MapContextMenuState | null>>;
-  setMultiEdgeModalEdges: React.Dispatch<React.SetStateAction<LocationEdge[] | null>>;
   openContextMenuAt: (e: React.MouseEvent, target: MapContextMenuState["target"]) => void;
   handleUpdateEdgeDistance: (edgeId: string, distanceMeters: number) => void;
   handleDeleteEdge: (edgeId: string) => void;
@@ -173,8 +181,11 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
   setSelectedLocId,
   setSelectedContainerId,
   setSelectedGhostLocId,
+  selectedEdgeState = null,
+  onSelectEdgePair,
+  onSelectEdgeBundle,
+  onClearEdgeSelection,
   setContextMenu,
-  setMultiEdgeModalEdges,
   openContextMenuAt,
   handleUpdateEdgeDistance,
   handleDeleteEdge,
@@ -230,7 +241,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
   const panPointerTypeRef = useRef<string>("mouse");
   const pendingTapTargetRef = useRef<
     | { kind: "location" | "container" | "ghost"; id: string }
-    | { kind: "edge"; openEditor: () => void }
+    | { kind: "edge-select"; select: () => void }
     | { kind: "edge-preview"; pairKey: string }
     | null
   >(null);
@@ -443,8 +454,8 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
             setSelectedContainerId(null);
             setSelectedLocId(null);
             setSelectedGhostLocId?.(pendingTap.id);
-          } else if (pendingTap.kind === "edge") {
-            pendingTap.openEditor();
+          } else if (pendingTap.kind === "edge-select") {
+            pendingTap.select();
           } else if (pendingTap.kind === "edge-preview") {
             lastTouchEdgePreviewAtRef.current = Date.now();
             toggleBadgeTimePreview(pendingTap.pairKey);
@@ -494,6 +505,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
             setSelectedLocId(null);
             setSelectedContainerId(null);
             setSelectedGhostLocId?.(null);
+            onClearEdgeSelection?.();
             setContextMenu(null);
             setInlineEdgeEdit(null);
             setShowMobileLegend(false);
@@ -532,6 +544,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
     setSelectedLocId,
     setSelectedContainerId,
     setSelectedGhostLocId,
+    onClearEdgeSelection,
     setContextMenu,
     setInlineEdgeEdit,
   ]);
@@ -547,18 +560,64 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
     return map;
   }, [projectedTopology.visibleSupernodes, projectedTopology.visibleLocations]);
 
+  const selectedBundleEdgeIds = useMemo(
+    () =>
+      selectedEdgeState?.kind === "bundle"
+        ? new Set(selectedEdgeState.edgeIds)
+        : null,
+    [selectedEdgeState]
+  );
+
+  const selectedPairEndpointKey = useMemo(() => {
+    if (selectedEdgeState?.kind !== "pair") return null;
+    for (const pe of projectedTopology.projectedEdges) {
+      if (
+        pe.rawEdge.id === selectedEdgeState.edgeId ||
+        pe.groupedEdges?.some((ge) => ge.id === selectedEdgeState.edgeId)
+      ) {
+        return canonicalEdgePairKey(
+          pe.rawEdge.from_location_id,
+          pe.rawEdge.to_location_id
+        );
+      }
+    }
+    for (const ge of projectedTopology.ghostEdges) {
+      if (ge.rawEdge.id === selectedEdgeState.edgeId) {
+        return canonicalEdgePairKey(
+          ge.rawEdge.from_location_id,
+          ge.rawEdge.to_location_id
+        );
+      }
+    }
+    return null;
+  }, [
+    selectedEdgeState,
+    projectedTopology.projectedEdges,
+    projectedTopology.ghostEdges,
+  ]);
+
   const renderedEdges = useMemo(() => {
     const focusedId = selectedContainer?.id || selectedLocation?.id;
 
     const buildEdgeRenderItem = (params: {
       edge: Pick<
         LocationEdge,
-        "id" | "distance_meters" | "is_locked_or_hidden" | "direction_label"
+        | "id"
+        | "distance_meters"
+        | "speed_modifier"
+        | "travel_mode"
+        | "obstacles"
+        | "is_blocked"
+        | "is_secret"
+        | "direction_label"
       > & {
         sourceNodeId: string;
         targetNodeId: string;
         isAggregated: boolean;
-        containsLockedEdge: boolean;
+        isUndiscoveredSecret: boolean;
+        containsBlockedEdge: boolean;
+        containsUndiscoveredSecretEdge: boolean;
+        containsObstacles: boolean;
         rawEdge: LocationEdge;
         groupedEdges?: LocationEdge[];
         passagePairCount?: number;
@@ -581,40 +640,93 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
         edge.passagePairCount ?? (edge.groupedEdges?.length ?? 0);
       const aggSuffix =
         edge.isAggregated && passagePairCount > 1 ? ` · ${passagePairCount}` : "";
-      const lockSuffix = edge.containsLockedEdge ? " 🔒" : "";
-      const distanceLabelText = `${formatDistanceCompact(edge.distance_meters)}${aggSuffix}${lockSuffix}`;
+      const blockedCue = edge.containsBlockedEdge;
+      const secretCue = edge.containsUndiscoveredSecretEdge;
+      const iconCount = (blockedCue ? 1 : 0) + (secretCue ? 1 : 0);
+      const extraIconW = iconCount > 0 ? iconCount * 10 + 2 : 0;
+
+      const distanceLabelText = `${formatDistanceCompact(edge.distance_meters)}${aggSuffix}`;
       const timeDurationText =
         edge.isAggregated &&
-        passagePairCount > 1 &&
-        edge.maxDistanceMeters !== undefined
-          ? formatBundleWalkingDuration(edge.distance_meters, edge.maxDistanceMeters)
-          : formatWalkingDuration(edge.distance_meters);
-      const timeLabelText = `${timeDurationText}${aggSuffix}${lockSuffix}`;
+        edge.groupedEdges &&
+        edge.groupedEdges.length > 1 &&
+        passagePairCount > 1
+          ? formatBundleTravelDuration(edge.groupedEdges)
+          : formatTravelDuration(edge.distance_meters, edge.speed_modifier);
+      const timeLabelText = `${timeDurationText}${aggSuffix}`;
       const isTimePreview = previewTimePairKeys.has(pairKey);
       const labelText = isTimePreview ? timeLabelText : distanceLabelText;
-      const badgeWidth = computeDistanceBadgeWidth(labelText);
+      const badgeWidth = computeDistanceBadgeWidth(labelText) + extraIconW;
       const hitWidth = Math.max(
         badgeWidth,
         computeDistanceBadgeWidth(
           isTimePreview ? distanceLabelText : timeLabelText
-        )
+        ) + extraIconW
       );
+
+      const isSelected = (() => {
+        if (!selectedEdgeState) return false;
+        if (selectedEdgeState.kind === "bundle" && selectedBundleEdgeIds) {
+          return (
+            selectedBundleEdgeIds.has(edge.rawEdge.id) ||
+            Boolean(edge.groupedEdges?.some((ge) => selectedBundleEdgeIds.has(ge.id)))
+          );
+        }
+        if (selectedEdgeState.kind === "pair") {
+          if (
+            edge.rawEdge.id === selectedEdgeState.edgeId ||
+            edge.groupedEdges?.some((ge) => ge.id === selectedEdgeState.edgeId)
+          ) {
+            return true;
+          }
+          if (
+            !edge.isAggregated &&
+            selectedPairEndpointKey &&
+            canonicalEdgePairKey(
+              edge.rawEdge.from_location_id,
+              edge.rawEdge.to_location_id
+            ) === selectedPairEndpointKey
+          ) {
+            return true;
+          }
+        }
+        return false;
+      })();
+
+      const singleTravelPhrase = formatExitTravelPhrase(
+        edge.distance_meters,
+        edge.speed_modifier,
+        edge.travel_mode
+      );
+      const statusCues: string[] = [];
+      if (blockedCue) statusCues.push("Blocked");
+      if (secretCue) statusCues.push("Secret · Hidden");
+      else if (edge.is_secret) statusCues.push("Secret · Discovered");
+      if (edge.containsObstacles && !edge.isAggregated && edge.obstacles.length > 0) {
+        statusCues.push(`Obstacles: ${edge.obstacles.join(", ")}`);
+      }
+      const statusPart = statusCues.length > 0 ? ` · ${statusCues.join(" · ")}` : "";
+      const speedPart =
+        !edge.isAggregated && Math.abs((edge.speed_modifier ?? 1) - 1) > 0.01
+          ? ` (${edge.speed_modifier}×)`
+          : "";
       const hoverTitle =
         edge.isAggregated && edge.groupedEdges && edge.groupedEdges.length > 1
           ? `${
               passagePairCount > 1 ? `${passagePairCount} boundary passages (` : "("
-            }${formatDistanceCompact(edge.distance_meters)} · ${timeDurationText}${
-              edge.containsLockedEdge ? " · locked" : ""
-            }): ${edge.groupedEdges
+            }${formatDistanceCompact(edge.distance_meters)} · ${timeDurationText}${statusPart}): ${edge.groupedEdges
               .map((ge) => ge.direction_label)
-              .join(" · ")} — click badge for walk time`
-          : `${edge.direction_label} (${formatDistanceCompact(edge.distance_meters)} · ${formatWalkingDuration(edge.distance_meters)}${
-              edge.containsLockedEdge ? " · locked" : ""
-            }) — click badge for walk time`;
+              .join(" · ")} — click to inspect`
+          : `${edge.direction_label} (${formatDistanceCompact(edge.distance_meters)} · ${singleTravelPhrase}${speedPart}${statusPart}) — click to inspect`;
+
       return {
         edge,
         clipped,
         isDirect,
+        isSelected,
+        blockedCue,
+        secretCue,
+        extraIconW,
         showLabel,
         labelText,
         isTimePreview,
@@ -651,7 +763,9 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
             ...edge,
             distance_meters: bundle.minDistanceMeters,
             maxDistanceMeters: bundle.maxDistanceMeters,
-            containsLockedEdge: bundle.containsLockedEdge,
+            containsBlockedEdge: bundle.containsBlockedEdge,
+            containsUndiscoveredSecretEdge: bundle.containsUndiscoveredSecretEdge,
+            containsObstacles: bundle.containsObstacles,
             groupedEdges: bundle.allEdges,
             passagePairCount: bundle.passagePairCount,
           }
@@ -699,7 +813,9 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
         edge: {
           ...ge,
           isAggregated: false,
-          containsLockedEdge: ge.is_locked_or_hidden,
+          containsBlockedEdge: ge.is_blocked,
+          containsUndiscoveredSecretEdge: ge.isUndiscoveredSecret,
+          containsObstacles: (ge.obstacles?.length ?? 0) > 0,
         },
         p1,
         p2,
@@ -725,6 +841,9 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
     selectedContainer?.id,
     selectedLocation?.id,
     selectedGhostLocId,
+    selectedEdgeState,
+    selectedBundleEdgeIds,
+    selectedPairEndpointKey,
     previewTimePairKeys,
   ]);
 
@@ -742,9 +861,26 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
       fallbackMeters: match
         ? match.edge.distance_meters
         : DEFAULT_FALLBACK_DISTANCE_METERS,
+      speedModifier: match?.edge.speed_modifier ?? 1,
       pairKey: match?.pairKey ?? null,
     };
   }, [inlineEdgeEdit, renderedEdges]);
+
+  const selectRenderedEdge = (
+    edge: (typeof renderedEdges)[number]["edge"],
+    passagePairCount: number
+  ) => {
+    if (
+      edge.isAggregated &&
+      edge.groupedEdges &&
+      edge.groupedEdges.length > 1 &&
+      passagePairCount > 1
+    ) {
+      onSelectEdgeBundle?.(edge.groupedEdges.map((ge) => ge.id));
+    } else {
+      onSelectEdgePair?.(edge.rawEdge.id);
+    }
+  };
 
   const openEdgeEditor = (
     ev: React.MouseEvent,
@@ -768,7 +904,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
       edge.groupedEdges.length > 1 &&
       passagePairCount > 1
     ) {
-      setMultiEdgeModalEdges(edge.groupedEdges);
+      onSelectEdgeBundle?.(edge.groupedEdges.map((ge) => ge.id));
     } else {
       setInlineEdgeEdit({
         edgeId: edge.rawEdge.id,
@@ -988,20 +1124,87 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     edge,
                     clipped,
                     isDirect,
+                    isSelected,
+                    blockedCue,
+                    secretCue,
                     hoverTitle,
                     passagePairCount,
                     pairKey,
                     isGhost,
                   }) => {
+                  const lineStroke = isSelected
+                    ? "#22d3ee"
+                    : secretCue
+                    ? "#a78bfa"
+                    : isGhost
+                    ? isDirect
+                      ? "#22d3ee"
+                      : "#64748b"
+                    : blockedCue
+                    ? "#fb7185"
+                    : isDirect
+                    ? "#06b6d4"
+                    : edge.isAggregated
+                    ? "#475569"
+                    : "#334155";
+                  const lineDash = secretCue
+                    ? "6 4"
+                    : isGhost
+                    ? "5 4"
+                    : blockedCue
+                    ? "4 3"
+                    : edge.isAggregated
+                    ? "2 2"
+                    : undefined;
+                  const lineOpacity = isSelected
+                    ? 1
+                    : secretCue
+                    ? 0.85
+                    : isGhost
+                    ? isDirect
+                      ? 0.85
+                      : 0.6
+                    : blockedCue
+                    ? 0.9
+                    : 1;
+                  const lineWidth = isSelected
+                    ? edge.isAggregated
+                      ? 3.2
+                      : 2.8
+                    : edge.isAggregated
+                    ? isDirect
+                      ? 2.8
+                      : 2.0
+                    : isDirect
+                    ? 2.4
+                    : 1.5;
                   return (
                     <g
                       key={edge.id}
+                      data-edge-selected={isSelected ? "true" : undefined}
                       onMouseEnter={() => {
                         if (isEditorQuickDeleteEnabled) enterEdgeHover(pairKey);
                       }}
                       onMouseLeave={() => leaveEdgeHover(pairKey)}
+                      onPointerDown={(ev) => {
+                        if (ev.button !== 0) return;
+                        if (ev.pointerType === "touch" || isMobileViewport) {
+                          pendingTapTargetRef.current = {
+                            kind: "edge-select",
+                            select: () =>
+                              selectRenderedEdge(edge, passagePairCount),
+                          };
+                        } else {
+                          ev.stopPropagation();
+                        }
+                      }}
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        if (isPanning) return;
+                        selectRenderedEdge(edge, passagePairCount);
+                      }}
                       onContextMenu={(ev) =>
-                        openContextMenuAt(ev, {
+                        handleSvgContextMenu(ev, {
                           kind: "edge",
                           edgeId: edge.rawEdge.id,
                           ...(edge.isAggregated && edge.groupedEdges?.length
@@ -1032,34 +1235,10 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                         y1={clipped.y1}
                         x2={clipped.x2}
                         y2={clipped.y2}
-                        stroke={
-                          isGhost
-                            ? isDirect
-                              ? "#22d3ee"
-                              : "#64748b"
-                            : isDirect
-                            ? "#06b6d4"
-                            : edge.isAggregated
-                            ? "#475569"
-                            : "#334155"
-                        }
-                        strokeOpacity={isGhost ? (isDirect ? 0.85 : 0.6) : 1}
-                        strokeWidth={
-                          edge.isAggregated
-                            ? isDirect
-                              ? 2.8
-                              : 2.0
-                            : isDirect
-                            ? 2.4
-                            : 1.5
-                        }
-                        strokeDasharray={
-                          isGhost || edge.containsLockedEdge
-                            ? "5 4"
-                            : edge.isAggregated
-                            ? "2 2"
-                            : undefined
-                        }
+                        stroke={lineStroke}
+                        strokeOpacity={lineOpacity}
+                        strokeWidth={lineWidth}
+                        strokeDasharray={lineDash}
                         pointerEvents="none"
                       />
                     </g>
@@ -1088,6 +1267,10 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     edge,
                     clipped,
                     isDirect,
+                    isSelected,
+                    blockedCue,
+                    secretCue,
+                    extraIconW,
                     showLabel,
                     labelText,
                     isTimePreview,
@@ -1105,6 +1288,18 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     ) {
                       return null;
                     }
+                    const badgeStroke = isSelected
+                      ? "#22d3ee"
+                      : isTimePreview
+                      ? "#f59e0b"
+                      : secretCue
+                      ? "#a78bfa"
+                      : blockedCue
+                      ? "#fb7185"
+                      : isDirect
+                      ? "#0891b2"
+                      : "#334155";
+                    const iconStartX = clipped.midX - badgeWidth / 2 + 4;
                     return (
                       <g
                         key={`badge-${edge.id}`}
@@ -1113,33 +1308,11 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                         onPointerDown={(ev) => {
                           if (ev.button !== 0) return;
                           if (ev.pointerType === "touch" || isMobileViewport) {
-                            if (mode === "editor" && !isMutatingLocked) {
-                              pendingTapTargetRef.current = {
-                                kind: "edge",
-                                openEditor: () => {
-                                  if (
-                                    edge.isAggregated &&
-                                    edge.groupedEdges &&
-                                    edge.groupedEdges.length > 1 &&
-                                    passagePairCount > 1
-                                  ) {
-                                    setMultiEdgeModalEdges(edge.groupedEdges);
-                                  } else {
-                                    setInlineEdgeEdit({
-                                      edgeId: edge.rawEdge.id,
-                                      midX: clipped.midX,
-                                      midY: clipped.midY,
-                                      value: String(edge.distance_meters),
-                                    });
-                                  }
-                                },
-                              };
-                            } else {
-                              pendingTapTargetRef.current = {
-                                kind: "edge-preview",
-                                pairKey,
-                              };
-                            }
+                            pendingTapTargetRef.current = {
+                              kind: "edge-select",
+                              select: () =>
+                                selectRenderedEdge(edge, passagePairCount),
+                            };
                           } else {
                             ev.stopPropagation();
                           }
@@ -1152,7 +1325,11 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                           ) {
                             return;
                           }
-                          toggleBadgeTimePreview(pairKey);
+                          if (ev.shiftKey) {
+                            toggleBadgeTimePreview(pairKey);
+                          } else {
+                            selectRenderedEdge(edge, passagePairCount);
+                          }
                         }}
                         onMouseEnter={() => {
                           if (isEditorQuickDeleteEnabled) enterEdgeHover(pairKey);
@@ -1190,23 +1367,35 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                           rx={4}
                           fill="#0b0e14"
                           fillOpacity={1}
-                          stroke={
-                            isTimePreview
-                              ? "#f59e0b"
-                              : isDirect
-                              ? "#0891b2"
-                              : "#334155"
-                          }
-                          strokeWidth={1}
+                          stroke={badgeStroke}
+                          strokeWidth={isSelected ? 1.4 : 1}
                         />
+                        {secretCue && (
+                          <EyeOff
+                            size={8.5}
+                            x={iconStartX}
+                            y={clipped.midY - 5.25}
+                            color="#c084fc"
+                          />
+                        )}
+                        {blockedCue && (
+                          <Lock
+                            size={8.5}
+                            x={secretCue ? iconStartX + 10 : iconStartX}
+                            y={clipped.midY - 5.25}
+                            color="#fb7185"
+                          />
+                        )}
                         <text
-                          x={clipped.midX}
+                          x={clipped.midX + extraIconW / 2}
                           y={clipped.midY + 2}
                           textAnchor="middle"
                           fill={
                             isTimePreview
                               ? "#fde68a"
-                              : isDirect
+                              : secretCue
+                              ? "#ddd6fe"
+                              : isSelected || isDirect
                               ? "#67e8f9"
                               : "#94a3b8"
                           }
@@ -2116,7 +2305,10 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                 m
               </span>
               <span className="map-inline-edge-walk-hint">
-                {formatWalkingDuration(activeInlinePreviewMeters)}
+                {formatTravelDuration(
+                  activeInlinePreviewMeters,
+                  activeInlineEdge.speedModifier
+                )}
               </span>
               <button
                 type="button"
@@ -2266,7 +2458,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                 <Layers size={11} color="#fbbf24" /> Container
               </span>
               <span className="map-legend-hint">
-                Drag nodes · Middle-drag to pan · Drag ports to link · Click badge for walk time · Double-click to edit · Right-click for actions
+                Drag nodes · Middle-drag to pan · Drag ports to link · Click link to inspect · Shift+click badge for travel time · Double-click distance to edit
               </span>
             </div>
 

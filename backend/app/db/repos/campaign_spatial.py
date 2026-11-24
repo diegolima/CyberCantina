@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import json
 import sqlite3
 import uuid
@@ -26,6 +27,7 @@ from app.schemas.turn import (
 )
 from app.db.repos.arrival_descriptions import build_first_visit_arrival_bundle
 from app.schemas.world import (
+    DEFAULT_EDGE_SPEED_MODIFIER,
     DEFAULT_EXTERIOR_DISTANCE_METERS,
     DEFAULT_FALLBACK_DISTANCE_METERS,
     DEFAULT_INTERIOR_DISTANCE_METERS,
@@ -36,13 +38,119 @@ from app.schemas.world import (
     LocationEdge,
     LocationNode,
     LoreNode,
+    canonical_edge_pair_key,
+    is_edge_revealed,
     normalize_compass_direction,
+    normalize_edge_obstacles,
+    normalize_edge_speed_modifier,
+    normalize_edge_travel_mode,
 )
 from app.db.repos.campaign_map_update import CampaignMapUpdateMixin
 from app.db.repos.campaign_lore_items import CampaignLoreItemsMixin
 
 
 class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
+    """Campaign location overrides, edges, spatial projections, and row mappers."""
+
+    def _resolve_revealed_edge_state(
+        self,
+        world_id: str,
+        revealed_edge_ids: Iterable[str],
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> tuple[set[str], set[tuple[str, str]]]:
+        """Resolve exact revealed edge IDs and canonical endpoint pairs across active & superseded rows."""
+        id_set = {str(eid) for eid in (revealed_edge_ids or ()) if eid}
+        if not id_set:
+            return set(), set()
+
+        own_conn = conn is None
+        active_conn = self._connect() if own_conn else conn
+        try:
+            placeholders = ",".join("?" for _ in id_set)
+            rows = active_conn.execute(
+                f"""
+                SELECT from_location_id, to_location_id
+                FROM location_edges
+                WHERE world_id = ? AND id IN ({placeholders})
+                """,
+                (world_id, *sorted(id_set)),
+            ).fetchall()
+            pairs = {
+                canonical_edge_pair_key(r["from_location_id"], r["to_location_id"])
+                for r in rows
+            }
+            return id_set, pairs
+        finally:
+            if own_conn:
+                active_conn.close()
+
+    @staticmethod
+    def _remap_revealed_edge_ids_in_snapshot(
+        conn: sqlite3.Connection,
+        *,
+        turn_id: str,
+        world_id: str,
+        remapped_edges: list[tuple[str, str]],
+    ) -> None:
+        """Preserve reveal state when CoW edge supersession replaces an already-revealed edge ID."""
+        if not remapped_edges:
+            return
+        ws_row = conn.execute(
+            "SELECT revealed_edge_ids_json FROM world_state_snapshots WHERE turn_id = ?",
+            (turn_id,),
+        ).fetchone()
+        if not ws_row or not ws_row["revealed_edge_ids_json"]:
+            return
+        try:
+            existing_ids = [
+                str(eid)
+                for eid in json.loads(ws_row["revealed_edge_ids_json"] or "[]")
+                if eid
+            ]
+        except Exception:
+            existing_ids = []
+        if not existing_ids:
+            return
+        id_set = set(existing_ids)
+        placeholders = ",".join("?" for _ in id_set)
+        revealed_rows = conn.execute(
+            f"""
+            SELECT from_location_id, to_location_id
+            FROM location_edges
+            WHERE world_id = ? AND id IN ({placeholders})
+            """,
+            (world_id, *sorted(id_set)),
+        ).fetchall()
+        revealed_pairs = {
+            canonical_edge_pair_key(r["from_location_id"], r["to_location_id"])
+            for r in revealed_rows
+        }
+
+        new_ids_to_add: list[str] = []
+        for old_eid, new_eid in remapped_edges:
+            if old_eid in id_set:
+                new_ids_to_add.append(new_eid)
+                continue
+            edge_row = conn.execute(
+                "SELECT from_location_id, to_location_id FROM location_edges WHERE id = ?",
+                (new_eid,),
+            ).fetchone()
+            if edge_row and (
+                canonical_edge_pair_key(
+                    edge_row["from_location_id"], edge_row["to_location_id"]
+                )
+                in revealed_pairs
+            ):
+                new_ids_to_add.append(new_eid)
+
+        if not new_ids_to_add:
+            return
+        merged = list(dict.fromkeys([*existing_ids, *new_ids_to_add]))
+        conn.execute(
+            "UPDATE world_state_snapshots SET revealed_edge_ids_json = ? WHERE turn_id = ?",
+            (json.dumps(merged), turn_id),
+        )
     """Campaign location overrides, edges, spatial projections, and row mappers."""
 
     def _load_character_names(self, char_ids: list[str]) -> dict[str, str]:
@@ -446,12 +554,19 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
         distance_meters: int | None = None,
         direction_label: str | None = None,
         bidirectional: bool = True,
+        speed_modifier: float = DEFAULT_EDGE_SPEED_MODIFIER,
+        travel_mode: str | None = None,
+        obstacles: list[str] | None = None,
+        is_blocked: bool = False,
+        is_secret: bool = False,
         owner_id: str | None = None,
     ) -> CampaignStateBundle:
         """Connect two existing map locations on the campaign's active timeline."""
         campaign = self.get_campaign(campaign_id, owner_id=owner_id)
         if not campaign.active_leaf_turn_id:
             raise ValueError(f"Campaign '{campaign_id}' has no active turn")
+        if is_secret:
+            self._require_gm_lore_unlocked(campaign)
 
         if from_location_id == to_location_id:
             raise ValueError("Cannot connect a location to itself")
@@ -503,6 +618,12 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
             else f"Passage to {to_loc.name}"
         )
 
+        norm_speed = normalize_edge_speed_modifier(speed_modifier)
+        norm_mode = normalize_edge_travel_mode(travel_mode)
+        norm_obstacles_json = json.dumps(normalize_edge_obstacles(obstacles or []))
+        blocked_int = 1 if is_blocked else 0
+        secret_int = 1 if is_secret else 0
+
         conn = self._connect()
         try:
             conn.execute(
@@ -510,9 +631,10 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                 INSERT INTO location_edges (
                     id, world_id, from_location_id, to_location_id,
                     direction_label, compass_direction, distance_meters,
-                    is_locked_or_hidden, created_at_turn_id
+                    speed_modifier, travel_mode, obstacles_json,
+                    is_blocked, is_secret, created_at_turn_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     fwd_edge_id,
@@ -522,6 +644,11 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                     fwd_label,
                     cdir,
                     resolved_meters,
+                    norm_speed,
+                    norm_mode,
+                    norm_obstacles_json,
+                    blocked_int,
+                    secret_int,
                     campaign.active_leaf_turn_id,
                 ),
             )
@@ -539,9 +666,10 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                         INSERT INTO location_edges (
                             id, world_id, from_location_id, to_location_id,
                             direction_label, compass_direction, distance_meters,
-                            is_locked_or_hidden, created_at_turn_id
+                            speed_modifier, travel_mode, obstacles_json,
+                            is_blocked, is_secret, created_at_turn_id
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             rev_edge_id,
@@ -551,10 +679,178 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                             f"Return passage to {from_loc.name}",
                             rev_dir,
                             resolved_meters,
+                            norm_speed,
+                            norm_mode,
+                            norm_obstacles_json,
+                            blocked_int,
+                            secret_int,
                             campaign.active_leaf_turn_id,
                         ),
                     )
 
+            conn.commit()
+        finally:
+            conn.close()
+
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
+
+    def update_campaign_edge(
+        self,
+        campaign_id: str,
+        *,
+        edge_id: str,
+        distance_meters: int | None = None,
+        speed_modifier: float | None = None,
+        travel_mode: str | None = None,
+        travel_mode_provided: bool = False,
+        obstacles: list[str] | None = None,
+        is_blocked: bool | None = None,
+        is_secret: bool | None = None,
+        direction_label: str | None = None,
+        reciprocal_direction_label: str | None = None,
+        update_reciprocal: bool = True,
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
+        """Update properties of an existing link (and its reciprocal) branch-safely on the active timeline."""
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
+        if not campaign.active_leaf_turn_id:
+            raise ValueError(f"Campaign '{campaign_id}' has no active turn")
+        leaf_turn_id = campaign.active_leaf_turn_id
+
+        branch_turns = self.get_branch_turn_chain(leaf_turn_id)
+        valid_turn_ids = {t.id for t in branch_turns}
+        leaf_turn = branch_turns[-1]
+        world = self.get_world(campaign.world_id, valid_turn_ids=valid_turn_ids)
+
+        target_edge = next((e for e in world.edges if e.id == edge_id), None)
+        if not target_edge:
+            raise KeyError(f"Edge '{edge_id}' is not visible on the active timeline")
+
+        gm_unlocked = bool(campaign.world_settings.unlock_lore)
+        revealed_ids, revealed_pairs = self._resolve_revealed_edge_state(
+            campaign.world_id,
+            leaf_turn.world_snapshot.revealed_edge_ids,
+        )
+        if (
+            target_edge.is_secret
+            and not gm_unlocked
+            and not is_edge_revealed(
+                target_edge.id,
+                target_edge.from_location_id,
+                target_edge.to_location_id,
+                revealed_ids,
+                revealed_pairs,
+            )
+        ):
+            raise KeyError(f"Edge '{edge_id}' is not visible on the active timeline")
+
+        if is_secret is not None and bool(is_secret) != bool(target_edge.is_secret):
+            self._require_gm_lore_unlocked(campaign)
+
+        edges_to_update: list[LocationEdge] = [target_edge]
+        if update_reciprocal:
+            for e in world.edges:
+                if (
+                    e.from_location_id == target_edge.to_location_id
+                    and e.to_location_id == target_edge.from_location_id
+                    and e.id != target_edge.id
+                ):
+                    edges_to_update.append(e)
+
+        conn = self._connect()
+        try:
+            remapped_edges: list[tuple[str, str]] = []
+            for edge in edges_to_update:
+                is_primary = edge.id == target_edge.id
+                next_dist = (
+                    max(1, min(MAX_EDGE_DISTANCE_METERS, int(distance_meters)))
+                    if distance_meters is not None
+                    else edge.distance_meters
+                )
+                next_speed = (
+                    normalize_edge_speed_modifier(speed_modifier)
+                    if speed_modifier is not None
+                    else edge.speed_modifier
+                )
+                next_mode = (
+                    normalize_edge_travel_mode(travel_mode)
+                    if travel_mode_provided
+                    else edge.travel_mode
+                )
+                next_obs = (
+                    normalize_edge_obstacles(obstacles)
+                    if obstacles is not None
+                    else list(edge.obstacles)
+                )
+                next_blocked = bool(is_blocked) if is_blocked is not None else bool(edge.is_blocked)
+                next_secret = bool(is_secret) if is_secret is not None else bool(edge.is_secret)
+
+                if is_primary and direction_label is not None:
+                    next_label = direction_label.strip() or edge.direction_label
+                elif not is_primary and reciprocal_direction_label is not None:
+                    next_label = reciprocal_direction_label.strip() or edge.direction_label
+                else:
+                    next_label = edge.direction_label
+
+                if edge.created_at_turn_id == leaf_turn_id:
+                    conn.execute(
+                        """
+                        UPDATE location_edges
+                        SET direction_label = ?, distance_meters = ?, speed_modifier = ?,
+                            travel_mode = ?, obstacles_json = ?, is_blocked = ?, is_secret = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            next_label,
+                            next_dist,
+                            next_speed,
+                            next_mode,
+                            json.dumps(next_obs),
+                            1 if next_blocked else 0,
+                            1 if next_secret else 0,
+                            edge.id,
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE location_edges SET superseded_at_turn_id = ? WHERE id = ?",
+                        (leaf_turn_id, edge.id),
+                    )
+                    new_edge_id = f"edge_{uuid.uuid4().hex[:10]}"
+                    conn.execute(
+                        """
+                        INSERT INTO location_edges (
+                            id, world_id, from_location_id, to_location_id,
+                            direction_label, compass_direction, distance_meters,
+                            speed_modifier, travel_mode, obstacles_json,
+                            is_blocked, is_secret, created_at_turn_id
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            new_edge_id,
+                            edge.world_id,
+                            edge.from_location_id,
+                            edge.to_location_id,
+                            next_label,
+                            edge.compass_direction,
+                            next_dist,
+                            next_speed,
+                            next_mode,
+                            json.dumps(next_obs),
+                            1 if next_blocked else 0,
+                            1 if next_secret else 0,
+                            leaf_turn_id,
+                        ),
+                    )
+                    remapped_edges.append((edge.id, new_edge_id))
+
+            self._remap_revealed_edge_ids_in_snapshot(
+                conn,
+                turn_id=leaf_turn_id,
+                world_id=campaign.world_id,
+                remapped_edges=remapped_edges,
+            )
             conn.commit()
         finally:
             conn.close()
@@ -571,65 +867,88 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
         owner_id: str | None = None,
     ) -> CampaignStateBundle:
         """Update distance (distance_meters) of an existing edge on the active timeline."""
+        return self.update_campaign_edge(
+            campaign_id,
+            edge_id=edge_id,
+            distance_meters=distance_meters,
+            update_reciprocal=update_reciprocal,
+            owner_id=owner_id,
+        )
+
+    def toggle_campaign_edge_reveal(
+        self,
+        campaign_id: str,
+        edge_id: str,
+        *,
+        revealed: bool,
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
+        """Manually reveal or hide a secret link pair at the active leaf turn (GM Mode)."""
         campaign = self.get_campaign(campaign_id, owner_id=owner_id)
+        self._require_gm_lore_unlocked(campaign)
         if not campaign.active_leaf_turn_id:
             raise ValueError(f"Campaign '{campaign_id}' has no active turn")
+        leaf_turn_id = campaign.active_leaf_turn_id
 
-        distance_meters = max(1, min(MAX_EDGE_DISTANCE_METERS, int(distance_meters)))
-
-        branch_turns = self.get_branch_turn_chain(campaign.active_leaf_turn_id)
+        branch_turns = self.get_branch_turn_chain(leaf_turn_id)
         valid_turn_ids = {t.id for t in branch_turns}
         world = self.get_world(campaign.world_id, valid_turn_ids=valid_turn_ids)
 
         target_edge = next((e for e in world.edges if e.id == edge_id), None)
         if not target_edge:
-            raise KeyError(f"Edge '{edge_id}' is not visible on the active timeline")
+            raise KeyError(f"Edge '{edge_id}' not found in campaign '{campaign_id}'")
+        if not target_edge.is_secret:
+            raise ValueError("Only secret links can be marked revealed or hidden.")
 
-        edges_to_update = [target_edge]
-        if update_reciprocal:
-            for e in world.edges:
-                if (
-                    e.from_location_id == target_edge.to_location_id
-                    and e.to_location_id == target_edge.from_location_id
-                    and e.id != target_edge.id
-                ):
-                    edges_to_update.append(e)
+        pair_ids: list[str] = [target_edge.id]
+        for e in world.edges:
+            if (
+                e.from_location_id == target_edge.to_location_id
+                and e.to_location_id == target_edge.from_location_id
+                and e.id not in pair_ids
+            ):
+                pair_ids.append(e.id)
 
         conn = self._connect()
         try:
-            for edge in edges_to_update:
-                if edge.created_at_turn_id == campaign.active_leaf_turn_id:
-                    conn.execute(
-                        "UPDATE location_edges SET distance_meters = ? WHERE id = ?",
-                        (distance_meters, edge.id),
-                    )
-                else:
-                    conn.execute(
-                        "UPDATE location_edges SET superseded_at_turn_id = ? WHERE id = ?",
-                        (campaign.active_leaf_turn_id, edge.id),
-                    )
-                    new_edge_id = f"edge_{uuid.uuid4().hex[:10]}"
-                    conn.execute(
-                        """
-                        INSERT INTO location_edges (
-                            id, world_id, from_location_id, to_location_id,
-                            direction_label, compass_direction, distance_meters,
-                            is_locked_or_hidden, created_at_turn_id
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            new_edge_id,
-                            edge.world_id,
-                            edge.from_location_id,
-                            edge.to_location_id,
-                            edge.direction_label,
-                            edge.compass_direction,
-                            distance_meters,
-                            1 if edge.is_locked_or_hidden else 0,
-                            campaign.active_leaf_turn_id,
-                        ),
-                    )
+            ws_row = conn.execute(
+                "SELECT revealed_edge_ids_json FROM world_state_snapshots WHERE turn_id = ?",
+                (leaf_turn_id,),
+            ).fetchone()
+            existing_revealed: list[str] = []
+            if ws_row and ws_row["revealed_edge_ids_json"]:
+                try:
+                    existing_revealed = json.loads(ws_row["revealed_edge_ids_json"] or "[]")
+                except Exception:
+                    existing_revealed = []
+
+            if revealed:
+                next_revealed = list(dict.fromkeys([*existing_revealed, *pair_ids]))
+            else:
+                hist_rows = conn.execute(
+                    """
+                    SELECT id FROM location_edges
+                    WHERE world_id = ?
+                      AND (
+                          (from_location_id = ? AND to_location_id = ?)
+                          OR (from_location_id = ? AND to_location_id = ?)
+                      )
+                    """,
+                    (
+                        campaign.world_id,
+                        target_edge.from_location_id,
+                        target_edge.to_location_id,
+                        target_edge.to_location_id,
+                        target_edge.from_location_id,
+                    ),
+                ).fetchall()
+                drop_ids = set(pair_ids) | {str(r["id"]) for r in hist_rows}
+                next_revealed = [rid for rid in existing_revealed if rid not in drop_ids]
+
+            conn.execute(
+                "UPDATE world_state_snapshots SET revealed_edge_ids_json = ? WHERE turn_id = ?",
+                (json.dumps(next_revealed), leaf_turn_id),
+            )
             conn.commit()
         finally:
             conn.close()
@@ -992,6 +1311,28 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
             )
         else:
             distance_meters = DEFAULT_FALLBACK_DISTANCE_METERS
+
+        raw_obs: Any = []
+        if "obstacles_json" in keys and r["obstacles_json"]:
+            try:
+                raw_obs = json.loads(r["obstacles_json"] or "[]")
+            except Exception:
+                raw_obs = []
+        legacy_locked = (
+            bool(r["is_locked_or_hidden"])
+            if "is_locked_or_hidden" in keys and r["is_locked_or_hidden"] is not None
+            else False
+        )
+        is_blocked = (
+            bool(r["is_blocked"])
+            if "is_blocked" in keys and r["is_blocked"] is not None
+            else legacy_locked
+        )
+        is_secret = (
+            bool(r["is_secret"])
+            if "is_secret" in keys and r["is_secret"] is not None
+            else False
+        )
         return LocationEdge(
             id=r["id"],
             world_id=r["world_id"],
@@ -1000,7 +1341,15 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
             direction_label=r["direction_label"],
             compass_direction=cdir,
             distance_meters=distance_meters,
-            is_locked_or_hidden=bool(r["is_locked_or_hidden"]),
+            speed_modifier=normalize_edge_speed_modifier(
+                r["speed_modifier"] if "speed_modifier" in keys else DEFAULT_EDGE_SPEED_MODIFIER
+            ),
+            travel_mode=normalize_edge_travel_mode(
+                r["travel_mode"] if "travel_mode" in keys else None
+            ),
+            obstacles=normalize_edge_obstacles(raw_obs),
+            is_blocked=is_blocked,
+            is_secret=is_secret,
             created_at_turn_id=r["created_at_turn_id"],
             superseded_at_turn_id=r["superseded_at_turn_id"] if "superseded_at_turn_id" in keys else None,
         )

@@ -37,7 +37,7 @@ from app.schemas.world import (
     NeighborLocationView,
     WorldRecord,
     format_distance_meters,
-    format_walking_duration,
+    format_exit_travel_phrase,
 )
 
 from app.engine.context.lore_scope import (
@@ -214,13 +214,35 @@ def build_zone4_ephemeral_tail_frame(
     world: WorldRecord | None = None,
     origin_location_id: str | None = None,
     active_parties: list[PartyRecord] | None = None,
+    newly_discovered_edge_ids: set[str] | None = None,
 ) -> str:
     """Zone 4: Dynamic turn-specific context injected at the tail of the prompt."""
-    exits_text = "\n".join(
-        f"  - [{n.compass_direction or 'N'}] {n.direction_label} -> {n.destination.name} ({n.destination.summary}) "
-        f"[{format_distance_meters(n.distance_meters)}, {format_walking_duration(n.distance_meters)} walk{' | LOCKED/HIDDEN' if n.is_locked_or_hidden else ''}]"
-        for n in neighbors
-    ) or "  - None visible"
+    discovered_set = newly_discovered_edge_ids or set()
+    has_newly_discovered = False
+    exit_lines: list[str] = []
+    for n in neighbors:
+        is_new_secret = n.edge_id in discovered_set
+        if is_new_secret:
+            has_newly_discovered = True
+        meta_parts = [
+            format_distance_meters(n.distance_meters),
+            format_exit_travel_phrase(n.distance_meters, n.speed_modifier, n.travel_mode),
+        ]
+        if n.obstacles:
+            meta_parts.append(f"obstacles: {', '.join(n.obstacles)}")
+        if n.is_blocked:
+            meta_parts.append("BLOCKED")
+        if is_new_secret:
+            meta_parts.append("NEWLY DISCOVERED SECRET PASSAGE")
+        exit_lines.append(
+            f"  - [{n.compass_direction or 'N'}] {n.direction_label} -> {n.destination.name} "
+            f"({n.destination.summary}) [{'; '.join(meta_parts)}]"
+        )
+    if has_newly_discovered:
+        exit_lines.append(
+            "  *(Note: Any exit tagged NEWLY DISCOVERED SECRET PASSAGE was just uncovered this turn — narrate finding it naturally.)*"
+        )
+    exits_text = "\n".join(exit_lines) or "  - None visible"
 
     memories_text = "\n".join(
         f"  - [{m.source_type.upper()}] {m.title}: {m.short_content if (m.render_form == 'short' and m.short_content) else m.content}"

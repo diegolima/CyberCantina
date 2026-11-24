@@ -83,12 +83,17 @@ interface WorldInspectorModalProps {
     loreId: string,
     revealed: boolean
   ) => Promise<void> | void;
+  onToggleCampaignEdgeReveal?: (
+    edgeId: string,
+    revealed: boolean
+  ) => Promise<void> | void;
   onSaveCampaignMap?: (payload: {
     containers: LocationContainer[];
     locations: LocationNode[];
     edges: LocationEdge[];
   }) => Promise<void> | void;
   revealedLoreIds?: readonly string[];
+  revealedEdgeIds?: readonly string[];
   isMutatingLocked?: boolean;
   onBackToSeed?: () => void;
   onCommitDraft?: (payload: {
@@ -123,8 +128,10 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   onSaveCampaignLocationLore,
   onSaveCampaignContainerLore,
   onToggleCampaignLoreReveal,
+  onToggleCampaignEdgeReveal,
   onSaveCampaignMap,
   revealedLoreIds = [],
+  revealedEdgeIds = [],
   isMutatingLocked = false,
   onBackToSeed,
   onCommitDraft,
@@ -974,9 +981,11 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 }
                 unlockLore={isCampaignMode ? campaignUnlockLore : false}
                 revealedLoreIds={revealedLoreIds}
+                revealedEdgeIds={revealedEdgeIds}
                 onSaveCampaignLocationLore={onSaveCampaignLocationLore}
                 onSaveCampaignContainerLore={onSaveCampaignContainerLore}
                 onToggleLoreReveal={onToggleCampaignLoreReveal}
+                onToggleEdgeReveal={onToggleCampaignEdgeReveal}
                 externalFocusRequest={externalMapFocus}
                 worldMedia={media}
                 visitedContainerIds={visitedContainerIds}

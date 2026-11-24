@@ -121,7 +121,11 @@ function makeSearchFixture(): {
       direction_label: "North into Market",
       compass_direction: "N",
       distance_meters: 140,
-      is_locked_or_hidden: false,
+      speed_modifier: 1,
+      travel_mode: null,
+      obstacles: [],
+      is_blocked: false,
+      is_secret: false,
     },
     {
       id: "e_2",
@@ -131,7 +135,11 @@ function makeSearchFixture(): {
       direction_label: "South to Square",
       compass_direction: "S",
       distance_meters: 140,
-      is_locked_or_hidden: false,
+      speed_modifier: 1,
+      travel_mode: null,
+      obstacles: [],
+      is_blocked: false,
+      is_secret: false,
     },
   ];
 

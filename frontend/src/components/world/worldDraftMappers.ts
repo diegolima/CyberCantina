@@ -134,7 +134,11 @@ export function mapDraftToNodesAndEdges(
         direction_label: edge.direction_label || "Passage",
         compass_direction: fwdDir,
         distance_meters: edge.distance_meters ?? DEFAULT_FALLBACK_DISTANCE_METERS,
-        is_locked_or_hidden: Boolean(edge.is_locked_or_hidden),
+        speed_modifier: edge.speed_modifier ?? 1,
+        travel_mode: edge.travel_mode ?? null,
+        obstacles: [...(edge.obstacles ?? [])],
+        is_blocked: Boolean(edge.is_blocked),
+        is_secret: Boolean(edge.is_secret),
       });
     }
 
@@ -157,7 +161,11 @@ export function mapDraftToNodesAndEdges(
           edge.reverse_direction_label || `Return to ${fromLocName}`,
         compass_direction: revDir,
         distance_meters: edge.distance_meters ?? DEFAULT_FALLBACK_DISTANCE_METERS,
-        is_locked_or_hidden: Boolean(edge.is_locked_or_hidden),
+        speed_modifier: edge.speed_modifier ?? 1,
+        travel_mode: edge.travel_mode ?? null,
+        obstacles: [...(edge.obstacles ?? [])],
+        is_blocked: Boolean(edge.is_blocked),
+        is_secret: Boolean(edge.is_secret),
       });
     }
   });
@@ -305,7 +313,11 @@ export function worldStateToDraft(state: {
       reverse_direction_label: "",
       compass_direction: edge.compass_direction ?? null,
       distance_meters: edge.distance_meters,
-      is_locked_or_hidden: Boolean(edge.is_locked_or_hidden),
+      speed_modifier: edge.speed_modifier ?? 1,
+      travel_mode: edge.travel_mode ?? null,
+      obstacles: [...(edge.obstacles ?? [])],
+      is_blocked: Boolean(edge.is_blocked),
+      is_secret: Boolean(edge.is_secret),
       bidirectional: false,
     })),
     lore_nodes: state.lore_nodes.map((lore) => ({

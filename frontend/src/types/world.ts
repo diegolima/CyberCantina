@@ -133,7 +133,11 @@ export interface LocationEdge {
   direction_label: string;
   compass_direction?: CompassDirection | null;
   distance_meters: number;
-  is_locked_or_hidden: boolean;
+  speed_modifier: number;
+  travel_mode?: string | null;
+  obstacles: string[];
+  is_blocked: boolean;
+  is_secret: boolean;
   created_at_turn_id?: string | null;
   superseded_at_turn_id?: string | null;
 }
@@ -143,7 +147,11 @@ export interface NeighborLocationView {
   direction_label: string;
   compass_direction?: CompassDirection | null;
   distance_meters: number;
-  is_locked_or_hidden: boolean;
+  speed_modifier: number;
+  travel_mode?: string | null;
+  obstacles: string[];
+  is_blocked: boolean;
+  is_secret: boolean;
   destination: LocationNode;
 }
 
@@ -198,7 +206,11 @@ export interface LocationEdgeDraft {
   reverse_direction_label: string;
   compass_direction?: CompassDirection | null;
   distance_meters: number;
-  is_locked_or_hidden: boolean;
+  speed_modifier?: number;
+  travel_mode?: string | null;
+  obstacles?: string[];
+  is_blocked: boolean;
+  is_secret: boolean;
   bidirectional: boolean;
 }
 

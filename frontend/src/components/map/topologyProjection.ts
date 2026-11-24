@@ -5,15 +5,26 @@ import type {
   LocationNode,
 } from "../../types";
 export {
+  DEFAULT_EDGE_SPEED_MODIFIER,
   DEFAULT_EXTERIOR_DISTANCE_METERS,
   DEFAULT_FALLBACK_DISTANCE_METERS,
   DEFAULT_INTERIOR_DISTANCE_METERS,
+  LINK_SPEED_PRESETS,
   MAX_EDGE_DISTANCE_METERS,
+  MAX_EDGE_OBSTACLES,
+  MAX_EDGE_SPEED_MODIFIER,
+  MIN_EDGE_SPEED_MODIFIER,
   WALKING_METERS_PER_MINUTE,
   clampEdgeDistanceMeters,
+  clampEdgeSpeedModifier,
+  deriveTravelMinutes,
   deriveWalkingMinutes,
+  formatBundleTravelDuration,
   formatBundleWalkingDuration,
   formatDistanceCompact,
+  formatEffectiveSpeedKmh,
+  formatExitTravelPhrase,
+  formatTravelDuration,
   formatWalkingDuration,
   getAdaptiveDistanceStep,
   parseCommittedEdgeDistance,
@@ -259,9 +270,16 @@ export interface ProjectedTopologyEdge {
   direction_label: string;
   compass_direction?: CompassDirection | null;
   distance_meters: number;
-  is_locked_or_hidden: boolean;
+  speed_modifier: number;
+  travel_mode?: string | null;
+  obstacles: string[];
+  is_blocked: boolean;
+  is_secret: boolean;
+  isUndiscoveredSecret: boolean;
   isAggregated: boolean;
-  containsLockedEdge: boolean;
+  containsBlockedEdge: boolean;
+  containsUndiscoveredSecretEdge: boolean;
+  containsObstacles: boolean;
   rawEdge: LocationEdge;
   groupedEdges?: LocationEdge[];
 }
@@ -287,8 +305,62 @@ export interface ProjectedGhostEdge {
   direction_label: string;
   compass_direction?: CompassDirection | null;
   distance_meters: number;
-  is_locked_or_hidden: boolean;
+  speed_modifier: number;
+  travel_mode?: string | null;
+  obstacles: string[];
+  is_blocked: boolean;
+  is_secret: boolean;
+  isUndiscoveredSecret: boolean;
   rawEdge: LocationEdge;
+}
+
+export interface TopologyProjectionOptions {
+  mode?: "editor" | "campaign";
+  unlockLore?: boolean;
+  revealedEdgeIds?: readonly string[];
+}
+
+export type SelectedEdgeState =
+  | { kind: "pair"; edgeId: string; returnBundleEdgeIds?: string[] }
+  | { kind: "bundle"; edgeIds: string[] };
+
+export interface LinkPairInspectorData {
+  pairKey: string;
+  primary: LocationEdge;
+  reciprocal: LocationEdge | null;
+}
+
+/** Return canonical unordered endpoint pair key `min<->max` for bidirectional edge matching. */
+export function canonicalEdgePairKey(fromId: string, toId: string): string {
+  return fromId <= toId ? `${fromId}<->${toId}` : `${toId}<->${fromId}`;
+}
+
+/** Derive canonical endpoint pair keys for all edges whose IDs appear in `revealedEdgeIds`. */
+export function resolveRevealedEdgePairs(
+  edges: readonly LocationEdge[],
+  revealedEdgeIds: readonly string[]
+): Set<string> {
+  const idSet = new Set(revealedEdgeIds.filter(Boolean));
+  const pairs = new Set<string>();
+  if (idSet.size === 0) return pairs;
+  for (const edge of edges) {
+    if (idSet.has(edge.id)) {
+      pairs.add(canonicalEdgePairKey(edge.from_location_id, edge.to_location_id));
+    }
+  }
+  return pairs;
+}
+
+/** Return true if a secret edge has been discovered on the active branch (by ID or pair). */
+export function isEdgeRevealed(
+  edge: Pick<LocationEdge, "id" | "from_location_id" | "to_location_id">,
+  revealedIds: ReadonlySet<string>,
+  revealedPairs: ReadonlySet<string>
+): boolean {
+  return (
+    revealedIds.has(edge.id) ||
+    revealedPairs.has(canonicalEdgePairKey(edge.from_location_id, edge.to_location_id))
+  );
 }
 
 export interface ProjectedDepthTopology {
@@ -350,8 +422,26 @@ export function projectTopologyForDepth(
   locations: LocationNode[],
   edges: LocationEdge[],
   activeLocationId?: string,
-  presentCharacterLocations?: Record<string, string>
+  presentCharacterLocations?: Record<string, string>,
+  options?: TopologyProjectionOptions
 ): ProjectedDepthTopology {
+  const isCampaignPlayerMode =
+    options?.mode === "campaign" && !options?.unlockLore;
+  const revealedEdgeIdSet = new Set(options?.revealedEdgeIds ?? []);
+  const revealedEdgePairs = resolveRevealedEdgePairs(
+    edges,
+    options?.revealedEdgeIds ?? []
+  );
+  const isUndiscoveredSecretEdge = (edge: LocationEdge): boolean => {
+    if (!edge.is_secret) return false;
+    if (options?.mode === "campaign") {
+      return !isEdgeRevealed(edge, revealedEdgeIdSet, revealedEdgePairs);
+    }
+    return true;
+  };
+  const visibleInputEdges = isCampaignPlayerMode
+    ? edges.filter((edge) => !isUndiscoveredSecretEdge(edge))
+    : edges;
   const byId = new Map(containers.map((c) => [c.id, c]));
   const validCurrentId =
     currentContainerId && byId.has(currentContainerId) ? currentContainerId : null;
@@ -496,12 +586,17 @@ export function projectTopologyForDepth(
       direction_label: edge.direction_label,
       compass_direction: edge.compass_direction,
       distance_meters: edge.distance_meters,
-      is_locked_or_hidden: edge.is_locked_or_hidden,
+      speed_modifier: edge.speed_modifier ?? 1,
+      travel_mode: edge.travel_mode ?? null,
+      obstacles: edge.obstacles ?? [],
+      is_blocked: Boolean(edge.is_blocked),
+      is_secret: Boolean(edge.is_secret),
+      isUndiscoveredSecret: isUndiscoveredSecretEdge(edge),
       rawEdge: edge,
     });
   };
 
-  for (const edge of edges) {
+  for (const edge of visibleInputEdges) {
     const fromVis = visibleByLocId.get(edge.from_location_id);
     const toVis = visibleByLocId.get(edge.to_location_id);
 
@@ -541,6 +636,7 @@ export function projectTopologyForDepth(
     if (fromVis.id === toVis.id) continue;
 
     if (fromVis.kind === "location" && toVis.kind === "location") {
+      const undisc = isUndiscoveredSecretEdge(edge);
       projectedEdges.push({
         id: edge.id,
         sourceNodeId: fromVis.id,
@@ -548,9 +644,16 @@ export function projectTopologyForDepth(
         direction_label: edge.direction_label,
         compass_direction: edge.compass_direction,
         distance_meters: edge.distance_meters,
-        is_locked_or_hidden: edge.is_locked_or_hidden,
+        speed_modifier: edge.speed_modifier ?? 1,
+        travel_mode: edge.travel_mode ?? null,
+        obstacles: edge.obstacles ?? [],
+        is_blocked: Boolean(edge.is_blocked),
+        is_secret: Boolean(edge.is_secret),
+        isUndiscoveredSecret: undisc,
         isAggregated: false,
-        containsLockedEdge: edge.is_locked_or_hidden,
+        containsBlockedEdge: Boolean(edge.is_blocked),
+        containsUndiscoveredSecretEdge: undisc,
+        containsObstacles: (edge.obstacles?.length ?? 0) > 0,
         rawEdge: edge,
       });
     } else {
@@ -569,7 +672,10 @@ export function projectTopologyForDepth(
   for (const [groupKey, group] of aggregatedGroups.entries()) {
     const first = group.edges[0];
     const minMeters = Math.min(...group.edges.map((e) => e.distance_meters));
-    const anyLocked = group.edges.some((e) => e.is_locked_or_hidden);
+    const anyBlocked = group.edges.some((e) => e.is_blocked);
+    const anySecret = group.edges.some((e) => e.is_secret);
+    const anyUndiscSecret = group.edges.some((e) => isUndiscoveredSecretEdge(e));
+    const anyObstacles = group.edges.some((e) => (e.obstacles?.length ?? 0) > 0);
     projectedEdges.push({
       id: `agg:${groupKey}`,
       sourceNodeId: group.sourceNodeId,
@@ -580,9 +686,16 @@ export function projectTopologyForDepth(
           : first.direction_label,
       compass_direction: first.compass_direction,
       distance_meters: minMeters,
-      is_locked_or_hidden: anyLocked,
+      speed_modifier: first.speed_modifier ?? 1,
+      travel_mode: first.travel_mode ?? null,
+      obstacles: first.obstacles ?? [],
+      is_blocked: anyBlocked,
+      is_secret: anySecret,
+      isUndiscoveredSecret: anyUndiscSecret,
       isAggregated: true,
-      containsLockedEdge: anyLocked,
+      containsBlockedEdge: anyBlocked,
+      containsUndiscoveredSecretEdge: anyUndiscSecret,
+      containsObstacles: anyObstacles,
       rawEdge: first,
       groupedEdges: group.edges,
     });
@@ -825,7 +938,10 @@ export function cloneGraph(
         entity_tags: [...(ln.entity_tags ?? [])],
       })),
     })),
-    edges: edges.map((e) => ({ ...e })),
+    edges: edges.map((e) => ({
+      ...e,
+      obstacles: [...(e.obstacles ?? [])],
+    })),
   };
 }
 
@@ -1002,17 +1118,26 @@ export interface BidirectionalProjectedBundle {
   passagePairCount: number;
   minDistanceMeters: number;
   maxDistanceMeters: number;
-  containsLockedEdge: boolean;
+  containsBlockedEdge: boolean;
+  containsUndiscoveredSecretEdge: boolean;
+  containsObstacles: boolean;
 }
 
 /**
  * Merge forward and reverse projected edges between two endpoints so collapsed
- * supernode badges, tooltips, and popovers reflect both directions uniformly.
+ * supernode badges, tooltips, and inspector bundles reflect both directions uniformly.
  */
 export function resolveBidirectionalProjectedBundle(
   edge: Pick<
     ProjectedTopologyEdge,
-    "sourceNodeId" | "targetNodeId" | "rawEdge" | "groupedEdges" | "distance_meters" | "containsLockedEdge"
+    | "sourceNodeId"
+    | "targetNodeId"
+    | "rawEdge"
+    | "groupedEdges"
+    | "distance_meters"
+    | "containsBlockedEdge"
+    | "containsUndiscoveredSecretEdge"
+    | "containsObstacles"
   >,
   projectedEdges: ProjectedTopologyEdge[]
 ): BidirectionalProjectedBundle {
@@ -1023,6 +1148,7 @@ export function resolveBidirectionalProjectedBundle(
     }
   };
 
+  let containsUndiscoveredSecretEdge = edge.containsUndiscoveredSecretEdge;
   for (const ge of edge.groupedEdges ?? [edge.rawEdge]) {
     addEdge(ge);
   }
@@ -1033,6 +1159,9 @@ export function resolveBidirectionalProjectedBundle(
       (candidate.sourceNodeId === edge.targetNodeId &&
         candidate.targetNodeId === edge.sourceNodeId);
     if (!isSamePair) continue;
+    if (candidate.containsUndiscoveredSecretEdge) {
+      containsUndiscoveredSecretEdge = true;
+    }
     for (const ge of candidate.groupedEdges ?? [candidate.rawEdge]) {
       addEdge(ge);
     }
@@ -1051,11 +1180,13 @@ export function resolveBidirectionalProjectedBundle(
   const pairKeys = new Set<string>();
   let minDistanceMeters = edge.distance_meters;
   let maxDistanceMeters = edge.distance_meters;
-  let containsLockedEdge = edge.containsLockedEdge;
+  let containsBlockedEdge = edge.containsBlockedEdge;
+  let containsObstacles = edge.containsObstacles;
   if (allEdges.length > 0) {
     minDistanceMeters = Infinity;
     maxDistanceMeters = 0;
-    containsLockedEdge = false;
+    containsBlockedEdge = false;
+    containsObstacles = false;
     for (const item of allEdges) {
       pairKeys.add([item.from_location_id, item.to_location_id].sort().join("<->"));
       if (item.distance_meters < minDistanceMeters) {
@@ -1064,8 +1195,11 @@ export function resolveBidirectionalProjectedBundle(
       if (item.distance_meters > maxDistanceMeters) {
         maxDistanceMeters = item.distance_meters;
       }
-      if (item.is_locked_or_hidden) {
-        containsLockedEdge = true;
+      if (item.is_blocked) {
+        containsBlockedEdge = true;
+      }
+      if ((item.obstacles?.length ?? 0) > 0) {
+        containsObstacles = true;
       }
     }
   }
@@ -1078,13 +1212,57 @@ export function resolveBidirectionalProjectedBundle(
       : edge.distance_meters,
     maxDistanceMeters:
       maxDistanceMeters > 0 ? maxDistanceMeters : edge.distance_meters,
-    containsLockedEdge,
+    containsBlockedEdge,
+    containsUndiscoveredSecretEdge,
+    containsObstacles,
   };
 }
 
+/** Resolve a directed edge and its optional reciprocal peer for Link Pair inspection. */
+export function resolveLinkPairForInspector(
+  edgeId: string,
+  workingEdges: readonly LocationEdge[]
+): LinkPairInspectorData | null {
+  const primary = workingEdges.find((e) => e.id === edgeId);
+  if (!primary) return null;
+  const reciprocal =
+    workingEdges.find(
+      (e) =>
+        e.id !== primary.id &&
+        e.from_location_id === primary.to_location_id &&
+        e.to_location_id === primary.from_location_id
+    ) ?? null;
+  return {
+    pairKey: canonicalEdgePairKey(primary.from_location_id, primary.to_location_id),
+    primary,
+    reciprocal,
+  };
+}
+
+/** Group a list of edge IDs (e.g. a collapsed supernode bundle) into unique Link Pairs. */
+export function resolveBundleLinkPairs(
+  edgeIds: readonly string[],
+  workingEdges: readonly LocationEdge[]
+): LinkPairInspectorData[] {
+  const idSet = new Set(edgeIds);
+  const seenPairs = new Set<string>();
+  const pairs: LinkPairInspectorData[] = [];
+  for (const edge of workingEdges) {
+    if (!idSet.has(edge.id)) continue;
+    const key = canonicalEdgePairKey(edge.from_location_id, edge.to_location_id);
+    if (seenPairs.has(key)) continue;
+    seenPairs.add(key);
+    const resolved = resolveLinkPairForInspector(edge.id, workingEdges);
+    if (resolved) {
+      pairs.push(resolved);
+    }
+  }
+  return pairs;
+}
+
 /**
- * Resolve the list of directed edges to open in MultiEdgePopover for a clicked
- * edge ID (plus its reciprocal edge, or an explicit bundle of edge IDs).
+ * Resolve the list of directed edges for an edge ID (plus its reciprocal edge,
+ * or an explicit bundle of edge IDs).
  */
 export function resolveEdgePairForDialog(
   edgeId: string,

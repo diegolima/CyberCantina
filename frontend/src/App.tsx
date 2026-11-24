@@ -211,6 +211,7 @@ export const App: React.FC = () => {
     handleUpdateCampaignMemories,
     handleSaveCampaignWorldLore,
     handleToggleCampaignLoreReveal,
+    handleToggleCampaignEdgeReveal,
     handleUpdateCampaignMajorEvent,
     handleDeleteCampaignMajorEvent,
     handleSaveCampaignLocationLore,
@@ -928,6 +929,7 @@ export const App: React.FC = () => {
           onSaveCampaignLocationLore={handleSaveCampaignLocationLore}
           onSaveCampaignContainerLore={handleSaveCampaignContainerLore}
           onToggleCampaignLoreReveal={handleToggleCampaignLoreReveal}
+          onToggleCampaignEdgeReveal={handleToggleCampaignEdgeReveal}
           isMutatingLocked={isStreaming || isPhase4Running}
           worlds={worlds}
         />
@@ -979,6 +981,7 @@ export const App: React.FC = () => {
             bundle.current_world_snapshot.visited_container_ids ?? []
           }
           revealedLoreIds={bundle.current_world_snapshot.revealed_lore_ids ?? []}
+          revealedEdgeIds={bundle.current_world_snapshot.revealed_edge_ids ?? []}
           campaignWorldSettings={bundle.campaign.world_settings}
           appSettings={appSettings}
           isAdmin={currentUser.role === "admin"}
@@ -988,6 +991,7 @@ export const App: React.FC = () => {
           onSaveCampaignLocationLore={handleSaveCampaignLocationLore}
           onSaveCampaignContainerLore={handleSaveCampaignContainerLore}
           onToggleCampaignLoreReveal={handleToggleCampaignLoreReveal}
+          onToggleCampaignEdgeReveal={handleToggleCampaignEdgeReveal}
           onSaveCampaignMap={handleSaveCampaignMap}
           onClose={() => setCampaignWorldSheetTab(null)}
           onSaved={() => setCampaignWorldSheetTab(null)}

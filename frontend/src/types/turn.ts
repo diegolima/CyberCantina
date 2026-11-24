@@ -53,6 +53,7 @@ export interface WorldStateSnapshot {
   visited_location_ids?: string[];
   visited_container_ids?: string[];
   revealed_lore_ids?: string[];
+  revealed_edge_ids?: string[];
   parties?: PartyRecord[];
 }
 

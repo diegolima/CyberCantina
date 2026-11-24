@@ -22,7 +22,7 @@ from app.schemas.world import (
     DEFAULT_INTERIOR_DISTANCE_METERS,
     LocationNode,
     NeighborLocationView,
-    derive_walking_minutes,
+    derive_travel_minutes,
     normalize_compass_direction,
 )
 
@@ -94,7 +94,7 @@ def _heuristic_spatial_and_inventory_delta(
                 return PostTurnStateDelta(
                     elapsed_minutes=min(
                         MAX_TURN_ELAPSED_MINUTES_SANITY,
-                        max(2, derive_walking_minutes(nb.distance_meters) + 1),
+                        max(2, derive_travel_minutes(nb.distance_meters, nb.speed_modifier) + 1),
                     ),
                     transition_type="move_existing",
                     target_location_id=nb.destination.id,
@@ -112,7 +112,7 @@ def _heuristic_spatial_and_inventory_delta(
                 return PostTurnStateDelta(
                     elapsed_minutes=min(
                         MAX_TURN_ELAPSED_MINUTES_SANITY,
-                        max(2, derive_walking_minutes(nb.distance_meters) + 1),
+                        max(2, derive_travel_minutes(nb.distance_meters, nb.speed_modifier) + 1),
                     ),
                     transition_type="move_existing",
                     target_location_id=nb.destination.id,

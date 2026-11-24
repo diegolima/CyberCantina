@@ -35,7 +35,9 @@ from app.engine.phase2_context import (
     resolve_actor_context_ceiling,
     resolve_character_previous_state,
     resolve_phase2_turn_context,
+    select_newly_discovered_secret_edges,
 )
+from app.schemas.world import is_edge_revealed
 from app.engine.phase3_cognition import run_phase3_multi_cognition
 from app.engine.phase4_prose import stream_phase4_prose
 from app.engine.phase5_clerk import run_phase5_post_turn_clerk
@@ -221,12 +223,40 @@ async def _execute_turn_stream_events_unlocked(
             parent_active_loc_id, campaign_id=campaign.id
         )
 
-    neighbors = repo.get_neighbor_locations(
+    all_neighbors = repo.get_neighbor_locations(
         world.id,
         active_location.id,
         valid_turn_ids=valid_turn_ids,
         campaign_id=campaign.id,
     )
+    prior_revealed_edge_ids = list(parent_turn.world_snapshot.revealed_edge_ids or [])
+    revealed_edge_id_set, revealed_edge_pairs = repo._resolve_revealed_edge_state(
+        world.id, prior_revealed_edge_ids
+    )
+    neighbors = [
+        nb
+        for nb in all_neighbors
+        if not nb.is_secret
+        or is_edge_revealed(
+            nb.edge_id,
+            active_location.id,
+            nb.destination.id,
+            revealed_edge_id_set,
+            revealed_edge_pairs,
+        )
+    ]
+    undiscovered_secret_neighbors = [
+        nb
+        for nb in all_neighbors
+        if nb.is_secret
+        and not is_edge_revealed(
+            nb.edge_id,
+            active_location.id,
+            nb.destination.id,
+            revealed_edge_id_set,
+            revealed_edge_pairs,
+        )
+    ]
     episodic_chunks = repo.get_branch_episodic_chunks(campaign.id, valid_turn_ids)
 
     # Filter characters physically present in active_location (room-level spatial isolation)
@@ -571,6 +601,34 @@ async def _execute_turn_stream_events_unlocked(
             active_location.id,
         )
 
+    # Evaluate same-turn discovery of secret passages right after Phase 1
+    newly_discovered_edges = select_newly_discovered_secret_edges(
+        undiscovered_secret_neighbors,
+        user_message=effective_user_message,
+        pre_turn=pre_turn,
+        dice_mode="auto" if is_narrator else req.dice_mode,
+        narrator_directive=req.narrator_directive if is_narrator else None,
+    )
+    newly_discovered_edge_ids = {nb.edge_id for nb in newly_discovered_edges}
+    if newly_discovered_edges:
+        neighbors = [*neighbors, *newly_discovered_edges]
+        discovered_dest_ids = {nb.destination.id for nb in newly_discovered_edges}
+        newly_discovered_pair_ids: list[str] = list(newly_discovered_edge_ids)
+        for edge in world.edges:
+            if edge.id in newly_discovered_edge_ids:
+                newly_discovered_pair_ids.append(edge.id)
+            elif (
+                edge.from_location_id in discovered_dest_ids
+                and edge.to_location_id == active_location.id
+                and edge.is_secret
+            ):
+                newly_discovered_pair_ids.append(edge.id)
+        initial_revealed_edge_ids = list(
+            dict.fromkeys([*prior_revealed_edge_ids, *newly_discovered_pair_ids])
+        )
+    else:
+        initial_revealed_edge_ids = prior_revealed_edge_ids
+
     # PHASE 2: Scoped RAG & Context Resolution
     context_bundle = await resolve_phase2_turn_context(
         repo=repo,
@@ -697,6 +755,7 @@ async def _execute_turn_stream_events_unlocked(
         zone2_budget_share_pct=eff_models.zone2_budget_share_pct,
         recall_budget_prose_tokens=eff_models.recall_budget_prose_tokens,
         active_parties=active_parties,
+        newly_discovered_edge_ids=newly_discovered_edge_ids,
     )
 
     is_sentinel_scene = is_narrator or is_solo
@@ -753,6 +812,7 @@ async def _execute_turn_stream_events_unlocked(
         campaign_elapsed_minutes=parent_elapsed,
         active_location_id=active_location.id,
         scene_flags=parent_turn.world_snapshot.scene_flags,
+        revealed_edge_ids=initial_revealed_edge_ids,
         parties=active_parties,
     )
     base_primary_state = context_bundle.all_character_states.get(character.id) or prev_char_state
@@ -889,6 +949,7 @@ async def _execute_turn_stream_events_unlocked(
                 summary_prompt_template=effective_prompts.get("clerk_episodic_summary_system"),
                 persona_snapshot=persona_snapshot,
                 current_player_state=current_player_state,
+                newly_discovered_edge_ids=newly_discovered_edge_ids,
                 on_progress=_phase5_progress_cb,
             )
             if telemetry_collector is not None:

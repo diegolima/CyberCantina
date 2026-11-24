@@ -17,7 +17,11 @@ from app.db.vector_math import (
     current_embedding_fingerprint,
     embed_text_sync,
 )
-from app.schemas.world import extract_edge_distance_meters, normalize_lore_category
+from app.schemas.world import (
+    extract_edge_distance_meters,
+    extract_edge_link_fields,
+    normalize_lore_category,
+)
 from app.security.log_sanitize import sanitize_log_value
 
 logger = logging.getLogger("cybercantina.import_export.campaign")
@@ -1046,28 +1050,40 @@ def ingest_campaigns_atomic(
                 to_id = id_remap.get(str(edge.get("to_location_id") or ""))
                 if not from_id or not to_id:
                     continue
+                old_edge_id = edge.get("id")
+                new_edge_id = f"edge_{uuid.uuid4().hex[:10]}"
+                if old_edge_id:
+                    id_remap[str(old_edge_id)] = new_edge_id
                 old_ct = edge.get("created_at_turn_id")
                 mapped_ct = id_remap.get(str(old_ct)) if old_ct else None
                 old_sup = edge.get("superseded_at_turn_id")
                 mapped_sup = id_remap.get(str(old_sup)) if old_sup else None
+                speed_modifier, travel_mode, obstacles, is_blocked, is_secret = (
+                    extract_edge_link_fields(edge)
+                )
                 conn.execute(
                     """
                     INSERT INTO location_edges (
                         id, world_id, from_location_id, to_location_id,
                         direction_label, compass_direction, distance_meters,
-                        is_locked_or_hidden, created_at_turn_id, superseded_at_turn_id
+                        speed_modifier, travel_mode, obstacles_json,
+                        is_blocked, is_secret, created_at_turn_id, superseded_at_turn_id
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        f"edge_{uuid.uuid4().hex[:10]}",
+                        new_edge_id,
                         new_world_id,
                         from_id,
                         to_id,
                         str(edge.get("direction_label") or "forward"),
                         edge.get("compass_direction"),
                         extract_edge_distance_meters(edge),
-                        1 if edge.get("is_locked_or_hidden") else 0,
+                        speed_modifier,
+                        travel_mode,
+                        json.dumps(obstacles),
+                        1 if is_blocked else 0,
+                        1 if is_secret else 0,
                         mapped_ct,
                         mapped_sup,
                     ),
@@ -1224,9 +1240,10 @@ def ingest_campaigns_atomic(
                     INSERT INTO world_state_snapshots (
                         turn_id, world_timestamp, active_location_id, scene_flags_json,
                         campaign_elapsed_minutes, visited_location_ids_json,
-                        visited_container_ids_json, revealed_lore_ids_json, parties_json
+                        visited_container_ids_json, revealed_lore_ids_json,
+                        revealed_edge_ids_json, parties_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         mapped_tid,
@@ -1237,6 +1254,7 @@ def ingest_campaigns_atomic(
                         _remap_id_list_json(snap.get("visited_location_ids_json"), id_remap),
                         _remap_id_list_json(snap.get("visited_container_ids_json"), id_remap),
                         _remap_id_list_json(snap.get("revealed_lore_ids_json") or "[]", id_remap),
+                        _remap_id_list_json(snap.get("revealed_edge_ids_json") or "[]", id_remap),
                         _remap_parties_json(snap.get("parties_json"), id_remap),
                     ),
                 )

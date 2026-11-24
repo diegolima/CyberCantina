@@ -161,7 +161,11 @@ function makeHierarchyFixture() {
       direction_label: "VIP Stairs",
       compass_direction: "E",
       distance_meters: 20,
-      is_locked_or_hidden: false,
+      speed_modifier: 1,
+      travel_mode: null,
+      obstacles: [],
+      is_blocked: false,
+      is_secret: false,
     },
     {
       id: "e2",
@@ -171,7 +175,11 @@ function makeHierarchyFixture() {
       direction_label: "Street Stairs",
       compass_direction: "W",
       distance_meters: 140,
-      is_locked_or_hidden: false,
+      speed_modifier: 1,
+      travel_mode: null,
+      obstacles: [],
+      is_blocked: false,
+      is_secret: false,
     },
     {
       id: "e3",
@@ -181,7 +189,11 @@ function makeHierarchyFixture() {
       direction_label: "Dusty Interstate",
       compass_direction: "S",
       distance_meters: 1400,
-      is_locked_or_hidden: true,
+      speed_modifier: 1,
+      travel_mode: null,
+      obstacles: [],
+      is_blocked: true,
+      is_secret: false,
     },
   ];
 
@@ -246,7 +258,7 @@ describe("Location Containers Frontend Architecture", () => {
     expect(rootProj.visibleSupernodes[0].descendantLocationCount).toBe(3);
     expect(rootProj.projectedEdges).toHaveLength(1);
     expect(rootProj.projectedEdges[0].isAggregated).toBe(true);
-    expect(rootProj.projectedEdges[0].containsLockedEdge).toBe(true);
+    expect(rootProj.projectedEdges[0].containsBlockedEdge).toBe(true);
 
     // Elastic containment inside L2 Watson District: displays child L1 supernodes (incl 0-portal Sealed Bunker) + direct L0 Watson Overpass
     const distProj = projectTopologyForDepth(
@@ -336,7 +348,11 @@ describe("Location Containers Frontend Architecture", () => {
           direction_label: "Club Entrance",
           compass_direction: "S" as const,
           distance_meters: 70,
-          is_locked_or_hidden: false,
+          speed_modifier: 1,
+          travel_mode: null,
+          obstacles: [],
+          is_blocked: false,
+          is_secret: false,
         })),
       ]
     );
@@ -673,7 +689,11 @@ describe("Location Containers Frontend Architecture", () => {
         direction_label: "Fire escape down to overpass",
         compass_direction: "NE",
         distance_meters: 210,
-        is_locked_or_hidden: false,
+        speed_modifier: 1,
+        travel_mode: null,
+        obstacles: [],
+        is_blocked: false,
+        is_secret: false,
       },
     ];
     const sharedClubProj = projectTopologyForDepth(

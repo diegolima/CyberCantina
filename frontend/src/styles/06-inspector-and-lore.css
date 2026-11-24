@@ -631,3 +631,139 @@
   background: rgba(251, 191, 36, 0.14);
   color: var(--amber-fg-soft);
 }
+
+/* First-Class Map Link Inspector */
+.link-travel-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: var(--cyan-bg);
+  border: 1px solid var(--cyan-border-subtle);
+  font-size: 0.74rem;
+}
+
+.link-speed-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.link-preset-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
+}
+
+.link-preset-chip:hover:not(:disabled) {
+  border-color: var(--cyan-border-subtle);
+  color: var(--text-primary);
+}
+
+.link-preset-chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.link-preset-chip--active {
+  border-color: var(--cyan-border);
+  background: var(--cyan-bg);
+  color: var(--cyan-fg);
+}
+
+.link-bundle-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+
+.link-bundle-row:hover {
+  border-color: var(--cyan-border);
+  background: var(--bg-card-hover);
+}
+
+.link-bundle-row-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.77rem;
+  font-weight: 700;
+}
+
+.link-bundle-row-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.link-bundle-row-label {
+  font-size: 0.66rem;
+  color: var(--text-muted);
+}
+
+.link-bundle-row-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.link-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.64rem;
+  font-weight: 600;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+}
+
+.link-status-pill--blocked {
+  border-color: var(--rose-border);
+  background: var(--rose-bg);
+  color: var(--rose-fg);
+}
+
+.link-status-pill--secret {
+  border-color: var(--violet-border);
+  background: var(--violet-bg);
+  color: var(--violet-fg);
+}
+
+.link-status-pill--revealed {
+  border-color: var(--amber-border);
+  background: var(--amber-bg);
+  color: var(--amber-fg);
+}
+
+.link-secret-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-subtle);
+}

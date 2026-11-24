@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 from app.prompts import BUILTIN_PRESETS
 from app.schemas.world import (
+    DEFAULT_EDGE_SPEED_MODIFIER,
     DEFAULT_FALLBACK_DISTANCE_METERS,
     WALKING_METERS_PER_MINUTE,
     normalize_and_validate_entity_tags,
@@ -273,6 +274,101 @@ class SchemaInitMixin:
                     id, world_id, from_location_id, to_location_id,
                     direction_label, compass_direction, {distance_expr},
                     COALESCE(is_locked_or_hidden, 0), created_at_turn_id, superseded_at_turn_id
+                FROM location_edges;
+                """
+            )
+            conn.execute("DROP TABLE location_edges;")
+            conn.execute("ALTER TABLE location_edges_migrated RENAME TO location_edges;")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_location_edges_from ON location_edges(from_location_id);"
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON;")
+
+    @staticmethod
+    def _migrate_location_edges_to_first_class_links(conn: sqlite3.Connection) -> None:
+        """Idempotently replace legacy `is_locked_or_hidden` with speed/mode/obstacles/blocked/secret columns."""
+        edge_cols = {
+            r["name"]
+            for r in conn.execute("PRAGMA table_info(location_edges)").fetchall()
+        }
+        required_cols = {
+            "speed_modifier",
+            "travel_mode",
+            "obstacles_json",
+            "is_blocked",
+            "is_secret",
+        }
+        if not edge_cols or (required_cols <= edge_cols and "is_locked_or_hidden" not in edge_cols):
+            return
+
+        has_legacy_lock = "is_locked_or_hidden" in edge_cols
+        has_blocked = "is_blocked" in edge_cols
+        has_secret = "is_secret" in edge_cols
+        has_speed = "speed_modifier" in edge_cols
+        has_mode = "travel_mode" in edge_cols
+        has_obstacles = "obstacles_json" in edge_cols
+
+        speed_expr = (
+            f"COALESCE(speed_modifier, {DEFAULT_EDGE_SPEED_MODIFIER})"
+            if has_speed
+            else str(DEFAULT_EDGE_SPEED_MODIFIER)
+        )
+        mode_expr = "travel_mode" if has_mode else "NULL"
+        obstacles_expr = "COALESCE(obstacles_json, '[]')" if has_obstacles else "'[]'"
+        if has_blocked and has_legacy_lock:
+            blocked_expr = "COALESCE(is_blocked, COALESCE(is_locked_or_hidden, 0))"
+        elif has_blocked:
+            blocked_expr = "COALESCE(is_blocked, 0)"
+        elif has_legacy_lock:
+            blocked_expr = "COALESCE(is_locked_or_hidden, 0)"
+        else:
+            blocked_expr = "0"
+        secret_expr = "COALESCE(is_secret, 0)" if has_secret else "0"
+
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = OFF;")
+        try:
+            conn.execute("BEGIN IMMEDIATE;")
+            conn.execute("DROP TABLE IF EXISTS location_edges_migrated;")
+            conn.execute(
+                f"""
+                CREATE TABLE location_edges_migrated (
+                    id TEXT PRIMARY KEY,
+                    world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+                    from_location_id TEXT NOT NULL REFERENCES location_nodes(id) ON DELETE CASCADE,
+                    to_location_id TEXT NOT NULL REFERENCES location_nodes(id) ON DELETE CASCADE,
+                    direction_label TEXT NOT NULL,
+                    compass_direction TEXT NULL,
+                    distance_meters INTEGER NOT NULL DEFAULT {DEFAULT_FALLBACK_DISTANCE_METERS},
+                    speed_modifier REAL NOT NULL DEFAULT {DEFAULT_EDGE_SPEED_MODIFIER},
+                    travel_mode TEXT NULL,
+                    obstacles_json TEXT NOT NULL DEFAULT '[]',
+                    is_blocked INTEGER NOT NULL DEFAULT 0,
+                    is_secret INTEGER NOT NULL DEFAULT 0,
+                    created_at_turn_id TEXT NULL,
+                    superseded_at_turn_id TEXT NULL
+                );
+                """
+            )
+            conn.execute(
+                f"""
+                INSERT INTO location_edges_migrated (
+                    id, world_id, from_location_id, to_location_id,
+                    direction_label, compass_direction, distance_meters,
+                    speed_modifier, travel_mode, obstacles_json,
+                    is_blocked, is_secret, created_at_turn_id, superseded_at_turn_id
+                )
+                SELECT
+                    id, world_id, from_location_id, to_location_id,
+                    direction_label, compass_direction,
+                    MAX(1, COALESCE(distance_meters, {DEFAULT_FALLBACK_DISTANCE_METERS})),
+                    {speed_expr}, {mode_expr}, {obstacles_expr},
+                    {blocked_expr}, {secret_expr}, created_at_turn_id, superseded_at_turn_id
                 FROM location_edges;
                 """
             )
@@ -1057,6 +1153,10 @@ class SchemaInitMixin:
                 conn.execute(
                     "ALTER TABLE world_state_snapshots ADD COLUMN revealed_lore_ids_json TEXT NOT NULL DEFAULT '[]'"
                 )
+            if "revealed_edge_ids_json" not in ws_cols:
+                conn.execute(
+                    "ALTER TABLE world_state_snapshots ADD COLUMN revealed_edge_ids_json TEXT NOT NULL DEFAULT '[]'"
+                )
 
             camp_cols = {
                 r["name"]
@@ -1163,6 +1263,7 @@ class SchemaInitMixin:
                     "ALTER TABLE location_edges ADD COLUMN superseded_at_turn_id TEXT NULL"
                 )
             self._migrate_location_edges_to_distance_meters(conn)
+            self._migrate_location_edges_to_first_class_links(conn)
 
             vec_cols = {
                 r["name"]

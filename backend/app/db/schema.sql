@@ -180,7 +180,11 @@ CREATE TABLE IF NOT EXISTS location_edges (
     direction_label TEXT NOT NULL,
     compass_direction TEXT NULL,
     distance_meters INTEGER NOT NULL DEFAULT 50,
-    is_locked_or_hidden INTEGER NOT NULL DEFAULT 0,
+    speed_modifier REAL NOT NULL DEFAULT 1.0,
+    travel_mode TEXT NULL,
+    obstacles_json TEXT NOT NULL DEFAULT '[]',
+    is_blocked INTEGER NOT NULL DEFAULT 0,
+    is_secret INTEGER NOT NULL DEFAULT 0,
     created_at_turn_id TEXT NULL,
     superseded_at_turn_id TEXT NULL
 );
@@ -380,6 +384,7 @@ CREATE TABLE IF NOT EXISTS world_state_snapshots (
     visited_location_ids_json TEXT NOT NULL DEFAULT '[]',
     visited_container_ids_json TEXT NOT NULL DEFAULT '[]',
     revealed_lore_ids_json TEXT NOT NULL DEFAULT '[]',
+    revealed_edge_ids_json TEXT NOT NULL DEFAULT '[]',
     parties_json TEXT NOT NULL DEFAULT '[]'
 );
 

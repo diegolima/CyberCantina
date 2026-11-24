@@ -28,6 +28,7 @@ from app.schemas.turn import (
     TurnNodeRecord,
     WorldStateSnapshot,
 )
+from app.schemas.world import is_edge_revealed
 from app.db.repos.base import (
     UNSET,
     _parse_care_state_json,
@@ -126,13 +127,17 @@ class TurnsBranchesMixin:
             revealed_lore_ids = list(
                 dict.fromkeys(world_snapshot.revealed_lore_ids or [])
             )
+            revealed_edge_ids = list(
+                dict.fromkeys(world_snapshot.revealed_edge_ids or [])
+            )
             if parent_turn_id is not None and (
                 not world_snapshot.visited_location_ids
                 or not world_snapshot.visited_container_ids
                 or not world_snapshot.revealed_lore_ids
+                or not world_snapshot.revealed_edge_ids
             ):
                 parent_ws = conn.execute(
-                    "SELECT visited_location_ids_json, visited_container_ids_json, revealed_lore_ids_json FROM world_state_snapshots WHERE turn_id = ?",
+                    "SELECT visited_location_ids_json, visited_container_ids_json, revealed_lore_ids_json, revealed_edge_ids_json FROM world_state_snapshots WHERE turn_id = ?",
                     (parent_turn_id,),
                 ).fetchone()
                 if parent_ws:
@@ -158,15 +163,25 @@ class TurnsBranchesMixin:
                         except Exception:
                             parent_revealed = []
                         revealed_lore_ids = list(dict.fromkeys([*parent_revealed, *revealed_lore_ids]))
+                    if (
+                        not world_snapshot.revealed_edge_ids
+                        and "revealed_edge_ids_json" in parent_ws.keys()
+                        and parent_ws["revealed_edge_ids_json"]
+                    ):
+                        try:
+                            parent_rev_edges = json.loads(parent_ws["revealed_edge_ids_json"] or "[]")
+                        except Exception:
+                            parent_rev_edges = []
+                        revealed_edge_ids = list(dict.fromkeys([*parent_rev_edges, *revealed_edge_ids]))
 
             conn.execute(
                 """
                 INSERT INTO world_state_snapshots (
                     turn_id, world_timestamp, active_location_id, scene_flags_json,
                     campaign_elapsed_minutes, visited_location_ids_json, visited_container_ids_json,
-                    revealed_lore_ids_json, parties_json
+                    revealed_lore_ids_json, revealed_edge_ids_json, parties_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     turn_id,
@@ -177,6 +192,7 @@ class TurnsBranchesMixin:
                     json.dumps(visited_ids),
                     json.dumps(visited_container_ids),
                     json.dumps(revealed_lore_ids),
+                    json.dumps(revealed_edge_ids),
                     json.dumps([p.model_dump() for p in world_snapshot.parties]),
                 ),
             )
@@ -318,12 +334,13 @@ class TurnsBranchesMixin:
                 (post_turn.model_dump_json(), turn_id),
             )
             existing_ws = conn.execute(
-                "SELECT visited_location_ids_json, visited_container_ids_json, revealed_lore_ids_json FROM world_state_snapshots WHERE turn_id = ?",
+                "SELECT visited_location_ids_json, visited_container_ids_json, revealed_lore_ids_json, revealed_edge_ids_json FROM world_state_snapshots WHERE turn_id = ?",
                 (turn_id,),
             ).fetchone()
             existing_visited: list[str] = []
             existing_visited_containers: list[str] = []
             existing_revealed_lore: list[str] = []
+            existing_revealed_edges: list[str] = []
             if existing_ws and existing_ws["visited_location_ids_json"]:
                 try:
                     existing_visited = json.loads(existing_ws["visited_location_ids_json"] or "[]")
@@ -341,6 +358,11 @@ class TurnsBranchesMixin:
                     existing_revealed_lore = json.loads(existing_ws["revealed_lore_ids_json"] or "[]")
                 except Exception:
                     existing_revealed_lore = []
+            if existing_ws and "revealed_edge_ids_json" in existing_ws.keys() and existing_ws["revealed_edge_ids_json"]:
+                try:
+                    existing_revealed_edges = json.loads(existing_ws["revealed_edge_ids_json"] or "[]")
+                except Exception:
+                    existing_revealed_edges = []
             merged_visited = list(
                 dict.fromkeys(
                     [
@@ -370,12 +392,21 @@ class TurnsBranchesMixin:
                     ]
                 )
             )
+            merged_revealed_edges = list(
+                dict.fromkeys(
+                    [
+                        *existing_revealed_edges,
+                        *(updated_world_snapshot.revealed_edge_ids or []),
+                    ]
+                )
+            )
             conn.execute(
                 """
                 UPDATE world_state_snapshots
                 SET world_timestamp = ?, active_location_id = ?, scene_flags_json = ?,
                     campaign_elapsed_minutes = ?, visited_location_ids_json = ?,
-                    visited_container_ids_json = ?, revealed_lore_ids_json = ?, parties_json = ?
+                    visited_container_ids_json = ?, revealed_lore_ids_json = ?,
+                    revealed_edge_ids_json = ?, parties_json = ?
                 WHERE turn_id = ?
                 """,
                 (
@@ -386,6 +417,7 @@ class TurnsBranchesMixin:
                     json.dumps(merged_visited),
                     json.dumps(merged_visited_containers),
                     json.dumps(merged_revealed_lore),
+                    json.dumps(merged_revealed_edges),
                     json.dumps([p.model_dump() for p in updated_world_snapshot.parties]),
                     turn_id,
                 ),
@@ -744,6 +776,7 @@ class TurnsBranchesMixin:
                     ws.visited_location_ids_json,
                     ws.visited_container_ids_json,
                     ws.revealed_lore_ids_json,
+                    ws.revealed_edge_ids_json,
                     ws.parties_json,
                     cs.character_id AS cs_character_id,
                     cs.current_location_id,
@@ -817,6 +850,7 @@ class TurnsBranchesMixin:
                     ws.visited_location_ids_json,
                     ws.visited_container_ids_json,
                     ws.revealed_lore_ids_json,
+                    ws.revealed_edge_ids_json,
                     ws.parties_json,
                     cs.character_id AS cs_character_id,
                     cs.current_location_id,
@@ -862,6 +896,7 @@ class TurnsBranchesMixin:
                     ws.visited_location_ids_json,
                     ws.visited_container_ids_json,
                     ws.revealed_lore_ids_json,
+                    ws.revealed_edge_ids_json,
                     ws.parties_json,
                     cs.character_id AS cs_character_id,
                     cs.current_location_id,
@@ -1097,12 +1132,30 @@ class TurnsBranchesMixin:
         else:
             active_loc.is_visited = True
 
+        revealed_ids, revealed_pairs = self._resolve_revealed_edge_state(
+            campaign.world_id,
+            leaf_turn.world_snapshot.revealed_edge_ids,
+        )
+        gm_lore_unlocked = bool(campaign.world_settings.unlock_lore)
+
         neighbors = self.get_neighbor_locations(
             campaign.world_id,
             active_loc.id,
             valid_turn_ids=valid_turn_ids,
             campaign_id=campaign_id,
         )
+        neighbors = [
+            nb
+            for nb in neighbors
+            if not nb.is_secret
+            or is_edge_revealed(
+                nb.edge_id,
+                active_loc.id,
+                nb.destination.id,
+                revealed_ids,
+                revealed_pairs,
+            )
+        ]
         for nb in neighbors:
             if nb.destination.id in loc_by_id:
                 ov_dest = loc_by_id[nb.destination.id]
@@ -1111,6 +1164,20 @@ class TurnsBranchesMixin:
                 )
             else:
                 nb.destination.is_visited = nb.destination.id in visited_set
+
+        visible_edges = [
+            edge
+            for edge in world_filtered.edges
+            if gm_lore_unlocked
+            or not edge.is_secret
+            or is_edge_revealed(
+                edge.id,
+                edge.from_location_id,
+                edge.to_location_id,
+                revealed_ids,
+                revealed_pairs,
+            )
+        ]
         all_episodic_chunks = self.list_campaign_episodic_chunks(campaign_id)
         episodic_chunks = [
             chunk
@@ -1156,7 +1223,7 @@ class TurnsBranchesMixin:
             neighbor_locations=neighbors,
             containers=world_filtered.containers,
             visible_locations=world_filtered.locations,
-            visible_edges=world_filtered.edges,
+            visible_edges=visible_edges,
             world_lore_nodes=world_filtered.lore_nodes,
             episodic_chunks=episodic_chunks,
             all_episodic_chunks=all_episodic_chunks,
@@ -1363,6 +1430,11 @@ class TurnsBranchesMixin:
                 revealed_lore_ids=(
                     json.loads(r["revealed_lore_ids_json"] or "[]")
                     if "revealed_lore_ids_json" in r.keys()
+                    else []
+                ),
+                revealed_edge_ids=(
+                    json.loads(r["revealed_edge_ids_json"] or "[]")
+                    if "revealed_edge_ids_json" in r.keys()
                     else []
                 ),
                 parties=parties_list,

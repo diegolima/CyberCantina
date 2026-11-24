@@ -1,8 +1,46 @@
 export const WALKING_METERS_PER_MINUTE = 70;
+export const WALKING_KM_PER_HOUR = 4.2;
 export const MAX_EDGE_DISTANCE_METERS = 100_000_000;
 export const DEFAULT_INTERIOR_DISTANCE_METERS = 20;
 export const DEFAULT_EXTERIOR_DISTANCE_METERS = 100;
 export const DEFAULT_FALLBACK_DISTANCE_METERS = 50;
+export const MIN_EDGE_SPEED_MODIFIER = 0.05;
+export const MAX_EDGE_SPEED_MODIFIER = 100;
+export const DEFAULT_EDGE_SPEED_MODIFIER = 1;
+export const MAX_EDGE_OBSTACLES = 6;
+export const MAX_EDGE_OBSTACLE_LENGTH = 48;
+export const MAX_EDGE_TRAVEL_MODE_LENGTH = 40;
+
+export interface LinkSpeedPreset {
+  id: string;
+  label: string;
+  modeLabel: string | null;
+  modifier: number;
+}
+
+export const LINK_SPEED_PRESETS: readonly LinkSpeedPreset[] = [
+  { id: "swamp", label: "Swamp / Bog", modeLabel: "Swamp / Difficult Terrain", modifier: 0.3 },
+  { id: "steep", label: "Steep / Stairs", modeLabel: "Steep Climb", modifier: 0.6 },
+  { id: "walk", label: "Walking", modeLabel: null, modifier: 1 },
+  { id: "mount", label: "Mount / Bike", modeLabel: "Mount / Bike", modifier: 3 },
+  { id: "vehicle", label: "Vehicle", modeLabel: "Vehicle", modifier: 10 },
+  { id: "rail", label: "Rail / Transit", modeLabel: "Rail", modifier: 25 },
+  { id: "air", label: "High-Speed / Air", modeLabel: "High-Speed Transit", modifier: 60 },
+];
+
+/** Clamp a positive speed multiplier into `[0.05, 100]`, defaulting to `1`. */
+export function clampEdgeSpeedModifier(
+  raw: number,
+  fallback: number = DEFAULT_EDGE_SPEED_MODIFIER
+): number {
+  const safeFallback =
+    Number.isFinite(fallback) && fallback > 0
+      ? Math.max(MIN_EDGE_SPEED_MODIFIER, Math.min(MAX_EDGE_SPEED_MODIFIER, fallback))
+      : DEFAULT_EDGE_SPEED_MODIFIER;
+  if (!Number.isFinite(raw) || raw <= 0) return Number(safeFallback.toFixed(4));
+  const clamped = Math.max(MIN_EDGE_SPEED_MODIFIER, Math.min(MAX_EDGE_SPEED_MODIFIER, raw));
+  return Number(clamped.toFixed(4));
+}
 
 /** Clamp an integer meter distance into `[1, MAX_EDGE_DISTANCE_METERS]`. */
 export function clampEdgeDistanceMeters(
@@ -19,10 +57,19 @@ export function clampEdgeDistanceMeters(
   return Math.min(MAX_EDGE_DISTANCE_METERS, rounded);
 }
 
+/** Derive rounded integer travel minutes from distance and speed modifier (min 1). */
+export function deriveTravelMinutes(
+  distanceMeters: number,
+  speedModifier: number = DEFAULT_EDGE_SPEED_MODIFIER
+): number {
+  const safeMeters = clampEdgeDistanceMeters(distanceMeters);
+  const safeMod = clampEdgeSpeedModifier(speedModifier);
+  return Math.max(1, Math.round(safeMeters / (WALKING_METERS_PER_MINUTE * safeMod)));
+}
+
 /** Derive rounded integer walking minutes at canonical 70 m/min (min 1). */
 export function deriveWalkingMinutes(distanceMeters: number): number {
-  const safeMeters = clampEdgeDistanceMeters(distanceMeters);
-  return Math.max(1, Math.round(safeMeters / WALKING_METERS_PER_MINUTE));
+  return deriveTravelMinutes(distanceMeters, DEFAULT_EDGE_SPEED_MODIFIER);
 }
 
 /** Format meters compactly (`350m`, `1km`, `1.4km`, `125km`). */
@@ -37,19 +84,106 @@ export function formatDistanceCompact(distanceMeters: number): string {
   return `${Math.round(safeMeters / 1000)}km`;
 }
 
-/** Format canonical walking duration (`< 1 min`, `~5 min`, `~1h`, `~1h 15min`). */
-export function formatWalkingDuration(distanceMeters: number): string {
-  const safeMeters = clampEdgeDistanceMeters(distanceMeters);
-  if (safeMeters < 35) {
+/** Format a minute count into `< 1 min`, `~5 min`, `~1h`, or `~1h 15min`. */
+export function formatMinutesCompact(mins: number, subHalfMinute = false): string {
+  if (subHalfMinute) {
     return "< 1 min";
   }
-  const mins = deriveWalkingMinutes(safeMeters);
-  if (mins < 60) {
-    return `~${mins} min`;
+  const safeMins = Math.max(1, Math.round(mins));
+  if (safeMins < 60) {
+    return `~${safeMins} min`;
   }
-  const hours = Math.floor(mins / 60);
-  const rem = mins % 60;
+  const hours = Math.floor(safeMins / 60);
+  const rem = safeMins % 60;
   return rem === 0 ? `~${hours}h` : `~${hours}h ${rem}min`;
+}
+
+/** Format speed-adjusted travel duration (`< 1 min`, `~5 min`, `~1h 15min`). */
+export function formatTravelDuration(
+  distanceMeters: number,
+  speedModifier: number = DEFAULT_EDGE_SPEED_MODIFIER
+): string {
+  const safeMeters = clampEdgeDistanceMeters(distanceMeters);
+  const safeMod = clampEdgeSpeedModifier(speedModifier);
+  if (safeMeters / (WALKING_METERS_PER_MINUTE * safeMod) < 0.5) {
+    return "< 1 min";
+  }
+  return formatMinutesCompact(deriveTravelMinutes(safeMeters, safeMod), false);
+}
+
+/** Format canonical walking duration (`< 1 min`, `~5 min`, `~1h`, `~1h 15min`). */
+export function formatWalkingDuration(distanceMeters: number): string {
+  return formatTravelDuration(distanceMeters, DEFAULT_EDGE_SPEED_MODIFIER);
+}
+
+/** Format effective speed in km/h (e.g. `1.3 km/h`, `4.2 km/h`, `105 km/h`). */
+export function formatEffectiveSpeedKmh(speedModifier: number): string {
+  const safeMod = clampEdgeSpeedModifier(speedModifier);
+  const kmh = WALKING_KM_PER_HOUR * safeMod;
+  if (kmh < 20) {
+    return `${Number(kmh.toFixed(1))} km/h`;
+  }
+  return `${Math.round(kmh)} km/h`;
+}
+
+/** Format mode-aware exit duration phrase (`~5 min walk`, `~2 min via Rail`, `~18 min travel`). */
+export function formatExitTravelPhrase(
+  distanceMeters: number,
+  speedModifier: number = DEFAULT_EDGE_SPEED_MODIFIER,
+  travelMode?: string | null
+): string {
+  const safeMod = clampEdgeSpeedModifier(speedModifier);
+  const dur = formatTravelDuration(distanceMeters, safeMod);
+  const mode = (travelMode ?? "").trim();
+  if (mode) {
+    return `${dur} via ${mode}`;
+  }
+  if (Math.abs(safeMod - DEFAULT_EDGE_SPEED_MODIFIER) < 0.01) {
+    return `${dur} walk`;
+  }
+  return `${dur} travel`;
+}
+
+/** Format single or range travel duration across an aggregated supernode bundle of edges. */
+export function formatBundleTravelDuration(
+  edges: ReadonlyArray<{ distance_meters: number; speed_modifier?: number }>
+): string {
+  if (edges.length === 0) return "~1 min";
+  let minEdge = edges[0];
+  let maxEdge = edges[0];
+  let minRatio = Infinity;
+  let maxRatio = -Infinity;
+  for (const e of edges) {
+    const safeM = clampEdgeDistanceMeters(e.distance_meters);
+    const safeS = clampEdgeSpeedModifier(e.speed_modifier ?? 1);
+    const ratio = safeM / (WALKING_METERS_PER_MINUTE * safeS);
+    if (ratio < minRatio) {
+      minRatio = ratio;
+      minEdge = e;
+    }
+    if (ratio > maxRatio) {
+      maxRatio = ratio;
+      maxEdge = e;
+    }
+  }
+  const minLabel = formatTravelDuration(minEdge.distance_meters, minEdge.speed_modifier ?? 1);
+  const maxLabel = formatTravelDuration(maxEdge.distance_meters, maxEdge.speed_modifier ?? 1);
+  if (minLabel === maxLabel) {
+    return minLabel;
+  }
+  const loSubHalf = minRatio < 0.5;
+  const hiMins = deriveTravelMinutes(maxEdge.distance_meters, maxEdge.speed_modifier ?? 1);
+  if (loSubHalf && hiMins <= 1) {
+    return "~1 min";
+  }
+  if (loSubHalf && hiMins < 60) {
+    return `< 1-${hiMins} min`;
+  }
+  const loMins = deriveTravelMinutes(minEdge.distance_meters, minEdge.speed_modifier ?? 1);
+  if (!loSubHalf && hiMins < 60) {
+    return `~${loMins}-${hiMins} min`;
+  }
+  return `${minLabel}-${maxLabel.replace(/^~/, "")}`;
 }
 
 /** Format single or range walking duration for aggregated supernode bundles. */
@@ -57,25 +191,10 @@ export function formatBundleWalkingDuration(
   minMeters: number,
   maxMeters: number
 ): string {
-  const lo = Math.min(minMeters, maxMeters);
-  const hi = Math.max(minMeters, maxMeters);
-  const minLabel = formatWalkingDuration(lo);
-  const maxLabel = formatWalkingDuration(hi);
-  if (minLabel === maxLabel) {
-    return minLabel;
-  }
-  const hiMins = deriveWalkingMinutes(hi);
-  if (lo < 35 && hiMins <= 1) {
-    return "~1 min";
-  }
-  if (lo < 35 && hiMins < 60) {
-    return `< 1-${hiMins} min`;
-  }
-  const loMins = deriveWalkingMinutes(lo);
-  if (lo >= 35 && hiMins < 60) {
-    return `~${loMins}-${hiMins} min`;
-  }
-  return `${minLabel}-${maxLabel.replace(/^~/, "")}`;
+  return formatBundleTravelDuration([
+    { distance_meters: Math.min(minMeters, maxMeters), speed_modifier: 1 },
+    { distance_meters: Math.max(minMeters, maxMeters), speed_modifier: 1 },
+  ]);
 }
 
 /** Determine adaptive stepper increment by distance magnitude (`±5`, `±25`, `±100`, `±500`, or `±1` when fine). */

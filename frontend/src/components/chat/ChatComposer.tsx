@@ -42,7 +42,7 @@ import {
 } from "../../utils/gmMentions";
 import {
   formatDistanceCompact,
-  formatWalkingDuration,
+  formatExitTravelPhrase,
 } from "../../utils/spatialDistance";
 import {
   findNextEnabledIndex,
@@ -1112,13 +1112,26 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                             <span>
                               via {nb.direction_label} •{" "}
                               {formatDistanceCompact(nb.distance_meters)} (
-                              {formatWalkingDuration(nb.distance_meters)})
+                              {formatExitTravelPhrase(
+                                nb.distance_meters,
+                                nb.speed_modifier,
+                                nb.travel_mode
+                              )}
+                              )
+                              {(nb.obstacles?.length ?? 0) > 0 &&
+                                ` • ${nb.obstacles.slice(0, 2).join(", ")}${
+                                  nb.obstacles.length > 2 ? "…" : ""
+                                }`}
                             </span>
                           </div>
-                          {nb.is_locked_or_hidden && (
+                          {nb.is_blocked && (
                             <span
                               className="badge badge-locked"
-                              title="Locked or hidden passage"
+                              title={
+                                (nb.obstacles?.length ?? 0) > 0
+                                  ? `Blocked (${nb.obstacles.join(", ")})`
+                                  : "Blocked passage"
+                              }
                             >
                               <Lock size={10} />
                             </span>

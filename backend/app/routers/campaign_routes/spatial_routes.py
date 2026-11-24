@@ -22,6 +22,7 @@ from app.routers.campaign_routes.schemas_and_gate import _resolve_facade_attr
 from app.routers.campaign_routes.schemas_and_gate import (
     CampaignEdgeCreateRequest,
     CampaignEdgeDistanceUpdateRequest,
+    CampaignEdgeRevealRequest,
     CampaignLoreRevealRequest,
     CampaignMajorEventUpdateRequest,
     CampaignWorldLoreEntryUpsertRequest,
@@ -71,8 +72,15 @@ def connect_campaign_locations(
             compass_direction=req.compass_direction,
             distance_meters=req.distance_meters,
             bidirectional=req.bidirectional,
+            speed_modifier=req.speed_modifier,
+            travel_mode=req.travel_mode,
+            obstacles=req.obstacles,
+            is_blocked=req.is_blocked,
+            is_secret=req.is_secret,
             owner_id=current_user.id,
         )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -86,15 +94,51 @@ def update_campaign_edge_distance(
     req: CampaignEdgeDistanceUpdateRequest,
     current_user: UserProfile = Depends(get_current_user),
 ) -> CampaignStateBundle:
-    """Update distance (distance_meters) of an existing edge on the active timeline."""
+    """Update link properties of an existing edge on the active timeline."""
     try:
-        return _resolve_facade_attr("get_repo", get_repo)().update_campaign_edge_distance(
+        return _resolve_facade_attr("get_repo", get_repo)().update_campaign_edge(
             campaign_id,
             edge_id=edge_id,
             distance_meters=req.distance_meters,
+            speed_modifier=req.speed_modifier,
+            travel_mode=req.travel_mode,
+            travel_mode_provided="travel_mode" in req.model_fields_set,
+            obstacles=req.obstacles,
+            is_blocked=req.is_blocked,
+            is_secret=req.is_secret,
+            direction_label=req.direction_label,
+            reciprocal_direction_label=req.reciprocal_direction_label,
             update_reciprocal=req.update_reciprocal,
             owner_id=current_user.id,
         )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/api/campaigns/{campaign_id}/edges/{edge_id}/reveal",
+    response_model=CampaignStateBundle,
+)
+def toggle_campaign_edge_reveal(
+    campaign_id: str,
+    edge_id: str,
+    req: CampaignEdgeRevealRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Manually reveal or hide a secret link pair on the active branch (requires GM Mode)."""
+    try:
+        return _resolve_facade_attr("get_repo", get_repo)().toggle_campaign_edge_reveal(
+            campaign_id,
+            edge_id,
+            revealed=req.revealed,
+            owner_id=current_user.id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import {
   LocationContainer,
+  LocationEdge,
   LocationLoreNodeDraft,
   LocationNode,
   LocationOverrideOptions,
@@ -35,7 +36,7 @@ import { useMagicWand } from "../../hooks/useMagicWand";
 import { MagicWandButton } from "../MagicWandButton";
 import {
   formatDistanceCompact,
-  formatWalkingDuration,
+  formatTravelDuration,
 } from "../../utils/spatialDistance";
 import { TagChipsInput, normalizeTagList } from "../TagChipsInput";
 import {
@@ -51,11 +52,14 @@ import {
   type MapIconOption,
 } from "./mapIcons";
 import { containerHasVisitedDescendants } from "./mapValidation";
+import { MapLinkInspectorSection } from "./MapLinkInspectorSection";
 import { MapLoreSection } from "./MapLoreSection";
 import type {
+  LinkPairInspectorData,
   ProjectedGhostEdge,
   ProjectedGhostExternalNode,
 } from "./topologyProjection";
+import type { EdgePairPatch } from "./useTopologyMutations";
 
 export interface WorldPromptContext {
   worldId?: string;
@@ -78,7 +82,12 @@ export interface ExternalPortalEntry {
   directionLabel?: string;
   compassDirection?: string | null;
   distanceMeters: number;
-  isLockedOrHidden: boolean;
+  speedModifier: number;
+  travelMode: string | null;
+  obstacles: string[];
+  isBlocked: boolean;
+  isSecret: boolean;
+  isUndiscoveredSecret: boolean;
 }
 
 export interface MapDetailsDrawerProps {
@@ -87,6 +96,12 @@ export interface MapDetailsDrawerProps {
   selectedContainer: LocationContainer | null;
   selectedGhost?: ProjectedGhostExternalNode | null;
   selectedGhostEdges?: ProjectedGhostEdge[];
+  selectedEdgePair?: LinkPairInspectorData | null;
+  selectedEdgeBundle?: LinkPairInspectorData[] | null;
+  returnBundleEdgeIds?: string[];
+  revealedEdgeIds?: readonly string[];
+  allEdges?: LocationEdge[];
+  isEdgeSavedSecretInDb?: boolean;
   hasGhostOverride?: boolean;
   containers: LocationContainer[];
   allLocations: LocationNode[];
@@ -103,10 +118,18 @@ export interface MapDetailsDrawerProps {
   onClose: () => void;
   onPatchLocation: (locId: string, patch: Partial<LocationNode>) => void;
   onPatchContainer: (contId: string, patch: Partial<LocationContainer>) => void;
+  onPatchEdgePair?: (edgeId: string, patch: EdgePairPatch) => void;
   onResetCoordinates: (kind: "location" | "container", id: string) => void;
   onResetGhostCoords?: (externalLocId: string) => void;
   onDeleteEdge?: (edgeId: string) => void;
+  canDeleteEdge?: (edgeId: string) => { allowed: boolean; reason?: string };
   onInspectEdgePair?: (edgeId: string, groupedEdgeIds?: string[]) => void;
+  onSelectEdgePair?: (edgeId: string, returnBundleEdgeIds?: string[]) => void;
+  onBackToBundle?: () => void;
+  onToggleEdgeReveal?: (
+    edgeId: string,
+    revealed: boolean
+  ) => Promise<void> | void;
   onJumpToContainer?: (containerId: string | null, focusLocId?: string) => void;
   onDrillIntoContainer: (contId: string) => void;
   coLocatedPartyNpcs?: Array<{ id: string; name: string }>;
@@ -945,6 +968,11 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
   selectedContainer,
   selectedGhost = null,
   selectedGhostEdges = [],
+  selectedEdgePair = null,
+  selectedEdgeBundle = null,
+  revealedEdgeIds = [],
+  allEdges = [],
+  isEdgeSavedSecretInDb = false,
   hasGhostOverride = false,
   containers,
   allLocations,
@@ -960,10 +988,15 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
   onClose,
   onPatchLocation,
   onPatchContainer,
+  onPatchEdgePair,
   onResetCoordinates,
   onResetGhostCoords,
   onDeleteEdge,
+  canDeleteEdge,
   onInspectEdgePair,
+  onSelectEdgePair,
+  onBackToBundle,
+  onToggleEdgeReveal,
   onJumpToContainer,
   onDrillIntoContainer,
   coLocatedPartyNpcs = [],
@@ -1132,6 +1165,32 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
     singleLine: true,
     maxWords: 32,
   });
+
+  if (
+    (selectedEdgeBundle && selectedEdgeBundle.length > 0) ||
+    selectedEdgePair
+  ) {
+    return (
+      <MapLinkInspectorSection
+        mode={mode}
+        unlockLore={unlockLore}
+        isMutatingLocked={isMutatingLocked}
+        selectedEdgePair={selectedEdgePair}
+        selectedEdgeBundle={selectedEdgeBundle}
+        allLocations={allLocations}
+        allEdges={allEdges}
+        revealedEdgeIds={revealedEdgeIds}
+        isEdgeSavedSecretInDb={isEdgeSavedSecretInDb}
+        onClose={onClose}
+        onPatchEdgePair={onPatchEdgePair}
+        onToggleEdgeReveal={onToggleEdgeReveal}
+        onSelectEdgePair={onSelectEdgePair}
+        onBackToBundle={onBackToBundle}
+        onDeleteEdge={onDeleteEdge}
+        canDeleteEdge={canDeleteEdge}
+      />
+    );
+  }
 
   if (!selectedLocation && !selectedContainer && !selectedGhost) {
     return null;
@@ -1326,8 +1385,17 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
                   <div>
                     {portalLoc?.name ?? ge.portalLocationId} (
                     {formatDistanceCompact(ge.distance_meters)} ·{" "}
-                    {formatWalkingDuration(ge.distance_meters)}
-                    {ge.is_locked_or_hidden ? " 🔒" : ""})
+                    {formatTravelDuration(ge.distance_meters, ge.speed_modifier)}
+                    {ge.is_blocked ? " · Blocked" : ""}
+                    {ge.isUndiscoveredSecret
+                      ? " · Secret"
+                      : ge.is_secret
+                      ? " · Discovered Secret"
+                      : ""}
+                    {ge.obstacles.length > 0
+                      ? ` · ${ge.obstacles.join(", ")}`
+                      : ""}
+                    )
                   </div>
                   {ge.direction_label && (
                     <div
@@ -2223,7 +2291,17 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
                   [{ext.compassDirection || "?"}] → {ext.destinationName} (
                   {ext.destinationContainerName},{" "}
                   {formatDistanceCompact(ext.distanceMeters)} ·{" "}
-                  {formatWalkingDuration(ext.distanceMeters)})
+                  {formatTravelDuration(ext.distanceMeters, ext.speedModifier)}
+                  {ext.isBlocked ? " · Blocked" : ""}
+                  {ext.isUndiscoveredSecret
+                    ? " · Secret"
+                    : ext.isSecret
+                    ? " · Discovered Secret"
+                    : ""}
+                  {ext.obstacles.length > 0
+                    ? ` · ${ext.obstacles.join(", ")}`
+                    : ""}
+                  )
                 </span>
                 {ext.directionLabel && (
                   <div

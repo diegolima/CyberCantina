@@ -25,7 +25,6 @@ import {
   MapContextMenu,
   MapContextMenuState,
   MapIconBrowserModal,
-  MultiEdgePopover,
   PassageHubCollisionModal,
   PassageHubCollisionState,
   StandaloneContainerCreateModal,
@@ -69,14 +68,17 @@ import {
   computePromotionCandidates,
   getLocationOccupiedPorts,
   inferCompassDirection,
+  isEdgeRevealed,
   pickCompassSlot,
   projectTopologyForDepth,
-  resolveEdgePairForDialog,
+  resolveBundleLinkPairs,
   resolveInitialMapFocus,
-  resolveLiveEdgeModalEdges,
+  resolveLinkPairForInspector,
+  resolveRevealedEdgePairs,
   type GraphSnapshot,
   type InitialMapFocus,
   type LinkDragState,
+  type LinkPairInspectorData,
   type NodeDragState,
   type ProjectedContainerSupernode,
   type ProjectedDepthTopology,
@@ -86,7 +88,10 @@ import {
   type ProjectedTopologyEdge,
   type PromotionCandidate,
   type PromotionPromptState,
+  type SelectedEdgeState,
 } from "./map/topologyProjection";
+
+export type { SelectedEdgeState };
 
 export {
   COMPASS_ANGLES,
@@ -149,6 +154,11 @@ export interface SpatialTopologyViewProps {
     loreId: string,
     revealed: boolean
   ) => Promise<void> | void;
+  revealedEdgeIds?: readonly string[];
+  onToggleEdgeReveal?: (
+    edgeId: string,
+    revealed: boolean
+  ) => Promise<void> | void;
   isMutatingLocked?: boolean;
   initialContainerFocus?: "active" | "root";
   externalFocusRequest?: {
@@ -184,6 +194,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   unlockLore = false,
   revealedLoreIds = [],
   onToggleLoreReveal,
+  revealedEdgeIds = [],
+  onToggleEdgeReveal,
   isMutatingLocked = false,
   initialContainerFocus = "active",
   externalFocusRequest = null,
@@ -208,6 +220,15 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   const baselineLocationIds = useMemo(
     () => new Set(propLocations.map((l) => l.id)),
     [propLocations]
+  );
+  const baselineSecretEdgeIds = useMemo(
+    () =>
+      new Set(
+        propEdges
+          .filter((e) => e.is_secret && !e.id.startsWith("new_"))
+          .map((e) => e.id)
+      ),
+    [propEdges]
   );
 
   // Keep draft synced when props update and no local staged changes are pending
@@ -301,6 +322,41 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   const [selectedGhostLocId, setSelectedGhostLocId] = useState<string | null>(
     null
   );
+  const [selectedEdgeState, setSelectedEdgeState] =
+    useState<SelectedEdgeState | null>(null);
+  const selectEdgePair = useCallback(
+    (edgeId: string, returnBundleEdgeIds?: string[]) => {
+      setSelectedLocId(null);
+      setSelectedContainerId(null);
+      setSelectedGhostLocId(null);
+      setInlineEdgeEdit(null);
+      setContextMenu(null);
+      setSelectedEdgeState({ kind: "pair", edgeId, returnBundleEdgeIds });
+    },
+    []
+  );
+  const selectEdgeBundle = useCallback(
+    (edgeIds: string[]) => {
+      setSelectedLocId(null);
+      setSelectedContainerId(null);
+      setSelectedGhostLocId(null);
+      setInlineEdgeEdit(null);
+      setContextMenu(null);
+      const pairs = resolveBundleLinkPairs(edgeIds, workingEdges);
+      if (pairs.length === 1) {
+        setSelectedEdgeState({ kind: "pair", edgeId: pairs[0].primary.id });
+      } else if (pairs.length > 1) {
+        setSelectedEdgeState({ kind: "bundle", edgeIds });
+      }
+    },
+    [workingEdges]
+  );
+  const clearAllSelection = useCallback(() => {
+    setSelectedLocId(null);
+    setSelectedContainerId(null);
+    setSelectedGhostLocId(null);
+    setSelectedEdgeState(null);
+  }, []);
   const [ghostCoordsByView, setGhostCoordsByView] = useState<
     Record<string, Record<string, { x: number; y: number }>>
   >({});
@@ -368,13 +424,6 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     useState<StandaloneContainerCreateState | null>(null);
   const [promotionPrompt, setPromotionPrompt] =
     useState<PromotionPromptState | null>(null);
-  const [multiEdgeModalEdges, setMultiEdgeModalEdges] = useState<
-    LocationEdge[] | null
-  >(null);
-  const liveMultiEdgeModalEdges = useMemo(
-    () => resolveLiveEdgeModalEdges(multiEdgeModalEdges, workingEdges),
-    [multiEdgeModalEdges, workingEdges]
-  );
   const [iconBrowserTarget, setIconBrowserTarget] = useState<{
     targetKind: "location" | "container";
     targetId: string;
@@ -444,6 +493,39 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     }
   }, [workingEdges, inlineEdgeEdit]);
 
+  useEffect(() => {
+    if (selectedLocId || selectedContainerId || selectedGhostLocId) {
+      setSelectedEdgeState(null);
+    }
+  }, [selectedLocId, selectedContainerId, selectedGhostLocId]);
+
+  useEffect(() => {
+    if (!selectedEdgeState) return;
+    if (selectedEdgeState.kind === "pair") {
+      if (!resolveLinkPairForInspector(selectedEdgeState.edgeId, workingEdges)) {
+        setSelectedEdgeState(null);
+      } else if (selectedEdgeState.returnBundleEdgeIds) {
+        const nextPairs = resolveBundleLinkPairs(
+          selectedEdgeState.returnBundleEdgeIds,
+          workingEdges
+        );
+        if (nextPairs.length <= 1) {
+          setSelectedEdgeState({ kind: "pair", edgeId: selectedEdgeState.edgeId });
+        }
+      }
+      return;
+    }
+    const nextPairs = resolveBundleLinkPairs(
+      selectedEdgeState.edgeIds,
+      workingEdges
+    );
+    if (nextPairs.length === 0) {
+      setSelectedEdgeState(null);
+    } else if (nextPairs.length === 1) {
+      setSelectedEdgeState({ kind: "pair", edgeId: nextPairs[0].primary.id });
+    }
+  }, [workingEdges, selectedEdgeState]);
+
   const activeLoc = useMemo(
     () =>
       workingLocations.find((l) => l.id === activeLocationId) ??
@@ -454,11 +536,31 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
 
   const selectedLocation = useMemo(
     () =>
-      !selectedContainerId && !selectedGhostLocId && selectedLocId
+      !selectedContainerId &&
+      !selectedGhostLocId &&
+      !selectedEdgeState &&
+      selectedLocId
         ? workingLocations.find((l) => l.id === selectedLocId) ?? null
         : null,
-    [workingLocations, selectedLocId, selectedContainerId, selectedGhostLocId]
+    [
+      workingLocations,
+      selectedLocId,
+      selectedContainerId,
+      selectedGhostLocId,
+      selectedEdgeState,
+    ]
   );
+
+  const selectedEdgePair = useMemo<LinkPairInspectorData | null>(() => {
+    if (selectedEdgeState?.kind !== "pair") return null;
+    return resolveLinkPairForInspector(selectedEdgeState.edgeId, workingEdges);
+  }, [selectedEdgeState, workingEdges]);
+
+  const selectedEdgeBundle = useMemo<LinkPairInspectorData[] | null>(() => {
+    if (selectedEdgeState?.kind !== "bundle") return null;
+    const pairs = resolveBundleLinkPairs(selectedEdgeState.edgeIds, workingEdges);
+    return pairs.length > 0 ? pairs : null;
+  }, [selectedEdgeState, workingEdges]);
 
   const containerMap = useMemo(
     () => new Map(workingContainers.map((c) => [c.id, c])),
@@ -483,7 +585,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         workingLocations,
         workingEdges,
         activeLoc?.id,
-        presentCharacterLocations
+        presentCharacterLocations,
+        { mode, unlockLore, revealedEdgeIds }
       ),
     [
       currentContainerId,
@@ -492,6 +595,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       workingEdges,
       activeLoc?.id,
       presentCharacterLocations,
+      mode,
+      unlockLore,
+      revealedEdgeIds,
     ]
   );
 
@@ -526,11 +632,31 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     [selectedGhostLocId, projectedTopology.ghostEdges]
   );
 
-  // Global validation reports (Reachability + Container invariants)
-  const reachabilityReport = useMemo(
+  // Global validation reports (Reachability + Container invariants).
+  // In Campaign Player Mode, undiscovered secret links are omitted from visible_edges,
+  // so pre-existing locations linked only via hidden secrets are excluded here;
+  // backend campaign_map_update enforces reachability after restoring omitted secrets.
+  const initialHiddenLinkedLocIds = useMemo(() => {
+    if (mode !== "campaign" || unlockLore) return new Set<string>();
+    const initialReport = computeUnreachableLocationIds(propLocations, propEdges);
+    return new Set(
+      initialReport.unreachableIds.filter((id) => !id.startsWith("new_"))
+    );
+  }, [mode, unlockLore, propLocations, propEdges]);
+
+  const rawReachabilityReport = useMemo(
     () => computeUnreachableLocationIds(workingLocations, workingEdges),
     [workingLocations, workingEdges]
   );
+  const reachabilityReport = useMemo(() => {
+    if (initialHiddenLinkedLocIds.size === 0) return rawReachabilityReport;
+    return {
+      ...rawReachabilityReport,
+      unreachableIds: rawReachabilityReport.unreachableIds.filter(
+        (id) => !initialHiddenLinkedLocIds.has(id)
+      ),
+    };
+  }, [rawReachabilityReport, initialHiddenLinkedLocIds]);
   const unreachableSet = useMemo(
     () => new Set(reachabilityReport.unreachableIds),
     [reachabilityReport.unreachableIds]
@@ -666,6 +792,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     setCurrentContainerId(contId);
     setSelectedContainerId(null);
     setSelectedGhostLocId(null);
+    setSelectedEdgeState(null);
     setContextMenu(null);
     setInlineEdgeEdit(null);
     setPan({ x: 0, y: 0 });
@@ -677,6 +804,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       setCurrentContainerId(targetContainerId);
       setSelectedContainerId(null);
       setSelectedGhostLocId(null);
+      setSelectedEdgeState(null);
       setSelectedLocId(focusLocId ?? null);
       setContextMenu(null);
       setInlineEdgeEdit(null);
@@ -797,6 +925,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       setCurrentContainerId(loc.container_id ?? null);
     }
     setSelectedContainerId(null);
+    setSelectedGhostLocId(null);
+    setSelectedEdgeState(null);
     setSelectedLocId(loc.id);
   }, [reachabilityReport.unreachableIds, locationMap, currentContainerId]);
 
@@ -818,6 +948,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     setCurrentContainerId(targetCont.parent_container_id ?? null);
     setSelectedLocId(null);
     setSelectedGhostLocId(null);
+    setSelectedEdgeState(null);
     setSelectedContainerId(targetCont.id);
     setContextMenu(null);
     setInlineEdgeEdit(null);
@@ -860,14 +991,15 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     canDeleteContainer,
     canConvertLocation,
     canMoveOutToParent,
+    canDeleteEdge,
     handleDeleteLocation,
     handleDeleteContainer,
     handleConvertLocationToContainer,
     handleSetStartingLocation,
+    handlePatchEdgePair,
     handleUpdateEdgeDistance,
-    handleUpdateEdgeLabel,
-    handleCommitEdgeEdits,
-    handleToggleEdgeLocked,
+    handleToggleEdgeBlocked,
+    handleToggleEdgeSecret,
     handleDeleteEdge,
     handleDeleteEdgeGroup,
   } = useTopologyMutations({
@@ -900,7 +1032,31 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     setGroupModal,
     standaloneContainerModal,
     setStandaloneContainerModal,
-    setMultiEdgeModalEdges,
+    onEdgesRemoved: (removedIds) => {
+      setInlineEdgeEdit((prev) =>
+        prev && removedIds.has(prev.edgeId) ? null : prev
+      );
+      setSelectedEdgeState((prev) => {
+        if (!prev) return null;
+        if (prev.kind === "pair" && removedIds.has(prev.edgeId)) {
+          return prev.returnBundleEdgeIds?.some((id) => !removedIds.has(id))
+            ? {
+                kind: "bundle",
+                edgeIds: prev.returnBundleEdgeIds.filter(
+                  (id) => !removedIds.has(id)
+                ),
+              }
+            : null;
+        }
+        if (prev.kind === "bundle") {
+          const remaining = prev.edgeIds.filter((id) => !removedIds.has(id));
+          return remaining.length > 0
+            ? { kind: "bundle", edgeIds: remaining }
+            : null;
+        }
+        return prev;
+      });
+    },
     setPromotionPrompt,
   });
 
@@ -996,7 +1152,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     }
   };
 
-  // Global Delete-key removal for selected location, hub, or container (Undo-backed)
+  // Global Delete-key removal for selected location, hub, container, or link pair (Undo-backed)
   const hasBlockingOverlayOpen = Boolean(
     inlineEdgeEdit ||
       contextMenu ||
@@ -1005,7 +1161,6 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       groupModal ||
       standaloneContainerModal ||
       promotionPrompt ||
-      multiEdgeModalEdges ||
       iconBrowserTarget
   );
 
@@ -1030,6 +1185,17 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
           typeof document !== "undefined" ? document.activeElement : null
         )
       ) {
+        return;
+      }
+
+      if (selectedEdgeState?.kind === "pair") {
+        e.preventDefault();
+        const check = canDeleteEdge(selectedEdgeState.edgeId);
+        if (!check.allowed) {
+          if (check.reason) setStatusNotice(check.reason);
+          return;
+        }
+        handleDeleteEdge(selectedEdgeState.edgeId);
         return;
       }
 
@@ -1069,11 +1235,14 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     isMutatingLocked,
     effectiveSaving,
     hasBlockingOverlayOpen,
+    selectedEdgeState,
     selectedGhostLocId,
     selectedContainerId,
     selectedLocId,
+    canDeleteEdge,
     canDeleteContainer,
     canDeleteLocation,
+    handleDeleteEdge,
     handleDeleteContainer,
     handleDeleteLocation,
   ]);
@@ -1109,19 +1278,24 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     setContextMenu({ x: clampedX, y: clampedY, target });
   };
 
-  const openEdgeDetailsPopover = useCallback(
+  const openEdgeInDrawer = useCallback(
     (edgeId: string, groupedEdgeIds?: string[]) => {
-      const pair = resolveEdgePairForDialog(edgeId, workingEdges, groupedEdgeIds);
-      if (pair.length > 0) {
-        setInlineEdgeEdit(null);
-        setMultiEdgeModalEdges(pair);
+      if (groupedEdgeIds && groupedEdgeIds.length > 0) {
+        const pairs = resolveBundleLinkPairs(groupedEdgeIds, workingEdges);
+        if (pairs.length > 1) {
+          selectEdgeBundle(groupedEdgeIds);
+          return;
+        }
       }
+      selectEdgePair(edgeId);
     },
-    [workingEdges]
+    [workingEdges, selectEdgeBundle, selectEdgePair]
   );
 
   const selectedExternalPortals = useMemo(() => {
     if (!selectedLocation) return [];
+    const revealedIdSet = new Set(revealedEdgeIds);
+    const revealedPairs = resolveRevealedEdgePairs(workingEdges, revealedEdgeIds);
     return (projectedTopology.externalPortalsByLocationId[selectedLocation.id] ?? []).map(
       (ext) => ({
         edgeId: ext.edge.id,
@@ -1130,10 +1304,25 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         directionLabel: ext.edge.direction_label,
         compassDirection: ext.edge.compass_direction,
         distanceMeters: ext.edge.distance_meters,
-        isLockedOrHidden: ext.edge.is_locked_or_hidden,
+        speedModifier: ext.edge.speed_modifier,
+        travelMode: ext.edge.travel_mode ?? null,
+        obstacles: ext.edge.obstacles ?? [],
+        isBlocked: Boolean(ext.edge.is_blocked),
+        isSecret: Boolean(ext.edge.is_secret),
+        isUndiscoveredSecret: Boolean(
+          ext.edge.is_secret &&
+            (mode !== "campaign" ||
+              !isEdgeRevealed(ext.edge, revealedIdSet, revealedPairs))
+        ),
       })
     );
-  }, [selectedLocation, projectedTopology.externalPortalsByLocationId]);
+  }, [
+    selectedLocation,
+    projectedTopology.externalPortalsByLocationId,
+    workingEdges,
+    revealedEdgeIds,
+    mode,
+  ]);
 
   const selectedContainerStats = useMemo(() => {
     if (!selectedContainer) return null;
@@ -1150,7 +1339,11 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   }, [selectedContainer, projectedTopology.visibleSupernodes]);
 
   const hasDetailsOpen = Boolean(
-    selectedLocation || selectedContainer || selectedGhost
+    selectedLocation ||
+      selectedContainer ||
+      selectedGhost ||
+      selectedEdgePair ||
+      (selectedEdgeBundle && selectedEdgeBundle.length > 0)
   );
 
   useEffect(() => {
@@ -1333,8 +1526,11 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             setSelectedLocId={setSelectedLocId}
             setSelectedContainerId={setSelectedContainerId}
             setSelectedGhostLocId={setSelectedGhostLocId}
+            selectedEdgeState={selectedEdgeState}
+            onSelectEdgePair={(edgeId) => selectEdgePair(edgeId)}
+            onSelectEdgeBundle={selectEdgeBundle}
+            onClearEdgeSelection={() => setSelectedEdgeState(null)}
             setContextMenu={setContextMenu}
-            setMultiEdgeModalEdges={setMultiEdgeModalEdges}
             openContextMenuAt={openContextMenuAt}
             handleUpdateEdgeDistance={handleUpdateEdgeDistance}
             handleDeleteEdge={handleDeleteEdge}
@@ -1359,16 +1555,21 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             containers={workingContainers}
             edges={workingEdges}
             mode={mode}
+            unlockLore={unlockLore}
             canDeleteContainer={canDeleteContainer}
             canDeleteLocation={canDeleteLocation}
             canConvertLocation={canConvertLocation}
             canMoveOutToParent={canMoveOutToParent}
             onClose={() => setContextMenu(null)}
             onInspect={(kind, id) => {
+              setSelectedEdgeState(null);
               if (kind === "location") {
                 setSelectedContainerId(null);
+                setSelectedGhostLocId(null);
                 setSelectedLocId(id);
               } else {
+                setSelectedLocId(null);
+                setSelectedGhostLocId(null);
                 setSelectedContainerId(id);
               }
             }}
@@ -1438,8 +1639,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                 value: String(edge.distance_meters),
               });
             }}
-            onEditEdgeDetails={openEdgeDetailsPopover}
-            onToggleEdgeLocked={handleToggleEdgeLocked}
+            onInspectEdge={openEdgeInDrawer}
+            onToggleEdgeBlocked={handleToggleEdgeBlocked}
+            onToggleEdgeSecret={handleToggleEdgeSecret}
             onDeleteEdge={handleDeleteEdge}
             onDeleteEdgeGroup={handleDeleteEdgeGroup}
           />
@@ -1468,18 +1670,6 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             state={standaloneContainerModal}
             onCancel={() => setStandaloneContainerModal(null)}
             onCreate={handleConfirmStandaloneContainerCreate}
-          />
-
-          <MultiEdgePopover
-            edges={liveMultiEdgeModalEdges}
-            locationMap={locationMap}
-            isMutatingLocked={isMutatingLocked}
-            onClose={() => setMultiEdgeModalEdges(null)}
-            onUpdateDistance={handleUpdateEdgeDistance}
-            onUpdateLabel={handleUpdateEdgeLabel}
-            onCommitEdgeEdits={handleCommitEdgeEdits}
-            onToggleLocked={handleToggleEdgeLocked}
-            onDeleteEdge={handleDeleteEdge}
           />
 
           <PortalPromotionModal
@@ -1524,6 +1714,24 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
               selectedContainer={selectedContainer}
               selectedGhost={selectedGhost}
               selectedGhostEdges={selectedGhostEdges}
+              selectedEdgePair={selectedEdgePair}
+              selectedEdgeBundle={selectedEdgeBundle}
+              returnBundleEdgeIds={
+                selectedEdgeState?.kind === "pair"
+                  ? selectedEdgeState.returnBundleEdgeIds
+                  : undefined
+              }
+              revealedEdgeIds={revealedEdgeIds}
+              allEdges={workingEdges}
+              isEdgeSavedSecretInDb={
+                selectedEdgePair
+                  ? baselineSecretEdgeIds.has(selectedEdgePair.primary.id) ||
+                    Boolean(
+                      selectedEdgePair.reciprocal &&
+                        baselineSecretEdgeIds.has(selectedEdgePair.reciprocal.id)
+                    )
+                  : false
+              }
               hasGhostOverride={Boolean(
                 selectedGhostLocId && currentGhostOverrides?.[selectedGhostLocId]
               )}
@@ -1550,17 +1758,38 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                 if (isMobileViewport) {
                   setIsMobileSheetExpanded(false);
                 } else {
-                  setSelectedLocId(null);
-                  setSelectedContainerId(null);
-                  setSelectedGhostLocId(null);
+                  clearAllSelection();
                 }
               }}
               onPatchLocation={patchLocation}
               onPatchContainer={patchContainer}
+              onPatchEdgePair={handlePatchEdgePair}
               onResetCoordinates={resetCoordinates}
               onResetGhostCoords={handleResetGhostCoords}
               onDeleteEdge={handleDeleteEdge}
-              onInspectEdgePair={openEdgeDetailsPopover}
+              canDeleteEdge={canDeleteEdge}
+              onInspectEdgePair={(edgeId, groupedEdgeIds) => {
+                if (groupedEdgeIds && groupedEdgeIds.length > 0) {
+                  const pairs = resolveBundleLinkPairs(groupedEdgeIds, workingEdges);
+                  if (pairs.length > 1) {
+                    selectEdgeBundle(groupedEdgeIds);
+                    return;
+                  }
+                }
+                selectEdgePair(edgeId);
+              }}
+              onSelectEdgePair={selectEdgePair}
+              onBackToBundle={
+                selectedEdgeState?.kind === "pair" &&
+                selectedEdgeState.returnBundleEdgeIds &&
+                selectedEdgeState.returnBundleEdgeIds.length > 0
+                  ? () =>
+                      selectEdgeBundle(
+                        selectedEdgeState.returnBundleEdgeIds ?? []
+                      )
+                  : undefined
+              }
+              onToggleEdgeReveal={onToggleEdgeReveal}
               onJumpToContainer={handleJumpToContainer}
               onDrillIntoContainer={(cid) => {
                 setIsMobileSheetExpanded(false);
@@ -1597,11 +1826,25 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
               ? selectedContainer.name
               : selectedGhost
               ? selectedGhost.destination.name
+              : selectedEdgeBundle
+              ? `Boundary Passages (${selectedEdgeBundle.length})`
+              : selectedEdgePair
+              ? `${
+                  locationMap.get(selectedEdgePair.primary.from_location_id)?.name ??
+                  selectedEdgePair.primary.from_location_id
+                } ${selectedEdgePair.reciprocal ? "↔" : "→"} ${
+                  locationMap.get(selectedEdgePair.primary.to_location_id)?.name ??
+                  selectedEdgePair.primary.to_location_id
+                }`
               : selectedLocation?.name ?? "";
             const peekBadge = selectedContainer
               ? `L${selectedContainer.depth}`
               : selectedGhost
               ? "Portal"
+              : selectedEdgeBundle
+              ? "Bundle"
+              : selectedEdgePair
+              ? "Link"
               : selectedLocation?.id === activeLoc?.id
               ? mode === "campaign"
                 ? "Current"
@@ -1712,11 +1955,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                       <button
                         type="button"
                         className="btn map-mobile-peek-dismiss"
-                        onClick={() => {
-                          setSelectedLocId(null);
-                          setSelectedContainerId(null);
-                          setSelectedGhostLocId(null);
-                        }}
+                        onClick={clearAllSelection}
                         aria-label="Clear selection"
                         title="Clear selection"
                       >
@@ -1756,10 +1995,10 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
                 No Map Element Selected
               </strong>
               <span>
-                Click any location, container, or external ghost destination to inspect its details.
+                Click any location, container, link, or external ghost destination to inspect its details.
               </span>
               <span style={{ fontSize: "0.7rem" }}>
-                Double-click a container card to enter it, or double-click a distance badge to edit travel time.
+                Double-click a container card to enter it, or double-click a link distance badge to edit distance quickly.
               </span>
             </div>
           );

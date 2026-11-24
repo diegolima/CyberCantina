@@ -18,8 +18,17 @@ from app.schemas.gm import (
     GmMentionRef,
     GmSourceRef,
 )
+from typing import Any
 from app.schemas.turn import CampaignStateBundle, TurnNodeRecord
-from app.schemas.world import LocationContainer, LocationNode, LoreNode
+from app.schemas.world import (
+    LocationContainer,
+    LocationNode,
+    LoreNode,
+    format_distance_meters,
+    format_exit_travel_phrase,
+    is_edge_revealed,
+    resolve_revealed_edge_pairs,
+)
 from app.security.log_sanitize import sanitize_log_value
 
 logger = logging.getLogger("cybercantina.engine.gm_talk")
@@ -169,6 +178,8 @@ class _BranchVisibility:
     valid_turn_ids: set[str]
     unlock_lore: bool
     revealed_lore_ids: set[str]
+    revealed_edge_ids: set[str]
+    revealed_edge_pairs: set[tuple[str, str]]
     visited_location_ids: set[str]
     visited_container_ids: set[str]
     active_container_ancestors: list[str]
@@ -206,6 +217,10 @@ def _compute_branch_visibility(bundle: CampaignStateBundle) -> _BranchVisibility
     valid_turn_ids = {t.id for t in bundle.active_branch_turns}
     unlock_lore = bool(bundle.campaign.world_settings.unlock_lore)
     revealed_lore_ids = set(snap.revealed_lore_ids or [])
+    revealed_edge_ids = set(snap.revealed_edge_ids or [])
+    revealed_edge_pairs = resolve_revealed_edge_pairs(
+        bundle.visible_edges, revealed_edge_ids
+    )
     visited_location_ids = set(snap.visited_location_ids or []) | {bundle.active_location.id}
     cont_by_id = {c.id: c for c in bundle.containers}
     active_ancestors = _container_ancestors(bundle.active_location.container_id, cont_by_id)
@@ -218,6 +233,8 @@ def _compute_branch_visibility(bundle: CampaignStateBundle) -> _BranchVisibility
         valid_turn_ids=valid_turn_ids,
         unlock_lore=unlock_lore,
         revealed_lore_ids=revealed_lore_ids,
+        revealed_edge_ids=revealed_edge_ids,
+        revealed_edge_pairs=revealed_edge_pairs,
         visited_location_ids=visited_location_ids,
         visited_container_ids=visited_container_ids,
         active_container_ancestors=active_ancestors,
@@ -225,6 +242,50 @@ def _compute_branch_visibility(bundle: CampaignStateBundle) -> _BranchVisibility
         loc_by_id=loc_by_id,
         turn_by_id=turn_by_id,
     )
+
+
+def _visible_location_exits_for_gm(
+    loc_id: str,
+    vis: _BranchVisibility,
+) -> list[dict[str, Any]]:
+    """Return spoiler-gated outgoing connections from `loc_id` for GM Talk and GM Tools."""
+    if not vis.unlock_lore and loc_id not in vis.visited_location_ids:
+        return []
+    exits: list[dict[str, Any]] = []
+    for edge in vis.bundle.visible_edges:
+        if edge.from_location_id != loc_id:
+            continue
+        revealed = is_edge_revealed(
+            edge.id,
+            edge.from_location_id,
+            edge.to_location_id,
+            vis.revealed_edge_ids,
+            vis.revealed_edge_pairs,
+        )
+        if edge.is_secret and not revealed and not vis.unlock_lore:
+            continue
+        dest = vis.loc_by_id.get(edge.to_location_id)
+        dest_name = dest.name if dest else edge.to_location_id
+        entry: dict[str, Any] = {
+            "edge_id": edge.id,
+            "destination": dest_name,
+            "direction_label": edge.direction_label,
+            "compass_direction": edge.compass_direction,
+            "distance": format_distance_meters(edge.distance_meters),
+            "travel": format_exit_travel_phrase(
+                edge.distance_meters, edge.speed_modifier, edge.travel_mode
+            ),
+            "speed_modifier": edge.speed_modifier,
+            "travel_mode": edge.travel_mode,
+            "obstacles": list(edge.obstacles),
+            "is_blocked": bool(edge.is_blocked),
+        }
+        if edge.is_secret:
+            entry["secret_status"] = (
+                "Secret · Discovered" if revealed else "Secret · Hidden"
+            )
+        exits.append(entry)
+    return exits
 
 
 def _is_lore_visible(
@@ -604,6 +665,21 @@ def _serialize_pinned_mention(
         ]
         if loc.environmental_tags:
             lines.append("Tags: " + ", ".join(loc.environmental_tags))
+        permitted_exits = _visible_location_exits_for_gm(loc.id, vis)
+        if permitted_exits:
+            exit_strs = []
+            for ex in permitted_exits:
+                tags = [ex["distance"], ex["travel"]]
+                if ex["obstacles"]:
+                    tags.append("obstacles: " + ", ".join(ex["obstacles"]))
+                if ex["is_blocked"]:
+                    tags.append("Blocked")
+                if "secret_status" in ex:
+                    tags.append(ex["secret_status"])
+                exit_strs.append(
+                    f"- [{ex['compass_direction'] or 'N'}] {ex['direction_label']} -> {ex['destination']} ({'; '.join(tags)})"
+                )
+            lines.append("Connections:\n" + "\n".join(exit_strs))
         permitted_loc_lore = [
             ln for ln in loc.lore_nodes if _is_lore_visible(ln, vis, owner_location_id=loc.id)
         ]

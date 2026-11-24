@@ -252,6 +252,7 @@ def assemble_four_zone_messages(
     recall_budget_prose_tokens: int | None = None,
     active_parties: list[PartyRecord] | None = None,
     budget_report_out: list[Phase4BudgetReport] | None = None,
+    newly_discovered_edge_ids: set[str] | None = None,
 ) -> list[dict[str, str]]:
     """Construct the complete 4-Zone OpenAI messages array for the Main Actor Model."""
     eff_is_solo = bool(
@@ -389,6 +390,7 @@ def assemble_four_zone_messages(
             if active_parties is not None
             else list(leaf_turn.world_snapshot.parties or [])
         ),
+        newly_discovered_edge_ids=newly_discovered_edge_ids,
     )
     zone4_msg = {"role": "user", "content": zone4_content}
 

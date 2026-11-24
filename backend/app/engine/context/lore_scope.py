@@ -27,6 +27,7 @@ from app.schemas.world import (
     LocationContainer,
     LocationNode,
     LoreNode,
+    NeighborLocationView,
     WorldRecord,
 )
 from collections.abc import (
@@ -609,6 +610,113 @@ def _select_scoped_lore_for_turn(
             selected.append(secret)
 
     return selected
+
+
+_EDGE_DISCOVERY_STOPWORDS = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "from",
+        "with",
+        "into",
+        "back",
+        "way",
+        "door",
+        "passage",
+        "return",
+        "path",
+        "route",
+        "corridor",
+        "hallway",
+        "exit",
+    }
+)
+
+
+def _extract_secret_edge_keywords(nb: NeighborLocationView) -> list[str]:
+    """Build match phrases/tokens from a secret link's obstacles, direction label, and destination name."""
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for obs in nb.obstacles or []:
+        phrase = obs.strip().lower()
+        if phrase and phrase not in seen:
+            seen.add(phrase)
+            keywords.append(phrase)
+    for tok in _WORD_TOKEN_RE.findall(
+        f"{nb.direction_label} {nb.destination.name}".lower()
+    ):
+        if len(tok) >= 4 and tok not in _EDGE_DISCOVERY_STOPWORDS and tok not in seen:
+            seen.add(tok)
+            keywords.append(tok)
+    return keywords
+
+
+def select_newly_discovered_secret_edges(
+    undiscovered_secret_neighbors: Sequence[NeighborLocationView],
+    *,
+    user_message: str = "",
+    pre_turn: PreTurnAnalysis | None = None,
+    dice_mode: str = "auto",
+    narrator_directive: str | None = None,
+) -> list[NeighborLocationView]:
+    """Select secret links uncovered this turn via discovery/keyword rolls or diceless search intent."""
+    if not undiscovered_secret_neighbors:
+        return []
+
+    all_rolls = []
+    if pre_turn is not None:
+        if pre_turn.character_rolls:
+            all_rolls.extend(pre_turn.character_rolls.values())
+        elif pre_turn.resolved_roll is not None:
+            all_rolls.append(pre_turn.resolved_roll)
+
+    succeeding_rolls = [
+        r for r in all_rolls if r.outcome_tier in ("Clean Success", "Critical Success")
+    ]
+    has_only_failed_rolls = bool(all_rolls) and not succeeding_rolls
+
+    user_lower = (user_message or "").lower()
+    directive_lower = (narrator_directive or "").lower()
+    roll_signal_lower = ""
+    has_discovery_roll_success = False
+    if succeeding_rolls:
+        roll_signal_lower = " ".join(
+            f"{r.action_description} {r.skill_or_approach}" for r in succeeding_rolls
+        ).lower()
+        combined_roll_context = f"{roll_signal_lower} {user_lower}"
+        has_discovery_roll_success = any(
+            stem in combined_roll_context for stem in _DISCOVERY_CHECK_STEMS
+        )
+
+    has_diceless_search_intent = dice_mode == "disabled" and any(
+        stem in user_lower for stem in _DISCOVERY_CHECK_STEMS
+    )
+
+    discovered: list[NeighborLocationView] = []
+    for nb in undiscovered_secret_neighbors:
+        keywords = _extract_secret_edge_keywords(nb)
+        if directive_lower and any(_tag_matches_text(kw, directive_lower) for kw in keywords):
+            discovered.append(nb)
+            continue
+
+        if has_only_failed_rolls:
+            continue
+
+        if succeeding_rolls:
+            if has_discovery_roll_success or any(
+                _tag_matches_text(kw, roll_signal_lower) for kw in keywords
+            ):
+                discovered.append(nb)
+            continue
+
+        if dice_mode == "disabled":
+            if has_diceless_search_intent or (
+                user_lower and any(_tag_matches_text(kw, user_lower) for kw in keywords)
+            ):
+                discovered.append(nb)
+
+    return discovered
 
 
 def select_active_location_lore_for_turn(

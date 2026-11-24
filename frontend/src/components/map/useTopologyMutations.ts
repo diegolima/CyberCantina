@@ -20,6 +20,12 @@ import {
   validateVisitedAncestorContainment,
 } from "./mapValidation";
 import {
+  MAX_EDGE_OBSTACLES,
+  MAX_EDGE_OBSTACLE_LENGTH,
+  MAX_EDGE_TRAVEL_MODE_LENGTH,
+  clampEdgeSpeedModifier,
+} from "../../utils/spatialDistance";
+import {
   DEFAULT_EXTERIOR_DISTANCE_METERS,
   DEFAULT_FALLBACK_DISTANCE_METERS,
   DEFAULT_INTERIOR_DISTANCE_METERS,
@@ -36,6 +42,41 @@ import {
   type ProjectedDepthTopology,
   type PromotionPromptState,
 } from "./topologyProjection";
+
+export interface EdgePairPatch {
+  distance_meters?: number;
+  speed_modifier?: number;
+  travel_mode?: string | null;
+  obstacles?: string[];
+  is_blocked?: boolean;
+  is_secret?: boolean;
+  direction_label?: string;
+  reciprocal_direction_label?: string;
+}
+
+function normalizeObstacleList(raw: readonly string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    const cleaned = entry
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, MAX_EDGE_OBSTACLE_LENGTH);
+    if (!cleaned) continue;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(cleaned);
+    if (out.length >= MAX_EDGE_OBSTACLES) break;
+  }
+  return out;
+}
+
+function normalizeTravelModeInput(raw: string | null): string | null {
+  if (raw === null) return null;
+  const cleaned = raw.replace(/\s+/g, " ").trim().slice(0, MAX_EDGE_TRAVEL_MODE_LENGTH);
+  return cleaned || null;
+}
 
 /** Resolve a node or container supernode to its active gateway location and candidate members. */
 export function resolveNodeConnectionEndpoint(params: {
@@ -109,7 +150,11 @@ export function buildBidirectionalEdgePair(params: {
       direction_label: `Passage to ${toLoc.name}`,
       compass_direction: direction,
       distance_meters: distanceMeters,
-      is_locked_or_hidden: false,
+      speed_modifier: 1,
+      travel_mode: null,
+      obstacles: [],
+      is_blocked: false,
+      is_secret: false,
     },
   ];
   if (bidirectional) {
@@ -121,7 +166,11 @@ export function buildBidirectionalEdgePair(params: {
       direction_label: `Return to ${fromLoc.name}`,
       compass_direction: revSlot,
       distance_meters: distanceMeters,
-      is_locked_or_hidden: false,
+      speed_modifier: 1,
+      travel_mode: null,
+      obstacles: [],
+      is_blocked: false,
+      is_secret: false,
     });
   }
   return edges;
@@ -165,9 +214,7 @@ export interface UseTopologyMutationsParams {
   setStandaloneContainerModal: React.Dispatch<
     React.SetStateAction<StandaloneContainerCreateState | null>
   >;
-  setMultiEdgeModalEdges: React.Dispatch<
-    React.SetStateAction<LocationEdge[] | null>
-  >;
+  onEdgesRemoved?: (removedIds: Set<string>) => void;
   setPromotionPrompt: React.Dispatch<
     React.SetStateAction<PromotionPromptState | null>
   >;
@@ -203,7 +250,7 @@ export function useTopologyMutations({
   setGroupModal,
   standaloneContainerModal,
   setStandaloneContainerModal,
-  setMultiEdgeModalEdges,
+  onEdgesRemoved,
   setPromotionPrompt,
 }: UseTopologyMutationsParams) {
   const patchLocation = useCallback(
@@ -819,7 +866,11 @@ export function useTopologyMutations({
             direction_label: `To ${hubName}`,
             compass_direction: anchorSlot,
             distance_meters: DEFAULT_INTERIOR_DISTANCE_METERS,
-            is_locked_or_hidden: false,
+            speed_modifier: 1,
+            travel_mode: null,
+            obstacles: [],
+            is_blocked: false,
+            is_secret: false,
           },
           {
             id: makeUniqueId("edge_hub_out"),
@@ -829,7 +880,11 @@ export function useTopologyMutations({
             direction_label: `Return to ${anchorNode.name}`,
             compass_direction: backToAnchorSlot,
             distance_meters: DEFAULT_INTERIOR_DISTANCE_METERS,
-            is_locked_or_hidden: false,
+            speed_modifier: 1,
+            travel_mode: null,
+            obstacles: [],
+            is_blocked: false,
+            is_secret: false,
           }
         );
 
@@ -847,7 +902,11 @@ export function useTopologyMutations({
               existingFwd.direction_label || `To ${oldDest?.name ?? "Wing"}`,
             compass_direction: slotToOldDest,
             distance_meters: existingFwd.distance_meters,
-            is_locked_or_hidden: existingFwd.is_locked_or_hidden,
+            speed_modifier: existingFwd.speed_modifier ?? 1,
+            travel_mode: existingFwd.travel_mode ?? null,
+            obstacles: [...(existingFwd.obstacles ?? [])],
+            is_blocked: Boolean(existingFwd.is_blocked),
+            is_secret: Boolean(existingFwd.is_secret),
           },
           {
             id: makeUniqueId("edge_old_rev"),
@@ -857,7 +916,11 @@ export function useTopologyMutations({
             direction_label: `Return to ${hubName}`,
             compass_direction: origRevSlot,
             distance_meters: existingFwd.distance_meters,
-            is_locked_or_hidden: existingFwd.is_locked_or_hidden,
+            speed_modifier: existingFwd.speed_modifier ?? 1,
+            travel_mode: existingFwd.travel_mode ?? null,
+            obstacles: [...(existingFwd.obstacles ?? [])],
+            is_blocked: Boolean(existingFwd.is_blocked),
+            is_secret: Boolean(existingFwd.is_secret),
           }
         );
       } else {
@@ -870,7 +933,11 @@ export function useTopologyMutations({
             direction_label: `To ${hubName}`,
             compass_direction: anchorSlot,
             distance_meters: DEFAULT_INTERIOR_DISTANCE_METERS,
-            is_locked_or_hidden: false,
+            speed_modifier: 1,
+            travel_mode: null,
+            obstacles: [],
+            is_blocked: false,
+            is_secret: false,
           },
           {
             id: makeUniqueId("edge_ha"),
@@ -880,7 +947,11 @@ export function useTopologyMutations({
             direction_label: `Return to ${anchorNode.name}`,
             compass_direction: backToAnchorSlot,
             distance_meters: DEFAULT_INTERIOR_DISTANCE_METERS,
-            is_locked_or_hidden: false,
+            speed_modifier: 1,
+            travel_mode: null,
+            obstacles: [],
+            is_blocked: false,
+            is_secret: false,
           }
         );
       }
@@ -901,7 +972,11 @@ export function useTopologyMutations({
           direction_label: `To ${peerNode.name}`,
           compass_direction: slotToPeer,
           distance_meters: distanceMeters,
-          is_locked_or_hidden: false,
+          speed_modifier: 1,
+          travel_mode: null,
+          obstacles: [],
+          is_blocked: false,
+          is_secret: false,
         },
         {
           id: makeUniqueId("edge_peer_rev"),
@@ -911,7 +986,11 @@ export function useTopologyMutations({
           direction_label: `To ${hubName}`,
           compass_direction: slotFromPeer,
           distance_meters: distanceMeters,
-          is_locked_or_hidden: false,
+          speed_modifier: 1,
+          travel_mode: null,
+          obstacles: [],
+          is_blocked: false,
+          is_secret: false,
         }
       );
 
@@ -1525,123 +1604,91 @@ export function useTopologyMutations({
     [mode, workingLocations, workingContainers, workingEdges, commitNextGraph]
   );
 
-  const handleUpdateEdgeDistance = useCallback(
-    (edgeId: string, distanceMeters: number) => {
+  const handlePatchEdgePair = useCallback(
+    (edgeId: string, patch: EdgePairPatch) => {
+      if (isMutatingLocked) return;
       const target = workingEdges.find((e) => e.id === edgeId);
       if (!target) return;
-      const clamped = clampEdgeDistanceMeters(
-        distanceMeters,
-        target.distance_meters
-      );
-      const nextEdges = workingEdges.map((e) => {
-        if (
-          e.id === edgeId ||
-          (e.from_location_id === target.to_location_id &&
-            e.to_location_id === target.from_location_id)
-        ) {
-          return { ...e, distance_meters: clamped };
-        }
-        return e;
-      });
-      commitNextGraph({
-        containers: workingContainers,
-        locations: workingLocations,
-        edges: nextEdges,
-      });
-    },
-    [workingEdges, workingContainers, workingLocations, commitNextGraph]
-  );
 
-  const handleToggleEdgeLocked = useCallback(
-    (edgeId: string) => {
-      const target = workingEdges.find((e) => e.id === edgeId);
-      if (!target) return;
-      const nextVal = !target.is_locked_or_hidden;
-      const nextEdges = workingEdges.map((e) => {
-        if (
-          e.id === edgeId ||
-          (e.from_location_id === target.to_location_id &&
-            e.to_location_id === target.from_location_id)
-        ) {
-          return { ...e, is_locked_or_hidden: nextVal };
-        }
-        return e;
-      });
-      commitNextGraph({
-        containers: workingContainers,
-        locations: workingLocations,
-        edges: nextEdges,
-      });
-    },
-    [workingEdges, workingContainers, workingLocations, commitNextGraph]
-  );
+      const isReciprocal = (e: LocationEdge) =>
+        e.from_location_id === target.to_location_id &&
+        e.to_location_id === target.from_location_id;
 
-  const handleUpdateEdgeLabel = useCallback(
-    (edgeId: string, directionLabel: string) => {
-      const trimmed = directionLabel.trim();
-      if (!trimmed) return;
-      const target = workingEdges.find((e) => e.id === edgeId);
-      if (!target || target.direction_label === trimmed) return;
-      const nextEdges = workingEdges.map((e) =>
-        e.id === edgeId ? { ...e, direction_label: trimmed } : e
-      );
-      commitNextGraph({
-        containers: workingContainers,
-        locations: workingLocations,
-        edges: nextEdges,
-      });
-    },
-    [workingEdges, workingContainers, workingLocations, commitNextGraph]
-  );
+      const nextDistance =
+        patch.distance_meters !== undefined
+          ? clampEdgeDistanceMeters(patch.distance_meters, target.distance_meters)
+          : undefined;
+      const nextSpeed =
+        patch.speed_modifier !== undefined
+          ? clampEdgeSpeedModifier(patch.speed_modifier, target.speed_modifier)
+          : undefined;
+      const hasTravelMode = Object.prototype.hasOwnProperty.call(patch, "travel_mode");
+      const nextTravelMode = hasTravelMode
+        ? normalizeTravelModeInput(patch.travel_mode ?? null)
+        : undefined;
+      const nextObstacles =
+        patch.obstacles !== undefined ? normalizeObstacleList(patch.obstacles) : undefined;
+      const nextPrimaryLabel =
+        patch.direction_label !== undefined ? patch.direction_label.trim() : undefined;
+      const nextReciprocalLabel =
+        patch.reciprocal_direction_label !== undefined
+          ? patch.reciprocal_direction_label.trim()
+          : undefined;
 
-  const handleCommitEdgeEdits = useCallback(
-    (
-      updates: Array<{
-        edgeId: string;
-        distanceMeters?: number;
-        directionLabel?: string;
-      }>
-    ) => {
-      if (updates.length === 0) return;
-      let nextEdges = workingEdges;
       let changed = false;
+      const nextEdges = workingEdges.map((e) => {
+        const isPrimary = e.id === edgeId;
+        const isRev = !isPrimary && isReciprocal(e);
+        if (!isPrimary && !isRev) return e;
 
-      for (const upd of updates) {
-        const target = nextEdges.find((e) => e.id === upd.edgeId);
-        if (!target) continue;
+        const updated: LocationEdge = { ...e };
+        let itemChanged = false;
 
-        if (upd.distanceMeters !== undefined) {
-          const clamped = clampEdgeDistanceMeters(
-            upd.distanceMeters,
-            target.distance_meters
-          );
-          nextEdges = nextEdges.map((e) => {
-            if (
-              (e.id === upd.edgeId ||
-                (e.from_location_id === target.to_location_id &&
-                  e.to_location_id === target.from_location_id)) &&
-              e.distance_meters !== clamped
-            ) {
-              changed = true;
-              return { ...e, distance_meters: clamped };
-            }
-            return e;
-          });
+        if (nextDistance !== undefined && updated.distance_meters !== nextDistance) {
+          updated.distance_meters = nextDistance;
+          itemChanged = true;
         }
-
-        if (upd.directionLabel !== undefined) {
-          const trimmed = upd.directionLabel.trim();
-          if (trimmed) {
-            nextEdges = nextEdges.map((e) => {
-              if (e.id === upd.edgeId && e.direction_label !== trimmed) {
-                changed = true;
-                return { ...e, direction_label: trimmed };
-              }
-              return e;
-            });
+        if (nextSpeed !== undefined && Math.abs(updated.speed_modifier - nextSpeed) > 1e-6) {
+          updated.speed_modifier = nextSpeed;
+          itemChanged = true;
+        }
+        if (hasTravelMode && (updated.travel_mode ?? null) !== nextTravelMode) {
+          updated.travel_mode = nextTravelMode ?? null;
+          itemChanged = true;
+        }
+        if (nextObstacles !== undefined) {
+          const prevObs = updated.obstacles ?? [];
+          if (
+            prevObs.length !== nextObstacles.length ||
+            prevObs.some((val, idx) => val !== nextObstacles[idx])
+          ) {
+            updated.obstacles = nextObstacles;
+            itemChanged = true;
           }
         }
-      }
+        if (patch.is_blocked !== undefined && updated.is_blocked !== patch.is_blocked) {
+          updated.is_blocked = patch.is_blocked;
+          itemChanged = true;
+        }
+        if (patch.is_secret !== undefined && updated.is_secret !== patch.is_secret) {
+          updated.is_secret = patch.is_secret;
+          itemChanged = true;
+        }
+        if (isPrimary && nextPrimaryLabel && updated.direction_label !== nextPrimaryLabel) {
+          updated.direction_label = nextPrimaryLabel;
+          itemChanged = true;
+        }
+        if (isRev && nextReciprocalLabel && updated.direction_label !== nextReciprocalLabel) {
+          updated.direction_label = nextReciprocalLabel;
+          itemChanged = true;
+        }
+
+        if (itemChanged) {
+          changed = true;
+          return updated;
+        }
+        return e;
+      });
 
       if (!changed) return;
       commitNextGraph({
@@ -1650,7 +1697,61 @@ export function useTopologyMutations({
         edges: nextEdges,
       });
     },
-    [workingEdges, workingContainers, workingLocations, commitNextGraph]
+    [
+      isMutatingLocked,
+      workingEdges,
+      workingContainers,
+      workingLocations,
+      commitNextGraph,
+    ]
+  );
+
+  const handleUpdateEdgeDistance = useCallback(
+    (edgeId: string, distanceMeters: number) => {
+      handlePatchEdgePair(edgeId, { distance_meters: distanceMeters });
+    },
+    [handlePatchEdgePair]
+  );
+
+  const handleToggleEdgeBlocked = useCallback(
+    (edgeId: string) => {
+      const target = workingEdges.find((e) => e.id === edgeId);
+      if (!target) return;
+      handlePatchEdgePair(edgeId, { is_blocked: !target.is_blocked });
+    },
+    [workingEdges, handlePatchEdgePair]
+  );
+
+  const handleToggleEdgeSecret = useCallback(
+    (edgeId: string) => {
+      const target = workingEdges.find((e) => e.id === edgeId);
+      if (!target) return;
+      handlePatchEdgePair(edgeId, { is_secret: !target.is_secret });
+    },
+    [workingEdges, handlePatchEdgePair]
+  );
+
+  const handleUpdateEdgeLabel = useCallback(
+    (edgeId: string, directionLabel: string) => {
+      handlePatchEdgePair(edgeId, { direction_label: directionLabel });
+    },
+    [handlePatchEdgePair]
+  );
+
+  const canDeleteEdge = useCallback(
+    (edgeId: string): { allowed: boolean; reason?: string } => {
+      if (mode !== "editor") {
+        return {
+          allowed: false,
+          reason: "Links can only be deleted in the World Editor.",
+        };
+      }
+      if (!workingEdges.some((e) => e.id === edgeId)) {
+        return { allowed: false, reason: "Link no longer exists." };
+      }
+      return { allowed: true };
+    },
+    [mode, workingEdges]
   );
 
   const deleteEdgeIds = useCallback(
@@ -1667,11 +1768,9 @@ export function useTopologyMutations({
           .filter((e) => !nextEdges.includes(e))
           .map((e) => e.id)
       );
-      setMultiEdgeModalEdges((prev) =>
-        prev ? prev.filter((e) => !removedIds.has(e.id)) : null
-      );
+      onEdgesRemoved?.(removedIds);
     },
-    [workingEdges, workingContainers, workingLocations, commitNextGraph, setMultiEdgeModalEdges]
+    [workingEdges, workingContainers, workingLocations, commitNextGraph, onEdgesRemoved]
   );
 
   const handleDeleteEdge = useCallback(
@@ -1708,14 +1807,16 @@ export function useTopologyMutations({
     canDeleteContainer,
     canConvertLocation,
     canMoveOutToParent,
+    canDeleteEdge,
     handleDeleteLocation,
     handleDeleteContainer,
     handleConvertLocationToContainer,
     handleSetStartingLocation,
+    handlePatchEdgePair,
     handleUpdateEdgeDistance,
     handleUpdateEdgeLabel,
-    handleCommitEdgeEdits,
-    handleToggleEdgeLocked,
+    handleToggleEdgeBlocked,
+    handleToggleEdgeSecret,
     handleDeleteEdge,
     handleDeleteEdgeGroup,
   };

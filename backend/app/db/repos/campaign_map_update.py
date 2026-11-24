@@ -14,7 +14,12 @@ from app.schemas.world import (
     LocationContainer,
     LocationEdge,
     LocationNode,
+    is_edge_revealed,
     normalize_compass_direction,
+    normalize_edge_obstacles,
+    normalize_edge_speed_modifier,
+    normalize_edge_travel_mode,
+    validate_world_reachability,
 )
 from app.db.repos.base import (
     utc_now_iso,
@@ -61,6 +66,23 @@ class CampaignMapUpdateMixin:
         orig_conts = {c.id: c for c in current_world.containers}
         orig_locs = {l.id: l for l in current_world.locations}
         orig_edges = {e.id: e for e in current_world.edges}
+        gm_unlocked = bool(campaign.world_settings.unlock_lore)
+        revealed_ids, revealed_pairs = self._resolve_revealed_edge_state(
+            campaign.world_id,
+            leaf_turn.world_snapshot.revealed_edge_ids,
+        )
+        hidden_secret_orig_edge_ids = {
+            eid
+            for eid, e in orig_edges.items()
+            if e.is_secret
+            and not is_edge_revealed(
+                e.id,
+                e.from_location_id,
+                e.to_location_id,
+                revealed_ids,
+                revealed_pairs,
+            )
+        }
 
         def _ancestor_chain(
             start_cont_id: str | None, c_map: dict[str, LocationContainer]
@@ -478,6 +500,16 @@ class CampaignMapUpdateMixin:
                 if mapped_from not in valid_new_loc_ids or mapped_to not in valid_new_loc_ids:
                     continue
                 if e.id in orig_edges and not e.id.startswith("new_"):
+                    orig_e = orig_edges[e.id]
+                    if not gm_unlocked:
+                        if e.id in hidden_secret_orig_edge_ids:
+                            raise PermissionError(
+                                "Unlock Lore & Secrets (GM Mode) is required to edit undiscovered secret links."
+                            )
+                        if bool(e.is_secret) != bool(orig_e.is_secret):
+                            raise PermissionError(
+                                "Unlock Lore & Secrets (GM Mode) is required to change a link's Secret status."
+                            )
                     payload_edges_by_orig_id[e.id] = e.model_copy(
                         update={
                             "from_location_id": mapped_from,
@@ -485,6 +517,10 @@ class CampaignMapUpdateMixin:
                         }
                     )
                 else:
+                    if not gm_unlocked and bool(e.is_secret):
+                        raise PermissionError(
+                            "Unlock Lore & Secrets (GM Mode) is required to create secret links."
+                        )
                     new_edges.append(
                         e.model_copy(
                             update={
@@ -494,8 +530,41 @@ class CampaignMapUpdateMixin:
                         )
                     )
 
+            # Validate full graph reachability after preserving omitted undiscovered secret links
+            effective_edges_for_reach: list[LocationEdge] = [
+                *payload_edges_by_orig_id.values(),
+                *new_edges,
+            ]
+            if not gm_unlocked:
+                for hidden_eid in hidden_secret_orig_edge_ids:
+                    if hidden_eid not in payload_edges_by_orig_id:
+                        orig_hidden = orig_edges[hidden_eid]
+                        m_from = loc_id_remap.get(
+                            orig_hidden.from_location_id, orig_hidden.from_location_id
+                        )
+                        m_to = loc_id_remap.get(
+                            orig_hidden.to_location_id, orig_hidden.to_location_id
+                        )
+                        if m_from in valid_new_loc_ids and m_to in valid_new_loc_ids:
+                            effective_edges_for_reach.append(
+                                orig_hidden.model_copy(
+                                    update={
+                                        "from_location_id": m_from,
+                                        "to_location_id": m_to,
+                                    }
+                                )
+                            )
+            validate_world_reachability(
+                locations=new_locs,
+                edges=effective_edges_for_reach,
+            )
+
+            remapped_revealed_edges: list[tuple[str, str]] = []
             for orig_eid, orig_e in orig_edges.items():
                 if orig_eid not in payload_edges_by_orig_id:
+                    if not gm_unlocked and orig_eid in hidden_secret_orig_edge_ids:
+                        # Player-mode bundles omit undiscovered secret links; preserve them intact.
+                        continue
                     if orig_e.created_at_turn_id == leaf_turn_id:
                         conn.execute("DELETE FROM location_edges WHERE id = ?", (orig_eid,))
                     else:
@@ -511,13 +580,23 @@ class CampaignMapUpdateMixin:
                     orig_cdir = normalize_compass_direction(
                         orig_e.compass_direction, orig_e.direction_label
                     )
+                    sub_speed = normalize_edge_speed_modifier(sub_e.speed_modifier)
+                    orig_speed = normalize_edge_speed_modifier(orig_e.speed_modifier)
+                    sub_mode = normalize_edge_travel_mode(sub_e.travel_mode)
+                    orig_mode = normalize_edge_travel_mode(orig_e.travel_mode)
+                    sub_obs = normalize_edge_obstacles(sub_e.obstacles)
+                    orig_obs = normalize_edge_obstacles(orig_e.obstacles)
                     edge_changed = (
                         sub_e.from_location_id != orig_e.from_location_id
                         or sub_e.to_location_id != orig_e.to_location_id
                         or sub_e.direction_label.strip() != orig_e.direction_label.strip()
                         or sub_cdir != orig_cdir
                         or int(sub_e.distance_meters) != int(orig_e.distance_meters)
-                        or bool(sub_e.is_locked_or_hidden) != bool(orig_e.is_locked_or_hidden)
+                        or abs(sub_speed - orig_speed) > 1e-6
+                        or sub_mode != orig_mode
+                        or sub_obs != orig_obs
+                        or bool(sub_e.is_blocked) != bool(orig_e.is_blocked)
+                        or bool(sub_e.is_secret) != bool(orig_e.is_secret)
                     )
                     if edge_changed:
                         if orig_e.created_at_turn_id == leaf_turn_id:
@@ -525,7 +604,8 @@ class CampaignMapUpdateMixin:
                                 """
                                 UPDATE location_edges
                                 SET from_location_id = ?, to_location_id = ?, direction_label = ?,
-                                    compass_direction = ?, distance_meters = ?, is_locked_or_hidden = ?
+                                    compass_direction = ?, distance_meters = ?, speed_modifier = ?,
+                                    travel_mode = ?, obstacles_json = ?, is_blocked = ?, is_secret = ?
                                 WHERE id = ?
                                 """,
                                 (
@@ -534,7 +614,11 @@ class CampaignMapUpdateMixin:
                                     sub_e.direction_label.strip() or f"To {sub_e.to_location_id}",
                                     sub_cdir,
                                     max(1, min(MAX_EDGE_DISTANCE_METERS, int(sub_e.distance_meters))),
-                                    1 if sub_e.is_locked_or_hidden else 0,
+                                    sub_speed,
+                                    sub_mode,
+                                    json.dumps(sub_obs),
+                                    1 if sub_e.is_blocked else 0,
+                                    1 if sub_e.is_secret else 0,
                                     orig_eid,
                                 ),
                             )
@@ -543,30 +627,49 @@ class CampaignMapUpdateMixin:
                                 "UPDATE location_edges SET superseded_at_turn_id = ? WHERE id = ?",
                                 (leaf_turn_id, orig_eid),
                             )
-                            new_edges.append(sub_e)
+                            new_eid = f"edge_{uuid.uuid4().hex[:10]}"
+                            remapped_revealed_edges.append((orig_eid, new_eid))
+                            new_edges.append(sub_e.model_copy(update={"id": new_eid}))
 
             for ne in new_edges:
                 cdir = normalize_compass_direction(ne.compass_direction, ne.direction_label)
+                ins_eid = (
+                    ne.id
+                    if ne.id and ne.id.startswith("edge_") and ne.id not in orig_edges
+                    else f"edge_{uuid.uuid4().hex[:10]}"
+                )
                 conn.execute(
                     """
                     INSERT INTO location_edges (
                         id, world_id, from_location_id, to_location_id, direction_label,
-                        compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
+                        compass_direction, distance_meters, speed_modifier, travel_mode,
+                        obstacles_json, is_blocked, is_secret, created_at_turn_id
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        f"edge_{uuid.uuid4().hex[:10]}",
+                        ins_eid,
                         campaign.world_id,
                         ne.from_location_id,
                         ne.to_location_id,
                         ne.direction_label.strip() or "Passage",
                         cdir,
                         max(1, min(MAX_EDGE_DISTANCE_METERS, int(ne.distance_meters))),
-                        1 if ne.is_locked_or_hidden else 0,
+                        normalize_edge_speed_modifier(ne.speed_modifier),
+                        normalize_edge_travel_mode(ne.travel_mode),
+                        json.dumps(normalize_edge_obstacles(ne.obstacles)),
+                        1 if ne.is_blocked else 0,
+                        1 if ne.is_secret else 0,
                         leaf_turn_id,
                     ),
                 )
+
+            self._remap_revealed_edge_ids_in_snapshot(
+                conn,
+                turn_id=leaf_turn_id,
+                world_id=campaign.world_id,
+                remapped_edges=remapped_revealed_edges,
+            )
 
             conn.commit()
         except Exception:

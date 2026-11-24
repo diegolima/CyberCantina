@@ -576,6 +576,19 @@ export function useCampaignTurnActions({
     setBundle(updated);
   };
 
+  const handleToggleCampaignEdgeReveal = async (
+    edgeId: string,
+    revealed: boolean
+  ) => {
+    if (!bundle || isStreaming || isPhase4Running) return;
+    const updated = await api.toggleCampaignEdgeReveal(
+      bundle.campaign.id,
+      edgeId,
+      revealed
+    );
+    setBundle(updated);
+  };
+
   const handleUpdateCampaignMajorEvent = async (
     turnId: string,
     payload: CampaignMajorEventUpdatePayload
@@ -715,6 +728,7 @@ export function useCampaignTurnActions({
     handleUpdateCampaignMemories,
     handleSaveCampaignWorldLore,
     handleToggleCampaignLoreReveal,
+    handleToggleCampaignEdgeReveal,
     handleUpdateCampaignMajorEvent,
     handleDeleteCampaignMajorEvent,
     handleSaveCampaignLocationLore,

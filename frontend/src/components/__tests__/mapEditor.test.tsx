@@ -35,7 +35,6 @@ import {
   GroupIntoContainerModal,
   MapContextMenu,
   MapIconBrowserModal,
-  MultiEdgePopover,
   PassageHubCollisionModal,
   StandaloneContainerCreateModal,
 } from "../map/MapDialogs";
@@ -65,8 +64,9 @@ import {
   parseCommittedEdgeDistance,
   resolveAutoTargetSlot,
   resolveBidirectionalProjectedBundle,
+  resolveBundleLinkPairs,
   resolveEdgePairForDialog,
-  resolveLiveEdgeModalEdges,
+  resolveLinkPairForInspector,
   sanitizeEdgeDistanceInput,
   stepEdgeDistanceDraft,
   syncEdgeLabelsForLocationRename,
@@ -192,7 +192,11 @@ function makeRichWorldFixture() {
       direction_label: "Out onto Canal",
       compass_direction: "E",
       distance_meters: 140,
-      is_locked_or_hidden: false,
+      speed_modifier: 1,
+      travel_mode: null,
+      obstacles: [],
+      is_blocked: false,
+      is_secret: false,
     },
     {
       id: "e2",
@@ -202,7 +206,11 @@ function makeRichWorldFixture() {
       direction_label: "Into Afterlife",
       compass_direction: "W",
       distance_meters: 140,
-      is_locked_or_hidden: false,
+      speed_modifier: 1,
+      travel_mode: null,
+      obstacles: [],
+      is_blocked: false,
+      is_secret: false,
     },
     {
       id: "e3",
@@ -212,7 +220,11 @@ function makeRichWorldFixture() {
       direction_label: "Down to Harbor",
       compass_direction: "S",
       distance_meters: 280,
-      is_locked_or_hidden: false,
+      speed_modifier: 1,
+      travel_mode: null,
+      obstacles: [],
+      is_blocked: false,
+      is_secret: false,
     },
     {
       id: "e4",
@@ -222,7 +234,11 @@ function makeRichWorldFixture() {
       direction_label: "Back to Canal",
       compass_direction: "N",
       distance_meters: 280,
-      is_locked_or_hidden: false,
+      speed_modifier: 1,
+      travel_mode: null,
+      obstacles: [],
+      is_blocked: false,
+      is_secret: false,
     },
   ];
 
@@ -680,7 +696,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
           direction_label: "Out onto Canal",
           compass_direction: "E",
           distance_meters: 140,
-          is_locked_or_hidden: false,
+          speed_modifier: 1,
+          travel_mode: null,
+          obstacles: [],
+          is_blocked: false,
+          is_secret: false,
           destination: locations[1],
         },
       ],
@@ -831,7 +851,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
           direction_label: "VIP stairs",
           compass_direction: "N",
           distance_meters: 20,
-          is_locked_or_hidden: false,
+          speed_modifier: 1,
+          travel_mode: null,
+          obstacles: [],
+          is_blocked: false,
+          is_secret: false,
           destination: mixedLocations[3],
         },
         {
@@ -839,7 +863,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
           direction_label: "Out onto Canal",
           compass_direction: "NE",
           distance_meters: 140,
-          is_locked_or_hidden: false,
+          speed_modifier: 1,
+          travel_mode: null,
+          obstacles: [],
+          is_blocked: false,
+          is_secret: false,
           destination: mixedLocations[1],
         },
         {
@@ -847,7 +875,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
           direction_label: "Main floor",
           compass_direction: "E",
           distance_meters: 20,
-          is_locked_or_hidden: false,
+          speed_modifier: 1,
+          travel_mode: null,
+          obstacles: [],
+          is_blocked: false,
+          is_secret: false,
           destination: mixedLocations[4],
         },
         {
@@ -855,7 +887,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
           direction_label: "Fire exit",
           compass_direction: "S",
           distance_meters: 100,
-          is_locked_or_hidden: true,
+          speed_modifier: 1,
+          travel_mode: null,
+          obstacles: [],
+          is_blocked: true,
+          is_secret: false,
           destination: mixedLocations[5],
         },
       ],
@@ -884,7 +920,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
           direction_label: "Through side door",
           compass_direction: "N",
           distance_meters: 70,
-          is_locked_or_hidden: false,
+          speed_modifier: 1,
+          travel_mode: null,
+          obstacles: [],
+          is_blocked: false,
+          is_secret: false,
           destination: mixedLocations[0],
         },
       ],
@@ -939,7 +979,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
           direction_label: "Into Afterlife",
           compass_direction: "N",
           distance_meters: 210,
-          is_locked_or_hidden: false,
+          speed_modifier: 1,
+          travel_mode: null,
+          obstacles: [],
+          is_blocked: false,
+          is_secret: false,
           destination: mixedLocations[0], // cont_club (L1 -> L2 -> L3)
         },
         {
@@ -947,7 +991,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
           direction_label: "Along canal",
           compass_direction: "E",
           distance_meters: 280,
-          is_locked_or_hidden: false,
+          speed_modifier: 1,
+          travel_mode: null,
+          obstacles: [],
+          is_blocked: false,
+          is_secret: false,
           destination: mixedLocations[1], // cont_district (L2 -> L3)
         },
         {
@@ -955,7 +1003,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
           direction_label: "Past city wall",
           compass_direction: "S",
           distance_meters: 420,
-          is_locked_or_hidden: false,
+          speed_modifier: 1,
+          travel_mode: null,
+          obstacles: [],
+          is_blocked: false,
+          is_secret: false,
           destination: mixedLocations[5], // uncontained (null)
         },
       ],
@@ -1001,7 +1053,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
           direction_label: "VIP stairs",
           compass_direction: "N",
           distance_meters: 20,
-          is_locked_or_hidden: false,
+          speed_modifier: 1,
+          travel_mode: null,
+          obstacles: [],
+          is_blocked: false,
+          is_secret: false,
           destination: mixedLocations[3], // cont_club (same L1)
         },
         {
@@ -1009,7 +1065,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
           direction_label: "Cross-alley",
           compass_direction: "E",
           distance_meters: 100,
-          is_locked_or_hidden: false,
+          speed_modifier: 1,
+          travel_mode: null,
+          obstacles: [],
+          is_blocked: false,
+          is_secret: false,
           destination: clinicLoc, // cont_clinic (different L1 under same L2/L3)
         },
         {
@@ -1017,7 +1077,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
           direction_label: "Street exit",
           compass_direction: "S",
           distance_meters: 100,
-          is_locked_or_hidden: false,
+          speed_modifier: 1,
+          travel_mode: null,
+          obstacles: [],
+          is_blocked: false,
+          is_secret: false,
           destination: mixedLocations[1], // cont_district (parent L2)
         },
       ],
@@ -1266,7 +1330,6 @@ describe("Interactive Map Editor & Mini-Map", () => {
         setSelectedLocId={() => {}}
         setSelectedContainerId={() => {}}
         setContextMenu={() => {}}
-        setMultiEdgeModalEdges={() => {}}
         openContextMenuAt={() => {}}
         handleUpdateEdgeDistance={() => {}}
         handleDeleteEdge={() => {}}
@@ -1296,7 +1359,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
       direction_label: "Fire escape",
       compass_direction: "S",
       distance_meters: 210,
-      is_locked_or_hidden: false,
+      speed_modifier: 1,
+      travel_mode: null,
+      obstacles: [],
+      is_blocked: false,
+      is_secret: false,
     };
     const extraRev: LocationEdge = {
       id: "e_extra_rev",
@@ -1306,7 +1373,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
       direction_label: "Up stairs",
       compass_direction: "N",
       distance_meters: 210,
-      is_locked_or_hidden: false,
+      speed_modifier: 1,
+      travel_mode: null,
+      obstacles: [],
+      is_blocked: false,
+      is_secret: false,
     };
     const afterBundleDelete = filterEdgesAfterDeletion(
       [...edges, extraEdge, extraRev],
@@ -1387,7 +1458,7 @@ describe("Interactive Map Editor & Mini-Map", () => {
     expect(l2ContHtml).not.toContain("Suggest Tags");
   });
 
-  it("keeps live multi-digit travel distances synchronized in inline editor and MultiEdgePopover", () => {
+  it("keeps live multi-digit travel distances synchronized in inline editor and MapDetailsDrawer Link Inspector", () => {
     const { containers, locations, edges } = makeRichWorldFixture();
 
     // 1. Distance input sanitization permits empty intermediate state, decimal km, and unit chars
@@ -1396,36 +1467,55 @@ describe("Interactive Map Editor & Mini-Map", () => {
     expect(sanitizeEdgeDistanceInput("1.5km")).toBe("1.5km");
     expect(sanitizeEdgeDistanceInput("2a5m")).toBe("25m");
 
-    // 2. resolveLiveEdgeModalEdges keeps MultiEdgePopover synchronized with workingEdges mutations
-    const snapshot = [edges[2]];
+    // 2. resolveLinkPairForInspector keeps live Link Pair synchronized with workingEdges mutations
     const updatedWorkingEdges = edges.map((e) =>
-      e.id === edges[2].id ? { ...e, distance_meters: 1500, is_locked_or_hidden: true } : e
+      e.id === edges[2].id
+        ? { ...e, distance_meters: 1500, is_blocked: true }
+        : e
     );
-    const liveResolved = resolveLiveEdgeModalEdges(snapshot, updatedWorkingEdges);
-    expect(liveResolved).toHaveLength(1);
-    expect(liveResolved?.[0].distance_meters).toBe(1500);
-    expect(liveResolved?.[0].is_locked_or_hidden).toBe(true);
-    expect(resolveLiveEdgeModalEdges([], updatedWorkingEdges)).toBeNull();
-    expect(
-      resolveLiveEdgeModalEdges(snapshot, updatedWorkingEdges.filter((e) => e.id !== edges[2].id))
-    ).toBeNull();
+    const livePair = resolveLinkPairForInspector(
+      edges[2].id,
+      updatedWorkingEdges
+    );
+    expect(livePair).not.toBeNull();
+    expect(livePair?.primary.distance_meters).toBe(1500);
+    expect(livePair?.primary.is_blocked).toBe(true);
+    expect(livePair?.reciprocal?.id).toBe(edges[3].id);
+    expect(resolveLinkPairForInspector("missing_edge", updatedWorkingEdges)).toBeNull();
 
-    // 3. MultiEdgePopover renders decimal text input initialized to live distance_meters + compact km/walk caption
-    const locMap = new Map(locations.map((l) => [l.id, l]));
-    const popoverHtml = renderToStaticMarkup(
-      <MultiEdgePopover
-        edges={liveResolved}
-        locationMap={locMap}
+    // 3. MapDetailsDrawer Link Pair view renders distance input initialized to live distance_meters + compact km/duration summary
+    const drawerLinkHtml = renderToStaticMarkup(
+      <MapDetailsDrawer
+        mode="editor"
+        isMutatingLocked={false}
+        selectedLocation={null}
+        selectedContainer={null}
+        selectedEdgePair={livePair}
+        allEdges={updatedWorkingEdges}
+        containers={containers}
+        allLocations={locations}
+        dynamicPortalIds={new Set()}
+        externalPortals={[]}
+        containerStats={null}
+        depthLabels={{
+          1: "Building / Landmark",
+          2: "District / Zone",
+          3: "City / Settlement",
+          4: "Region / Planet / Realm",
+        }}
         onClose={() => {}}
-        onUpdateDistance={() => {}}
-        onToggleLocked={() => {}}
+        onPatchLocation={() => {}}
+        onPatchContainer={() => {}}
+        onResetCoordinates={() => {}}
+        onDrillIntoContainer={() => {}}
+        onPatchEdgePair={() => {}}
         onDeleteEdge={() => {}}
       />
     );
-    expect(popoverHtml).toContain("Boundary Passages (1)");
-    expect(popoverHtml).toContain('inputMode="decimal"');
-    expect(popoverHtml).toContain('value="1500"');
-    expect(popoverHtml).toContain("1.5km · ~21 min");
+    expect(drawerLinkHtml).toContain("Link Pair");
+    expect(drawerLinkHtml).toContain('inputMode="decimal"');
+    expect(drawerLinkHtml).toContain('value="1500"');
+    expect(drawerLinkHtml).toContain("1.5km · ~21 min");
 
     // 4. Editing either direction of an edge pair hides its SVG badge and shows typed value
     const projected = projectTopologyForDepth(
@@ -1484,7 +1574,6 @@ describe("Interactive Map Editor & Mini-Map", () => {
         setSelectedLocId={() => {}}
         setSelectedContainerId={() => {}}
         setContextMenu={() => {}}
-        setMultiEdgeModalEdges={() => {}}
         openContextMenuAt={() => {}}
         handleUpdateEdgeDistance={() => {}}
         handleDeleteEdge={() => {}}
@@ -1965,7 +2054,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
         direction_label: "Passage to Passage (1-M)",
         compass_direction: "N",
         distance_meters: 140,
-        is_locked_or_hidden: false,
+        speed_modifier: 1,
+        travel_mode: null,
+        obstacles: [],
+        is_blocked: false,
+        is_secret: false,
       },
       {
         id: "t2",
@@ -1975,7 +2068,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
         direction_label: "Return to Passage (1-M)",
         compass_direction: "S",
         distance_meters: 140,
-        is_locked_or_hidden: false,
+        speed_modifier: 1,
+        travel_mode: null,
+        obstacles: [],
+        is_blocked: false,
+        is_secret: false,
       },
       {
         id: "t3",
@@ -1985,7 +2082,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
         direction_label: "To Passage (1-M)",
         compass_direction: "E",
         distance_meters: 140,
-        is_locked_or_hidden: false,
+        speed_modifier: 1,
+        travel_mode: null,
+        obstacles: [],
+        is_blocked: false,
+        is_secret: false,
       },
       {
         id: "t4",
@@ -1995,7 +2096,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
         direction_label: "Back to Passage (1-M)",
         compass_direction: "W",
         distance_meters: 140,
-        is_locked_or_hidden: false,
+        speed_modifier: 1,
+        travel_mode: null,
+        obstacles: [],
+        is_blocked: false,
+        is_secret: false,
       },
       {
         id: "t5",
@@ -2005,7 +2110,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
         direction_label: "Return passage to Passage (1-M)",
         compass_direction: "NE",
         distance_meters: 140,
-        is_locked_or_hidden: false,
+        speed_modifier: 1,
+        travel_mode: null,
+        obstacles: [],
+        is_blocked: false,
+        is_secret: false,
       },
       {
         id: "custom",
@@ -2015,7 +2124,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
         direction_label: "Rusted iron hatch",
         compass_direction: "NW",
         distance_meters: 140,
-        is_locked_or_hidden: true,
+        speed_modifier: 1,
+        travel_mode: null,
+        obstacles: [],
+        is_blocked: true,
+        is_secret: false,
       },
       {
         id: "outgoing",
@@ -2025,7 +2138,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
         direction_label: "Passage to Passage (1-M)",
         compass_direction: "S",
         distance_meters: 140,
-        is_locked_or_hidden: false,
+        speed_modifier: 1,
+        travel_mode: null,
+        obstacles: [],
+        is_blocked: false,
+        is_secret: false,
       },
     ];
 
@@ -2114,7 +2231,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
         direction_label: "Passage to Clinic Bay",
         compass_direction: "W",
         distance_meters: 560,
-        is_locked_or_hidden: false,
+        speed_modifier: 1,
+        travel_mode: null,
+        obstacles: [],
+        is_blocked: false,
+        is_secret: false,
       },
       {
         id: "cx1_rev",
@@ -2124,7 +2245,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
         direction_label: "Return to Main Floor",
         compass_direction: "E",
         distance_meters: 210,
-        is_locked_or_hidden: true,
+        speed_modifier: 1,
+        travel_mode: null,
+        obstacles: [],
+        is_blocked: true,
+        is_secret: false,
       },
       {
         id: "cx2_fwd",
@@ -2134,7 +2259,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
         direction_label: "Passage to Clinic Backdoor",
         compass_direction: "N",
         distance_meters: 420,
-        is_locked_or_hidden: false,
+        speed_modifier: 1,
+        travel_mode: null,
+        obstacles: [],
+        is_blocked: false,
+        is_secret: false,
       },
       {
         id: "cx2_rev",
@@ -2144,7 +2273,11 @@ describe("Interactive Map Editor & Mini-Map", () => {
         direction_label: "Return to Canal Junction",
         compass_direction: "S",
         distance_meters: 420,
-        is_locked_or_hidden: false,
+        speed_modifier: 1,
+        travel_mode: null,
+        obstacles: [],
+        is_blocked: false,
+        is_secret: false,
       },
     ];
     const rootCrossProj = projectTopologyForDepth(
@@ -2165,7 +2298,7 @@ describe("Interactive Map Editor & Mini-Map", () => {
     expect(mergedBundle.passagePairCount).toBe(2);
     expect(mergedBundle.minDistanceMeters).toBe(210);
     expect(mergedBundle.maxDistanceMeters).toBe(560);
-    expect(mergedBundle.containsLockedEdge).toBe(true);
+    expect(mergedBundle.containsBlockedEdge).toBe(true);
     expect(mergedBundle.allEdges).toHaveLength(4);
 
     const crossCoords: Record<string, { x: number; y: number }> = {
@@ -2217,7 +2350,6 @@ describe("Interactive Map Editor & Mini-Map", () => {
         setSelectedLocId={() => {}}
         setSelectedContainerId={() => {}}
         setContextMenu={() => {}}
-        setMultiEdgeModalEdges={() => {}}
         openContextMenuAt={() => {}}
         handleUpdateEdgeDistance={() => {}}
         handleDeleteEdge={() => {}}
@@ -2225,28 +2357,48 @@ describe("Interactive Map Editor & Mini-Map", () => {
         drillIntoContainer={() => {}}
       />
     );
-    expect(crossCanvasHtml).toContain("210m · 2 🔒");
+    expect(crossCanvasHtml).toContain("210m · 2");
+    expect(crossCanvasHtml).toContain("lucide-lock");
     expect(crossCanvasHtml).not.toContain("m · 1");
 
-    // 4. MultiEdgePopover renders editable passage label inputs while preserving Boundary Passages (N)
-    const locMap = new Map(twoContLocs.map((l) => [l.id, l]));
-    const popoverHtml = renderToStaticMarkup(
-      <MultiEdgePopover
-        edges={mergedBundle.allEdges}
-        locationMap={locMap}
+    // 4. MapDetailsDrawer Bundle List View renders unique Link Pairs with drill-in support
+    const bundlePairs = resolveBundleLinkPairs(
+      mergedBundle.allEdges.map((e) => e.id),
+      crossEdges
+    );
+    expect(bundlePairs).toHaveLength(2);
+    const drawerBundleHtml = renderToStaticMarkup(
+      <MapDetailsDrawer
+        mode="editor"
+        isMutatingLocked={false}
+        selectedLocation={null}
+        selectedContainer={null}
+        selectedEdgeBundle={bundlePairs}
+        allEdges={crossEdges}
+        containers={containers}
+        allLocations={twoContLocs}
+        dynamicPortalIds={new Set()}
+        externalPortals={[]}
+        containerStats={null}
+        depthLabels={{
+          1: "Building / Landmark",
+          2: "District / Zone",
+          3: "City / Settlement",
+          4: "Region / Planet / Realm",
+        }}
         onClose={() => {}}
-        onUpdateDistance={() => {}}
-        onUpdateLabel={() => {}}
-        onCommitEdgeEdits={() => {}}
-        onToggleLocked={() => {}}
-        onDeleteEdge={() => {}}
+        onPatchLocation={() => {}}
+        onPatchContainer={() => {}}
+        onResetCoordinates={() => {}}
+        onDrillIntoContainer={() => {}}
+        onSelectEdgePair={() => {}}
       />
     );
-    expect(popoverHtml).toContain("Boundary Passages (4)");
-    expect(popoverHtml).toContain('aria-label="Passage label for Main Floor to Clinic Bay"');
-    expect(popoverHtml).toContain('value="Passage to Clinic Bay"');
+    expect(drawerBundleHtml).toContain("Boundary Passages (2)");
+    expect(drawerBundleHtml).toContain("Passage to Clinic Bay");
+    expect(drawerBundleHtml).toContain("Blocked");
 
-    // 5. MapContextMenu shows label-edit action for single edge & bundle actions for multi-bundle
+    // 5. MapContextMenu shows inspect action for single edge & bundle actions for multi-bundle
     const singleCtxHtml = renderToStaticMarkup(
       <MapContextMenu
         menu={{ x: 10, y: 20, target: { kind: "edge", edgeId: "e1" } }}
@@ -2267,13 +2419,16 @@ describe("Interactive Map Editor & Mini-Map", () => {
         onDeleteLocation={() => {}}
         onDeleteContainer={() => {}}
         onEditEdgeDistance={() => {}}
-        onEditEdgeDetails={() => {}}
-        onToggleEdgeLocked={() => {}}
+        onInspectEdge={() => {}}
+        onToggleEdgeBlocked={() => {}}
+        onToggleEdgeSecret={() => {}}
         onDeleteEdge={() => {}}
         onDeleteEdgeGroup={() => {}}
       />
     );
-    expect(singleCtxHtml).toContain("Edit Passage Labels &amp; Details...");
+    expect(singleCtxHtml).toContain("Inspect Link...");
+    expect(singleCtxHtml).toContain("Mark Blocked");
+    expect(singleCtxHtml).toContain("Mark Secret");
 
     const bundleCtxHtml = renderToStaticMarkup(
       <MapContextMenu
@@ -2304,13 +2459,14 @@ describe("Interactive Map Editor & Mini-Map", () => {
         onDeleteLocation={() => {}}
         onDeleteContainer={() => {}}
         onEditEdgeDistance={() => {}}
-        onEditEdgeDetails={() => {}}
-        onToggleEdgeLocked={() => {}}
+        onInspectEdge={() => {}}
+        onToggleEdgeBlocked={() => {}}
+        onToggleEdgeSecret={() => {}}
         onDeleteEdge={() => {}}
         onDeleteEdgeGroup={() => {}}
       />
     );
-    expect(bundleCtxHtml).toContain("Manage Boundary Passages (2)...");
+    expect(bundleCtxHtml).toContain("Inspect 2 Passages...");
     expect(bundleCtxHtml).toContain("Delete All 2 Passages");
 
     // 6. MapDetailsDrawer renders directionLabel & edit button for externalPortals
@@ -2332,7 +2488,12 @@ describe("Interactive Map Editor & Mini-Map", () => {
             directionLabel: "Passage to Clinic Bay",
             compassDirection: "W",
             distanceMeters: 560,
-            isLockedOrHidden: false,
+            speedModifier: 1,
+            travelMode: null,
+            obstacles: [],
+            isBlocked: false,
+            isSecret: false,
+            isUndiscoveredSecret: false,
           },
         ]}
         containerStats={null}

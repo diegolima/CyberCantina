@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import Literal
 import uuid
 from app.schemas.turn import ImprovisedLocationSpec
@@ -17,12 +18,60 @@ from app.schemas.world import (
     WorldRecord,
     WorldUpdatePayload,
     normalize_compass_direction,
+    normalize_edge_obstacles,
+    normalize_edge_speed_modifier,
+    normalize_edge_travel_mode,
     pick_available_compass_direction,
 )
 
 
 class WorldLocationsMixin:
     """Location containers, neighbors, and improvised location creation."""
+
+    @staticmethod
+    def _insert_edge_row(
+        conn: sqlite3.Connection,
+        *,
+        edge_id: str,
+        world_id: str,
+        from_location_id: str,
+        to_location_id: str,
+        direction_label: str,
+        compass_direction: str | None,
+        distance_meters: int,
+        created_at_turn_id: str | None,
+        speed_modifier: float = 1.0,
+        travel_mode: str | None = None,
+        obstacles: list[str] | None = None,
+        is_blocked: bool = False,
+        is_secret: bool = False,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO location_edges (
+                id, world_id, from_location_id, to_location_id,
+                direction_label, compass_direction, distance_meters,
+                speed_modifier, travel_mode, obstacles_json,
+                is_blocked, is_secret, created_at_turn_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                edge_id,
+                world_id,
+                from_location_id,
+                to_location_id,
+                direction_label,
+                compass_direction,
+                max(1, min(MAX_EDGE_DISTANCE_METERS, int(distance_meters))),
+                normalize_edge_speed_modifier(speed_modifier),
+                normalize_edge_travel_mode(travel_mode),
+                json.dumps(normalize_edge_obstacles(obstacles or [])),
+                1 if is_blocked else 0,
+                1 if is_secret else 0,
+                created_at_turn_id,
+            ),
+        )
 
     def delete_location_container(
         self,
@@ -251,7 +300,11 @@ class WorldLocationsMixin:
                     e.direction_label,
                     e.compass_direction,
                     e.distance_meters,
-                    e.is_locked_or_hidden,
+                    e.speed_modifier,
+                    e.travel_mode,
+                    e.obstacles_json,
+                    e.is_blocked,
+                    e.is_secret,
                     e.created_at_turn_id AS edge_turn_id,
                     e.superseded_at_turn_id AS edge_superseded_turn_id,
                     loc.*
@@ -264,10 +317,11 @@ class WorldLocationsMixin:
 
             neighbors: list[NeighborLocationView] = []
             for r in rows:
+                keys = r.keys()
                 edge_turn = r["edge_turn_id"]
                 edge_sup = r["edge_superseded_turn_id"]
                 loc_turn = r["created_at_turn_id"]
-                loc_sup = r["superseded_at_turn_id"] if "superseded_at_turn_id" in r.keys() else None
+                loc_sup = r["superseded_at_turn_id"] if "superseded_at_turn_id" in keys else None
                 if valid_turn_ids is not None:
                     if edge_turn is not None and edge_turn not in valid_turn_ids:
                         continue
@@ -281,13 +335,27 @@ class WorldLocationsMixin:
                     continue
                 dest = self._row_to_location(r)
                 cdir = normalize_compass_direction(r["compass_direction"], r["direction_label"])
+                raw_obs = []
+                if "obstacles_json" in keys and r["obstacles_json"]:
+                    try:
+                        raw_obs = json.loads(r["obstacles_json"] or "[]")
+                    except Exception:
+                        raw_obs = []
                 neighbors.append(
                     NeighborLocationView(
                         edge_id=r["edge_id"],
                         direction_label=r["direction_label"],
                         compass_direction=cdir,
                         distance_meters=r["distance_meters"],
-                        is_locked_or_hidden=bool(r["is_locked_or_hidden"]),
+                        speed_modifier=normalize_edge_speed_modifier(
+                            r["speed_modifier"] if "speed_modifier" in keys else 1.0
+                        ),
+                        travel_mode=normalize_edge_travel_mode(
+                            r["travel_mode"] if "travel_mode" in keys else None
+                        ),
+                        obstacles=normalize_edge_obstacles(raw_obs),
+                        is_blocked=bool(r["is_blocked"]) if "is_blocked" in keys else False,
+                        is_secret=bool(r["is_secret"]) if "is_secret" in keys else False,
                         destination=dest,
                     )
                 )
@@ -409,43 +477,27 @@ class WorldLocationsMixin:
                         json.dumps(spec.environmental_tags),
                     ),
                 )
-                conn.execute(
-                    """
-                    INSERT INTO location_edges (
-                        id, world_id, from_location_id, to_location_id,
-                        direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
-                    """,
-                    (
-                        fwd_edge_id,
-                        world_id,
-                        from_location_id,
-                        new_loc_id,
-                        spec.entry_direction_label,
-                        assigned_dir,
-                        max(1, min(MAX_EDGE_DISTANCE_METERS, int(spec.distance_meters))),
-                        created_at_turn_id,
-                    ),
+                self._insert_edge_row(
+                    conn,
+                    edge_id=fwd_edge_id,
+                    world_id=world_id,
+                    from_location_id=from_location_id,
+                    to_location_id=new_loc_id,
+                    direction_label=spec.entry_direction_label,
+                    compass_direction=assigned_dir,
+                    distance_meters=spec.distance_meters,
+                    created_at_turn_id=created_at_turn_id,
                 )
-                conn.execute(
-                    """
-                    INSERT INTO location_edges (
-                        id, world_id, from_location_id, to_location_id,
-                        direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
-                    """,
-                    (
-                        rev_edge_id,
-                        world_id,
-                        new_loc_id,
-                        from_location_id,
-                        spec.return_direction_label,
-                        rev_dir,
-                        max(1, min(MAX_EDGE_DISTANCE_METERS, int(spec.distance_meters))),
-                        created_at_turn_id,
-                    ),
+                self._insert_edge_row(
+                    conn,
+                    edge_id=rev_edge_id,
+                    world_id=world_id,
+                    from_location_id=new_loc_id,
+                    to_location_id=from_location_id,
+                    direction_label=spec.return_direction_label,
+                    compass_direction=rev_dir,
+                    distance_meters=spec.distance_meters,
+                    created_at_turn_id=created_at_turn_id,
                 )
                 conn.commit()
             finally:
@@ -523,43 +575,27 @@ class WorldLocationsMixin:
             )
 
             # 2. Connect from_location_id <-> Hub at target_dir
-            conn.execute(
-                """
-                INSERT INTO location_edges (
-                    id, world_id, from_location_id, to_location_id,
-                    direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
-                """,
-                (
-                    f"edge_{uuid.uuid4().hex[:10]}",
-                    world_id,
-                    from_location_id,
-                    hub_id,
-                    f"Passage to {hub_name}",
-                    target_dir,
-                    DEFAULT_INTERIOR_DISTANCE_METERS,
-                    created_at_turn_id,
-                ),
+            self._insert_edge_row(
+                conn,
+                edge_id=f"edge_{uuid.uuid4().hex[:10]}",
+                world_id=world_id,
+                from_location_id=from_location_id,
+                to_location_id=hub_id,
+                direction_label=f"Passage to {hub_name}",
+                compass_direction=target_dir,
+                distance_meters=DEFAULT_INTERIOR_DISTANCE_METERS,
+                created_at_turn_id=created_at_turn_id,
             )
-            conn.execute(
-                """
-                INSERT INTO location_edges (
-                    id, world_id, from_location_id, to_location_id,
-                    direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
-                """,
-                (
-                    f"edge_{uuid.uuid4().hex[:10]}",
-                    world_id,
-                    hub_id,
-                    from_location_id,
-                    f"Back to {from_loc.name}",
-                    hub_back_dir,
-                    DEFAULT_INTERIOR_DISTANCE_METERS,
-                    created_at_turn_id,
-                ),
+            self._insert_edge_row(
+                conn,
+                edge_id=f"edge_{uuid.uuid4().hex[:10]}",
+                world_id=world_id,
+                from_location_id=hub_id,
+                to_location_id=from_location_id,
+                direction_label=f"Back to {from_loc.name}",
+                compass_direction=hub_back_dir,
+                distance_meters=DEFAULT_INTERIOR_DISTANCE_METERS,
+                created_at_turn_id=created_at_turn_id,
             )
 
             # 3. Reconnect existing neighbor(s) in target_dir to the Hub (superseding old direct edges for branch safety)
@@ -594,45 +630,37 @@ class WorldLocationsMixin:
 
                 old_slot = pick_available_compass_direction(target_dir, hub_occupied_dirs)
                 hub_occupied_dirs.add(old_slot)
-                conn.execute(
-                    """
-                    INSERT INTO location_edges (
-                        id, world_id, from_location_id, to_location_id,
-                        direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        f"edge_{uuid.uuid4().hex[:10]}",
-                        world_id,
-                        hub_id,
-                        old_dest_id,
-                        old_nb.direction_label,
-                        old_slot,
-                        old_nb.distance_meters,
-                        1 if old_nb.is_locked_or_hidden else 0,
-                        created_at_turn_id,
-                    ),
+                self._insert_edge_row(
+                    conn,
+                    edge_id=f"edge_{uuid.uuid4().hex[:10]}",
+                    world_id=world_id,
+                    from_location_id=hub_id,
+                    to_location_id=old_dest_id,
+                    direction_label=old_nb.direction_label,
+                    compass_direction=old_slot,
+                    distance_meters=old_nb.distance_meters,
+                    speed_modifier=old_nb.speed_modifier,
+                    travel_mode=old_nb.travel_mode,
+                    obstacles=old_nb.obstacles,
+                    is_blocked=old_nb.is_blocked,
+                    is_secret=old_nb.is_secret,
+                    created_at_turn_id=created_at_turn_id,
                 )
-                conn.execute(
-                    """
-                    INSERT INTO location_edges (
-                        id, world_id, from_location_id, to_location_id,
-                        direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        f"edge_{uuid.uuid4().hex[:10]}",
-                        world_id,
-                        old_dest_id,
-                        hub_id,
-                        f"Return to {hub_name}",
-                        OPPOSITE_COMPASS[old_slot],
-                        old_nb.distance_meters,
-                        1 if old_nb.is_locked_or_hidden else 0,
-                        created_at_turn_id,
-                    ),
+                self._insert_edge_row(
+                    conn,
+                    edge_id=f"edge_{uuid.uuid4().hex[:10]}",
+                    world_id=world_id,
+                    from_location_id=old_dest_id,
+                    to_location_id=hub_id,
+                    direction_label=f"Return to {hub_name}",
+                    compass_direction=OPPOSITE_COMPASS[old_slot],
+                    distance_meters=old_nb.distance_meters,
+                    speed_modifier=old_nb.speed_modifier,
+                    travel_mode=old_nb.travel_mode,
+                    obstacles=old_nb.obstacles,
+                    is_blocked=old_nb.is_blocked,
+                    is_secret=old_nb.is_secret,
+                    created_at_turn_id=created_at_turn_id,
                 )
 
             # 4. Insert the newly explored 9th location and connect it to the Hub
@@ -657,43 +685,27 @@ class WorldLocationsMixin:
             )
             new_slot = pick_available_compass_direction(target_dir, hub_occupied_dirs)
             hub_occupied_dirs.add(new_slot)
-            conn.execute(
-                """
-                INSERT INTO location_edges (
-                    id, world_id, from_location_id, to_location_id,
-                    direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
-                """,
-                (
-                    f"edge_{uuid.uuid4().hex[:10]}",
-                    world_id,
-                    hub_id,
-                    new_loc_id,
-                    spec.entry_direction_label,
-                    new_slot,
-                    max(1, min(MAX_EDGE_DISTANCE_METERS, int(spec.distance_meters))),
-                    created_at_turn_id,
-                ),
+            self._insert_edge_row(
+                conn,
+                edge_id=f"edge_{uuid.uuid4().hex[:10]}",
+                world_id=world_id,
+                from_location_id=hub_id,
+                to_location_id=new_loc_id,
+                direction_label=spec.entry_direction_label,
+                compass_direction=new_slot,
+                distance_meters=spec.distance_meters,
+                created_at_turn_id=created_at_turn_id,
             )
-            conn.execute(
-                """
-                INSERT INTO location_edges (
-                    id, world_id, from_location_id, to_location_id,
-                    direction_label, compass_direction, distance_meters, is_locked_or_hidden, created_at_turn_id
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
-                """,
-                (
-                    f"edge_{uuid.uuid4().hex[:10]}",
-                    world_id,
-                    new_loc_id,
-                    hub_id,
-                    spec.return_direction_label,
-                    OPPOSITE_COMPASS[new_slot],
-                    max(1, min(MAX_EDGE_DISTANCE_METERS, int(spec.distance_meters))),
-                    created_at_turn_id,
-                ),
+            self._insert_edge_row(
+                conn,
+                edge_id=f"edge_{uuid.uuid4().hex[:10]}",
+                world_id=world_id,
+                from_location_id=new_loc_id,
+                to_location_id=hub_id,
+                direction_label=spec.return_direction_label,
+                compass_direction=OPPOSITE_COMPASS[new_slot],
+                distance_meters=spec.distance_meters,
+                created_at_turn_id=created_at_turn_id,
             )
             conn.commit()
         finally:
