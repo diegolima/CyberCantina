@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Compass,
   FolderOpen,
+  LayoutGrid,
   Save,
   Search,
   Sparkles,
@@ -39,6 +40,10 @@ export interface TopologyHeaderToolbarProps {
   activeLocationId?: string;
   onFocusSearchResult?: (match: MapSearchMatch) => void;
   isMobileViewport?: boolean;
+  canAutoLayout?: boolean;
+  autoLayoutDisabled?: boolean;
+  isAutoLayoutPreviewing?: boolean;
+  onPreviewAutoLayout?: () => void;
 }
 
 export const TopologyHeaderToolbar: React.FC<TopologyHeaderToolbarProps> = ({
@@ -64,6 +69,10 @@ export const TopologyHeaderToolbar: React.FC<TopologyHeaderToolbarProps> = ({
   activeLocationId,
   onFocusSearchResult,
   isMobileViewport = false,
+  canAutoLayout = false,
+  autoLayoutDisabled = false,
+  isAutoLayoutPreviewing = false,
+  onPreviewAutoLayout,
 }) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -356,6 +365,32 @@ export const TopologyHeaderToolbar: React.FC<TopologyHeaderToolbarProps> = ({
               onClick={() => setMobileSearchOpen((v) => !v)}
             >
               <Search size={15} />
+            </button>
+          )}
+
+          {canAutoLayout && onPreviewAutoLayout && (
+            <button
+              type="button"
+              className={`btn ${
+                isMobileViewport ? "map-toolbar-icon-btn" : "map-toolbar-action-btn"
+              }${isAutoLayoutPreviewing ? " active" : ""}`}
+              disabled={autoLayoutDisabled || effectiveSaving}
+              onClick={onPreviewAutoLayout}
+              title={
+                autoLayoutDisabled
+                  ? "Add at least 2 elements in this view to auto-layout"
+                  : isAutoLayoutPreviewing
+                  ? "Auto-layout preview active (Apply or Reset on canvas)"
+                  : "Preview auto-layout for current view"
+              }
+              aria-label="Auto-Layout Current View"
+              aria-pressed={isAutoLayoutPreviewing}
+              data-testid="map-auto-layout-btn"
+            >
+              <LayoutGrid size={isMobileViewport ? 15 : 13} />
+              {!isMobileViewport && (
+                <span className="map-toolbar-btn-label">Auto-Layout</span>
+              )}
             </button>
           )}
 

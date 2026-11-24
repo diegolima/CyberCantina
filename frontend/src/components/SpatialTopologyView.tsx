@@ -34,9 +34,14 @@ import {
   CONTAINER_CARD_HALF_H,
   CONTAINER_CARD_HALF_W,
   computeEdgeClippedSegment,
+  computeResponsiveViewBox,
   isEditableKeyboardTarget,
   type NodeShapeDescriptor,
 } from "./map/mapGeometry";
+import {
+  computeScopedAutoLayout,
+  computeViewportFitForCoords,
+} from "./map/mapAutoLayout";
 import {
   MapPaletteBar,
   PALETTE_DRAG_MIME,
@@ -106,6 +111,8 @@ export {
   computeFullMapCoords,
   computeGhostNodeCoords,
   computePromotionCandidates,
+  computeScopedAutoLayout,
+  computeViewportFitForCoords,
   inferCompassDirection,
   pickCompassSlot,
   projectTopologyForDepth,
@@ -269,6 +276,19 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     [propContainers, propLocations, propEdges]
   );
 
+  interface AutoLayoutPreviewState {
+    containerId: string | null;
+    coords: Record<string, { x: number; y: number }>;
+    ghostCoords: Record<string, { x: number; y: number }>;
+    priorPan: { x: number; y: number };
+    priorZoom: number;
+  }
+  const [autoLayoutPreview, setAutoLayoutPreview] =
+    useState<AutoLayoutPreviewState | null>(null);
+  const canAutoLayout = (mode === "editor" || unlockLore) && !isMutatingLocked;
+  const isPreviewingAutoLayout = autoLayoutPreview !== null;
+  const effectiveMutatingLocked = isMutatingLocked || isPreviewingAutoLayout;
+
   const commitNextGraph = useCallback(
     (next: GraphSnapshot, pushUndo = true) => {
       if (pushUndo) {
@@ -297,7 +317,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   );
 
   const handleUndo = useCallback(() => {
-    if (undoStack.length === 0 || isMutatingLocked) return;
+    if (undoStack.length === 0 || effectiveMutatingLocked) return;
     const prev = undoStack[undoStack.length - 1];
     const nextStack = undoStack.slice(0, -1);
     setUndoStack(nextStack);
@@ -312,7 +332,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     setStatusNotice("Reverted last map action.");
   }, [
     undoStack,
-    isMutatingLocked,
+    effectiveMutatingLocked,
     isControlledExternally,
     onChangeGraph,
     propBaseline,
@@ -716,6 +736,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   }, [projectedTopology]);
 
   const fullMapCoords = useMemo(() => {
+    if (autoLayoutPreview) {
+      return autoLayoutPreview.coords;
+    }
     if (nodeDrag && nodeDrag.hasMoved && nodeDrag.kind !== "ghost") {
       return {
         ...settledFullMapCoords,
@@ -723,7 +746,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
       };
     }
     return settledFullMapCoords;
-  }, [settledFullMapCoords, nodeDrag]);
+  }, [autoLayoutPreview, settledFullMapCoords, nodeDrag]);
 
   const visibleFootprints = useMemo(() => {
     const map: Record<string, { halfW: number; halfH: number }> = {};
@@ -745,6 +768,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   const currentGhostOverrides = currentScopeContainer?.ghost_coords;
 
   const ghostCoords = useMemo(() => {
+    if (autoLayoutPreview) {
+      return autoLayoutPreview.ghostCoords;
+    }
     const computed = computeGhostNodeCoords(
       projectedTopology.ghostExternalNodes,
       projectedTopology.ghostEdges,
@@ -757,6 +783,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     }
     return computed;
   }, [
+    autoLayoutPreview,
     projectedTopology.ghostExternalNodes,
     projectedTopology.ghostEdges,
     settledFullMapCoords,
@@ -803,6 +830,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   }, [pendingCenterTarget, fullMapCoords]);
 
   const drillIntoContainer = useCallback((contId: string | null) => {
+    setAutoLayoutPreview(null);
     setPendingCenterTarget(null);
     setCurrentContainerId(contId);
     setSelectedContainerId(null);
@@ -816,6 +844,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
 
   const handleJumpToContainer = useCallback(
     (targetContainerId: string | null, focusLocId?: string) => {
+      setAutoLayoutPreview(null);
       setCurrentContainerId(targetContainerId);
       setSelectedContainerId(null);
       setSelectedGhostLocId(null);
@@ -1034,7 +1063,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     fullMapCoords,
     selectedLocId,
     selectedContainerId,
-    isMutatingLocked,
+    isMutatingLocked: effectiveMutatingLocked,
     commitNextGraph,
     setSelectedContainerId,
     setSelectedLocId,
@@ -1077,7 +1106,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
 
   const handleMoveGhostNode = useCallback(
     (externalLocId: string, x: number, y: number) => {
-      if (!currentContainerId || isMutatingLocked) return;
+      if (!currentContainerId || effectiveMutatingLocked) return;
       const targetCont = containerMap.get(currentContainerId);
       if (!targetCont) return;
       const roundedX = Math.round(x);
@@ -1101,18 +1130,18 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         true
       );
     },
-    [currentContainerId, isMutatingLocked, containerMap, patchContainer]
+    [currentContainerId, effectiveMutatingLocked, containerMap, patchContainer]
   );
 
   const handleResetGhostCoords = useCallback(
     (externalLocId: string) => {
-      if (!currentContainerId || isMutatingLocked) return;
+      if (!currentContainerId || effectiveMutatingLocked) return;
       const targetCont = containerMap.get(currentContainerId);
       if (!targetCont?.ghost_coords?.[externalLocId]) return;
       const { [externalLocId]: _removed, ...rest } = targetCont.ghost_coords;
       patchContainer(currentContainerId, { ghost_coords: rest }, true);
     },
-    [currentContainerId, isMutatingLocked, containerMap, patchContainer]
+    [currentContainerId, effectiveMutatingLocked, containerMap, patchContainer]
   );
 
   const emptyCanvasExistingTargets = useMemo<ExistingLinkTargetOption[]>(() => {
@@ -1187,8 +1216,121 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     availableContainerDepthsHere,
   });
 
+  const hasAutoLayoutTargets =
+    projectedTopology.visibleLocations.length +
+      projectedTopology.visibleSupernodes.length >=
+      2 || projectedTopology.ghostExternalNodes.length > 0;
+
+  const handleStartAutoLayoutPreview = useCallback(() => {
+    if (!canAutoLayout || !hasAutoLayoutTargets || effectiveSaving) return;
+    const { coords, ghostCoords: nextGhostCoords } = computeScopedAutoLayout({
+      projectedTopology,
+      footprints: visibleFootprints,
+    });
+    const wrapRect = canvasWrapRef.current?.getBoundingClientRect();
+    const viewBox = computeResponsiveViewBox(
+      wrapRect?.width ?? 0,
+      wrapRect?.height ?? 0
+    );
+    const fit = computeViewportFitForCoords({
+      coords,
+      ghostCoords: nextGhostCoords,
+      footprints: visibleFootprints,
+      viewBox,
+      isMobileViewport,
+    });
+    setContextMenu(null);
+    setInlineEdgeEdit(null);
+    setStatusNotice(null);
+    setNodeDrag(null);
+    setLinkDrag(null);
+    setAutoLayoutPreview((prev) => ({
+      containerId: currentContainerId,
+      coords,
+      ghostCoords: nextGhostCoords,
+      priorPan: prev ? prev.priorPan : { ...pan },
+      priorZoom: prev ? prev.priorZoom : zoom,
+    }));
+    setPan(fit.pan);
+    setZoom(fit.zoom);
+  }, [
+    canAutoLayout,
+    hasAutoLayoutTargets,
+    effectiveSaving,
+    projectedTopology,
+    visibleFootprints,
+    isMobileViewport,
+    currentContainerId,
+    pan,
+    zoom,
+  ]);
+
+  const handleResetAutoLayoutPreview = useCallback(() => {
+    if (!autoLayoutPreview) return;
+    setPan(autoLayoutPreview.priorPan);
+    setZoom(autoLayoutPreview.priorZoom);
+    setAutoLayoutPreview(null);
+  }, [autoLayoutPreview]);
+
+  const handleApplyAutoLayoutPreview = useCallback(() => {
+    if (!autoLayoutPreview || !canAutoLayout) return;
+    const nextGraph = cloneGraph(
+      workingContainers,
+      workingLocations,
+      workingEdges
+    );
+    for (const loc of nextGraph.locations) {
+      if (Object.prototype.hasOwnProperty.call(autoLayoutPreview.coords, loc.id)) {
+        const pt = autoLayoutPreview.coords[loc.id];
+        loc.ui_x = pt.x;
+        loc.ui_y = pt.y;
+      }
+    }
+    for (const cont of nextGraph.containers) {
+      if (Object.prototype.hasOwnProperty.call(autoLayoutPreview.coords, cont.id)) {
+        const pt = autoLayoutPreview.coords[cont.id];
+        cont.ui_x = pt.x;
+        cont.ui_y = pt.y;
+      }
+      if (currentContainerId !== null && cont.id === currentContainerId) {
+        cont.ghost_coords = {};
+      }
+    }
+    commitNextGraph(nextGraph, true);
+    setAutoLayoutPreview(null);
+    setStatusNotice("Applied auto-layout to current view. Save Map to persist.");
+  }, [
+    autoLayoutPreview,
+    canAutoLayout,
+    workingContainers,
+    workingLocations,
+    workingEdges,
+    currentContainerId,
+    commitNextGraph,
+  ]);
+
+  useEffect(() => {
+    if (!autoLayoutPreview) return;
+    if (!canAutoLayout) {
+      setPan(autoLayoutPreview.priorPan);
+      setZoom(autoLayoutPreview.priorZoom);
+      setAutoLayoutPreview(null);
+      return;
+    }
+    if (autoLayoutPreview.containerId !== currentContainerId) {
+      setAutoLayoutPreview(null);
+    }
+  }, [autoLayoutPreview, canAutoLayout, currentContainerId]);
+
   const handleSaveClick = async () => {
-    if (!onSaveMap || hasBlockingErrors || effectiveSaving) return;
+    if (
+      effectiveMutatingLocked ||
+      !onSaveMap ||
+      hasBlockingErrors ||
+      effectiveSaving
+    ) {
+      return;
+    }
     setInternalSaving(true);
     setSaveError(null);
     try {
@@ -1221,7 +1363,21 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (isMutatingLocked || effectiveSaving || hasBlockingOverlayOpen) {
+      if (
+        e.key === "Escape" &&
+        !e.repeat &&
+        isPreviewingAutoLayout &&
+        !hasBlockingOverlayOpen &&
+        !isEditableKeyboardTarget(e.target) &&
+        !isEditableKeyboardTarget(
+          typeof document !== "undefined" ? document.activeElement : null
+        )
+      ) {
+        e.preventDefault();
+        handleResetAutoLayoutPreview();
+        return;
+      }
+      if (effectiveMutatingLocked || effectiveSaving || hasBlockingOverlayOpen) {
         return;
       }
       if (
@@ -1302,7 +1458,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [
-    isMutatingLocked,
+    effectiveMutatingLocked,
+    isPreviewingAutoLayout,
+    handleResetAutoLayoutPreview,
     effectiveSaving,
     hasBlockingOverlayOpen,
     selectedEdgeState,
@@ -1338,6 +1496,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   ) => {
     e.preventDefault();
     e.stopPropagation();
+    if (effectiveMutatingLocked) return;
     const wrapRect = canvasWrapRef.current?.getBoundingClientRect();
     const relX = wrapRect ? e.clientX - wrapRect.left : 24;
     const relY = wrapRect ? e.clientY - wrapRect.top : 24;
@@ -1477,7 +1636,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         effectiveDirty={effectiveDirty}
         hasBlockingErrors={hasBlockingErrors}
         effectiveSaving={effectiveSaving}
-        isMutatingLocked={isMutatingLocked}
+        isMutatingLocked={effectiveMutatingLocked}
         validationSummary={validationSummary}
         handleSaveClick={handleSaveClick}
         onClose={onClose}
@@ -1490,12 +1649,17 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         activeLocationId={activeLoc?.id}
         onFocusSearchResult={handleFocusSearchResult}
         isMobileViewport={isMobileViewport}
+        canAutoLayout={canAutoLayout}
+        autoLayoutDisabled={!hasAutoLayoutTargets}
+        isAutoLayoutPreviewing={isPreviewingAutoLayout}
+        onPreviewAutoLayout={handleStartAutoLayoutPreview}
       />
 
       {/* Draggable Node Palette Bar + Undo + Validation Status */}
       <MapPaletteBar
         canAddContainerHere={canAddContainerHere}
         isMutatingLocked={isMutatingLocked}
+        isReadOnlyPreview={isPreviewingAutoLayout}
         undoCount={undoStack.length}
         onUndo={handleUndo}
         onQuickAdd={handleQuickAddElement}
@@ -1542,12 +1706,14 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
           ref={canvasWrapRef}
           className="map-canvas-wrap"
           onDragOver={(e) => {
+            if (effectiveMutatingLocked) return;
             if (e.dataTransfer.types.includes(PALETTE_DRAG_MIME)) {
               e.preventDefault();
               e.dataTransfer.dropEffect = "copy";
             }
           }}
           onDrop={(e) => {
+            if (effectiveMutatingLocked) return;
             const rawKind = e.dataTransfer.getData(
               PALETTE_DRAG_MIME
             ) as PaletteItemKind;
@@ -1590,7 +1756,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             activeNeighborIds={activeNeighborIds}
             unreachableSet={unreachableSet}
             occupiedSlotsByLocId={occupiedSlotsByLocId}
-            isMutatingLocked={isMutatingLocked}
+            isMutatingLocked={effectiveMutatingLocked}
             inlineEdgeEdit={inlineEdgeEdit}
             setInlineEdgeEdit={setInlineEdgeEdit}
             statusNotice={statusNotice}
@@ -1618,6 +1784,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             onFocusInvalid={handleFocusInvalid}
             canAddContainerHere={canAddContainerHere}
             onQuickAdd={handleQuickAddElement}
+            isAutoLayoutPreviewing={isPreviewingAutoLayout}
+            onApplyAutoLayout={handleApplyAutoLayoutPreview}
+            onResetAutoLayout={handleResetAutoLayoutPreview}
           />
 
           {/* Context Menu & Dialogs */}
@@ -1814,7 +1983,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
               containerStats={selectedContainerStats}
               activeLocId={activeLoc?.id}
               worldContext={worldContext}
-              isMutatingLocked={isMutatingLocked}
+              isMutatingLocked={effectiveMutatingLocked}
               isLocationSavedInDb={
                 selectedLocation
                   ? baselineLocationIds.has(selectedLocation.id)
@@ -1876,7 +2045,9 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
               revealedLoreIds={revealedLoreIds}
               onToggleLoreReveal={onToggleLoreReveal}
               usedIconKeys={usedMapIconKeys}
-              onOpenIconBrowser={setIconBrowserTarget}
+              onOpenIconBrowser={(target) => {
+                if (!effectiveMutatingLocked) setIconBrowserTarget(target);
+              }}
               worldMedia={worldMedia}
               visitedContainerIds={visitedContainerIds}
               canDeleteLocation={canDeleteLocation}

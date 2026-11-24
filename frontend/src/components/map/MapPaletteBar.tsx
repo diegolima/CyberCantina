@@ -16,6 +16,7 @@ export const PALETTE_DRAG_MIME = "application/x-cybercantina-palette";
 export interface MapPaletteBarProps {
   canAddContainerHere: boolean;
   isMutatingLocked?: boolean;
+  isReadOnlyPreview?: boolean;
   undoCount: number;
   onUndo: () => void;
   onQuickAdd: (kind: PaletteItemKind) => void;
@@ -65,6 +66,7 @@ const PALETTE_ITEMS: Array<{
 export const MapPaletteBar: React.FC<MapPaletteBarProps> = ({
   canAddContainerHere,
   isMutatingLocked = false,
+  isReadOnlyPreview = false,
   undoCount,
   onUndo,
   onQuickAdd,
@@ -73,9 +75,10 @@ export const MapPaletteBar: React.FC<MapPaletteBarProps> = ({
   onFocusInvalid,
 }) => {
   const hasValidationError = Boolean(validationMessage) || unreachableCount > 0;
-  if (isMutatingLocked && !hasValidationError) {
+  if (isMutatingLocked && !isReadOnlyPreview && !hasValidationError) {
     return null;
   }
+  const controlsDisabled = isMutatingLocked || isReadOnlyPreview;
 
   return (
     <div className="map-palette-bar">
@@ -87,7 +90,7 @@ export const MapPaletteBar: React.FC<MapPaletteBarProps> = ({
           flexWrap: "wrap",
         }}
       >
-        {!isMutatingLocked && (
+        {(!isMutatingLocked || isReadOnlyPreview) && (
           <>
             <span
               style={{
@@ -103,11 +106,13 @@ export const MapPaletteBar: React.FC<MapPaletteBarProps> = ({
             </span>
 
             {PALETTE_ITEMS.map(({ kind, label, title, accent, bg, border, Icon }) => {
-              const disabled = kind === "container" && !canAddContainerHere;
-              const effectiveTitle =
-                kind === "container" && !canAddContainerHere
-                  ? "Level 1 containers cannot hold nested containers"
-                  : title;
+              const disabled =
+                controlsDisabled || (kind === "container" && !canAddContainerHere);
+              const effectiveTitle = controlsDisabled
+                ? "Read-only while previewing auto-layout"
+                : kind === "container" && !canAddContainerHere
+                ? "Level 1 containers cannot hold nested containers"
+                : title;
               return (
                 <button
                   key={kind}
@@ -154,7 +159,7 @@ export const MapPaletteBar: React.FC<MapPaletteBarProps> = ({
           <button
             type="button"
             className="btn"
-            disabled={isMutatingLocked}
+            disabled={controlsDisabled}
             onClick={onUndo}
             title="Undo last map change"
             style={{

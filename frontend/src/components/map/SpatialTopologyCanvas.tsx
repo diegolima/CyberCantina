@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  Check,
   Crosshair,
   DoorOpen,
   EyeOff,
   GitBranch,
   HelpCircle,
   Layers,
+  LayoutGrid,
   Lock,
   MapPin,
   Plus,
@@ -145,6 +147,9 @@ export interface SpatialTopologyCanvasProps {
   onFocusInvalid?: () => void;
   canAddContainerHere?: boolean;
   onQuickAdd?: (kind: PaletteItemKind) => void;
+  isAutoLayoutPreviewing?: boolean;
+  onApplyAutoLayout?: () => void;
+  onResetAutoLayout?: () => void;
 }
 
 export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
@@ -201,6 +206,9 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
   onFocusInvalid,
   canAddContainerHere = true,
   onQuickAdd,
+  isAutoLayoutPreviewing = false,
+  onApplyAutoLayout,
+  onResetAutoLayout,
 }) => {
   const [isPanning, setIsPanning] = useState(false);
   const [isPinching, setIsPinching] = useState(false);
@@ -905,7 +913,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
       passagePairCount > 1
     ) {
       onSelectEdgeBundle?.(edge.groupedEdges.map((ge) => ge.id));
-    } else {
+    } else if (!isMutatingLocked) {
       setInlineEdgeEdit({
         edgeId: edge.rawEdge.id,
         midX: clipped.midX,
@@ -2358,6 +2366,41 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                   ? "Release to move inside container"
                   : "Release to group into a new Level 1 container"
                 : nodeDrag.hoverTarget.reason || "Invalid drop target"}
+            </div>
+          )}
+
+          {isAutoLayoutPreviewing && onApplyAutoLayout && onResetAutoLayout && (
+            <div
+              className="map-auto-layout-preview-bar"
+              role="region"
+              aria-label="Auto-layout preview controls"
+              data-testid="map-auto-layout-preview-bar"
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <span className="map-auto-layout-preview-label">
+                <LayoutGrid size={13} aria-hidden="true" />
+                <span>Auto-Layout Preview (Current View)</span>
+              </span>
+              <div className="map-auto-layout-preview-actions">
+                <button
+                  type="button"
+                  className="btn btn-cyan map-auto-layout-preview-btn"
+                  onClick={onApplyAutoLayout}
+                  data-testid="map-auto-layout-apply-btn"
+                >
+                  <Check size={13} />
+                  <span>Apply</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn map-auto-layout-preview-btn"
+                  onClick={onResetAutoLayout}
+                  data-testid="map-auto-layout-reset-btn"
+                >
+                  <RotateCcw size={13} />
+                  <span>Reset</span>
+                </button>
+              </div>
             </div>
           )}
 

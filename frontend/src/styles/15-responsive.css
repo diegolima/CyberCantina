@@ -431,6 +431,19 @@
   .map-search-dropdown {
     width: min(360px, calc(100vw - 16px));
   }
+
+  .map-auto-layout-preview-bar {
+    max-width: calc(100% - 16px);
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 10px;
+  }
+
+  .map-auto-layout-preview-btn {
+    min-height: 32px;
+    padding: 5px 11px;
+  }
 }
 
 /* Narrow Phone Polish (<= 620px) */
