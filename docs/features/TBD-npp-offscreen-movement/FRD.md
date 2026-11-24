@@ -1,6 +1,6 @@
 ---
 feature: npp-offscreen-movement
-target_version: 0.38.0
+target_version: TBD
 document_type: frd
 status: draft
 last_updated: 2026-11-24
@@ -9,8 +9,8 @@ last_updated: 2026-11-24
 # Feature Requirements Document (FRD)
 ## Non-Player Party (NPP) Off-Screen Movement & Navigation Engine
 
-**Status:** Draft (`v0.38.0`)  
-**Target Version:** CyberCantina v0.38.0  
+**Status:** Draft (`TBD`)  
+**Target Version:** CyberCantina `TBD`  
 **Depends On:**
 - [v0.37.0 First-Class Map Links](file:///home/diegolima/Git/cybercantina/docs/features/0.37.0-first-class-map-links/FRD.md)
 - [v0.36.0 Metric Spatial Edge Distances](file:///home/diegolima/Git/cybercantina/docs/features/0.36.0-metric-spatial-distances/FRD.md)

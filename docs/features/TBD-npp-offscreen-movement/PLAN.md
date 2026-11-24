@@ -1,12 +1,12 @@
 ---
 feature: npp-offscreen-movement
-target_version: 0.38.0
+target_version: TBD
 document_type: plan
 status: draft
 last_updated: 2026-11-24
 ---
 
-# Implementation Plan — v0.38.0 NPP Off-Screen Movement & Navigation Engine
+# Implementation Plan — NPP Off-Screen Movement & Navigation Engine (`TBD`)
 
 ## Stage 0: Feature Package Lifecycle Artifacts
 - [x] Author `FRD.md`

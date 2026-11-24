@@ -1,12 +1,12 @@
 ---
 feature: npp-offscreen-movement
-target_version: 0.38.0
+target_version: TBD
 document_type: review
 status: draft
 last_updated: 2026-11-24
 ---
 
-# Pre-Implementation Review — v0.38.0 NPP Off-Screen Movement & Navigation Engine
+# Pre-Implementation Review — NPP Off-Screen Movement & Navigation Engine (`TBD`)
 
 ## Key Architectural Traps & Mitigations
 
