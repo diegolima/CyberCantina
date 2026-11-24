@@ -52,6 +52,49 @@ export interface EdgePairPatch {
   is_secret?: boolean;
   direction_label?: string;
   reciprocal_direction_label?: string;
+  compass_direction?: CompassDirection;
+  reciprocal_compass_direction?: CompassDirection;
+}
+
+/**
+ * Pure helper to move a single directed edge's outgoing compass port to an empty slot
+ * on its source location without touching the reciprocal edge.
+ */
+export function reassignEdgeCompassSlot(
+  edges: LocationEdge[],
+  edgeId: string,
+  nextSlot: CompassDirection
+): {
+  edges: LocationEdge[];
+  changed: boolean;
+  reason?: string;
+} {
+  const target = edges.find((e) => e.id === edgeId);
+  if (!target) {
+    return { edges, changed: false, reason: "Link no longer exists." };
+  }
+  if (target.compass_direction === nextSlot) {
+    return { edges, changed: false };
+  }
+  const conflict = edges.find(
+    (e) =>
+      e.id !== edgeId &&
+      e.from_location_id === target.from_location_id &&
+      e.compass_direction === nextSlot
+  );
+  if (conflict) {
+    return {
+      edges,
+      changed: false,
+      reason: `Port ${nextSlot} is already occupied — choose an empty port.`,
+    };
+  }
+  return {
+    changed: true,
+    edges: edges.map((e) =>
+      e.id === edgeId ? { ...e, compass_direction: nextSlot } : e
+    ),
+  };
 }
 
 function normalizeObstacleList(raw: readonly string[]): string[] {
@@ -1686,6 +1729,46 @@ export function useTopologyMutations({
           updated.direction_label = nextReciprocalLabel;
           itemChanged = true;
         }
+        if (
+          isPrimary &&
+          patch.compass_direction !== undefined &&
+          updated.compass_direction !== patch.compass_direction
+        ) {
+          const slotConflict = workingEdges.some(
+            (other) =>
+              other.id !== updated.id &&
+              other.from_location_id === updated.from_location_id &&
+              other.compass_direction === patch.compass_direction
+          );
+          if (!slotConflict) {
+            updated.compass_direction = patch.compass_direction;
+            itemChanged = true;
+          } else {
+            setStatusNotice(
+              `Port ${patch.compass_direction} is already occupied — choose an empty port.`
+            );
+          }
+        }
+        if (
+          isRev &&
+          patch.reciprocal_compass_direction !== undefined &&
+          updated.compass_direction !== patch.reciprocal_compass_direction
+        ) {
+          const slotConflict = workingEdges.some(
+            (other) =>
+              other.id !== updated.id &&
+              other.from_location_id === updated.from_location_id &&
+              other.compass_direction === patch.reciprocal_compass_direction
+          );
+          if (!slotConflict) {
+            updated.compass_direction = patch.reciprocal_compass_direction;
+            itemChanged = true;
+          } else {
+            setStatusNotice(
+              `Port ${patch.reciprocal_compass_direction} is already occupied — choose an empty port.`
+            );
+          }
+        }
 
         if (itemChanged) {
           changed = true;
@@ -1707,6 +1790,7 @@ export function useTopologyMutations({
       workingContainers,
       workingLocations,
       commitNextGraph,
+      setStatusNotice,
     ]
   );
 
@@ -1740,6 +1824,33 @@ export function useTopologyMutations({
       handlePatchEdgePair(edgeId, { direction_label: directionLabel });
     },
     [handlePatchEdgePair]
+  );
+
+  const handleReassignEdgeSlot = useCallback(
+    (edgeId: string, nextSlot: CompassDirection): boolean => {
+      if (isMutatingLocked) return false;
+      const result = reassignEdgeCompassSlot(workingEdges, edgeId, nextSlot);
+      if (!result.changed) {
+        if (result.reason) {
+          setStatusNotice(result.reason);
+        }
+        return false;
+      }
+      commitNextGraph({
+        containers: workingContainers,
+        locations: workingLocations,
+        edges: result.edges,
+      });
+      return true;
+    },
+    [
+      isMutatingLocked,
+      workingEdges,
+      workingContainers,
+      workingLocations,
+      commitNextGraph,
+      setStatusNotice,
+    ]
   );
 
   const canDeleteEdge = useCallback(
@@ -1817,6 +1928,7 @@ export function useTopologyMutations({
     handleConvertLocationToContainer,
     handleSetStartingLocation,
     handlePatchEdgePair,
+    handleReassignEdgeSlot,
     handleUpdateEdgeDistance,
     handleUpdateEdgeLabel,
     handleToggleEdgeBlocked,

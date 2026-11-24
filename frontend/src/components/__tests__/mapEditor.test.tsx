@@ -1209,7 +1209,7 @@ describe("Interactive Map Editor & Mini-Map", () => {
     expect(html).not.toContain("rooms ·");
 
     // Hover buffer around location
-    expect(html).toContain('r="34"');
+    expect(html).toContain('r="38"');
 
     // Consolidated bottom-right canvas zoom indicator & floating Center icon button
     expect(html).toContain('data-testid="canvas-zoom-indicator"');

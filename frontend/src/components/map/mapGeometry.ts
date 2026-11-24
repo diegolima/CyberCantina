@@ -15,7 +15,7 @@ export const GHOST_CARD_HALF_H = GHOST_CARD_H / 2;
 export const GHOST_CARD_RX = 8;
 
 export const LOCATION_PORT_RADIUS = 26;
-export const LOCATION_HOVER_RADIUS = 34;
+export const LOCATION_HOVER_RADIUS = 38;
 export const CONTAINER_HOVER_PAD = 12;
 export const CONTAINER_PORT_OFFSET = 7;
 export const CONTAINER_HIT_HALF_W = CONTAINER_CARD_HALF_W + 2;

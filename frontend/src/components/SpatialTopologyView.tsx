@@ -88,6 +88,7 @@ import {
   type LinkDragState,
   type LinkPairInspectorData,
   type NodeDragState,
+  type PortReassignDragState,
   type ProjectedContainerSupernode,
   type ProjectedDepthTopology,
   type ProjectedExternalPortalDestination,
@@ -446,6 +447,8 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
 
   // Active compass link-port drag
   const [linkDrag, setLinkDrag] = useState<LinkDragState | null>(null);
+  const [portReassignDrag, setPortReassignDrag] =
+    useState<PortReassignDragState | null>(null);
 
   // Modals & Popovers
   const [contextMenu, setContextMenu] = useState<MapContextMenuState | null>(null);
@@ -1041,6 +1044,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     handleConvertLocationToContainer,
     handleSetStartingLocation,
     handlePatchEdgePair,
+    handleReassignEdgeSlot,
     handleUpdateEdgeDistance,
     handleToggleEdgeBlocked,
     handleToggleEdgeSecret,
@@ -1187,6 +1191,11 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     setNodeDrag,
     linkDrag,
     setLinkDrag,
+    portReassignDrag,
+    setPortReassignDrag,
+    occupiedSlotsByLocId,
+    onReassignEdgeSlot: handleReassignEdgeSlot,
+    onSelectEdgePair: selectEdgePair,
     pan,
     zoom,
     svgRef,
@@ -1244,6 +1253,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     setStatusNotice(null);
     setNodeDrag(null);
     setLinkDrag(null);
+    setPortReassignDrag(null);
     setAutoLayoutPreview((prev) => ({
       containerId: currentContainerId,
       coords,
@@ -1744,9 +1754,13 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             setNodeDrag={setNodeDrag}
             linkDrag={linkDrag}
             setLinkDrag={setLinkDrag}
+            portReassignDrag={portReassignDrag}
+            setPortReassignDrag={setPortReassignDrag}
             hoveredNodeKey={hoveredNodeKey}
             setHoveredNodeKey={setHoveredNodeKey}
             projectedTopology={projectedTopology}
+            workingEdges={workingEdges}
+            locationMap={locationMap}
             fullMapCoords={fullMapCoords}
             ghostCoords={ghostCoords}
             selectedContainer={selectedContainer}
@@ -1773,6 +1787,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
             handleUpdateEdgeDistance={handleUpdateEdgeDistance}
             handleDeleteEdge={handleDeleteEdge}
             handleDeleteEdgeGroup={handleDeleteEdgeGroup}
+            onReassignEdgeSlot={handleReassignEdgeSlot}
             drillIntoContainer={drillIntoContainer}
             onJumpToContainer={handleJumpToContainer}
             handleCenter={handleCenter}

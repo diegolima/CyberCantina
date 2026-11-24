@@ -24,6 +24,7 @@ import {
   clientToWorldPoint,
   type LinkDragState,
   type NodeDragState,
+  type PortReassignDragState,
   type ProjectedDepthTopology,
 } from "./topologyProjection";
 
@@ -110,6 +111,40 @@ export function hitTestTopologyPortAt(
   return bodyHit ? { kind: bodyHit.kind, id: bodyHit.id } : null;
 }
 
+/**
+ * Hit-test the 8 compass ports on a single location node during slot reassignment.
+ * Picks the closest matching port within `portHitRadius + 1` and flags whether it is
+ * already occupied by another outgoing link.
+ */
+export function hitTestSameLocationPortAt(
+  wx: number,
+  wy: number,
+  center: { x: number; y: number } | undefined,
+  occupiedSlots: Set<CompassDirection>,
+  fromSlot: CompassDirection,
+  portHitRadius: number = PORT_HIT_RADIUS
+): { slot: CompassDirection; blocked: boolean } | null {
+  if (!center) return null;
+  const hitRadius = portHitRadius + 1;
+  let bestSlot: CompassDirection | null = null;
+  let bestDist = Infinity;
+  for (const slot of COMPASS_ORDER) {
+    const a = COMPASS_ANGLES[slot];
+    const px = center.x + Math.cos(a) * LOCATION_PORT_RADIUS;
+    const py = center.y + Math.sin(a) * LOCATION_PORT_RADIUS;
+    const d = Math.hypot(wx - px, wy - py);
+    if (d <= hitRadius && d < bestDist) {
+      bestDist = d;
+      bestSlot = slot;
+    }
+  }
+  if (!bestSlot) return null;
+  return {
+    slot: bestSlot,
+    blocked: bestSlot !== fromSlot && occupiedSlots.has(bestSlot),
+  };
+}
+
 /** Persist a discrete open-canvas node drop with undo support when coordinates changed. */
 export function commitCanvasDropCoordinates(params: {
   kind: "location" | "container";
@@ -157,6 +192,13 @@ export interface UseTopologyPointerDragParams {
   setNodeDrag: React.Dispatch<React.SetStateAction<NodeDragState | null>>;
   linkDrag: LinkDragState | null;
   setLinkDrag: React.Dispatch<React.SetStateAction<LinkDragState | null>>;
+  portReassignDrag?: PortReassignDragState | null;
+  setPortReassignDrag?: React.Dispatch<
+    React.SetStateAction<PortReassignDragState | null>
+  >;
+  occupiedSlotsByLocId?: Map<string, Set<CompassDirection>>;
+  onReassignEdgeSlot?: (edgeId: string, nextSlot: CompassDirection) => boolean | void;
+  onSelectEdgePair?: (edgeId: string) => void;
   pan: { x: number; y: number };
   zoom: number;
   svgRef: React.RefObject<SVGSVGElement | null>;
@@ -210,6 +252,11 @@ export function useTopologyPointerDrag({
   setNodeDrag,
   linkDrag,
   setLinkDrag,
+  portReassignDrag = null,
+  setPortReassignDrag,
+  occupiedSlotsByLocId,
+  onReassignEdgeSlot,
+  onSelectEdgePair,
   pan,
   zoom,
   svgRef,
@@ -270,9 +317,9 @@ export function useTopologyPointerDrag({
     [projectedTopology, fullMapCoords]
   );
 
-  // Global window pointer move / up / cancel listeners for nodeDrag & linkDrag
+  // Global window pointer move / up / cancel listeners for nodeDrag, linkDrag & portReassignDrag
   useEffect(() => {
-    if (!nodeDrag && !linkDrag) return;
+    if (!nodeDrag && !linkDrag && !portReassignDrag) return;
 
     const handleMove = (ev: PointerEvent) => {
       const wpt = clientToWorldPoint(
@@ -350,6 +397,47 @@ export function useTopologyPointerDrag({
                 currX: wpt.x,
                 currY: wpt.y,
                 hoverTarget: portHit,
+              }
+            : null
+        );
+      }
+
+      if (
+        portReassignDrag &&
+        setPortReassignDrag &&
+        (portReassignDrag.pointerId === undefined ||
+          ev.pointerId === portReassignDrag.pointerId)
+      ) {
+        const distPx = Math.hypot(
+          ev.clientX - portReassignDrag.startClientX,
+          ev.clientY - portReassignDrag.startClientY
+        );
+        const hasMoved =
+          portReassignDrag.hasMoved || distPx > TAP_MOVE_THRESHOLD_PX;
+        const hitRadius =
+          portReassignDrag.pointerType === "touch"
+            ? PORT_TOUCH_HIT_RADIUS
+            : PORT_HIT_RADIUS;
+        const occupied =
+          occupiedSlotsByLocId?.get(portReassignDrag.locationId) ??
+          new Set<CompassDirection>();
+        const hit = hitTestSameLocationPortAt(
+          wpt.x,
+          wpt.y,
+          fullMapCoords[portReassignDrag.locationId],
+          occupied,
+          portReassignDrag.fromSlot,
+          hitRadius
+        );
+        setPortReassignDrag((prev) =>
+          prev
+            ? {
+                ...prev,
+                currX: wpt.x,
+                currY: wpt.y,
+                hasMoved,
+                hoverSlot: hit?.slot ?? null,
+                hoverSlotBlocked: Boolean(hit?.blocked),
               }
             : null
         );
@@ -532,6 +620,52 @@ export function useTopologyPointerDrag({
         }
         setLinkDrag(null);
       }
+
+      if (
+        portReassignDrag &&
+        setPortReassignDrag &&
+        (portReassignDrag.pointerId === undefined ||
+          ev.pointerId === portReassignDrag.pointerId)
+      ) {
+        if (!portReassignDrag.hasMoved) {
+          onSelectEdgePair?.(portReassignDrag.edgeId);
+          setPortReassignDrag(null);
+          return;
+        }
+        const wpt = clientToWorldPoint(
+          ev.clientX,
+          ev.clientY,
+          svgRef.current,
+          viewportGroupRef.current,
+          pan,
+          zoom
+        );
+        const hitRadius =
+          portReassignDrag.pointerType === "touch"
+            ? PORT_TOUCH_HIT_RADIUS
+            : PORT_HIT_RADIUS;
+        const occupied =
+          occupiedSlotsByLocId?.get(portReassignDrag.locationId) ??
+          new Set<CompassDirection>();
+        const hit = hitTestSameLocationPortAt(
+          wpt.x,
+          wpt.y,
+          fullMapCoords[portReassignDrag.locationId],
+          occupied,
+          portReassignDrag.fromSlot,
+          hitRadius
+        );
+        if (hit) {
+          if (hit.blocked) {
+            setStatusNotice(
+              `Port ${hit.slot} is already occupied — drop on an empty port.`
+            );
+          } else if (hit.slot !== portReassignDrag.fromSlot) {
+            onReassignEdgeSlot?.(portReassignDrag.edgeId, hit.slot);
+          }
+        }
+        setPortReassignDrag(null);
+      }
     };
 
     const handleCancel = (ev?: PointerEvent) => {
@@ -546,6 +680,15 @@ export function useTopologyPointerDrag({
         (!ev || linkDrag.pointerId === undefined || ev.pointerId === linkDrag.pointerId)
       ) {
         setLinkDrag(null);
+      }
+      if (
+        portReassignDrag &&
+        setPortReassignDrag &&
+        (!ev ||
+          portReassignDrag.pointerId === undefined ||
+          ev.pointerId === portReassignDrag.pointerId)
+      ) {
+        setPortReassignDrag(null);
       }
     };
 
@@ -564,6 +707,12 @@ export function useTopologyPointerDrag({
   }, [
     nodeDrag,
     linkDrag,
+    portReassignDrag,
+    setPortReassignDrag,
+    occupiedSlotsByLocId,
+    onReassignEdgeSlot,
+    onSelectEdgePair,
+    fullMapCoords,
     pan,
     zoom,
     hitTestNodeAt,

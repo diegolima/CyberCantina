@@ -74,11 +74,13 @@ import {
   getAdaptiveDistanceStep,
   parseCommittedEdgeDistance,
   resolveBidirectionalProjectedBundle,
+  resolvePortConnectionPreview,
   sanitizeEdgeDistanceInput,
   stepEdgeDistanceDraft,
   worldPointToWrapperPoint,
   type LinkDragState,
   type NodeDragState,
+  type PortReassignDragState,
   type ProjectedDepthTopology,
   type SelectedEdgeState,
 } from "./topologyProjection";
@@ -105,9 +107,15 @@ export interface SpatialTopologyCanvasProps {
   setNodeDrag: React.Dispatch<React.SetStateAction<NodeDragState | null>>;
   linkDrag: LinkDragState | null;
   setLinkDrag: React.Dispatch<React.SetStateAction<LinkDragState | null>>;
+  portReassignDrag?: PortReassignDragState | null;
+  setPortReassignDrag?: React.Dispatch<
+    React.SetStateAction<PortReassignDragState | null>
+  >;
   hoveredNodeKey: string | null;
   setHoveredNodeKey: React.Dispatch<React.SetStateAction<string | null>>;
   projectedTopology: ProjectedDepthTopology;
+  workingEdges?: LocationEdge[];
+  locationMap?: Map<string, LocationNode>;
   fullMapCoords: Record<string, { x: number; y: number }>;
   ghostCoords?: Record<string, { x: number; y: number }>;
   selectedContainer: LocationContainer | null;
@@ -136,6 +144,7 @@ export interface SpatialTopologyCanvasProps {
   handleUpdateEdgeDistance: (edgeId: string, distanceMeters: number) => void;
   handleDeleteEdge: (edgeId: string) => void;
   handleDeleteEdgeGroup: (edgeIds: string[]) => void;
+  onReassignEdgeSlot?: (edgeId: string, nextSlot: CompassDirection) => boolean | void;
   drillIntoContainer: (contId: string | null) => void;
   onJumpToContainer?: (containerId: string | null, focusLocId?: string) => void;
   handleCenter?: () => void;
@@ -166,9 +175,13 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
   setNodeDrag,
   linkDrag,
   setLinkDrag,
+  portReassignDrag = null,
+  setPortReassignDrag,
   hoveredNodeKey,
   setHoveredNodeKey,
   projectedTopology,
+  workingEdges = [],
+  locationMap,
   fullMapCoords,
   ghostCoords = {},
   selectedContainer,
@@ -195,6 +208,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
   handleUpdateEdgeDistance,
   handleDeleteEdge,
   handleDeleteEdgeGroup,
+  onReassignEdgeSlot,
   drillIntoContainer,
   onJumpToContainer,
   handleCenter,
@@ -215,9 +229,82 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
   const [showMobileLegend, setShowMobileLegend] = useState(false);
   const [showMobileAddMenu, setShowMobileAddMenu] = useState(false);
   const [hoveredEdgePairKey, setHoveredEdgePairKey] = useState<string | null>(null);
+  const [hoveredPort, setHoveredPort] = useState<{
+    locationId: string;
+    slot: CompassDirection;
+  } | null>(null);
+  const [armedTouchPort, setArmedTouchPort] = useState<{
+    locationId: string;
+    edgeId: string;
+    slot: CompassDirection;
+  } | null>(null);
   const [previewTimePairKeys, setPreviewTimePairKeys] = useState<Set<string>>(
     () => new Set()
   );
+
+  useEffect(() => {
+    if (!armedTouchPort) return;
+    if (isMutatingLocked || selectedLocation?.id !== armedTouchPort.locationId) {
+      setArmedTouchPort(null);
+    }
+  }, [armedTouchPort, isMutatingLocked, selectedLocation?.id]);
+
+  const effectiveLocationMap = useMemo(() => {
+    if (locationMap) return locationMap;
+    const map = new Map<string, LocationNode>();
+    for (const loc of projectedTopology.visibleLocations) {
+      map.set(loc.id, loc);
+    }
+    for (const ghost of projectedTopology.ghostExternalNodes) {
+      map.set(ghost.destination.id, ghost.destination);
+    }
+    return map;
+  }, [
+    locationMap,
+    projectedTopology.visibleLocations,
+    projectedTopology.ghostExternalNodes,
+  ]);
+
+  const outgoingEdgeByLocSlot = useMemo(() => {
+    const map = new Map<string, LocationEdge>();
+    for (const edge of workingEdges) {
+      if (!edge.compass_direction) continue;
+      const key = `${edge.from_location_id}:${edge.compass_direction}`;
+      if (!map.has(key)) {
+        map.set(key, edge);
+      }
+    }
+    return map;
+  }, [workingEdges]);
+
+  const activePortPreview = useMemo(() => {
+    const target = portReassignDrag
+      ? {
+          locationId: portReassignDrag.locationId,
+          slot: portReassignDrag.fromSlot,
+        }
+      : armedTouchPort
+      ? {
+          locationId: armedTouchPort.locationId,
+          slot: armedTouchPort.slot,
+        }
+      : hoveredPort;
+    if (!target) return null;
+    return resolvePortConnectionPreview({
+      locationId: target.locationId,
+      slot: target.slot,
+      edges: workingEdges,
+      projectedTopology,
+      locationMap: effectiveLocationMap,
+    });
+  }, [
+    portReassignDrag,
+    armedTouchPort,
+    hoveredPort,
+    workingEdges,
+    projectedTopology,
+    effectiveLocationMap,
+  ]);
   const lastTouchEdgePreviewAtRef = useRef<number>(0);
   const toggleBadgeTimePreview = useCallback((pairKey: string) => {
     setPreviewTimePairKeys((prev) => {
@@ -516,6 +603,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
             onClearEdgeSelection?.();
             setContextMenu(null);
             setInlineEdgeEdit(null);
+            setArmedTouchPort(null);
             setShowMobileLegend(false);
             setShowMobileAddMenu(false);
           }
@@ -994,7 +1082,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
   const inlineIncStep = getAdaptiveDistanceStep(activeInlinePreviewMeters);
 
   const canvasCursor = resolveCanvasCursor({
-    isNodeDragging: Boolean(nodeDrag?.hasMoved),
+    isNodeDragging: Boolean(nodeDrag?.hasMoved || portReassignDrag?.hasMoved),
     isLinking: Boolean(linkDrag),
     isPanning,
   });
@@ -1037,6 +1125,8 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
         // Engage two-finger midpoint pinch-to-zoom; cancel any active single-finger gesture
         setNodeDrag(null);
         setLinkDrag(null);
+        setPortReassignDrag?.(null);
+        setArmedTouchPort(null);
         panDragRef.current.active = false;
         panPointerIdRef.current = null;
         pendingTapTargetRef.current = null;
@@ -1073,7 +1163,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
       }
     }
 
-    if ((e.button !== 0 && e.button !== 1) || nodeDrag || linkDrag) return;
+    if ((e.button !== 0 && e.button !== 1) || nodeDrag || linkDrag || portReassignDrag) return;
     if (e.button === 1) {
       e.preventDefault();
     }
@@ -1140,7 +1230,13 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     pairKey,
                     isGhost,
                   }) => {
-                  const lineStroke = isSelected
+                  const isPortPreviewed = Boolean(
+                    activePortPreview?.edgePairKey &&
+                      activePortPreview.edgePairKey === pairKey
+                  );
+                  const lineStroke = isPortPreviewed
+                    ? "#fbbf24"
+                    : isSelected
                     ? "#22d3ee"
                     : secretCue
                     ? "#a78bfa"
@@ -1164,7 +1260,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     : edge.isAggregated
                     ? "2 2"
                     : undefined;
-                  const lineOpacity = isSelected
+                  const lineOpacity = isPortPreviewed || isSelected
                     ? 1
                     : secretCue
                     ? 0.85
@@ -1175,7 +1271,11 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     : blockedCue
                     ? 0.9
                     : 1;
-                  const lineWidth = isSelected
+                  const lineWidth = isPortPreviewed
+                    ? edge.isAggregated
+                      ? 3.8
+                      : 3.4
+                    : isSelected
                     ? edge.isAggregated
                       ? 3.2
                       : 2.8
@@ -1190,6 +1290,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     <g
                       key={edge.id}
                       data-edge-selected={isSelected ? "true" : undefined}
+                      data-port-preview-edge={isPortPreviewed ? "true" : undefined}
                       onMouseEnter={() => {
                         if (isEditorQuickDeleteEnabled) enterEdgeHover(pairKey);
                       }}
@@ -1266,6 +1367,37 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     pointerEvents="none"
                   />
                 )}
+
+                {/* Port Reassignment Guide Line (same-node slot move) */}
+                {portReassignDrag?.hasMoved && (() => {
+                  const locPt = fullMapCoords[portReassignDrag.locationId];
+                  let endX = portReassignDrag.currX;
+                  let endY = portReassignDrag.currY;
+                  if (locPt && portReassignDrag.hoverSlot && !portReassignDrag.hoverSlotBlocked) {
+                    const a = COMPASS_ANGLES[portReassignDrag.hoverSlot];
+                    endX = locPt.x + Math.cos(a) * LOCATION_PORT_RADIUS;
+                    endY = locPt.y + Math.sin(a) * LOCATION_PORT_RADIUS;
+                  }
+                  return (
+                    <line
+                      x1={portReassignDrag.startX}
+                      y1={portReassignDrag.startY}
+                      x2={endX}
+                      y2={endY}
+                      stroke={
+                        portReassignDrag.hoverSlotBlocked
+                          ? "#f43f5e"
+                          : portReassignDrag.hoverSlot &&
+                            portReassignDrag.hoverSlot !== portReassignDrag.fromSlot
+                          ? "#10b981"
+                          : "#fbbf24"
+                      }
+                      strokeWidth={2}
+                      strokeDasharray="3 2"
+                      pointerEvents="none"
+                    />
+                  );
+                })()}
               </g>
 
               {/* Layer 2: Opaque Distance Badges (painted above all edge lines) */}
@@ -1296,7 +1428,13 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     ) {
                       return null;
                     }
-                    const badgeStroke = isSelected
+                    const isPortPreviewed = Boolean(
+                      activePortPreview?.edgePairKey &&
+                        activePortPreview.edgePairKey === pairKey
+                    );
+                    const badgeStroke = isPortPreviewed
+                      ? "#fbbf24"
+                      : isSelected
                       ? "#22d3ee"
                       : isTimePreview
                       ? "#f59e0b"
@@ -1427,10 +1565,15 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                 const isDropHover =
                   nodeDrag?.hoverTarget?.kind === "container" &&
                   nodeDrag.hoverTarget.id === sn.container.id;
+                const isPortPreviewTarget =
+                  activePortPreview?.targetKind === "container" &&
+                  activePortPreview.targetNodeId === sn.container.id;
                 const dropStroke = isDropHover
                   ? nodeDrag!.hoverTarget!.valid
                     ? "#10b981"
                     : "#f43f5e"
+                  : isPortPreviewTarget
+                  ? "#fbbf24"
                   : sn.hasActivePlayer
                   ? "#f59e0b"
                   : isSelected
@@ -1454,6 +1597,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     key={sn.container.id}
                     data-node-kind="container"
                     data-node-id={sn.container.id}
+                    data-port-preview-target={isPortPreviewTarget ? "container" : undefined}
                     onMouseEnter={() => setHoveredNodeKey(`cont:${sn.container.id}`)}
                     onMouseLeave={() =>
                       setHoveredNodeKey((curr) =>
@@ -1678,6 +1822,12 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                 const isDropHover =
                   nodeDrag?.hoverTarget?.kind === "location" &&
                   nodeDrag.hoverTarget.id === loc.id;
+                const isPortPreviewTarget =
+                  activePortPreview?.targetKind === "location" &&
+                  activePortPreview.targetNodeId === loc.id;
+                const previewTargetSlot = isPortPreviewTarget
+                  ? activePortPreview.targetSlot
+                  : null;
 
                 const IconComp = resolveMapIconComponent(
                   loc.icon,
@@ -1688,6 +1838,8 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                   ? nodeDrag!.hoverTarget!.valid
                     ? "#10b981"
                     : "#f43f5e"
+                  : isPortPreviewTarget
+                  ? "#fbbf24"
                   : isAnchorOrStart
                   ? "#f59e0b"
                   : loc.is_hub
@@ -1718,10 +1870,17 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
 
                 const occupiedSet =
                   occupiedSlotsByLocId.get(loc.id) ?? new Set<CompassDirection>();
+                const isReassignSourceHere =
+                  (portReassignDrag?.locationId === loc.id &&
+                    portReassignDrag.hasMoved) ||
+                  armedTouchPort?.locationId === loc.id;
                 const showPorts =
                   hoveredNodeKey === `loc:${loc.id}` ||
                   isSelected ||
-                  Boolean(linkDrag);
+                  Boolean(linkDrag) ||
+                  hoveredPort?.locationId === loc.id ||
+                  portReassignDrag?.locationId === loc.id ||
+                  armedTouchPort?.locationId === loc.id;
 
                 const extExits =
                   projectedTopology.externalPortalsByLocationId[loc.id] ?? [];
@@ -1740,6 +1899,7 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     key={loc.id}
                     data-node-kind="location"
                     data-node-id={loc.id}
+                    data-port-preview-target={isPortPreviewTarget ? "location" : undefined}
                     style={{
                       opacity:
                         mode === "campaign" && !loc.is_visited && !isSelected
@@ -1747,11 +1907,14 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                           : 1,
                     }}
                     onMouseEnter={() => setHoveredNodeKey(`loc:${loc.id}`)}
-                    onMouseLeave={() =>
+                    onMouseLeave={() => {
                       setHoveredNodeKey((curr) =>
                         curr === `loc:${loc.id}` ? null : curr
-                      )
-                    }
+                      );
+                      setHoveredPort((curr) =>
+                        curr?.locationId === loc.id ? null : curr
+                      );
+                    }}
                   >
                     {/* Transparent hover buffer bridging gap to compass ports without triggering node drag */}
                     <circle
@@ -1810,16 +1973,22 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                         handleSvgContextMenu(e, { kind: "location", id: loc.id })
                       }
                     >
-                      {/* Selection or Unreachable Warning Ring */}
-                      {(isSelected || isUnreachable) && (
+                      {/* Selection, Unreachable, or Opposite-Port Preview Ring */}
+                      {(isSelected || isUnreachable || isPortPreviewTarget) && (
                         <circle
                           cx={pt.x}
                           cy={pt.y}
                           r={loc.is_hub ? 22 : 24}
                           fill="none"
-                          stroke={isUnreachable ? "#f59e0b" : "#38bdf8"}
-                          strokeWidth={1.8}
-                          strokeDasharray="3 3"
+                          stroke={
+                            isPortPreviewTarget
+                              ? "#fbbf24"
+                              : isUnreachable
+                              ? "#f59e0b"
+                              : "#38bdf8"
+                          }
+                          strokeWidth={isPortPreviewTarget ? 2.4 : 1.8}
+                          strokeDasharray={isPortPreviewTarget ? undefined : "3 3"}
                           pointerEvents="none"
                         />
                       )}
@@ -1949,6 +2118,36 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                       )}
                     </g>
 
+                    {/* Opposite-end reciprocal port highlight when destination node's ports aren't open */}
+                    {previewTargetSlot && !showPorts && (() => {
+                      const a = COMPASS_ANGLES[previewTargetSlot];
+                      const px = pt.x + Math.cos(a) * LOCATION_PORT_RADIUS;
+                      const py = pt.y + Math.sin(a) * LOCATION_PORT_RADIUS;
+                      return (
+                        <g
+                          data-port-preview-target-slot={`${loc.id}:${previewTargetSlot}`}
+                          pointerEvents="none"
+                        >
+                          <circle
+                            cx={px}
+                            cy={py}
+                            r={8}
+                            fill="rgba(251, 191, 36, 0.28)"
+                            stroke="#fbbf24"
+                            strokeWidth={1.4}
+                          />
+                          <circle
+                            cx={px}
+                            cy={py}
+                            r={4.8}
+                            fill="#fbbf24"
+                            stroke="#fef3c7"
+                            strokeWidth={1.4}
+                          />
+                        </g>
+                      );
+                    })()}
+
                     {/* 8 Compass Connection Link Ports */}
                     {showPorts &&
                       !isMutatingLocked &&
@@ -1956,19 +2155,197 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                         const a = COMPASS_ANGLES[slot];
                         const px = pt.x + Math.cos(a) * LOCATION_PORT_RADIUS;
                         const py = pt.y + Math.sin(a) * LOCATION_PORT_RADIUS;
+                        const outgoingEdge = outgoingEdgeByLocSlot.get(
+                          `${loc.id}:${slot}`
+                        );
                         const isOccupied = occupiedSet.has(slot);
                         const isTargetHovered =
                           linkDrag?.hoverTarget?.kind === "location" &&
                           linkDrag.hoverTarget.id === loc.id &&
                           linkDrag.hoverTarget.slot === slot;
+                        const isReassignOrigin =
+                          (portReassignDrag?.locationId === loc.id &&
+                            portReassignDrag.fromSlot === slot) ||
+                          (armedTouchPort?.locationId === loc.id &&
+                            armedTouchPort.slot === slot);
+                        const isReassignHoverEmpty =
+                          portReassignDrag?.locationId === loc.id &&
+                          portReassignDrag.hasMoved &&
+                          portReassignDrag.hoverSlot === slot &&
+                          !portReassignDrag.hoverSlotBlocked &&
+                          slot !== portReassignDrag.fromSlot;
+                        const isReassignHoverBlocked =
+                          portReassignDrag?.locationId === loc.id &&
+                          portReassignDrag.hasMoved &&
+                          portReassignDrag.hoverSlot === slot &&
+                          portReassignDrag.hoverSlotBlocked;
+                        const isReassignCandidateEmpty =
+                          isReassignSourceHere && !isOccupied;
+                        const isOppositePreviewSlot =
+                          previewTargetSlot === slot;
+                        const isSelfHoveredOccupied =
+                          isOccupied &&
+                          hoveredPort?.locationId === loc.id &&
+                          hoveredPort.slot === slot;
+
+                        const portTooltip = isOccupied && outgoingEdge
+                          ? (() => {
+                              const destName =
+                                effectiveLocationMap.get(outgoingEdge.to_location_id)
+                                  ?.name ?? outgoingEdge.to_location_id;
+                              const isPreviewMatch =
+                                activePortPreview?.fromLocationId === loc.id &&
+                                activePortPreview.fromSlot === slot;
+                              const summary = isPreviewMatch
+                                ? activePortPreview.tooltipText
+                                : `${slot} → ${destName}`;
+                              return isMobileViewport
+                                ? `${summary} — tap to move or inspect`
+                                : `${summary} — drag to empty port to move, click to inspect`;
+                            })()
+                          : isReassignCandidateEmpty
+                          ? `${slot} — empty port (release or tap to move link here)`
+                          : `${slot} — drag to create a link`;
+
+                        const portCursor = isReassignHoverBlocked
+                          ? "not-allowed"
+                          : isOccupied
+                          ? portReassignDrag?.locationId === loc.id
+                            ? "grabbing"
+                            : "grab"
+                          : isReassignCandidateEmpty
+                          ? "pointer"
+                          : "crosshair";
+
+                        const dotRadius =
+                          isOppositePreviewSlot || isReassignHoverEmpty
+                            ? 5.4
+                            : isTargetHovered ||
+                              isReassignOrigin ||
+                              isSelfHoveredOccupied
+                            ? 5.0
+                            : isReassignCandidateEmpty
+                            ? 4.2
+                            : isOccupied
+                            ? 4
+                            : 3.4;
+
+                        const dotFill = isReassignHoverBlocked
+                          ? "#f43f5e"
+                          : isReassignHoverEmpty
+                          ? "#10b981"
+                          : isOppositePreviewSlot ||
+                            isReassignOrigin ||
+                            isSelfHoveredOccupied
+                          ? "#fbbf24"
+                          : isTargetHovered
+                          ? "#22d3ee"
+                          : isOccupied
+                          ? "#06b6d4"
+                          : "#0f172a";
+
+                        const dotStroke = isReassignHoverBlocked
+                          ? "#fecdd3"
+                          : isReassignHoverEmpty
+                          ? "#a7f3d0"
+                          : isOppositePreviewSlot ||
+                            isReassignOrigin ||
+                            isSelfHoveredOccupied
+                          ? "#fef3c7"
+                          : isReassignCandidateEmpty
+                          ? "#22d3ee"
+                          : isOccupied
+                          ? "#a5f3fc"
+                          : "#38bdf8";
 
                         return (
                           <g
                             key={slot}
                             data-link-port={`${loc.id}:${slot}`}
-                            style={{ cursor: "crosshair" }}
+                            data-port-occupied={isOccupied ? "true" : undefined}
+                            data-port-preview-target-slot={
+                              isOppositePreviewSlot
+                                ? `${loc.id}:${slot}`
+                                : undefined
+                            }
+                            style={{ cursor: portCursor }}
+                            onMouseEnter={() => {
+                              if (isOccupied) {
+                                setHoveredPort({ locationId: loc.id, slot });
+                              }
+                            }}
+                            onMouseLeave={() => {
+                              setHoveredPort((curr) =>
+                                curr?.locationId === loc.id && curr.slot === slot
+                                  ? null
+                                  : curr
+                              );
+                            }}
                             onPointerDown={(ev) => {
                               ev.stopPropagation();
+                              const isTouch =
+                                ev.pointerType === "touch" || isMobileViewport;
+
+                              // Mobile two-tap: if a port on this node is armed, tapping any empty port moves it there
+                              if (
+                                armedTouchPort &&
+                                armedTouchPort.locationId === loc.id
+                              ) {
+                                if (!isOccupied) {
+                                  onReassignEdgeSlot?.(
+                                    armedTouchPort.edgeId,
+                                    slot
+                                  );
+                                  setArmedTouchPort(null);
+                                  return;
+                                }
+                                if (armedTouchPort.slot === slot) {
+                                  const edgeIdToInspect = armedTouchPort.edgeId;
+                                  setArmedTouchPort(null);
+                                  onSelectEdgePair?.(edgeIdToInspect);
+                                  return;
+                                }
+                                if (outgoingEdge) {
+                                  setArmedTouchPort({
+                                    locationId: loc.id,
+                                    edgeId: outgoingEdge.id,
+                                    slot,
+                                  });
+                                  return;
+                                }
+                              }
+
+                              if (isOccupied && outgoingEdge) {
+                                if (isTouch) {
+                                  setArmedTouchPort({
+                                    locationId: loc.id,
+                                    edgeId: outgoingEdge.id,
+                                    slot,
+                                  });
+                                  return;
+                                }
+                                if (setPortReassignDrag) {
+                                  setPortReassignDrag({
+                                    locationId: loc.id,
+                                    edgeId: outgoingEdge.id,
+                                    fromSlot: slot,
+                                    pointerId: ev.pointerId,
+                                    pointerType: ev.pointerType,
+                                    startClientX: ev.clientX,
+                                    startClientY: ev.clientY,
+                                    startX: px,
+                                    startY: py,
+                                    currX: px,
+                                    currY: py,
+                                    hasMoved: false,
+                                    hoverSlot: slot,
+                                    hoverSlotBlocked: false,
+                                  });
+                                  return;
+                                }
+                              }
+
+                              setArmedTouchPort(null);
                               setLinkDrag({
                                 sourceKind: "location",
                                 sourceId: loc.id,
@@ -1983,19 +2360,42 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                               });
                             }}
                           >
-                            <circle cx={px} cy={py} r={portHitCircleRadius} fill="transparent" />
+                            <title>{portTooltip}</title>
                             <circle
                               cx={px}
                               cy={py}
-                              r={isTargetHovered ? 5.2 : isOccupied ? 4 : 3.4}
-                              fill={
-                                isTargetHovered
-                                  ? "#22d3ee"
-                                  : isOccupied
-                                  ? "#06b6d4"
-                                  : "#0f172a"
-                              }
-                              stroke={isOccupied ? "#a5f3fc" : "#38bdf8"}
+                              r={portHitCircleRadius}
+                              fill="transparent"
+                            />
+                            {(isOppositePreviewSlot || isReassignOrigin) && (
+                              <circle
+                                cx={px}
+                                cy={py}
+                                r={8}
+                                fill="rgba(251, 191, 36, 0.24)"
+                                stroke="#fbbf24"
+                                strokeWidth={1.2}
+                                pointerEvents="none"
+                              />
+                            )}
+                            {isReassignCandidateEmpty && !isReassignHoverEmpty && (
+                              <circle
+                                cx={px}
+                                cy={py}
+                                r={6.8}
+                                fill="rgba(34, 211, 238, 0.14)"
+                                stroke="#22d3ee"
+                                strokeWidth={1}
+                                strokeDasharray="2 2"
+                                pointerEvents="none"
+                              />
+                            )}
+                            <circle
+                              cx={px}
+                              cy={py}
+                              r={dotRadius}
+                              fill={dotFill}
+                              stroke={dotStroke}
                               strokeWidth={1.3}
                               pointerEvents="none"
                             />
@@ -2011,6 +2411,9 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                 const pt = ghostCoords[ghost.destination.id];
                 if (!pt) return null;
                 const isSelected = selectedGhostLocId === ghost.destination.id;
+                const isPortPreviewTarget =
+                  activePortPreview?.targetKind === "ghost" &&
+                  activePortPreview.targetNodeId === ghost.destination.id;
                 const GhostIcon = resolveMapIconComponent(
                   ghost.destination.icon,
                   ghost.destination.is_hub ? "hub" : "location"
@@ -2029,8 +2432,9 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                     key={`ghost-node-${ghost.destination.id}`}
                     data-node-kind="ghost"
                     data-node-id={ghost.destination.id}
+                    data-port-preview-target={isPortPreviewTarget ? "ghost" : undefined}
                     style={{
-                      opacity: isSelected ? 0.94 : 0.72,
+                      opacity: isPortPreviewTarget ? 1 : isSelected ? 0.94 : 0.72,
                       cursor: isPanning ? "grabbing" : "pointer",
                     }}
                     onPointerDown={(e) => {
@@ -2095,9 +2499,15 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                       rx={GHOST_CARD_RX}
                       fill="#0b0e14"
                       fillOpacity={0.82}
-                      stroke={isSelected ? "#22d3ee" : "#475569"}
-                      strokeWidth={isSelected ? 1.8 : 1.2}
-                      strokeDasharray="4 3"
+                      stroke={
+                        isPortPreviewTarget
+                          ? "#fbbf24"
+                          : isSelected
+                          ? "#22d3ee"
+                          : "#475569"
+                      }
+                      strokeWidth={isPortPreviewTarget ? 2.2 : isSelected ? 1.8 : 1.2}
+                      strokeDasharray={isPortPreviewTarget ? undefined : "4 3"}
                     />
                     <GhostIcon
                       size={13}
@@ -2334,6 +2744,47 @@ export const SpatialTopologyCanvas: React.FC<SpatialTopologyCanvasProps> = ({
                 }}
               >
                 +
+              </button>
+            </div>
+          )}
+
+          {/* Mobile two-tap port reassignment banner */}
+          {armedTouchPort && activePortPreview && (
+            <div
+              role="status"
+              data-testid="map-touch-port-reassign-bar"
+              onPointerDown={(e) => e.stopPropagation()}
+              style={{
+                position: "absolute",
+                top: 10,
+                left: "50%",
+                transform: "translateX(-50%)",
+                maxWidth: "calc(100% - 24px)",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                background: "rgba(15, 23, 42, 0.95)",
+                border: "1px solid #fbbf24",
+                color: "#fef3c7",
+                padding: "5px 10px",
+                borderRadius: 8,
+                fontSize: "0.72rem",
+                fontWeight: 600,
+                boxShadow: "0 4px 14px rgba(0, 0, 0, 0.55)",
+                zIndex: 22,
+              }}
+            >
+              <span>
+                {activePortPreview.tooltipText} · Tap an empty port to move, or tap{" "}
+                {armedTouchPort.slot} again to inspect
+              </span>
+              <button
+                type="button"
+                className="btn"
+                style={{ padding: "2px 7px", fontSize: "0.68rem" }}
+                onClick={() => setArmedTouchPort(null)}
+              >
+                Cancel
               </button>
             </div>
           )}

@@ -71,6 +71,37 @@ export interface LinkDragState {
   } | null;
 }
 
+export interface PortReassignDragState {
+  locationId: string;
+  edgeId: string;
+  fromSlot: CompassDirection;
+  pointerId?: number;
+  pointerType?: string;
+  startClientX: number;
+  startClientY: number;
+  startX: number;
+  startY: number;
+  currX: number;
+  currY: number;
+  hasMoved: boolean;
+  hoverSlot: CompassDirection | null;
+  hoverSlotBlocked: boolean;
+}
+
+export interface PortConnectionPreview {
+  edgeId: string;
+  fromLocationId: string;
+  fromSlot: CompassDirection;
+  toLocationId: string;
+  toLocationName: string;
+  targetKind: "location" | "container" | "ghost";
+  targetNodeId: string;
+  targetSlot: CompassDirection | null;
+  targetContainerName?: string;
+  edgePairKey: string | null;
+  tooltipText: string;
+}
+
 export const COMPASS_ORDER: CompassDirection[] = [
   "N",
   "NE",
@@ -204,11 +235,13 @@ export function resolveAutoTargetSlot(
 export function getLocationOccupiedPorts(
   locationId: string,
   edges: LocationEdge[],
-  locationMap: Map<string, LocationNode>
+  locationMap: Map<string, LocationNode>,
+  excludeEdgeId?: string
 ): Map<CompassDirection, string> {
   const occupied = new Map<CompassDirection, string>();
   for (const edge of edges) {
     if (edge.from_location_id !== locationId) continue;
+    if (excludeEdgeId && edge.id === excludeEdgeId) continue;
     const dir = edge.compass_direction;
     if (!dir || !COMPASS_ORDER.includes(dir)) continue;
     if (!occupied.has(dir)) {
@@ -219,6 +252,134 @@ export function getLocationOccupiedPorts(
     }
   }
   return occupied;
+}
+
+/**
+ * Resolve the opposite-end visual target for an occupied outgoing compass port on a location.
+ * Supports direct visible locations (including reciprocal port dot), cross-boundary container
+ * supernodes (aggregated or single passage), and shared external ghost nodes.
+ */
+export function resolvePortConnectionPreview(params: {
+  locationId: string;
+  slot: CompassDirection;
+  edges: LocationEdge[];
+  projectedTopology: Pick<
+    ProjectedDepthTopology,
+    | "visibleLocations"
+    | "visibleSupernodes"
+    | "ghostExternalNodes"
+    | "projectedEdges"
+    | "ghostEdges"
+  >;
+  locationMap: Map<string, LocationNode>;
+}): PortConnectionPreview | null {
+  const { locationId, slot, edges, projectedTopology, locationMap } = params;
+  const outgoing = edges.find(
+    (e) => e.from_location_id === locationId && e.compass_direction === slot
+  );
+  if (!outgoing) return null;
+
+  const toLocationId = outgoing.to_location_id;
+  const toLocationName = locationMap.get(toLocationId)?.name ?? toLocationId;
+  const reciprocal = edges.find(
+    (e) => e.from_location_id === toLocationId && e.to_location_id === locationId
+  );
+  const reciprocalSlot =
+    reciprocal?.compass_direction &&
+    COMPASS_ORDER.includes(reciprocal.compass_direction)
+      ? reciprocal.compass_direction
+      : null;
+
+  // 1. Direct visible location in the current view
+  if (projectedTopology.visibleLocations.some((l) => l.id === toLocationId)) {
+    const edgePairKey = [locationId, toLocationId].sort().join("<->");
+    const tooltipText = reciprocalSlot
+      ? `${slot} → ${toLocationName} (${reciprocalSlot})`
+      : `${slot} → ${toLocationName}`;
+    return {
+      edgeId: outgoing.id,
+      fromLocationId: locationId,
+      fromSlot: slot,
+      toLocationId,
+      toLocationName,
+      targetKind: "location",
+      targetNodeId: toLocationId,
+      targetSlot: reciprocalSlot,
+      edgePairKey,
+      tooltipText,
+    };
+  }
+
+  // 2. Shared external ghost node in the current view
+  if (
+    projectedTopology.ghostExternalNodes.some(
+      (g) => g.destination.id === toLocationId
+    )
+  ) {
+    const edgePairKey = `ghost:${[locationId, toLocationId].sort().join("<->")}`;
+    const tooltipText = reciprocalSlot
+      ? `${slot} → ${toLocationName} (${reciprocalSlot} · external)`
+      : `${slot} → ${toLocationName} (external)`;
+    return {
+      edgeId: outgoing.id,
+      fromLocationId: locationId,
+      fromSlot: slot,
+      toLocationId,
+      toLocationName,
+      targetKind: "ghost",
+      targetNodeId: toLocationId,
+      targetSlot: null,
+      edgePairKey,
+      tooltipText,
+    };
+  }
+
+  // 3. Cross-boundary link terminating inside a visible container supernode
+  const matchedProjected = projectedTopology.projectedEdges.find((pe) => {
+    const involvesLocation =
+      pe.sourceNodeId === locationId || pe.targetNodeId === locationId;
+    if (!involvesLocation) return false;
+    return (
+      pe.rawEdge.id === outgoing.id ||
+      Boolean(pe.groupedEdges?.some((ge) => ge.id === outgoing.id))
+    );
+  });
+  if (matchedProjected) {
+    const otherNodeId =
+      matchedProjected.sourceNodeId === locationId
+        ? matchedProjected.targetNodeId
+        : matchedProjected.sourceNodeId;
+    const matchedSupernode = projectedTopology.visibleSupernodes.find(
+      (sn) => sn.container.id === otherNodeId
+    );
+    if (matchedSupernode) {
+      const containerName = matchedSupernode.container.name;
+      const edgePairKey = [
+        matchedProjected.sourceNodeId,
+        matchedProjected.targetNodeId,
+      ]
+        .sort()
+        .join("<->");
+      const tooltipText = reciprocalSlot
+        ? `${slot} → ${toLocationName} (${reciprocalSlot}, inside ${containerName})`
+        : `${slot} → ${toLocationName} (inside ${containerName})`;
+      return {
+        edgeId: outgoing.id,
+        fromLocationId: locationId,
+        fromSlot: slot,
+        toLocationId,
+        toLocationName,
+        targetKind: "container",
+        targetNodeId: otherNodeId,
+        targetSlot: null,
+        targetContainerName: containerName,
+        edgePairKey,
+        tooltipText,
+      };
+    }
+  }
+
+  return null;
 }
 
 /** Build a human-readable ancestor breadcrumb (e.g., "Region › District") for a container. */

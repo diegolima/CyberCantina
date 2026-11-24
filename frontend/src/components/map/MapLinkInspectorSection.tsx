@@ -13,7 +13,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import type { LocationEdge, LocationNode } from "../../types";
+import type { CompassDirection, LocationEdge, LocationNode } from "../../types";
 import {
   LINK_SPEED_PRESET_GROUPS,
   MAX_EDGE_OBSTACLES,
@@ -35,6 +35,8 @@ import {
 } from "../../utils/spatialDistance";
 import { TagChipsInput } from "../TagChipsInput";
 import {
+  COMPASS_ORDER,
+  getLocationOccupiedPorts,
   isEdgeRevealed,
   resolveRevealedEdgePairs,
   type LinkPairInspectorData,
@@ -81,6 +83,10 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
   onDeleteEdge,
   canDeleteEdge,
 }) => {
+  const locationNodeMap = useMemo(
+    () => new Map(allLocations.map((loc) => [loc.id, loc])),
+    [allLocations]
+  );
   const locNameMap = useMemo(
     () => new Map(allLocations.map((loc) => [loc.id, loc.name])),
     [allLocations]
@@ -743,6 +749,101 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
           )}
         </div>
       </div>
+
+      {/* Compass Ports */}
+      {(() => {
+        const primaryOtherOccupied = getLocationOccupiedPorts(
+          primary.from_location_id,
+          allEdges,
+          locationNodeMap,
+          primary.id
+        );
+        const reciprocalOtherOccupied = reciprocal
+          ? getLocationOccupiedPorts(
+              reciprocal.from_location_id,
+              allEdges,
+              locationNodeMap,
+              reciprocal.id
+            )
+          : null;
+
+        const renderCompassRow = (opts: {
+          label: string;
+          currentSlot?: CompassDirection | null;
+          otherOccupied: Map<CompassDirection, string>;
+          onSelect: (slot: CompassDirection) => void;
+          testId: string;
+        }) => (
+          <div className="link-passage-field" data-testid={opts.testId}>
+            <span className="link-passage-sub">{opts.label}</span>
+            <div className="link-compass-grid" role="group" aria-label={opts.label}>
+              {COMPASS_ORDER.map((slot) => {
+                const isSelected = opts.currentSlot === slot;
+                const occupiedBy = opts.otherOccupied.get(slot);
+                const isDisabled = isMutatingLocked || Boolean(occupiedBy);
+                return (
+                  <button
+                    key={slot}
+                    type="button"
+                    className={`btn link-compass-btn${
+                      isSelected
+                        ? " link-compass-btn--active"
+                        : occupiedBy
+                        ? " link-compass-btn--occupied"
+                        : ""
+                    }`}
+                    disabled={isDisabled}
+                    aria-pressed={isSelected}
+                    aria-label={`${opts.label}: ${slot}`}
+                    data-compass-slot={slot}
+                    title={
+                      isSelected
+                        ? `${slot} — current port`
+                        : occupiedBy
+                        ? `${slot} — occupied by ${occupiedBy}`
+                        : `${slot} — move port here`
+                    }
+                    onClick={() => {
+                      if (!isSelected && !isDisabled) {
+                        opts.onSelect(slot);
+                      }
+                    }}
+                  >
+                    {slot}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+
+        return (
+          <div className="link-inspector-card" data-testid="link-compass-ports-card">
+            <span className="link-inspector-label">
+              <Compass size={12} color="#38bdf8" aria-hidden="true" /> Compass Ports
+            </span>
+            {renderCompassRow({
+              label: `Exit on ${fromName}`,
+              currentSlot: primary.compass_direction,
+              otherOccupied: primaryOtherOccupied,
+              testId: "link-compass-primary",
+              onSelect: (slot) =>
+                onPatchEdgePair?.(primary.id, { compass_direction: slot }),
+            })}
+            {reciprocal && reciprocalOtherOccupied &&
+              renderCompassRow({
+                label: `Exit on ${toName}`,
+                currentSlot: reciprocal.compass_direction,
+                otherOccupied: reciprocalOtherOccupied,
+                testId: "link-compass-reciprocal",
+                onSelect: (slot) =>
+                  onPatchEdgePair?.(primary.id, {
+                    reciprocal_compass_direction: slot,
+                  }),
+              })}
+          </div>
+        );
+      })()}
 
       {/* Direction Labels */}
       <div className="link-inspector-card">
