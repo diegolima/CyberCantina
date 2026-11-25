@@ -25,13 +25,22 @@ test.describe("05 - Live Campaign SSE Turn Streaming, Cognition, Arrival Cards &
       )
     ).toBeVisible();
 
-    // 2. Verify Turn #1 has sibling branch swipe buttons (v1 and v2) and switch to v2
+    // 2. Verify Turn #1 has segmented swipe switcher (v1/2) and switch to v2 via comparison popover
     await expect(
       page.getByText(/Clean checksum\. You might actually survive the night/i)
     ).toBeVisible();
-    const v2Btn = page.getByRole("button", { name: "v2" });
-    await expect(v2Btn).toBeVisible();
-    await v2Btn.click();
+    const swipeTrigger = page.locator(".turn-swipe-trigger-btn");
+    await expect(swipeTrigger).toBeVisible();
+    await expect(swipeTrigger).toContainText("v1/2");
+    await swipeTrigger.click();
+
+    const swipePopover = page.locator(".turn-swipe-popover");
+    await expect(swipePopover).toBeVisible();
+    const v2Option = swipePopover.getByRole("option", { name: /v2/i });
+    await expect(v2Option).toBeVisible();
+    await v2Option.click();
+
+    await expect(swipeTrigger).toContainText("v2/2");
 
     await expect(
       page.getByText(/Half now, half when the tunnel hatch opens/i)
@@ -98,21 +107,28 @@ test.describe("05 - Live Campaign SSE Turn Streaming, Cognition, Arrival Cards &
       "Tell me about the Cooling Tunnels."
     );
 
-    // Expand Kira Vance's Inner Cognition drawer on Turn #2
+    // Expand/collapse Kira Vance's Inner Cognition drawer on Turn #2 (default-expanded on desktop)
     const lastCognitionHeader = page.locator(".cognition-header").last();
     await expect(lastCognitionHeader).toContainText(
       "Kira Vance Inner Cognition"
     );
-    await lastCognitionHeader.click();
 
-    await expect(
-      page.getByText(
-        /Offer the tunnel route if they agree to split the cipher payout/i
-      )
-    ).toBeVisible();
-    await expect(
-      page.getByText(/Project the tunnel schematics onto the holo-table/i)
-    ).toBeVisible();
+    const cognitionWant = page.getByText(
+      /Offer the tunnel route if they agree to split the cipher payout/i
+    );
+    const cognitionPlan = page.getByText(
+      /Project the tunnel schematics onto the holo-table/i
+    );
+    await expect(cognitionWant).toBeVisible();
+    await expect(cognitionPlan).toBeVisible();
+
+    await lastCognitionHeader.click();
+    await expect(cognitionWant).not.toBeVisible();
+    await expect(cognitionPlan).not.toBeVisible();
+
+    await lastCognitionHeader.click();
+    await expect(cognitionWant).toBeVisible();
+    await expect(cognitionPlan).toBeVisible();
 
     mock.assertNoPageErrors();
   });
