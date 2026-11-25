@@ -1237,3 +1237,36 @@
   border-color: var(--cyan-border);
   background: var(--cyan-bg-subtle);
 }
+
+/* Physical State Codex Card */
+.codex-physical-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.codex-physical-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.codex-physical-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.codex-physical-context {
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.codex-physical-context--empty {
+  color: var(--text-muted);
+  font-style: italic;
+}

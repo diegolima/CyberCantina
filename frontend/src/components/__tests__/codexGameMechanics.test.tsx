@@ -235,12 +235,12 @@ function makeBundle(char: CharacterRecord, state: CharacterStateSnapshot): Campa
 }
 
 describe("Codex Game Mechanics Catalog & Helpers (v0.40.0)", () => {
-  it("contains all 7 subcategories and 23 valid unique articles with non-empty fields and valid cross-links", () => {
+  it("contains all 7 subcategories and 24 valid unique articles with non-empty fields and valid cross-links", () => {
     expect(MECHANICS_SUBCATEGORIES).toHaveLength(7);
-    expect(MECHANICS_ARTICLES).toHaveLength(23);
+    expect(MECHANICS_ARTICLES).toHaveLength(24);
 
     const ids = new Set(MECHANICS_ARTICLES.map((a) => a.id));
-    expect(ids.size).toBe(23);
+    expect(ids.size).toBe(24);
 
     for (const article of MECHANICS_ARTICLES) {
       expect(article.title.trim().length).toBeGreaterThan(0);
@@ -354,7 +354,7 @@ describe("Codex Game Mechanics UI & Contextual ? Deep-Links (SSR)", () => {
       expect(html).toContain("codex-hub-shelf");
       expect(html).toContain("Game Mechanics");
       expect(html).toContain("Reference");
-      expect(html).toContain("7 topics · 23 guides");
+      expect(html).toContain("7 topics · 24 guides");
       expect(html).toContain("CARE");
       expect(html).toContain("Dice &amp; Choices");
     }

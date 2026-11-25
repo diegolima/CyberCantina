@@ -1,6 +1,10 @@
 import React from "react";
 import { BookOpen, MapPin, User, Users } from "lucide-react";
-import { CharacterRecord, CharacterStateSnapshot } from "../../types";
+import {
+  CharacterRecord,
+  CharacterStateSnapshot,
+  getPhysicalStanceMeta,
+} from "../../types";
 import { getCharacterEmotionPortrait } from "../../utils/entityImages";
 import { ChangeDot, MiniMoodBars } from "./InspectorPrimitives";
 
@@ -36,6 +40,12 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
   const composurePct = Math.round(composureValue * 100);
   const activeEmotion = care?.active_emotion ?? "default";
   const portraitUrl = getCharacterEmotionPortrait(character, activeEmotion);
+  const stanceValue = state.physical_stance ?? "unspecified";
+  const showStancePill = isPresent && stanceValue !== "unspecified";
+  const stanceMeta = showStancePill ? getPhysicalStanceMeta(stanceValue) : null;
+  const stanceTitle = state.physical_context?.trim()
+    ? `${stanceMeta?.label}: ${state.physical_context.trim()}`
+    : stanceMeta?.shortHint || stanceMeta?.label;
 
   return (
     <div className={`char-row ${isPresent ? "" : "char-row-absent"}`}>
@@ -95,6 +105,14 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
                   }}
                 >
                   {activeEmotion}
+                </span>
+              )}
+              {showStancePill && stanceMeta && (
+                <span
+                  className={`physical-stance-pill physical-stance-pill--${stanceMeta.tone} char-row-stance-pill`}
+                  title={stanceTitle}
+                >
+                  {stanceMeta.label}
                 </span>
               )}
               {moodChanged && <ChangeDot title="Mood shifted this turn" />}

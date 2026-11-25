@@ -11,5 +11,6 @@ export * from "./prompts";
 export * from "./notes";
 export * from "./persona";
 export * from "./party";
+export * from "./physical";
 export * from "./gm";
 export * from "./importExport";

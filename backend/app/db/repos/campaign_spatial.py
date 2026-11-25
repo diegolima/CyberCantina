@@ -18,6 +18,12 @@ from app.schemas.party import (
     USER_PARTY_MEMBER_ID,
     LocationOverrideMoveMode,
 )
+from app.schemas.physical import (
+    PhysicalStance,
+    normalize_physical_stance,
+    resolve_post_turn_physical_state,
+    sanitize_physical_context,
+)
 from app.schemas.turn import (
     CampaignStateBundle,
     ImprovisedLocationSpec,
@@ -234,10 +240,20 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
         if arrival_cards or arrival_media:
             def _moved_state(st):
                 new_loc = updated_char_locs.get(st.character_id, st.current_location_id)
+                next_stance, next_ctx, _ = resolve_post_turn_physical_state(
+                    st.physical_stance,
+                    st.physical_context,
+                    st.physical_stance,
+                    st.physical_context,
+                    location_changed=(new_loc != st.current_location_id),
+                    time_elapsed_minutes=0,
+                )
                 return st.model_copy(
                     update={
                         "turn_id": arrival_turn_id,
                         "current_location_id": new_loc,
+                        "physical_stance": next_stance,
+                        "physical_context": next_ctx,
                     }
                 )
 
@@ -282,6 +298,29 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                     first_visit_media=arrival_media,
                 ),
             )
+            if world_target.id != old_loc_id:
+                conn = self._connect()
+                try:
+                    pts_row = conn.execute(
+                        "SELECT physical_stance, physical_context FROM persona_turn_states WHERE turn_id = ?",
+                        (arrival_turn_id,),
+                    ).fetchone()
+                    if pts_row:
+                        next_ps, next_pc, _ = resolve_post_turn_physical_state(
+                            pts_row["physical_stance"],
+                            pts_row["physical_context"],
+                            pts_row["physical_stance"],
+                            pts_row["physical_context"],
+                            location_changed=True,
+                            time_elapsed_minutes=0,
+                        )
+                        conn.execute(
+                            "UPDATE persona_turn_states SET physical_stance = ?, physical_context = ? WHERE turn_id = ?",
+                            (next_ps, next_pc, arrival_turn_id),
+                        )
+                        conn.commit()
+                finally:
+                    conn.close()
             return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
 
         conn = self._connect()
@@ -304,14 +343,51 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                 ),
             )
             for cid in moving_npcs:
-                conn.execute(
-                    """
-                    UPDATE character_states
-                    SET current_location_id = ?
-                    WHERE turn_id = ? AND character_id = ?
-                    """,
-                    (world_target.id, leaf_turn.id, cid),
-                )
+                prev_st = all_prev_states.get(cid)
+                if prev_st is not None:
+                    next_stance, next_ctx, _ = resolve_post_turn_physical_state(
+                        prev_st.physical_stance,
+                        prev_st.physical_context,
+                        prev_st.physical_stance,
+                        prev_st.physical_context,
+                        location_changed=(world_target.id != prev_st.current_location_id),
+                        time_elapsed_minutes=0,
+                    )
+                    conn.execute(
+                        """
+                        UPDATE character_states
+                        SET current_location_id = ?, physical_stance = ?, physical_context = ?
+                        WHERE turn_id = ? AND character_id = ?
+                        """,
+                        (world_target.id, next_stance, next_ctx, leaf_turn.id, cid),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE character_states
+                        SET current_location_id = ?
+                        WHERE turn_id = ? AND character_id = ?
+                        """,
+                        (world_target.id, leaf_turn.id, cid),
+                    )
+            if world_target.id != old_loc_id:
+                pts_row = conn.execute(
+                    "SELECT physical_stance, physical_context FROM persona_turn_states WHERE turn_id = ?",
+                    (leaf_turn.id,),
+                ).fetchone()
+                if pts_row:
+                    next_ps, next_pc, _ = resolve_post_turn_physical_state(
+                        pts_row["physical_stance"],
+                        pts_row["physical_context"],
+                        pts_row["physical_stance"],
+                        pts_row["physical_context"],
+                        location_changed=True,
+                        time_elapsed_minutes=0,
+                    )
+                    conn.execute(
+                        "UPDATE persona_turn_states SET physical_stance = ?, physical_context = ? WHERE turn_id = ?",
+                        (next_ps, next_pc, leaf_turn.id),
+                    )
             conn.commit()
         finally:
             conn.close()
@@ -360,16 +436,35 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
             name_map=name_map,
         )
 
+        prev_st = leaf_turn.character_states.get(character_id)
         conn = self._connect()
         try:
-            conn.execute(
-                """
-                UPDATE character_states
-                SET current_location_id = ?
-                WHERE turn_id = ? AND character_id = ?
-                """,
-                (target_loc.id, leaf_turn.id, character_id),
-            )
+            if prev_st is not None:
+                next_stance, next_ctx, _ = resolve_post_turn_physical_state(
+                    prev_st.physical_stance,
+                    prev_st.physical_context,
+                    prev_st.physical_stance,
+                    prev_st.physical_context,
+                    location_changed=(target_loc.id != prev_st.current_location_id),
+                    time_elapsed_minutes=0,
+                )
+                conn.execute(
+                    """
+                    UPDATE character_states
+                    SET current_location_id = ?, physical_stance = ?, physical_context = ?
+                    WHERE turn_id = ? AND character_id = ?
+                    """,
+                    (target_loc.id, next_stance, next_ctx, leaf_turn.id, character_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE character_states
+                    SET current_location_id = ?
+                    WHERE turn_id = ? AND character_id = ?
+                    """,
+                    (target_loc.id, leaf_turn.id, character_id),
+                )
             conn.execute(
                 """
                 UPDATE world_state_snapshots
@@ -380,6 +475,104 @@ class CampaignMapOpsMixin(CampaignMapUpdateMixin, CampaignLoreItemsMixin):
                     json.dumps([p.model_dump() for p in reconciled_parties]),
                     leaf_turn.id,
                 ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
+
+    def override_character_physical_state(
+        self,
+        campaign_id: str,
+        character_id: str,
+        *,
+        physical_stance: PhysicalStance,
+        physical_context: str = "",
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
+        """Override an NPC's physical stance & context in-place on the active leaf turn."""
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
+        if not campaign.active_leaf_turn_id:
+            raise ValueError(f"Campaign '{campaign_id}' has no active turn")
+
+        leaf_turn = self.get_turn_node(campaign.active_leaf_turn_id)
+        participant_set = set(campaign.participant_character_ids or [campaign.character_id]) | set(
+            leaf_turn.character_states.keys()
+        )
+        if character_id not in participant_set:
+            raise ValueError(
+                f"Character '{character_id}' is not a participant in campaign '{campaign_id}'."
+            )
+
+        norm_stance = normalize_physical_stance(physical_stance)
+        clean_ctx = sanitize_physical_context(physical_context)
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                """
+                UPDATE character_states
+                SET physical_stance = ?, physical_context = ?
+                WHERE turn_id = ? AND character_id = ?
+                """,
+                (norm_stance, clean_ctx, leaf_turn.id, character_id),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(
+                    f"No state snapshot found for character '{character_id}' on active turn."
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return self.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
+
+    def override_player_physical_state(
+        self,
+        campaign_id: str,
+        *,
+        physical_stance: PhysicalStance,
+        physical_context: str = "",
+        owner_id: str | None = None,
+    ) -> CampaignStateBundle:
+        """Override the player's physical stance & context on the active leaf turn (works with or without Persona)."""
+        campaign = self.get_campaign(campaign_id, owner_id=owner_id)
+        if not campaign.active_leaf_turn_id:
+            raise ValueError(f"Campaign '{campaign_id}' has no active turn")
+
+        turn_id = campaign.active_leaf_turn_id
+        norm_stance = normalize_physical_stance(physical_stance)
+        clean_ctx = sanitize_physical_context(physical_context)
+        default_eq = (
+            json.dumps([it.model_dump() for it in campaign.persona_snapshot.equipped])
+            if campaign.persona_snapshot is not None
+            else "[]"
+        )
+        default_inv = (
+            json.dumps([it.model_dump() for it in campaign.persona_snapshot.inventory])
+            if campaign.persona_snapshot is not None
+            else "[]"
+        )
+
+        conn = self._connect()
+        try:
+            existing = conn.execute(
+                "SELECT equipped_json, inventory_json FROM persona_turn_states WHERE turn_id = ?",
+                (turn_id,),
+            ).fetchone()
+            eq_json = existing["equipped_json"] if existing else default_eq
+            inv_json = existing["inventory_json"] if existing else default_inv
+            conn.execute(
+                """
+                INSERT INTO persona_turn_states (
+                    turn_id, equipped_json, inventory_json, physical_stance, physical_context
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(turn_id) DO UPDATE SET
+                    physical_stance = excluded.physical_stance,
+                    physical_context = excluded.physical_context
+                """,
+                (turn_id, eq_json, inv_json, norm_stance, clean_ctx),
             )
             conn.commit()
         finally:

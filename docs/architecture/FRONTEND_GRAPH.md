@@ -141,7 +141,7 @@ flowchart TD
 | `components/party` | 1 | `components/shared`, `types`, `utils` |
 | `components/prompts` | 3 | *(leaf)* |
 | `components/providers` | 5 | `api`, `local`, `providers`, `types` |
-| `components/shared` | 6 | `types`, `utils` |
+| `components/shared` | 7 | `types`, `utils` |
 | `components/story` | 5 | `components (root)`, `components/shared`, `types` |
 | `components/wizard` | 2 | `api`, `components (root)`, `types` |
 | `components/world` | 17 | `api`, `components (root)`, `components/character`, `components/chat`, `components/map`, `components/shared`, `types`, `utils` |
@@ -149,5 +149,5 @@ flowchart TD
 | `local` | 7 | `types` |
 | `main` | 1 | `App`, `styles.css` |
 | `providers` | 1 | `api`, `local`, `types` |
-| `types` | 16 | *(leaf)* |
+| `types` | 17 | *(leaf)* |
 | `utils` | 15 | `types` |

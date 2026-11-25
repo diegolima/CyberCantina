@@ -787,7 +787,9 @@ class SchemaInitMixin:
                 CREATE TABLE IF NOT EXISTS persona_turn_states (
                     turn_id TEXT PRIMARY KEY REFERENCES turn_nodes(id) ON DELETE CASCADE,
                     equipped_json TEXT NOT NULL DEFAULT '[]',
-                    inventory_json TEXT NOT NULL DEFAULT '[]'
+                    inventory_json TEXT NOT NULL DEFAULT '[]',
+                    physical_stance TEXT NOT NULL DEFAULT 'unspecified',
+                    physical_context TEXT NOT NULL DEFAULT ''
                 );
                 """
             )
@@ -1220,6 +1222,27 @@ class SchemaInitMixin:
             if "affective_state_json" not in cs_cols:
                 conn.execute(
                     "ALTER TABLE character_states ADD COLUMN affective_state_json TEXT NOT NULL DEFAULT '{}'"
+                )
+            if "physical_stance" not in cs_cols:
+                conn.execute(
+                    "ALTER TABLE character_states ADD COLUMN physical_stance TEXT NOT NULL DEFAULT 'unspecified'"
+                )
+            if "physical_context" not in cs_cols:
+                conn.execute(
+                    "ALTER TABLE character_states ADD COLUMN physical_context TEXT NOT NULL DEFAULT ''"
+                )
+
+            pts_cols = {
+                r["name"]
+                for r in conn.execute("PRAGMA table_info(persona_turn_states)").fetchall()
+            }
+            if "physical_stance" not in pts_cols:
+                conn.execute(
+                    "ALTER TABLE persona_turn_states ADD COLUMN physical_stance TEXT NOT NULL DEFAULT 'unspecified'"
+                )
+            if "physical_context" not in pts_cols:
+                conn.execute(
+                    "ALTER TABLE persona_turn_states ADD COLUMN physical_context TEXT NOT NULL DEFAULT ''"
                 )
 
             loc_cols = {

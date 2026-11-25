@@ -355,3 +355,103 @@
   outline-offset: 1px;
   color: var(--cyan-fg);
 }
+
+/* ==========================================================================
+   Physical Stance Pills & Inline Override Editor
+   ========================================================================== */
+.physical-stance-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 600;
+  line-height: 1.4;
+  border: 1px solid var(--border-subtle);
+  background: var(--slate-bg-subtle);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.physical-stance-pill--muted {
+  background: var(--slate-bg-subtle);
+  border-color: var(--slate-border-muted);
+  color: var(--text-secondary);
+}
+
+.physical-stance-pill--cyan {
+  background: var(--cyan-bg-subtle);
+  border-color: var(--cyan-border-subtle);
+  color: var(--cyan-fg);
+}
+
+.physical-stance-pill--emerald {
+  background: var(--emerald-bg-subtle);
+  border-color: var(--emerald-border);
+  color: var(--emerald-fg);
+}
+
+.physical-stance-pill--amber {
+  background: var(--amber-bg-subtle);
+  border-color: var(--amber-border-subtle);
+  color: var(--amber-fg);
+}
+
+.physical-stance-pill--violet {
+  background: var(--violet-bg-subtle);
+  border-color: var(--violet-border-subtle);
+  color: var(--violet-fg);
+}
+
+.physical-stance-pill--rose {
+  background: var(--rose-bg);
+  border-color: var(--rose-border);
+  color: var(--rose-fg);
+}
+
+.physical-state-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.physical-state-editor--compact {
+  gap: 6px;
+}
+
+.physical-state-editor-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.physical-state-select {
+  font-size: 0.74rem;
+  padding: 5px 8px;
+  flex: 0 0 auto;
+  max-width: 240px;
+}
+
+.physical-state-editor--compact .physical-state-select {
+  max-width: 125px;
+}
+
+.physical-state-input {
+  font-size: 0.74rem;
+  padding: 5px 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.physical-state-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.physical-state-error {
+  font-size: 0.72rem;
+  color: var(--rose-fg);
+}

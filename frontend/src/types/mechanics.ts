@@ -154,6 +154,7 @@ export type MechanicsTopicId =
   | "spatial-parties"
   | "spatial-hierarchy-portals"
   | "spatial-links-travel"
+  | "spatial-physical-stance"
   | "memory-3-tier"
   | "memory-context-health"
   | "memory-lore-flags"
@@ -177,6 +178,11 @@ export type CodexReturnTarget =
         | "inventory"
         | "current"
         | "media";
+      label: string;
+    }
+  | {
+      kind: "persona";
+      personaId: string;
       label: string;
     }
   | {

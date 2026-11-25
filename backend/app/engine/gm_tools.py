@@ -389,8 +389,11 @@ async def execute_gm_tool(
 
         if kind == "persona":
             persona = bundle.campaign.persona_snapshot
-            if persona and (query in persona.name.lower() or query == persona.id.lower()):
+            player_turn_state = bundle.current_persona_turn_state
+            if persona and (query in persona.name.lower() or query == persona.id.lower() or query in ("player", "you")):
                 sources.append(GmSourceRef(kind="persona", id=persona.id, label=persona.name))
+                eq_list = player_turn_state.equipped if player_turn_state is not None else persona.equipped
+                inv_list = player_turn_state.inventory if player_turn_state is not None else persona.inventory
                 return (
                     {
                         "kind": "persona",
@@ -398,8 +401,42 @@ async def execute_gm_tool(
                         "name": persona.name,
                         "tagline": persona.tagline,
                         "bio": persona.persona_bio,
-                        "equipped": [it.name for it in persona.equipped],
-                        "inventory": [it.name for it in persona.inventory],
+                        "equipped": [it.name for it in eq_list],
+                        "inventory": [it.name for it in inv_list],
+                        "physical_stance": (
+                            player_turn_state.physical_stance
+                            if player_turn_state is not None
+                            else "unspecified"
+                        ),
+                        "physical_context": (
+                            player_turn_state.physical_context
+                            if player_turn_state is not None
+                            else ""
+                        ),
+                    },
+                    sources,
+                    None,
+                )
+            if persona is None and query in ("player", "you"):
+                return (
+                    {
+                        "kind": "persona",
+                        "id": "user",
+                        "name": "Player",
+                        "tagline": "",
+                        "bio": "",
+                        "equipped": [it.name for it in (player_turn_state.equipped if player_turn_state else [])],
+                        "inventory": [it.name for it in (player_turn_state.inventory if player_turn_state else [])],
+                        "physical_stance": (
+                            player_turn_state.physical_stance
+                            if player_turn_state is not None
+                            else "unspecified"
+                        ),
+                        "physical_context": (
+                            player_turn_state.physical_context
+                            if player_turn_state is not None
+                            else ""
+                        ),
                     },
                     sources,
                     None,
@@ -422,6 +459,8 @@ async def execute_gm_tool(
                     "kind": "character",
                     "id": char.id,
                     "name": char.name,
+                    "physical_stance": state.physical_stance if state is not None else "unspecified",
+                    "physical_context": state.physical_context if state is not None else "",
                     "summary": _format_character_detail(char, state, vis=vis, detailed=True),
                 },
                 sources,

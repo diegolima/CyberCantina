@@ -19,6 +19,7 @@ from app.schemas.gm import (
     GmSourceRef,
 )
 from typing import Any
+from app.schemas.physical import format_physical_state_prompt_value
 from app.schemas.turn import CampaignStateBundle, TurnNodeRecord
 from app.schemas.world import (
     LocationContainer,
@@ -590,6 +591,12 @@ def _format_character_detail(
 
     lines = [f"- {char.name} (id={char.id}): {char.tagline or char.core_persona[:140]}"]
     lines.append(f"  Location: {loc_name}")
+    if state is not None:
+        phys_str = format_physical_state_prompt_value(
+            state.physical_stance, state.physical_context
+        )
+        if phys_str:
+            lines.append(f"  Physical State: {phys_str}")
     if equipped:
         lines.append(f"  Equipped: {', '.join(equipped)}")
     if inventory:
@@ -631,6 +638,14 @@ def _serialize_pinned_mention(
             f"Tagline: {persona.tagline}",
             f"Bio: {persona.persona_bio}",
         ]
+        player_turn_state = bundle.current_persona_turn_state
+        if player_turn_state is not None:
+            phys_str = format_physical_state_prompt_value(
+                player_turn_state.physical_stance,
+                player_turn_state.physical_context,
+            )
+            if phys_str:
+                lines.append(f"Physical State: {phys_str}")
         if persona.equipped:
             lines.append("Equipped: " + ", ".join(it.name for it in persona.equipped))
         if persona.inventory:

@@ -16,9 +16,11 @@ import {
   LocationNode,
   MechanicsTopicId,
   PersonaRecord,
+  PhysicalStateOverridePayload,
   TurnNodeRecord,
 } from "../../../types";
 import { MechanicsHelpButton } from "../../shared/MechanicsHelpButton";
+import { PhysicalStateControl } from "../../shared/PhysicalStateControl";
 import { RelationalBondChart } from "./RelationalBondChart";
 import { extractBondHistorySeries } from "./relationalHistory";
 
@@ -34,6 +36,9 @@ export interface CampaignCharacterStateTabProps {
   onRelocateCharacter?: (
     characterId: string,
     locationId: string
+  ) => Promise<void> | void;
+  onOverridePhysicalState?: (
+    payload: PhysicalStateOverridePayload
   ) => Promise<void> | void;
   characterNameMap: Record<string, string>;
   personaSnapshot?: PersonaRecord | null;
@@ -53,6 +58,7 @@ export const CampaignCharacterStateTab: React.FC<CampaignCharacterStateTabProps>
   locations = [],
   isMutatingLocked = false,
   onRelocateCharacter,
+  onOverridePhysicalState,
   characterNameMap,
   personaSnapshot = null,
   activeBranchTurns = [],
@@ -180,6 +186,17 @@ export const CampaignCharacterStateTab: React.FC<CampaignCharacterStateTabProps>
             Turn ID: {state.turn_id}
           </div>
         </div>
+
+        <PhysicalStateControl
+          label={character.name}
+          headerTitle="Physical Stance & Position"
+          stance={state.physical_stance}
+          context={state.physical_context}
+          variant="codex"
+          isMutatingLocked={isMutatingLocked}
+          onSave={onOverridePhysicalState}
+          onOpenMechanicsHelp={onOpenMechanicsHelp}
+        />
 
         {onRelocateCharacter && locations.length > 0 && (
           <div

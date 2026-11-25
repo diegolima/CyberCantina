@@ -1195,3 +1195,56 @@
   padding-top: 6px;
   border-top: 1px solid var(--border-subtle);
 }
+
+/* Physical Stance Continuity (LiveInspector Player Strip & CharacterRow Pill) */
+.char-row-stance-pill {
+  font-size: 0.6rem;
+  padding: 0 5px;
+}
+
+.inspector-player-physical {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-glass-1);
+}
+
+.inspector-player-physical-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.inspector-player-physical-identity {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.inspector-player-physical-label {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.inspector-player-physical-edit-btn {
+  padding: 2px 7px;
+  font-size: 0.68rem;
+  gap: 4px;
+}
+
+.inspector-player-physical-context {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+
+.inspector-player-physical-context--empty {
+  color: var(--text-muted);
+  font-style: italic;
+}

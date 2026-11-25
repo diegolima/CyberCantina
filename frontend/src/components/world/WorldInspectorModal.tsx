@@ -34,6 +34,7 @@ import type {
   MemoryShard,
   PersonaRecord,
   PersonaTurnStateSnapshot,
+  PhysicalStateOverridePayload,
   TurnNodeRecord,
   WorldGlobalRules,
   WorldLoreCategory,
@@ -129,6 +130,13 @@ interface WorldInspectorModalProps {
     characterId: string,
     locationId: string
   ) => Promise<void> | void;
+  onOverrideCharacterPhysicalState?: (
+    characterId: string,
+    payload: PhysicalStateOverridePayload
+  ) => Promise<void> | void;
+  onOverridePlayerPhysicalState?: (
+    payload: PhysicalStateOverridePayload
+  ) => Promise<void> | void;
 }
 
 export type WorldTab = "base" | "media" | "map" | "codex" | "settings" | "unsupported";
@@ -165,6 +173,8 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   onToggleItemEquip,
   onUpdateCampaignMemories,
   onOverrideCharacterLocation,
+  onOverrideCharacterPhysicalState,
+  onOverridePlayerPhysicalState,
 }) => {
   const isCampaignMode = mode === "campaign";
   const [activeTab, setActiveTab] = useState<WorldTab>(() =>
@@ -1102,6 +1112,8 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             onItemAction={onToggleItemEquip}
             onSaveMemories={onUpdateCampaignMemories}
             onRelocateCharacter={onOverrideCharacterLocation}
+            onOverrideCharacterPhysicalState={onOverrideCharacterPhysicalState}
+            onOverridePlayerPhysicalState={onOverridePlayerPhysicalState}
             onUpdateLoreNodes={(updater) => {
               setLoreNodes(updater);
               if (isCampaignMode) {

@@ -42,6 +42,13 @@ from app.schemas.character import (
     format_item_names,
 )
 from app.schemas.party import USER_PARTY_MEMBER_ID, PartyRecord
+from app.schemas.physical import (
+    extract_heuristic_physical_state,
+    format_physical_state_prompt_value,
+    is_physical_state_established,
+    normalize_physical_stance,
+    sanitize_physical_context,
+)
 from app.schemas.turn import (
     CharacterAgentDelta,
     ExtractedCharacterMemory,
@@ -527,6 +534,25 @@ def heuristic_character_agent_delta(
         )
         memories = [m for m in all_candidates if m.character_id == character.id]
 
+    # 6. Physical Stance & Context Heuristic (scoped to segments involving this character)
+    char_first_low = character.name.split()[0].lower() if character.name.split() else character.name.lower()
+    char_prose_segments: list[str] = []
+    for seg in re.split(r"(?<=[.!?])\s+|\n+", raw_prose):
+        s_clean = seg.strip()
+        if not s_clean:
+            continue
+        s_low = s_clean.lower()
+        mentions_self = character.name.lower() in s_low or (
+            len(char_first_low) >= 3 and bool(re.search(rf"\b{re.escape(char_first_low)}\b", s_low))
+        )
+        if mentions_self or is_speaker:
+            char_prose_segments.append(s_clean)
+    heur_stance, heur_ctx = extract_heuristic_physical_state(
+        "\n".join(char_prose_segments),
+        prev_stance=prev_state.physical_stance,
+        prev_context=prev_state.physical_context,
+    )
+
     return CharacterAgentDelta(
         mood_label=mood,
         affect_tone=affect_tone,
@@ -548,6 +574,8 @@ def heuristic_character_agent_delta(
         location_transition=loc_transition,
         target_location_id=target_loc_id,
         new_memories=memories,
+        physical_stance=heur_stance,
+        physical_context=heur_ctx,
     )
 
 
@@ -677,6 +705,12 @@ async def run_character_post_turn_agent(
         character_name=character.name,
         character_id=character.id,
     )
+    starting_physical_str = (
+        format_physical_state_prompt_value(
+            prev_state.physical_stance, prev_state.physical_context
+        )
+        or "unspecified"
+    )
     user_prompt = (
         f"Character Identity:\n"
         f"- Name: {character.name} (id='{character.id}')\n"
@@ -687,6 +721,7 @@ async def run_character_post_turn_agent(
         f"Pre-Turn Baseline State (Anchor post-turn updates here):\n"
         f"{affective_block}\n"
         f"- Pre-Turn Want: {prev_state.active_want}\n"
+        f"- Pre-Turn Starting Physical State: {starting_physical_str}\n"
         f"- Equipped / Worn: {equipped_str}\n"
         f"- Carried Inventory: {inventory_str}\n"
         f"{cognition_context}\n"
@@ -736,8 +771,17 @@ async def run_character_post_turn_agent(
             active_parties=eff_parties,
         )
 
-    # Post-process invariants: 2-4 word mood, canonical stance keys, and strict self-scoped memory ownership
+    # Post-process invariants: 2-4 word mood, canonical stance keys, physical carry-forward, and memory ownership
     delta.mood_label = normalize_mood_label(delta.mood_label, fallback=prev_state.mood_label)
+    delta.physical_stance = normalize_physical_stance(delta.physical_stance)
+    delta.physical_context = sanitize_physical_context(delta.physical_context)
+    if (
+        delta.physical_stance == "unspecified"
+        and not delta.physical_context
+        and is_physical_state_established(prev_state.physical_stance, prev_state.physical_context)
+    ):
+        delta.physical_stance = prev_state.physical_stance
+        delta.physical_context = prev_state.physical_context
     delta.stance_updates = normalize_stance_updates(
         delta.stance_updates,
         self_id=character.id,

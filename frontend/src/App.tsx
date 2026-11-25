@@ -209,6 +209,8 @@ export const App: React.FC = () => {
     handleSendTurn,
     handleOverrideLocation,
     handleOverrideCharacterLocation,
+    handleOverrideCharacterPhysicalState,
+    handleOverridePlayerPhysicalState,
     handleCreateNpcParty,
     handleDisbandParty,
     handleUpdateCampaignWorldSettings,
@@ -945,6 +947,7 @@ export const App: React.FC = () => {
           participants={campaignParticipants}
           pendingLocationOverrideId={pendingLocationOverrideId}
           onOverrideLocation={handleOverrideLocation}
+          onOverridePlayerPhysicalState={handleOverridePlayerPhysicalState}
           onOpenWorldSheet={() => {
             setCodexFocusRequest(null);
             setCampaignWorldSheetTab("base");
@@ -1011,6 +1014,7 @@ export const App: React.FC = () => {
           initialCodexFocus={codexFocusRequest}
           campaignId={bundle.campaign.id}
           activePersona={bundle.campaign.persona_snapshot ?? null}
+          activePersonaTurnState={bundle.current_persona_turn_state ?? null}
           campaignCharacters={liftedCodexCharacters}
           activeBranchTurns={bundle.active_branch_turns}
           activeLocationId={bundle.active_location.id}
@@ -1033,6 +1037,8 @@ export const App: React.FC = () => {
           onToggleItemEquip={handleToggleItemEquip}
           onUpdateCampaignMemories={handleUpdateCampaignMemories}
           onOverrideCharacterLocation={handleOverrideCharacterLocation}
+          onOverrideCharacterPhysicalState={handleOverrideCharacterPhysicalState}
+          onOverridePlayerPhysicalState={handleOverridePlayerPhysicalState}
           onClose={() => {
             setCampaignWorldSheetTab(null);
             setCodexFocusRequest(null);

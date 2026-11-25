@@ -13,6 +13,7 @@ import type {
   LocationOverrideOptions,
   MemoryShard,
   PersonaTurnStateSnapshot,
+  PhysicalStateOverridePayload,
   TurnBookmarkSummaryResponse,
   TurnBookmarkUpdatePayload,
   TurnNodeRecord,
@@ -80,6 +81,31 @@ export const campaignsApi = {
       {
         method: "POST",
         body: JSON.stringify({ location_id: locationId }),
+      }
+    ),
+
+  overrideCharacterPhysicalState: (
+    campaignId: string,
+    characterId: string,
+    payload: PhysicalStateOverridePayload
+  ) =>
+    fetchJson<CampaignStateBundle>(
+      `${API_BASE}/campaigns/${campaignId}/characters/${characterId}/physical-state-override`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    ),
+
+  overridePlayerPhysicalState: (
+    campaignId: string,
+    payload: PhysicalStateOverridePayload
+  ) =>
+    fetchJson<CampaignStateBundle>(
+      `${API_BASE}/campaigns/${campaignId}/player-physical-state-override`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
       }
     ),
 

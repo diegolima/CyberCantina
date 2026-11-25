@@ -70,6 +70,14 @@ from app.schemas.persona import (
     PersonaRecord,
     PersonaTurnStateSnapshot,
 )
+from app.schemas.physical import (
+    PhysicalStateResetReason,
+    format_physical_state_prompt_value,
+    is_physical_state_established,
+    normalize_physical_stance,
+    resolve_post_turn_physical_state,
+    sanitize_physical_context,
+)
 from app.schemas.turn import (
     ArbitrationRulingRecord,
     CharacterAgentDelta,
@@ -373,6 +381,17 @@ async def run_phase5_post_turn_clerk(
     ]
     involved_roster_str = ", ".join(dict.fromkeys(involved_roster_parts))
 
+    prev_player_stance = normalize_physical_stance(
+        current_player_state.physical_stance if current_player_state is not None else "unspecified"
+    )
+    prev_player_context = sanitize_physical_context(
+        current_player_state.physical_context if current_player_state is not None else ""
+    )
+    player_start_phys_str = (
+        format_physical_state_prompt_value(prev_player_stance, prev_player_context)
+        or "unspecified"
+    )
+
     world_system_prompt = render_template(
         post_turn_prompt_template or get_default_prompt("clerk_post_turn_system"),
         character_name=character.name,
@@ -383,6 +402,7 @@ async def run_phase5_post_turn_clerk(
         f"Current Location Description: {active_location.description}\n"
         f"Current Location Environmental Tags: {active_loc_env_str}\n"
         f"Present Characters/Persona: {involved_roster_str}\n"
+        f"Player Starting Physical State: {player_start_phys_str}\n"
         f"Current Scene Flags: {existing_flags_str}\n"
         f"Known Exits:\n{neighbor_options}\n"
         f"{candidate_secrets_block}\n"
@@ -433,6 +453,8 @@ async def run_phase5_post_turn_clerk(
                 neighbors=neighbors,
                 current_timestamp=current_timestamp,
                 candidate_secrets=candidate_secrets,
+                prev_player_stance=prev_player_stance,
+                prev_player_context=prev_player_context,
             )
         if on_progress:
             await on_progress(
@@ -863,6 +885,7 @@ async def run_phase5_post_turn_clerk(
 
     # 4. Reconcile CharacterStateSnapshots via CARE Solver + Witness Coupling (conserving ItemInstances)
     updated_states_by_char: dict[str, CharacterStateSnapshot] = {}
+    physical_reset_reasons: dict[str, PhysicalStateResetReason] = {}
     if is_narrator_turn:
         for ch in scene_characters:
             prev_st = prev_states_by_char[ch.id]
@@ -877,6 +900,21 @@ async def run_phase5_post_turn_clerk(
                 psyche=ch.baseline_psyche,
             )
             char_end_loc = resolved_end_locs.get(ch.id, prev_st.current_location_id)
+            if is_static_describe:
+                next_stance = prev_st.physical_stance
+                next_ctx = prev_st.physical_context
+                reset_reason = None
+            else:
+                next_stance, next_ctx, reset_reason = resolve_post_turn_physical_state(
+                    prev_st.physical_stance,
+                    prev_st.physical_context,
+                    prev_st.physical_stance,
+                    prev_st.physical_context,
+                    location_changed=(char_end_loc != prev_st.current_location_id),
+                    time_elapsed_minutes=turn_elapsed,
+                )
+            if reset_reason is not None:
+                physical_reset_reasons[ch.id] = reset_reason
             base_snap = CharacterStateSnapshot(
                 turn_id=completed_turn.id,
                 character_id=ch.id,
@@ -892,6 +930,8 @@ async def run_phase5_post_turn_clerk(
                 unlocked_persona_keys=list(prev_st.unlocked_persona_keys),
                 persona_knowledge_provenance=dict(prev_st.persona_knowledge_provenance),
                 care_state=projected_care,
+                physical_stance=next_stance,
+                physical_context=next_ctx,
             )
             updated_states_by_char[ch.id] = (
                 base_snap
@@ -958,6 +998,22 @@ async def run_phase5_post_turn_clerk(
                 donor_pool=donor_pool,
                 recipient_id=ch.id,
             )
+            next_stance, next_ctx, char_reset_reason = resolve_post_turn_physical_state(
+                prev_st.physical_stance,
+                prev_st.physical_context,
+                c_delta.physical_stance,
+                c_delta.physical_context,
+                location_changed=(char_loc_id != prev_st.current_location_id),
+                time_elapsed_minutes=turn_elapsed,
+            )
+            if char_reset_reason is not None:
+                physical_reset_reasons[ch.id] = char_reset_reason
+            char_deltas[ch.id] = char_deltas[ch.id].model_copy(
+                update={
+                    "physical_stance": next_stance,
+                    "physical_context": next_ctx,
+                }
+            )
 
             base_snaps_by_char[ch.id] = CharacterStateSnapshot(
                 turn_id=completed_turn.id,
@@ -973,6 +1029,8 @@ async def run_phase5_post_turn_clerk(
                 inventory=new_inventory,
                 unlocked_persona_keys=list(prev_st.unlocked_persona_keys),
                 persona_knowledge_provenance=dict(prev_st.persona_knowledge_provenance),
+                physical_stance=next_stance,
+                physical_context=next_ctx,
             )
 
             # Python-enforced epistemic visibility ceiling
@@ -1277,6 +1335,50 @@ async def run_phase5_post_turn_clerk(
                 tags_removed=applied_removed,
             )
 
+    if is_static_describe:
+        resolved_player_stance = prev_player_stance
+        resolved_player_context = prev_player_context
+        player_reset_reason = None
+    else:
+        raw_player_stance = normalize_physical_stance(world_delta.player_physical_stance)
+        raw_player_ctx = sanitize_physical_context(world_delta.player_physical_context)
+        if (
+            raw_player_stance == "unspecified"
+            and not raw_player_ctx
+            and is_physical_state_established(prev_player_stance, prev_player_context)
+        ):
+            raw_player_stance = prev_player_stance
+            raw_player_ctx = prev_player_context
+        resolved_player_stance, resolved_player_context, player_reset_reason = (
+            resolve_post_turn_physical_state(
+                prev_player_stance,
+                prev_player_context,
+                raw_player_stance,
+                raw_player_ctx,
+                location_changed=location_changed,
+                time_elapsed_minutes=turn_elapsed,
+            )
+        )
+    if player_reset_reason is not None:
+        physical_reset_reasons["user"] = player_reset_reason
+
+    if current_player_state is not None:
+        current_player_state = current_player_state.model_copy(
+            update={
+                "turn_id": completed_turn.id,
+                "physical_stance": resolved_player_stance,
+                "physical_context": resolved_player_context,
+            }
+        )
+    else:
+        current_player_state = PersonaTurnStateSnapshot(
+            turn_id=completed_turn.id,
+            equipped=[],
+            inventory=[],
+            physical_stance=resolved_player_stance,
+            physical_context=resolved_player_context,
+        )
+
     composite_post_turn = PostTurnStateDelta(
         elapsed_minutes=turn_elapsed if moved_neighbor is not None else world_delta.elapsed_minutes,
         new_world_timestamp=new_timestamp if moved_neighbor is not None and turn_elapsed >= min_travel_minutes else world_delta.new_world_timestamp,
@@ -1306,6 +1408,11 @@ async def run_phase5_post_turn_clerk(
         party_event_delta=party_event_delta,
         revealed_secret_lore_ids=newly_revealed_ids,
         major_event=persisted_major_event,
+        player_physical_stance=resolved_player_stance,
+        player_physical_context=resolved_player_context,
+        previous_player_physical_stance=prev_player_stance,
+        previous_player_physical_context=prev_player_context,
+        physical_state_reset_reasons=physical_reset_reasons,
     )
 
     primary_char_state = updated_states_by_char.get(

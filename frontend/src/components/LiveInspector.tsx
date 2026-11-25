@@ -18,6 +18,7 @@ import {
   LocationOverrideOptions,
   MechanicsTopicId,
   NeighborLocationView,
+  PhysicalStateOverridePayload,
   WorldRecord,
 } from "../types";
 import {
@@ -36,6 +37,7 @@ import {
 } from "./inspector/miniMapGeometry";
 import { InspectorInternalsSection } from "./inspector/InspectorInternalsSection";
 import { LoreIndexModal } from "./inspector/LoreIndexModal";
+import { PhysicalStateControl } from "./shared/PhysicalStateControl";
 import { buildCampaignCharacterEntries } from "./world/codexHelpers";
 import {
   COMPASS_ANGLES,
@@ -71,6 +73,9 @@ interface LiveInspectorProps {
   onOverrideLocation?: (
     locationId: string,
     options?: LocationOverrideOptions
+  ) => Promise<void> | void;
+  onOverridePlayerPhysicalState?: (
+    payload: PhysicalStateOverridePayload
   ) => Promise<void> | void;
   onSaveCampaignMap?: (payload: {
     containers: LocationContainer[];
@@ -109,6 +114,7 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   participants,
   pendingLocationOverrideId,
   onOverrideLocation,
+  onOverridePlayerPhysicalState,
   onSaveCampaignMap,
   onSaveCampaignLocationLore,
   onSaveCampaignContainerLore,
@@ -441,34 +447,41 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
           : fullMapModal;
       })()}
 
-      {/* 3. Characters (compact portrait cards opening the unified Codex dossier) */}
-      {characterRows.length > 0 && (
-        <div className="inspector-card inspector-collapsible">
-          {characterRows.map((row) => {
-            const cParty = getCharacterParty(activeParties, row.record.id);
-            const partyRole = cParty
-              ? cParty.member_ids.includes(USER_PARTY_MEMBER_ID)
-                ? "player_party"
-                : cParty.leader_id === row.record.id
-                ? "npc_leader"
-                : "npc_party"
-              : null;
-            return (
-              <CharacterRow
-                key={row.record.id}
-                character={row.record}
-                state={row.state}
-                isPresent={row.isPresent}
-                elsewhereLocationName={row.elsewhereLocationName}
-                moodChanged={row.moodChanged}
-                partyRole={partyRole}
-                partyName={cParty?.name ?? null}
-                onOpenInCodex={onOpenCharacterInCodex}
-              />
-            );
-          })}
-        </div>
-      )}
+      {/* 3. Player Physical Continuity + Characters (compact portrait cards opening the unified Codex dossier) */}
+      <div className="inspector-card inspector-collapsible">
+        <PhysicalStateControl
+          label={bundle.campaign.persona_snapshot?.name?.trim() || "You"}
+          variant="inspector"
+          stance={bundle.current_persona_turn_state?.physical_stance}
+          context={bundle.current_persona_turn_state?.physical_context}
+          isMutatingLocked={isMutatingLocked}
+          onSave={onOverridePlayerPhysicalState}
+          onOpenMechanicsHelp={onOpenMechanicsHelp}
+        />
+        {characterRows.map((row) => {
+          const cParty = getCharacterParty(activeParties, row.record.id);
+          const partyRole = cParty
+            ? cParty.member_ids.includes(USER_PARTY_MEMBER_ID)
+              ? "player_party"
+              : cParty.leader_id === row.record.id
+              ? "npc_leader"
+              : "npc_party"
+            : null;
+          return (
+            <CharacterRow
+              key={row.record.id}
+              character={row.record}
+              state={row.state}
+              isPresent={row.isPresent}
+              elsewhereLocationName={row.elsewhereLocationName}
+              moodChanged={row.moodChanged}
+              partyRole={partyRole}
+              partyName={cParty?.name ?? null}
+              onOpenInCodex={onOpenCharacterInCodex}
+            />
+          );
+        })}
+      </div>
 
       <InspectorInternalsSection
         bundle={bundle}

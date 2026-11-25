@@ -1,4 +1,5 @@
 import type { GalleryImage, ItemFlag } from "./character";
+import type { PhysicalStance } from "./physical";
 
 export type DisclosureDetectionMode = "llm_intent" | "token_matching" | "hybrid";
 
@@ -93,6 +94,8 @@ export interface PersonaTurnStateSnapshot {
   turn_id: string;
   equipped: PersonaItemInstance[];
   inventory: PersonaItemInstance[];
+  physical_stance?: PhysicalStance;
+  physical_context?: string;
 }
 
 // ---------------------------------------------------------------------------

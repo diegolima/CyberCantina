@@ -20,6 +20,7 @@ from app.prompts.defaults import (
 from app.schemas.auth import UserProfile
 from app.schemas.character import CharacterRecord
 from app.schemas.persona import PersonaTurnStateSnapshot
+from app.schemas.physical import PhysicalStateOverrideRequest
 from app.schemas.turn import (
     CampaignCharacterMemoriesUpdateRequest,
     CampaignRecord,
@@ -306,6 +307,58 @@ async def override_campaign_character_location(
             raise HTTPException(status_code=404, detail="Campaign, character, or location not found.") from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid character location override request.") from exc
+
+
+@router.post(
+    "/api/campaigns/{campaign_id}/characters/{character_id}/physical-state-override",
+    response_model=CampaignStateBundle,
+)
+async def override_campaign_character_physical_state(
+    campaign_id: str,
+    character_id: str,
+    req: PhysicalStateOverrideRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Override a participant NPC's physical stance and context in-place on the active leaf turn."""
+    async with campaign_turn_gate.lock_for(campaign_id):
+        try:
+            return await asyncio.to_thread(
+                _resolve_facade_attr("get_repo", get_repo)().override_character_physical_state,
+                campaign_id,
+                character_id,
+                physical_stance=req.physical_stance,
+                physical_context=req.physical_context,
+                owner_id=current_user.id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Campaign or character not found.") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid character physical state override request.") from exc
+
+
+@router.post(
+    "/api/campaigns/{campaign_id}/player-physical-state-override",
+    response_model=CampaignStateBundle,
+)
+async def override_campaign_player_physical_state(
+    campaign_id: str,
+    req: PhysicalStateOverrideRequest,
+    current_user: UserProfile = Depends(get_current_user),
+) -> CampaignStateBundle:
+    """Override the player's physical stance and context in-place on the active leaf turn."""
+    async with campaign_turn_gate.lock_for(campaign_id):
+        try:
+            return await asyncio.to_thread(
+                _resolve_facade_attr("get_repo", get_repo)().override_player_physical_state,
+                campaign_id,
+                physical_stance=req.physical_stance,
+                physical_context=req.physical_context,
+                owner_id=current_user.id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Campaign not found.") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid player physical state override request.") from exc
 
 
 @router.post("/api/campaigns/{campaign_id}/parties", response_model=CampaignStateBundle)

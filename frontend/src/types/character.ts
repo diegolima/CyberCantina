@@ -12,6 +12,7 @@ import type {
 import type { ChoiceComplianceOutcome } from "./mechanics";
 import type { PartyInviteDecision, TravelIntent } from "./party";
 import type { PersonaKnowledgeProvenance } from "./persona";
+import type { PhysicalStance } from "./physical";
 import type { WorldWizardDraft } from "./world";
 
 export interface BaselinePsyche {
@@ -298,4 +299,6 @@ export interface CharacterStateSnapshot {
   unlocked_persona_keys?: string[];
   persona_knowledge_provenance?: Record<string, PersonaKnowledgeProvenance>;
   care_state?: AffectiveCareState | null;
+  physical_stance?: PhysicalStance;
+  physical_context?: string;
 }

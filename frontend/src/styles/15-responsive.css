@@ -547,6 +547,17 @@
     grid-template-columns: 1fr;
   }
 
+  .physical-state-editor-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .physical-state-select,
+  .physical-state-editor--compact .physical-state-select {
+    max-width: none;
+    width: 100%;
+  }
+
   .turn-model-pill-label {
     display: none;
   }

@@ -34,6 +34,7 @@
 | `POST` | `/api/campaigns/{campaign_id}/characters` | `app.routers.campaign_routes.crud_and_state.add_campaign_character` | `CampaignStateBundle` | *(backend-only / test / SSE)* |
 | `POST` | `/api/campaigns/{campaign_id}/characters/{character_id}/location-override` | `app.routers.campaign_routes.crud_and_state.override_campaign_character_location` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/characters/{character_id}/memories` | `app.routers.campaign_routes.crud_and_state.update_campaign_character_memories` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
+| `POST` | `/api/campaigns/{campaign_id}/characters/{character_id}/physical-state-override` | `app.routers.campaign_routes.crud_and_state.override_campaign_character_physical_state` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/checkout` | `app.routers.campaign_routes.crud_and_state.checkout_campaign_branch` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `PUT` | `/api/campaigns/{campaign_id}/containers/{container_id}/lore` | `app.routers.campaign_routes.spatial_routes.update_campaign_container_lore` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/edges` | `app.routers.campaign_routes.spatial_routes.connect_campaign_locations` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
@@ -59,6 +60,7 @@
 | `POST` | `/api/campaigns/{campaign_id}/parties` | `app.routers.campaign_routes.crud_and_state.create_campaign_npc_party` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `DELETE` | `/api/campaigns/{campaign_id}/parties/{party_id}` | `app.routers.campaign_routes.crud_and_state.delete_campaign_party` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `GET` | `/api/campaigns/{campaign_id}/persona-state` | `app.routers.campaign_routes.crud_and_state.get_campaign_player_turn_state` | `Union` | `frontend/src/api/campaigns.ts` |
+| `POST` | `/api/campaigns/{campaign_id}/player-physical-state-override` | `app.routers.campaign_routes.crud_and_state.override_campaign_player_physical_state` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `PUT` | `/api/campaigns/{campaign_id}/prompt-preset` | `app.routers.prompts.set_campaign_prompt_preset` | `CampaignRecord` | `frontend/src/api/prompts.ts` |
 | `GET` | `/api/campaigns/{campaign_id}/state` | `app.routers.campaign_routes.crud_and_state.get_campaign_state` | `CampaignStateBundle` | `frontend/src/api/campaigns.ts` |
 | `POST` | `/api/campaigns/{campaign_id}/turns` | `app.routers.campaign_routes.turn_streaming.submit_campaign_turn_sync` | `CampaignStateBundle` | *(backend-only / test / SSE)* |
@@ -607,6 +609,7 @@ erDiagram
 | `backend/app/schemas/note.py` | Schemas for User Notes. |
 | `backend/app/schemas/party.py` | Leaf schemas for traveling parties, cognitive invite/travel intents, and party events. |
 | `backend/app/schemas/persona.py` | User persona, knowledge visibility, and dynamic state schemas. |
+| `backend/app/schemas/physical.py` | Leaf physical stance & motion continuity schemas, normalization, and staleness resolution. |
 | `backend/app/schemas/prompt.py` | Schemas for Prompt Presets, Template Customization, and Documentation. |
 | `backend/app/schemas/provider.py` | Pydantic schemas and domain records for LLM providers. |
 | `backend/app/schemas/telemetry.py` | Leaf Pydantic v2 schemas for per-turn LLM token usage and Context Health telemetry. |
@@ -859,6 +862,7 @@ erDiagram
 | `frontend/src/components/shared/ClickToEditField.tsx` |
 | `frontend/src/components/shared/ImageLightboxModal.tsx` |
 | `frontend/src/components/shared/MechanicsHelpButton.tsx` |
+| `frontend/src/components/shared/PhysicalStateControl.tsx` |
 | `frontend/src/components/shared/UnsupportedFieldsTab.tsx` |
 | `frontend/src/components/shared/VideoUploadControls.tsx` |
 
@@ -949,6 +953,7 @@ erDiagram
 | `frontend/src/types/notes.ts` |
 | `frontend/src/types/party.ts` |
 | `frontend/src/types/persona.ts` |
+| `frontend/src/types/physical.ts` |
 | `frontend/src/types/prompts.ts` |
 | `frontend/src/types/providers.ts` |
 | `frontend/src/types/telemetry.ts` |

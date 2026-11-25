@@ -31,6 +31,7 @@ import type {
   MemoryShard,
   PersonaRecord,
   PersonaTurnStateSnapshot,
+  PhysicalStateOverridePayload,
   TurnNodeRecord,
   WorldLoreCategory,
 } from "../../types";
@@ -140,6 +141,13 @@ interface WorldCodexTabProps {
   onItemAction?: (payload: ItemEquipActionPayload) => Promise<void> | void;
   onSaveMemories?: (characterId: string, shards: MemoryShard[]) => Promise<void>;
   onRelocateCharacter?: (characterId: string, locationId: string) => Promise<void> | void;
+  onOverrideCharacterPhysicalState?: (
+    characterId: string,
+    payload: PhysicalStateOverridePayload
+  ) => Promise<void> | void;
+  onOverridePlayerPhysicalState?: (
+    payload: PhysicalStateOverridePayload
+  ) => Promise<void> | void;
   onReturnToWorldTab?: (tab: "map" | "settings") => void;
 }
 
@@ -187,6 +195,8 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   onItemAction,
   onSaveMemories,
   onRelocateCharacter,
+  onOverrideCharacterPhysicalState,
+  onOverridePlayerPhysicalState,
   onReturnToWorldTab,
 }) => {
   const canEditWorldLore = !isCampaignMode || (unlockLore && !isMutatingLocked);
@@ -734,6 +744,13 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
       });
       return;
     }
+    if (target.kind === "persona") {
+      setGlobalQuery("");
+      setCategoryQuery("");
+      setActiveSection("major_characters");
+      setSelectedEntryKey(`persona:${target.personaId}`);
+      return;
+    }
     onReturnToWorldTab?.(target.tab);
   };
 
@@ -1125,6 +1142,11 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
             personaTurnState={effectivePersonaTurnState}
             loreNodes={loreNodes}
             onJumpToLore={handleJumpToLoreId}
+            isMutatingLocked={isMutatingLocked}
+            onOverridePlayerPhysicalState={onOverridePlayerPhysicalState}
+            onOpenMechanicsHelp={(topicId, returnTarget) =>
+              handleOpenMechanicsTopic(topicId, returnTarget ?? null)
+            }
           />
         );
       }
@@ -1145,6 +1167,8 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
             onItemAction={onItemAction}
             onSaveMemories={onSaveMemories}
             onRelocateCharacter={onRelocateCharacter}
+            onOverrideCharacterPhysicalState={onOverrideCharacterPhysicalState}
+            onOverridePlayerPhysicalState={onOverridePlayerPhysicalState}
             onOpenMechanicsHelp={(topicId, returnTarget) =>
               handleOpenMechanicsTopic(topicId, returnTarget ?? null)
             }
@@ -1299,6 +1323,8 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
           onItemAction={onItemAction}
           onSaveMemories={onSaveMemories}
           onRelocateCharacter={onRelocateCharacter}
+          onOverrideCharacterPhysicalState={onOverrideCharacterPhysicalState}
+          onOverridePlayerPhysicalState={onOverridePlayerPhysicalState}
           onOpenMechanicsHelp={(topicId, returnTarget) =>
             handleOpenMechanicsTopic(topicId, returnTarget ?? null)
           }

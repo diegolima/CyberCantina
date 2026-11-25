@@ -16,6 +16,7 @@ from app.schemas.character import (
     dump_items_json,
 )
 from app.schemas.party import PartyRecord
+from app.schemas.physical import normalize_physical_stance, sanitize_physical_context
 from app.schemas.telemetry import TurnTelemetry
 from app.schemas.persona import PersonaTurnStateSnapshot
 from app.schemas.turn import (
@@ -205,16 +206,36 @@ class TurnsBranchesMixin:
 
             if parent_turn_id is not None:
                 parent_pts = conn.execute(
-                    "SELECT equipped_json, inventory_json FROM persona_turn_states WHERE turn_id = ?",
+                    """
+                    SELECT equipped_json, inventory_json, physical_stance, physical_context
+                    FROM persona_turn_states WHERE turn_id = ?
+                    """,
                     (parent_turn_id,),
                 ).fetchone()
                 if parent_pts:
+                    pts_keys = parent_pts.keys()
                     conn.execute(
                         """
-                        INSERT OR REPLACE INTO persona_turn_states (turn_id, equipped_json, inventory_json)
-                        VALUES (?, ?, ?)
+                        INSERT OR REPLACE INTO persona_turn_states (
+                            turn_id, equipped_json, inventory_json, physical_stance, physical_context
+                        )
+                        VALUES (?, ?, ?, ?, ?)
                         """,
-                        (turn_id, parent_pts["equipped_json"], parent_pts["inventory_json"]),
+                        (
+                            turn_id,
+                            parent_pts["equipped_json"],
+                            parent_pts["inventory_json"],
+                            normalize_physical_stance(
+                                parent_pts["physical_stance"]
+                                if "physical_stance" in pts_keys
+                                else "unspecified"
+                            ),
+                            sanitize_physical_context(
+                                parent_pts["physical_context"]
+                                if "physical_context" in pts_keys
+                                else ""
+                            ),
+                        ),
                     )
 
                 parent_cs_rows = conn.execute(
@@ -256,6 +277,16 @@ class TurnsBranchesMixin:
                                 if "affective_state_json" in pcs_keys
                                 else None
                             ),
+                            physical_stance=normalize_physical_stance(
+                                pcs["physical_stance"]
+                                if "physical_stance" in pcs_keys
+                                else "unspecified"
+                            ),
+                            physical_context=sanitize_physical_context(
+                                pcs["physical_context"]
+                                if "physical_context" in pcs_keys
+                                else ""
+                            ),
                         )
 
             for st in states_by_char.values():
@@ -265,9 +296,10 @@ class TurnsBranchesMixin:
                         turn_id, character_id, current_location_id, mood_label,
                         valence, arousal, active_want, active_plan, relationship_notes_json,
                         equipped_json, inventory_json, unlocked_persona_keys_json,
-                        persona_knowledge_provenance_json, affective_state_json
+                        persona_knowledge_provenance_json, affective_state_json,
+                        physical_stance, physical_context
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         turn_id,
@@ -284,6 +316,8 @@ class TurnsBranchesMixin:
                         json.dumps(st.unlocked_persona_keys),
                         _dump_provenance_json(st.persona_knowledge_provenance),
                         _dump_care_state_json(st.care_state),
+                        normalize_physical_stance(st.physical_stance),
+                        sanitize_physical_context(st.physical_context),
                     ),
                 )
                 conn.execute(
@@ -425,16 +459,22 @@ class TurnsBranchesMixin:
             if updated_persona_turn_state is not None:
                 conn.execute(
                     """
-                    INSERT INTO persona_turn_states (turn_id, equipped_json, inventory_json)
-                    VALUES (?, ?, ?)
+                    INSERT INTO persona_turn_states (
+                        turn_id, equipped_json, inventory_json, physical_stance, physical_context
+                    )
+                    VALUES (?, ?, ?, ?, ?)
                     ON CONFLICT(turn_id) DO UPDATE SET
                         equipped_json = excluded.equipped_json,
-                        inventory_json = excluded.inventory_json
+                        inventory_json = excluded.inventory_json,
+                        physical_stance = excluded.physical_stance,
+                        physical_context = excluded.physical_context
                     """,
                     (
                         turn_id,
                         json.dumps([it.model_dump() for it in updated_persona_turn_state.equipped]),
                         json.dumps([it.model_dump() for it in updated_persona_turn_state.inventory]),
+                        normalize_physical_stance(updated_persona_turn_state.physical_stance),
+                        sanitize_physical_context(updated_persona_turn_state.physical_context),
                     ),
                 )
             for st in [updated_character_state, *(extra_character_states or [])]:
@@ -461,9 +501,9 @@ class TurnsBranchesMixin:
                         valence, arousal, active_want, active_plan,
                         relationship_notes_json, equipped_json, inventory_json,
                         unlocked_persona_keys_json, persona_knowledge_provenance_json,
-                        affective_state_json
+                        affective_state_json, physical_stance, physical_context
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(turn_id, character_id) DO UPDATE SET
                         current_location_id = excluded.current_location_id,
                         mood_label = excluded.mood_label,
@@ -476,7 +516,9 @@ class TurnsBranchesMixin:
                         inventory_json = excluded.inventory_json,
                         unlocked_persona_keys_json = excluded.unlocked_persona_keys_json,
                         persona_knowledge_provenance_json = excluded.persona_knowledge_provenance_json,
-                        affective_state_json = excluded.affective_state_json
+                        affective_state_json = excluded.affective_state_json,
+                        physical_stance = excluded.physical_stance,
+                        physical_context = excluded.physical_context
                     """,
                     (
                         turn_id,
@@ -493,6 +535,8 @@ class TurnsBranchesMixin:
                         json.dumps(st.unlocked_persona_keys),
                         _dump_provenance_json(st.persona_knowledge_provenance),
                         _dump_care_state_json(eff_care),
+                        normalize_physical_stance(st.physical_stance),
+                        sanitize_physical_context(st.physical_context),
                     ),
                 )
             conn.commit()
@@ -754,6 +798,12 @@ class TurnsBranchesMixin:
                     if "affective_state_json" in r_keys
                     else None
                 ),
+                physical_stance=normalize_physical_stance(
+                    r["physical_stance"] if "physical_stance" in r_keys else "unspecified"
+                ),
+                physical_context=sanitize_physical_context(
+                    r["physical_context"] if "physical_context" in r_keys else ""
+                ),
             )
         for t in turns:
             t.character_states = states_by_turn.get(
@@ -790,7 +840,9 @@ class TurnsBranchesMixin:
                     cs.inventory_json,
                     cs.unlocked_persona_keys_json,
                     cs.persona_knowledge_provenance_json,
-                    cs.affective_state_json
+                    cs.affective_state_json,
+                    cs.physical_stance,
+                    cs.physical_context
                 FROM turn_nodes t
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
                 JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = (
@@ -864,7 +916,9 @@ class TurnsBranchesMixin:
                     cs.inventory_json,
                     cs.unlocked_persona_keys_json,
                     cs.persona_knowledge_provenance_json,
-                    cs.affective_state_json
+                    cs.affective_state_json,
+                    cs.physical_stance,
+                    cs.physical_context
                 FROM branch_path bp
                 JOIN turn_nodes t ON t.id = bp.id
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
@@ -910,7 +964,9 @@ class TurnsBranchesMixin:
                     cs.inventory_json,
                     cs.unlocked_persona_keys_json,
                     cs.persona_knowledge_provenance_json,
-                    cs.affective_state_json
+                    cs.affective_state_json,
+                    cs.physical_stance,
+                    cs.physical_context
                 FROM turn_nodes t
                 JOIN world_state_snapshots ws ON ws.turn_id = t.id
                 JOIN character_states cs ON cs.turn_id = t.id AND cs.character_id = (
@@ -1210,12 +1266,26 @@ class TurnsBranchesMixin:
             except KeyError:
                 pass
 
+        persona_turn_state = self.get_campaign_persona_turn_state(
+            leaf_turn.id, campaign_id=campaign_id
+        )
+        if persona_turn_state is None:
+            persona_snap = campaign.persona_snapshot
+            persona_turn_state = PersonaTurnStateSnapshot(
+                turn_id=leaf_turn.id,
+                equipped=list(persona_snap.equipped) if persona_snap is not None else [],
+                inventory=list(persona_snap.inventory) if persona_snap is not None else [],
+                physical_stance="unspecified",
+                physical_context="",
+            )
+
         return CampaignStateBundle(
             campaign=campaign,
             active_branch_turns=branch_turns,
             all_turn_nodes=all_turns,
             current_world_snapshot=leaf_turn.world_snapshot,
             current_character_state=leaf_turn.character_state,
+            current_persona_turn_state=persona_turn_state,
             character_states=leaf_turn.character_states,
             character_records=char_records,
             present_character_ids=present_ids,
@@ -1469,6 +1539,12 @@ class TurnsBranchesMixin:
                     r["affective_state_json"]
                     if "affective_state_json" in r.keys()
                     else None
+                ),
+                physical_stance=normalize_physical_stance(
+                    r["physical_stance"] if "physical_stance" in r.keys() else "unspecified"
+                ),
+                physical_context=sanitize_physical_context(
+                    r["physical_context"] if "physical_context" in r.keys() else ""
                 ),
             ),
             recalled_items=[

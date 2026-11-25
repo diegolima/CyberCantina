@@ -5,8 +5,13 @@ from __future__ import annotations
 import hashlib
 import re
 from typing import Any, Literal
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from app.schemas.character import GalleryImage, ItemFlag
+from app.schemas.physical import (
+    PhysicalStance as PhysicalStance,
+    normalize_physical_stance,
+    sanitize_physical_context,
+)
 from app.schemas.unsupported import sanitize_unsupported_fields_dict
 
 DisclosureDetectionMode = Literal["llm_intent", "token_matching", "hybrid"]
@@ -345,8 +350,20 @@ class PersonaUpdatePayload(BaseModel):
 
 
 class PersonaTurnStateSnapshot(BaseModel):
-    """Turn-indexed mutable inventory state of the player character."""
+    """Turn-indexed mutable inventory and physical state of the player character."""
 
     turn_id: str
     equipped: list[PersonaItemInstance] = Field(default_factory=list)
     inventory: list[PersonaItemInstance] = Field(default_factory=list)
+    physical_stance: PhysicalStance = Field(default="unspecified")
+    physical_context: str = Field(default="")
+
+    @field_validator("physical_stance", mode="before")
+    @classmethod
+    def _coerce_physical_stance(cls, val: Any) -> PhysicalStance:
+        return normalize_physical_stance(val)
+
+    @field_validator("physical_context", mode="before")
+    @classmethod
+    def _coerce_physical_context(cls, val: Any) -> str:
+        return sanitize_physical_context(val)

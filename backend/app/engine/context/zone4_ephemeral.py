@@ -26,6 +26,7 @@ from app.schemas.persona import (
     PersonaRecord,
     PersonaTurnStateSnapshot,
 )
+from app.schemas.physical import format_physical_state_prompt_value
 from app.schemas.turn import (
     PreTurnAnalysis,
     RecalledMemoryItem,
@@ -346,10 +347,18 @@ def build_zone4_ephemeral_tail_frame(
                 oc_inv_names = format_item_names(
                     oc_state.inventory if oc_state is not None else oc.inventory
                 )
+                oc_phys = (
+                    format_physical_state_prompt_value(
+                        oc_state.physical_stance, oc_state.physical_context
+                    )
+                    if oc_state is not None
+                    else ""
+                )
+                phys_info = f" | Starting Physical State: {oc_phys}" if oc_phys else ""
                 eq_info = f" | Equipped: {', '.join(oc_eq_names)}" if oc_eq_names else ""
                 inv_info = f" | Carried: {', '.join(oc_inv_names)}" if oc_inv_names else ""
                 other_lines.append(
-                    f"    - {oc.name} ({oc.tagline}){demeanor_info}{player_stance}{speaker_stance}{app_info}{eq_info}{inv_info}"
+                    f"    - {oc.name} ({oc.tagline}){demeanor_info}{player_stance}{speaker_stance}{app_info}{phys_info}{eq_info}{inv_info}"
                 )
             co_present_section = (
                 "\n  <other_characters_in_room>\n"
@@ -398,6 +407,7 @@ def build_zone4_ephemeral_tail_frame(
             "  <solo_scene_directive>\n"
             "    The protagonist is acting alone in this empty location.\n"
             "    - Depict concrete environmental, sensory, and spatial outcomes of the user's action.\n"
+            "    - Treat any Starting Physical State below as where the protagonist begins this turn (not a frozen pose)—depict stance, orientation, and spatial transitions explicitly in prose rather than skipping or leaving them ambiguous.\n"
             "    - Honor any <mechanics_outcome> roll tier strictly without narrating absent NPC reactions.\n"
             "    - Keep absent campaign characters strictly off-screen unless triggered via remote comms.\n"
             "  </solo_scene_directive>"
@@ -445,14 +455,20 @@ def build_zone4_ephemeral_tail_frame(
         else:
             anchor_line = "    Behavioral Anchor: Ground outward speech, cadence, and micro-expressions in the affective state and self-control directives above.\n"
 
+        speaker_phys = format_physical_state_prompt_value(
+            character_state.physical_stance, character_state.physical_context
+        )
+        speaker_phys_line = f"    Starting Physical State: {speaker_phys}\n" if speaker_phys else ""
         mind_state_section = (
             f"{indented_affective}\n"
             f"  <character_equipment_and_goals character=\"{character.name}\">\n"
             f"    Previous Want: {character_state.active_want}\n"
             f"    Previous Plan: {character_state.active_plan}\n"
+            f"{speaker_phys_line}"
             f"    Equipped / Worn: {equipped_text}\n"
             f"    Carried Inventory: {inventory_text}\n"
             f"{anchor_line}"
+            f"    Physical Continuity: Treat any Starting Physical State above or below as where each participant begins this turn (not a frozen pose)—depict stance, orientation, and spatial transitions explicitly in prose rather than skipping or leaving them ambiguous.\n"
             f"  </character_equipment_and_goals>"
         )
         user_tail = f"User Action / Dialogue:\n{user_message}"
@@ -608,6 +624,34 @@ def build_zone4_ephemeral_tail_frame(
                 f"  </player_visible_equipment>"
             )
 
+    player_phys_str = (
+        format_physical_state_prompt_value(
+            current_player_state.physical_stance,
+            current_player_state.physical_context,
+        )
+        if current_player_state is not None
+        else ""
+    )
+    player_label = (
+        persona_snapshot.name.strip()
+        if persona_snapshot and persona_snapshot.name and persona_snapshot.name.strip()
+        else "Player"
+    )
+    player_phys_section = (
+        f'\n  <player_physical_state player="{player_label}">\n'
+        f"    Starting Physical State: {player_phys_str}\n"
+        f"  </player_physical_state>"
+        if player_phys_str
+        else ""
+    )
+    narrator_continuity_section = (
+        "\n  <physical_continuity>Treat any Starting Physical State above as where each participant begins this turn (not a frozen pose)—depict stance, orientation, and spatial transitions explicitly in prose rather than skipping or leaving them ambiguous.</physical_continuity>"
+        if is_narrator
+        and narrative_mode != "describe"
+        and (bool(player_phys_str) or "Starting Physical State:" in co_present_section)
+        else ""
+    )
+
     directed_cues_section = ""
     if decomposed_message and decomposed_message.whispers:
         whisper_lines = []
@@ -660,6 +704,8 @@ def build_zone4_ephemeral_tail_frame(
         f"{mind_state_section}"
         f"{established_cognition_section}"
         f"{player_gear_section}"
+        f"{player_phys_section}"
+        f"{narrator_continuity_section}"
         f"{directed_cues_section}\n"
         "</scene_context>\n\n"
         f"{user_tail}"

@@ -429,13 +429,17 @@ CREATE TABLE IF NOT EXISTS character_states (
     unlocked_persona_keys_json TEXT NOT NULL DEFAULT '[]',
     persona_knowledge_provenance_json TEXT NOT NULL DEFAULT '{}',
     affective_state_json TEXT NOT NULL DEFAULT '{}',
+    physical_stance TEXT NOT NULL DEFAULT 'unspecified',
+    physical_context TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (turn_id, character_id)
 );
 
 CREATE TABLE IF NOT EXISTS persona_turn_states (
     turn_id TEXT PRIMARY KEY REFERENCES turn_nodes(id) ON DELETE CASCADE,
     equipped_json TEXT NOT NULL DEFAULT '[]',
-    inventory_json TEXT NOT NULL DEFAULT '[]'
+    inventory_json TEXT NOT NULL DEFAULT '[]',
+    physical_stance TEXT NOT NULL DEFAULT 'unspecified',
+    physical_context TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS episodic_chunks (

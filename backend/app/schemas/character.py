@@ -40,6 +40,11 @@ from app.schemas.party import (
     PartyInviteDecision as PartyInviteDecision,
     TravelIntent as TravelIntent,
 )
+from app.schemas.physical import (
+    PhysicalStance as PhysicalStance,
+    normalize_physical_stance,
+    sanitize_physical_context,
+)
 
 MemoryOrigin = Literal[
     "backstory", "clerk_ephemeral", "clerk_promoted", "compacted"
@@ -1393,11 +1398,29 @@ class CharacterStateSnapshot(BaseModel):
         default=None,
         description="Self-contained 4-layer CARE affective and relational snapshot.",
     )
+    physical_stance: PhysicalStance = Field(
+        default="unspecified",
+        description="Current bodily stance at the end of this turn.",
+    )
+    physical_context: str = Field(
+        default="",
+        description="Concise micro-spatial/body context (orientation, cover, hands/contact).",
+    )
 
     @field_validator("equipped", "inventory", mode="before")
     @classmethod
     def _coerce_state_items(cls, val: Any) -> list[ItemInstance]:
         return coerce_item_list(val)
+
+    @field_validator("physical_stance", mode="before")
+    @classmethod
+    def _coerce_physical_stance(cls, val: Any) -> PhysicalStance:
+        return normalize_physical_stance(val)
+
+    @field_validator("physical_context", mode="before")
+    @classmethod
+    def _coerce_physical_context(cls, val: Any) -> str:
+        return sanitize_physical_context(val)
 
 
 class CharacterFeatureExtractionRequest(BaseModel):

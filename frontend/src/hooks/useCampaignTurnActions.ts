@@ -21,6 +21,7 @@ import type {
   Phase3TurnProgress,
   Phase4AgentProgressItem,
   Phase4TurnProgress,
+  PhysicalStateOverridePayload,
   TurnBookmarkUpdatePayload,
   TurnNodeRecord,
   WorldLoreNodeDraft,
@@ -488,6 +489,40 @@ export function useCampaignTurnActions({
     }
   };
 
+  const handleOverrideCharacterPhysicalState = async (
+    characterId: string,
+    payload: PhysicalStateOverridePayload
+  ) => {
+    if (!bundle || isStreaming || isPhase4Running) return;
+    try {
+      const updated = await api.overrideCharacterPhysicalState(
+        bundle.campaign.id,
+        characterId,
+        payload
+      );
+      setBundle(updated);
+    } catch (err) {
+      setStreamError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  };
+
+  const handleOverridePlayerPhysicalState = async (
+    payload: PhysicalStateOverridePayload
+  ) => {
+    if (!bundle || isStreaming || isPhase4Running) return;
+    try {
+      const updated = await api.overridePlayerPhysicalState(
+        bundle.campaign.id,
+        payload
+      );
+      setBundle(updated);
+    } catch (err) {
+      setStreamError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  };
+
   const handleCreateNpcParty = async (payload: CreateNpcPartyPayload) => {
     if (!bundle || isStreaming || isPhase4Running) return;
     try {
@@ -721,6 +756,8 @@ export function useCampaignTurnActions({
     handleSendTurn,
     handleOverrideLocation,
     handleOverrideCharacterLocation,
+    handleOverrideCharacterPhysicalState,
+    handleOverridePlayerPhysicalState,
     handleCreateNpcParty,
     handleDisbandParty,
     handleUpdateCampaignWorldSettings,

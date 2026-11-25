@@ -1,5 +1,6 @@
 import React from "react";
 import {
+  Activity,
   ArrowRight,
   Award,
   Bot,
@@ -24,7 +25,57 @@ import {
   ExtractedCharacterMemory,
   ImprovisedLocationSpec,
   Phase4TurnProgress,
+  PhysicalStance,
+  PhysicalStateResetReason,
+  formatPhysicalStateResetLabel,
+  getPhysicalStanceMeta,
 } from "../../types";
+
+function renderPhysicalTransitionContent(
+  prevStance: PhysicalStance,
+  prevContext: string,
+  nextStance: PhysicalStance,
+  nextContext: string,
+  resetReason: PhysicalStateResetReason | null
+): React.ReactNode {
+  const prevMeta = getPhysicalStanceMeta(prevStance);
+  const nextMeta = getPhysicalStanceMeta(nextStance);
+  const resetLabel = formatPhysicalStateResetLabel(resetReason);
+  const cleanPrevCtx = prevContext.trim();
+  const cleanNextCtx = nextContext.trim();
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span
+          className={`physical-stance-pill physical-stance-pill--${prevMeta.tone}`}
+          style={{ opacity: 0.78 }}
+        >
+          {prevMeta.label}
+        </span>
+        {cleanPrevCtx && (
+          <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+            ({cleanPrevCtx})
+          </span>
+        )}
+        <ArrowRight size={12} color="var(--text-muted)" />
+        <span className={`physical-stance-pill physical-stance-pill--${nextMeta.tone}`}>
+          {nextMeta.label}
+        </span>
+        {cleanNextCtx && (
+          <span style={{ fontSize: "0.78rem", color: "var(--text-primary)" }}>
+            {cleanNextCtx}
+          </span>
+        )}
+        {resetLabel && (
+          <span className="badge codex-badge--amber" style={{ fontSize: "0.68rem" }}>
+            {resetLabel}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export interface ActiveAgentModalTarget {
   turnId: string;
@@ -114,6 +165,24 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
           partyDelta.followed_player_ids.length > 0)
     );
 
+    const prevPlayerStance: PhysicalStance =
+      postTurn?.previous_player_physical_stance ?? "unspecified";
+    const prevPlayerContext = postTurn?.previous_player_physical_context ?? "";
+    const nextPlayerStance: PhysicalStance =
+      postTurn?.player_physical_stance ??
+      provisional?.player_physical_stance ??
+      prevPlayerStance;
+    const nextPlayerContext =
+      postTurn?.player_physical_context ??
+      provisional?.player_physical_context ??
+      prevPlayerContext;
+    const playerResetReason: PhysicalStateResetReason | null =
+      postTurn?.physical_state_reset_reasons?.user ?? null;
+    const hasPlayerPhysicalChange =
+      prevPlayerStance !== nextPlayerStance ||
+      prevPlayerContext.trim() !== nextPlayerContext.trim() ||
+      Boolean(playerResetReason);
+
     const hasAnyChanges =
       elapsedMinutes > 0 ||
       transitionType !== "stay" ||
@@ -121,7 +190,8 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
       flagsRemoved.length > 0 ||
       Boolean(notableSummary) ||
       arbitrationRulings.length > 0 ||
-      hasPartyDelta;
+      hasPartyDelta ||
+      hasPlayerPhysicalChange;
 
     return (
       <div className="modal-backdrop" onClick={onClose} style={{ zIndex: 85 }}>
@@ -282,6 +352,25 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
                 )}
               </div>
             </div>
+
+            {/* Player Physical State Transition */}
+            {hasPlayerPhysicalChange && (
+              <div className="agent-modal-card">
+                <div className="agent-modal-card-header">
+                  <Activity size={13} color="var(--accent-cyan)" />
+                  <span>Player Physical State</span>
+                </div>
+                <div className="agent-modal-card-body">
+                  {renderPhysicalTransitionContent(
+                    prevPlayerStance,
+                    prevPlayerContext,
+                    nextPlayerStance,
+                    nextPlayerContext,
+                    playerResetReason
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Notable World Event */}
             {notableSummary && (
@@ -558,6 +647,23 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
 
   const relationalEvents = delta?.relational_events || [];
 
+  const prevPhysStance: PhysicalStance = prevCharState?.physical_stance ?? "unspecified";
+  const prevPhysContext = prevCharState?.physical_context ?? "";
+  const nextPhysStance: PhysicalStance =
+    turn?.character_states?.[charId]?.physical_stance ??
+    delta?.physical_stance ??
+    prevPhysStance;
+  const nextPhysContext =
+    turn?.character_states?.[charId]?.physical_context ??
+    delta?.physical_context ??
+    prevPhysContext;
+  const charResetReason: PhysicalStateResetReason | null =
+    turn?.post_turn?.physical_state_reset_reasons?.[charId] ?? null;
+  const hasPhysicalMutation =
+    prevPhysStance !== nextPhysStance ||
+    prevPhysContext.trim() !== nextPhysContext.trim() ||
+    Boolean(charResetReason);
+
   const hasAnyMutations =
     Boolean(delta?.updated_want) ||
     Boolean(delta?.affect_tone) ||
@@ -568,7 +674,8 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
     hasInventoryChanges ||
     locTransition !== "stay_here" ||
     newMemories.length > 0 ||
-    characterArbitrations.length > 0;
+    characterArbitrations.length > 0 ||
+    hasPhysicalMutation;
 
   return (
     <div className="modal-backdrop" onClick={onClose} style={{ zIndex: 85 }}>
@@ -760,6 +867,25 @@ export const AgentChangesModal: React.FC<AgentChangesModalProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Physical Stance & Context */}
+          {hasPhysicalMutation && (
+            <div className="agent-modal-card">
+              <div className="agent-modal-card-header">
+                <Activity size={13} color="var(--accent-cyan)" />
+                <span>Physical Stance & Position</span>
+              </div>
+              <div className="agent-modal-card-body">
+                {renderPhysicalTransitionContent(
+                  prevPhysStance,
+                  prevPhysContext,
+                  nextPhysStance,
+                  nextPhysContext,
+                  charResetReason
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Immediate Want / Goal */}
           {delta?.updated_want && (

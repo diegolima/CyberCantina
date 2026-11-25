@@ -1,6 +1,9 @@
 import {
   DEFAULT_GATE_DC,
   MAX_CHOICE_OPTIONS,
+  MAX_PHYSICAL_CONTEXT_LENGTH,
+  PHYSICAL_STANCE_OPTIONS,
+  STALE_TIME_SKIP_MINUTES,
   TEMPERAMENT_ARCHETYPE_OPTIONS,
   type MechanicsSubcategoryId,
   type MechanicsTopicId,
@@ -1224,8 +1227,84 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
     },
     relatedTopicIds: [
       "spatial-hierarchy-portals",
+      "spatial-physical-stance",
       "directing-narrator-clock",
       "gm-mode",
+    ],
+  },
+  {
+    id: "spatial-physical-stance",
+    subcategoryId: "spatial",
+    title: "Physical Stance & Motion Continuity",
+    shortTitle: "Physical Stance",
+    keywords: [
+      "stance",
+      "posture",
+      "position",
+      "motion",
+      "continuity",
+      "prone",
+      "stomach",
+      "kneeling",
+      "crouching",
+      "sitting",
+      "restrained",
+      "incapacitated",
+      "physical context",
+    ],
+    inOneLine:
+      "Tracks each present NPC's and the Player's bodily stance and micro-position across turns so characters do not teleport out of cover, kneel abruptly after lying prone, or shrug off restraints.",
+    scales: [
+      {
+        label: "Canonical Stances",
+        rangeOrTag: `${PHYSICAL_STANCE_OPTIONS.length} Stances`,
+        meaning: PHYSICAL_STANCE_OPTIONS.map((opt) => opt.label).join(" · "),
+        accent: "cyan",
+      },
+      {
+        label: "Position Context",
+        rangeOrTag: `<= ${MAX_PHYSICAL_CONTEXT_LENGTH} chars`,
+        meaning:
+          "Concise anchor capturing body orientation (on stomach/back/side), room cover, hands/props, or physical contact.",
+        accent: "emerald",
+      },
+      {
+        label: "Smart Staleness Reset",
+        rangeOrTag: `Travel / >=${STALE_TIME_SKIP_MINUTES}m`,
+        meaning:
+          "Relocating rooms or skipping 30+ minutes clears untouched pose context (moving -> Standing, time skip -> Unspecified) while keeping Restrained/Incapacitated intact.",
+        accent: "amber",
+      },
+      {
+        label: "Manual Overrides",
+        rangeOrTag: "Always Available",
+        meaning:
+          "Edit live in the right-pane You strip, Codex → Current, or Codex → Player Persona without needing GM Mode.",
+        accent: "violet",
+      },
+    ],
+    howItChanges: [
+      "Phase 5 World Clerk (for You) and Character State Agents (for present NPCs) carry forward prior physical state verbatim unless turn prose depicts an explicit bodily or micro-spatial change.",
+      "Zone 4 injects non-unspecified positions as Starting Physical State—explicitly framed as a starting point, never a static lock—paired with a blocking continuity cue.",
+      "Zone 1 renders static character card Posture separately as Habitual Bearing so lasting mannerisms never collide with transient turn poses.",
+    ],
+    effectOnPlay: [
+      "Both Phase 3 Cognition and Phase 4 Prose account for starting physical constraints (such as scrambling up from Lying Down before rushing an exit, or fighting while Restrained).",
+      "Turn Clerk inspection modals display exact before -> after stance diffs and note whenever travel or a time skip triggered an automatic staleness reset.",
+    ],
+    underTheHood: {
+      summary:
+        "Zero extra LLM calls: physical fields piggyback on WorldPostTurnDelta and CharacterAgentDelta, silently omitted from prompts whenever Unspecified + empty.",
+      items: PHYSICAL_STANCE_OPTIONS.map((opt) => ({
+        label: opt.label,
+        value: opt.value,
+        detail: opt.shortHint,
+      })),
+    },
+    relatedTopicIds: [
+      "spatial-links-travel",
+      "gm-overrides-locks",
+      "directing-narrator-clock",
     ],
   },
 
@@ -1745,6 +1824,7 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
     ],
     relatedTopicIds: [
       "spatial-parties",
+      "spatial-physical-stance",
       "gm-mode",
       "memory-lore-flags",
     ],

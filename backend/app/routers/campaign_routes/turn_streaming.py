@@ -153,11 +153,13 @@ async def _execute_turn_stream_events_unlocked(
 
     persona_snapshot: PersonaRecord | None = campaign.persona_snapshot
     current_player_state: PersonaTurnStateSnapshot | None = repo.get_campaign_persona_turn_state(parent_turn.id)
-    if current_player_state is None and persona_snapshot is not None:
+    if current_player_state is None:
         current_player_state = PersonaTurnStateSnapshot(
             turn_id=parent_turn.id,
-            equipped=list(persona_snapshot.equipped),
-            inventory=list(persona_snapshot.inventory),
+            equipped=list(persona_snapshot.equipped) if persona_snapshot is not None else [],
+            inventory=list(persona_snapshot.inventory) if persona_snapshot is not None else [],
+            physical_stance="unspecified",
+            physical_context="",
         )
 
     world = repo.get_world(
@@ -857,6 +859,8 @@ async def _execute_turn_stream_events_unlocked(
         unlocked_persona_keys=list(base_primary_state.unlocked_persona_keys),
         persona_knowledge_provenance=dict(base_primary_state.persona_knowledge_provenance),
         care_state=provisional_primary_care,
+        physical_stance=base_primary_state.physical_stance,
+        physical_context=base_primary_state.physical_context,
     )
 
     # Seed all participant character states so UI doesn't drop co-present character state

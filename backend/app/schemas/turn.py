@@ -43,6 +43,14 @@ from app.schemas.party import (
     PartyRecord as PartyRecord,
     TravelIntent as TravelIntent,
 )
+from app.schemas.physical import (
+    PhysicalStance as PhysicalStance,
+    PhysicalStateOverrideRequest as PhysicalStateOverrideRequest,
+    PhysicalStateResetReason as PhysicalStateResetReason,
+    normalize_physical_stance,
+    sanitize_physical_context,
+)
+from app.schemas.persona import PersonaTurnStateSnapshot
 from app.schemas.persona import PersonaRecord
 from app.schemas.telemetry import TurnTelemetry
 from app.schemas.world import (
@@ -649,6 +657,21 @@ class WorldPostTurnDelta(BaseModel):
             "(null on ~90%+ of routine turns)."
         ),
     )
+    player_physical_stance: PhysicalStance = Field(
+        default="unspecified",
+        description=(
+            "Player's bodily stance at the END of this turn: 'unspecified', 'standing', 'sitting', "
+            "'leaning', 'crouching', 'kneeling', 'lying_down', 'moving', 'restrained', or 'incapacitated'. "
+            "Carry forward the starting stance verbatim unless the turn depicts an explicit physical change."
+        ),
+    )
+    player_physical_context: str = Field(
+        default="",
+        description=(
+            "Concise <=15-word anchor for the player's orientation (on stomach/back/side), micro-location, "
+            "and hands/contact at the end of this turn. Carry forward verbatim when unchanged; empty string if none."
+        ),
+    )
 
     @field_validator("elapsed_minutes", mode="before")
     @classmethod
@@ -658,12 +681,32 @@ class WorldPostTurnDelta(BaseModel):
         except (TypeError, ValueError):
             return 2
 
+    @field_validator("player_physical_stance", mode="before")
+    @classmethod
+    def _coerce_player_physical_stance(cls, v: Any) -> PhysicalStance:
+        return normalize_physical_stance(v)
+
+    @field_validator("player_physical_context", mode="before")
+    @classmethod
+    def _coerce_player_physical_context(cls, v: Any) -> str:
+        return sanitize_physical_context(v)
+
 
 CharacterLocationTransition = Literal["stay_here", "follow_player", "move_to_neighbor"]
 
 
 class CharacterAgentDelta(BaseModel):
     """Per-character post-turn state mutation proposal emitted by a Character State Agent."""
+
+    model_config = ConfigDict(
+        json_schema_extra=lambda schema: schema.update(
+            required=[
+                k
+                for k in schema.get("properties", {}).keys()
+                if k not in ("valence_delta", "arousal_delta")
+            ]
+        )
+    )
 
     mood_label: str = Field(
         default="Observant and composed",
@@ -765,6 +808,21 @@ class CharacterAgentDelta(BaseModel):
         default_factory=dict,
         description="Gossip exchange: mapping of recipient character_id to secret persona keys communicated in dialogue.",
     )
+    physical_stance: PhysicalStance = Field(
+        default="unspecified",
+        description=(
+            "Character's bodily stance at the END of this turn: 'unspecified', 'standing', 'sitting', "
+            "'leaning', 'crouching', 'kneeling', 'lying_down', 'moving', 'restrained', or 'incapacitated'. "
+            "Carry forward the pre-turn stance verbatim unless the turn depicts an explicit physical transition."
+        ),
+    )
+    physical_context: str = Field(
+        default="",
+        description=(
+            "Concise <=15-word anchor for orientation (on stomach/back/side), micro-location, and hands/contact "
+            "at the end of this turn. Carry forward verbatim when unchanged; empty string if none."
+        ),
+    )
 
     @field_validator("affect_tone", mode="before")
     @classmethod
@@ -858,6 +916,16 @@ class CharacterAgentDelta(BaseModel):
             if "neighbor" in low or "depart" in low or "leave" in low or "move" in low:
                 return "move_to_neighbor"
         return "stay_here"
+
+    @field_validator("physical_stance", mode="before")
+    @classmethod
+    def _coerce_physical_stance(cls, v: Any) -> PhysicalStance:
+        return normalize_physical_stance(v)
+
+    @field_validator("physical_context", mode="before")
+    @classmethod
+    def _coerce_physical_context(cls, v: Any) -> str:
+        return sanitize_physical_context(v)
 
 
 class PersonaGossipEvent(BaseModel):
@@ -984,6 +1052,26 @@ class PostTurnStateDelta(BaseModel):
     major_event: MajorEventRecord | None = Field(
         default=None,
         description="Structured world-changing or location-changing Major Event logged during Phase 5.",
+    )
+    player_physical_stance: PhysicalStance | None = Field(
+        default=None,
+        description="Resolved player bodily stance at the end of this turn.",
+    )
+    player_physical_context: str | None = Field(
+        default=None,
+        description="Resolved player physical context at the end of this turn.",
+    )
+    previous_player_physical_stance: PhysicalStance | None = Field(
+        default=None,
+        description="Player bodily stance immediately before this turn.",
+    )
+    previous_player_physical_context: str | None = Field(
+        default=None,
+        description="Player physical context immediately before this turn.",
+    )
+    physical_state_reset_reasons: dict[str, PhysicalStateResetReason] = Field(
+        default_factory=dict,
+        description="Automatic smart staleness reset reasons keyed by 'user' or character_id.",
     )
 
 
@@ -1184,6 +1272,7 @@ class CampaignStateBundle(BaseModel):
     all_turn_nodes: list[TurnNodeRecord]
     current_world_snapshot: WorldStateSnapshot
     current_character_state: CharacterStateSnapshot
+    current_persona_turn_state: PersonaTurnStateSnapshot | None = None
     character_states: dict[str, CharacterStateSnapshot] = Field(default_factory=dict)
     character_records: dict[str, CharacterRecord] = Field(default_factory=dict)
     present_character_ids: list[str] = Field(default_factory=list)

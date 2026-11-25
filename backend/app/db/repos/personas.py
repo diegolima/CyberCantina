@@ -24,6 +24,11 @@ from app.schemas.persona import (
     is_default_persona_id,
     sanitize_persona_unsupported_fields,
 )
+from app.schemas.physical import (
+    PhysicalStance,
+    normalize_physical_stance,
+    sanitize_physical_context,
+)
 from app.db.repos.base import _sanitize_persona_media, utc_now_iso
 from app.security.media_path import (
     PathTraversalError,
@@ -776,13 +781,14 @@ class PersonasMixin:
     def get_campaign_persona_turn_state(
         self, turn_id: str, campaign_id: str | None = None
     ) -> PersonaTurnStateSnapshot | None:
-        """Retrieve the player's dynamic inventory & equipped items for a turn."""
+        """Retrieve the player's dynamic inventory, equipped items, and physical state for a turn."""
         conn = self._connect()
         try:
             if campaign_id is not None:
                 r = conn.execute(
                     """
-                    SELECT pts.equipped_json, pts.inventory_json
+                    SELECT pts.equipped_json, pts.inventory_json,
+                           pts.physical_stance, pts.physical_context
                     FROM persona_turn_states pts
                     JOIN turn_nodes tn ON tn.id = pts.turn_id
                     WHERE pts.turn_id = ? AND tn.campaign_id = ?
@@ -791,17 +797,30 @@ class PersonasMixin:
                 ).fetchone()
             else:
                 r = conn.execute(
-                    "SELECT equipped_json, inventory_json FROM persona_turn_states WHERE turn_id = ?",
+                    """
+                    SELECT equipped_json, inventory_json, physical_stance, physical_context
+                    FROM persona_turn_states
+                    WHERE turn_id = ?
+                    """,
                     (turn_id,),
                 ).fetchone()
             if not r:
                 return None
+            r_keys = r.keys()
             equipped_raw = json.loads(r["equipped_json"] or "[]")
             inventory_raw = json.loads(r["inventory_json"] or "[]")
+            stance = normalize_physical_stance(
+                r["physical_stance"] if "physical_stance" in r_keys else "unspecified"
+            )
+            context = sanitize_physical_context(
+                r["physical_context"] if "physical_context" in r_keys else ""
+            )
             return PersonaTurnStateSnapshot(
                 turn_id=turn_id,
                 equipped=[PersonaItemInstance.model_validate(it) for it in equipped_raw],
                 inventory=[PersonaItemInstance.model_validate(it) for it in inventory_raw],
+                physical_stance=stance,
+                physical_context=context,
             )
         finally:
             conn.close()
@@ -811,22 +830,33 @@ class PersonasMixin:
         turn_id: str,
         equipped: list[PersonaItemInstance],
         inventory: list[PersonaItemInstance],
+        *,
+        physical_stance: PhysicalStance = "unspecified",
+        physical_context: str = "",
     ) -> None:
-        """Persist or update the player's turn-indexed dynamic inventory state."""
+        """Persist or update the player's turn-indexed dynamic inventory and physical state."""
+        norm_stance = normalize_physical_stance(physical_stance)
+        clean_ctx = sanitize_physical_context(physical_context)
         conn = self._connect()
         try:
             conn.execute(
                 """
-                INSERT INTO persona_turn_states (turn_id, equipped_json, inventory_json)
-                VALUES (?, ?, ?)
+                INSERT INTO persona_turn_states (
+                    turn_id, equipped_json, inventory_json, physical_stance, physical_context
+                )
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(turn_id) DO UPDATE SET
                     equipped_json = excluded.equipped_json,
-                    inventory_json = excluded.inventory_json
+                    inventory_json = excluded.inventory_json,
+                    physical_stance = excluded.physical_stance,
+                    physical_context = excluded.physical_context
                 """,
                 (
                     turn_id,
                     json.dumps([it.model_dump() for it in equipped]),
                     json.dumps([it.model_dump() for it in inventory]),
+                    norm_stance,
+                    clean_ctx,
                 ),
             )
             conn.commit()

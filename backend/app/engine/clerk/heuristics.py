@@ -11,6 +11,10 @@ from app.engine.world_clock import (
 )
 from app.schemas.affective import MAX_TURN_ELAPSED_MINUTES_SANITY
 from app.schemas.character import CharacterRecord
+from app.schemas.physical import (
+    PhysicalStance,
+    extract_heuristic_physical_state,
+)
 from app.schemas.turn import (
     ImprovisedLocationSpec,
     PostTurnStateDelta,
@@ -210,6 +214,8 @@ def heuristic_world_post_turn_delta(
     neighbors: list[NeighborLocationView],
     current_timestamp: str | None = None,
     candidate_secrets: list | None = None,
+    prev_player_stance: PhysicalStance = "unspecified",
+    prev_player_context: str = "",
 ) -> WorldPostTurnDelta:
     """Deterministic fallback global world state extractor (clock, spatial graph, scene flags)."""
     legacy = _heuristic_spatial_and_inventory_delta(
@@ -254,6 +260,16 @@ def heuristic_world_post_turn_delta(
                 ):
                     revealed_ids.append(sec.id)
 
+    player_stance, player_ctx = (
+        (prev_player_stance, prev_player_context)
+        if user_message.strip().lower().startswith("[describe")
+        else extract_heuristic_physical_state(
+            user_message,
+            prev_stance=prev_player_stance,
+            prev_context=prev_player_context,
+        )
+    )
+
     return WorldPostTurnDelta(
         elapsed_minutes=elapsed,
         new_world_timestamp=new_ts,
@@ -265,4 +281,6 @@ def heuristic_world_post_turn_delta(
         scene_flags_removed=legacy.scene_flags_removed,
         revealed_secret_lore_ids=revealed_ids,
         major_event=None,
+        player_physical_stance=player_stance,
+        player_physical_context=player_ctx,
     )

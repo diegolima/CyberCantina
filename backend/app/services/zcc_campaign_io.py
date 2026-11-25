@@ -17,6 +17,7 @@ from app.db.vector_math import (
     current_embedding_fingerprint,
     embed_text_sync,
 )
+from app.schemas.physical import normalize_physical_stance, sanitize_physical_context
 from app.schemas.world import (
     extract_edge_distance_meters,
     extract_edge_link_fields,
@@ -1540,9 +1541,9 @@ def ingest_campaigns_atomic(
                         valence, arousal, active_want, active_plan,
                         relationship_notes_json, equipped_json, inventory_json,
                         unlocked_persona_keys_json, persona_knowledge_provenance_json,
-                        affective_state_json
+                        affective_state_json, physical_stance, physical_context
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         mapped_tid,
@@ -1559,6 +1560,8 @@ def ingest_campaigns_atomic(
                         str(cs.get("unlocked_persona_keys_json") or "[]"),
                         str(cs.get("persona_knowledge_provenance_json") or "{}"),
                         _remap_affective_state_json(cs.get("affective_state_json"), id_remap),
+                        normalize_physical_stance(cs.get("physical_stance")),
+                        sanitize_physical_context(cs.get("physical_context")),
                     ),
                 )
 
@@ -1571,13 +1574,17 @@ def ingest_campaigns_atomic(
                     continue
                 conn.execute(
                     """
-                    INSERT INTO persona_turn_states (turn_id, equipped_json, inventory_json)
-                    VALUES (?, ?, ?)
+                    INSERT INTO persona_turn_states (
+                        turn_id, equipped_json, inventory_json, physical_stance, physical_context
+                    )
+                    VALUES (?, ?, ?, ?, ?)
                     """,
                     (
                         mapped_tid,
                         _remap_items_json(pts.get("equipped_json"), id_remap),
                         _remap_items_json(pts.get("inventory_json"), id_remap),
+                        normalize_physical_stance(pts.get("physical_stance")),
+                        sanitize_physical_context(pts.get("physical_context")),
                     ),
                 )
 

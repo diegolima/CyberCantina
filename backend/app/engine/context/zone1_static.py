@@ -200,7 +200,7 @@ def build_zone1_static_system_prompt(
     if character.distinctive_features:
         appearance_parts.append(f"- Distinctive Features: {', '.join(character.distinctive_features)}")
     if character.posture:
-        appearance_parts.append(f"- Posture: {character.posture}")
+        appearance_parts.append(f"- Habitual Bearing: {character.posture}")
     if character.mannerisms:
         mannerism_lines = "\n".join(f"  * {m}" for m in character.mannerisms)
         appearance_parts.append(f"- Mannerisms & Behavioral Tells:\n{mannerism_lines}")
@@ -300,7 +300,7 @@ def build_zone1_ensemble_system_prompt(
         if c.distinctive_features:
             appearance_parts.append(f"Features: {', '.join(c.distinctive_features)}")
         if c.posture:
-            appearance_parts.append(f"Posture: {c.posture}")
+            appearance_parts.append(f"Habitual Bearing: {c.posture}")
         if c.modifications:
             seen_features = {f.strip().lower() for f in c.distinctive_features}
             extra_mods = [

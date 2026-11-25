@@ -44,6 +44,8 @@ from app.schemas.character import (
     format_item_names,
 )
 from app.schemas.party import PartyRecord
+from app.schemas.persona import PersonaTurnStateSnapshot
+from app.schemas.physical import format_physical_state_prompt_value
 from app.schemas.turn import (
     CharacterSpotlightRole,
     ChoiceResolution,
@@ -109,6 +111,8 @@ async def run_character_cognition_agent(
     char_whisper: CharacterWhisper | None = None,
     recall_budget_cognition_tokens: int | None = None,
     active_parties: Sequence[PartyRecord] | None = None,
+    all_character_states: dict[str, CharacterStateSnapshot] | None = None,
+    current_player_state: PersonaTurnStateSnapshot | None = None,
 ) -> CognitionBlock:
     """Execute a single character subconscious cognition agent turn."""
     template = system_prompt_template or get_default_prompt(
@@ -202,10 +206,17 @@ async def run_character_cognition_agent(
 
     voice_quotes = [v.snippet for v in character.voice_anchors[:2]]
 
-    co_present_text = "\n".join(
-        f"  - {c.name} (id='{c.id}'): {c.tagline}"
-        for c in co_present_characters
-    ) or "  - None (alone with user)"
+    co_present_lines: list[str] = []
+    for c in co_present_characters:
+        c_st = (all_character_states or {}).get(c.id)
+        c_phys = (
+            format_physical_state_prompt_value(c_st.physical_stance, c_st.physical_context)
+            if c_st is not None
+            else ""
+        )
+        phys_suffix = f" [Starting Physical State: {c_phys}]" if c_phys else ""
+        co_present_lines.append(f"  - {c.name} (id='{c.id}'): {c.tagline}{phys_suffix}")
+    co_present_text = "\n".join(co_present_lines) or "  - None (alone with user)"
 
     prior_cues_section = ""
     if prior_cues:
@@ -214,7 +225,7 @@ async def run_character_cognition_agent(
             roll_note = f" [Roll: {c.roll_outcome_tier}]" if c.roll_outcome_tier else ""
             conseq_note = f" Fallout: '{c.observable_consequence_hint}'." if c.observable_consequence_hint else ""
             cue_lines.append(
-                f"  - {c.character_name}: Outward posture: '{c.feeling_summary}'. Aim: '{c.want_summary}'. Action: '{c.observable_action_hint}'.{roll_note}{conseq_note}"
+                f"  - {c.character_name}: Outward manner: '{c.feeling_summary}'. Aim: '{c.want_summary}'. Action: '{c.observable_action_hint}'.{roll_note}{conseq_note}"
             )
         prior_cues_section = (
             "\nObservable Co-Present Character Actions & Postures this turn:\n"
@@ -286,11 +297,21 @@ async def run_character_cognition_agent(
             f"[Atmosphere: {c_tags}]{c_lore_text}\n"
         )
 
+    player_phys_text = (
+        format_physical_state_prompt_value(
+            current_player_state.physical_stance,
+            current_player_state.physical_context,
+        )
+        if current_player_state is not None
+        else ""
+    )
     known_player_facts_section = ""
     if known_persona is not None:
         lines: list[str] = [f"Player Character ({known_persona.name}):"]
         if known_persona.physical_appearance:
             lines.append(f"- Appearance: {known_persona.physical_appearance}")
+        if player_phys_text:
+            lines.append(f"- Starting Physical State: {player_phys_text}")
         if known_persona.revealed_age:
             lines.append(f"- Known Age: {known_persona.revealed_age}")
         if known_persona.visible_equipped:
@@ -307,6 +328,12 @@ async def run_character_cognition_agent(
             + "\n".join(lines)
             + "\n\n"
         )
+    elif player_phys_text:
+        known_player_facts_section = (
+            f"Known Player Facts & Secrets (epistemically verified for {character.name}):\n"
+            f"Player Character (Player):\n"
+            f"- Starting Physical State: {player_phys_text}\n\n"
+        )
 
     clean_prev_want = (
         _sanitize_cognition_text(previous_state.active_want, field_type="want")
@@ -317,6 +344,16 @@ async def run_character_cognition_agent(
         _sanitize_cognition_text(previous_state.active_plan, field_type="plan")
         or character.baseline_psyche.default_plan
         or "Observe surroundings and maintain stance."
+    )
+
+    self_phys_text = format_physical_state_prompt_value(
+        previous_state.physical_stance, previous_state.physical_context
+    )
+    self_phys_line = (
+        f"- [0] Starting Physical State: {self_phys_text} "
+        "(respect physical constraints—e.g. stand up or break free before crossing the room)\n"
+        if self_phys_text
+        else ""
     )
 
     user_prompt = (
@@ -332,6 +369,7 @@ async def run_character_cognition_agent(
         f"- Active Plan: {clean_prev_plan}\n"
         f"{anchor_guideline}\n\n"
         f"Available Physical Affordances:\n"
+        f"{self_phys_line}"
         f"- [1] Equipped / In-Hand: {', '.join(format_item_names(previous_state.equipped)) or 'None'}\n"
         f"- [2] Carried Inventory: {', '.join(format_item_names(previous_state.inventory)) or 'None'}\n"
         f"- [3] Scene Props & Fixtures ({active_location.name}): {', '.join(active_location.environmental_tags) or 'None'}\n\n"
@@ -652,6 +690,8 @@ async def run_phase3_multi_cognition(
                         char_whisper=char_w,
                         recall_budget_cognition_tokens=context.recall_budget_cognition_tokens,
                         active_parties=context.active_parties,
+                        all_character_states=context.all_character_states,
+                        current_player_state=context.current_player_state,
                     )
                 used_fallback = False
             except Exception as err:
@@ -750,6 +790,8 @@ async def run_phase3_multi_cognition(
                     char_whisper=char_w,
                     recall_budget_cognition_tokens=context.recall_budget_cognition_tokens,
                     active_parties=context.active_parties,
+                    all_character_states=context.all_character_states,
+                    current_player_state=context.current_player_state,
                 )
                 used_fallback = False
             except Exception as err:

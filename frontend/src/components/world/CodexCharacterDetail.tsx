@@ -29,6 +29,7 @@ import {
   MemoryShard,
   PersonaRecord,
   PersonaTurnStateSnapshot,
+  PhysicalStateOverridePayload,
   TurnNodeRecord,
   getTemperamentPresetMeta,
   splitLegacyWornItems,
@@ -36,6 +37,7 @@ import {
 import { getCharacterEmotionPortrait, getEntityPrimaryImage } from "../../utils/entityImages";
 import { ImageLightboxModal } from "../shared/ImageLightboxModal";
 import { MechanicsHelpButton } from "../shared/MechanicsHelpButton";
+import { PhysicalStateControl } from "../shared/PhysicalStateControl";
 import { CampaignCharacterInventoryTab } from "./codexCharacter/CampaignCharacterInventoryTab";
 import { CampaignCharacterMediaTab } from "./codexCharacter/CampaignCharacterMediaTab";
 import { CampaignCharacterMemoriesTab } from "./codexCharacter/CampaignCharacterMemoriesTab";
@@ -77,6 +79,13 @@ interface CodexCharacterDetailProps {
   onItemAction?: (payload: ItemEquipActionPayload) => Promise<void> | void;
   onSaveMemories?: (characterId: string, shards: MemoryShard[]) => Promise<void>;
   onRelocateCharacter?: (characterId: string, locationId: string) => Promise<void> | void;
+  onOverrideCharacterPhysicalState?: (
+    characterId: string,
+    payload: PhysicalStateOverridePayload
+  ) => Promise<void> | void;
+  onOverridePlayerPhysicalState?: (
+    payload: PhysicalStateOverridePayload
+  ) => Promise<void> | void;
   onOpenMechanicsHelp?: (
     topicId: MechanicsTopicId,
     returnTarget?: CodexReturnTarget
@@ -110,6 +119,8 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
   onItemAction,
   onSaveMemories,
   onRelocateCharacter,
+  onOverrideCharacterPhysicalState,
+  onOverridePlayerPhysicalState,
   onOpenMechanicsHelp,
 }) => {
   const hasState = Boolean(characterEntry?.state);
@@ -280,6 +291,29 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Live Campaign Physical State (when in campaign mode) */}
+          {(personaTurnState || onOverridePlayerPhysicalState) && (
+            <PhysicalStateControl
+              label={persona.name}
+              headerTitle="Current Physical State (Live)"
+              stance={personaTurnState?.physical_stance}
+              context={personaTurnState?.physical_context}
+              variant="codex"
+              isMutatingLocked={isMutatingLocked}
+              onSave={onOverridePlayerPhysicalState}
+              onOpenMechanicsHelp={
+                onOpenMechanicsHelp
+                  ? (topicId) =>
+                      onOpenMechanicsHelp(topicId, {
+                        kind: "persona",
+                        personaId: persona.id,
+                        label: persona.name,
+                      })
+                  : undefined
+              }
+            />
+          )}
 
           {/* Persona Subtabs Bar */}
           <div className="codex-char-tabs" role="tablist" aria-label="Persona dossier sections">
@@ -1094,6 +1128,11 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
               locations={locations}
               isMutatingLocked={isMutatingLocked}
               onRelocateCharacter={onRelocateCharacter}
+              onOverridePhysicalState={
+                onOverrideCharacterPhysicalState
+                  ? (payload) => onOverrideCharacterPhysicalState(record.id, payload)
+                  : undefined
+              }
               characterNameMap={characterNameMap}
               personaSnapshot={persona}
               activeBranchTurns={activeBranchTurns}

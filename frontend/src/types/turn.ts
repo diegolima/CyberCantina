@@ -19,7 +19,8 @@ import type {
   PartyEventDelta,
   PartyRecord,
 } from "./party";
-import type { PersonaRecord } from "./persona";
+import type { PersonaRecord, PersonaTurnStateSnapshot } from "./persona";
+import type { PhysicalStance, PhysicalStateResetReason } from "./physical";
 import type { TurnTelemetry } from "./telemetry";
 import type {
   CompassDirection,
@@ -141,6 +142,8 @@ export interface CharacterAgentDelta {
   location_transition: "stay_here" | "follow_player" | "move_to_neighbor";
   target_location_id?: string | null;
   new_memories: ExtractedCharacterMemory[];
+  physical_stance?: PhysicalStance;
+  physical_context?: string;
 }
 
 export interface ImprovisedLocationSpec {
@@ -161,6 +164,8 @@ export interface WorldPostTurnDelta {
   notable_event_summary?: string | null;
   scene_flags_updated: string[];
   scene_flags_removed: string[];
+  player_physical_stance?: PhysicalStance;
+  player_physical_context?: string;
 }
 
 export interface ArbitrationRulingRecord {
@@ -196,6 +201,11 @@ export interface PostTurnStateDelta {
   party_event_delta?: PartyEventDelta | null;
   revealed_secret_lore_ids?: string[];
   major_event?: MajorEventRecord | null;
+  player_physical_stance?: PhysicalStance | null;
+  player_physical_context?: string | null;
+  previous_player_physical_stance?: PhysicalStance | null;
+  previous_player_physical_context?: string | null;
+  physical_state_reset_reasons?: Record<string, PhysicalStateResetReason>;
 }
 
 export type Phase5AgentKind = "world_clerk" | "character";
@@ -549,6 +559,7 @@ export interface CampaignStateBundle {
   all_turn_nodes: TurnNodeRecord[];
   current_world_snapshot: WorldStateSnapshot;
   current_character_state: CharacterStateSnapshot;
+  current_persona_turn_state?: PersonaTurnStateSnapshot | null;
   character_states?: Record<string, CharacterStateSnapshot>;
   character_records?: Record<string, CharacterRecord>;
   present_character_ids?: string[];
