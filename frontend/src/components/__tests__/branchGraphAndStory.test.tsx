@@ -438,8 +438,9 @@ describe("Story Modal, Branch Buttons, Sidebar & Inspector UI (SSR markup)", () 
         character={CHAR_KIRA}
       />
     );
-    expect(inspectorHtml).toContain("World Clock");
-    expect(inspectorHtml).toContain("Internals");
+    expect(inspectorHtml).toContain("Here");
+    expect(inspectorHtml).not.toContain("World Clock");
+    expect(inspectorHtml).not.toContain("Internals");
     expect(inspectorHtml).not.toContain("Timeline Branches");
     expect(inspectorHtml).not.toContain("No summaries yet.");
   });
@@ -532,6 +533,8 @@ describe("Story Modal, Branch Buttons, Sidebar & Inspector UI (SSR markup)", () 
     expect(rewoundStageHtml).toContain("Cannot delete a turn that has descendant branches");
     expect(rewoundStageHtml).toContain("Branched at Turn #1");
     expect(rewoundStageHtml).toContain("Open Branch Graph");
+    expect(rewoundStageHtml).toContain("stage-clock-cluster");
+    expect(rewoundStageHtml).toContain("Open Story &amp; Timelines (Turn #1)");
 
     // StandaloneArrivalCard emits data-turn-id for map moves and has no Branch button
     const arrivalHtml = renderToStaticMarkup(

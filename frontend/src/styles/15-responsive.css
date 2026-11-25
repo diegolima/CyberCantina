@@ -497,9 +497,21 @@
     gap: 8px;
   }
 
-  .stage-header-badges,
-  .stage-actor-tagline {
+  .stage-location-badge,
+  .stage-actor-tagline,
+  .stage-turn-word {
     display: none;
+  }
+
+  .stage-clock-time {
+    padding: 3px 6px;
+    font-size: 0.72rem;
+    gap: 4px;
+  }
+
+  .stage-turn-btn {
+    padding: 3px 6px;
+    font-size: 0.68rem;
   }
 
   .turn-feed {
@@ -597,6 +609,8 @@
   .gm-talk-streaming-dot,
   .ui-pill--fade,
   .change-dot,
+  .stage-clock-colon--blinking,
+  .stage-clock-cluster--flash,
   .provider-dot--probing,
   .spin,
   .spin-slow {

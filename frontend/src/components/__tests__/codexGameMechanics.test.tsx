@@ -16,7 +16,6 @@ import { ChatComposer } from "../chat/ChatComposer";
 import { ContextHealthModal } from "../chat/ContextHealthModal";
 import { DirectorChoicesDrawer } from "../chat/DirectorChoicesDrawer";
 import { GmTalkDrawer } from "../chat/GmTalkDrawer";
-import { InspectorInternalsSection } from "../inspector/InspectorInternalsSection";
 import { MapLinkInspectorSection } from "../map/MapLinkInspectorSection";
 import { PartyManagementModal } from "../party/PartyManagementModal";
 import { StoryModal } from "../story/StoryModal";
@@ -480,23 +479,18 @@ describe("Codex Game Mechanics UI & Contextual ? Deep-Links (SSR)", () => {
     );
     expect(contextHtml).toContain("Learn about Context Health &amp; 4-Zone Economy");
 
-    const internalsHtml = renderToStaticMarkup(
-      <InspectorInternalsSection
+    const sceneRecallHtml = renderToStaticMarkup(
+      <ContextHealthModal
+        isOpen={true}
+        onClose={noop}
+        telemetry={null}
         bundle={bundle}
-        turnsCount={1}
-        indexedCount={2}
-        sceneFlags={["rain_outside"]}
-        recalledItems={[]}
-        flagsChanged={false}
-        showAllFlags={false}
-        setShowAllFlags={noop}
-        expandedRecalls={new Set()}
-        toggleRecall={noop}
-        onOpenLoreIndex={noop}
+        characters={[char]}
+        initialTab="scene_recall"
         onOpenMechanicsHelp={onHelp}
       />
     );
-    expect(internalsHtml).toContain("Learn about Lore Recall, Secrets &amp; Scene Flags");
+    expect(sceneRecallHtml).toContain("Learn about Lore Recall, Secrets &amp; Scene Flags");
 
     const choicesHtml = renderToStaticMarkup(
       <DirectorChoicesDrawer

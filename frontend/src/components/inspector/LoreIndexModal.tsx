@@ -1,12 +1,22 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { BookOpen, MapPin, Search, Sparkles, X } from "lucide-react";
+import {
+  BookOpen,
+  Eye,
+  EyeOff,
+  MapPin,
+  Search,
+  Sparkles,
+  X,
+} from "lucide-react";
 import {
   CharacterRecord,
   LocationContainer,
   LocationNode,
+  LoreNode,
   RecalledMemoryItem,
   WorldRecord,
 } from "../../types";
+import { isSecretLoreRevealed } from "../world/codexHelpers";
 
 type IndexFilter =
   | "all"
@@ -25,40 +35,61 @@ export interface LoreIndexEntry {
   tags?: string[];
   recalled: boolean;
   ambientActive?: boolean;
+  isSecret?: boolean;
+  isRevealed?: boolean;
 }
 
 type IndexEntry = LoreIndexEntry;
 
-interface LoreIndexModalProps {
+export interface BuildLoreIndexOptions {
   world: WorldRecord;
+  /** Campaign Copy-on-Write world lore override when available (falls back to world.lore_nodes). */
+  worldLoreNodes?: LoreNode[];
   characters: CharacterRecord[];
   /** Campaign-resolved visible locations (falls back to world.locations). */
   locations?: LocationNode[];
   /** Campaign-resolved containers including CoW container lore overrides (falls back to world.containers). */
   containers?: LocationContainer[];
   activeLocationId?: string;
-  /** Items injected into the prompt on the latest turn, highlighted in the list. */
+  /** Items injected into the prompt on the inspected turn, highlighted in the list. */
   recalledItems: RecalledMemoryItem[];
-  onClose: () => void;
+  /** When false (Player Mode), unrevealed category="secret" lore entries are hidden. */
+  unlockLore?: boolean;
+  /** Secret lore IDs revealed on the active branch. */
+  revealedLoreIds?: readonly string[];
 }
 
-const norm = (s: string) => s.trim().toLowerCase();
-
-export function buildLoreIndexEntries(opts: {
+export interface LoreIndexPanelProps {
   world: WorldRecord;
+  worldLoreNodes?: LoreNode[];
   characters: CharacterRecord[];
   locations?: LocationNode[];
   containers?: LocationContainer[];
   activeLocationId?: string;
   recalledItems: RecalledMemoryItem[];
-}): LoreIndexEntry[] {
+  unlockLore?: boolean;
+  revealedLoreIds?: readonly string[];
+  embedded?: boolean;
+  autoFocusSearch?: boolean;
+}
+
+interface LoreIndexModalProps extends Omit<LoreIndexPanelProps, "embedded" | "autoFocusSearch"> {
+  onClose: () => void;
+}
+
+const norm = (s: string) => s.trim().toLowerCase();
+
+export function buildLoreIndexEntries(opts: BuildLoreIndexOptions): LoreIndexEntry[] {
   const {
     world,
+    worldLoreNodes,
     characters,
     locations,
     containers,
     activeLocationId,
     recalledItems,
+    unlockLore = false,
+    revealedLoreIds = [],
   } = opts;
   const recalledLoreIds = new Set(
     recalledItems.filter((r) => r.source_type === "lore").map((r) => r.id)
@@ -117,7 +148,12 @@ export function buildLoreIndexEntries(opts: {
       });
     });
   }
-  for (const lore of world.lore_nodes) {
+
+  const effectiveWorldLore = worldLoreNodes ?? world.lore_nodes ?? [];
+  for (const lore of effectiveWorldLore) {
+    const isSecret = lore.category === "secret";
+    const isRevealed = isSecret && isSecretLoreRevealed(lore, revealedLoreIds);
+    if (isSecret && !unlockLore && !isRevealed) continue;
     list.push({
       key: `lore-${lore.id}`,
       kind: "world_lore",
@@ -128,13 +164,18 @@ export function buildLoreIndexEntries(opts: {
       tags: lore.entity_tags,
       recalled:
         recalledLoreIds.has(lore.id) || recalledLoreTitles.has(norm(lore.title)),
+      isSecret,
+      isRevealed,
     });
   }
+
   const resolvedLocations = locations ?? world.locations ?? [];
   for (const loc of resolvedLocations) {
     const isCurrent = loc.id === activeLocationId;
     for (const lore of loc.lore_nodes ?? []) {
-      if (lore.category === "secret") continue;
+      const isSecret = lore.category === "secret";
+      const isRevealed = isSecret && isSecretLoreRevealed(lore, revealedLoreIds);
+      if (isSecret && !unlockLore && !isRevealed) continue;
       const compositeTitle = `${loc.name} — ${lore.title}`;
       list.push({
         key: `loc-lore-${loc.id}-${lore.id}`,
@@ -149,9 +190,12 @@ export function buildLoreIndexEntries(opts: {
           recalledLocLoreTitles.has(norm(lore.title)) ||
           recalledLocLoreTitles.has(norm(compositeTitle)),
         ambientActive: isCurrent,
+        isSecret,
+        isRevealed,
       });
     }
   }
+
   const resolvedContainers = containers ?? world.containers ?? [];
   const activeLoc = resolvedLocations.find((l) => l.id === activeLocationId);
   const activeContainerId = activeLoc?.container_id ?? null;
@@ -159,7 +203,9 @@ export function buildLoreIndexEntries(opts: {
     if (cont.depth !== 1) continue;
     const isActiveCont = cont.id === activeContainerId;
     for (const lore of cont.lore_nodes ?? []) {
-      if (lore.category === "secret") continue;
+      const isSecret = lore.category === "secret";
+      const isRevealed = isSecret && isSecretLoreRevealed(lore, revealedLoreIds);
+      if (isSecret && !unlockLore && !isRevealed) continue;
       const compositeTitle = `${cont.name} — ${lore.title}`;
       list.push({
         key: `cont-lore-${cont.id}-${lore.id}`,
@@ -174,44 +220,55 @@ export function buildLoreIndexEntries(opts: {
           recalledContLoreTitles.has(norm(lore.title)) ||
           recalledContLoreTitles.has(norm(compositeTitle)),
         ambientActive: isActiveCont,
+        isSecret,
+        isRevealed,
       });
     }
   }
   return list;
 }
 
-/** Searchable modal listing the full static RAG index (character shards + world, container & location lore). */
-export const LoreIndexModal: React.FC<LoreIndexModalProps> = ({
+/** Searchable, spoiler-gated Shards & Lore Index panel (embeddable or standalone). */
+export const LoreIndexPanel: React.FC<LoreIndexPanelProps> = ({
   world,
+  worldLoreNodes,
   characters,
   locations,
   containers,
   activeLocationId,
   recalledItems,
-  onClose,
+  unlockLore = false,
+  revealedLoreIds = [],
+  embedded = false,
+  autoFocusSearch = false,
 }) => {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<IndexFilter>("all");
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   const entries = useMemo<IndexEntry[]>(
     () =>
       buildLoreIndexEntries({
         world,
+        worldLoreNodes,
         characters,
         locations,
         containers,
         activeLocationId,
         recalledItems,
+        unlockLore,
+        revealedLoreIds,
       }),
-    [characters, world, locations, containers, activeLocationId, recalledItems]
+    [
+      world,
+      worldLoreNodes,
+      characters,
+      locations,
+      containers,
+      activeLocationId,
+      recalledItems,
+      unlockLore,
+      revealedLoreIds,
+    ]
   );
 
   const filtered = useMemo(() => {
@@ -247,6 +304,195 @@ export const LoreIndexModal: React.FC<LoreIndexModalProps> = ({
   const containerLoreCount = entries.filter((e) => e.kind === "container_lore").length;
 
   return (
+    <div className={embedded ? "lore-index-panel" : undefined}>
+      <div
+        className={`lore-index-toolbar${
+          embedded ? " lore-index-toolbar--embedded" : ""
+        }`}
+      >
+        <div className="lore-index-search-row">
+          <div className="ui-search-wrap" style={{ flex: 1 }}>
+            <Search size={13} className="ui-search-icon" />
+            <input
+              autoFocus={autoFocusSearch}
+              className="ui-search-input"
+              placeholder="Search titles, content, keywords, or locations..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
+          {unlockLore && (
+            <span
+              className="lore-index-gm-pill"
+              title="Unlock Lore & Secrets (GM Mode) is active — unrevealed secrets are visible."
+            >
+              <Eye size={11} />
+              <span>GM Mode · Secrets Unlocked</span>
+            </span>
+          )}
+        </div>
+        <div className="lore-index-filters" role="tablist" aria-label="Lore index category filter">
+          {(
+            [
+              ["all", `All (${entries.length})`],
+              ["shards", `Shards (${shardCount})`],
+              ["world_lore", `World (${worldLoreCount})`],
+              ["container_lore", `Containers (${containerLoreCount})`],
+              ["location_lore", `Locations (${locationLoreCount})`],
+            ] as Array<[IndexFilter, string]>
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              role="tab"
+              aria-selected={filter === value}
+              className={`lore-index-chip ${filter === value ? "active" : ""}`}
+              onClick={() => setFilter(value)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className={embedded ? "lore-index-panel-list" : "modal-body"}>
+        {grouped.length === 0 && (
+          <div className="inspector-empty">No entries match your search.</div>
+        )}
+        {grouped.map(([group, items]) => (
+          <div key={group} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div className="sidebar-label" style={{ marginBottom: 2 }}>
+              {group} ({items.length})
+            </div>
+            {items.map((item) => (
+              <div
+                key={item.key}
+                className={`memory-item ${
+                  item.kind === "shard"
+                    ? "memory-item-shard"
+                    : item.kind === "location_lore"
+                      ? "memory-item-location_lore"
+                      : item.kind === "container_lore"
+                        ? "memory-item-container_lore"
+                        : "memory-item-lore"
+                }`}
+              >
+                <div className="memory-item-head">
+                  <strong>
+                    [{item.tag}] {item.title}
+                  </strong>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    {item.isSecret && item.isRevealed && (
+                      <span className="lore-index-discovered-badge">
+                        <Eye size={10} /> Discovered
+                      </span>
+                    )}
+                    {item.isSecret && !item.isRevealed && (
+                      <span className="lore-index-secret-badge">
+                        <EyeOff size={10} /> Secret
+                      </span>
+                    )}
+                    {item.ambientActive && (
+                      <span
+                        className="badge"
+                        style={{
+                          fontSize: "0.62rem",
+                          padding: "1px 6px",
+                          borderColor: "rgba(245, 158, 11, 0.4)",
+                          color: "var(--accent-amber)",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 3,
+                        }}
+                      >
+                        <MapPin size={10} /> Active location
+                      </span>
+                    )}
+                    {item.recalled && (
+                      <span className="badge badge-rag" style={{ fontSize: "0.62rem", padding: "1px 6px" }}>
+                        <Sparkles size={10} /> Recalled last turn
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="memory-item-content">{item.content}</div>
+                {item.tags && item.tags.length > 0 && (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 4,
+                      marginTop: 5,
+                    }}
+                  >
+                    {item.tags.map((tag) => (
+                      <span
+                        key={tag}
+                        className="badge"
+                        style={{ fontSize: "0.6rem", padding: "1px 5px" }}
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+/** Standalone modal wrapper around LoreIndexPanel for direct callers. */
+export const LoreIndexModal: React.FC<LoreIndexModalProps> = ({
+  world,
+  worldLoreNodes,
+  characters,
+  locations,
+  containers,
+  activeLocationId,
+  recalledItems,
+  unlockLore = false,
+  revealedLoreIds = [],
+  onClose,
+}) => {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const visibleCount = useMemo(
+    () =>
+      buildLoreIndexEntries({
+        world,
+        worldLoreNodes,
+        characters,
+        locations,
+        containers,
+        activeLocationId,
+        recalledItems,
+        unlockLore,
+        revealedLoreIds,
+      }).length,
+    [
+      world,
+      worldLoreNodes,
+      characters,
+      locations,
+      containers,
+      activeLocationId,
+      recalledItems,
+      unlockLore,
+      revealedLoreIds,
+    ]
+  );
+
+  return (
     <div className="modal-backdrop" onClick={onClose} style={{ zIndex: 70 }}>
       <div
         className="modal-panel"
@@ -259,7 +505,7 @@ export const LoreIndexModal: React.FC<LoreIndexModalProps> = ({
         <div className="modal-header">
           <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <BookOpen size={17} color="var(--accent-emerald)" />
-            Indexed Shards, World &amp; Location Lore ({entries.length})
+            Indexed Shards, World &amp; Location Lore ({visibleCount})
           </span>
           <button
             type="button"
@@ -272,117 +518,18 @@ export const LoreIndexModal: React.FC<LoreIndexModalProps> = ({
           </button>
         </div>
 
-        <div className="lore-index-toolbar">
-          <div className="ui-search-wrap" style={{ flex: 1 }}>
-            <Search size={13} className="ui-search-icon" />
-            <input
-              autoFocus
-              className="ui-search-input"
-              placeholder="Search titles, content, keywords, or locations..."
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </div>
-          <div className="lore-index-filters" role="tablist">
-            {(
-              [
-                ["all", `All (${entries.length})`],
-                ["shards", `Shards (${shardCount})`],
-                ["world_lore", `World (${worldLoreCount})`],
-                ["container_lore", `Containers (${containerLoreCount})`],
-                ["location_lore", `Locations (${locationLoreCount})`],
-              ] as Array<[IndexFilter, string]>
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                role="tab"
-                aria-selected={filter === value}
-                className={`lore-index-chip ${filter === value ? "active" : ""}`}
-                onClick={() => setFilter(value)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="modal-body">
-          {grouped.length === 0 && (
-            <div className="inspector-empty">No entries match your search.</div>
-          )}
-          {grouped.map(([group, items]) => (
-            <div key={group} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <div className="sidebar-label" style={{ marginBottom: 2 }}>
-                {group} ({items.length})
-              </div>
-              {items.map((item) => (
-                <div
-                  key={item.key}
-                  className={`memory-item ${
-                    item.kind === "shard"
-                      ? "memory-item-shard"
-                      : item.kind === "location_lore"
-                        ? "memory-item-location_lore"
-                        : item.kind === "container_lore"
-                          ? "memory-item-container_lore"
-                          : "memory-item-lore"
-                  }`}
-                >
-                  <div className="memory-item-head">
-                    <strong>
-                      [{item.tag}] {item.title}
-                    </strong>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      {item.ambientActive && (
-                        <span
-                          className="badge"
-                          style={{
-                            fontSize: "0.62rem",
-                            padding: "1px 6px",
-                            borderColor: "rgba(245, 158, 11, 0.4)",
-                            color: "var(--accent-amber)",
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: 3,
-                          }}
-                        >
-                          <MapPin size={10} /> Active location
-                        </span>
-                      )}
-                      {item.recalled && (
-                        <span className="badge badge-rag" style={{ fontSize: "0.62rem", padding: "1px 6px" }}>
-                          <Sparkles size={10} /> Recalled last turn
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="memory-item-content">{item.content}</div>
-                  {item.tags && item.tags.length > 0 && (
-                    <div
-                      style={{
-                        display: "flex",
-                        flexWrap: "wrap",
-                        gap: 4,
-                        marginTop: 5,
-                      }}
-                    >
-                      {item.tags.map((tag) => (
-                        <span
-                          key={tag}
-                          className="badge"
-                          style={{ fontSize: "0.6rem", padding: "1px 5px" }}
-                        >
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
+        <LoreIndexPanel
+          world={world}
+          worldLoreNodes={worldLoreNodes}
+          characters={characters}
+          locations={locations}
+          containers={containers}
+          activeLocationId={activeLocationId}
+          recalledItems={recalledItems}
+          unlockLore={unlockLore}
+          revealedLoreIds={revealedLoreIds}
+          autoFocusSearch
+        />
       </div>
     </div>
   );

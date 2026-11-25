@@ -20,6 +20,8 @@ interface CharacterRowProps {
   /** Party role badge for this character on the active turn. */
   partyRole?: "player_party" | "npc_leader" | "npc_party" | null;
   partyName?: string | null;
+  /** Whether to prefix line 2 with the `Present` indicator when co-present. */
+  showPresenceLabel?: boolean;
   /** Open this character directly in the Codex on the Current tab. */
   onOpenInCodex?: (characterId: string) => void;
 }
@@ -33,6 +35,7 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
   moodChanged,
   partyRole = null,
   partyName = null,
+  showPresenceLabel = true,
   onOpenInCodex,
 }) => {
   const care = state.care_state ?? null;
@@ -119,17 +122,24 @@ export const CharacterRow: React.FC<CharacterRowProps> = ({
             </span>
             <span className="char-row-status-line">
               {isPresent ? (
-                <span className="char-row-present">
-                  <MapPin size={10} />
-                  Present
-                </span>
+                showPresenceLabel && (
+                  <>
+                    <span className="char-row-present">
+                      <MapPin size={10} />
+                      Present
+                    </span>
+                    <span aria-hidden="true">·</span>
+                  </>
+                )
               ) : (
-                <span className="char-row-elsewhere">
-                  <MapPin size={10} />
-                  Elsewhere{elsewhereLocationName ? ` · ${elsewhereLocationName}` : ""}
-                </span>
+                <>
+                  <span className="char-row-elsewhere">
+                    <MapPin size={10} />
+                    Elsewhere{elsewhereLocationName ? ` · ${elsewhereLocationName}` : ""}
+                  </span>
+                  <span aria-hidden="true">·</span>
+                </>
               )}
-              <span aria-hidden="true">·</span>
               <span
                 className="char-row-mood"
                 title={care?.outward_demeanor || state.mood_label}

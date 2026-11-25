@@ -1,9 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  Clock,
-  PanelRightClose,
-  X,
+  MapPin,
+  Users,
 } from "lucide-react";
 import type { RightPanelMode } from "../utils/campaignLayout";
 import {
@@ -27,7 +26,11 @@ import {
   getCoLocatedPlayerPartyNpcs,
 } from "../utils/partyHelpers";
 import { USER_PARTY_MEMBER_ID } from "../types";
-import { usePersistentState } from "./inspector/InspectorPrimitives";
+import { getEntityPrimaryImage } from "../utils/entityImages";
+import {
+  InspectorSection,
+  usePersistentState,
+} from "./inspector/InspectorPrimitives";
 import { CharacterRow } from "./inspector/CharacterRow";
 import { InspectorLocationCard } from "./inspector/InspectorLocationCard";
 import {
@@ -35,8 +38,6 @@ import {
   MINI_MAP_RX,
   MINI_MAP_RY,
 } from "./inspector/miniMapGeometry";
-import { InspectorInternalsSection } from "./inspector/InspectorInternalsSection";
-import { LoreIndexModal } from "./inspector/LoreIndexModal";
 import { PhysicalStateControl } from "./shared/PhysicalStateControl";
 import { buildCampaignCharacterEntries } from "./world/codexHelpers";
 import {
@@ -100,7 +101,9 @@ interface LiveInspectorProps {
   ) => Promise<void> | void;
   onOpenWorldSheet?: () => void;
   onOpenCharacterInCodex?: (characterId: string) => void;
+  onOpenPersonaInCodex?: (personaId: string) => void;
   onOpenMechanicsHelp?: (topicId: MechanicsTopicId) => void;
+  defaultElsewhereOpen?: boolean;
   isMutatingLocked?: boolean;
 }
 
@@ -122,7 +125,9 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   onToggleCampaignEdgeReveal,
   onOpenWorldSheet,
   onOpenCharacterInCodex,
+  onOpenPersonaInCodex,
   onOpenMechanicsHelp,
+  defaultElsewhereOpen = false,
   isMutatingLocked = false,
 }) => {
   const activeLoc = bundle.active_location;
@@ -130,24 +135,10 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   const [showFullMap, setShowFullMap] = useState(false);
   const [isOverriding, setIsOverriding] = useState(false);
   const [showExits, setShowExits] = usePersistentState<boolean>("map.exits", false);
-  const [showLoreIndex, setShowLoreIndex] = useState(false);
-  const [expandedRecalls, setExpandedRecalls] = useState<Set<string>>(new Set());
-  const [showAllFlags, setShowAllFlags] = useState(false);
 
   // Latest vs previous turn on the active branch, used for "changed this turn" indicators
   const turns = bundle.active_branch_turns;
-  const lastTurn = turns[turns.length - 1];
   const prevTurn = turns.length > 1 ? turns[turns.length - 2] : undefined;
-  const sceneFlags = bundle.current_world_snapshot.scene_flags;
-  const recalledItems = lastTurn?.recalled_items ?? [];
-
-  const flagsChanged = useMemo(() => {
-    if (!prevTurn) return false;
-    const prev = new Set(prevTurn.world_snapshot.scene_flags);
-    return (
-      prev.size !== sceneFlags.length || sceneFlags.some((f) => !prev.has(f))
-    );
-  }, [prevTurn, sceneFlags]);
 
   // Participant roster: primary character first, then present, then elsewhere
   const characterRows = useMemo(() => {
@@ -171,10 +162,15 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
     return [...rows.filter((r) => r.isPresent), ...rows.filter((r) => !r.isPresent)];
   }, [participants, character, bundle, prevTurn]);
 
-  const indexedCharacters = useMemo(
-    () => characterRows.map((r) => r.record),
+  const presentRows = useMemo(
+    () => characterRows.filter((r) => r.isPresent),
     [characterRows]
   );
+  const absentRows = useMemo(
+    () => characterRows.filter((r) => !r.isPresent),
+    [characterRows]
+  );
+
   const presentCharacterLocations = useMemo(() => {
     const map: Record<string, string> = {};
     for (const row of characterRows) {
@@ -197,31 +193,6 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
     () => buildContainerBreadcrumbChain(activeLoc.container_id, effectiveContainers),
     [activeLoc.container_id, effectiveContainers]
   );
-
-  const indexedCount =
-    world.lore_nodes.length +
-    (bundle.visible_locations ?? []).reduce(
-      (n, loc) =>
-        n + (loc.lore_nodes ?? []).filter((l) => l.category !== "secret").length,
-      0
-    ) +
-    effectiveContainers.reduce(
-      (n, cont) =>
-        n +
-        (cont.depth === 1
-          ? (cont.lore_nodes ?? []).filter((l) => l.category !== "secret").length
-          : 0),
-      0
-    ) +
-    indexedCharacters.reduce((n, c) => n + c.memory_shards.length, 0);
-
-  const toggleRecall = (key: string) =>
-    setExpandedRecalls((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
 
   useEffect(() => {
     setSelectedLocId(activeLoc.id);
@@ -326,45 +297,45 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
     .filter(Boolean)
     .join(" ");
 
+  const personaSnapshot = bundle.campaign.persona_snapshot ?? null;
+  const personaName = personaSnapshot?.name?.trim() || "You";
+  const personaPortraitUrl = getEntityPrimaryImage("personas", personaSnapshot);
+
+  const renderCharacterCard = (
+    row: (typeof characterRows)[number],
+    showPresenceLabel: boolean
+  ) => {
+    const cParty = getCharacterParty(activeParties, row.record.id);
+    const partyRole = cParty
+      ? cParty.member_ids.includes(USER_PARTY_MEMBER_ID)
+        ? "player_party"
+        : cParty.leader_id === row.record.id
+        ? "npc_leader"
+        : "npc_party"
+      : null;
+    return (
+      <CharacterRow
+        key={row.record.id}
+        character={row.record}
+        state={row.state}
+        isPresent={row.isPresent}
+        elsewhereLocationName={row.elsewhereLocationName}
+        moodChanged={row.moodChanged}
+        partyRole={partyRole}
+        partyName={cParty?.name ?? null}
+        showPresenceLabel={showPresenceLabel}
+        onOpenInCodex={onOpenCharacterInCodex}
+      />
+    );
+  };
+
   return (
     <aside
       id={id}
       className={inspectorClassName}
       aria-hidden={mode === "hidden" ? true : undefined}
     >
-      {/* 1. World Clock */}
-      <div className="inspector-card">
-        <div
-          className="sidebar-label inspector-top-row"
-          style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}
-        >
-          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <Clock size={13} color="var(--accent-amber)" />
-            World Clock
-          </span>
-          {onClose && (
-            <button
-              type="button"
-              className="btn btn-ghost inspector-collapse-btn"
-              onClick={onClose}
-              title={mode === "overlay" ? "Close inspector" : "Collapse inspector"}
-              aria-label={mode === "overlay" ? "Close inspector" : "Collapse inspector"}
-              aria-expanded={mode !== "hidden"}
-              aria-controls={id}
-            >
-              {mode === "overlay" ? <X size={15} /> : <PanelRightClose size={15} />}
-            </button>
-          )}
-        </div>
-        <div className="clock-display">
-          <span>{bundle.current_world_snapshot.world_timestamp}</span>
-          <span style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
-            Turn #{lastTurn?.depth_index ?? 0}
-          </span>
-        </div>
-      </div>
-
-
+      {/* 1. Where is here (Map) */}
       <InspectorLocationCard
         bundle={bundle}
         activeLoc={activeLoc}
@@ -387,6 +358,9 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
         handleOverrideClick={handleOverrideClick}
         handleOpenFullMap={handleOpenFullMap}
         onOpenWorldSheet={onOpenWorldSheet}
+        panelId={id}
+        mode={mode}
+        onClose={onClose}
       />
 
       {/* Full Zoomable Map Modal (portaled to document.body to escape .inspector--overlay stacking context) */}
@@ -447,67 +421,48 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
           : fullMapModal;
       })()}
 
-      {/* 3. Player Physical Continuity + Characters (compact portrait cards opening the unified Codex dossier) */}
+      {/* 2. Who is here: Here (User Persona + present characters) & collapsed Elsewhere */}
       <div className="inspector-card inspector-collapsible">
+        <div className="inspector-here-header">
+          <span className="inspector-section-title">
+            <Users size={13} color="var(--accent-emerald)" />
+            Here
+          </span>
+          <span className="inspector-section-meta">{1 + presentRows.length}</span>
+        </div>
         <PhysicalStateControl
-          label={bundle.campaign.persona_snapshot?.name?.trim() || "You"}
+          label={personaName}
           variant="inspector"
+          portraitUrl={personaPortraitUrl}
+          showYouBadge={personaName.toLowerCase() !== "you"}
+          onOpenPersona={
+            personaSnapshot && onOpenPersonaInCodex
+              ? () => onOpenPersonaInCodex(personaSnapshot.id)
+              : undefined
+          }
           stance={bundle.current_persona_turn_state?.physical_stance}
           context={bundle.current_persona_turn_state?.physical_context}
           isMutatingLocked={isMutatingLocked}
           onSave={onOverridePlayerPhysicalState}
           onOpenMechanicsHelp={onOpenMechanicsHelp}
         />
-        {characterRows.map((row) => {
-          const cParty = getCharacterParty(activeParties, row.record.id);
-          const partyRole = cParty
-            ? cParty.member_ids.includes(USER_PARTY_MEMBER_ID)
-              ? "player_party"
-              : cParty.leader_id === row.record.id
-              ? "npc_leader"
-              : "npc_party"
-            : null;
-          return (
-            <CharacterRow
-              key={row.record.id}
-              character={row.record}
-              state={row.state}
-              isPresent={row.isPresent}
-              elsewhereLocationName={row.elsewhereLocationName}
-              moodChanged={row.moodChanged}
-              partyRole={partyRole}
-              partyName={cParty?.name ?? null}
-              onOpenInCodex={onOpenCharacterInCodex}
-            />
-          );
-        })}
+        {presentRows.map((row) => renderCharacterCard(row, false))}
+        {presentRows.length === 0 && (
+          <div className="inspector-here-empty">No other characters here</div>
+        )}
       </div>
 
-      <InspectorInternalsSection
-        bundle={bundle}
-        turnsCount={turns.length}
-        indexedCount={indexedCount}
-        sceneFlags={sceneFlags}
-        recalledItems={recalledItems}
-        flagsChanged={flagsChanged}
-        showAllFlags={showAllFlags}
-        setShowAllFlags={setShowAllFlags}
-        expandedRecalls={expandedRecalls}
-        toggleRecall={toggleRecall}
-        onOpenLoreIndex={() => setShowLoreIndex(true)}
-        onOpenMechanicsHelp={onOpenMechanicsHelp}
-      />
-
-      {showLoreIndex && (
-        <LoreIndexModal
-          world={world}
-          characters={indexedCharacters}
-          locations={bundle.visible_locations}
-          containers={effectiveContainers}
-          activeLocationId={activeLoc.id}
-          recalledItems={recalledItems}
-          onClose={() => setShowLoreIndex(false)}
-        />
+      {absentRows.length > 0 && (
+        <InspectorSection
+          storageKey="elsewhere"
+          title="Elsewhere"
+          icon={<MapPin size={13} color="var(--text-muted)" />}
+          meta={absentRows.length}
+          defaultOpen={defaultElsewhereOpen}
+          bodyClassName="inspector-section-body--flush"
+        >
+          {absentRows.map((row) => renderCharacterCard(row, true))}
+        </InspectorSection>
       )}
     </aside>
   );

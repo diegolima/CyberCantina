@@ -14,6 +14,7 @@ import type {
   Phase4TurnProgress,
   TurnBookmarkUpdatePayload,
   TurnNodeRecord,
+  WorldRecord,
 } from "../../types";
 import { decomposeClientUserMessage } from "../../utils/mentions";
 
@@ -40,6 +41,7 @@ export function getTierBadgeClass(tier?: string): string {
 
 export interface ChatStageProps {
   bundle: CampaignStateBundle;
+  world?: WorldRecord | null;
   character: CharacterRecord;
   pendingLocationOverrideId?: string | null;
   isStreaming: boolean;

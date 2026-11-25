@@ -125,9 +125,23 @@ describe("Stabilized Tabbed Sheet Modals", () => {
         })
       );
       expect(html).toContain("modal-panel modal-panel--sheet-wide");
-      expect(html).toContain("World Sheet");
+        expect(html).toContain("World Sheet");
       expect(html).not.toContain("transition:width 0.2s ease");
     }
+
+    const personaFocusHtml = renderToStaticMarkup(
+      React.createElement(WorldInspectorModal, {
+        world: WORLD,
+        mode: "campaign",
+        initialTab: "codex",
+        activePersona: PERSONA,
+        initialCodexFocus: { kind: "persona", personaId: PERSONA.id, nonce: 1 },
+        onClose: vi.fn(),
+        onSaved: vi.fn(),
+      })
+    );
+    expect(personaFocusHtml).toContain("Valerie Wells");
+    expect(personaFocusHtml).toContain("Player Persona");
   });
 
   it("renders CharacterInspectorModal with modal-panel--sheet and Character Sheet naming", () => {

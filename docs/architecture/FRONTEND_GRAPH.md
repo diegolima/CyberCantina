@@ -79,7 +79,7 @@ flowchart TD
     b_5 --> b_20
     b_5 --> b_21
     b_6 --> b_7
-    b_6 --> b_12
+    b_6 --> b_15
     b_6 --> b_20
     b_6 --> b_21
     b_7 --> b_2
@@ -134,8 +134,8 @@ flowchart TD
 | `components (root)` | 25 | `api`, `components/auth`, `components/character`, `components/chat`, `components/inspector`, `components/map`, `components/prompts`, `components/shared`, `components/wizard`, `components/world`, `hooks`, `providers`, `types`, `utils` |
 | `components/auth` | 14 | `api`, `components (root)`, `components/models`, `components/providers`, `components/shared`, `types`, `utils` |
 | `components/character` | 12 | `api`, `components (root)`, `components/shared`, `types`, `utils` |
-| `components/chat` | 20 | `components (root)`, `components/inspector`, `components/shared`, `components/world`, `hooks`, `types`, `utils` |
-| `components/inspector` | 8 | `components/map`, `components/shared`, `types`, `utils` |
+| `components/chat` | 21 | `components (root)`, `components/inspector`, `components/shared`, `components/world`, `hooks`, `types`, `utils` |
+| `components/inspector` | 7 | `components/map`, `components/world`, `types`, `utils` |
 | `components/map` | 17 | `components (root)`, `components/inspector`, `components/shared`, `hooks`, `types`, `utils` |
 | `components/models` | 12 | `components/providers`, `local`, `types` |
 | `components/party` | 1 | `components/shared`, `types`, `utils` |

@@ -429,8 +429,22 @@ describe("Phase 1 Empty / Solo Room UI Components", () => {
         participants={[absentChar]}
       />
     );
-    expect(inspectorHtml).toContain("char-row-absent");
+    expect(inspectorHtml).toContain("Here");
+    expect(inspectorHtml).toContain("No other characters here");
     expect(inspectorHtml).toContain("Elsewhere");
-    expect(inspectorHtml).toContain("Main Floor");
+    expect(inspectorHtml).not.toContain("char-row-absent");
+
+    const expandedElsewhereHtml = renderToStaticMarkup(
+      <LiveInspector
+        bundle={bundle}
+        world={world}
+        character={absentChar}
+        participants={[absentChar]}
+        defaultElsewhereOpen={true}
+      />
+    );
+    expect(expandedElsewhereHtml).toContain("char-row-absent");
+    expect(expandedElsewhereHtml).toContain("Elsewhere");
+    expect(expandedElsewhereHtml).toContain("Main Floor");
   });
 });

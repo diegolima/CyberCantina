@@ -255,7 +255,7 @@ describe("Physical Stance Helpers & UI (v0.41.0)", () => {
     expect(elsewhereLying).not.toContain("char-row-stance-pill");
   });
 
-  it("renders LiveInspector You strip both with Persona and without Persona (including Solo rooms)", () => {
+  it("renders LiveInspector Here section & Persona card parity with and without Persona (including Solo rooms)", () => {
     const loc = makeLocation();
     const world = makeWorld(loc);
     const char = makeCharacter();
@@ -267,6 +267,7 @@ describe("Physical Stance Helpers & UI (v0.41.0)", () => {
       tagline: "Fixer",
       age_is_secret: false,
       persona_bio: "Always watching exits.",
+      portrait_url: "/api/media/personas/pers_jax/portrait.png",
       equipped: [],
       inventory: [],
       lore_entries: [],
@@ -285,31 +286,51 @@ describe("Physical Stance Helpers & UI (v0.41.0)", () => {
         world={world}
         character={char}
         onOverridePlayerPhysicalState={() => {}}
+        onOpenPersonaInCodex={() => {}}
+        onOpenMechanicsHelp={() => {}}
       />
     );
+    expect(withPersonaHtml).toContain("Here");
     expect(withPersonaHtml).toContain("Jax Mercer");
+    expect(withPersonaHtml).toContain("inspector-you-pill");
+    expect(withPersonaHtml).toContain("/api/media/personas/pers_jax/portrait.png");
+    expect(withPersonaHtml).toContain("Open Jax Mercer in Codex");
     expect(withPersonaHtml).toContain("Crouching");
     expect(withPersonaHtml).toContain("behind overturned booth");
     expect(withPersonaHtml).toContain("Kneeling");
+    // Present badge is suppressed inside Here, and no nested <button> exists inside persona link
+    expect(withPersonaHtml).not.toContain("char-row-present");
+    const linkStart = withPersonaHtml.indexOf('class="inspector-persona-link"');
+    const linkEnd = withPersonaHtml.indexOf("</button>", linkStart);
+    expect(linkStart).toBeGreaterThan(-1);
+    expect(linkEnd).toBeGreaterThan(linkStart);
+    expect(withPersonaHtml.slice(linkStart, linkEnd)).not.toContain("<button");
+    expect(withPersonaHtml).toContain("Learn about Physical Stance &amp; Motion Continuity");
+    expect(withPersonaHtml).not.toContain("Elsewhere");
 
-    // Persona-less & Solo empty room (presentIds = [])
+    // Persona-less & Solo empty room (presentIds = []) with unspecified stance shows quiet cue + collapsed Elsewhere
     const soloNoPersonaHtml = renderToStaticMarkup(
       <LiveInspector
         bundle={makeBundle({
           persona: null,
-          playerStance: "restrained",
-          playerContext: "cuffed to bulkhead",
+          playerStance: "unspecified",
+          playerContext: "",
           presentIds: [],
         })}
         world={world}
         character={char}
         participants={[]}
         onOverridePlayerPhysicalState={() => {}}
+        onOpenPersonaInCodex={() => {}}
       />
     );
-    expect(soloNoPersonaHtml).toContain("inspector-player-physical-label\">You</span>");
-    expect(soloNoPersonaHtml).toContain("Restrained");
-    expect(soloNoPersonaHtml).toContain("cuffed to bulkhead");
+    expect(soloNoPersonaHtml).toContain('char-row-name">You</span>');
+    expect(soloNoPersonaHtml).not.toContain("inspector-you-pill");
+    expect(soloNoPersonaHtml).not.toContain("inspector-persona-link");
+    expect(soloNoPersonaHtml).toContain("Set stance");
+    expect(soloNoPersonaHtml).toContain("No other characters here");
+    expect(soloNoPersonaHtml).toContain("Elsewhere");
+    expect(soloNoPersonaHtml).not.toContain("char-row-absent");
   });
 
   it("renders Physical State controls inside NPC Current tab and Persona Codex dossier", () => {

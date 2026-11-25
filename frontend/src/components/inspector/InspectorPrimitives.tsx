@@ -52,6 +52,8 @@ interface InspectorSectionProps {
   defaultOpen?: boolean;
   /** Optional sibling button/action rendered on the right edge of the header row (never nested inside toggle button). */
   headerAction?: React.ReactNode;
+  /** Optional additional class on the collapsible body container. */
+  bodyClassName?: string;
   children: React.ReactNode;
 }
 
@@ -65,6 +67,7 @@ export const InspectorSection: React.FC<InspectorSectionProps> = ({
   changedTitle = "Updated this turn",
   defaultOpen = false,
   headerAction,
+  bodyClassName,
   children,
 }) => {
   const [open, setOpen] = usePersistentState<boolean>(
@@ -105,7 +108,10 @@ export const InspectorSection: React.FC<InspectorSectionProps> = ({
         toggleButton
       )}
       {open && (
-        <div id={bodyId} className="inspector-section-body">
+        <div
+          id={bodyId}
+          className={`inspector-section-body${bodyClassName ? ` ${bodyClassName}` : ""}`}
+        >
           {children}
         </div>
       )}

@@ -70,10 +70,12 @@ import { getLatestBranchTurnId } from "./chat/arrivalHelpers";
 import { LiveStreamingTurnCard } from "./chat/LiveStreamingTurnCard";
 import { ChatComposer } from "./chat/ChatComposer";
 import { GmTalkDrawer } from "./chat/GmTalkDrawer";
+import { splitWorldClockDisplay } from "./chat/worldClockDisplay";
 import { useGmTalk } from "../hooks/useGmTalk";
 
 export const ChatStage: React.FC<ChatStageProps> = ({
   bundle,
+  world = null,
   character,
   pendingLocationOverrideId,
   isStreaming,
@@ -218,6 +220,36 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const lastBranchTurn =
     bundle.active_branch_turns[bundle.active_branch_turns.length - 1];
   const lastTurnId = getLatestBranchTurnId(bundle.active_branch_turns);
+
+  // Top-bar World Clock & Turn bezel state
+  const worldTimestamp = bundle.current_world_snapshot.world_timestamp;
+  const activeTurnDepth = lastBranchTurn?.depth_index ?? 0;
+  const clockParts = useMemo(
+    () => splitWorldClockDisplay(worldTimestamp),
+    [worldTimestamp]
+  );
+  const [clockAdvanceFlash, setClockAdvanceFlash] = useState(false);
+  const prevClockRef = useRef<{ campaignId: string; timestamp: string }>({
+    campaignId: bundle.campaign.id,
+    timestamp: worldTimestamp,
+  });
+
+  useEffect(() => {
+    const prev = prevClockRef.current;
+    prevClockRef.current = {
+      campaignId: bundle.campaign.id,
+      timestamp: worldTimestamp,
+    };
+    if (
+      prev.campaignId === bundle.campaign.id &&
+      prev.timestamp !== worldTimestamp
+    ) {
+      setClockAdvanceFlash(true);
+      const timer = window.setTimeout(() => setClockAdvanceFlash(false), 900);
+      return () => window.clearTimeout(timer);
+    }
+    return undefined;
+  }, [bundle.campaign.id, worldTimestamp]);
 
   // When a new turn is committed, collapse all past description cards (clearing manual overrides)
   useEffect(() => {
@@ -1619,14 +1651,64 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         </div>
         <div className="stage-header-actions">
           <div className="stage-header-badges">
-            <span className="badge">
-              <MapPin size={13} color="var(--accent-cyan)" />
-              {bundle.active_location.name}
-            </span>
-            <span className="badge">
-              <Clock size={13} color="var(--accent-amber)" />
-              {bundle.current_world_snapshot.world_timestamp}
-            </span>
+            {!isInspectorOpen && (
+              <span
+                className="badge stage-location-badge"
+                title={bundle.active_location.name}
+              >
+                <MapPin size={13} color="var(--accent-cyan)" />
+                <span className="stage-location-badge-text">
+                  {bundle.active_location.name}
+                </span>
+              </span>
+            )}
+            <div
+              className={`stage-clock-cluster${
+                clockAdvanceFlash ? " stage-clock-cluster--flash" : ""
+              }`}
+            >
+              <span
+                className="stage-clock-time"
+                title={`World Clock: ${worldTimestamp}`}
+              >
+                <Clock
+                  size={12}
+                  className="stage-clock-icon"
+                  aria-hidden="true"
+                />
+                {clockParts ? (
+                  <span>
+                    {clockParts.prefix}
+                    <span
+                      className={`stage-clock-colon${
+                        isBusy ? " stage-clock-colon--blinking" : ""
+                      }`}
+                    >
+                      {clockParts.colon}
+                    </span>
+                    {clockParts.suffix}
+                  </span>
+                ) : (
+                  <span>{worldTimestamp}</span>
+                )}
+              </span>
+              <span className="stage-clock-divider" aria-hidden="true" />
+              {onOpenStoryTimelines ? (
+                <button
+                  type="button"
+                  className="stage-turn-btn"
+                  onClick={onOpenStoryTimelines}
+                  title={`Open Story & Timelines (Turn #${activeTurnDepth})`}
+                  aria-label={`Open Story & Timelines (Turn #${activeTurnDepth})`}
+                >
+                  <span className="stage-turn-word">Turn </span>#{activeTurnDepth}
+                </button>
+              ) : (
+                <span className="stage-turn-btn stage-turn-btn--static">
+                  <span className="stage-turn-word">Turn </span>#{activeTurnDepth}
+                </span>
+              )}
+            </div>
           </div>
           {onToggleInspector && (
             <button
@@ -1975,6 +2057,10 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         }}
         telemetry={modalTelemetryTurn?.telemetry ?? null}
         turnDepth={modalTelemetryTurn?.depth_index ?? null}
+        bundle={bundle}
+        world={world ?? null}
+        characters={allCampaignCharacters}
+        inspectedTurn={modalTelemetryTurn ?? null}
         onOpenSettings={onOpenSettings}
         onOpenMechanicsHelp={onOpenMechanicsHelp}
       />

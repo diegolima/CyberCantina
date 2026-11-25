@@ -138,6 +138,27 @@
   }
 }
 
+@keyframes clockColonBlink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.2;
+  }
+}
+
+@keyframes clockAdvanceFlash {
+  0% {
+    border-color: var(--accent-amber);
+    box-shadow: 0 0 0 2px var(--amber-bg);
+  }
+  100% {
+    border-color: var(--amber-border-subtle);
+    box-shadow: none;
+  }
+}
+
 @keyframes gmSlideUpIn {
   from {
     opacity: 0;

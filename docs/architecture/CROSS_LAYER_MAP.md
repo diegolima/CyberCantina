@@ -777,6 +777,7 @@ erDiagram
 | `frontend/src/components/chat/chatHelpers.tsx` |
 | `frontend/src/components/chat/contextHealthHelpers.ts` |
 | `frontend/src/components/chat/proseTelemetryHelpers.ts` |
+| `frontend/src/components/chat/worldClockDisplay.ts` |
 
 #### `components/inspector`
 
@@ -784,7 +785,6 @@ erDiagram
 | :--- |
 | `frontend/src/components/inspector/AgentChangesModal.tsx` |
 | `frontend/src/components/inspector/CharacterRow.tsx` |
-| `frontend/src/components/inspector/InspectorInternalsSection.tsx` |
 | `frontend/src/components/inspector/InspectorLocationCard.tsx` |
 | `frontend/src/components/inspector/InspectorPrimitives.tsx` |
 | `frontend/src/components/inspector/LocationOverrideButton.tsx` |

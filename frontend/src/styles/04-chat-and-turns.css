@@ -19,6 +19,106 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
+}
+
+.stage-location-badge {
+  min-width: 0;
+}
+
+.stage-location-badge-text {
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stage-clock-cluster {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg-deep);
+  border: 1px solid var(--amber-border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.stage-clock-cluster--flash {
+  animation: clockAdvanceFlash 0.9s ease-out;
+}
+
+.stage-clock-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  font-family: "JetBrains Mono", var(--font-mono);
+  font-size: 0.79rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-amber);
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.stage-clock-icon {
+  color: var(--accent-amber);
+  flex-shrink: 0;
+}
+
+.stage-clock-colon {
+  display: inline-block;
+}
+
+.stage-clock-colon--blinking {
+  animation: clockColonBlink 1s steps(2, start) infinite;
+}
+
+.stage-clock-divider {
+  width: 1px;
+  align-self: stretch;
+  background: var(--amber-border-subtle);
+  flex-shrink: 0;
+}
+
+.stage-turn-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border: none;
+  background: transparent;
+  font-family: "JetBrains Mono", var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1.2;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.stage-turn-btn:hover {
+  background: var(--surface-glass-2);
+  color: var(--text-primary);
+}
+
+.stage-turn-btn:focus-visible {
+  outline: 2px solid var(--accent-amber);
+  outline-offset: -2px;
+}
+
+.stage-turn-btn--static {
+  cursor: default;
+}
+
+.stage-turn-btn--static:hover {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.stage-turn-word {
+  white-space: pre;
 }
 
 .chat-stage-feed-region {
@@ -1581,10 +1681,74 @@
 }
 
 .context-health-modal {
-  width: min(680px, 94vw);
+  width: min(800px, 94vw);
   max-height: 86vh;
   display: flex;
   flex-direction: column;
+}
+
+.context-health-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-dark-soft);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+
+.context-health-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-deep);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.context-health-tab:hover {
+  border-color: var(--text-muted);
+  color: var(--text-primary);
+}
+
+.context-health-tab.active {
+  background: var(--cyan-bg);
+  border-color: var(--cyan-border);
+  color: var(--cyan-fg);
+}
+
+.context-health-tab-count {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+.context-health-tab.active .context-health-tab-count {
+  color: var(--cyan-fg);
+  opacity: 0.88;
+}
+
+.context-health-tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.context-health-scene-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .context-health-modal-body {

@@ -8,7 +8,10 @@ import {
   Globe,
   Lock,
   Maximize2,
+  PanelRightClose,
+  X,
 } from "lucide-react";
+import type { RightPanelMode } from "../../utils/campaignLayout";
 import type {
   CampaignStateBundle,
   CompassDirection,
@@ -78,6 +81,9 @@ export interface InspectorLocationCardProps {
   ) => Promise<void>;
   handleOpenFullMap: () => void;
   onOpenWorldSheet?: () => void;
+  panelId?: string;
+  mode?: RightPanelMode;
+  onClose?: () => void;
 }
 
 export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
@@ -102,6 +108,9 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
   handleOverrideClick,
   handleOpenFullMap,
   onOpenWorldSheet,
+  panelId,
+  mode = "expanded",
+  onClose,
 }) => {
   const maskUid = useId().replace(/:/g, "");
   const fillMaskId = `minimap-env-fill-${maskUid}`;
@@ -162,43 +171,50 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
 
   return (
       <div className="inspector-card">
-        <div
-          className="sidebar-label"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            flexWrap: "wrap",
-            gap: 6,
-          }}
-        >
-          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <div className="sidebar-label inspector-map-header">
+          <span
+            className="inspector-map-title"
+            title={`Adjacent Map (${immediateNeighbors.length}/8 exits)`}
+          >
             <Compass size={13} color="var(--accent-cyan)" />
-            Adjacent Map ({immediateNeighbors.length}/8 exits)
+            <span>Map</span>
           </span>
-          <div style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+          <div className="inspector-map-actions">
             {onOpenWorldSheet && (
               <button
                 type="button"
-                className="btn"
-                style={{ padding: "2px 7px", fontSize: "0.68rem" }}
+                className="btn inspector-map-action-btn"
                 onClick={onOpenWorldSheet}
                 title="Open World Sheet & campaign World Settings"
+                aria-label="Open World Sheet & campaign World Settings"
               >
                 <Globe size={11} />
-                World Sheet
+                <span>World</span>
               </button>
             )}
             <button
               type="button"
-              className="btn"
-              style={{ padding: "2px 7px", fontSize: "0.68rem" }}
+              className="btn inspector-map-action-btn"
               onClick={handleOpenFullMap}
-              title="Expand full zoomable world map"
+              title={`Expand full zoomable world map (${bundle.visible_locations.length} locations)`}
+              aria-label={`Expand Map (${bundle.visible_locations.length})`}
             >
               <Maximize2 size={11} />
-              Expand Map ({bundle.visible_locations.length})
+              <span>{bundle.visible_locations.length}</span>
             </button>
+            {onClose && (
+              <button
+                type="button"
+                className="btn btn-ghost inspector-collapse-btn"
+                onClick={onClose}
+                title={mode === "overlay" ? "Close inspector" : "Collapse inspector"}
+                aria-label={mode === "overlay" ? "Close inspector" : "Collapse inspector"}
+                aria-expanded={mode !== "hidden"}
+                aria-controls={panelId}
+              >
+                {mode === "overlay" ? <X size={15} /> : <PanelRightClose size={15} />}
+              </button>
+            )}
           </div>
         </div>
 

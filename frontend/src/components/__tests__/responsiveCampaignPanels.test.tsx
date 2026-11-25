@@ -271,8 +271,28 @@ describe("Responsive campaign panels", () => {
     expect(html).toContain('aria-controls="live-inspector-aside"');
     expect(html).toContain("stage-attention-dot");
     expect(html).toContain("stage-header-badges");
+    expect(html).toContain("stage-location-badge");
+    expect(html).toContain("stage-clock-cluster");
     expect(html).not.toContain("btn-close-campaign");
     expect(html).not.toContain("Close Campaign");
+
+    const openInspectorStageHtml = renderToStaticMarkup(
+      <ChatStage
+        bundle={bundle}
+        character={character}
+        isStreaming={false}
+        liveStream={null}
+        onSendTurn={noop}
+        onCheckoutTurn={noop}
+        showSidebarToggle
+        isSidebarOpen={false}
+        onToggleSidebar={noop}
+        isInspectorOpen={true}
+        onToggleInspector={noop}
+      />
+    );
+    expect(openInspectorStageHtml).not.toContain("stage-location-badge");
+    expect(openInspectorStageHtml).toContain("stage-clock-cluster");
   });
 
   it("renders LiveInspector collapse controls and aria-hidden state cleanly", () => {

@@ -33,6 +33,7 @@ import {
 } from "../map/mapValidation";
 import {
   LoreIndexModal,
+  LoreIndexPanel,
   buildLoreIndexEntries,
 } from "../inspector/LoreIndexModal";
 
@@ -483,6 +484,101 @@ describe("Location Containers Frontend Architecture", () => {
     expect(loreModalHtml).toContain("Containers (1)");
     expect(loreModalHtml).toContain("Mercenary Etiquette");
     expect(loreModalHtml).not.toContain("Sub-pier Vault");
+
+    // Codex-parity spoiler gating across World, Location & L1 Container secret lore
+    const worldWithSecrets: WorldRecord = {
+      ...world,
+      lore_nodes: [
+        ...world.lore_nodes,
+        {
+          id: "w_sec_hidden",
+          world_id: world.id,
+          title: "Hidden Syndicate Ledger",
+          category: "secret",
+          content: "Blackmail dossier.",
+          entity_tags: ["syndicate"],
+        },
+        {
+          id: "w_sec_revealed",
+          world_id: world.id,
+          title: "Revealed Reactor Sabotage",
+          category: "secret",
+          content: "Coolant valve tampered.",
+          entity_tags: ["reactor"],
+        },
+      ],
+    };
+    const locWithSecrets: LocationNode[] = locations.map((loc) =>
+      loc.id === "loc_foyer"
+        ? {
+            ...loc,
+            lore_nodes: [
+              ...(loc.lore_nodes ?? []),
+              {
+                id: "loc_sec_hidden",
+                world_id: world.id,
+                title: "False Wall Hatch",
+                category: "secret",
+                content: "Behind the coat rack.",
+                entity_tags: ["hatch"],
+              },
+            ],
+          }
+        : loc
+    );
+    const contWithSecrets: LocationContainer[] = containers.map((c) =>
+      c.id === "cont_club"
+        ? {
+            ...c,
+            lore_nodes: [
+              ...(c.lore_nodes ?? []),
+              {
+                id: "cont_sec_hidden",
+                world_id: world.id,
+                title: "Owner Smuggling Tunnel",
+                category: "secret",
+                content: "Drops below dock 4.",
+                entity_tags: ["tunnel"],
+              },
+            ],
+          }
+        : c
+    );
+
+    const playerEntries = buildLoreIndexEntries({
+      world: worldWithSecrets,
+      characters: [],
+      locations: locWithSecrets,
+      containers: contWithSecrets,
+      activeLocationId: "loc_foyer",
+      recalledItems: [],
+      unlockLore: false,
+      revealedLoreIds: ["w_sec_revealed"],
+    });
+    expect(playerEntries.some((e) => e.title === "Revealed Reactor Sabotage" && e.isRevealed)).toBe(true);
+    expect(playerEntries.some((e) => e.title === "Hidden Syndicate Ledger")).toBe(false);
+    expect(playerEntries.some((e) => e.title === "False Wall Hatch")).toBe(false);
+    expect(playerEntries.some((e) => e.title === "Owner Smuggling Tunnel")).toBe(false);
+
+    const gmPanelHtml = renderToStaticMarkup(
+      <LoreIndexPanel
+        world={worldWithSecrets}
+        characters={[]}
+        locations={locWithSecrets}
+        containers={contWithSecrets}
+        activeLocationId="loc_foyer"
+        recalledItems={[]}
+        unlockLore={true}
+        revealedLoreIds={["w_sec_revealed"]}
+        embedded
+      />
+    );
+    expect(gmPanelHtml).toContain("GM Mode · Secrets Unlocked");
+    expect(gmPanelHtml).toContain("Hidden Syndicate Ledger");
+    expect(gmPanelHtml).toContain("False Wall Hatch");
+    expect(gmPanelHtml).toContain("Owner Smuggling Tunnel");
+    expect(gmPanelHtml).toContain("Discovered");
+    expect(gmPanelHtml).toContain("Secret");
   });
 
   it("round-trips containers, L1 lore, portals, and layout coords across worldStateToDraft and draftToWorldRecord", () => {

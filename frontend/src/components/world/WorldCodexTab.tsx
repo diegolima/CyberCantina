@@ -90,6 +90,11 @@ export type CodexFocusRequest =
       nonce: number;
     }
   | {
+      kind: "persona";
+      personaId: string;
+      nonce: number;
+    }
+  | {
       kind: "mechanics";
       topicId: MechanicsTopicId;
       returnTarget?: CodexReturnTarget | null;
@@ -201,7 +206,10 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
 }) => {
   const canEditWorldLore = !isCampaignMode || (unlockLore && !isMutatingLocked);
   const [activeSection, setActiveSection] = useState<CodexSectionId | null>(() => {
-    if (externalFocusRequest?.kind === "character") {
+    if (
+      externalFocusRequest?.kind === "character" ||
+      externalFocusRequest?.kind === "persona"
+    ) {
       return "major_characters";
     }
     if (externalFocusRequest?.kind === "mechanics") {
@@ -218,6 +226,9 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   const [selectedEntryKey, setSelectedEntryKey] = useState<string | null>(() => {
     if (externalFocusRequest?.kind === "character") {
       return `character:${externalFocusRequest.characterId}`;
+    }
+    if (externalFocusRequest?.kind === "persona") {
+      return `persona:${externalFocusRequest.personaId}`;
     }
     if (externalFocusRequest?.kind === "mechanics") {
       return `mechanics:${externalFocusRequest.topicId}`;
@@ -350,6 +361,18 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
         subtab: externalFocusRequest.initialSubtab ?? "bio",
         nonce: externalFocusRequest.nonce,
       });
+      return;
+    }
+    if (externalFocusRequest.kind === "persona") {
+      setGlobalQuery("");
+      setCategoryQuery("");
+      setFrozenOrderIds(null);
+      setReclassifiedNotice(null);
+      setArtifactUnlinkNotice(null);
+      setCharFocusTarget(null);
+      setMechanicsReturnTarget(null);
+      setActiveSection("major_characters");
+      setSelectedEntryKey(`persona:${externalFocusRequest.personaId}`);
       return;
     }
     if (externalFocusRequest.kind === "mechanics") {

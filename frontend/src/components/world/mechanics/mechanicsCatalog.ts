@@ -1279,7 +1279,7 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
         label: "Manual Overrides",
         rangeOrTag: "Always Available",
         meaning:
-          "Edit live in the right-pane You strip, Codex → Current, or Codex → Player Persona without needing GM Mode.",
+          "Edit live in the right-pane Here persona card, Codex → Current, or Codex → Player Persona without needing GM Mode.",
         accent: "violet",
       },
     ],
@@ -1430,7 +1430,7 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
       ...PHASE_CONTEXT_SCALES,
     ],
     howItChanges: [
-      "Click the 4-bar Context Health pill in the top stage header (Green / Amber / Red) after any turn—or via a turn's Prose Model Pill—to inspect exact token counts.",
+      "Click the 4-bar Context Health pill in the top stage header (Green / Amber / Red) after any turn—or via a turn's Prose Model Pill—to inspect Telemetry, Scene & Recall (flags and recalled items), and the searchable Lore Index.",
       "When local endpoints (like Ollama num_ctx) near their limit, overflow protection cascades oldest Zone 2 summaries down to synopses before trimming recent turns.",
     ],
     effectOnPlay: [
@@ -1466,7 +1466,7 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
       "rag",
     ],
     inOneLine:
-      "Global, Location, Level 1 Container, and Artifact lore stay spoiler-gated until discovered, while Scene Flags track temporary room state via FIFO in Internals.",
+      "Global, Location, Level 1 Container, and Artifact lore stay spoiler-gated until discovered, while Scene Flags track temporary room state via FIFO inside Context Health → Scene & Recall.",
     scales: [
       {
         label: "World / Artifact Lore",
@@ -1495,7 +1495,7 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
       "Scene Flags append on turn resolution and automatically evict oldest flags once the active cap (default 10) is reached.",
     ],
     effectOnPlay: [
-      "Open Live Inspector → Internals to inspect active Scene Flags, exact Recalled Last Turn scores, or open the Lore Index across all shards.",
+      "Open Context Health → Scene & Recall to inspect active Scene Flags and exact Recalled item scores, or switch to Context Health → Lore Index to browse visible shards and lore.",
       "Rewinding or branching prior to a secret reveal re-hides that secret cleanly on the earlier branch.",
     ],
     relatedTopicIds: [
@@ -1735,10 +1735,10 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
       "Toggling Unlock Lore & Secrets (GM Mode) in World Settings reveals hidden secrets and unlocks campaign-scoped authoring tools—while AI characters still obey in-game discovery rules.",
     scales: [
       {
-        label: "Codex & Map Secrets",
+        label: "Codex, Map & Index Secrets",
         rangeOrTag: "UI-Only Reveal",
         meaning:
-          "Shows undiscovered secret lore entries, unrevealed Secret Map Links (as dashed violet ghost lines), and reveals toggle buttons.",
+          "Shows undiscovered secret lore entries (in Codex and Context Health → Lore Index), unrevealed Secret Map Links (as dashed violet ghost lines), and reveals toggle buttons.",
         accent: "amber",
       },
       {
@@ -1757,7 +1757,7 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
       },
     ],
     howItChanges: [
-      "Toggle in Campaign → World → World Settings; takes effect immediately across Codex, Map Inspector, Story Major Events, and Neuromancer.",
+      "Toggle in Campaign → World → World Settings; takes effect immediately across Codex, Map Inspector, Context Health → Lore Index, Story Major Events, and Neuromancer.",
     ],
     effectOnPlay: [
       "Critical invariant: enabling GM Mode never leaks unrevealed secrets into AI character prompts—NPCs still only react to what they discovered in play.",

@@ -14,18 +14,34 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.clock-display {
-  font-family: "JetBrains Mono", monospace;
-  font-size: 1.05rem;
-  font-weight: 700;
-  color: var(--accent-amber);
-  background: var(--bg-deep);
-  padding: 8px 12px;
-  border-radius: 6px;
-  border: 1px solid var(--amber-border-subtle);
+.inspector-map-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
+.inspector-map-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.inspector-map-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.inspector-map-action-btn {
+  padding: 2px 7px;
+  font-size: 0.68rem;
+  gap: 4px;
+  white-space: nowrap;
 }
 
 .meter-row {
@@ -143,6 +159,29 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.inspector-section-body--flush {
+  padding: 0;
+  gap: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.inspector-here-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.inspector-here-empty {
+  padding: 8px 14px 10px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-style: italic;
+  border-top: 1px solid var(--border-subtle);
 }
 
 .inspector-empty {
@@ -503,17 +542,78 @@
   overflow: hidden;
 }
 
-/* Lore index modal */
+/* Lore index modal & embedded panel */
+.lore-index-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .lore-index-toolbar {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
   padding: 12px 20px;
   border-bottom: 1px solid var(--border-subtle);
 }
 
+.lore-index-toolbar--embedded {
+  padding: 0 0 10px;
+}
+
+.lore-index-search-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.lore-index-gm-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 0.69rem;
+  font-weight: 700;
+  border: 1px solid var(--amber-border);
+  background: var(--amber-bg);
+  color: var(--amber-fg);
+  white-space: nowrap;
+}
+
+.lore-index-panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lore-index-secret-badge,
+.lore-index-discovered-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+}
+
+.lore-index-secret-badge {
+  border: 1px solid var(--rose-border);
+  background: var(--rose-bg);
+  color: var(--rose-fg);
+}
+
+.lore-index-discovered-badge {
+  border: 1px solid var(--emerald-border);
+  background: var(--emerald-bg);
+  color: var(--emerald-fg);
+}
+
 .lore-index-filters {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
 }
 
@@ -1196,55 +1296,104 @@
   border-top: 1px solid var(--border-subtle);
 }
 
-/* Physical Stance Continuity (LiveInspector Player Strip & CharacterRow Pill) */
+/* Physical Stance Continuity (LiveInspector Here Persona Card & CharacterRow Pill) */
 .char-row-stance-pill {
   font-size: 0.6rem;
   padding: 0 5px;
 }
 
-.inspector-player-physical {
+.inspector-persona-row {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border-subtle);
   background: var(--surface-glass-1);
 }
 
-.inspector-player-physical-top {
+.inspector-persona-row + .char-row {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.inspector-persona-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 6px;
+  gap: 8px;
+  padding: 11px 14px;
 }
 
-.inspector-player-physical-identity {
+.inspector-persona-link,
+.inspector-persona-identity {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  align-items: flex-start;
+  gap: 10px;
   min-width: 0;
-  flex-wrap: wrap;
+  flex: 1;
+  color: var(--text-secondary);
 }
 
-.inspector-player-physical-label {
-  font-size: 0.74rem;
-  font-weight: 600;
-  color: var(--text-primary);
+.inspector-persona-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.inspector-persona-link:hover .char-row-name {
+  color: var(--cyan-fg);
+}
+
+.inspector-persona-link:focus-visible {
+  outline: 1px solid var(--accent-cyan);
+  outline-offset: 2px;
+}
+
+.inspector-persona-portrait {
+  border-color: var(--cyan-border);
+}
+
+.inspector-you-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  background: var(--cyan-bg);
+  border: 1px solid var(--cyan-border);
+  color: var(--cyan-fg);
+}
+
+.inspector-persona-context {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-persona-context--muted {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.inspector-persona-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.inspector-persona-editor-wrap {
+  padding: 0 14px 11px;
 }
 
 .inspector-player-physical-edit-btn {
   padding: 2px 7px;
   font-size: 0.68rem;
   gap: 4px;
-}
-
-.inspector-player-physical-context {
-  font-size: 0.72rem;
-  color: var(--text-secondary);
-  line-height: 1.35;
-}
-
-.inspector-player-physical-context--empty {
-  color: var(--text-muted);
-  font-style: italic;
 }

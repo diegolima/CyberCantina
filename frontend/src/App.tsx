@@ -799,6 +799,7 @@ export const App: React.FC = () => {
       {bundle && campaignCharacter ? (
         <ChatStage
           bundle={bundle}
+          world={campaignWorld}
           character={campaignCharacter}
           pendingLocationOverrideId={pendingLocationOverrideId}
           isStreaming={isStreaming}
@@ -958,6 +959,15 @@ export const App: React.FC = () => {
               kind: "character",
               characterId,
               initialSubtab: "current",
+              nonce: ++codexFocusNonceRef.current,
+            });
+            setCampaignWorldSheetTab("codex");
+          }}
+          onOpenPersonaInCodex={(personaId) => {
+            layout.closeOverlays();
+            setCodexFocusRequest({
+              kind: "persona",
+              personaId,
               nonce: ++codexFocusNonceRef.current,
             });
             setCampaignWorldSheetTab("codex");
