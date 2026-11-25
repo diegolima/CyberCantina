@@ -82,11 +82,11 @@ test.describe("05 - Live Campaign SSE Turn Streaming, Cognition, Arrival Cards &
       page.getByText(/Watch the third pressure valve—it vents scalding steam/i)
     ).toBeVisible();
     await expect(
-      page.getByRole("main").getByText("Turn #2")
+      page.locator(".turn-feed").getByText("Turn #2")
     ).toBeVisible();
     await expect(
-      page.locator("#live-inspector-aside").getByText("Turn #2")
-    ).toBeVisible();
+      page.locator(".stage-clock-cluster .stage-turn-btn")
+    ).toContainText("Turn #2");
 
     const streamReq = mock.requests.find(
       (r) =>
