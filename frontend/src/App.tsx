@@ -992,6 +992,7 @@ export const App: React.FC = () => {
           campaignId={bundle.campaign.id}
           activePersona={bundle.campaign.persona_snapshot ?? null}
           campaignCharacters={liftedCodexCharacters}
+          activeBranchTurns={bundle.active_branch_turns}
           activeLocationId={bundle.active_location.id}
           visitedContainerIds={
             bundle.current_world_snapshot.visited_container_ids ?? []

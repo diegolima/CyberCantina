@@ -892,6 +892,8 @@ erDiagram
 | `frontend/src/components/world/codexCharacter/CampaignCharacterMediaTab.tsx` |
 | `frontend/src/components/world/codexCharacter/CampaignCharacterMemoriesTab.tsx` |
 | `frontend/src/components/world/codexCharacter/CampaignCharacterStateTab.tsx` |
+| `frontend/src/components/world/codexCharacter/RelationalBondChart.tsx` |
+| `frontend/src/components/world/codexCharacter/relationalHistory.ts` |
 | `frontend/src/components/world/codexHelpers.ts` |
 | `frontend/src/components/world/worldDraftMappers.ts` |
 

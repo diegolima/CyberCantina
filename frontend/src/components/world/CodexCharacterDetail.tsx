@@ -27,6 +27,7 @@ import {
   MemoryShard,
   PersonaRecord,
   PersonaTurnStateSnapshot,
+  TurnNodeRecord,
   getTemperamentPresetMeta,
   splitLegacyWornItems,
 } from "../../types";
@@ -68,6 +69,7 @@ interface CodexCharacterDetailProps {
   locations?: LocationNode[];
   activeWorldName?: string;
   characterNameMap?: Record<string, string>;
+  activeBranchTurns?: readonly TurnNodeRecord[];
   isMutatingLocked?: boolean;
   onItemAction?: (payload: ItemEquipActionPayload) => Promise<void> | void;
   onSaveMemories?: (characterId: string, shards: MemoryShard[]) => Promise<void>;
@@ -96,6 +98,7 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
   locations = [],
   activeWorldName,
   characterNameMap = {},
+  activeBranchTurns = [],
   isMutatingLocked = false,
   onItemAction,
   onSaveMemories,
@@ -272,61 +275,63 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
 
           {/* Persona Subtabs Bar */}
           <div className="codex-char-tabs" role="tablist" aria-label="Persona dossier sections">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activePersonaTab === "bio"}
-              className={`codex-char-tab ${activePersonaTab === "bio" ? "active" : ""}`}
-              onClick={() => setActivePersonaTab("bio")}
-            >
-              <BookOpen size={12} />
-              <span>Bio</span>
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activePersonaTab === "appearance"}
-              className={`codex-char-tab ${activePersonaTab === "appearance" ? "active" : ""}`}
-              onClick={() => setActivePersonaTab("appearance")}
-            >
-              <Eye size={12} />
-              <span>Appearance</span>
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activePersonaTab === "gear"}
-              className={`codex-char-tab ${activePersonaTab === "gear" ? "active" : ""}`}
-              onClick={() => setActivePersonaTab("gear")}
-            >
-              <Package size={12} />
-              <span>Gear</span>
-              <span className="codex-char-tab-badge">
-                {equipped.length + inventory.length}
-              </span>
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activePersonaTab === "lore"}
-              className={`codex-char-tab ${activePersonaTab === "lore" ? "active" : ""}`}
-              onClick={() => setActivePersonaTab("lore")}
-            >
-              <ScrollText size={12} />
-              <span>Lore &amp; Secrets</span>
-              <span className="codex-char-tab-badge">{loreEntries.length}</span>
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activePersonaTab === "media"}
-              className={`codex-char-tab ${activePersonaTab === "media" ? "active" : ""}`}
-              onClick={() => setActivePersonaTab("media")}
-            >
-              <ImageIcon size={12} />
-              <span>Media</span>
-              <span className="codex-char-tab-badge">{gallery.length}</span>
-            </button>
+            <div className="codex-char-tab-row">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activePersonaTab === "bio"}
+                className={`codex-char-tab ${activePersonaTab === "bio" ? "active" : ""}`}
+                onClick={() => setActivePersonaTab("bio")}
+              >
+                <BookOpen size={12} />
+                <span>Bio</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activePersonaTab === "appearance"}
+                className={`codex-char-tab ${activePersonaTab === "appearance" ? "active" : ""}`}
+                onClick={() => setActivePersonaTab("appearance")}
+              >
+                <Eye size={12} />
+                <span>Appearance</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activePersonaTab === "gear"}
+                className={`codex-char-tab ${activePersonaTab === "gear" ? "active" : ""}`}
+                onClick={() => setActivePersonaTab("gear")}
+              >
+                <Package size={12} />
+                <span>Gear</span>
+                <span className="codex-char-tab-badge">
+                  {equipped.length + inventory.length}
+                </span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activePersonaTab === "lore"}
+                className={`codex-char-tab ${activePersonaTab === "lore" ? "active" : ""}`}
+                onClick={() => setActivePersonaTab("lore")}
+              >
+                <ScrollText size={12} />
+                <span>Lore &amp; Secrets</span>
+                <span className="codex-char-tab-badge">{loreEntries.length}</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activePersonaTab === "media"}
+                className={`codex-char-tab ${activePersonaTab === "media" ? "active" : ""}`}
+                onClick={() => setActivePersonaTab("media")}
+              >
+                <ImageIcon size={12} />
+                <span>Media</span>
+                <span className="codex-char-tab-badge">{gallery.length}</span>
+              </button>
+            </div>
           </div>
 
           {/* Persona Tab Panels */}
@@ -661,109 +666,116 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
           </div>
         </div>
 
-        {/* Unified 8-Subtab Navigation Bar */}
+        {/* Unified Two-Row Character Subtab Bar */}
         <div
           className="codex-char-tabs"
           role="tablist"
           aria-label="Character dossier sections"
         >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeCharTab === "bio"}
-            className={`codex-char-tab ${activeCharTab === "bio" ? "active" : ""}`}
-            onClick={() => setActiveCharTab("bio")}
-          >
-            <BookOpen size={12} />
-            <span>Bio</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeCharTab === "appearance"}
-            className={`codex-char-tab ${activeCharTab === "appearance" ? "active" : ""}`}
-            onClick={() => setActiveCharTab("appearance")}
-          >
-            <Eye size={12} />
-            <span>Appearance</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeCharTab === "personality"}
-            className={`codex-char-tab ${activeCharTab === "personality" ? "active" : ""}`}
-            onClick={() => setActiveCharTab("personality")}
-          >
-            <Brain size={12} />
-            <span>Pers</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeCharTab === "voice"}
-            className={`codex-char-tab ${activeCharTab === "voice" ? "active" : ""}`}
-            onClick={() => setActiveCharTab("voice")}
-          >
-            <MessageSquare size={12} />
-            <span>Voice</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeCharTab === "memories"}
-            className={`codex-char-tab codex-char-tab--live ${
-              activeCharTab === "memories" ? "active" : ""
-            }`}
-            onClick={() => setActiveCharTab("memories")}
-          >
-            <Database size={12} />
-            <span>Memories</span>
-            <span className="codex-char-tab-badge">{memoryCount}</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeCharTab === "inventory"}
-            className={`codex-char-tab codex-char-tab--live ${
-              activeCharTab === "inventory" ? "active" : ""
-            }`}
-            onClick={() => setActiveCharTab("inventory")}
-          >
-            <Package size={12} />
-            <span>Inv</span>
-            <span className="codex-char-tab-badge">{totalInvCount}</span>
-          </button>
-          {state && (
+          <div className="codex-char-tab-row">
+            <span className="codex-char-tab-row-label">Profile</span>
             <button
               type="button"
               role="tab"
-              aria-selected={activeCharTab === "current"}
-              className={`codex-char-tab codex-char-tab--live ${
-                activeCharTab === "current" ? "active" : ""
-              }`}
-              onClick={() => setActiveCharTab("current")}
+              aria-selected={activeCharTab === "bio"}
+              className={`codex-char-tab ${activeCharTab === "bio" ? "active" : ""}`}
+              onClick={() => setActiveCharTab("bio")}
             >
-              <Activity
-                size={12}
-                color={activeCharTab === "current" ? "var(--accent-amber)" : undefined}
-              />
-              <span>Current</span>
-              <span className="codex-char-tab-badge codex-char-tab-badge--live">
-                Live
-              </span>
+              <BookOpen size={12} />
+              <span>Bio</span>
             </button>
-          )}
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeCharTab === "media"}
-            className={`codex-char-tab ${activeCharTab === "media" ? "active" : ""}`}
-            onClick={() => setActiveCharTab("media")}
-          >
-            <ImageIcon size={12} />
-            <span>Media</span>
-            <span className="codex-char-tab-badge">{totalMediaCount}</span>
-          </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeCharTab === "appearance"}
+              className={`codex-char-tab ${activeCharTab === "appearance" ? "active" : ""}`}
+              onClick={() => setActiveCharTab("appearance")}
+            >
+              <Eye size={12} />
+              <span>Appearance</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeCharTab === "personality"}
+              className={`codex-char-tab ${activeCharTab === "personality" ? "active" : ""}`}
+              onClick={() => setActiveCharTab("personality")}
+            >
+              <Brain size={12} />
+              <span>Personality</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeCharTab === "voice"}
+              className={`codex-char-tab ${activeCharTab === "voice" ? "active" : ""}`}
+              onClick={() => setActiveCharTab("voice")}
+            >
+              <MessageSquare size={12} />
+              <span>Voice</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeCharTab === "media"}
+              className={`codex-char-tab ${activeCharTab === "media" ? "active" : ""}`}
+              onClick={() => setActiveCharTab("media")}
+            >
+              <ImageIcon size={12} />
+              <span>Media</span>
+              <span className="codex-char-tab-badge">{totalMediaCount}</span>
+            </button>
+          </div>
+
+          <div className="codex-char-tab-row codex-char-tab-row--live">
+            <span className="codex-char-tab-row-label">Live</span>
+            {state && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeCharTab === "current"}
+                className={`codex-char-tab codex-char-tab--live ${
+                  activeCharTab === "current" ? "active" : ""
+                }`}
+                onClick={() => setActiveCharTab("current")}
+              >
+                <Activity
+                  size={12}
+                  color={activeCharTab === "current" ? "var(--accent-amber)" : undefined}
+                />
+                <span>Current</span>
+                <span className="codex-char-tab-badge codex-char-tab-badge--live">
+                  Live
+                </span>
+              </button>
+            )}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeCharTab === "inventory"}
+              className={`codex-char-tab codex-char-tab--live ${
+                activeCharTab === "inventory" ? "active" : ""
+              }`}
+              onClick={() => setActiveCharTab("inventory")}
+            >
+              <Package size={12} />
+              <span>Inventory</span>
+              <span className="codex-char-tab-badge">{totalInvCount}</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeCharTab === "memories"}
+              className={`codex-char-tab codex-char-tab--live ${
+                activeCharTab === "memories" ? "active" : ""
+              }`}
+              onClick={() => setActiveCharTab("memories")}
+            >
+              <Database size={12} />
+              <span>Memories</span>
+              <span className="codex-char-tab-badge">{memoryCount}</span>
+            </button>
+          </div>
         </div>
 
         {/* Subtab Content Panels */}
@@ -981,22 +993,6 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
                       {record.baseline_psyche.core_fear || "—"}
                     </p>
                   </div>
-                  {record.baseline_psyche.default_want?.trim() && (
-                    <div>
-                      <div className="codex-sub-label">Default Want</div>
-                      <p className="codex-prose-text">
-                        {record.baseline_psyche.default_want}
-                      </p>
-                    </div>
-                  )}
-                  {record.baseline_psyche.default_plan?.trim() && (
-                    <div>
-                      <div className="codex-sub-label">Default Plan</div>
-                      <p className="codex-prose-text">
-                        {record.baseline_psyche.default_plan}
-                      </p>
-                    </div>
-                  )}
                 </div>
               </div>
             </>
@@ -1074,6 +1070,7 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
               onRelocateCharacter={onRelocateCharacter}
               characterNameMap={characterNameMap}
               personaSnapshot={persona}
+              activeBranchTurns={activeBranchTurns}
               isActive={activeCharTab === "current"}
             />
           )}

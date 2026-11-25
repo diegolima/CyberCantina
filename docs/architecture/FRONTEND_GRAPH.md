@@ -140,7 +140,7 @@ flowchart TD
 | `components/shared` | 5 | `types`, `utils` |
 | `components/story` | 5 | `components (root)`, `types` |
 | `components/wizard` | 2 | `api`, `components (root)`, `types` |
-| `components/world` | 12 | `api`, `components (root)`, `components/character`, `components/map`, `components/shared`, `types`, `utils` |
+| `components/world` | 14 | `api`, `components (root)`, `components/character`, `components/map`, `components/shared`, `types`, `utils` |
 | `hooks` | 4 | `api`, `types`, `utils` |
 | `local` | 7 | `types` |
 | `main` | 1 | `App`, `styles.css` |

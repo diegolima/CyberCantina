@@ -1136,6 +1136,19 @@ describe("World Codex Helpers & Components (v0.20.0)", () => {
     expect(persHtml).toContain("Baseline Psyche &amp; Emotional Defaults");
     expect(persHtml).toContain("GM_SECRET_DRIVE_TOKEN");
     expect(persHtml).toContain("GM_SECRET_FEAR_TOKEN");
+    // Default Want / Default Plan are Turn 1 seeds omitted from Personality
+    expect(persHtml).not.toContain("Default Want");
+    expect(persHtml).not.toContain("Default Plan");
+    expect(persHtml).not.toContain("Protect beacon");
+    // Two-row renamed tab bar: Profile (Bio, Appearance, Personality, Voice, Media) + Live (Current, Inventory, Memories)
+    expect(persHtml).toContain(">Profile<");
+    expect(persHtml).toContain(">Live<");
+    expect(persHtml).toContain(">Personality<");
+    expect(persHtml).toContain(">Inventory<");
+    expect(persHtml).not.toContain(">Pers<");
+    expect(persHtml).not.toContain(">Inv<");
+    expect(persHtml.indexOf(">Current<")).toBeLessThan(persHtml.indexOf(">Inventory<"));
+    expect(persHtml.indexOf(">Inventory<")).toBeLessThan(persHtml.indexOf(">Memories<"));
 
     const voiceHtml = renderToStaticMarkup(
       <CodexCharacterDetail
@@ -1168,6 +1181,9 @@ describe("World Codex Helpers & Components (v0.20.0)", () => {
     expect(currentHtml).toContain("Knowledge of You (1)");
     expect(currentHtml).toContain("Age: 31");
     expect(currentHtml).toContain("Direct");
+    // Core Drive / Core Fear removed from Current tab (kept exclusively in Personality)
+    expect(currentHtml).not.toContain("GM_SECRET_DRIVE_TOKEN");
+    expect(currentHtml).not.toContain("GM_SECRET_FEAR_TOKEN");
 
     // Right-pane focus request lands directly on Current (Live); default Codex browse lands on Bio
     const focusedCodexHtml = renderToStaticMarkup(

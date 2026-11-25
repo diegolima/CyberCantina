@@ -2,6 +2,8 @@ import React, { useEffect, useState } from "react";
 import {
   Activity,
   Brain,
+  ChevronDown,
+  ChevronUp,
   Clock,
   HeartPulse,
   MapPin,
@@ -13,7 +15,10 @@ import {
   CharacterStateSnapshot,
   LocationNode,
   PersonaRecord,
+  TurnNodeRecord,
 } from "../../../types";
+import { RelationalBondChart } from "./RelationalBondChart";
+import { extractBondHistorySeries } from "./relationalHistory";
 
 export interface CampaignCharacterStateTabProps {
   character: CharacterRecord;
@@ -30,6 +35,8 @@ export interface CampaignCharacterStateTabProps {
   ) => Promise<void> | void;
   characterNameMap: Record<string, string>;
   personaSnapshot?: PersonaRecord | null;
+  activeBranchTurns?: readonly TurnNodeRecord[];
+  initialExpandedBondTargets?: readonly string[];
   isActive: boolean;
 }
 
@@ -45,14 +52,32 @@ export const CampaignCharacterStateTab: React.FC<CampaignCharacterStateTabProps>
   onRelocateCharacter,
   characterNameMap,
   personaSnapshot = null,
+  activeBranchTurns = [],
+  initialExpandedBondTargets,
   isActive,
 }) => {
   const [targetLocId, setTargetLocId] = useState(state.current_location_id);
   const [isRelocating, setIsRelocating] = useState(false);
+  const [expandedBondTargets, setExpandedBondTargets] = useState<Set<string>>(
+    () => new Set(initialExpandedBondTargets ?? [])
+  );
 
   useEffect(() => {
     setTargetLocId(state.current_location_id);
   }, [character.id, state.current_location_id]);
+
+  useEffect(() => {
+    setExpandedBondTargets(new Set(initialExpandedBondTargets ?? []));
+  }, [character.id, initialExpandedBondTargets]);
+
+  const toggleBondTarget = (target: string) => {
+    setExpandedBondTargets((prev) => {
+      const next = new Set(prev);
+      if (next.has(target)) next.delete(target);
+      else next.add(target);
+      return next;
+    });
+  };
   const valencePct = Math.round(((state.valence + 1) / 2) * 100);
   const arousalPct = Math.round(state.arousal * 100);
   const care = state.care_state ?? null;
@@ -587,63 +612,92 @@ export const CampaignCharacterStateTab: React.FC<CampaignCharacterStateTabProps>
                   </div>
                 );
               };
+              const isExpanded = expandedBondTargets.has(target);
+              const bondPoints = isExpanded
+                ? extractBondHistorySeries({
+                    characterId: character.id,
+                    targetId: target,
+                    activeBranchTurns,
+                    currentState: state,
+                  })
+                : [];
               return (
-                <div
-                  key={target}
-                  style={{
-                    background: "var(--bg-panel)",
-                    border: "1px solid var(--border-subtle)",
-                    borderRadius: 6,
-                    padding: "9px 11px",
-                    fontSize: "0.78rem",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 8,
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
-                    <strong style={{ color: "#c4b5fd" }}>{displayTarget}</strong>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      {edge.grievance >= 0.15 && (
-                        <span
-                          className="badge"
-                          style={{
-                            fontSize: "0.66rem",
-                            padding: "1px 6px",
-                            borderColor: "rgba(244, 63, 94, 0.45)",
-                            color: "#fda4af",
-                          }}
-                        >
-                          Grievance: {Math.round(edge.grievance * 100)}%
+                <div key={target} className="codex-bond-card">
+                  <button
+                    type="button"
+                    className="codex-bond-toggle"
+                    aria-expanded={isExpanded}
+                    onClick={() => toggleBondTarget(target)}
+                    title={
+                      isExpanded
+                        ? `Collapse relational history with ${displayTarget}`
+                        : `Expand turn-by-turn relational history with ${displayTarget}`
+                    }
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        gap: 6,
+                        width: "100%",
+                      }}
+                    >
+                      <strong style={{ color: "#c4b5fd" }}>{displayTarget}</strong>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        {edge.grievance >= 0.15 && (
+                          <span
+                            className="badge"
+                            style={{
+                              fontSize: "0.66rem",
+                              padding: "1px 6px",
+                              borderColor: "rgba(244, 63, 94, 0.45)",
+                              color: "#fda4af",
+                            }}
+                          >
+                            Grievance: {Math.round(edge.grievance * 100)}%
+                          </span>
+                        )}
+                        {Math.abs(edge.obligation) >= 0.15 && (
+                          <span
+                            className="badge"
+                            style={{
+                              fontSize: "0.66rem",
+                              padding: "1px 6px",
+                              borderColor: "rgba(245, 158, 11, 0.45)",
+                              color: "var(--accent-amber)",
+                            }}
+                          >
+                            {edge.obligation > 0
+                              ? `Indebted (+${edge.obligation.toFixed(2)})`
+                              : `Owed Debt (${edge.obligation.toFixed(2)})`}
+                          </span>
+                        )}
+                        <span className="codex-bond-chevron">
+                          <span>History</span>
+                          {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                         </span>
-                      )}
-                      {Math.abs(edge.obligation) >= 0.15 && (
-                        <span
-                          className="badge"
-                          style={{
-                            fontSize: "0.66rem",
-                            padding: "1px 6px",
-                            borderColor: "rgba(245, 158, 11, 0.45)",
-                            color: "var(--accent-amber)",
-                          }}
-                        >
-                          {edge.obligation > 0
-                            ? `Indebted (+${edge.obligation.toFixed(2)})`
-                            : `Owed Debt (${edge.obligation.toFixed(2)})`}
-                        </span>
-                      )}
+                      </div>
                     </div>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
-                    {renderMiniAxis("Warmth", edge.warmth)}
-                    {renderMiniAxis("Trust", edge.trust)}
-                    {renderMiniAxis("Respect", edge.respect)}
-                    {renderMiniAxis("Power", edge.power)}
-                  </div>
-                  {(edge.episodic_note || state.relationship_notes?.[target]) && (
-                    <div style={{ color: "var(--text-secondary)", fontSize: "0.76rem" }}>
-                      {edge.episodic_note || state.relationship_notes?.[target]}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, width: "100%" }}>
+                      {renderMiniAxis("Warmth", edge.warmth)}
+                      {renderMiniAxis("Trust", edge.trust)}
+                      {renderMiniAxis("Respect", edge.respect)}
+                      {renderMiniAxis("Power", edge.power)}
                     </div>
+                    {(edge.episodic_note || state.relationship_notes?.[target]) && (
+                      <div style={{ color: "var(--text-secondary)", fontSize: "0.76rem", textAlign: "left" }}>
+                        {edge.episodic_note || state.relationship_notes?.[target]}
+                      </div>
+                    )}
+                  </button>
+
+                  {isExpanded && (
+                    <RelationalBondChart
+                      targetLabel={displayTarget}
+                      points={bondPoints}
+                    />
                   )}
                 </div>
               );
@@ -750,36 +804,6 @@ export const CampaignCharacterStateTab: React.FC<CampaignCharacterStateTabProps>
             No secrets revealed to this character yet
           </div>
         )}
-      </div>
-
-      {/* Core Drive & Fear Reminder */}
-      <div
-        style={{
-          background: "var(--bg-card)",
-          border: "1px solid var(--border-subtle)",
-          borderRadius: 8,
-          padding: 12,
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 12,
-        }}
-      >
-        <div>
-          <div className="sidebar-label" style={{ marginBottom: 4 }}>
-            Core Drive
-          </div>
-          <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
-            {character.baseline_psyche.core_drive}
-          </div>
-        </div>
-        <div>
-          <div className="sidebar-label" style={{ marginBottom: 4 }}>
-            Core Fear
-          </div>
-          <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
-            {character.baseline_psyche.core_fear}
-          </div>
-        </div>
       </div>
     </div>
   );

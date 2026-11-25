@@ -27,6 +27,7 @@ import type {
   MemoryShard,
   PersonaRecord,
   PersonaTurnStateSnapshot,
+  TurnNodeRecord,
   WorldLoreCategory,
 } from "../../types";
 import { isEditableKeyboardTarget } from "../map/mapGeometry";
@@ -87,6 +88,7 @@ interface WorldCodexTabProps {
   activePersonaTurnState?: PersonaTurnStateSnapshot | null;
   campaignCharacters?: CodexCampaignCharacterEntry[];
   characterNameMap?: Record<string, string>;
+  activeBranchTurns?: readonly TurnNodeRecord[];
   externalFocusRequest?: CodexFocusRequest | null;
   initialSection?: CodexSectionId | null;
   initialExpandedContainerIds?: readonly string[];
@@ -141,6 +143,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   activePersonaTurnState,
   campaignCharacters = [],
   characterNameMap,
+  activeBranchTurns = [],
   externalFocusRequest,
   initialSection = null,
   initialExpandedContainerIds,
@@ -934,6 +937,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
             locations={locations}
             activeWorldName={activeWorldName}
             characterNameMap={resolvedCharacterNameMap}
+            activeBranchTurns={activeBranchTurns}
             isMutatingLocked={isMutatingLocked}
             onItemAction={onItemAction}
             onSaveMemories={onSaveMemories}
@@ -1084,6 +1088,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
           locations={locations}
           activeWorldName={activeWorldName}
           characterNameMap={resolvedCharacterNameMap}
+          activeBranchTurns={activeBranchTurns}
           isMutatingLocked={isMutatingLocked}
           onItemAction={onItemAction}
           onSaveMemories={onSaveMemories}

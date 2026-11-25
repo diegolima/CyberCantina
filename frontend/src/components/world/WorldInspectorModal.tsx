@@ -32,6 +32,7 @@ import type {
   MemoryShard,
   PersonaRecord,
   PersonaTurnStateSnapshot,
+  TurnNodeRecord,
   WorldGlobalRules,
   WorldLoreCategory,
   WorldLoreNodeDraft,
@@ -114,6 +115,7 @@ interface WorldInspectorModalProps {
   visitedContainerIds?: string[];
   appSettings?: AppSettings | null;
   isAdmin?: boolean;
+  activeBranchTurns?: readonly TurnNodeRecord[];
   initialCodexFocus?: CodexFocusRequest | null;
   onToggleItemEquip?: (payload: ItemEquipActionPayload) => Promise<void> | void;
   onUpdateCampaignMemories?: (
@@ -155,6 +157,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   visitedContainerIds = [],
   appSettings = null,
   isAdmin = false,
+  activeBranchTurns = [],
   initialCodexFocus = null,
   onToggleItemEquip,
   onUpdateCampaignMemories,
@@ -1070,6 +1073,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             activePersonaTurnState={activePersonaTurnState}
             campaignCharacters={campaignCharacters}
             characterNameMap={characterNameMap}
+            activeBranchTurns={activeBranchTurns}
             externalFocusRequest={codexFocusRequest}
             onItemAction={onToggleItemEquip}
             onSaveMemories={onUpdateCampaignMemories}

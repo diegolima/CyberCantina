@@ -454,13 +454,25 @@
 /* Narrow Phone Polish (<= 620px) */
 @media (max-width: 620px) {
   .codex-char-tabs {
-    gap: 3px;
-    padding: 4px;
+    padding: 4px 5px;
+  }
+
+  .codex-char-tab-row-label {
+    display: none;
   }
 
   .codex-char-tab {
     padding: 4px 7px;
     font-size: 0.7rem;
+  }
+
+  .codex-chart-toolbar {
+    gap: 5px;
+  }
+
+  .codex-chart-pill {
+    padding: 2px 6px;
+    font-size: 0.64rem;
   }
 
   .map-toolbar-btn-label {
