@@ -1385,6 +1385,26 @@
   color: var(--text-secondary);
 }
 
+.gm-source-chip--interactive {
+  font-family: inherit;
+  cursor: pointer;
+  color: var(--cyan-fg);
+  background: var(--cyan-bg-subtle);
+  border-color: var(--cyan-border-subtle);
+  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.gm-source-chip--interactive:hover {
+  background: var(--cyan-bg);
+  border-color: var(--cyan-border);
+  color: var(--cyan-fg-bright);
+}
+
+.gm-source-chip--interactive:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 1px;
+}
+
 .gm-talk-error {
   display: flex;
   align-items: center;

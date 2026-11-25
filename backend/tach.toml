@@ -298,10 +298,15 @@ depends_on = [
 ]
 
 [[modules]]
+path = "app.engine.game_mechanics"
+depends_on = []
+
+[[modules]]
 path = "app.engine.gm_talk"
 depends_on = [
     "app.config",
     "app.db",
+    "app.engine.game_mechanics",
     "app.engine.parties",
     "app.prompts",
     "app.schemas",
@@ -326,6 +331,7 @@ path = "app.engine.gm_tools"
 depends_on = [
     "app.config",
     "app.db",
+    "app.engine.game_mechanics",
     "app.engine.gm_codex",
     "app.engine.gm_talk",
     "app.engine.llm_client",

@@ -4,6 +4,7 @@ import {
   Box,
   ChevronRight,
   Clock,
+  Compass,
   MapPin,
   Search,
   Users,
@@ -42,6 +43,8 @@ function CategoryIcon({
       return <Box size={size} className="gm-mention-icon gm-mention-icon--emerald" />;
     case "turns":
       return <Clock size={size} className="gm-mention-icon gm-mention-icon--blue" />;
+    case "mechanics":
+      return <Compass size={size} className="gm-mention-icon gm-mention-icon--cyan" />;
   }
 }
 

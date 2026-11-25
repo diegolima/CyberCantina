@@ -20,9 +20,10 @@ Source of truth: [backend/tach.toml](../../backend/tach.toml) validated by `tach
 | `app.engine.clerk_placement` | `app.config`, `app.engine.llm_client`, `app.prompts`, `app.schemas` |
 | `app.engine.cognition` | `app.config`, `app.engine.affective_engine`, `app.engine.choices`, `app.engine.llm_client`, `app.engine.mentions`, `app.engine.parties`, `app.engine.phase2_context`, `app.engine.telemetry`, `app.prompts`, `app.schemas` |
 | `app.engine.context` | `app.config`, `app.db`, `app.engine.affective_engine`, `app.engine.choices`, `app.engine.mentions`, `app.engine.parties`, `app.engine.telemetry`, `app.engine.world_clock`, `app.prompts`, `app.providers`, `app.schemas` |
+| `app.engine.game_mechanics` | *(leaf / none)* |
 | `app.engine.gm_codex` | `app.config`, `app.db`, `app.engine.gm_talk`, `app.engine.llm_client`, `app.prompts`, `app.providers`, `app.schemas`, `app.security` |
-| `app.engine.gm_talk` | `app.config`, `app.db`, `app.engine.parties`, `app.prompts`, `app.schemas`, `app.security` |
-| `app.engine.gm_tools` | `app.config`, `app.db`, `app.engine.gm_codex`, `app.engine.gm_talk`, `app.engine.llm_client`, `app.providers`, `app.schemas`, `app.security` |
+| `app.engine.gm_talk` | `app.config`, `app.db`, `app.engine.game_mechanics`, `app.engine.parties`, `app.prompts`, `app.schemas`, `app.security` |
+| `app.engine.gm_tools` | `app.config`, `app.db`, `app.engine.game_mechanics`, `app.engine.gm_codex`, `app.engine.gm_talk`, `app.engine.llm_client`, `app.providers`, `app.schemas`, `app.security` |
 | `app.engine.llm_client` | `app.config`, `app.engine.telemetry`, `app.providers`, `app.schemas`, `app.security` |
 | `app.engine.mentions` | `app.schemas` |
 | `app.engine.parties` | `app.schemas` |
@@ -126,6 +127,7 @@ graph TD
     app.engine.context --> app.prompts
     app.engine.context --> app.providers
     app.engine.context --> app.schemas
+    app.engine.game_mechanics
     app.engine.gm_codex --> app.config
     app.engine.gm_codex --> app.db
     app.engine.gm_codex --> app.engine.gm_talk
@@ -136,12 +138,14 @@ graph TD
     app.engine.gm_codex --> app.security
     app.engine.gm_talk --> app.config
     app.engine.gm_talk --> app.db
+    app.engine.gm_talk --> app.engine.game_mechanics
     app.engine.gm_talk --> app.engine.parties
     app.engine.gm_talk --> app.prompts
     app.engine.gm_talk --> app.schemas
     app.engine.gm_talk --> app.security
     app.engine.gm_tools --> app.config
     app.engine.gm_tools --> app.db
+    app.engine.gm_tools --> app.engine.game_mechanics
     app.engine.gm_tools --> app.engine.gm_codex
     app.engine.gm_tools --> app.engine.gm_talk
     app.engine.gm_tools --> app.engine.llm_client

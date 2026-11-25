@@ -1674,13 +1674,15 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
       "gm talk",
       "ooc",
       "/gm",
+      "@mechanics",
+      "game rules",
       "draft codex",
       "agentic tools",
       "clerk",
       "spoiler",
     ],
     inOneLine:
-      "Neuromancer is your zero-mutation out-of-character GM assistant for recapping turns, querying lore, and drafting human-confirmed Codex entries.",
+      "Neuromancer is your zero-mutation out-of-character GM assistant for recapping turns, querying lore, checking CyberCantina game rules via @mechanics, and drafting human-confirmed Codex entries.",
     scales: [
       {
         label: GM_SPEC.syntax,
@@ -1700,13 +1702,14 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
         label: "GM Agentic Tools (Opt-In)",
         rangeOrTag: "Primary or Clerk Role",
         meaning:
-          "Optional native read-only lookups across Codex, turns, cast, and visited rooms; can run on Clerk while prose stays on Primary.",
+          "Optional native read-only lookups across Codex, turns, cast, and visited rooms—plus lookup_game_rules when @mechanics is active; can run on Clerk while prose stays on Primary.",
         accent: "cyan",
       },
     ],
     howItChanges: [
-      "Type @ inside GM Mode to browse or live-search Characters, Lore, Locations, Containers, and Turns.",
-      "Click Draft Codex on any Neuromancer reply (or ask it to propose entries) to review an editable card before clicking Confirm & Add to Codex.",
+      "Type @ inside GM Mode to browse or live-search Characters, Lore, Locations, Containers, Turns, and Game Mechanics (@mechanics:).",
+      "Reference @mechanics (or pin an article with @mechanics:) whenever you want Neuromancer to inspect CyberCantina rules—leaving normal campaign turns uncluttered; mechanic context carries over for 1 follow-up turn if a mechanic source was cited.",
+      "Click any mechanic chip in Sources used to jump directly to its Game Mechanics Codex article, or click Draft Codex on a story reply to prepare an editable World Codex card.",
     ],
     effectOnPlay: [
       "Conversations with Neuromancer never advance the World Clock, mutate CARE states, or pollute story turns.",

@@ -8,6 +8,19 @@ from dataclasses import dataclass, field
 
 from app.config import settings
 from app.db.repository import CantinaRepository
+from app.engine.game_mechanics import (
+    CARRYOVER_MATCH_MIN_SCORE,
+    UMBRELLA_MECHANIC_ID,
+    UMBRELLA_MECHANIC_LABEL,
+    format_mechanics_article_prompt_block,
+    format_mechanics_directory_block,
+    get_mechanics_article,
+    get_subcategory_map,
+    has_inline_mechanics_trigger,
+    list_mechanics_articles,
+    search_mechanics_articles,
+    wrap_game_mechanics_section,
+)
 from app.engine.parties import get_player_party
 from app.prompts import DEFAULT_GM_TALK_SYSTEM, PROMPT_KEY_GM_TALK_SYSTEM, render_template
 from app.schemas.character import CharacterRecord, CharacterStateSnapshot
@@ -548,6 +561,111 @@ def search_gm_mentions(
                 extra_search=f"{turn.user_message} {turn.raw_prose} {turn.user_note or ''}",
             )
 
+    # 6. Game Mechanics (strictly scoped to @mechanics: category or `@mech...` global prefix)
+    if category == "mechanics":
+        subcat_map = get_subcategory_map()
+        include_umbrella = not ql or ql in (
+            "all",
+            "any",
+            "rule",
+            "rules",
+            "mech",
+            "mecha",
+            "mechan",
+            "mechani",
+            "mechanic",
+            "mechanics",
+        )
+        if include_umbrella:
+            seq += 1
+            scored.append(
+                (
+                    0,
+                    seq,
+                    GmMentionCandidate(
+                        kind="mechanic",
+                        category="mechanics",
+                        id=UMBRELLA_MECHANIC_ID,
+                        label=UMBRELLA_MECHANIC_LABEL,
+                        subtitle="Let Neuromancer search all CyberCantina game rules",
+                        badge="All Rules",
+                    ),
+                    "",
+                )
+            )
+        if not ql:
+            for art in list_mechanics_articles():
+                sub = subcat_map.get(art.subcategory_id)
+                seq += 1
+                scored.append(
+                    (
+                        100,
+                        seq,
+                        GmMentionCandidate(
+                            kind="mechanic",
+                            category="mechanics",
+                            id=art.id,
+                            label=art.title,
+                            subtitle=_collapse_inline(art.in_one_line, 72),
+                            badge=sub.short_label if sub else art.subcategory_id,
+                        ),
+                        "",
+                    )
+                )
+        else:
+            rank_by_id = {
+                art.id: rank_score
+                for rank_score, art in search_mechanics_articles(ql, limit=50, min_score=1)
+            }
+            for art in list_mechanics_articles():
+                sub = subcat_map.get(art.subcategory_id)
+                sub_short = sub.short_label if sub else art.subcategory_id
+                sub_full = sub.label if sub else art.subcategory_id
+                rank_score = rank_by_id.get(art.id, 0)
+                if rank_score > 0:
+                    sort_key = max(1, 100 - min(99, rank_score))
+                else:
+                    hay = (
+                        f"{art.id} {art.title} {art.short_title or ''} "
+                        f"{sub_full} {' '.join(art.keywords)} {art.in_one_line}"
+                    ).lower()
+                    if ql not in hay:
+                        continue
+                    sort_key = 120
+                seq += 1
+                scored.append(
+                    (
+                        sort_key,
+                        seq,
+                        GmMentionCandidate(
+                            kind="mechanic",
+                            category="mechanics",
+                            id=art.id,
+                            label=art.title,
+                            subtitle=_collapse_inline(art.in_one_line, 72),
+                            badge=sub_short,
+                        ),
+                        "",
+                    )
+                )
+    elif category is None and ql and len(ql) >= 4 and "mechanics".startswith(ql):
+        seq += 1
+        scored.append(
+            (
+                5,
+                seq,
+                GmMentionCandidate(
+                    kind="mechanic",
+                    category="mechanics",
+                    id=UMBRELLA_MECHANIC_ID,
+                    label=UMBRELLA_MECHANIC_LABEL,
+                    subtitle="Enable CyberCantina game rules lookup for this question",
+                    badge="All Rules",
+                ),
+                "",
+            )
+        )
+
     scored.sort(key=lambda item: (item[0], item[1]))
     return [item[2] for item in scored[:limit]]
 
@@ -762,6 +880,74 @@ class GmPreparedContext:
     retrieved_sources: list[GmSourceRef] = field(default_factory=list)
     all_sources: list[GmSourceRef] = field(default_factory=list)
     bundle: CampaignStateBundle | None = None
+    mechanics_active: bool = False
+    mechanics_explicit: bool = False
+    mechanics_needs_non_tool_fallback: bool = False
+
+
+def _has_recent_mechanic_carryover(prior_gm_messages: list[GmChatMessage]) -> bool:
+    """Return True when the latest persisted GM reply cited at least one `mechanic` source."""
+    for msg in reversed(prior_gm_messages):
+        if msg.role == "assistant":
+            return any(src.kind == "mechanic" for src in (msg.sources or []))
+    return False
+
+
+def _resolve_non_tool_mechanics_blocks(
+    user_message: str,
+    *,
+    is_explicit: bool,
+) -> tuple[list[str], list[GmSourceRef]]:
+    """Deterministically match top 1-2 Game Mechanics articles for non-tool / fallback mode."""
+    subcat_map = get_subcategory_map()
+    min_score = 1 if is_explicit else CARRYOVER_MATCH_MIN_SCORE
+    hits = search_mechanics_articles(user_message, limit=2, min_score=min_score)
+    if hits:
+        blocks: list[str] = []
+        sources: list[GmSourceRef] = []
+        for _, art in hits:
+            sub = subcat_map.get(art.subcategory_id)
+            sub_label = sub.label if sub else art.subcategory_id
+            blocks.append(format_mechanics_article_prompt_block(art, sub_label))
+            sources.append(GmSourceRef(kind="mechanic", id=art.id, label=art.title))
+        return blocks, sources
+    if is_explicit:
+        return [format_mechanics_directory_block()], []
+    return [], []
+
+
+def apply_non_tool_mechanics_fallback(
+    prep: GmPreparedContext,
+    user_message: str,
+) -> list[GmSourceRef]:
+    """Inject deterministic `<game_mechanics>` context if tool calling failed or is unsupported."""
+    if not prep.mechanics_needs_non_tool_fallback:
+        return []
+    blocks, new_sources = _resolve_non_tool_mechanics_blocks(
+        user_message,
+        is_explicit=prep.mechanics_explicit,
+    )
+    prep.mechanics_needs_non_tool_fallback = False
+    if not blocks:
+        return []
+
+    if prep.messages and prep.messages[0].get("role") == "system":
+        prep.messages[0] = {
+            "role": "system",
+            "content": f"{prep.messages[0]['content']}\n\n{wrap_game_mechanics_section(blocks)}",
+        }
+
+    existing_keys = {(s.kind, s.id) for s in prep.all_sources}
+    added: list[GmSourceRef] = []
+    for src in new_sources:
+        key = (src.kind, src.id)
+        if key in existing_keys:
+            continue
+        existing_keys.add(key)
+        prep.retrieved_sources.append(src)
+        prep.all_sources.append(src)
+        added.append(src)
+    return added
 
 
 async def build_gm_context_and_messages(
@@ -775,6 +961,7 @@ async def build_gm_context_and_messages(
     context_size: int,
     gm_max_tokens: int,
     resolved_prompts: dict[str, str],
+    gm_tools_enabled: bool = False,
 ) -> GmPreparedContext:
     """Assemble spoiler-safe active-branch context, explicit `@` pins, and hybrid RAG for Neuromancer."""
     bundle = repo.get_campaign_state_bundle(campaign_id, owner_id=owner_id)
@@ -792,16 +979,40 @@ async def build_gm_context_and_messages(
     pinned_blocks: list[str] = []
     pinned_sources: list[GmSourceRef] = []
     seen_pin_keys: set[tuple[str, str]] = set()
+    mechanics_blocks: list[str] = []
+    pinned_mechanic_ids: set[str] = set()
+    has_umbrella_trigger = False
+    subcat_map = get_subcategory_map()
+
     for ref in mentions[:10]:
         key = (ref.kind, ref.id)
         if key in seen_pin_keys:
             continue
         seen_pin_keys.add(key)
+        if ref.kind == "mechanic":
+            if ref.id == UMBRELLA_MECHANIC_ID:
+                has_umbrella_trigger = True
+                continue
+            art = get_mechanics_article(ref.id)
+            if art is not None:
+                sub = subcat_map.get(art.subcategory_id)
+                sub_label = sub.label if sub else art.subcategory_id
+                mechanics_blocks.append(format_mechanics_article_prompt_block(art, sub_label))
+                pinned_mechanic_ids.add(art.id)
+                pinned_sources.append(GmSourceRef(kind="mechanic", id=art.id, label=art.title))
+            continue
         resolved_pin = _serialize_pinned_mention(ref, vis)
         if resolved_pin is not None:
             block_txt, src = resolved_pin
             pinned_blocks.append(block_txt)
             pinned_sources.append(src)
+
+    if has_inline_mechanics_trigger(user_message):
+        has_umbrella_trigger = True
+
+    has_carryover = _has_recent_mechanic_carryover(prior_gm_messages)
+    mechanics_explicit = bool(pinned_mechanic_ids) or has_umbrella_trigger
+    mechanics_active = mechanics_explicit or has_carryover
 
     # Inline `@Turn N` fallback (e.g. from `/gm What happened in @Turn 2?` in the main composer)
     if len(seen_pin_keys) < 10:
@@ -904,6 +1115,19 @@ async def build_gm_context_and_messages(
             retrieved_sources.append(GmSourceRef(kind="lore", id=lore.id, label=lore.title))
             retrieved_ids.add(lore.id)
             rag_tokens += tok
+
+    # 2b. Opt-In Game Mechanics Non-Tool Fallback (tools mode defers to `lookup_game_rules`)
+    mechanics_needs_non_tool_fallback = False
+    if mechanics_active and not pinned_mechanic_ids:
+        if gm_tools_enabled:
+            mechanics_needs_non_tool_fallback = True
+        else:
+            mech_blocks, mech_sources = _resolve_non_tool_mechanics_blocks(
+                user_message,
+                is_explicit=mechanics_explicit,
+            )
+            mechanics_blocks.extend(mech_blocks)
+            retrieved_sources.extend(mech_sources)
 
     # 3. World, Scene, Party & Persona Default Context
     rules = world.global_rules
@@ -1024,6 +1248,8 @@ async def build_gm_context_and_messages(
         context_sections.append("<referenced_entities>\n" + "\n\n".join(pinned_blocks) + "\n</referenced_entities>")
     if retrieved_blocks:
         context_sections.append("<retrieved_lore>\n" + "\n".join(retrieved_blocks) + "\n</retrieved_lore>")
+    if mechanics_blocks:
+        context_sections.append(wrap_game_mechanics_section(mechanics_blocks))
 
     system_content = "\n\n".join(context_sections)
 
@@ -1051,6 +1277,9 @@ async def build_gm_context_and_messages(
         retrieved_sources=retrieved_sources,
         all_sources=all_sources,
         bundle=bundle,
+        mechanics_active=mechanics_active,
+        mechanics_explicit=mechanics_explicit,
+        mechanics_needs_non_tool_fallback=mechanics_needs_non_tool_fallback,
     )
 
 

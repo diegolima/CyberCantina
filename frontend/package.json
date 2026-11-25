@@ -14,7 +14,9 @@
     "typecheck:e2e": "tsc -p tsconfig.e2e.json --noEmit",
     "arch:check": "depcruise src --config .dependency-cruiser.cjs",
     "arch:graph": "depcruise src --config .dependency-cruiser.cjs --output-type mermaid",
-    "css:audit": "node scripts/audit-css.mjs"
+    "css:audit": "node scripts/audit-css.mjs",
+    "mechanics:export": "node scripts/export-mechanics-catalog.mjs",
+    "mechanics:check": "node scripts/export-mechanics-catalog.mjs --check"
   },
   "dependencies": {
     "@mlc-ai/web-llm": "^0.2.88",

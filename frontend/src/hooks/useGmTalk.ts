@@ -308,7 +308,11 @@ export function useGmTalk({
                 ? mentionTrigger.category
                 : undefined,
             q: mentionTrigger.query || undefined,
-            limit: 16,
+            limit:
+              mentionTrigger.mode === "category" &&
+              mentionTrigger.category === "mechanics"
+                ? 30
+                : 16,
           },
           controller.signal
         )

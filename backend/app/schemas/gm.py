@@ -14,8 +14,8 @@ from app.schemas.world import (
 )
 
 GmModelRole = Literal["primary", "clerk"]
-GmMentionKind = Literal["character", "persona", "lore", "location", "container", "turn"]
-GmMentionCategory = Literal["characters", "lore", "locations", "containers", "turns"]
+GmMentionKind = Literal["character", "persona", "lore", "location", "container", "turn", "mechanic"]
+GmMentionCategory = Literal["characters", "lore", "locations", "containers", "turns", "mechanics"]
 GmCodexProposalStatus = Literal["pending", "confirmed", "cancelled"]
 
 _CODEX_REASONING_TAGS = ("think", "thought", "reasoning", "scratchpad")

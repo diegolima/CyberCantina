@@ -1,0 +1,1689 @@
+{
+  "schema_version": 1,
+  "subcategories": [
+    {
+      "id": "care",
+      "label": "CARE (Emotions & Bonds)",
+      "short_label": "CARE",
+      "description": "Deterministic 4-layer psychology: worldview, PAD mood & composure, scene appraisal, and relational bonds."
+    },
+    {
+      "id": "dice",
+      "label": "Dice & Action Resolution",
+      "short_label": "Dice & Choices",
+      "description": "d20 modes, the 5 outcome tiers, natural roll precedence, and Director Choices (/choice)."
+    },
+    {
+      "id": "directing",
+      "label": "Directing & Privacy",
+      "short_label": "Directing",
+      "description": "Public room actions, @Character whispers, remote comms, Narrator commands, and Persona gossip."
+    },
+    {
+      "id": "spatial",
+      "label": "Parties, Map & Travel",
+      "short_label": "Parties & Map",
+      "description": "Co-located parties, nested containers and portals, metric distances, speed modifiers, and secret passages."
+    },
+    {
+      "id": "memory",
+      "label": "Memory, Lore & Context",
+      "short_label": "Memory & Context",
+      "description": "3-tier memory, Context Health 4-zone KV-cache economy, hybrid RAG recall, secrets, and scene flags."
+    },
+    {
+      "id": "timelines",
+      "label": "Timelines & Chronicles",
+      "short_label": "Timelines",
+      "description": "Branch-safe timelines, Branch Graph episodes, out-of-context bookmarks, and Major Events."
+    },
+    {
+      "id": "gm",
+      "label": "GM Tools & Overrides",
+      "short_label": "GM Tools",
+      "description": "Neuromancer GM Talk, Unlock Lore & Secrets (GM Mode), manual relocations, and inventory locks."
+    }
+  ],
+  "articles": [
+    {
+      "id": "care-overview",
+      "subcategory_id": "care",
+      "title": "How CARE Works",
+      "short_title": null,
+      "keywords": [
+        "care",
+        "affective",
+        "psychology",
+        "emotion",
+        "layers",
+        "qualitative",
+        "decay",
+        "half-life"
+      ],
+      "in_one_line": "CARE (CyberCantina Affective & Relational Engine) is a deterministic 4-layer psychology solver that tracks each NPC's worldview, mood, composure, scene appraisal, and relationships across turns.",
+      "scales": [
+        {
+          "label": "Layer 1 · Active Worldview",
+          "range_or_tag": "Slow Baseline",
+          "meaning": "Temperament preset, existential beliefs (Benevolence, Belonging, Agency), Core Drive, and Core Fear."
+        },
+        {
+          "label": "Layer 2 · Mood & Composure",
+          "range_or_tag": "PAD + Mask",
+          "meaning": "4D emotional state (Valence, Arousal, Dominance, Composure) driving outward demeanor and portrait expressions."
+        },
+        {
+          "label": "Layer 3 · Scene Appraisal",
+          "range_or_tag": "Tactical Read",
+          "meaning": "Immediate read of Threat, Coping, Goal Fit, and Surprise shaping Active Scene Want and Tactical Plan."
+        },
+        {
+          "label": "Layer 4 · Dyadic Bonds",
+          "range_or_tag": "Per-Actor Edges",
+          "meaning": "Directed trust, warmth, respect, power, grievance, and obligation toward you and other characters."
+        }
+      ],
+      "how_it_changes": [
+        "Before updating each turn, elapsed in-world minutes gently relax active emotions and acute threat back toward the character's resting baseline.",
+        "During Phase 3, the character evaluates the scene using compact qualitative tags (<feeling>, <want>, <plan>).",
+        "After prose finishes in Phase 5, the Clerk records categorical social impacts and grievances, and Python updates continuous state deterministically."
+      ],
+      "effect_on_play": [
+        "LLMs never see or emit raw decimal floats—CARE converts continuous numbers into clear qualitative directives so small and large models react consistently.",
+        "Every turn's CARE snapshot is stored per timeline node, so branching, swiping, or rewinding automatically restores exact emotional and relational state.",
+        "Use /wait (or travel across distant map links) to let high arousal and acute danger cool down naturally while long-term bonds remain anchored."
+      ],
+      "under_the_hood": {
+        "title": null,
+        "summary": "Symmetric Semantic Quantization keeps math deterministic in Python while feeding clean qualitative cues to prompts, with continuous-time exponential decay between turns.",
+        "items": [
+          {
+            "label": "Acute Threat half-life",
+            "value": "30 minutes",
+            "detail": "Situational threat fades quickly once danger passes."
+          },
+          {
+            "label": "Arousal half-life",
+            "value": "45 minutes",
+            "detail": "Adrenaline and startle responses settle within an hour of calm."
+          },
+          {
+            "label": "Dominance half-life",
+            "value": "180 minutes (3 hours)",
+            "detail": "Feeling cornered or in command lingers across a scene."
+          },
+          {
+            "label": "Composure rest half-life",
+            "value": "240 minutes (4 hours)",
+            "detail": "Safe downtime gradually rebuilds a character's emotional mask."
+          },
+          {
+            "label": "Valence half-life",
+            "value": "360 minutes (6 hours)",
+            "detail": "Overall warmth or distress shifts slowly across the day."
+          },
+          {
+            "label": "Consolidated Bond anchor",
+            "value": "14 days",
+            "detail": "Deep-rooted trust and warmth resist sudden resets after one tense moment."
+          }
+        ]
+      },
+      "related_topic_ids": [
+        "care-worldview-temperament",
+        "care-mood-composure",
+        "care-scene-appraisal",
+        "care-dyadic-bonds"
+      ]
+    },
+    {
+      "id": "care-worldview-temperament",
+      "subcategory_id": "care",
+      "title": "Worldview & Temperament (Layer 1)",
+      "short_title": "Worldview & Temperament",
+      "keywords": [
+        "layer 1",
+        "worldview",
+        "benevolence",
+        "belonging",
+        "agency",
+        "temperament",
+        "stoic",
+        "volatile",
+        "paranoiac",
+        "confidant",
+        "proud rival",
+        "balanced"
+      ],
+      "in_one_line": "Layer 1 defines a character's deep-seated existential assumptions and emotional reactivity profile—explaining why two NPCs react very differently to the exact same event.",
+      "scales": [
+        {
+          "label": "Benevolence",
+          "range_or_tag": "-1.0 to +1.0",
+          "meaning": "How fair vs. predatory the character believes the world and other people's motives are."
+        },
+        {
+          "label": "Belonging",
+          "range_or_tag": "-1.0 to +1.0",
+          "meaning": "Rooted ally/protector mindset (+1) versus isolated outsider detachment (-1)."
+        },
+        {
+          "label": "Agency",
+          "range_or_tag": "-1.0 to +1.0",
+          "meaning": "Self-determined belief in shaping outcomes (+1) versus fatalistic helplessness (-1)."
+        },
+        {
+          "label": "Balanced Realist",
+          "range_or_tag": "balanced",
+          "meaning": "Measured trust and steady emotional recovery; fair give-and-take."
+        },
+        {
+          "label": "Stoic Guardian",
+          "range_or_tag": "stoic",
+          "meaning": "High composure mask & slow-moving loyalty; unshaken by minor friction."
+        },
+        {
+          "label": "Volatile Firebrand",
+          "range_or_tag": "volatile",
+          "meaning": "Thin emotional mask, rapid mood swings, and sharp reactions to slights."
+        },
+        {
+          "label": "Warm Confidant",
+          "range_or_tag": "confidant",
+          "meaning": "Open-hearted, forgiving of small missteps, and deeply hurt by betrayal."
+        },
+        {
+          "label": "Guarded Paranoiac",
+          "range_or_tag": "paranoiac",
+          "meaning": "Skeptical of cheap flattery; requires costly proof before trusting."
+        },
+        {
+          "label": "Proud Rival",
+          "range_or_tag": "proud_rival",
+          "meaning": "Respect-gated warmth; admires competence and despises condescension."
+        }
+      ],
+      "how_it_changes": [
+        "Temperament Archetype, Baseline Mood, Core Drive, and Core Fear are authored on the character's Personality profile.",
+        "Active Worldview starts from the character's baseline profile (or Temperament preset) and shifts only slowly through sustained, transformative campaign experiences."
+      ],
+      "effect_on_play": [
+        "A Guarded Paranoiac discounts small favors and treats insults harshly, whereas a Warm Confidant builds trust quickly but feels betrayal deeply.",
+        "A Stoic Guardian holds a thick emotional mask under pressure, while a Volatile Firebrand swings rapidly and leaks feelings right away.",
+        "Core Drive and Core Fear act as permanent motivational anchors inside Phase 1 static prompts (Zone 1)."
+      ],
+      "under_the_hood": {
+        "title": null,
+        "summary": "Each Temperament Archetype configures relational inertia, Gottman negativity ratio (how much harder negative events hit than positive ones), trust-step thresholds, and composure resilience.",
+        "items": [
+          {
+            "label": "Balanced Realist",
+            "value": "Inertia 0.80 · Negativity 3.5× · Resilience 1.0",
+            "detail": "Default worldview: Benevolence +0.0, Belonging +0.1, Agency +0.2"
+          },
+          {
+            "label": "Stoic Guardian",
+            "value": "Inertia 0.92 · Negativity 2.5× · Resilience 1.8",
+            "detail": "Default worldview: Benevolence -0.2, Belonging +0.3, Agency +0.1"
+          },
+          {
+            "label": "Volatile Firebrand",
+            "value": "Inertia 0.55 · Negativity 6.0× · Resilience 0.6",
+            "detail": "Default worldview: Benevolence -0.5, Belonging -0.3, Agency +0.6"
+          },
+          {
+            "label": "Warm Confidant",
+            "value": "Inertia 0.78 · Negativity 1.8× · Resilience 1.1",
+            "detail": "Default worldview: Benevolence +0.6, Belonging +0.7, Agency +0.2"
+          },
+          {
+            "label": "Guarded Paranoiac",
+            "value": "Inertia 0.88 · Negativity 8.0× · Resilience 0.8",
+            "detail": "Default worldview: Benevolence -0.8, Belonging -0.7, Agency +0.3"
+          },
+          {
+            "label": "Proud Rival",
+            "value": "Inertia 0.84 · Negativity 4.0× · Resilience 1.4",
+            "detail": "Default worldview: Benevolence -0.3, Belonging -0.1, Agency +0.8"
+          }
+        ]
+      },
+      "related_topic_ids": [
+        "care-overview",
+        "care-mood-composure",
+        "care-dyadic-bonds"
+      ]
+    },
+    {
+      "id": "care-mood-composure",
+      "subcategory_id": "care",
+      "title": "Mood & Composure (PAD · Layer 2)",
+      "short_title": "Mood & Composure (PAD)",
+      "keywords": [
+        "layer 2",
+        "valence",
+        "arousal",
+        "tension",
+        "dominance",
+        "composure",
+        "emotional mask",
+        "outward demeanor",
+        "expression",
+        "portrait",
+        "leakage"
+      ],
+      "in_one_line": "Layer 2 tracks a character's current emotional coordinates (Valence, Arousal/Tension, Dominance) gated by their Composure & Emotional Mask.",
+      "scales": [
+        {
+          "label": "Valence (Distressed ↔ Warm)",
+          "range_or_tag": "-1.00 to +1.00",
+          "meaning": "Overall emotional tone from distressed/hostile (rose) to warm/pleased (emerald)."
+        },
+        {
+          "label": "Arousal / Tension",
+          "range_or_tag": "0.00 to 1.00",
+          "meaning": "Physiological activation and alertness—from calm/sedate to wired, frantic, or explosive."
+        },
+        {
+          "label": "Dominance (Cornered ↔ Commanding)",
+          "range_or_tag": "-1.00 to +1.00",
+          "meaning": "Perceived social or tactical leverage in the moment: cornered/submissive (-) vs. commanding (+)."
+        },
+        {
+          "label": "Composure & Emotional Mask",
+          "range_or_tag": "0% to 100%",
+          "meaning": "Self-control shielding raw feelings. Below 35% (rose), cracks and involuntary somatic tells leak into prose."
+        }
+      ],
+      "how_it_changes": [
+        "Phase 3 emotional tags (<feeling> tone, intensity, agency) nudge PAD coordinates through a composure-gated filter.",
+        "Acute threat and shocks drain Composure toward a threat- and coping-scaled equilibrium floor rather than flatlining permanently at 0%.",
+        "Coping-assisted steadying helps characters recover part of their poise during lulls and short /wait pauses under moderate threat, while calm scenes and longer /wait advances restore Arousal (45m half-life), Dominance (3h), Composure (4h), and Valence (6h) toward baseline."
+      ],
+      "effect_on_play": [
+        "High Composure dampens wild turn-to-turn emotional swings and lets an NPC project a cool Outward Demeanor even while inwardly uneasy.",
+        "When Composure drops below 35%, CARE allows somatic leakage—trembling hands, clipped breathing, flushed voice—into Phase 4 directives.",
+        "Layer 2 resolves a discrete Expression (happy, sad, afraid, angry, disgusted, surprised, contempt, or default) that swaps character portraits in the UI."
+      ],
+      "under_the_hood": {
+        "title": null,
+        "summary": "Discretized Ornstein-Uhlenbeck mean reversion combined with a Composure-Gated Kalman Gain resists single-turn noise unless a severe shock triggers bypass strain.",
+        "items": [
+          {
+            "label": "Somatic Leakage Threshold",
+            "value": "Composure < 35% (0.35)",
+            "detail": "Mask breaks; involuntary physical tells surface in outward demeanor."
+          },
+          {
+            "label": "Composure Damper (Beta)",
+            "value": "2.0 × resilience",
+            "detail": "High composure scales down Kalman gain on routine emotional fluctuations."
+          },
+          {
+            "label": "Shock Bypass (Psi)",
+            "value": "3.5× gain multiplier",
+            "detail": "Severe shocks bypass the composure damper and strain the mask directly."
+          },
+          {
+            "label": "Strain Coefficient (Eta)",
+            "value": "0.14",
+            "detail": "Controls how fast threat + vulnerability erode Composure per turn."
+          }
+        ]
+      },
+      "related_topic_ids": [
+        "care-overview",
+        "care-worldview-temperament",
+        "care-scene-appraisal",
+        "directing-narrator-clock"
+      ]
+    },
+    {
+      "id": "care-scene-appraisal",
+      "subcategory_id": "care",
+      "title": "Scene Appraisal & Intent (Layer 3)",
+      "short_title": "Scene Appraisal & Intent",
+      "keywords": [
+        "layer 3",
+        "appraisal",
+        "threat",
+        "coping",
+        "goal fit",
+        "goal congruence",
+        "surprise",
+        "ambiguity",
+        "want",
+        "plan",
+        "cognition"
+      ],
+      "in_one_line": "Layer 3 captures how a character tactically reads the immediate room—Threat, Coping, Goal Fit, and Surprise—to form their Active Scene Want and Tactical Plan.",
+      "scales": [
+        {
+          "label": "Threat",
+          "range_or_tag": "0% to 100%",
+          "meaning": "Immediate perceived physical, social, or exposure danger in the active scene."
+        },
+        {
+          "label": "Coping",
+          "range_or_tag": "-1.00 to +1.00",
+          "meaning": "Confidence in handling the situation: overwhelmed (-) vs. adequate/mastery (+)."
+        },
+        {
+          "label": "Goal Fit",
+          "range_or_tag": "-1.00 to +1.00",
+          "meaning": "Whether recent turns help (+1) or obstruct (-1) what the character wants right now."
+        },
+        {
+          "label": "Surprise",
+          "range_or_tag": "0% to 100%",
+          "meaning": "Unexpectedness or ambiguity of current events—spikes when sudden twists occur."
+        }
+      ],
+      "how_it_changes": [
+        "Updated every turn from Phase 3 <feeling> threat/coping attributes alongside Phase 5 social/hazard outcomes.",
+        "High Threat combined with negative Coping rapidly drains Layer 2 Composure and Dominance.",
+        "Acute Threat decays rapidly with a 30-minute half-life once the scene stabilizes."
+      ],
+      "effect_on_play": [
+        "Active Scene Want summarizes what the NPC is pursuing right now; Active Tactical Plan captures their next concrete move.",
+        "If a character feels overwhelmed (negative Coping + high Threat), their cognition shifts toward deflection, retreat, or crisis containment rather than bold offense.",
+        "Staged Director Choices (/choice) and d20 outcomes inject directly alongside Layer 3 appraisal inside Phase 3 private <cognition>."
+      ],
+      "under_the_hood": {
+        "title": null,
+        "summary": "Backend stores Goal Fit as `goal_congruence` and Surprise as `ambiguity` inside `SituationalAppraisal`, decaying acute threat toward zero with LN(2)/30 per minute.",
+        "items": [
+          {
+            "label": "Phase 3 Categorical Inputs",
+            "value": "threat (none..critical) · coping (overwhelmed..mastery)",
+            "detail": "Discrete XML attributes parsed from private <cognition> blocks."
+          },
+          {
+            "label": "Acute Threat Half-Life",
+            "value": "30 minutes",
+            "detail": "Shortest CARE decay timer; cleared rapidly by /wait or safe travel."
+          }
+        ]
+      },
+      "related_topic_ids": [
+        "care-mood-composure",
+        "care-dyadic-bonds",
+        "dice-director-choices"
+      ]
+    },
+    {
+      "id": "care-dyadic-bonds",
+      "subcategory_id": "care",
+      "title": "Dyadic Relational Bonds (Layer 4)",
+      "short_title": "Dyadic Relational Bonds",
+      "keywords": [
+        "layer 4",
+        "bonds",
+        "warmth",
+        "trust",
+        "respect",
+        "power",
+        "grievance",
+        "obligation",
+        "indebted",
+        "owed debt",
+        "witness coupling",
+        "chart",
+        "history"
+      ],
+      "in_one_line": "Layer 4 tracks how a character specifically feels about you and every other known actor across Warmth, Trust, Respect, Power, Grievance, and Obligation.",
+      "scales": [
+        {
+          "label": "Warmth",
+          "range_or_tag": "-1.00 to +1.00",
+          "meaning": "Personal fondness or hostility toward that actor (does not require trusting them)."
+        },
+        {
+          "label": "Trust",
+          "range_or_tag": "-1.00 to +1.00",
+          "meaning": "Confidence that the actor is reliable, honest, and won't betray them."
+        },
+        {
+          "label": "Respect",
+          "range_or_tag": "-1.00 to +1.00",
+          "meaning": "Admiration for competence, resolve, or stature—especially decisive for Proud Rivals."
+        },
+        {
+          "label": "Power",
+          "range_or_tag": "-1.00 to +1.00",
+          "meaning": "Perceived leverage balance: whether the target holds upper hand (+) or the character does (-)."
+        },
+        {
+          "label": "Grievance",
+          "range_or_tag": "0% to 100%",
+          "meaning": "Accumulated resentment from slights or grave wrongs; resists quick flattery until addressed."
+        },
+        {
+          "label": "Obligation",
+          "range_or_tag": "-1.00 to +1.00",
+          "meaning": "Favor ledger: Indebted (+) means the NPC owes the target; Owed Debt (-) means the target owes them."
+        }
+      ],
+      "how_it_changes": [
+        "Phase 5 Clerk scores directed interactions on a 5-point ordinal scale (strong negative to strong positive) plus Grievance shifts (reconciled, eased, none, slighted, grave wrong).",
+        "Public room actions trigger Co-Present Witness Coupling: bystanders in the same room adjust their bonds with you based on what they saw and how allied they are with the target.",
+        "Local @Character whispers keep relational shifts strictly between you and that character."
+      ],
+      "effect_on_play": [
+        "Strong positive or negative bonds change tone, candor, willingness to share secrets, and whether an NPC accepts /party invitations.",
+        "Un-aggrieved guarded strangers (including Guarded Paranoiacs) thaw slowly through consistent positive actions, whereas once genuine grievance or deep hostility sets in, Negative Sentiment Override blocks cheap flattery until costly proof or reconciliation.",
+        "Negative shocks hit harder than positive compliments (scaled by Temperament negativity ratio).",
+        "Click any bond card on a character's Current tab to expand its turn-by-turn line chart (toggle Grievance/Obligation pills, switch All / Last 25 on long branches, and inspect per-turn episodic notes)."
+      ],
+      "under_the_hood": {
+        "title": null,
+        "summary": "Each edge pairs fast dynamic signals with slow 14-day consolidated anchors (`consolidated_warmth`, `consolidated_trust`), Weber-Fechner diminishing returns, and Gottman override dampening.",
+        "items": [
+          {
+            "label": "Two-Timescale Consolidation",
+            "value": "14-day anchor half-life",
+            "detail": "Long-time allies don't drop to strangers after one awkward exchange."
+          },
+          {
+            "label": "Gottman Negativity Override",
+            "value": "Base slope 1.35 × negativity_ratio",
+            "detail": "Betrayals carry multiplied weight scaled by the character's Temperament."
+          },
+          {
+            "label": "Chart Filtering",
+            "value": "Excludes __arrival__ waypoints",
+            "detail": "Bond charts plot narrative turns starting from the first turn that actor appeared."
+          }
+        ]
+      },
+      "related_topic_ids": [
+        "care-worldview-temperament",
+        "directing-whispers-privacy",
+        "spatial-parties"
+      ]
+    },
+    {
+      "id": "dice-modes",
+      "subcategory_id": "dice",
+      "title": "d20 Modes (Auto, Forced, Disabled)",
+      "short_title": "d20 Modes",
+      "keywords": [
+        "d20",
+        "dice",
+        "auto",
+        "forced",
+        "disabled",
+        "dc",
+        "modifier",
+        "check",
+        "contested",
+        "hazard",
+        "bystander"
+      ],
+      "in_one_line": "The footer dice pill controls whether Phase 1 triggers real 1d20 + modifier checks automatically, forces a roll on every turn, or suppresses dice for pure dialogue.",
+      "scales": [
+        {
+          "label": "Auto (Default)",
+          "range_or_tag": "auto",
+          "meaning": "Phase 1 Clerk decides when an uncertain/risky action needs a roll, assigning skill, DC (5–25), and modifier (-5 to +8)."
+        },
+        {
+          "label": "Forced",
+          "range_or_tag": "forced · 1–20",
+          "meaning": "Guarantees a d20 check on this turn. Leave the override box blank for a random 1–20 roll, or pin an exact natural roll."
+        },
+        {
+          "label": "Disabled",
+          "range_or_tag": "disabled",
+          "meaning": "Skips dice rolls for slice-of-life or pure roleplay scenes (automatically promoted to Auto if gated choices or blocked exits require a check)."
+        }
+      ],
+      "how_it_changes": [
+        "Click the dice pill in the bottom-right composer footer to cycle Auto → Forced → Disabled.",
+        "Staging gated Director Choices (/choice with @success, @fail, etc.) or stepping onto Blocked/Obstacle exits promotes Disabled to Auto automatically.",
+        "Narrator turns (/look, /wait, /event, /narrate) never roll dice."
+      ],
+      "effect_on_play": [
+        "Phase 1 supports multiple per-character check roles on a single turn: active attempts, contested reactions, scene hazards, and co-present bystanders.",
+        "Every roll resolves before Phase 3 cognition so NPC thoughts and Phase 4 prose must respect the dice result."
+      ],
+      "under_the_hood": {
+        "title": null,
+        "summary": "Phase 1 evaluates player intent, location obstacles, and character checks before assembling Zone 4 roll directives.",
+        "items": [
+          {
+            "label": "Check Roles",
+            "value": "active_attempt · contested_reaction · scene_hazard · co_present_bystander",
+            "detail": null
+          },
+          {
+            "label": "DC & Modifier Clamps",
+            "value": "DC 5–25 · Modifier -5 to +8",
+            "detail": null
+          }
+        ]
+      },
+      "related_topic_ids": [
+        "dice-outcome-tiers",
+        "dice-director-choices",
+        "spatial-links-travel"
+      ]
+    },
+    {
+      "id": "dice-outcome-tiers",
+      "subcategory_id": "dice",
+      "title": "The 5 Outcome Tiers",
+      "short_title": "5 Outcome Tiers",
+      "keywords": [
+        "outcome tier",
+        "critical failure",
+        "critical success",
+        "clean success",
+        "simple failure",
+        "consequences",
+        "margin",
+        "nat 1",
+        "nat 20"
+      ],
+      "in_one_line": "Every d20 check classifies into 5 narrative tiers where natural 1 and natural 20 always override total margin against Difficulty Class (DC).",
+      "scales": [
+        {
+          "label": "Critical Success",
+          "range_or_tag": "d20 = 20 or margin ≥ +5",
+          "meaning": "Attempt succeeds with outstanding flair, extra advantage, or bonus insight."
+        },
+        {
+          "label": "Clean Success",
+          "range_or_tag": "0 ≤ margin ≤ +4",
+          "meaning": "Attempt succeeds smoothly as intended without unexpected complications."
+        },
+        {
+          "label": "Simple Failure",
+          "range_or_tag": "-2 ≤ margin ≤ -1",
+          "meaning": "Clean miss or narrow shortfall without piling on extra disasters."
+        },
+        {
+          "label": "Failure with Consequences",
+          "range_or_tag": "-5 ≤ margin ≤ -3",
+          "meaning": "Attempt fails with noticeable resistance, lost leverage, or secondary trouble."
+        },
+        {
+          "label": "Critical Failure",
+          "range_or_tag": "d20 = 1 or margin ≤ -6",
+          "meaning": "Catastrophic backfire with severe fallout—Phase 4 prose is forbidden from narrating success."
+        }
+      ],
+      "how_it_changes": [
+        "Margin is computed deterministically as (d20_raw + modifier) - DC after checking strict natural 1 and natural 20 precedence."
+      ],
+      "effect_on_play": [
+        "Outcome tiers inject strict plan and narrative directives into Phase 3 cognition and Phase 4 prose so models cannot soft-retcon failures into wins.",
+        "Critical Success and Critical Failure turns automatically boost episodic salience (+2), keeping pivotal moments in full summary memory longer."
+      ],
+      "under_the_hood": null,
+      "related_topic_ids": [
+        "dice-modes",
+        "dice-director-choices",
+        "memory-3-tier"
+      ]
+    },
+    {
+      "id": "dice-director-choices",
+      "subcategory_id": "dice",
+      "title": "Director Choices (/choice)",
+      "short_title": "Director Choices",
+      "keywords": [
+        "choice",
+        "choices",
+        "director",
+        "gate",
+        "odds",
+        "dc",
+        "coerced",
+        "complied",
+        "slash"
+      ],
+      "in_one_line": "Director Choices let you steer what an NPC chooses to do next—optionally gating options behind d20 outcome tiers—without writing their dialogue yourself.",
+      "scales": [
+        {
+          "label": "Slash Syntax",
+          "range_or_tag": "/choice [Name] [(DC N)]: Opt 1 [@gate] | Opt 2",
+          "meaning": "Stage up to 6 options per present character (default DC 12)."
+        },
+        {
+          "label": "Gate Tags",
+          "range_or_tag": "@any · @success · @crit · @fail · @critfail",
+          "meaning": "Restrict which options remain eligible depending on the turn's resolved outcome tier."
+        },
+        {
+          "label": "Compliance Badges",
+          "range_or_tag": "followed · coerced · free_fallback",
+          "meaning": "Cognition cards show whether the NPC complied naturally, was coerced within bounds, or hit free fallback when every gate was eliminated."
+        }
+      ],
+      "how_it_changes": [
+        "Open the Choices tray in the composer or type /choice ...; submitting with an empty message box continues the scene straight from your staged choices.",
+        "Staging gated options displays live backend odds per outcome tier and automatically upgrades Disabled dice mode to Auto."
+      ],
+      "effect_on_play": [
+        "Available options are presented inside Phase 3 <cognition> so characters weigh them against their CARE mood and bonds before speaking.",
+        "Cannot be combined with Narrator commands (/look, /wait, /event, /narrate)."
+      ],
+      "under_the_hood": {
+        "title": null,
+        "summary": "Choice odds are evaluated server-side (`POST /api/mechanics/choice-preview`) across all 20 faces of the d20 using the active DC, modifier, and any pinned roll.",
+        "items": [
+          {
+            "label": "Gate Mapping",
+            "value": "@success → Clean/Crit · @crit → Crit Success · @fail → Any Failure · @critfail → Crit Failure",
+            "detail": null
+          },
+          {
+            "label": "Example",
+            "value": "/choice Yulia (DC 14): Bluff @success | Bolt @fail",
+            "detail": null
+          }
+        ]
+      },
+      "related_topic_ids": [
+        "dice-modes",
+        "dice-outcome-tiers",
+        "care-scene-appraisal"
+      ]
+    },
+    {
+      "id": "directing-whispers-privacy",
+      "subcategory_id": "directing",
+      "title": "Whispers, Remote Comms & Privacy (@Character:)",
+      "short_title": "Whispers & Privacy",
+      "keywords": [
+        "whisper",
+        "mention",
+        "@",
+        "remote",
+        "comms",
+        "privacy",
+        "isolation",
+        "quotes",
+        "solo",
+        "epistemic"
+      ],
+      "in_one_line": "Use @Character Name: blocks to privately address one person in the room, feed hidden sensory/GM cues, or reach an off-site ally over remote comms without breaking room privacy.",
+      "scales": [
+        {
+          "label": "Shared Public Action",
+          "range_or_tag": "Outside @Name:",
+          "meaning": "Observed by every character physically present in the active location and kept in shared history."
+        },
+        {
+          "label": "Local Whisper (In Room)",
+          "range_or_tag": "@Name: \"speech\" + cue",
+          "meaning": "Text inside \"double quotes\" is spoken dialogue for that character; unquoted text is private perception/GM guidance hidden from peers and scrubbed from summaries."
+        },
+        {
+          "label": "Remote Comms (Off-Site)",
+          "range_or_tag": "@Name: (Elsewhere)",
+          "meaning": "Reaches an off-site participant over radio/comms, updating their mood and bond without moving them into the room."
+        },
+        {
+          "label": "Solo / Empty Room",
+          "range_or_tag": "0 NPCs Present",
+          "meaning": "Runs lore recall, d20 rolls, secret discovery, and exits normally without pulling or hallucinating absent characters."
+        }
+      ],
+      "how_it_changes": [
+        "Type @ in the composer to open the character mention picker, separating present NPCs from off-site contacts.",
+        "Characters only retain Zone 3 verbatim turns from scenes where they were physically present (or remote comms directed specifically to them)."
+      ],
+      "effect_on_play": [
+        "Co-present characters never see private whispers or unquoted cues directed at someone else—preventing accidental omniscient AI leaks.",
+        "When Phase 5 seals an episodic summary chunk, private whisper lines are scrubbed first so secrets aren't leaked through shared Zone 2 summaries."
+      ],
+      "under_the_hood": null,
+      "related_topic_ids": [
+        "directing-knowledge-gossip",
+        "care-dyadic-bonds",
+        "memory-3-tier"
+      ]
+    },
+    {
+      "id": "directing-narrator-clock",
+      "subcategory_id": "directing",
+      "title": "Narrator Mode & World Clock",
+      "short_title": "Narrator & World Clock",
+      "keywords": [
+        "narrator",
+        "world clock",
+        "time",
+        "/look",
+        "/wait",
+        "/event",
+        "/narrate",
+        "complication",
+        "slash"
+      ],
+      "in_one_line": "Narrator mode runs neutral environmental prose, external complications, or explicit time passage via the World Clock without rolling dice or forcing NPC turns.",
+      "scales": [
+        {
+          "label": "/look",
+          "range_or_tag": "Aliases: /scene, /describe",
+          "meaning": "Have the Narrator describe the current room and sensory markers"
+        },
+        {
+          "label": "/wait [duration or cue]",
+          "range_or_tag": "Aliases: /pass",
+          "meaning": "Advance the World Clock without taking a character action Supports durations like 30m or 2h and decays CARE states across elapsed time."
+        },
+        {
+          "label": "/event [description]",
+          "range_or_tag": "Aliases: /complication",
+          "meaning": "Introduce an unexpected external complication via the Narrator"
+        },
+        {
+          "label": "/narrate [directive]",
+          "range_or_tag": "Aliases: /direct, /custom",
+          "meaning": "Direct the Narrator with custom guidance (blank opens directive tray)"
+        }
+      ],
+      "how_it_changes": [
+        "Trigger via the Narrator menu in the composer footer or type /look, /wait, /event, or /narrate directly.",
+        "On normal dialogue/action turns, Phase 5 Clerk estimates elapsed minutes; on /wait or map travel, explicit durations advance the World Clock deterministically."
+      ],
+      "effect_on_play": [
+        "Narrator turns never trigger d20 checks and use a neutral narrator prefix rather than adopting an NPC persona.",
+        "Advancing the clock with /wait 2h or long travel relaxes NPC Arousal, acute Threat, Valence, and Composure along CARE's real half-life curves."
+      ],
+      "under_the_hood": {
+        "title": null,
+        "summary": "Narrator turns bypass character <cognition> unless NPCs react to an external complication, and stamp the updated world_timestamp onto the new turn node.",
+        "items": [
+          {
+            "label": "Supported /wait Formats",
+            "value": "30m, 2h, minutes/hours, or free-form pause cues",
+            "detail": null
+          },
+          {
+            "label": "Dice Rule",
+            "value": "Narrator turns strictly suppress d20 checks",
+            "detail": null
+          }
+        ]
+      },
+      "related_topic_ids": [
+        "care-overview",
+        "spatial-links-travel",
+        "dice-modes"
+      ]
+    },
+    {
+      "id": "directing-knowledge-gossip",
+      "subcategory_id": "directing",
+      "title": "Knowledge of You & Gossip",
+      "short_title": "Knowledge & Gossip",
+      "keywords": [
+        "knowledge of you",
+        "persona",
+        "secrets",
+        "gossip",
+        "direct",
+        "provenance",
+        "unlocked",
+        "age",
+        "lore"
+      ],
+      "in_one_line": "NPCs only learn your Player Persona's hidden facts (secret age, concealed items, personal lore) when revealed directly in play or passed along via Gossip.",
+      "scales": [
+        {
+          "label": "Direct",
+          "range_or_tag": "Learned from you",
+          "meaning": "Fact unlocked when you openly showed, wore, or disclosed it in that character's presence."
+        },
+        {
+          "label": "Gossip",
+          "range_or_tag": "Gossiped by NPC",
+          "meaning": "Fact heard secondhand from another NPC who already knew it, tagged with the original source's name."
+        }
+      ],
+      "how_it_changes": [
+        "Phase 5 Clerk inspects each turn to unlock newly disclosed Persona keys for co-present witnesses.",
+        "Between turns, co-located NPCs with sufficient trust/rapport can propagate known Persona facts to peers via background gossip."
+      ],
+      "effect_on_play": [
+        "Until a Persona secret is unlocked for a specific NPC, that fact is omitted from their prompts so they cannot meta-read your sheet.",
+        "Inspect any NPC's Current tab under Knowledge of You to verify exactly which secrets they know and hover chips for Direct vs. Gossip provenance."
+      ],
+      "under_the_hood": null,
+      "related_topic_ids": [
+        "directing-whispers-privacy",
+        "care-dyadic-bonds",
+        "memory-lore-flags"
+      ]
+    },
+    {
+      "id": "spatial-parties",
+      "subcategory_id": "spatial",
+      "title": "Parties & Strict Co-Location (/party)",
+      "short_title": "Parties & Co-Location",
+      "keywords": [
+        "party",
+        "parties",
+        "co-location",
+        "invite",
+        "kick",
+        "leave",
+        "disband",
+        "npc party",
+        "leader",
+        "persuasion"
+      ],
+      "in_one_line": "Parties group co-located characters so companions travel together across exits while enforcing strict same-room co-location and single-party membership.",
+      "scales": [
+        {
+          "label": "/party [invite|kick|leave|disband] [@Name ...] [message]",
+          "range_or_tag": "In-Character",
+          "meaning": "Invite co-located NPCs, kick companions, leave, or disband via a narrative turn (with scoped @Name autocomplete)."
+        },
+        {
+          "label": "Player Party",
+          "range_or_tag": "In Party",
+          "meaning": "Companions who follow you automatically across Exits, prose travel, and Narrator travel unless they choose to stay behind."
+        },
+        {
+          "label": "NPC-Only Party",
+          "range_or_tag": "NPC Party · Leader",
+          "meaning": "Groups of 2+ co-located NPCs traveling together under an elected leader (created via Party modal or when you leave 2+ companions behind)."
+        }
+      ],
+      "how_it_changes": [
+        "Invited NPCs weigh CARE trust/warmth/grievance, active goals, existing NPC-party ties, and any Social/Persuasion d20 check inside Phase 3 cognition.",
+        "If a party splits across rooms, any 2+ cluster staying together remains an NPC-only party while isolated singletons leave cleanly.",
+        "Relocating an NPC out of the room (via Current tab or Party modal) removes them from that party automatically."
+      ],
+      "effect_on_play": [
+        "Non-party NPCs stay behind in their current room when you depart rather than teleporting silently with you.",
+        "Party membership is snapshotted per turn node, so branching, swiping, or deleting restores exact group lineups."
+      ],
+      "under_the_hood": {
+        "title": null,
+        "summary": "Strict command validation blocks misspelled, off-site, or ineligible @Name targets instead of falling back to inviting the entire room.",
+        "items": [
+          {
+            "label": "/party disband [message]",
+            "value": "Dissolve your current party via an in-character turn",
+            "detail": null
+          },
+          {
+            "label": "/party invite [@Name ...] [message]",
+            "value": "Invite specific co-located NPC(s), or everyone here if omitted",
+            "detail": null
+          },
+          {
+            "label": "/party kick @Name ... [message]",
+            "value": "Remove one or more companions from your party",
+            "detail": null
+          },
+          {
+            "label": "/party leave [message]",
+            "value": "Leave your current party via an in-character farewell turn",
+            "detail": null
+          }
+        ]
+      },
+      "related_topic_ids": [
+        "spatial-links-travel",
+        "care-dyadic-bonds",
+        "gm-overrides-locks"
+      ]
+    },
+    {
+      "id": "spatial-hierarchy-portals",
+      "subcategory_id": "spatial",
+      "title": "Locations, Containers & Portals",
+      "short_title": "Locations & Portals",
+      "keywords": [
+        "location",
+        "container",
+        "portal",
+        "entry/exit",
+        "ghost stub",
+        "arrival",
+        "depth",
+        "hierarchy",
+        "building",
+        "district"
+      ],
+      "in_one_line": "Worlds organize Level 0 Locations inside nested Level 1–4 Containers connected across thresholds by [Entry/Exit Portal] rooms and cross-boundary links.",
+      "scales": [
+        {
+          "label": "Level 4 Container",
+          "range_or_tag": "Region / Planet / Realm",
+          "meaning": "Macro geographic tier grouping Level 3 areas on the spatial map."
+        },
+        {
+          "label": "Level 3 Container",
+          "range_or_tag": "City / Settlement",
+          "meaning": "Macro geographic tier grouping Level 2 areas on the spatial map."
+        },
+        {
+          "label": "Level 2 Container",
+          "range_or_tag": "District / Zone",
+          "meaning": "Macro geographic tier grouping Level 1 structures or rooms on the spatial map."
+        },
+        {
+          "label": "Level 1 Container",
+          "range_or_tag": "Building / Landmark",
+          "meaning": "Innermost structure (e.g., building or deck) that can carry local lore and enclose Level 0 Locations."
+        }
+      ],
+      "how_it_changes": [
+        "Opening or entering an interior building/structure drills inside its Level 1 Container, rendering exterior destinations as Ghost Stubs.",
+        "Crossing outside a building uses designated [Entry/Exit Portal] threshold rooms so indoor hallways don't leak straight onto city highways.",
+        "Entering an unvisited location or container emits collapsible First-Visit Arrival descriptions/visuals in chat (zero LLM prompt bloat)."
+      ],
+      "effect_on_play": [
+        "Phase 2 injects hierarchical <spatial_hierarchy> breadcrumbs and Level 1 ambient lore so characters understand where they are in the world.",
+        "Only Level 0 Locations and Level 1 Containers carry local lore nodes; unvisited nodes stay hidden in Player Mode until discovered."
+      ],
+      "under_the_hood": null,
+      "related_topic_ids": [
+        "spatial-links-travel",
+        "memory-lore-flags",
+        "gm-mode"
+      ]
+    },
+    {
+      "id": "spatial-links-travel",
+      "subcategory_id": "spatial",
+      "title": "Links, Travel Time & Secret Passages",
+      "short_title": "Links & Secret Passages",
+      "keywords": [
+        "link",
+        "edge",
+        "distance",
+        "metric",
+        "speed modifier",
+        "travel time",
+        "blocked",
+        "obstacle",
+        "secret passage",
+        "secret link"
+      ],
+      "in_one_line": "Every map connection carries a metric distance, speed modifier, optional travel mode, obstacles/blocked flags, and optional Secret gating that hides unfound paths.",
+      "scales": [
+        {
+          "label": "Metric Distance & Base Pace",
+          "range_or_tag": "m / km · 70m/min",
+          "meaning": "Default walking pace (~4.2 km/h) sets a deterministic travel duration floor on the World Clock when crossing a link."
+        },
+        {
+          "label": "Speed Modifier",
+          "range_or_tag": "0.05× to 100×",
+          "meaning": "Scales pace for terrain or transit—from Crawl/Swamp (0.25×–0.3×) up to Rail (25×) or High-Speed Air (60×)."
+        },
+        {
+          "label": "Blocked & Obstacles",
+          "range_or_tag": "Auto-Check",
+          "meaning": "Exits marked Blocked or carrying Obstacles automatically trigger Auto dice checks (unless Forced) when traversed."
+        },
+        {
+          "label": "Secret Passages",
+          "range_or_tag": "Hidden Until Found",
+          "meaning": "Excluded from Exits (N), Mini-Map, Full Map, Phase 1/Zone 4 prompts, and Neuromancer until discovered in play (or revealed in GM Mode)."
+        }
+      ],
+      "how_it_changes": [
+        "Shift+Click any map distance badge to toggle an instant speed-adjusted duration preview; double-click a link badge (when editing is unlocked) to edit metric distance inline.",
+        "In play, succeeding on a discovery roll or searching when dice are Disabled reveals both directions of a Secret Link on the active timeline branch."
+      ],
+      "effect_on_play": [
+        "Travel time derived from a link prevents instant cross-city teleports from passing 0 minutes—long transit visibly advances the clock and decays CARE states.",
+        "Even when GM Mode shows secret ghost links visually on your map, AI characters still cannot use or mention unrevealed passages."
+      ],
+      "under_the_hood": {
+        "title": null,
+        "summary": "Traversal duration floor formula: `distance_meters / (WALKING_METERS_PER_MINUTE * speed_modifier)` minutes (minimum 1m when nonzero).",
+        "items": [
+          {
+            "label": "Base Walking Speed",
+            "value": "70 m/min (4.2 km/h)",
+            "detail": null
+          },
+          {
+            "label": "Terrain & Slow",
+            "value": "Crawl / Tight (0.25×) · Swamp / Bog (0.3×) · Swim (0.4×) · Steep / Mountain (0.6×)",
+            "detail": null
+          },
+          {
+            "label": "On Foot & Mounts",
+            "value": "Walking (1×) · Sprint / March (2×) · Mount / Bike (3×)",
+            "detail": null
+          },
+          {
+            "label": "Vehicles & Transit",
+            "value": "Boat / Sea (5×) · Vehicle (10×) · Rail / Transit (25×) · High-Speed / Air (60×)",
+            "detail": null
+          }
+        ]
+      },
+      "related_topic_ids": [
+        "spatial-hierarchy-portals",
+        "spatial-physical-stance",
+        "directing-narrator-clock",
+        "gm-mode"
+      ]
+    },
+    {
+      "id": "spatial-physical-stance",
+      "subcategory_id": "spatial",
+      "title": "Physical Stance & Motion Continuity",
+      "short_title": "Physical Stance",
+      "keywords": [
+        "stance",
+        "posture",
+        "position",
+        "motion",
+        "continuity",
+        "prone",
+        "stomach",
+        "kneeling",
+        "crouching",
+        "sitting",
+        "restrained",
+        "incapacitated",
+        "physical context"
+      ],
+      "in_one_line": "Tracks each present NPC's and the Player's bodily stance and micro-position across turns so characters do not teleport out of cover, kneel abruptly after lying prone, or shrug off restraints.",
+      "scales": [
+        {
+          "label": "Canonical Stances",
+          "range_or_tag": "10 Stances",
+          "meaning": "Unspecified · Standing · Sitting · Leaning · Crouching · Kneeling · Lying Down · Moving · Restrained · Incapacitated"
+        },
+        {
+          "label": "Position Context",
+          "range_or_tag": "<= 120 chars",
+          "meaning": "Concise anchor capturing body orientation (on stomach/back/side), room cover, hands/props, or physical contact."
+        },
+        {
+          "label": "Smart Staleness Reset",
+          "range_or_tag": "Travel / >=30m",
+          "meaning": "Relocating rooms or skipping 30+ minutes clears untouched pose context (moving -> Standing, time skip -> Unspecified) while keeping Restrained/Incapacitated intact."
+        },
+        {
+          "label": "Manual Overrides",
+          "range_or_tag": "Always Available",
+          "meaning": "Edit live in the right-pane Here persona card, Codex → Current, or Codex → Player Persona without needing GM Mode."
+        }
+      ],
+      "how_it_changes": [
+        "Phase 5 World Clerk (for You) and Character State Agents (for present NPCs) carry forward prior physical state verbatim unless turn prose depicts an explicit bodily or micro-spatial change.",
+        "Zone 4 injects non-unspecified positions as Starting Physical State—explicitly framed as a starting point, never a static lock—paired with a blocking continuity cue.",
+        "Zone 1 renders static character card Posture separately as Habitual Bearing so lasting mannerisms never collide with transient turn poses."
+      ],
+      "effect_on_play": [
+        "Both Phase 3 Cognition and Phase 4 Prose account for starting physical constraints (such as scrambling up from Lying Down before rushing an exit, or fighting while Restrained).",
+        "Turn Clerk inspection modals display exact before -> after stance diffs and note whenever travel or a time skip triggered an automatic staleness reset."
+      ],
+      "under_the_hood": {
+        "title": null,
+        "summary": "Zero extra LLM calls: physical fields piggyback on WorldPostTurnDelta and CharacterAgentDelta, silently omitted from prompts whenever Unspecified + empty.",
+        "items": [
+          {
+            "label": "Unspecified",
+            "value": "unspecified",
+            "detail": "No explicit stance established yet (omitted from prompts)"
+          },
+          {
+            "label": "Standing",
+            "value": "standing",
+            "detail": "On feet in an upright position"
+          },
+          {
+            "label": "Sitting",
+            "value": "sitting",
+            "detail": "Seated on a chair, booth, floor, or ledge"
+          },
+          {
+            "label": "Leaning",
+            "value": "leaning",
+            "detail": "Propped or braced against a wall, bar, or railing"
+          },
+          {
+            "label": "Crouching",
+            "value": "crouching",
+            "detail": "Low crouched or hunkered posture behind cover"
+          },
+          {
+            "label": "Kneeling",
+            "value": "kneeling",
+            "detail": "On one or both knees"
+          },
+          {
+            "label": "Lying Down",
+            "value": "lying_down",
+            "detail": "Prone on stomach, supine on back, or sprawled flat"
+          },
+          {
+            "label": "Moving",
+            "value": "moving",
+            "detail": "Walking, running, pacing, climbing, or crawling"
+          },
+          {
+            "label": "Restrained",
+            "value": "restrained",
+            "detail": "Bound, cuffed, grappled, or physically pinned"
+          },
+          {
+            "label": "Incapacitated",
+            "value": "incapacitated",
+            "detail": "Unconscious, collapsed, stunned, or immobilized"
+          }
+        ]
+      },
+      "related_topic_ids": [
+        "spatial-links-travel",
+        "gm-overrides-locks",
+        "directing-narrator-clock"
+      ]
+    },
+    {
+      "id": "memory-3-tier",
+      "subcategory_id": "memory",
+      "title": "How the AI Remembers (3-Tier Memory)",
+      "short_title": "3-Tier Memory",
+      "keywords": [
+        "memory",
+        "working memory",
+        "episodic",
+        "summary",
+        "synopsis",
+        "lod",
+        "shard",
+        "rag",
+        "rrf",
+        "mmr",
+        "compaction"
+      ],
+      "in_one_line": "CyberCantina layers verbatim Working Memory, sealed Episodic Summaries with Level-of-Detail compression, and Hybrid RRF/MMR long-term vector recall.",
+      "scales": [
+        {
+          "label": "Tier 1 · Working Memory",
+          "range_or_tag": "Zone 3 · 12 turns",
+          "meaning": "Recent verbatim turns filtered strictly to rooms where that NPC was present (with private whispers to others removed)."
+        },
+        {
+          "label": "Tier 2 · Episodic Summaries",
+          "range_or_tag": "Zone 2 · LOD Cascade",
+          "meaning": "Older 6-turn slices sealed into narrative Episode chunks; newest/pivotal stay full summaries while ancient ones fold to 1-line synopses."
+        },
+        {
+          "label": "Tier 3 · Long-Term Shards & Vectors",
+          "range_or_tag": "Zone 4 · Hybrid Search",
+          "meaning": "Character Memory Shards, Lore, and Episode chunks ranked by BM25/IDF + embedding MMR and dynamically elevated when recalled."
+        }
+      ],
+      "how_it_changes": [
+        "Once active history exceeds working_memory_turns (default 12), Phase 5 Clerk compresses the oldest 6-turn slice into an EpisodicChunkRecord.",
+        "High-salience episodes (critical d20 rolls, shattered composure, room transitions, secret reveals) resist LOD synopsis compression longer.",
+        "After 40 turns, unpromoted clerk_ephemeral character shards compact into permanent Memory Shards without losing key facts."
+      ],
+      "effect_on_play": [
+        "Even after 50+ turns, recalling an old episode dynamically elevates its matching verbatim turns (strictly gated by room presence) into Zone 4.",
+        "Phase 3 reserves up to 2 personal character_shard slots so global world lore never crowds out an NPC's own core memories."
+      ],
+      "under_the_hood": {
+        "title": null,
+        "summary": "Default memory pipeline parameters (tunable in User Profile / Server Settings).",
+        "items": [
+          {
+            "label": "Working Memory Default / Floor",
+            "value": "12 turns (min 4 protected)",
+            "detail": null
+          },
+          {
+            "label": "Episodic Chunk Size / Full LOD Cap",
+            "value": "6 turns / 6 full chunks",
+            "detail": null
+          },
+          {
+            "label": "High-Salience LOD Bonus",
+            "value": "salience ≥ 8 → +2 longevity positions",
+            "detail": null
+          },
+          {
+            "label": "Ephemeral Shard Compaction",
+            "value": "40 turns (superseded cleanly per branch)",
+            "detail": null
+          }
+        ]
+      },
+      "related_topic_ids": [
+        "memory-context-health",
+        "memory-lore-flags",
+        "timelines-branching"
+      ]
+    },
+    {
+      "id": "memory-context-health",
+      "subcategory_id": "memory",
+      "title": "Context Health & 4-Zone Economy",
+      "short_title": "Context Health & Zones",
+      "keywords": [
+        "context health",
+        "4-zone",
+        "kv cache",
+        "tokens",
+        "phase 1",
+        "phase 3",
+        "phase 4",
+        "phase 5",
+        "num_ctx",
+        "truncation"
+      ],
+      "in_one_line": "Every Actor turn partitions prompts into 4 cache-friendly Zones, and the Context Health pill monitors token headroom across all 4 LLM phases.",
+      "scales": [
+        {
+          "label": "Zone 1 · Static Prefix",
+          "range_or_tag": "Cached Forever",
+          "meaning": "World genre/rules, character identity, drives, voice anchors, and public persona summary—byte-identical across turns."
+        },
+        {
+          "label": "Zone 2 · Episodic Summaries",
+          "range_or_tag": "Shared Semi-Static",
+          "meaning": "Sealed Episode summaries shared across characters; capped at 45% of remaining history budget during tight context windows."
+        },
+        {
+          "label": "Zone 3 · Working Memory",
+          "range_or_tag": "Recent Verbatim",
+          "meaning": "Last N turns; protects at least 4 turns before Zone 2 LOD chunks are cascaded or dropped."
+        },
+        {
+          "label": "Zone 4 · Ephemeral Frame",
+          "range_or_tag": "Tail Volatility",
+          "meaning": "World Clock, exits, scene flags, budget-packed RAG recalls, CARE state, d20 results, cognition directives, and your message."
+        },
+        {
+          "label": "P1 · Phase 1 — Pre-Turn",
+          "range_or_tag": "Clerk",
+          "meaning": "Intent, movement, rolls & disclosures (Clerk)"
+        },
+        {
+          "label": "P3 · Phase 3 — Cognition",
+          "range_or_tag": "Actor or Clerk",
+          "meaning": "Per-character private reasoning"
+        },
+        {
+          "label": "P4 · Phase 4 — Prose",
+          "range_or_tag": "Actor (4-Zone)",
+          "meaning": "4-zone narrative generation (Actor)"
+        },
+        {
+          "label": "P5 · Phase 5 — Clerk",
+          "range_or_tag": "Clerk",
+          "meaning": "World state, character agents & compaction"
+        }
+      ],
+      "how_it_changes": [
+        "Click the 4-bar Context Health pill in the top stage header (Green / Amber / Red) after any turn—or via a turn's Prose Model Pill—to inspect Telemetry, Scene & Recall (flags and recalled items), and the searchable Lore Index.",
+        "When local endpoints (like Ollama num_ctx) near their limit, overflow protection cascades oldest Zone 2 summaries down to synopses before trimming recent turns."
+      ],
+      "effect_on_play": [
+        "Keeping volatile data in Zone 4 preserves local KV-cache prefixes so turns respond much faster on Ollama, llama.cpp, and vLLM.",
+        "If Context Health turns Amber or Red, you can raise context_size, lower working_memory_turns, or compact lore without losing earlier summaries."
+      ],
+      "under_the_hood": {
+        "title": null,
+        "summary": "Two-form RAG packing (`recall_budget_prose_tokens = 450`, `recall_budget_cognition_tokens = 220`) guarantees Rank 0 in full form while squeezing more breadth via 1-line summaries.",
+        "items": [
+          {
+            "label": "Zone 2 Budget Share Cap",
+            "value": "45% of history budget",
+            "detail": null
+          },
+          {
+            "label": "Zone 3 Protected Floor",
+            "value": "4 turns (min_working_memory_turns)",
+            "detail": null
+          }
+        ]
+      },
+      "related_topic_ids": [
+        "memory-3-tier",
+        "memory-lore-flags"
+      ]
+    },
+    {
+      "id": "memory-lore-flags",
+      "subcategory_id": "memory",
+      "title": "Lore Recall, Secrets & Scene Flags",
+      "short_title": "Lore, Secrets & Flags",
+      "keywords": [
+        "lore",
+        "secret",
+        "scene flags",
+        "internals",
+        "recalled",
+        "artifact",
+        "fifo",
+        "rag"
+      ],
+      "in_one_line": "Global, Location, Level 1 Container, and Artifact lore stay spoiler-gated until discovered, while Scene Flags track temporary room state via FIFO inside Context Health → Scene & Recall.",
+      "scales": [
+        {
+          "label": "World / Artifact Lore",
+          "range_or_tag": "Hybrid Recalled",
+          "meaning": "Recalled automatically into Zone 4 via keywords/embeddings; equipped Artifacts link directly to World Codex entries."
+        },
+        {
+          "label": "Location & L1 Container Lore",
+          "range_or_tag": "Room-Scoped",
+          "meaning": "Active room lore injects deterministically; secret entries stay hidden from UI/Phase 1 until revealed in public prose."
+        },
+        {
+          "label": "Scene Flags",
+          "range_or_tag": "FIFO · Max 10",
+          "meaning": "Short-lived tactical state markers (e.g., \"alarm tripped\", \"vault door ajar\") updated each turn by Phase 5 Clerk."
+        }
+      ],
+      "how_it_changes": [
+        "Phase 5 Clerk detects when the substance of a secret location/container lore entry is spoken or uncovered in public prose and reveals it on that branch.",
+        "Scene Flags append on turn resolution and automatically evict oldest flags once the active cap (default 10) is reached."
+      ],
+      "effect_on_play": [
+        "Open Context Health → Scene & Recall to inspect active Scene Flags and exact Recalled item scores, or switch to Context Health → Lore Index to browse visible shards and lore.",
+        "Rewinding or branching prior to a secret reveal re-hides that secret cleanly on the earlier branch."
+      ],
+      "under_the_hood": null,
+      "related_topic_ids": [
+        "memory-3-tier",
+        "memory-context-health",
+        "gm-mode"
+      ]
+    },
+    {
+      "id": "timelines-branching",
+      "subcategory_id": "timelines",
+      "title": "Branching, Swiping & Editing",
+      "short_title": "Branching & Swiping",
+      "keywords": [
+        "branch",
+        "timeline",
+        "swipe",
+        "edit",
+        "delete",
+        "rewind",
+        "checkout",
+        "multiverse"
+      ],
+      "in_one_line": "Campaign history is an acyclic turn tree—letting you Branch from any earlier turn, Swipe responses, or Edit prompts while keeping every state snapshot branch-isolated.",
+      "scales": [
+        {
+          "label": "Branch",
+          "range_or_tag": "Any Earlier Turn",
+          "meaning": "Rewinds the active view to that turn (including Turn #0) without deleting your existing continuation—your next message forks a new timeline."
+        },
+        {
+          "label": "Swipe / Edit",
+          "range_or_tag": "Sibling Variants",
+          "meaning": "Swipe regenerates an alternate reply from the same parent state; Edit revises your latest prompt into a sibling turn. Compare and switch siblings via the compact ‹ v#/N › stepper and preview popover (showing Active, Edited prompt tags, bookmarks, descendant counts, and 1-line previews)."
+        },
+        {
+          "label": "Delete",
+          "range_or_tag": "Leaf-Only Safe",
+          "meaning": "Removes only a true leaf turn (and unfollowed unbookmarked sibling swipes) using an inline two-tap confirmation (Delete → Confirm?, rendered as a compact trash icon at rest on narrow phones); blocked on interior turns that have descendants."
+        }
+      ],
+      "how_it_changes": [
+        "Checking out another branch tip inside Story → Timelines switches atomically to that branch's lineage."
+      ],
+      "effect_on_play": [
+        "World Clock, character positions, improvised rooms, secret reveals, parties, inventories, CARE states, episodic summaries, and RAG vectors all switch atomically—zero cross-branch contamination."
+      ],
+      "under_the_hood": null,
+      "related_topic_ids": [
+        "timelines-graph-bookmarks",
+        "timelines-major-events",
+        "care-overview"
+      ]
+    },
+    {
+      "id": "timelines-graph-bookmarks",
+      "subcategory_id": "timelines",
+      "title": "Branch Graph & Bookmarks",
+      "short_title": "Branch Graph & Bookmarks",
+      "keywords": [
+        "branch graph",
+        "bookmark",
+        "note",
+        "episode",
+        "summary",
+        "magic wand",
+        "unfollowed swipes"
+      ],
+      "in_one_line": "Story → Timelines renders your campaign multiverse as a collapsible pan/zoom tree, paired with Bookmarks for out-of-character notes that never leak to the AI.",
+      "scales": [
+        {
+          "label": "Summarized Episodes",
+          "range_or_tag": "+N turns pill",
+          "meaning": "Summarized turn spans fold into stacked episode nodes while keeping Turn #0, recent turns, and your active branch tip expanded."
+        },
+        {
+          "label": "Episode in Progress",
+          "range_or_tag": "Spoiler-Safe",
+          "meaning": "Shows when another timeline summarized turns your current branch hasn't sealed yet, with ‹ › controls to preview alternates."
+        },
+        {
+          "label": "Bookmark Notes",
+          "range_or_tag": "100% OOC · Private",
+          "meaning": "Stored on the turn (and retained even if un-bookmarked temporarily); strictly excluded from LLM prompts and vector memory."
+        }
+      ],
+      "how_it_changes": [
+        "Pan by dragging the canvas with a mouse or single finger, zoom smoothly with the mouse wheel or two-finger pinch gesture on touchscreens, and tap Fit All / Active Leaf to refocus.",
+        "Click the Bookmark icon on any narrative turn after Turn #0; click the Magic Wand inside the note editor to ask your Clerk for an objective 1-sentence summary.",
+        "Unfollowed same-prompt swipes stay tucked behind +N swipes pills unless bookmarked or toggled via Show swipes."
+      ],
+      "effect_on_play": [
+        "Click any bookmark in Story → Bookmarks to scroll straight to it on the active branch or locate it on an alternate branch inside the Branch Graph.",
+        "Personal bookmark notes help you track theories and pacing without polluting context tokens."
+      ],
+      "under_the_hood": null,
+      "related_topic_ids": [
+        "timelines-branching",
+        "timelines-major-events",
+        "memory-3-tier"
+      ]
+    },
+    {
+      "id": "timelines-major-events",
+      "subcategory_id": "timelines",
+      "title": "Major Events & Copy-on-Write",
+      "short_title": "Major Events & CoW",
+      "keywords": [
+        "major events",
+        "copy-on-write",
+        "cow",
+        "history",
+        "chronicle",
+        "location change",
+        "campaign lore"
+      ],
+      "in_one_line": "Permanent world-shaking milestones and physical location transformations are recorded chronologically under Story → Major Events using branch-safe Copy-on-Write.",
+      "scales": [
+        {
+          "label": "World Scope",
+          "range_or_tag": "YYYY-MM-DD History",
+          "meaning": "Permanent world-level shifts (e.g., ruler fallen, faction dissolved) saved as branch-scoped World Codex history entries."
+        },
+        {
+          "label": "Location Scope",
+          "range_or_tag": "Room Override",
+          "meaning": "Permanent physical or regime changes revise that room's branch-scoped description and environmental tags."
+        }
+      ],
+      "how_it_changes": [
+        "Phase 5 Clerk emits Major Events automatically when irreversible milestones occur in play.",
+        "With GM Mode enabled, expanded Major Event cards let you edit mistakes or Delete / Revert location transformations."
+      ],
+      "effect_on_play": [
+        "Reused base Worlds stay pristine across campaigns—all Codex edits, location lore overrides, and Major Events apply strictly to this campaign branch.",
+        "Click Jump to Turn #N on any Major Event card to inspect the originating moment in chat."
+      ],
+      "under_the_hood": null,
+      "related_topic_ids": [
+        "timelines-branching",
+        "gm-mode",
+        "memory-lore-flags"
+      ]
+    },
+    {
+      "id": "gm-neuromancer",
+      "subcategory_id": "gm",
+      "title": "GM Talk (Neuromancer)",
+      "short_title": "GM Talk (Neuromancer)",
+      "keywords": [
+        "neuromancer",
+        "gm talk",
+        "ooc",
+        "/gm",
+        "@mechanics",
+        "game rules",
+        "draft codex",
+        "agentic tools",
+        "clerk",
+        "spoiler"
+      ],
+      "in_one_line": "Neuromancer is your zero-mutation out-of-character GM assistant for recapping turns, querying lore, checking CyberCantina game rules via @mechanics, and drafting human-confirmed Codex entries.",
+      "scales": [
+        {
+          "label": "/gm [question]",
+          "range_or_tag": "Aliases: /neuromancer",
+          "meaning": "Opens the ~50% slide-out drawer above the composer (or sends an OOC question immediately without spending a turn)."
+        },
+        {
+          "label": "Spoiler Boundary",
+          "range_or_tag": "Tracks GM Mode",
+          "meaning": "Spoiler-Safe hides unrevealed secrets, unvisited areas, and NPC private thoughts; GM Mode unlocks full behind-the-scenes visibility."
+        },
+        {
+          "label": "GM Agentic Tools (Opt-In)",
+          "range_or_tag": "Primary or Clerk Role",
+          "meaning": "Optional native read-only lookups across Codex, turns, cast, and visited rooms—plus lookup_game_rules when @mechanics is active; can run on Clerk while prose stays on Primary."
+        }
+      ],
+      "how_it_changes": [
+        "Type @ inside GM Mode to browse or live-search Characters, Lore, Locations, Containers, Turns, and Game Mechanics (@mechanics:).",
+        "Reference @mechanics (or pin an article with @mechanics:) whenever you want Neuromancer to inspect CyberCantina rules—leaving normal campaign turns uncluttered; mechanic context carries over for 1 follow-up turn if a mechanic source was cited.",
+        "Click any mechanic chip in Sources used to jump directly to its Game Mechanics Codex article, or click Draft Codex on a story reply to prepare an editable World Codex card."
+      ],
+      "effect_on_play": [
+        "Conversations with Neuromancer never advance the World Clock, mutate CARE states, or pollute story turns.",
+        "Confirmed Draft Codex entries save strictly to the active branch and index immediately for future RAG recall."
+      ],
+      "under_the_hood": null,
+      "related_topic_ids": [
+        "gm-mode",
+        "timelines-major-events",
+        "memory-lore-flags"
+      ]
+    },
+    {
+      "id": "gm-mode",
+      "subcategory_id": "gm",
+      "title": "Unlock Lore & Secrets (GM Mode)",
+      "short_title": "GM Mode",
+      "keywords": [
+        "gm mode",
+        "unlock lore",
+        "secrets",
+        "auto-layout",
+        "ghost",
+        "spoiler",
+        "edit lore"
+      ],
+      "in_one_line": "Toggling Unlock Lore & Secrets (GM Mode) in World Settings reveals hidden secrets and unlocks campaign-scoped authoring tools—while AI characters still obey in-game discovery rules.",
+      "scales": [
+        {
+          "label": "Codex, Map & Index Secrets",
+          "range_or_tag": "UI-Only Reveal",
+          "meaning": "Shows undiscovered secret lore entries (in Codex and Context Health → Lore Index), unrevealed Secret Map Links (as dashed violet ghost lines), and reveals toggle buttons."
+        },
+        {
+          "label": "Editing & Major Events",
+          "range_or_tag": "Branch-Scoped CoW",
+          "meaning": "Unlocks adding/editing/deleting campaign World Codex entries, Location/L1 Container lore, visited room details, and Major Events."
+        },
+        {
+          "label": "Scoped Map Auto-Layout",
+          "range_or_tag": "GM Mode Only",
+          "meaning": "Exposes Auto-Layout preview on the map toolbar (hidden in Player Mode so unrevealed secret topology cannot be inferred)."
+        }
+      ],
+      "how_it_changes": [
+        "Toggle in Campaign → World → World Settings; takes effect immediately across Codex, Map Inspector, Context Health → Lore Index, Story Major Events, and Neuromancer."
+      ],
+      "effect_on_play": [
+        "Critical invariant: enabling GM Mode never leaks unrevealed secrets into AI character prompts—NPCs still only react to what they discovered in play.",
+        "All campaign edits apply from the current turn onward on that timeline branch and never modify the reusable base World."
+      ],
+      "under_the_hood": null,
+      "related_topic_ids": [
+        "gm-neuromancer",
+        "gm-overrides-locks",
+        "spatial-links-travel"
+      ]
+    },
+    {
+      "id": "gm-overrides-locks",
+      "subcategory_id": "gm",
+      "title": "Manual Overrides & Item Locks",
+      "short_title": "Overrides & Item Locks",
+      "keywords": [
+        "override",
+        "relocate",
+        "move scene",
+        "move party",
+        "permanent",
+        "artifact",
+        "inventory",
+        "memory shards"
+      ],
+      "in_one_line": "Manual overrides let you correct room placement, relocate individual NPCs, edit campaign memory shards, and lock pivotal equipment without breaking turn lineage.",
+      "scales": [
+        {
+          "label": "Scene Location Override",
+          "range_or_tag": "Move Party / Alone / Selected",
+          "meaning": "Re-anchors the active leaf turn from the mini-map or full map drawer; split menu preserves left-behind 2+ companions as an NPC party."
+        },
+        {
+          "label": "NPC Relocation",
+          "range_or_tag": "Current Tab / Party Modal",
+          "meaning": "Moves one NPC cleanly to any visible location without relocating you or firing player arrival cards."
+        },
+        {
+          "label": "Inventory Locks",
+          "range_or_tag": "permanent · artifact",
+          "meaning": "permanent prevents Phase 5 Clerk from silently dropping essential gear; artifact links an item to a World Codex Artifact entry."
+        },
+        {
+          "label": "Campaign Memory Edits",
+          "range_or_tag": "Codex → Memories",
+          "meaning": "Add, edit, or prune an NPC's Memory Shards from the next turn onward without mutating the base Character template."
+        }
+      ],
+      "how_it_changes": [
+        "Inventory changes, Memory Shard edits, and Location overrides apply directly on the active leaf turn."
+      ],
+      "effect_on_play": [
+        "Gives you clean surgical control whenever an LLM makes a spatial or inventory slip—preserving smooth play across future turns and swipes."
+      ],
+      "under_the_hood": null,
+      "related_topic_ids": [
+        "spatial-parties",
+        "spatial-physical-stance",
+        "gm-mode",
+        "memory-lore-flags"
+      ]
+    }
+  ]
+}

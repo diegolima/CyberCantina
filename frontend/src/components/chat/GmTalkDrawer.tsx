@@ -25,6 +25,7 @@ import type {
 import type { GmModelMeta } from "../../hooks/useGmTalk";
 import { GM_GREETING_MESSAGE, GM_NAME } from "../../utils/gmMentions";
 import { MechanicsHelpButton } from "../shared/MechanicsHelpButton";
+import { getMechanicsArticle } from "../world/mechanics/mechanicsHelpers";
 import { GmCodexProposalCard } from "./GmCodexProposalCard";
 import { renderFormattedProse } from "./chatHelpers";
 
@@ -126,6 +127,32 @@ export const GmTalkDrawer: React.FC<GmTalkDrawerProps> = ({
   ]
     .filter(Boolean)
     .join(" ");
+
+  const renderSourceChip = (src: GmSourceRef, idx: number) => {
+    const key = `${src.kind}:${src.id}:${idx}`;
+    const isClickableMechanic =
+      src.kind === "mechanic" &&
+      Boolean(onOpenMechanicsHelp) &&
+      Boolean(getMechanicsArticle(src.id as MechanicsTopicId));
+    if (isClickableMechanic && onOpenMechanicsHelp) {
+      return (
+        <button
+          key={key}
+          type="button"
+          className="gm-source-chip gm-source-chip--interactive"
+          onClick={() => onOpenMechanicsHelp(src.id as MechanicsTopicId)}
+          title={`Open ${src.label} in Game Mechanics`}
+        >
+          {src.kind}: {src.label}
+        </button>
+      );
+    }
+    return (
+      <span key={key} className="gm-source-chip">
+        {src.kind}: {src.label}
+      </span>
+    );
+  };
 
   return (
     <section
@@ -357,14 +384,7 @@ export const GmTalkDrawer: React.FC<GmTalkDrawerProps> = ({
                       </button>
                       {showSources && (
                         <div className="gm-sources-list">
-                          {msg.sources.map((src, idx) => (
-                            <span
-                              key={`${src.kind}:${src.id}:${idx}`}
-                              className="gm-source-chip"
-                            >
-                              {src.kind}: {src.label}
-                            </span>
-                          ))}
+                          {msg.sources.map(renderSourceChip)}
                         </div>
                       )}
                     </div>
@@ -423,14 +443,7 @@ export const GmTalkDrawer: React.FC<GmTalkDrawerProps> = ({
                 {streamingSources.length > 0 && (
                   <div className="gm-sources-bar">
                     <div className="gm-sources-list">
-                      {streamingSources.map((src, idx) => (
-                        <span
-                          key={`${src.kind}:${src.id}:${idx}`}
-                          className="gm-source-chip"
-                        >
-                          {src.kind}: {src.label}
-                        </span>
-                      ))}
+                      {streamingSources.map(renderSourceChip)}
                     </div>
                   </div>
                 )}

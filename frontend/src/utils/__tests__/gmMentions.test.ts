@@ -12,7 +12,7 @@ import {
 } from "../gmMentions";
 
 describe("gmMentions helpers", () => {
-  it("defines Neuromancer greeting and all 5 Browse categories", () => {
+  it("defines Neuromancer greeting and all 6 Browse categories", () => {
     expect(GM_GREETING_MESSAGE).toContain("Neuromancer");
     expect(GM_MENTION_CATEGORIES.map((c) => c.id)).toEqual([
       "characters",
@@ -20,10 +20,11 @@ describe("gmMentions helpers", () => {
       "locations",
       "containers",
       "turns",
+      "mechanics",
     ]);
   });
 
-  it("detects Browse, Category drill-down, and Unified Live Search triggers", () => {
+  it("detects Browse, Category drill-down (including @mechanics:), and Unified Live Search triggers", () => {
     const browse = detectGmMentionTrigger("Tell me about @", 15);
     expect(browse).toEqual({
       mode: "browse",
@@ -39,6 +40,15 @@ describe("gmMentions helpers", () => {
       query: "2",
       tokenStart: 17,
       tokenEnd: 25,
+    });
+
+    const mechCat = detectGmMentionTrigger("Explain @mechanics:d20", 22);
+    expect(mechCat).toEqual({
+      mode: "category",
+      category: "mechanics",
+      query: "d20",
+      tokenStart: 8,
+      tokenEnd: 22,
     });
 
     const search = detectGmMentionTrigger("Who is @kira", 12);
@@ -80,9 +90,22 @@ describe("gmMentions helpers", () => {
     });
 
     expect(shouldPopCategoryToBrowse("Check @lore:blackout", 20)).toBeNull();
+
+    const mechTrigger = detectGmMentionTrigger("Check @", 7)!;
+    const mechDrilled = applyCategoryDrilldown("Check @", mechTrigger, "mechanics");
+    expect(mechDrilled).toEqual({
+      nextText: "Check @mechanics:",
+      nextCursorPos: 17,
+    });
+    expect(
+      shouldPopCategoryToBrowse(mechDrilled.nextText, mechDrilled.nextCursorPos)
+    ).toEqual({
+      nextText: "Check @",
+      nextCursorPos: 7,
+    });
   });
 
-  it("inserts structured tokens, syncs with text edits, and removes chips cleanly", () => {
+  it("inserts structured tokens (including umbrella @Mechanics and specific rules), syncs with text edits, and removes chips cleanly", () => {
     const trigger = detectGmMentionTrigger("Explain @heli", 13)!;
     const cand: GmMentionCandidate = {
       kind: "lore",
@@ -113,5 +136,21 @@ describe("gmMentions helpers", () => {
     );
     expect(removed.nextText).toBe("Explain ");
     expect(removed.nextMentions).toEqual([]);
+
+    const umbrellaTrigger = detectGmMentionTrigger("Ask @mech", 9)!;
+    const umbrellaIns = insertGmMentionToken("Ask @mech", umbrellaTrigger, {
+      kind: "mechanic",
+      category: "mechanics",
+      id: "__all__",
+      label: "Mechanics",
+      subtitle: "All rules",
+      badge: "All Rules",
+    });
+    expect(umbrellaIns.nextText).toBe("Ask @Mechanics ");
+    expect(umbrellaIns.mentionRef).toEqual({
+      kind: "mechanic",
+      id: "__all__",
+      label: "Mechanics",
+    });
   });
 });

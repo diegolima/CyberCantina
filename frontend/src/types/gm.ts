@@ -11,14 +11,16 @@ export type GmMentionKind =
   | "lore"
   | "location"
   | "container"
-  | "turn";
+  | "turn"
+  | "mechanic";
 
 export type GmMentionCategory =
   | "characters"
   | "lore"
   | "locations"
   | "containers"
-  | "turns";
+  | "turns"
+  | "mechanics";
 
 export interface GmMentionRef {
   kind: GmMentionKind;

@@ -11,6 +11,12 @@ from typing import Any
 from app.config import ModelProfile
 from app.db.repos.base import utc_now_iso
 from app.db.repository import CantinaRepository
+from app.engine.game_mechanics import (
+    format_mechanics_tool_result,
+    get_subcategory_map,
+    load_mechanics_catalog,
+    search_mechanics_articles,
+)
 from app.engine.gm_codex import find_world_codex_duplicates
 from app.engine.gm_talk import (
     GmPreparedContext,
@@ -52,6 +58,41 @@ GM_TOOLS_SYSTEM_ADDENDUM = (
     "Do NOT call it for exploratory questions (e.g., 'What would be a reasonable entry to add?').\n"
     "- Never write OOC turn numbers inside `content` (use `source_turns` instead). After calling `propose_world_lore_entry`, "
     "tell the player the draft is ready for review and confirmation—never claim it is already saved."
+)
+
+GM_TOOLS_MECHANICS_ADDENDUM = (
+    "- You ALSO have `lookup_game_rules(query)` for CyberCantina application and simulation mechanics "
+    "(CARE emotions/bonds/half-lives, d20 modes & tiers, `/choice`, whispers/privacy, parties, map links & travel math, "
+    "3-tier memory & Context Health, timelines/bookmarks, GM Mode & Neuromancer).\n"
+    "- Use `lookup_game_rules` ONLY for CyberCantina game/engine rules—NEVER for in-world story canon or faction rules, "
+    "and NEVER pass game mechanics into `propose_world_lore_entry`."
+)
+
+GM_MECHANICS_TOOL_DEFINITION = LlmToolDefinition(
+    name="lookup_game_rules",
+    description=(
+        "Look up CyberCantina app and simulation rules (CARE emotions/bonds/half-lives, d20 modes & outcome tiers, "
+        "/choice, whispers & privacy, parties, map links & travel math, 3-tier memory & Context Health, "
+        "timelines/bookmarks, GM Mode & Neuromancer). Do NOT use for in-world story lore or faction rules. "
+        "Returns matched article summaries, scales, and Under the Hood constants in one call."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Game mechanic topic, command, or keyword (e.g., 'composure half-life', 'd20 critical failure', '/choice gates', 'travel speed modifier').",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3,
+                "default": 2,
+                "description": "Maximum number of matched mechanic articles to return (1-3).",
+            },
+        },
+        "required": ["query"],
+    },
 )
 
 GM_TOOL_DEFINITIONS: list[LlmToolDefinition] = [
@@ -191,6 +232,8 @@ def describe_gm_tool_status(tool_name: str, args: dict[str, Any] | None = None) 
         return "Inspecting campaign records…"
     if tool_name == "propose_world_lore_entry":
         return "Preparing World Codex proposal…"
+    if tool_name == "lookup_game_rules":
+        return "Checking CyberCantina game rules…"
     return "Running GM lookup…"
 
 
@@ -600,6 +643,73 @@ async def execute_gm_tool(
             proposal,
         )
 
+    if name == "lookup_game_rules":
+        query = str(args.get("query") or "").strip()
+        try:
+            limit = max(1, min(3, int(args.get("limit") or 2)))
+        except (TypeError, ValueError):
+            limit = 2
+
+        catalog = load_mechanics_catalog()
+        subcat_map = get_subcategory_map()
+        if not query:
+            topics = [
+                {
+                    "id": art.id,
+                    "title": art.title,
+                    "subcategory": (
+                        subcat_map[art.subcategory_id].short_label
+                        if art.subcategory_id in subcat_map
+                        else art.subcategory_id
+                    ),
+                }
+                for art in catalog.articles
+            ]
+            return (
+                {
+                    "articles": [],
+                    "available_topics": topics,
+                    "total_mechanics_articles": len(catalog.articles),
+                },
+                sources,
+                None,
+            )
+
+        hits = search_mechanics_articles(query, limit=limit, min_score=1)
+        if not hits:
+            topics = [
+                {
+                    "id": art.id,
+                    "title": art.title,
+                    "subcategory": (
+                        subcat_map[art.subcategory_id].short_label
+                        if art.subcategory_id in subcat_map
+                        else art.subcategory_id
+                    ),
+                }
+                for art in catalog.articles
+            ]
+            return (
+                {
+                    "articles": [],
+                    "available_topics": topics,
+                    "note": "No direct match; retry with a topic title or keyword from available_topics.",
+                },
+                sources,
+                None,
+            )
+
+        matched_articles = [art for _, art in hits]
+        for art in matched_articles:
+            sources.append(GmSourceRef(kind="mechanic", id=art.id, label=art.title))
+        return (
+            format_mechanics_tool_result(
+                matched_articles, subcat_map, len(catalog.articles)
+            ),
+            sources,
+            None,
+        )
+
     return {"error": f"Unknown tool '{name}'."}, sources, None
 
 
@@ -637,7 +747,7 @@ def _build_synthesis_messages(
         "If `propose_world_lore_entry` succeeded, tell the player the draft card is ready for review and confirmation (never claim it is already saved).",
     ]
     total_chars = sum(len(line) for line in lines) + 2
-    max_total_chars = 4000
+    max_total_chars = 5500
     for idx, (tool_name, tool_args, tool_out) in enumerate(tool_trace, start=1):
         try:
             args_str = json.dumps(tool_args, ensure_ascii=False)
@@ -649,8 +759,9 @@ def _build_synthesis_messages(
             out_str = json.dumps(tool_out, ensure_ascii=False)
         except Exception:
             out_str = "{}"
-        if len(out_str) > 750:
-            out_str = out_str[:747] + "…"
+        out_limit = 1800 if tool_name == "lookup_game_rules" else 750
+        if len(out_str) > out_limit:
+            out_str = out_str[: out_limit - 3] + "…"
         entry = f"[{idx}] {tool_name}({args_str}) -> {out_str}"
         if total_chars + len(entry) + 1 > max_total_chars:
             lines.append("[Additional earlier tool outputs truncated for context budget.]")
@@ -675,11 +786,22 @@ async def run_gm_tool_loop(
     vis = _compute_branch_visibility(bundle)
     base_world_ids = repo.get_base_world_lore_ids(bundle.campaign.world_id)
 
+    active_tools = (
+        [*GM_TOOL_DEFINITIONS, GM_MECHANICS_TOOL_DEFINITION]
+        if prep.mechanics_active
+        else GM_TOOL_DEFINITIONS
+    )
+    addendum = (
+        f"{GM_TOOLS_SYSTEM_ADDENDUM}\n{GM_TOOLS_MECHANICS_ADDENDUM}"
+        if prep.mechanics_active
+        else GM_TOOLS_SYSTEM_ADDENDUM
+    )
+
     convo_messages: list[dict[str, Any]] = [dict(m) for m in prep.messages]
     if convo_messages and convo_messages[0].get("role") == "system":
         convo_messages[0] = {
             "role": "system",
-            "content": f"{convo_messages[0]['content']}\n\n{GM_TOOLS_SYSTEM_ADDENDUM}",
+            "content": f"{convo_messages[0]['content']}\n\n{addendum}",
         }
 
     emitted_proposals: list[GmCodexProposal] = []
@@ -691,7 +813,7 @@ async def run_gm_tool_loop(
         try:
             result = await active_llm.complete_with_tools(
                 convo_messages,
-                GM_TOOL_DEFINITIONS,
+                active_tools,
                 profile=gm_profile,
                 disable_reasoning=True,
             )

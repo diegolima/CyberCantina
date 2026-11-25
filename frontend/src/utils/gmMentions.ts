@@ -48,6 +48,12 @@ export const GM_MENTION_CATEGORIES: readonly GmMentionCategorySpec[] =
       description: "Reference turns along the active branch",
       prefix: "@turns:",
     },
+    {
+      id: "mechanics",
+      label: "Mechanics",
+      description: "CyberCantina rules, CARE, d20, travel & memory",
+      prefix: "@mechanics:",
+    },
   ]);
 
 export interface GmMentionTrigger {
@@ -59,7 +65,7 @@ export interface GmMentionTrigger {
 }
 
 const CATEGORY_PREFIX_RE =
-  /^(characters|lore|locations|containers|turns):([\s\S]*)$/i;
+  /^(characters|lore|locations|containers|turns|mechanics):([\s\S]*)$/i;
 
 function isWordBoundaryBeforeAt(ch: string | undefined): boolean {
   if (!ch) return true;
@@ -174,7 +180,7 @@ export function shouldPopCategoryToBrowse(
   const clamped = Math.max(0, Math.min(cursorPos, text.length));
   const before = text.slice(0, clamped);
   const match =
-    /(?:^|[\s(\["'])(@(?:characters|lore|locations|containers|turns):)$/i.exec(
+    /(?:^|[\s(\["'])(@(?:characters|lore|locations|containers|turns|mechanics):)$/i.exec(
       before
     );
   if (!match) return null;

@@ -324,6 +324,7 @@ describe("GM Talk UI components", () => {
     expect(browseHtml).toContain("Locations");
     expect(browseHtml).toContain("Containers");
     expect(browseHtml).toContain("Turns");
+    expect(browseHtml).toContain("Mechanics");
 
     const turnsHtml = renderToStaticMarkup(
       <GmMentionPopover
@@ -354,6 +355,36 @@ describe("GM Talk UI components", () => {
     expect(turnsHtml).toContain("Turn 2");
     expect(turnsHtml).toContain("Inspecting the neon hatch");
     expect(turnsHtml).toContain("Bookmarked");
+
+    const mechanicsPopoverHtml = renderToStaticMarkup(
+      <GmMentionPopover
+        trigger={{
+          mode: "category",
+          category: "mechanics",
+          query: "composure",
+          tokenStart: 0,
+          tokenEnd: 20,
+        }}
+        items={[
+          {
+            kind: "mechanic",
+            category: "mechanics",
+            id: "care-mood-composure",
+            label: "Mood & Composure (PAD · Layer 2)",
+            subtitle: "Layer 2 tracks current emotional coordinates.",
+            badge: "CARE",
+          },
+        ]}
+        loading={false}
+        selectedIndex={0}
+        onHoverIndex={vi.fn()}
+        onSelectCategory={vi.fn()}
+        onSelectCandidate={vi.fn()}
+      />
+    );
+    expect(mechanicsPopoverHtml).toContain("gm-mention-icon--cyan");
+    expect(mechanicsPopoverHtml).toContain("Mood &amp; Composure");
+    expect(mechanicsPopoverHtml).toContain("CARE");
   });
 
   it("renders 5th GM Talk behavior card and Include GM conversations export toggle (unchecked by default)", () => {
@@ -555,5 +586,71 @@ describe("GM Talk UI components", () => {
     expect(streamingToolHtml).toContain("gm-talk-notice");
     expect(streamingToolHtml).toContain("does not support native tools");
     expect(streamingToolHtml).toContain("Dismiss notice");
+  });
+
+  it("renders valid mechanic source chips as interactive Codex deep-link buttons while keeping lore/turn/unknown chips static", () => {
+    const sourcesHtml = renderToStaticMarkup(
+      <GmTalkDrawer
+        campaignTitle="Kowloon Run"
+        worldName="New Kowloon"
+        unlockLore={false}
+        isClosing={false}
+        isExpanded={false}
+        isCampaignStreaming={false}
+        messages={[
+          {
+            id: "gm_m1",
+            campaign_id: "camp_1",
+            anchor_turn_id: "turn_1",
+            role: "assistant",
+            content: "Composure shields PAD swings above 35%.",
+            mentions: [],
+            sources: [
+              {
+                kind: "mechanic",
+                id: "care-mood-composure",
+                label: "Mood & Composure (PAD · Layer 2)",
+              },
+              {
+                kind: "mechanic",
+                id: "unknown-invalid-id",
+                label: "Stale Topic",
+              },
+              {
+                kind: "lore",
+                id: "lore_1",
+                label: "Helios Blackout",
+              },
+            ],
+            created_at: "2026-11-26T00:00:00Z",
+          },
+        ]}
+        isLoading={false}
+        isStreaming={false}
+        streamingText=""
+        streamingSources={[]}
+        error={null}
+        clearConfirm={false}
+        isClearing={false}
+        copiedId={null}
+        expandedSources={{ gm_m1: true }}
+        modelMeta={null}
+        onInsertAtTrigger={vi.fn()}
+        onClearChat={vi.fn()}
+        onCopyMessage={vi.fn()}
+        onToggleSources={vi.fn()}
+        onOpenMechanicsHelp={vi.fn()}
+        onDismissError={vi.fn()}
+        onToggleExpanded={vi.fn()}
+        onMinimize={vi.fn()}
+      />
+    );
+
+    expect(sourcesHtml).toContain(
+      '<button type="button" class="gm-source-chip gm-source-chip--interactive"'
+    );
+    expect(sourcesHtml).toContain("Open Mood &amp; Composure (PAD · Layer 2) in Game Mechanics");
+    expect(sourcesHtml).toContain('<span class="gm-source-chip">mechanic: Stale Topic</span>');
+    expect(sourcesHtml).toContain('<span class="gm-source-chip">lore: Helios Blackout</span>');
   });
 });

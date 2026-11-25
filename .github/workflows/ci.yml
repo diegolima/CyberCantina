@@ -53,8 +53,8 @@ jobs:
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
-      - name: Check boundaries, CSS audit, build, and run tests
-        run: npm --prefix frontend run arch:check && npm --prefix frontend run css:audit && npm --prefix frontend run build && npm --prefix frontend test
+      - name: Check boundaries, mechanics catalog sync, CSS audit, build, and run tests
+        run: npm --prefix frontend run mechanics:check && npm --prefix frontend run arch:check && npm --prefix frontend run css:audit && npm --prefix frontend run build && npm --prefix frontend test
       - name: Install Playwright Chromium
         working-directory: frontend
         run: npx playwright install --with-deps chromium

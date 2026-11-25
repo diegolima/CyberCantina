@@ -428,6 +428,12 @@ erDiagram
 | `backend/app/engine/context/zone2_episodic.py` | Zone 2 LOD episodic memory rendering, vector recall packing, and compacted turn elevation. |
 | `backend/app/engine/context/zone4_ephemeral.py` | Zone 4 ephemeral tail frame and elapsed snapshot state projection. |
 
+#### `app.engine.game_mechanics`
+
+| File | Summary |
+| :--- | :--- |
+| `backend/app/engine/game_mechanics.py` | Pure static loader, trigger matcher, scorer, and formatters for CyberCantina Game Mechanics. |
+
 #### `app.engine.gm_codex`
 
 | File | Summary |

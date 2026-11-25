@@ -21,6 +21,7 @@ from app.engine.gm_codex import (
 )
 from app.engine.gm_talk import (
     ReasoningTagStreamFilter,
+    apply_non_tool_mechanics_fallback,
     build_gm_context_and_messages,
     build_offline_gm_reply,
     is_offline_fallback_enabled,
@@ -50,12 +51,23 @@ from app.schemas.gm import (
     GmMentionsResponse,
     GmMessagesResponse,
     GmProposalActionRequest,
+    GmSourceRef,
 )
 from app.security.log_sanitize import sanitize_log_value
 
 
 def _sse_packet(event: str, data: dict[str, object]) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+def _append_unique_sources(target: list[GmSourceRef], incoming: list[GmSourceRef]) -> None:
+    """Append deduplicated `GmSourceRef` items preserving original insertion order."""
+    seen = {(s.kind, s.id) for s in target}
+    for src in incoming:
+        key = (src.kind, src.id)
+        if key not in seen:
+            seen.add(key)
+            target.append(src)
 
 
 @router.get("/api/campaigns/{campaign_id}/gm/messages", response_model=GmMessagesResponse)
@@ -162,6 +174,7 @@ async def stream_campaign_gm_chat(
                 context_size=int(gm_profile.context_size or 8192),
                 gm_max_tokens=gm_profile.max_tokens,
                 resolved_prompts=resolved_prompts,
+                gm_tools_enabled=gm_tools_enabled,
             )
 
             yield _sse_packet(
@@ -198,11 +211,7 @@ async def stream_campaign_gm_chat(
                         if ev_kind == "tool_status":
                             yield _sse_packet("tool_status", ev_val)
                         elif ev_kind == "extra_sources":
-                            seen_src = {(s.kind, s.id) for s in merged_sources}
-                            for src in ev_val:
-                                if (src.kind, src.id) not in seen_src:
-                                    seen_src.add((src.kind, src.id))
-                                    merged_sources.append(src)
+                            _append_unique_sources(merged_sources, list(ev_val))
                         elif ev_kind == "proposals":
                             proposals = list(ev_val)
                         elif ev_kind == "final_text":
@@ -240,11 +249,15 @@ async def stream_campaign_gm_chat(
                             )
                         },
                     )
+                    fallback_sources = apply_non_tool_mechanics_fallback(prep, req.message)
+                    _append_unique_sources(merged_sources, fallback_sources)
                     run_phase1_flow = True
                 except (RelayUnavailableError, RelayRemoteError, asyncio.CancelledError):
                     raise
                 except Exception as exc:
                     if is_offline_fallback_enabled() and not chunks:
+                        fallback_sources = apply_non_tool_mechanics_fallback(prep, req.message)
+                        _append_unique_sources(merged_sources, fallback_sources)
                         run_phase1_flow = True
                     else:
                         logger.warning(
