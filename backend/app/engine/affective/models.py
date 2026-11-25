@@ -44,6 +44,9 @@ LAMBDA_DOMINANCE: Final[float] = LN2 / 180.0     # 3-hour half-life
 LAMBDA_COMPOSURE_REST: Final[float] = LN2 / 240.0  # 4-hour safe rest half-life
 
 
+LAMBDA_COMPOSURE_STEADY: Final[float] = LN2 / 45.0  # 45-minute half-life for active steadying up to threat-scaled equilibrium
+
+
 LAMBDA_APPRAISAL_DECAY: Final[float] = LN2 / 30.0  # 30-minute acute threat decay
 
 

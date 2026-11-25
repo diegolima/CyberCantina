@@ -449,8 +449,8 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
     ],
     howItChanges: [
       "Phase 3 emotional tags (<feeling> tone, intensity, agency) nudge PAD coordinates through a composure-gated filter.",
-      "Acute threat and shocks drain Composure depending on vulnerability and Temperament resilience.",
-      "Quiet scenes and /wait time advances allow Arousal (45m half-life), Dominance (3h), Composure (4h), and Valence (6h) to recover toward baseline.",
+      "Acute threat and shocks drain Composure toward a threat- and coping-scaled equilibrium floor rather than flatlining permanently at 0%.",
+      "Coping-assisted steadying helps characters recover part of their poise during lulls and short /wait pauses under moderate threat, while calm scenes and longer /wait advances restore Arousal (45m half-life), Dominance (3h), Composure (4h), and Valence (6h) toward baseline.",
     ],
     effectOnPlay: [
       "High Composure dampens wild turn-to-turn emotional swings and lets an NPC project a cool Outward Demeanor even while inwardly uneasy.",
@@ -645,7 +645,8 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
     ],
     effectOnPlay: [
       "Strong positive or negative bonds change tone, candor, willingness to share secrets, and whether an NPC accepts /party invitations.",
-      "Negative shocks hit harder than positive compliments (scaled by Temperament negativity ratio), and high Grievance blocks cheap reconciliation.",
+      "Un-aggrieved guarded strangers (including Guarded Paranoiacs) thaw slowly through consistent positive actions, whereas once genuine grievance or deep hostility sets in, Negative Sentiment Override blocks cheap flattery until costly proof or reconciliation.",
+      "Negative shocks hit harder than positive compliments (scaled by Temperament negativity ratio).",
       "Click any bond card on a character's Current tab to expand its turn-by-turn line chart (toggle Grievance/Obligation pills, switch All / Last 25 on long branches, and inspect per-turn episodic notes).",
     ],
     underTheHood: {

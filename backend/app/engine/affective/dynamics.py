@@ -30,6 +30,7 @@ from app.engine.affective.models import (
     LAMBDA_AROUSAL,
     LAMBDA_BOND_CONSOLIDATION,
     LAMBDA_COMPOSURE_REST,
+    LAMBDA_COMPOSURE_STEADY,
     LAMBDA_DOMINANCE,
     LAMBDA_VALENCE,
     ORDINAL_TO_OBLIGATION_DELTA,
@@ -94,6 +95,21 @@ def project_care_to_minute(
             0.0,
             1.0,
         )
+    elif new_threat < 0.85:
+        c_eq = _composure_equilibrium(
+            new_threat,
+            care_state.appraisal.coping,
+            psyche.temperament.composure_resilience,
+        )
+        if care_state.composure < c_eq:
+            c_new = _clamp(
+                care_state.composure
+                + (c_eq - care_state.composure) * (1.0 - math.exp(-LAMBDA_COMPOSURE_STEADY * dt)),
+                0.0,
+                1.0,
+            )
+        else:
+            c_new = care_state.composure
     else:
         c_new = care_state.composure
 
@@ -223,6 +239,38 @@ def kalman_mood_step(
     )
 
 
+def _composure_equilibrium(
+    threat: float,
+    coping: float,
+    composure_resilience: float,
+) -> float:
+    """Threat- and coping-scaled composure floor in [0.0, 1.0]."""
+    res_factor = _clamp(composure_resilience, 0.30, 2.50)
+    vulnerability = _clamp((1.0 - coping) * 0.5, 0.0, 1.0)
+    pressure = _clamp(
+        _clamp(threat, 0.0, 1.0) * (0.35 + 0.85 * vulnerability) / math.sqrt(res_factor),
+        0.0,
+        1.0,
+    )
+    return _clamp(1.0 - pressure, 0.0, 1.0)
+
+
+def _coping_steady_recovery(
+    prior_composure: float,
+    c_eq: float,
+    *,
+    coping: float,
+    resilience: float,
+    dt_minutes: int,
+) -> float:
+    """Active steadying step toward c_eq scaled by coping and temperament resilience."""
+    coping_scale = 0.65 + 0.55 * _clamp((coping + 1.0) * 0.5, 0.0, 1.0)
+    steady_rate = LAMBDA_COMPOSURE_STEADY * coping_scale * math.sqrt(
+        _clamp(resilience, 0.30, 2.50)
+    )
+    return (c_eq - prior_composure) * (1.0 - math.exp(-steady_rate * max(dt_minutes, 2)))
+
+
 def update_composure_step(
     prior_composure: float,
     *,
@@ -232,21 +280,41 @@ def update_composure_step(
     composure_resilience: float,
     shock_drain: float = 0.0,
 ) -> float:
-    """Apply log-capped acute turn strain and low-threat restorative recovery."""
+    """Apply equilibrium-bounded turn strain, shock drain, and coping-assisted steadying."""
     dt = max(0, int(dt_minutes))
     resilience = max(0.30, composure_resilience)
     strain_factor = 1.0 + math.log(1.0 + min(float(dt), 60.0) / 10.0)
     vulnerability = _clamp((1.0 - coping) * 0.5, 0.0, 1.0)
-    drain = (
-        (COMPOSURE_STRAIN_ETA / resilience) * threat * vulnerability * strain_factor
-        + shock_drain
-    )
-    recover = (
-        (1.0 - prior_composure) * (1.0 - math.exp(-LAMBDA_COMPOSURE_REST * max(dt, 1)))
-        if threat < 0.25
-        else 0.0
-    )
-    return round(_clamp(prior_composure - drain + recover, 0.0, 1.0), 4)
+    c_eq = _composure_equilibrium(threat, coping, resilience)
+
+    raw_strain = (COMPOSURE_STRAIN_ETA / resilience) * threat * vulnerability * strain_factor
+    strain_drain = min(max(0.0, prior_composure - c_eq), raw_strain)
+
+    recover = 0.0
+    if threat < 0.25:
+        rest_recover = (1.0 - prior_composure) * (
+            1.0 - math.exp(-LAMBDA_COMPOSURE_REST * max(dt, 1))
+        )
+        recover = rest_recover
+        if shock_drain == 0.0 and prior_composure < c_eq and coping >= 0.0:
+            steady_recover = _coping_steady_recovery(
+                prior_composure,
+                c_eq,
+                coping=coping,
+                resilience=resilience,
+                dt_minutes=dt,
+            )
+            recover = max(rest_recover, steady_recover)
+    elif shock_drain == 0.0 and threat < 0.85 and prior_composure < c_eq:
+        recover = _coping_steady_recovery(
+            prior_composure,
+            c_eq,
+            coping=coping,
+            resilience=resilience,
+            dt_minutes=dt,
+        )
+
+    return round(_clamp(prior_composure - strain_drain - shock_drain + recover, 0.0, 1.0), 4)
 
 
 def gottman_effective_thresholds(
@@ -283,13 +351,20 @@ def _gottman_influence(
     theta_pos: float,
     s_pos: float,
     s_neg: float,
+    allow_stranger_thaw: bool = False,
 ) -> float:
     """Piecewise Gottman influence with strict I(0) == 0 dead-zone invariance.
 
     Severe ruptures (u <= -0.70) shatter Positive Sentiment Override buffering.
+    When allow_stranger_thaw is True (un-aggrieved neutral/stranger bonds), positive
+    stimuli slowly build rapport even for high-threshold temperaments like 'paranoiac'.
     """
-    if u > theta_pos:
-        return s_pos * (u - theta_pos)
+    if u > 0.0:
+        if allow_stranger_thaw:
+            return s_pos * max(u - theta_pos, u * _clamp(1.0 - theta_pos, 0.25, 1.0))
+        if u > theta_pos:
+            return s_pos * (u - theta_pos)
+        return 0.0
     eff_theta_neg = max(theta_neg, theta_neg_base) if u <= -0.70 else theta_neg
     if u < eff_theta_neg:
         return s_neg * (u - eff_theta_neg)
@@ -315,7 +390,8 @@ def apply_gottman_relational_event(
     temperament: TemperamentConfig,
 ) -> tuple[RelationalEdge, tuple[float, float, float]]:
     """Apply a single RelationalEventSpec to edge. Returns (updated_edge, (u_w, u_r, u_t))."""
-    _, theta_neg, theta_pos = gottman_effective_thresholds(edge, temperament)
+    rapport, theta_neg, theta_pos = gottman_effective_thresholds(edge, temperament)
+    allow_stranger_thaw = not (edge.grievance >= 0.15 or rapport <= -0.35)
     one_minus_r = 1.0 - temperament.relational_inertia
     s_pos = GOTTMAN_BASE_POS_SLOPE
     s_neg = GOTTMAN_BASE_POS_SLOPE * temperament.negativity_ratio
@@ -333,6 +409,7 @@ def apply_gottman_relational_event(
         theta_pos=theta_pos,
         s_pos=s_pos,
         s_neg=s_neg * 0.75,
+        allow_stranger_thaw=allow_stranger_thaw,
     )
     new_r = _weber_fechner_step(edge.respect, one_minus_r * inf_r, max_step=0.55)
 
@@ -347,6 +424,7 @@ def apply_gottman_relational_event(
         theta_pos=theta_pos,
         s_pos=s_pos,
         s_neg=s_neg,
+        allow_stranger_thaw=allow_stranger_thaw,
     )
     new_w = _weber_fechner_step(edge.warmth, one_minus_r * inf_w, max_step=0.55)
 
@@ -357,6 +435,7 @@ def apply_gottman_relational_event(
         theta_pos=theta_pos,
         s_pos=s_pos,
         s_neg=s_neg,
+        allow_stranger_thaw=allow_stranger_thaw,
     )
     new_t = _weber_fechner_step(edge.trust, one_minus_r * inf_t, max_step=0.55)
 

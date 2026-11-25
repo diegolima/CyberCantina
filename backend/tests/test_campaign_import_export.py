@@ -13,6 +13,12 @@ from app import main as main_module
 from app.db.repository import CantinaRepository
 from app.db.vector_math import current_embedding_fingerprint
 from app.routers import import_export as import_export_router
+from app.schemas.affective import (
+    AffectiveCareState,
+    RelationalEdge,
+    RelationalEventSpec,
+    SituationalAppraisal,
+)
 from app.schemas.character import (
     BaselinePsyche,
     CharacterStateSnapshot,
@@ -21,8 +27,22 @@ from app.schemas.character import (
     MemoryShard,
     VoiceAnchor,
 )
+from app.schemas.party import (
+    PartyActionSpec,
+    PartyEventDelta,
+    PartyInviteOutcome,
+)
 from app.schemas.persona import PersonaCreatePayload
 from app.schemas.turn import (
+    ArbitrationRulingRecord,
+    CharacterAgentDelta,
+    CharacterCheckSpec,
+    CharacterChoiceOption,
+    CharacterChoiceSet,
+    ChoiceResolution,
+    DiceRollResult,
+    ExtractedCharacterMemory,
+    PostTurnStateDelta,
     PreTurnAnalysis,
     WorldStateSnapshot,
 )
@@ -562,5 +582,337 @@ def test_password_protected_zcc_unlock_and_vector_reembed_on_fingerprint_mismatc
             assert len(vec_rows[0]["embedding_blob"]) > 0
         finally:
             conn.close()
+    finally:
+        main_module.app.dependency_overrides.clear()
+
+
+def test_campaign_zcc_remaps_memories_care_relations_and_turn_payloads(
+    empty_repo: CantinaRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify .zcc export/import branch-filters & remaps campaign_character_memories, CARE relations, and turn JSON payloads."""
+    reset_rate_limiters()
+    u1 = empty_repo.create_user(username="remap_u1", display_name="Author")
+    u2 = empty_repo.create_user(username="remap_u2", display_name="Importer")
+    ids = _build_rich_campaign(empty_repo, u1.id)
+
+    char1_id = ids["char1_id"]
+    char2_id = ids["char2_id"]
+    camp_id = ids["campaign_id"]
+    root_tid = ids["root_turn_id"]
+    t1a_id = ids["t1a_id"]
+    t1b_id = ids["t1b_id"]
+
+    # Enrich t1a with full pre_turn, post_turn, wrapped cognitions, CARE relations toward char2, and anchored memories
+    world = empty_repo.get_world(ids["world_id"])
+    loc1_id = world.locations[1].id
+    rich_pre = PreTurnAnalysis(
+        spatial_intent="stay",
+        active_speaker_id=char1_id,
+        speaker_order=[char1_id, char2_id],
+        character_checks=[
+            CharacterCheckSpec(
+                character_id=char1_id,
+                requires_roll=True,
+                action_description="Signal Mina across the dock",
+                skill_or_approach="Stealth",
+            )
+        ],
+        character_rolls={
+            char1_id: DiceRollResult(
+                character_id=char1_id,
+                character_name="Vex Mercer",
+                action_description="Signal Mina",
+                skill_or_approach="Stealth",
+                d20_raw=15,
+                modifier=2,
+                total=17,
+                difficulty_class=12,
+                outcome_tier="Clean Success",
+                narrative_directive="Cleanly signaled.",
+            )
+        },
+        character_choices={
+            char1_id: CharacterChoiceSet(options=[CharacterChoiceOption(label="Signal Mina")])
+        },
+        choice_resolutions={
+            char1_id: ChoiceResolution(character_id=char1_id, status="mandatory")
+        },
+        party_action=PartyActionSpec(kind="invite", target_character_ids=[char2_id]),
+    )
+    rich_post = PostTurnStateDelta(
+        transition_type="move_existing",
+        target_location_id=loc1_id,
+        character_names={char1_id: "Vex Mercer", char2_id: "Mina Sato"},
+        compacted_character_ids=[char1_id],
+        character_memories=[
+            ExtractedCharacterMemory(
+                character_id=char1_id,
+                title="Signal at Warehouse 9",
+                content="Mina held the perimeter without hesitation.",
+                significance="bonding",
+            )
+        ],
+        character_deltas={
+            char1_id: CharacterAgentDelta(
+                mood_label="Steady trust",
+                location_transition="move_to_neighbor",
+                target_location_id=loc1_id,
+                relational_events=[
+                    RelationalEventSpec(
+                        target=char2_id,
+                        warmth_shift="mild_pos",
+                        trust_shift="mild_pos",
+                        note="Mina covered my blind spot.",
+                    )
+                ],
+                stance_updates={char2_id: "Reliable rig watcher."},
+                new_memories=[
+                    ExtractedCharacterMemory(
+                        character_id=char1_id,
+                        title="Signal at Warehouse 9",
+                        content="Mina held the perimeter without hesitation.",
+                        significance="bonding",
+                    )
+                ],
+                persona_secrets_disclosed_to={char2_id: ["past_alias"]},
+            )
+        },
+        arbitration_rulings=[
+            ArbitrationRulingRecord(
+                item_name="Manifest Datapad",
+                reason="multi_claim",
+                claimant_ids=[char1_id, char2_id],
+                prior_holder_id=char2_id,
+                winner_id=char1_id,
+                winner_label="Vex Mercer",
+                rationale="Vex kept custody.",
+            )
+        ],
+        party_event_delta=PartyEventDelta(
+            action_kind="invite",
+            invite_outcomes=[
+                PartyInviteOutcome(
+                    character_id=char2_id,
+                    character_name="Mina Sato",
+                    decision="accept",
+                    reason="Trusted Vex's lead.",
+                )
+            ],
+            followed_player_ids=[char2_id],
+        ),
+    )
+    rich_care = AffectiveCareState(
+        valence=0.1,
+        arousal=0.45,
+        dominance=0.15,
+        composure=0.78,
+        appraisal=SituationalAppraisal(threat=0.2, coping=0.4),
+        relations={
+            "user": RelationalEdge(target_id="user", warmth=0.25, trust=0.2, episodic_note="Solid run."),
+            char2_id: RelationalEdge(target_id=char2_id, warmth=0.42, trust=0.55, episodic_note="Has my back."),
+        },
+    )
+    cog_payload = {
+        "cognitions": {
+            char1_id: CognitionBlock(
+                recall="- Mina looped the cameras.",
+                feeling="Alert",
+                want="Reach Warehouse 9",
+                plan="- Signal Mina",
+            ).model_dump()
+        },
+        "character_names": {char1_id: "Vex Mercer"},
+    }
+    shards = [
+        MemoryShard(id="mem_backstory", title="Lost Cargo", content="Lost a crate.", origin="backstory").model_dump(),
+        MemoryShard(
+            id="mem_superseded",
+            title="Initial Suspicion",
+            content="Doubted the courier at the gate.",
+            origin="clerk_ephemeral",
+            significance="revelation",
+            anchor_turn_id=root_tid,
+            created_at_depth=0,
+            superseded_at_turn_id=t1a_id,
+        ).model_dump(),
+        MemoryShard(
+            id="mem_active",
+            title="Signal at Warehouse 9",
+            content="Mina held the perimeter without hesitation.",
+            origin="clerk_ephemeral",
+            significance="bonding",
+            anchor_turn_id=t1a_id,
+            created_at_depth=1,
+        ).model_dump(),
+        MemoryShard(
+            id="mem_alt_branch",
+            title="Refused at Harbor",
+            content="Walked away on the alternate swipe.",
+            origin="clerk_ephemeral",
+            significance="betrayal",
+            anchor_turn_id=t1b_id,
+            created_at_depth=1,
+        ).model_dump(),
+    ]
+
+    conn = empty_repo._connect()
+    try:
+        conn.execute(
+            """
+            UPDATE turn_nodes
+            SET pre_turn_json = ?, post_turn_json = ?, cognitions_json = ?
+            WHERE id = ?
+            """,
+            (rich_pre.model_dump_json(), rich_post.model_dump_json(), json.dumps(cog_payload), t1a_id),
+        )
+        conn.execute(
+            """
+            UPDATE character_states
+            SET affective_state_json = ?, relationship_notes_json = ?
+            WHERE turn_id = ? AND character_id = ?
+            """,
+            (
+                rich_care.model_dump_json(),
+                json.dumps({"user": "Solid run.", char2_id: "Has my back."}),
+                t1a_id,
+                char1_id,
+            ),
+        )
+        # Ensure char2 is a campaign participant on root/active branch for active export testing too
+        conn.execute(
+            "UPDATE campaign_characters SET joined_at_turn_id = NULL WHERE campaign_id = ? AND character_id = ?",
+            (camp_id, char2_id),
+        )
+        conn.execute(
+            "UPDATE campaign_character_memories SET memory_shards_json = ? WHERE campaign_id = ? AND character_id = ?",
+            (json.dumps(shards), camp_id, char1_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    try:
+        client_u1 = _make_client(empty_repo, monkeypatch, u1.id)
+        # 1. Active export prunes alt-branch memory shards
+        exp_active = client_u1.post(
+            f"/api/export/campaign/{camp_id}",
+            json={"timeline_scope": "active", "strip_bookmark_comments": False},
+        )
+        assert exp_active.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(exp_active.content), "r") as zf:
+            camp_raw = json.loads(zf.read("campaigns.json"))[0]
+            exported_shards = json.loads(camp_raw["campaign_character_memories"][0]["memory_shards_json"])
+            assert [s["id"] for s in exported_shards] == ["mem_backstory", "mem_superseded", "mem_active"]
+
+        # 2. Full export + import remaps all memory anchors, CARE relations, pre_turn, post_turn, and cognitions
+        exp_full = client_u1.post(
+            f"/api/export/campaign/{camp_id}",
+            json={"timeline_scope": "full", "strip_bookmark_comments": False},
+        )
+        assert exp_full.status_code == 200
+
+        client_u2 = _make_client(empty_repo, monkeypatch, u2.id)
+        ins = client_u2.post(
+            "/api/import/inspect",
+            files={"file": ("full.zcc", exp_full.content, "application/octet-stream")},
+        ).json()
+        commit = client_u2.post(
+            "/api/import/commit",
+            json={"staged_token": ins["staged_token"], "import_campaign_assets_as_standalone": False},
+        ).json()
+        assert commit["success"] is True
+
+        imp_camp = empty_repo.list_campaigns(owner_id=u2.id)[0]
+        bundle = empty_repo.get_campaign_state_bundle(imp_camp.id, owner_id=u2.id)
+        imp_char1_id = imp_camp.character_id
+        other_chars = [cid for cid in bundle.campaign.participant_character_ids if cid != imp_char1_id]
+        assert len(other_chars) == 1
+        imp_char2_id = other_chars[0]
+        assert imp_char1_id != char1_id
+        assert imp_char2_id != char2_id
+
+        imp_t1a = bundle.active_branch_turns[-1]
+        imp_t1b = next(t for t in bundle.all_turn_nodes if t.id not in {b.id for b in bundle.active_branch_turns})
+        imp_loc1_id = bundle.active_location.id
+
+        # Active branch memories returned cleanly with remapped anchor_turn_id / superseded_at_turn_id!
+        valid_active_ids = {t.id for t in bundle.active_branch_turns}
+        active_mems = empty_repo.get_campaign_character_memories(
+            imp_camp.id, imp_char1_id, valid_turn_ids=valid_active_ids
+        )
+        assert active_mems is not None
+        assert [m.id for m in active_mems] == ["mem_backstory", "mem_active"]
+        assert active_mems[1].anchor_turn_id == imp_t1a.id
+
+        raw_mems = empty_repo.get_raw_campaign_character_memories(imp_camp.id, imp_char1_id)
+        by_mid = {m.id: m for m in raw_mems}
+        assert by_mid["mem_superseded"].superseded_at_turn_id == imp_t1a.id
+        assert by_mid["mem_alt_branch"].anchor_turn_id == imp_t1b.id
+
+        # CARE Layer 4 relations key & target_id remapped
+        imp_care = imp_t1a.character_states[imp_char1_id].care_state
+        assert imp_care is not None
+        assert imp_char2_id in imp_care.relations
+        assert char2_id not in imp_care.relations
+        assert imp_care.relations[imp_char2_id].target_id == imp_char2_id
+
+        # PreTurnAnalysis, PostTurnStateDelta, and wrapped cognitions remapped
+        assert imp_t1a.pre_turn.active_speaker_id == imp_char1_id
+        assert imp_t1a.pre_turn.speaker_order == [imp_char1_id, imp_char2_id]
+        assert imp_char1_id in imp_t1a.pre_turn.character_rolls
+        assert imp_t1a.pre_turn.character_rolls[imp_char1_id].character_id == imp_char1_id
+        assert imp_t1a.pre_turn.resolved_roll is not None
+        assert imp_t1a.pre_turn.resolved_roll.character_id == imp_char1_id
+        assert imp_t1a.pre_turn.party_action is not None
+        assert imp_t1a.pre_turn.party_action.target_character_ids == [imp_char2_id]
+
+        assert imp_t1a.post_turn is not None
+        assert imp_t1a.post_turn.target_location_id == imp_loc1_id
+        assert imp_char1_id in imp_t1a.post_turn.character_deltas
+        assert imp_t1a.post_turn.character_deltas[imp_char1_id].relational_events[0].target == imp_char2_id
+        assert imp_char2_id in imp_t1a.post_turn.character_deltas[imp_char1_id].stance_updates
+        assert imp_t1a.post_turn.character_deltas[imp_char1_id].new_memories[0].character_id == imp_char1_id
+        assert imp_t1a.post_turn.character_memories[0].character_id == imp_char1_id
+        assert imp_t1a.post_turn.arbitration_rulings[0].winner_id == imp_char1_id
+        assert imp_t1a.post_turn.party_event_delta is not None
+        assert imp_t1a.post_turn.party_event_delta.followed_player_ids == [imp_char2_id]
+        assert imp_char1_id in imp_t1a.cognitions
+        assert imp_char1_id in imp_t1a.cognition_character_names
+
+        # 3. Legacy archive with unmappable anchor_turn_id / superseded_at_turn_id drops orphan and clears unmapped supersedure
+        buf = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(exp_active.content), "r") as zin, zipfile.ZipFile(buf, "w") as zout:
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                if item.filename == "campaigns.json":
+                    camps = json.loads(data)
+                    cur_shards = json.loads(camps[0]["campaign_character_memories"][0]["memory_shards_json"])
+                    cur_shards[2]["superseded_at_turn_id"] = "turn_orphan_sup"
+                    cur_shards.append(
+                        MemoryShard(
+                            id="mem_orphan",
+                            title="Ghost Branch",
+                            content="Should be dropped.",
+                            origin="clerk_ephemeral",
+                            anchor_turn_id="turn_orphan_missing",
+                        ).model_dump()
+                    )
+                    camps[0]["campaign_character_memories"][0]["memory_shards_json"] = json.dumps(cur_shards)
+                    data = json.dumps(camps).encode("utf-8")
+                zout.writestr(item, data)
+
+        ins_leg = client_u2.post(
+            "/api/import/inspect",
+            files={"file": ("legacy.zcc", buf.getvalue(), "application/octet-stream")},
+        ).json()
+        commit_leg = client_u2.post(
+            "/api/import/commit",
+            json={"staged_token": ins_leg["staged_token"], "import_campaign_assets_as_standalone": False},
+        ).json()
+        assert commit_leg["success"] is True
+        leg_camp = next(c for c in empty_repo.list_campaigns(owner_id=u2.id) if c.id != imp_camp.id)
+        leg_mems = empty_repo.get_raw_campaign_character_memories(leg_camp.id, leg_camp.character_id)
+        assert [m.id for m in leg_mems] == ["mem_backstory", "mem_superseded", "mem_active"]
+        assert leg_mems[2].superseded_at_turn_id is None
     finally:
         main_module.app.dependency_overrides.clear()

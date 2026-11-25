@@ -21,6 +21,7 @@ from app.engine.affective_engine import (
     render_zone4_affective_block,
     resolve_post_turn_care_state,
     seed_initial_care_state,
+    update_composure_step,
 )
 from app.schemas.affective import (
     CategoricalFeelingImpulse,
@@ -732,4 +733,141 @@ def test_portrait_emotion_hysteresis_prevents_boundary_flicker():
     assert derive_active_emotion(valence=-0.45, arousal=0.65, dominance=0.01, prior_emotion="afraid") == "afraid"
     assert derive_active_emotion(valence=-0.45, arousal=0.65, dominance=-0.10, prior_emotion="angry") == "afraid"
     assert derive_active_emotion(valence=-0.45, arousal=0.65, dominance=0.20, prior_emotion="afraid") == "angry"
+
+
+def test_paranoiac_stranger_thaws_slowly_while_grievance_reengages_dead_zone():
+    """Un-aggrieved paranoiac strangers thaw gradually on mild_pos, while grievance locks cheap flattery."""
+    psyche = _make_psyche("paranoiac")
+    care = seed_initial_care_state(psyche)
+    edge = care.relations["user"]
+    assert edge.trust < -0.20
+    assert edge.warmth < -0.10
+    assert edge.grievance == pytest.approx(0.0)
+
+    # Zero-stimulus invariance still holds strictly
+    zero_edge, _ = apply_gottman_relational_event(
+        edge, RelationalEventSpec(target="user"), psyche.temperament
+    )
+    assert zero_edge == edge
+
+    helpful = RelationalEventSpec(
+        target="user",
+        warmth_shift="mild_pos",
+        respect_shift="mild_pos",
+        trust_shift="mild_pos",
+        note="Shared salvage and kept steady watch.",
+    )
+    first_step, _ = apply_gottman_relational_event(edge, helpful, psyche.temperament)
+    assert 0.015 <= (first_step.trust - edge.trust) <= 0.045
+    assert 0.015 <= (first_step.warmth - edge.warmth) <= 0.045
+    assert 0.015 <= (first_step.respect - edge.respect) <= 0.045
+
+    cur = first_step
+    for _ in range(14):
+        cur, _ = apply_gottman_relational_event(cur, helpful, psyche.temperament)
+    assert cur.trust > 0.10
+    assert cur.warmth > 0.12
+    assert cur.respect > 0.25
+
+    # Once slighted (grievance >= 0.15), Negative Sentiment Override re-engages hard dead-zone
+    slight = RelationalEventSpec(
+        target="user",
+        warmth_shift="mild_neg",
+        trust_shift="mild_neg",
+        grievance_shift="slighted",
+        note="Cut me loose in the dark.",
+    )
+    aggrieved, _ = apply_gottman_relational_event(cur, slight, psyche.temperament)
+    assert aggrieved.grievance >= 0.15
+
+    flattery = RelationalEventSpec(
+        target="user",
+        warmth_shift="mild_pos",
+        trust_shift="mild_pos",
+        grievance_shift="eased",
+        note="Offered a quick apology.",
+    )
+    after_flattery = aggrieved
+    for _ in range(5):
+        after_flattery, _ = apply_gottman_relational_event(
+            after_flattery, flattery, psyche.temperament
+        )
+    assert after_flattery.warmth == pytest.approx(aggrieved.warmth, abs=1e-6)
+    assert after_flattery.trust == pytest.approx(aggrieved.trust, abs=1e-6)
+    assert after_flattery.grievance == pytest.approx(aggrieved.grievance, abs=1e-6)
+
+    costly = RelationalEventSpec(
+        target="user",
+        warmth_shift="strong_pos",
+        trust_shift="strong_pos",
+        grievance_shift="reconciled",
+        note="Took the hit to pull me clear.",
+    )
+    reconciled, _ = apply_gottman_relational_event(
+        after_flattery, costly, psyche.temperament
+    )
+    assert reconciled.trust > aggrieved.trust + 0.05
+    assert reconciled.warmth > aggrieved.warmth + 0.05
+    assert reconciled.grievance < aggrieved.grievance
+
+
+def test_composure_equilibrium_steadying_and_short_rest_under_threat():
+    """Sustained non-critical threat settles near equilibrium rather than 0%, while shocks still shatter it."""
+    psyche = _make_psyche("paranoiac")
+    res = psyche.temperament.composure_resilience
+    comp = 0.85
+
+    # 1. Sustained high threat + strained coping settles near cracking equilibrium (~0.20-0.25), not 0.0
+    for _ in range(20):
+        comp = update_composure_step(
+            comp,
+            threat=0.75,
+            coping=-0.35,
+            dt_minutes=3,
+            composure_resilience=res,
+        )
+    assert 0.15 <= comp <= 0.30
+
+    # 2. Adequate coping under same threat steadily rebuilds poise toward higher equilibrium (> 0.35)
+    for _ in range(12):
+        comp = update_composure_step(
+            comp,
+            threat=0.75,
+            coping=0.35,
+            dt_minutes=5,
+            composure_resilience=res,
+        )
+    assert comp > 0.35
+
+    # 3. Critical shock still punches straight through to 0.0
+    shattered = update_composure_step(
+        0.22,
+        threat=0.95,
+        coping=-0.85,
+        dt_minutes=1,
+        composure_resilience=res,
+        shock_drain=0.25,
+    )
+    assert shattered == pytest.approx(0.0, abs=1e-4)
+
+    # 4. Short /wait pause (dt=10m) recovers partial composure under moderate threat, unlike critical threat
+    mod_state = seed_initial_care_state(psyche).model_copy(
+        update={
+            "composure": 0.10,
+            "appraisal": seed_initial_care_state(psyche).appraisal.model_copy(
+                update={"threat": 0.60, "coping": -0.20}
+            ),
+        }
+    )
+    breather = project_care_to_minute(mod_state, target_elapsed_minutes=10, psyche=psyche)
+    assert breather.composure > 0.10
+
+    crit_state = mod_state.model_copy(
+        update={
+            "composure": 0.10,
+            "appraisal": mod_state.appraisal.model_copy(update={"threat": 0.95, "coping": -0.85}),
+        }
+    )
+    pinned = project_care_to_minute(crit_state, target_elapsed_minutes=2, psyche=psyche)
+    assert pinned.composure == pytest.approx(0.10, abs=1e-4)
 

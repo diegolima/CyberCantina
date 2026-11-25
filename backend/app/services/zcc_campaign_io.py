@@ -166,15 +166,34 @@ def extract_campaign_export_bundle(
 
         included_char_set = set(included_char_ids)
 
-        # Campaign character memories (campaign-scoped per character)
-        char_mem_rows = [
-            dict(r)
-            for r in conn.execute(
-                "SELECT * FROM campaign_character_memories WHERE campaign_id = ?",
-                (campaign_id,),
-            ).fetchall()
-            if str(r["character_id"]) in included_char_set
-        ]
+        # Campaign character memories (campaign-scoped per character, branch-filtered)
+        char_mem_rows: list[dict[str, Any]] = []
+        for r in conn.execute(
+            "SELECT * FROM campaign_character_memories WHERE campaign_id = ?",
+            (campaign_id,),
+        ).fetchall():
+            if str(r["character_id"]) not in included_char_set:
+                continue
+            row_dict = dict(r)
+            try:
+                raw_shards = json.loads(row_dict.get("memory_shards_json") or "[]")
+            except Exception:
+                raw_shards = []
+            if isinstance(raw_shards, list):
+                filtered_shards: list[Any] = []
+                for shard in raw_shards:
+                    if not isinstance(shard, dict):
+                        continue
+                    anchor = shard.get("anchor_turn_id")
+                    if anchor and str(anchor) not in exported_turn_ids:
+                        continue
+                    shard_copy = dict(shard)
+                    sup = shard_copy.get("superseded_at_turn_id")
+                    if sup and str(sup) not in exported_turn_ids:
+                        shard_copy["superseded_at_turn_id"] = None
+                    filtered_shards.append(shard_copy)
+                row_dict["memory_shards_json"] = json.dumps(filtered_shards)
+            char_mem_rows.append(row_dict)
 
         # Per-turn state snapshots
         if exported_turn_ids:
@@ -470,6 +489,185 @@ def _remap_id(val: Any, id_remap: dict[str, str]) -> Any:
     return id_remap.get(val, val)
 
 
+def _remap_party_dict(party: dict[str, Any], id_remap: dict[str, str]) -> dict[str, Any]:
+    p_copy = dict(party)
+    if isinstance(p_copy.get("member_ids"), list):
+        p_copy["member_ids"] = [_remap_id(mid, id_remap) for mid in p_copy["member_ids"]]
+    if isinstance(p_copy.get("leader_id"), str):
+        p_copy["leader_id"] = _remap_id(p_copy["leader_id"], id_remap)
+    if isinstance(p_copy.get("location_id"), str):
+        p_copy["location_id"] = _remap_id(p_copy["location_id"], id_remap)
+    if isinstance(p_copy.get("formed_at_turn_id"), str) and p_copy["formed_at_turn_id"]:
+        p_copy["formed_at_turn_id"] = _remap_id(p_copy["formed_at_turn_id"], id_remap)
+    return p_copy
+
+
+def _remap_memory_shards_json(raw_json: Any, id_remap: dict[str, str]) -> str:
+    if isinstance(raw_json, str):
+        try:
+            parsed = json.loads(raw_json)
+        except Exception:
+            return "[]"
+    elif isinstance(raw_json, list):
+        parsed = raw_json
+    else:
+        return "[]"
+    if not isinstance(parsed, list):
+        return "[]"
+
+    remapped: list[Any] = []
+    for shard in parsed:
+        if not isinstance(shard, dict):
+            continue
+        shard_copy = dict(shard)
+        anchor = shard_copy.get("anchor_turn_id")
+        if isinstance(anchor, str) and anchor.strip():
+            mapped_anchor = id_remap.get(anchor.strip())
+            if not mapped_anchor:
+                # Drop orphaned branch shards whose anchor turn was not exported
+                continue
+            shard_copy["anchor_turn_id"] = mapped_anchor
+        sup = shard_copy.get("superseded_at_turn_id")
+        if isinstance(sup, str) and sup.strip():
+            shard_copy["superseded_at_turn_id"] = id_remap.get(sup.strip())
+        remapped.append(shard_copy)
+    return json.dumps(remapped)
+
+
+def _remap_list_items_field(
+    items: list[Any], field: str, id_remap: dict[str, str]
+) -> list[Any]:
+    out: list[Any] = []
+    for item in items:
+        if isinstance(item, dict) and isinstance(item.get(field), str) and item[field]:
+            item_copy = dict(item)
+            item_copy[field] = _remap_id(item_copy[field], id_remap)
+            out.append(item_copy)
+        else:
+            out.append(item)
+    return out
+
+
+def _remap_keyed_dict_and_field(
+    mapping: dict[str, Any], field: str, id_remap: dict[str, str]
+) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, val in mapping.items():
+        mapped_k = str(_remap_id(key, id_remap))
+        if isinstance(val, dict) and isinstance(val.get(field), str) and val[field]:
+            val_copy = dict(val)
+            val_copy[field] = _remap_id(val_copy[field], id_remap)
+            out[mapped_k] = val_copy
+        else:
+            out[mapped_k] = val
+    return out
+
+
+def _remap_pre_turn_json(raw_json: Any, id_remap: dict[str, str]) -> str:
+    if isinstance(raw_json, str):
+        if not raw_json.strip():
+            return "{}"
+        try:
+            parsed = json.loads(raw_json)
+        except Exception:
+            return raw_json
+    elif isinstance(raw_json, dict):
+        parsed = dict(raw_json)
+    else:
+        return "{}"
+    if not isinstance(parsed, dict):
+        return json.dumps(parsed)
+
+    out = dict(parsed)
+    if isinstance(out.get("active_speaker_id"), str) and out["active_speaker_id"]:
+        out["active_speaker_id"] = _remap_id(out["active_speaker_id"], id_remap)
+    if isinstance(out.get("speaker_order"), list):
+        out["speaker_order"] = [_remap_id(cid, id_remap) for cid in out["speaker_order"]]
+    if isinstance(out.get("character_checks"), list):
+        out["character_checks"] = _remap_list_items_field(
+            out["character_checks"], "character_id", id_remap
+        )
+    if isinstance(out.get("character_rolls"), dict):
+        out["character_rolls"] = _remap_keyed_dict_and_field(
+            out["character_rolls"], "character_id", id_remap
+        )
+    if isinstance(out.get("resolved_roll"), dict):
+        rr_copy = dict(out["resolved_roll"])
+        if isinstance(rr_copy.get("character_id"), str) and rr_copy["character_id"]:
+            rr_copy["character_id"] = _remap_id(rr_copy["character_id"], id_remap)
+        out["resolved_roll"] = rr_copy
+    if isinstance(out.get("character_choices"), dict):
+        out["character_choices"] = {
+            str(_remap_id(cid, id_remap)): v for cid, v in out["character_choices"].items()
+        }
+    if isinstance(out.get("choice_resolutions"), dict):
+        out["choice_resolutions"] = _remap_keyed_dict_and_field(
+            out["choice_resolutions"], "character_id", id_remap
+        )
+    if isinstance(out.get("party_action"), dict):
+        pa_copy = dict(out["party_action"])
+        if isinstance(pa_copy.get("target_character_ids"), list):
+            pa_copy["target_character_ids"] = [
+                _remap_id(cid, id_remap) for cid in pa_copy["target_character_ids"]
+            ]
+        out["party_action"] = pa_copy
+    return json.dumps(out)
+
+
+def _remap_character_delta_dict(delta: dict[str, Any], id_remap: dict[str, str]) -> dict[str, Any]:
+    d_copy = dict(delta)
+    if isinstance(d_copy.get("target_location_id"), str) and d_copy["target_location_id"]:
+        d_copy["target_location_id"] = _remap_id(d_copy["target_location_id"], id_remap)
+    if isinstance(d_copy.get("relational_events"), list):
+        d_copy["relational_events"] = _remap_list_items_field(
+            d_copy["relational_events"], "target", id_remap
+        )
+    if isinstance(d_copy.get("stance_updates"), dict):
+        d_copy["stance_updates"] = {
+            str(_remap_id(k, id_remap)): v for k, v in d_copy["stance_updates"].items()
+        }
+    if isinstance(d_copy.get("new_memories"), list):
+        d_copy["new_memories"] = _remap_list_items_field(
+            d_copy["new_memories"], "character_id", id_remap
+        )
+    if isinstance(d_copy.get("persona_secrets_disclosed_to"), dict):
+        d_copy["persona_secrets_disclosed_to"] = {
+            str(_remap_id(k, id_remap)): v
+            for k, v in d_copy["persona_secrets_disclosed_to"].items()
+        }
+    return d_copy
+
+
+def _remap_party_event_delta_dict(
+    ped: dict[str, Any], id_remap: dict[str, str]
+) -> dict[str, Any]:
+    ped_copy = dict(ped)
+    if isinstance(ped_copy.get("invite_outcomes"), list):
+        ped_copy["invite_outcomes"] = _remap_list_items_field(
+            ped_copy["invite_outcomes"], "character_id", id_remap
+        )
+    for list_key in (
+        "departed_member_ids",
+        "stayed_behind_ids",
+        "followed_player_ids",
+        "member_ids",
+        "joined_character_ids",
+        "left_character_ids",
+        "character_ids",
+    ):
+        if isinstance(ped_copy.get(list_key), list):
+            ped_copy[list_key] = [_remap_id(cid, id_remap) for cid in ped_copy[list_key]]
+    for scalar_key in ("leader_id", "location_id"):
+        if isinstance(ped_copy.get(scalar_key), str) and ped_copy[scalar_key]:
+            ped_copy[scalar_key] = _remap_id(ped_copy[scalar_key], id_remap)
+    if isinstance(ped_copy.get("parties"), list):
+        ped_copy["parties"] = [
+            _remap_party_dict(p, id_remap) if isinstance(p, dict) else p
+            for p in ped_copy["parties"]
+        ]
+    return ped_copy
+
+
 def _remap_post_turn_json(raw_json: Any, id_remap: dict[str, str]) -> Any:
     if not raw_json or not isinstance(raw_json, str):
         return raw_json
@@ -479,22 +677,68 @@ def _remap_post_turn_json(raw_json: Any, id_remap: dict[str, str]) -> Any:
         return raw_json
     if not isinstance(parsed, dict):
         return raw_json
-    changed = False
-    rev = parsed.get("revealed_secret_lore_ids")
+
+    out = dict(parsed)
+    rev = out.get("revealed_secret_lore_ids")
     if isinstance(rev, list) and rev:
-        parsed["revealed_secret_lore_ids"] = [
-            str(_remap_id(str(x), id_remap)) for x in rev
-        ]
-        changed = True
-    me = parsed.get("major_event")
+        out["revealed_secret_lore_ids"] = [str(_remap_id(str(x), id_remap)) for x in rev]
+    me = out.get("major_event")
     if isinstance(me, dict):
+        me_copy = dict(me)
         for key in ("turn_id", "lore_node_id", "location_id"):
-            if me.get(key):
-                me[key] = str(_remap_id(str(me[key]), id_remap))
-        if me.get("turn_id"):
-            me["id"] = f"me_{me['turn_id']}"
-        changed = True
-    return json.dumps(parsed) if changed else raw_json
+            if me_copy.get(key):
+                me_copy[key] = str(_remap_id(str(me_copy[key]), id_remap))
+        if me_copy.get("turn_id"):
+            me_copy["id"] = f"me_{me_copy['turn_id']}"
+        out["major_event"] = me_copy
+    if isinstance(out.get("target_location_id"), str) and out["target_location_id"]:
+        out["target_location_id"] = _remap_id(out["target_location_id"], id_remap)
+    if isinstance(out.get("character_names"), dict):
+        out["character_names"] = {
+            str(_remap_id(k, id_remap)): v for k, v in out["character_names"].items()
+        }
+    if isinstance(out.get("compacted_character_ids"), list):
+        out["compacted_character_ids"] = [
+            _remap_id(cid, id_remap) for cid in out["compacted_character_ids"]
+        ]
+    if isinstance(out.get("character_memories"), list):
+        out["character_memories"] = _remap_list_items_field(
+            out["character_memories"], "character_id", id_remap
+        )
+    if isinstance(out.get("character_deltas"), dict):
+        out["character_deltas"] = {
+            str(_remap_id(cid, id_remap)): (
+                _remap_character_delta_dict(delta, id_remap)
+                if isinstance(delta, dict)
+                else delta
+            )
+            for cid, delta in out["character_deltas"].items()
+        }
+    if isinstance(out.get("arbitration_rulings"), list):
+        remapped_rulings: list[Any] = []
+        for ruling in out["arbitration_rulings"]:
+            if isinstance(ruling, dict):
+                r_copy = dict(ruling)
+                for key in ("prior_holder_id", "winner_id"):
+                    if isinstance(r_copy.get(key), str) and r_copy[key]:
+                        r_copy[key] = _remap_id(r_copy[key], id_remap)
+                if isinstance(r_copy.get("claimant_ids"), list):
+                    r_copy["claimant_ids"] = [
+                        _remap_id(cid, id_remap) for cid in r_copy["claimant_ids"]
+                    ]
+                remapped_rulings.append(r_copy)
+            else:
+                remapped_rulings.append(ruling)
+        out["arbitration_rulings"] = remapped_rulings
+    if isinstance(out.get("party_event_delta"), dict):
+        out["party_event_delta"] = _remap_party_event_delta_dict(
+            out["party_event_delta"], id_remap
+        )
+    for visit_key in ("first_visit_cards", "first_visit_media"):
+        if isinstance(out.get(visit_key), list):
+            out[visit_key] = _remap_list_items_field(out[visit_key], "entity_id", id_remap)
+
+    return raw_json if out == parsed else json.dumps(out)
 
 
 def _remap_gm_refs_json(raw_json: Any, id_remap: dict[str, str]) -> str:
@@ -590,19 +834,10 @@ def _remap_parties_json(raw_json: Any, id_remap: dict[str, str]) -> str:
         return "[]"
     if not isinstance(parsed, list):
         return json.dumps(parsed)
-    out: list[Any] = []
-    for party in parsed:
-        if not isinstance(party, dict):
-            out.append(party)
-            continue
-        p_copy = dict(party)
-        if isinstance(p_copy.get("member_ids"), list):
-            p_copy["member_ids"] = [_remap_id(mid, id_remap) for mid in p_copy["member_ids"]]
-        if isinstance(p_copy.get("leader_id"), str):
-            p_copy["leader_id"] = _remap_id(p_copy["leader_id"], id_remap)
-        if isinstance(p_copy.get("location_id"), str):
-            p_copy["location_id"] = _remap_id(p_copy["location_id"], id_remap)
-        out.append(p_copy)
+    out = [
+        _remap_party_dict(party, id_remap) if isinstance(party, dict) else party
+        for party in parsed
+    ]
     return json.dumps(out)
 
 
@@ -659,6 +894,8 @@ def _remap_affective_state_json(raw_json: Any, id_remap: dict[str, str]) -> str:
     if not isinstance(parsed, dict):
         return json.dumps(parsed)
     out = dict(parsed)
+    if isinstance(out.get("relations"), dict):
+        out["relations"] = _remap_keyed_dict_and_field(out["relations"], "target_id", id_remap)
     if isinstance(out.get("relationships"), dict):
         out["relationships"] = {
             str(_remap_id(k, id_remap)): v for k, v in out["relationships"].items()
@@ -709,6 +946,16 @@ def _remap_cognitions_json(raw_json: Any, id_remap: dict[str, str]) -> str | Non
         return None
     if not isinstance(parsed, dict):
         return json.dumps(parsed)
+    if isinstance(parsed.get("cognitions"), dict):
+        out = dict(parsed)
+        out["cognitions"] = {
+            str(_remap_id(k, id_remap)): v for k, v in parsed["cognitions"].items()
+        }
+        if isinstance(out.get("character_names"), dict):
+            out["character_names"] = {
+                str(_remap_id(k, id_remap)): v for k, v in out["character_names"].items()
+            }
+        return json.dumps(out)
     return json.dumps({str(_remap_id(k, id_remap)): v for k, v in parsed.items()})
 
 
@@ -918,9 +1165,7 @@ def ingest_campaigns_atomic(
                 mapped_cid = id_remap.get(str(mem.get("character_id") or ""))
                 if not mapped_cid:
                     continue
-                shards_json = mem.get("memory_shards_json")
-                if not isinstance(shards_json, str):
-                    shards_json = json.dumps(shards_json or [])
+                shards_json = _remap_memory_shards_json(mem.get("memory_shards_json"), id_remap)
                 conn.execute(
                     """
                     INSERT INTO campaign_character_memories (campaign_id, character_id, memory_shards_json, updated_at)
@@ -938,6 +1183,7 @@ def ingest_campaigns_atomic(
                 mapped_actor = str(_remap_id(str(t.get("actor_id") or new_char_id), id_remap))
                 recalled_json = _remap_recalled_items_json(t.get("recalled_items_json"), id_remap)
                 cognitions_json = _remap_cognitions_json(t.get("cognitions_json"), id_remap)
+                pre_turn_json = _remap_pre_turn_json(t.get("pre_turn_json"), id_remap)
                 post_turn_json = _remap_post_turn_json(t.get("post_turn_json"), id_remap)
                 conn.execute(
                     """
@@ -960,7 +1206,7 @@ def ingest_campaigns_atomic(
                         str(t.get("cognition_json") or "{}"),
                         cognitions_json,
                         t.get("whispers_json"),
-                        str(t.get("pre_turn_json") or "{}"),
+                        pre_turn_json,
                         post_turn_json,
                         recalled_json,
                         t.get("telemetry_json"),
