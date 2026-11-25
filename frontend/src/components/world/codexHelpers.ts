@@ -20,7 +20,8 @@ export type CodexSectionId =
   | "locations"
   | "items_artifacts"
   | "major_characters"
-  | "rumors_threats";
+  | "rumors_threats"
+  | "mechanics";
 
 export type EditableCodexSectionId =
   | "history_culture"
@@ -102,6 +103,17 @@ export const CODEX_SECTIONS: readonly CodexSectionMeta[] = [
   },
 ] as const;
 
+export const MECHANICS_SECTION_META: CodexSectionMeta = {
+  id: "mechanics",
+  label: "Game Mechanics",
+  description:
+    "In-app reference guide for CARE psychology, d20 resolution, whispers, parties, map links, memory, timelines, and GM tools.",
+  accentColor: "var(--accent-cyan)",
+  categories: [],
+  isSpecial: true,
+  campaignOnly: false,
+};
+
 const CATEGORY_TO_SECTION: Record<WorldLoreCategory, EditableCodexSectionId> = {
   history: "history_culture",
   culture: "history_culture",
@@ -182,6 +194,9 @@ export interface CodexMajorCharacterItem {
 }
 
 export function getCodexSectionMeta(sectionId: CodexSectionId): CodexSectionMeta {
+  if (sectionId === "mechanics") {
+    return MECHANICS_SECTION_META;
+  }
   return CODEX_SECTIONS.find((s) => s.id === sectionId) ?? CODEX_SECTIONS[0];
 }
 

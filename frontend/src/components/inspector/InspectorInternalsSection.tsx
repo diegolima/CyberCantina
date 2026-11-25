@@ -7,7 +7,12 @@ import {
   Flag,
   Sparkles,
 } from "lucide-react";
-import type { CampaignStateBundle, RecalledMemoryItem } from "../../types";
+import type {
+  CampaignStateBundle,
+  MechanicsTopicId,
+  RecalledMemoryItem,
+} from "../../types";
+import { MechanicsHelpButton } from "../shared/MechanicsHelpButton";
 import { InspectorSection } from "./InspectorPrimitives";
 
 const RECALL_SOURCE_LABEL: Record<RecalledMemoryItem["source_type"], string> = {
@@ -33,6 +38,7 @@ export interface InspectorInternalsSectionProps {
   expandedRecalls: Set<string>;
   toggleRecall: (key: string) => void;
   onOpenLoreIndex: () => void;
+  onOpenMechanicsHelp?: (topicId: MechanicsTopicId) => void;
 }
 
 export const InspectorInternalsSection: React.FC<
@@ -49,6 +55,7 @@ export const InspectorInternalsSection: React.FC<
   expandedRecalls,
   toggleRecall,
   onOpenLoreIndex,
+  onOpenMechanicsHelp,
 }) => {
   return (
       <InspectorSection
@@ -58,6 +65,15 @@ export const InspectorInternalsSection: React.FC<
         meta={`${sceneFlags.length} flags · ${recalledItems.length} recalled`}
         changed={flagsChanged}
         changedTitle="Scene flags changed this turn"
+        headerAction={
+          onOpenMechanicsHelp ? (
+            <MechanicsHelpButton
+              topicId="memory-lore-flags"
+              label="Lore Recall, Secrets & Scene Flags"
+              onOpenHelp={onOpenMechanicsHelp}
+            />
+          ) : undefined
+        }
       >
         <div className="internals-stats">
           {turnsCount} branch turns · {bundle.episodic_chunks.length} episodic chunks ·{" "}

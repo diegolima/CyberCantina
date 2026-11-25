@@ -7,6 +7,7 @@ import {
   LocationLoreNodeDraft,
   LocationNode,
   LocationOverrideOptions,
+  MechanicsTopicId,
   WorldMediaItem,
 } from "../types";
 import { getViewportTier } from "../utils/campaignLayout";
@@ -179,6 +180,7 @@ export interface SpatialTopologyViewProps {
   } | null;
   worldMedia?: WorldMediaItem[];
   visitedContainerIds?: string[];
+  onOpenMechanicsHelp?: (topicId: MechanicsTopicId) => void;
 }
 
 export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
@@ -212,6 +214,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
   externalFocusRequest = null,
   worldMedia = [],
   visitedContainerIds = [],
+  onOpenMechanicsHelp,
 }) => {
   // Staged draft state for async editing in campaign (or standalone editor without onChangeGraph)
   const isControlledExternally = mode === "editor" && Boolean(onChangeGraph);
@@ -2074,6 +2077,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
               onSetStartingLocation={handleSetStartingLocation}
               onConvertToContainer={handleConvertLocationToContainer}
               onMoveOutToParent={handleMoveOutToParent}
+              onOpenMechanicsHelp={onOpenMechanicsHelp}
             />
           ) : null;
 

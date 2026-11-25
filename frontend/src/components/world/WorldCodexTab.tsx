@@ -4,6 +4,7 @@ import {
   BookOpen,
   ChevronDown,
   ChevronRight,
+  Compass,
   Gem,
   Info,
   Layers,
@@ -19,11 +20,14 @@ import {
 } from "lucide-react";
 import { api } from "../../api";
 import type {
+  CodexReturnTarget,
   ItemEquipActionPayload,
   LocationContainer,
   LocationLoreNodeDraft,
   LocationNode,
   LoreNode,
+  MechanicsSubcategoryId,
+  MechanicsTopicId,
   MemoryShard,
   PersonaRecord,
   PersonaTurnStateSnapshot,
@@ -45,6 +49,7 @@ import {
   CodexSearchHit,
   CodexSectionId,
   EditableCodexSectionId,
+  MECHANICS_SECTION_META,
   buildCodexLocationTree,
   buildCodexMajorCharacterList,
   collectAllContainerIds,
@@ -59,6 +64,21 @@ import {
   isEditableCodexSection,
   searchAllCodexEntries,
 } from "./codexHelpers";
+import { CodexMechanicsDetail } from "./mechanics/CodexMechanicsDetail";
+import {
+  MECHANICS_ARTICLES,
+  MECHANICS_SUBCATEGORIES,
+} from "./mechanics/mechanicsCatalog";
+import {
+  DEFAULT_MECHANICS_SUBCATEGORY_ID,
+  DEFAULT_MECHANICS_TOPIC_ID,
+  buildMechanicsTree,
+  collectAllMechanicsSubcategoryIds,
+  extractMechanicsTopicIdFromKey,
+  flattenVisibleMechanicsTree,
+  getMechanicsArticle,
+  searchMechanicsArticles,
+} from "./mechanics/mechanicsHelpers";
 
 export type CodexFocusRequest =
   | { kind?: "lore"; loreId: string; nonce: number }
@@ -66,6 +86,12 @@ export type CodexFocusRequest =
       kind: "character";
       characterId: string;
       initialSubtab?: CodexCharacterSubtab;
+      nonce: number;
+    }
+  | {
+      kind: "mechanics";
+      topicId: MechanicsTopicId;
+      returnTarget?: CodexReturnTarget | null;
       nonce: number;
     };
 
@@ -91,6 +117,7 @@ interface WorldCodexTabProps {
   activeBranchTurns?: readonly TurnNodeRecord[];
   externalFocusRequest?: CodexFocusRequest | null;
   initialSection?: CodexSectionId | null;
+  initialGlobalQuery?: string;
   initialExpandedContainerIds?: readonly string[];
   onUpdateLoreNodes: (updater: (prev: LoreNode[]) => LoreNode[]) => void;
   onUpdatePendingTagDrafts: (
@@ -113,6 +140,7 @@ interface WorldCodexTabProps {
   onItemAction?: (payload: ItemEquipActionPayload) => Promise<void> | void;
   onSaveMemories?: (characterId: string, shards: MemoryShard[]) => Promise<void>;
   onRelocateCharacter?: (characterId: string, locationId: string) => Promise<void> | void;
+  onReturnToWorldTab?: (tab: "map" | "settings") => void;
 }
 
 const SECTION_ICON: Record<CodexSectionId, React.ReactNode> = {
@@ -122,6 +150,7 @@ const SECTION_ICON: Record<CodexSectionId, React.ReactNode> = {
   items_artifacts: <Gem size={16} color="var(--accent-amber)" />,
   major_characters: <UserCheck size={16} color="var(--accent-cyan)" />,
   rumors_threats: <Skull size={16} color="var(--accent-amber)" />,
+  mechanics: <Compass size={16} color="var(--accent-cyan)" />,
 };
 
 export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
@@ -146,6 +175,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   activeBranchTurns = [],
   externalFocusRequest,
   initialSection = null,
+  initialGlobalQuery = "",
   initialExpandedContainerIds,
   onUpdateLoreNodes,
   onUpdatePendingTagDrafts,
@@ -157,11 +187,15 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   onItemAction,
   onSaveMemories,
   onRelocateCharacter,
+  onReturnToWorldTab,
 }) => {
   const canEditWorldLore = !isCampaignMode || (unlockLore && !isMutatingLocked);
   const [activeSection, setActiveSection] = useState<CodexSectionId | null>(() => {
     if (externalFocusRequest?.kind === "character") {
       return "major_characters";
+    }
+    if (externalFocusRequest?.kind === "mechanics") {
+      return "mechanics";
     }
     if (externalFocusRequest && "loreId" in externalFocusRequest) {
       const target = loreNodes.find((ln) => ln.id === externalFocusRequest.loreId);
@@ -169,14 +203,20 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     }
     return initialSection;
   });
-  const [globalQuery, setGlobalQuery] = useState("");
+  const [globalQuery, setGlobalQuery] = useState(initialGlobalQuery);
   const [categoryQuery, setCategoryQuery] = useState("");
   const [selectedEntryKey, setSelectedEntryKey] = useState<string | null>(() => {
     if (externalFocusRequest?.kind === "character") {
       return `character:${externalFocusRequest.characterId}`;
     }
+    if (externalFocusRequest?.kind === "mechanics") {
+      return `mechanics:${externalFocusRequest.topicId}`;
+    }
     if (externalFocusRequest && "loreId" in externalFocusRequest) {
       return externalFocusRequest.loreId;
+    }
+    if (initialSection === "mechanics") {
+      return `mechanics:${DEFAULT_MECHANICS_TOPIC_ID}`;
     }
     return null;
   });
@@ -196,6 +236,23 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   const [expandedContainerIds, setExpandedContainerIds] = useState<Set<string>>(
     () => new Set(initialExpandedContainerIds ?? [])
   );
+  const [expandedMechanicsSubcats, setExpandedMechanicsSubcats] = useState<
+    Set<MechanicsSubcategoryId>
+  >(() => {
+    const initialSubcat =
+      externalFocusRequest?.kind === "mechanics"
+        ? getMechanicsArticle(externalFocusRequest.topicId)?.subcategoryId ??
+          DEFAULT_MECHANICS_SUBCATEGORY_ID
+        : DEFAULT_MECHANICS_SUBCATEGORY_ID;
+    return new Set([initialSubcat]);
+  });
+  const [mechanicsReturnTarget, setMechanicsReturnTarget] =
+    useState<CodexReturnTarget | null>(() =>
+      externalFocusRequest?.kind === "mechanics"
+        ? externalFocusRequest.returnTarget ?? null
+        : null
+    );
+  const internalReturnNonceRef = useRef(0);
   const [frozenOrderIds, setFrozenOrderIds] = useState<string[] | null>(null);
   const [reclassifiedNotice, setReclassifiedNotice] = useState<{
     loreId: string;
@@ -275,6 +332,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
       setFrozenOrderIds(null);
       setReclassifiedNotice(null);
       setArtifactUnlinkNotice(null);
+      setMechanicsReturnTarget(null);
       setActiveSection("major_characters");
       setSelectedEntryKey(`character:${externalFocusRequest.characterId}`);
       setCharFocusTarget({
@@ -284,6 +342,24 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
       });
       return;
     }
+    if (externalFocusRequest.kind === "mechanics") {
+      const targetArticle = getMechanicsArticle(externalFocusRequest.topicId);
+      const targetSubcat =
+        targetArticle?.subcategoryId ?? DEFAULT_MECHANICS_SUBCATEGORY_ID;
+      setGlobalQuery("");
+      setCategoryQuery("");
+      setFrozenOrderIds(null);
+      setReclassifiedNotice(null);
+      setArtifactUnlinkNotice(null);
+      setCharFocusTarget(null);
+      setActiveSection("mechanics");
+      setExpandedMechanicsSubcats((prev) => new Set([...prev, targetSubcat]));
+      setSelectedEntryKey(
+        `mechanics:${targetArticle?.id ?? DEFAULT_MECHANICS_TOPIC_ID}`
+      );
+      setMechanicsReturnTarget(externalFocusRequest.returnTarget ?? null);
+      return;
+    }
     const target = loreNodes.find((ln) => ln.id === externalFocusRequest.loreId);
     if (!target) return;
     const secId = getCodexSectionForCategory(target.category);
@@ -291,6 +367,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     setCategoryQuery("");
     setFrozenOrderIds(null);
     setCharFocusTarget(null);
+    setMechanicsReturnTarget(null);
     setActiveSection(secId);
     setSelectedEntryKey(target.id);
     setTimeout(() => titleInputRef.current?.focus(), 40);
@@ -389,7 +466,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     invalidCountsBySection,
   ]);
 
-  // Global Quick Search hits
+  // Global Quick Search hits (world/campaign canon ranked first; Game Mechanics grouped below)
   const globalSearchHits = useMemo(() => {
     if (!isGlobalSearchMode) return [];
     return searchAllCodexEntries({
@@ -419,6 +496,11 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     revealedLoreIds,
     frozenOrderIds,
   ]);
+
+  const globalMechanicsHits = useMemo(() => {
+    if (!isGlobalSearchMode) return [];
+    return searchMechanicsArticles(globalQuery);
+  }, [isGlobalSearchMode, globalQuery]);
 
   // Category-scoped items
   const editableLoreItems = useMemo(() => {
@@ -491,9 +573,46 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     categoryQuery,
   ]);
 
+  const mechanicsTree = useMemo(() => {
+    if (activeSection !== "mechanics") {
+      return {
+        roots: [],
+        autoExpandedSubcategoryIds: new Set<MechanicsSubcategoryId>(),
+      };
+    }
+    return buildMechanicsTree(categoryQuery);
+  }, [activeSection, categoryQuery]);
+
+  const effectiveExpandedMechanicsSubcats = useMemo(() => {
+    if (categoryQuery.trim()) {
+      return new Set<MechanicsSubcategoryId>([
+        ...expandedMechanicsSubcats,
+        ...mechanicsTree.autoExpandedSubcategoryIds,
+      ]);
+    }
+    return expandedMechanicsSubcats;
+  }, [
+    expandedMechanicsSubcats,
+    mechanicsTree.autoExpandedSubcategoryIds,
+    categoryQuery,
+  ]);
+
+  const visibleMechanicsFlat = useMemo(() => {
+    if (activeSection !== "mechanics") return [];
+    return flattenVisibleMechanicsTree(
+      mechanicsTree.roots,
+      effectiveExpandedMechanicsSubcats
+    );
+  }, [activeSection, mechanicsTree.roots, effectiveExpandedMechanicsSubcats]);
+
   // Visible keys in order for auto-selection & ArrowUp/ArrowDown navigation
   const visibleRowKeys = useMemo<string[]>(() => {
-    if (isGlobalSearchMode) return globalSearchHits.map((h) => h.key);
+    if (isGlobalSearchMode) {
+      return [
+        ...globalSearchHits.map((h) => h.key),
+        ...globalMechanicsHits.map((h) => h.key),
+      ];
+    }
     if (!activeSection) return [];
     if (isEditableCodexSection(activeSection)) {
       return editableLoreItems.map((item) => item.lore.id);
@@ -504,19 +623,39 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     if (activeSection === "major_characters") {
       return majorCharacterItems.map((m) => m.key);
     }
+    if (activeSection === "mechanics") {
+      return visibleMechanicsFlat.map((m) => m.key);
+    }
     return [];
   }, [
     isGlobalSearchMode,
     globalSearchHits,
+    globalMechanicsHits,
     activeSection,
     editableLoreItems,
     visibleLocationFlat,
     majorCharacterItems,
+    visibleMechanicsFlat,
   ]);
 
   // Reconcile selection when switching category, filtering, or mutating campaign roster
   useEffect(() => {
     if (!isTwoPaneMode) return;
+    if (activeSection === "mechanics") {
+      if (categoryQuery.trim()) {
+        if (visibleRowKeys.length === 0) {
+          if (selectedEntryKey !== null) setSelectedEntryKey(null);
+        } else if (!selectedEntryKey || !visibleRowKeys.includes(selectedEntryKey)) {
+          setSelectedEntryKey(visibleRowKeys[0]);
+        }
+      } else if (
+        !selectedEntryKey ||
+        !extractMechanicsTopicIdFromKey(selectedEntryKey)
+      ) {
+        setSelectedEntryKey(`mechanics:${DEFAULT_MECHANICS_TOPIC_ID}`);
+      }
+      return;
+    }
     if (visibleRowKeys.length === 0) {
       if (selectedEntryKey !== null) setSelectedEntryKey(null);
       return;
@@ -524,7 +663,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     if (!selectedEntryKey || !visibleRowKeys.includes(selectedEntryKey)) {
       setSelectedEntryKey(visibleRowKeys[0]);
     }
-  }, [isTwoPaneMode, visibleRowKeys, selectedEntryKey]);
+  }, [isTwoPaneMode, activeSection, categoryQuery, visibleRowKeys, selectedEntryKey]);
 
   const resolvedCharacterNameMap = useMemo(() => {
     if (characterNameMap && Object.keys(characterNameMap).length > 0) {
@@ -544,8 +683,58 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     setReclassifiedNotice(null);
     setArtifactUnlinkNotice(null);
     setCharFocusTarget(null);
+    setMechanicsReturnTarget(null);
     setActiveSection(secId);
-    setSelectedEntryKey(null);
+    if (secId === "mechanics") {
+      setExpandedMechanicsSubcats((prev) =>
+        prev.size > 0 ? prev : new Set([DEFAULT_MECHANICS_SUBCATEGORY_ID])
+      );
+      setSelectedEntryKey(`mechanics:${DEFAULT_MECHANICS_TOPIC_ID}`);
+    } else {
+      setSelectedEntryKey(null);
+    }
+  };
+
+  const handleOpenMechanicsTopic = (
+    topicId: MechanicsTopicId,
+    returnTarget?: CodexReturnTarget | null
+  ) => {
+    const article = getMechanicsArticle(topicId);
+    const subcatId =
+      article?.subcategoryId ?? DEFAULT_MECHANICS_SUBCATEGORY_ID;
+    setGlobalQuery("");
+    setCategoryQuery("");
+    setFrozenOrderIds(null);
+    setReclassifiedNotice(null);
+    setArtifactUnlinkNotice(null);
+    setCharFocusTarget(null);
+    setActiveSection("mechanics");
+    setExpandedMechanicsSubcats((prev) => new Set([...prev, subcatId]));
+    setSelectedEntryKey(
+      `mechanics:${article?.id ?? DEFAULT_MECHANICS_TOPIC_ID}`
+    );
+    if (returnTarget !== undefined) {
+      setMechanicsReturnTarget(returnTarget);
+    }
+  };
+
+  const handleReturnFromMechanics = () => {
+    const target = mechanicsReturnTarget;
+    if (!target) return;
+    setMechanicsReturnTarget(null);
+    if (target.kind === "character") {
+      setGlobalQuery("");
+      setCategoryQuery("");
+      setActiveSection("major_characters");
+      setSelectedEntryKey(`character:${target.characterId}`);
+      setCharFocusTarget({
+        characterId: target.characterId,
+        subtab: target.subtab,
+        nonce: ++internalReturnNonceRef.current,
+      });
+      return;
+    }
+    onReturnToWorldTab?.(target.tab);
   };
 
   const handleBackToHub = () => {
@@ -556,6 +745,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     setReclassifiedNotice(null);
     setArtifactUnlinkNotice(null);
     setCharFocusTarget(null);
+    setMechanicsReturnTarget(null);
     setSelectedEntryKey(null);
   };
 
@@ -827,15 +1017,28 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
       const hit: CodexSearchHit | undefined = globalSearchHits.find(
         (h) => h.key === selectedEntryKey
       );
-      if (!hit) {
+      const mechHit = !hit
+        ? globalMechanicsHits.find((m) => m.key === selectedEntryKey)
+        : undefined;
+      if (!hit && !mechHit) {
+        const totalHits = globalSearchHits.length + globalMechanicsHits.length;
         return (
           <div className="ui-empty-state ui-empty-state--fill">
-            {globalSearchHits.length === 0
+            {totalHits === 0
               ? `No entries match "${globalQuery.trim()}".`
               : "Select a search result on the left to inspect its details."}
           </div>
         );
       }
+      if (mechHit) {
+        return (
+          <CodexMechanicsDetail
+            article={mechHit.article}
+            onSelectTopic={(id) => handleOpenMechanicsTopic(id, null)}
+          />
+        );
+      }
+      if (!hit) return null;
       if (hit.kind === "lore" && hit.lore) {
         const lore = hit.lore;
         return (
@@ -942,6 +1145,9 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
             onItemAction={onItemAction}
             onSaveMemories={onSaveMemories}
             onRelocateCharacter={onRelocateCharacter}
+            onOpenMechanicsHelp={(topicId, returnTarget) =>
+              handleOpenMechanicsTopic(topicId, returnTarget ?? null)
+            }
           />
         );
       }
@@ -1093,6 +1299,33 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
           onItemAction={onItemAction}
           onSaveMemories={onSaveMemories}
           onRelocateCharacter={onRelocateCharacter}
+          onOpenMechanicsHelp={(topicId, returnTarget) =>
+            handleOpenMechanicsTopic(topicId, returnTarget ?? null)
+          }
+        />
+      );
+    }
+
+    if (activeSection === "mechanics") {
+      const selectedTopicId = extractMechanicsTopicIdFromKey(selectedEntryKey);
+      const selectedArticle =
+        (selectedTopicId ? getMechanicsArticle(selectedTopicId) : undefined) ??
+        (!categoryQuery.trim()
+          ? getMechanicsArticle(DEFAULT_MECHANICS_TOPIC_ID)
+          : undefined);
+      if (!selectedArticle) {
+        return (
+          <div className="ui-empty-state ui-empty-state--fill">
+            {categoryQuery.trim()
+              ? `No Game Mechanics guides match "${categoryQuery.trim()}".`
+              : "Select a Game Mechanics topic on the left."}
+          </div>
+        );
+      }
+      return (
+        <CodexMechanicsDetail
+          article={selectedArticle}
+          onSelectTopic={(id) => handleOpenMechanicsTopic(id)}
         />
       );
     }
@@ -1105,6 +1338,12 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     () => collectAllContainerIds(locationTree.roots),
     [locationTree.roots]
   );
+  const allMechanicsSubcategoryIds = useMemo(
+    () => collectAllMechanicsSubcategoryIds(mechanicsTree.roots),
+    [mechanicsTree.roots]
+  );
+  const totalGlobalSearchCount =
+    globalSearchHits.length + globalMechanicsHits.length;
 
   return (
     <div
@@ -1115,13 +1354,24 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
       <div className="codex-topbar">
         <div className="codex-topbar-left">
           {isTwoPaneMode ? (
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={handleBackToHub}
-            >
-              <ArrowLeft size={13} /> All Categories
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={handleBackToHub}
+              >
+                <ArrowLeft size={13} /> All Categories
+              </button>
+              {activeSection === "mechanics" && mechanicsReturnTarget && (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-amber"
+                  onClick={handleReturnFromMechanics}
+                >
+                  <ArrowLeft size={13} /> Return to {mechanicsReturnTarget.label}
+                </button>
+              )}
+            </>
           ) : (
             <span className="codex-topbar-heading">
               <BookOpen size={14} color="var(--accent-violet)" />
@@ -1131,7 +1381,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
           {isTwoPaneMode && (
             <span className="codex-topbar-crumb">
               {isGlobalSearchMode
-                ? `Search Results (${globalSearchHits.length})`
+                ? `Search Results (${totalGlobalSearchCount})`
                 : activeSectionMeta?.label}
             </span>
           )}
@@ -1188,64 +1438,109 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
 
       {/* Hub View */}
       {!isTwoPaneMode ? (
-        <div className="codex-hub-grid">
-          {hubSectionData.map(
-            ({ sec, countText, invalidCount, preview, disabled }) => (
-              <button
-                key={sec.id}
-                type="button"
-                className={`codex-hub-card ${disabled ? "is-disabled" : ""}`}
-                disabled={disabled}
-                aria-disabled={disabled}
-                onClick={() => handleOpenSection(sec.id)}
-                style={
-                  {
-                    "--codex-card-accent": sec.accentColor,
-                  } as React.CSSProperties
-                }
-              >
-                <div className="codex-hub-card-head">
-                  <div className="codex-hub-card-title-wrap">
-                    {SECTION_ICON[sec.id]}
-                    <span className="codex-hub-card-title">{sec.label}</span>
+        <>
+          <div className="codex-hub-grid">
+            {hubSectionData.map(
+              ({ sec, countText, invalidCount, preview, disabled }) => (
+                <button
+                  key={sec.id}
+                  type="button"
+                  className={`codex-hub-card ${disabled ? "is-disabled" : ""}`}
+                  disabled={disabled}
+                  aria-disabled={disabled}
+                  onClick={() => handleOpenSection(sec.id)}
+                  style={
+                    {
+                      "--codex-card-accent": sec.accentColor,
+                    } as React.CSSProperties
+                  }
+                >
+                  <div className="codex-hub-card-head">
+                    <div className="codex-hub-card-title-wrap">
+                      {SECTION_ICON[sec.id]}
+                      <span className="codex-hub-card-title">{sec.label}</span>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      {invalidCount > 0 && canEditWorldLore && (
+                        <span
+                          className="codex-invalid-badge"
+                          title={`${invalidCount} incomplete entry/entries`}
+                        >
+                          !{invalidCount}
+                        </span>
+                      )}
+                      <span className="badge codex-hub-count">{countText}</span>
+                    </div>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    {invalidCount > 0 && canEditWorldLore && (
-                      <span
-                        className="codex-invalid-badge"
-                        title={`${invalidCount} incomplete entry/entries`}
-                      >
-                        !{invalidCount}
-                      </span>
+                  <p className="codex-hub-card-desc">
+                    {disabled ? "Available during an active campaign." : sec.description}
+                  </p>
+                  <div className="codex-hub-card-preview">
+                    {disabled ? (
+                      <span className="codex-muted-note">Campaign only</span>
+                    ) : preview.length === 0 ? (
+                      <span className="codex-muted-note">No entries yet</span>
+                    ) : (
+                      preview.map((title, i) => (
+                        <span
+                          key={`${sec.id}-prev-${i}`}
+                          className={`codex-preview-chip ${
+                            title === "Untitled Entry" ? "is-untitled" : ""
+                          }`}
+                        >
+                          {title}
+                        </span>
+                      ))
                     )}
-                    <span className="badge codex-hub-count">{countText}</span>
                   </div>
+                </button>
+              )
+            )}
+          </div>
+
+          {/* System Reference Shelf (visibly separated from world canon) */}
+          <div className="codex-hub-shelf">
+            <button
+              type="button"
+              className="codex-hub-shelf-main"
+              onClick={() => handleOpenSection("mechanics")}
+            >
+              <div className="codex-hub-shelf-head">
+                <div className="codex-hub-card-title-wrap">
+                  {SECTION_ICON.mechanics}
+                  <span className="codex-hub-card-title">
+                    {MECHANICS_SECTION_META.label}
+                  </span>
+                  <span className="badge codex-badge--location">Reference</span>
                 </div>
-                <p className="codex-hub-card-desc">
-                  {disabled ? "Available during an active campaign." : sec.description}
-                </p>
-                <div className="codex-hub-card-preview">
-                  {disabled ? (
-                    <span className="codex-muted-note">Campaign only</span>
-                  ) : preview.length === 0 ? (
-                    <span className="codex-muted-note">No entries yet</span>
-                  ) : (
-                    preview.map((title, i) => (
-                      <span
-                        key={`${sec.id}-prev-${i}`}
-                        className={`codex-preview-chip ${
-                          title === "Untitled Entry" ? "is-untitled" : ""
-                        }`}
-                      >
-                        {title}
-                      </span>
-                    ))
-                  )}
-                </div>
-              </button>
-            )
-          )}
-        </div>
+                <span className="badge codex-hub-count">
+                  {MECHANICS_SUBCATEGORIES.length} topics · {MECHANICS_ARTICLES.length} guides
+                </span>
+              </div>
+              <p className="codex-hub-card-desc">
+                {MECHANICS_SECTION_META.description}
+              </p>
+            </button>
+            <div className="codex-hub-shelf-chips">
+              {MECHANICS_SUBCATEGORIES.map((subcat) => {
+                const firstArticle = MECHANICS_ARTICLES.find(
+                  (a) => a.subcategoryId === subcat.id
+                );
+                if (!firstArticle) return null;
+                return (
+                  <button
+                    key={subcat.id}
+                    type="button"
+                    className="codex-hub-shelf-chip"
+                    onClick={() => handleOpenMechanicsTopic(firstArticle.id, null)}
+                  >
+                    {subcat.shortLabel}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </>
       ) : (
         /* 2-Pane Master-Detail View */
         <div className="codex-two-pane">
@@ -1275,6 +1570,18 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
                   </button>
                 );
               })}
+              <span className="codex-pill-divider" aria-hidden="true" />
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeSection === "mechanics"}
+                className={`codex-section-pill ${
+                  activeSection === "mechanics" ? "active" : ""
+                }`}
+                onClick={() => handleOpenSection("mechanics")}
+              >
+                <span>{MECHANICS_SECTION_META.label}</span>
+              </button>
             </div>
 
             {/* Category-Scoped Filter Input (mounted ONLY inside Category 2-Pane View) */}
@@ -1321,6 +1628,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
                     setActiveSection(null);
                     setCategoryQuery("");
                     setFrozenOrderIds(null);
+                    setMechanicsReturnTarget(null);
                     setGlobalQuery(transfer);
                     if (!transfer) {
                       shouldFocusGlobalSearchRef.current = true;
@@ -1360,6 +1668,35 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
               </div>
             )}
 
+            {/* Game Mechanics Expand/Collapse Toolbar */}
+            {activeSection === "mechanics" && allMechanicsSubcategoryIds.length > 0 && (
+              <div className="codex-tree-toolbar">
+                <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>
+                  Topics
+                </span>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button
+                    type="button"
+                    className="codex-link-btn"
+                    onClick={() =>
+                      setExpandedMechanicsSubcats(
+                        new Set(allMechanicsSubcategoryIds)
+                      )
+                    }
+                  >
+                    Expand All
+                  </button>
+                  <button
+                    type="button"
+                    className="codex-link-btn"
+                    onClick={() => setExpandedMechanicsSubcats(new Set())}
+                  >
+                    Collapse All
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Scrollable Master List / Tree */}
             <div
               className="codex-list-scroll"
@@ -1368,7 +1705,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
               onKeyDown={handleListKeyDown}
             >
               {isGlobalSearchMode ? (
-                globalSearchHits.length === 0 ? (
+                totalGlobalSearchCount === 0 ? (
                   <div className="ui-empty-state ui-empty-state--fill">
                     <span>No entries match &ldquo;{globalQuery.trim()}&rdquo;.</span>
                     <button
@@ -1380,57 +1717,111 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
                     </button>
                   </div>
                 ) : (
-                  globalSearchHits.map((hit) => {
-                    const isSelected = selectedEntryKey === hit.key;
-                    const tierText =
-                      hit.matchTier === 1
-                        ? "Title"
-                        : hit.matchTier === 2
-                          ? "Keyword"
-                          : "Content";
-                    return (
-                      <div
-                        key={hit.key}
-                        role="option"
-                        aria-selected={isSelected}
-                        tabIndex={0}
-                        className={`codex-list-row ${isSelected ? "active" : ""}`}
-                        onClick={() => {
-                          setCharFocusTarget(null);
-                          setSelectedEntryKey(hit.key);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
+                  <>
+                    {globalSearchHits.map((hit) => {
+                      const isSelected = selectedEntryKey === hit.key;
+                      const tierText =
+                        hit.matchTier === 1
+                          ? "Title"
+                          : hit.matchTier === 2
+                            ? "Keyword"
+                            : "Content";
+                      return (
+                        <div
+                          key={hit.key}
+                          role="option"
+                          aria-selected={isSelected}
+                          tabIndex={0}
+                          className={`codex-list-row ${isSelected ? "active" : ""}`}
+                          onClick={() => {
                             setCharFocusTarget(null);
                             setSelectedEntryKey(hit.key);
-                          }
-                        }}
-                      >
-                        <span
-                          className={`codex-list-row-title ${
-                            hit.title === "Untitled Entry" ? "is-untitled" : ""
-                          }`}
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              setCharFocusTarget(null);
+                              setSelectedEntryKey(hit.key);
+                            }
+                          }}
                         >
-                          {hit.title}
-                        </span>
-                        <div className="codex-list-row-meta">
-                          {hit.isInvalid && (
-                            <span
-                              className="codex-invalid-dot"
-                              title="Incomplete entry"
-                            >
-                              !
-                            </span>
-                          )}
-                          <span className={`lore-cat-badge ${hit.badgeClass}`}>
-                            {hit.badgeLabel}
+                          <span
+                            className={`codex-list-row-title ${
+                              hit.title === "Untitled Entry" ? "is-untitled" : ""
+                            }`}
+                          >
+                            {hit.title}
                           </span>
-                          <span className="codex-match-tier">{tierText}</span>
+                          <div className="codex-list-row-meta">
+                            {hit.isInvalid && (
+                              <span
+                                className="codex-invalid-dot"
+                                title="Incomplete entry"
+                              >
+                                !
+                              </span>
+                            )}
+                            <span className={`lore-cat-badge ${hit.badgeClass}`}>
+                              {hit.badgeLabel}
+                            </span>
+                            <span className="codex-match-tier">{tierText}</span>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })
+                      );
+                    })}
+
+                    {globalMechanicsHits.length > 0 && (
+                      <>
+                        <div className="codex-search-group-header">
+                          Game Mechanics ({globalMechanicsHits.length})
+                        </div>
+                        {globalMechanicsHits.map((hit) => {
+                          const isSelected = selectedEntryKey === hit.key;
+                          const tierText =
+                            hit.matchTier === 1
+                              ? "Title"
+                              : hit.matchTier === 2
+                                ? "Keyword"
+                                : "Content";
+                          return (
+                            <div
+                              key={hit.key}
+                              role="option"
+                              aria-selected={isSelected}
+                              tabIndex={0}
+                              className={`codex-list-row ${isSelected ? "active" : ""}`}
+                              onClick={() => {
+                                setCharFocusTarget(null);
+                                setSelectedEntryKey(hit.key);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  setCharFocusTarget(null);
+                                  setSelectedEntryKey(hit.key);
+                                }
+                              }}
+                            >
+                              <Compass
+                                size={12}
+                                color="var(--accent-cyan)"
+                                style={{ flexShrink: 0 }}
+                              />
+                              <span className="codex-list-row-title">
+                                {hit.title}
+                              </span>
+                              <div className="codex-list-row-meta">
+                                <span className="badge codex-badge--location">
+                                  {hit.badgeLabel}
+                                </span>
+                                <span className="codex-match-tier">{tierText}</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </>
+                    )}
+                  </>
                 )
               ) : activeSection && isEditableCodexSection(activeSection) ? (
                 editableLoreItems.length === 0 ? (
@@ -1594,6 +1985,105 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
                           ) : null}
                         </div>
                       </div>
+                    );
+                  })
+                )
+              ) : activeSection === "mechanics" ? (
+                mechanicsTree.roots.length === 0 ? (
+                  <div className="ui-empty-state ui-empty-state--fill">
+                    <span>
+                      No guides match &ldquo;{categoryQuery.trim()}&rdquo;.
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => setCategoryQuery("")}
+                    >
+                      Clear filter
+                    </button>
+                  </div>
+                ) : (
+                  mechanicsTree.roots.map((group) => {
+                    const isExpanded = effectiveExpandedMechanicsSubcats.has(
+                      group.subcategoryId
+                    );
+                    const toggleGroup = () => {
+                      setExpandedMechanicsSubcats((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(group.subcategoryId)) {
+                          next.delete(group.subcategoryId);
+                        } else {
+                          next.add(group.subcategoryId);
+                        }
+                        return next;
+                      });
+                    };
+                    return (
+                      <React.Fragment key={group.key}>
+                        <div
+                          className="codex-list-row codex-mechanics-group-row"
+                          style={{ paddingLeft: 8 }}
+                          title={group.subcategory.description}
+                          onClick={toggleGroup}
+                        >
+                          <button
+                            type="button"
+                            className="codex-tree-toggle"
+                            aria-expanded={isExpanded}
+                            aria-label={
+                              isExpanded
+                                ? `Collapse ${group.subcategory.label}`
+                                : `Expand ${group.subcategory.label}`
+                            }
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleGroup();
+                            }}
+                          >
+                            {isExpanded ? (
+                              <ChevronDown size={12} />
+                            ) : (
+                              <ChevronRight size={12} />
+                            )}
+                          </button>
+                          <span className="codex-list-row-title">
+                            {group.subcategory.label}
+                          </span>
+                          <span className="codex-mechanics-group-count">
+                            {group.children.length}
+                          </span>
+                        </div>
+                        {isExpanded &&
+                          group.children.map((leaf) => {
+                            const isSelected = selectedEntryKey === leaf.key;
+                            return (
+                              <div
+                                key={leaf.key}
+                                role="option"
+                                aria-selected={isSelected}
+                                tabIndex={0}
+                                className={`codex-list-row ${isSelected ? "active" : ""}`}
+                                style={{ paddingLeft: 24 }}
+                                onClick={() => setSelectedEntryKey(leaf.key)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    setSelectedEntryKey(leaf.key);
+                                  }
+                                }}
+                              >
+                                <Compass
+                                  size={12}
+                                  color="var(--accent-cyan)"
+                                  style={{ flexShrink: 0 }}
+                                />
+                                <span className="codex-list-row-title">
+                                  {leaf.title}
+                                </span>
+                              </div>
+                            );
+                          })}
+                      </React.Fragment>
                     );
                   })
                 )

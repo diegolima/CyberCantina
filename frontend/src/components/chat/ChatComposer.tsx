@@ -31,6 +31,7 @@ import {
   GmMentionCandidate,
   GmMentionCategory,
   GmMentionRef,
+  MechanicsTopicId,
   NarrativeMode,
   NeighborLocationView,
   TurnNodeRecord,
@@ -54,6 +55,7 @@ import {
 } from "../../utils/slashCommands";
 import { useMagicWand } from "../../hooks/useMagicWand";
 import { MagicWandButton } from "../MagicWandButton";
+import { MechanicsHelpButton } from "../shared/MechanicsHelpButton";
 import { CharacterMentionPicker } from "../CharacterMentionPicker";
 import { DirectorChoicesDrawer } from "./DirectorChoicesDrawer";
 import { GmMentionPopover } from "./GmMentionPopover";
@@ -161,6 +163,7 @@ export interface ChatComposerProps {
   handleCancelEdit: () => void;
   handleSend: (e: React.FormEvent) => void;
   onOpenGmTalk?: () => void;
+  onOpenMechanicsHelp?: (topicId: MechanicsTopicId) => void;
   gmMode?: ChatComposerGmProps;
 }
 
@@ -239,6 +242,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   handleCancelEdit,
   handleSend,
   onOpenGmTalk,
+  onOpenMechanicsHelp,
   gmMode,
 }) => {
   const isGmActive = Boolean(gmMode?.isActive);
@@ -408,6 +412,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
             onUpdateOption={handleUpdateOption}
             onRemoveOption={handleRemoveOption}
             onClose={() => setActiveTray("none")}
+            onOpenMechanicsHelp={onOpenMechanicsHelp}
           />
         )}
 
@@ -1216,6 +1221,11 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                 <Dices size={13} />
                 <span>{diceMode}</span>
               </button>
+              <MechanicsHelpButton
+                topicId="dice-modes"
+                label="d20 Modes & Checks"
+                onOpenHelp={onOpenMechanicsHelp}
+              />
 
               {diceMode === "forced" && (
                 <input

@@ -13,7 +13,13 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import type { CompassDirection, LocationEdge, LocationNode } from "../../types";
+import type {
+  CompassDirection,
+  LocationEdge,
+  LocationNode,
+  MechanicsTopicId,
+} from "../../types";
+import { MechanicsHelpButton } from "../shared/MechanicsHelpButton";
 import {
   LINK_SPEED_PRESET_GROUPS,
   MAX_EDGE_OBSTACLES,
@@ -63,6 +69,7 @@ export interface MapLinkInspectorSectionProps {
   onBackToBundle?: () => void;
   onDeleteEdge?: (edgeId: string) => void;
   canDeleteEdge?: (edgeId: string) => { allowed: boolean; reason?: string };
+  onOpenMechanicsHelp?: (topicId: MechanicsTopicId) => void;
 }
 
 export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = ({
@@ -82,6 +89,7 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
   onBackToBundle,
   onDeleteEdge,
   canDeleteEdge,
+  onOpenMechanicsHelp,
 }) => {
   const locationNodeMap = useMemo(
     () => new Map(allLocations.map((loc) => [loc.id, loc])),
@@ -617,6 +625,11 @@ export const MapLinkInspectorSection: React.FC<MapLinkInspectorSectionProps> = (
               <Info size={12} />
             </span>
           </label>
+          <MechanicsHelpButton
+            topicId="spatial-links-travel"
+            label="Links, Travel Time & Secret Passages"
+            onOpenHelp={onOpenMechanicsHelp}
+          />
         </div>
 
         <div className="link-speed-row">

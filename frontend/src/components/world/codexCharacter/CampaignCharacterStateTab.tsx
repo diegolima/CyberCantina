@@ -14,9 +14,11 @@ import {
   CharacterRecord,
   CharacterStateSnapshot,
   LocationNode,
+  MechanicsTopicId,
   PersonaRecord,
   TurnNodeRecord,
 } from "../../../types";
+import { MechanicsHelpButton } from "../../shared/MechanicsHelpButton";
 import { RelationalBondChart } from "./RelationalBondChart";
 import { extractBondHistorySeries } from "./relationalHistory";
 
@@ -37,6 +39,7 @@ export interface CampaignCharacterStateTabProps {
   personaSnapshot?: PersonaRecord | null;
   activeBranchTurns?: readonly TurnNodeRecord[];
   initialExpandedBondTargets?: readonly string[];
+  onOpenMechanicsHelp?: (topicId: MechanicsTopicId) => void;
   isActive: boolean;
 }
 
@@ -54,6 +57,7 @@ export const CampaignCharacterStateTab: React.FC<CampaignCharacterStateTabProps>
   personaSnapshot = null,
   activeBranchTurns = [],
   initialExpandedBondTargets,
+  onOpenMechanicsHelp,
   isActive,
 }) => {
   const [targetLocId, setTargetLocId] = useState(state.current_location_id);
@@ -258,11 +262,21 @@ export const CampaignCharacterStateTab: React.FC<CampaignCharacterStateTabProps>
 
         {/* Layer 2: PAD + Composure Emotional Meters */}
         <div
+          className="sidebar-label"
+          style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginTop: 4 }}
+        >
+          <span>Layer 2 · Mood &amp; Composure</span>
+          <MechanicsHelpButton
+            topicId="care-mood-composure"
+            label="Mood & Composure (PAD)"
+            onOpenHelp={onOpenMechanicsHelp}
+          />
+        </div>
+        <div
           style={{
             display: "grid",
             gridTemplateColumns: "1fr 1fr",
             gap: 12,
-            marginTop: 4,
           }}
         >
           <div className="meter-row">
@@ -397,9 +411,19 @@ export const CampaignCharacterStateTab: React.FC<CampaignCharacterStateTabProps>
               gap: 8,
             }}
           >
-            <div className="sidebar-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <Brain size={13} color="var(--accent-amber)" />
-              Layer 3 · Scene Appraisal
+            <div
+              className="sidebar-label"
+              style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}
+            >
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <Brain size={13} color="var(--accent-amber)" />
+                Layer 3 · Scene Appraisal
+              </span>
+              <MechanicsHelpButton
+                topicId="care-scene-appraisal"
+                label="Scene Appraisal & Intent"
+                onOpenHelp={onOpenMechanicsHelp}
+              />
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: "0.74rem" }}>
               <div>
@@ -440,9 +464,19 @@ export const CampaignCharacterStateTab: React.FC<CampaignCharacterStateTabProps>
               gap: 8,
             }}
           >
-            <div className="sidebar-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <HeartPulse size={13} color="#ec4899" />
-              Layer 1 · Active Worldview
+            <div
+              className="sidebar-label"
+              style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}
+            >
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <HeartPulse size={13} color="#ec4899" />
+                Layer 1 · Active Worldview
+              </span>
+              <MechanicsHelpButton
+                topicId="care-worldview-temperament"
+                label="Worldview & Temperament"
+                onOpenHelp={onOpenMechanicsHelp}
+              />
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, fontSize: "0.74rem" }}>
               <div>
@@ -568,16 +602,24 @@ export const CampaignCharacterStateTab: React.FC<CampaignCharacterStateTabProps>
           style={{
             display: "flex",
             alignItems: "center",
+            justifyContent: "space-between",
             gap: 6,
             marginBottom: 8,
           }}
         >
-          <Users size={13} color="var(--accent-violet)" />
-          Layer 4 · Dyadic Relational Bonds (
-          {care
-            ? Object.keys(care.relations || {}).length
-            : relationships.length}
-          )
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <Users size={13} color="var(--accent-violet)" />
+            Layer 4 · Dyadic Relational Bonds (
+            {care
+              ? Object.keys(care.relations || {}).length
+              : relationships.length}
+            )
+          </span>
+          <MechanicsHelpButton
+            topicId="care-dyadic-bonds"
+            label="Dyadic Relational Bonds"
+            onOpenHelp={onOpenMechanicsHelp}
+          />
         </div>
 
         {care && Object.keys(care.relations || {}).length > 0 ? (
@@ -758,8 +800,15 @@ export const CampaignCharacterStateTab: React.FC<CampaignCharacterStateTabProps>
             <UserCheck size={13} color="var(--accent-emerald)" />
             Knowledge of You ({unlockedPersonaKeys.length})
           </span>
-          <span style={{ fontSize: "0.7rem", color: "var(--accent-emerald)", textTransform: "none", letterSpacing: 0 }}>
-            {personaSnapshot ? personaSnapshot.name : "Protagonist"}
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: "0.7rem", color: "var(--accent-emerald)", textTransform: "none", letterSpacing: 0 }}>
+              {personaSnapshot ? personaSnapshot.name : "Protagonist"}
+            </span>
+            <MechanicsHelpButton
+              topicId="directing-knowledge-gossip"
+              label="Knowledge of You & Gossip"
+              onOpenHelp={onOpenMechanicsHelp}
+            />
           </span>
         </div>
         {unlockedPersonaKeys.length > 0 ? (

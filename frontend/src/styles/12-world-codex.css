@@ -1004,3 +1004,236 @@
   font-style: italic;
   line-height: 1.4;
 }
+
+/* Codex Game Mechanics Reference Shelf & Reader (v0.40.0) */
+.codex-hub-shelf {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--accent-cyan);
+  border-radius: 9px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.codex-hub-shelf-main {
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  cursor: pointer;
+  width: 100%;
+}
+
+.codex-hub-shelf-main:hover .codex-hub-card-title {
+  color: var(--cyan-fg);
+}
+
+.codex-hub-shelf-main:focus-visible {
+  outline: 1px solid var(--accent-cyan);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+.codex-hub-shelf-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.codex-hub-shelf-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.codex-hub-shelf-chip {
+  font-size: 0.69rem;
+  font-weight: 500;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color 0.14s ease, color 0.14s ease, background-color 0.14s ease;
+}
+
+.codex-hub-shelf-chip:hover {
+  border-color: var(--cyan-border);
+  background: var(--cyan-bg-subtle);
+  color: var(--cyan-fg);
+}
+
+.codex-pill-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 3px;
+  background: var(--border-subtle);
+}
+
+.codex-search-group-header {
+  margin-top: 8px;
+  padding: 5px 8px 3px;
+  font-size: 0.67rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--cyan-fg);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.codex-mechanics-group-row {
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--surface-glass-1);
+}
+
+.codex-mechanics-group-count {
+  font-size: 0.66rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.codex-mechanics-lead {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text-soft);
+}
+
+.codex-mechanics-scale-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.codex-mechanics-scale-row {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.codex-mechanics-scale-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.76rem;
+  color: var(--text-primary);
+}
+
+.codex-mechanics-scale-desc {
+  font-size: 0.74rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.codex-mechanics-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.66rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+}
+
+.codex-mechanics-pill--cyan {
+  background: var(--cyan-bg-subtle);
+  border-color: var(--cyan-border-subtle);
+  color: var(--cyan-fg);
+}
+
+.codex-mechanics-pill--emerald {
+  background: var(--emerald-bg-subtle);
+  border-color: var(--emerald-border);
+  color: var(--emerald-fg);
+}
+
+.codex-mechanics-pill--amber {
+  background: var(--amber-bg-subtle);
+  border-color: var(--amber-border-subtle);
+  color: var(--amber-fg);
+}
+
+.codex-mechanics-pill--violet {
+  background: var(--violet-bg-subtle);
+  border-color: var(--violet-border-subtle);
+  color: var(--violet-fg);
+}
+
+.codex-mechanics-pill--rose {
+  background: var(--rose-bg-subtle);
+  border-color: var(--rose-border);
+  color: var(--rose-fg);
+}
+
+.codex-mechanics-pill--muted {
+  background: var(--slate-bg-subtle);
+  border-color: var(--slate-border-muted);
+  color: var(--text-secondary);
+}
+
+.codex-mechanics-hood-toggle {
+  align-self: flex-start;
+}
+
+.codex-mechanics-hood-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.codex-mechanics-hood-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 7px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.codex-mechanics-related-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.codex-mechanics-related-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  color: var(--cyan-fg);
+  cursor: pointer;
+  transition: border-color 0.14s ease, background-color 0.14s ease;
+}
+
+.codex-mechanics-related-chip:hover {
+  border-color: var(--cyan-border);
+  background: var(--cyan-bg-subtle);
+}

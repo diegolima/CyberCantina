@@ -20,10 +20,12 @@ import {
   Users,
 } from "lucide-react";
 import {
+  CodexReturnTarget,
   GalleryImage,
   ItemEquipActionPayload,
   LocationNode,
   LoreNode,
+  MechanicsTopicId,
   MemoryShard,
   PersonaRecord,
   PersonaTurnStateSnapshot,
@@ -33,6 +35,7 @@ import {
 } from "../../types";
 import { getCharacterEmotionPortrait, getEntityPrimaryImage } from "../../utils/entityImages";
 import { ImageLightboxModal } from "../shared/ImageLightboxModal";
+import { MechanicsHelpButton } from "../shared/MechanicsHelpButton";
 import { CampaignCharacterInventoryTab } from "./codexCharacter/CampaignCharacterInventoryTab";
 import { CampaignCharacterMediaTab } from "./codexCharacter/CampaignCharacterMediaTab";
 import { CampaignCharacterMemoriesTab } from "./codexCharacter/CampaignCharacterMemoriesTab";
@@ -74,6 +77,10 @@ interface CodexCharacterDetailProps {
   onItemAction?: (payload: ItemEquipActionPayload) => Promise<void> | void;
   onSaveMemories?: (characterId: string, shards: MemoryShard[]) => Promise<void>;
   onRelocateCharacter?: (characterId: string, locationId: string) => Promise<void> | void;
+  onOpenMechanicsHelp?: (
+    topicId: MechanicsTopicId,
+    returnTarget?: CodexReturnTarget
+  ) => void;
 }
 
 function resolveCharacterInitialTab(
@@ -103,6 +110,7 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
   onItemAction,
   onSaveMemories,
   onRelocateCharacter,
+  onOpenMechanicsHelp,
 }) => {
   const hasState = Boolean(characterEntry?.state);
   const [activeCharTab, setActiveCharTab] = useState<CodexCharacterSubtab>(() =>
@@ -961,8 +969,26 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
               </div>
 
               <div className="codex-section-card">
-                <div className="codex-section-label">
-                  Baseline Psyche &amp; Emotional Defaults
+                <div
+                  className="codex-section-label"
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}
+                >
+                  <span>Baseline Psyche &amp; Emotional Defaults</span>
+                  <MechanicsHelpButton
+                    topicId="care-worldview-temperament"
+                    label="Worldview & Temperament"
+                    onOpenHelp={
+                      onOpenMechanicsHelp
+                        ? (topicId) =>
+                            onOpenMechanicsHelp(topicId, {
+                              kind: "character",
+                              characterId: record.id,
+                              subtab: "personality",
+                              label: `${record.name} (Personality)`,
+                            })
+                        : undefined
+                    }
+                  />
                 </div>
                 <div className="codex-psyche-grid">
                   <div>
@@ -1071,6 +1097,17 @@ export const CodexCharacterDetail: React.FC<CodexCharacterDetailProps> = ({
               characterNameMap={characterNameMap}
               personaSnapshot={persona}
               activeBranchTurns={activeBranchTurns}
+              onOpenMechanicsHelp={
+                onOpenMechanicsHelp
+                  ? (topicId) =>
+                      onOpenMechanicsHelp(topicId, {
+                        kind: "character",
+                        characterId: record.id,
+                        subtab: "current",
+                        label: `${record.name} (Current)`,
+                      })
+                  : undefined
+              }
               isActive={activeCharTab === "current"}
             />
           )}

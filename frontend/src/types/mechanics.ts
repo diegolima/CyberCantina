@@ -129,3 +129,58 @@ export interface PreTurnAnalysis {
   dice_mode_promoted?: boolean;
   party_action?: PartyActionSpec | null;
 }
+
+export type MechanicsSubcategoryId =
+  | "care"
+  | "dice"
+  | "directing"
+  | "spatial"
+  | "memory"
+  | "timelines"
+  | "gm";
+
+export type MechanicsTopicId =
+  | "care-overview"
+  | "care-worldview-temperament"
+  | "care-mood-composure"
+  | "care-scene-appraisal"
+  | "care-dyadic-bonds"
+  | "dice-modes"
+  | "dice-outcome-tiers"
+  | "dice-director-choices"
+  | "directing-whispers-privacy"
+  | "directing-narrator-clock"
+  | "directing-knowledge-gossip"
+  | "spatial-parties"
+  | "spatial-hierarchy-portals"
+  | "spatial-links-travel"
+  | "memory-3-tier"
+  | "memory-context-health"
+  | "memory-lore-flags"
+  | "timelines-branching"
+  | "timelines-graph-bookmarks"
+  | "timelines-major-events"
+  | "gm-neuromancer"
+  | "gm-mode"
+  | "gm-overrides-locks";
+
+export type CodexReturnTarget =
+  | {
+      kind: "character";
+      characterId: string;
+      subtab:
+        | "bio"
+        | "appearance"
+        | "personality"
+        | "voice"
+        | "memories"
+        | "inventory"
+        | "current"
+        | "media";
+      label: string;
+    }
+  | {
+      kind: "tab";
+      tab: "map" | "settings";
+      label: string;
+    };

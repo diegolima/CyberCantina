@@ -7,7 +7,9 @@ import type {
   ChoiceGate,
   ChoicePreviewResponse,
   DiceMode,
+  MechanicsTopicId,
 } from "../../types";
+import { MechanicsHelpButton } from "../shared/MechanicsHelpButton";
 import {
   DEFAULT_GATE_DC,
   MAX_CHOICE_LABEL_LENGTH,
@@ -34,6 +36,7 @@ export interface DirectorChoicesDrawerProps {
   ) => void;
   onRemoveOption: (charId: string, optId: string) => void;
   onClose: () => void;
+  onOpenMechanicsHelp?: (topicId: MechanicsTopicId) => void;
 }
 
 export const DirectorChoicesDrawer: React.FC<DirectorChoicesDrawerProps> = ({
@@ -52,6 +55,7 @@ export const DirectorChoicesDrawer: React.FC<DirectorChoicesDrawerProps> = ({
   onUpdateOption,
   onRemoveOption,
   onClose,
+  onOpenMechanicsHelp,
 }) => {
   const handleClearAllChoices = onClearAll;
   const handleClearCharChoices = onClearChar;
@@ -76,6 +80,11 @@ export const DirectorChoicesDrawer: React.FC<DirectorChoicesDrawerProps> = ({
               >
                 <ListChecks size={14} />
                 <span>Director Choices (Guide Character Cognition)</span>
+                <MechanicsHelpButton
+                  topicId="dice-director-choices"
+                  label="Director Choices"
+                  onOpenHelp={onOpenMechanicsHelp}
+                />
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 {totalStagedOptionsCount > 0 && (

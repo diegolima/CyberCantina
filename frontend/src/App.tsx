@@ -38,6 +38,7 @@ import {
   CampaignRecord,
   CampaignStateBundle,
   CharacterRecord,
+  MechanicsTopicId,
   PersonaRecord,
   ProfileModelSettingsResponse,
   PublicAdminMessage,
@@ -243,6 +244,22 @@ export const App: React.FC = () => {
     hasTopPopoverOpen: showNotesFlyout,
     onPanelOpened: handlePanelOpened,
   });
+
+  const handleOpenMechanicsGuide = useCallback(
+    (topicId: MechanicsTopicId) => {
+      layout.closeOverlays();
+      setStoryModalTab(null);
+      setIsPartyModalOpen(false);
+      setCodexFocusRequest({
+        kind: "mechanics",
+        topicId,
+        returnTarget: null,
+        nonce: ++codexFocusNonceRef.current,
+      });
+      setCampaignWorldSheetTab("codex");
+    },
+    [layout.closeOverlays]
+  );
 
   // Close overlay drawer automatically when NotesFlyout opens on tablet/mobile.
   useEffect(() => {
@@ -812,6 +829,7 @@ export const App: React.FC = () => {
             setCodexFocusRequest(null);
             setCampaignWorldSheetTab("codex");
           }}
+          onOpenMechanicsHelp={handleOpenMechanicsGuide}
         />
       ) : (
         <HomeScreen
@@ -946,6 +964,7 @@ export const App: React.FC = () => {
           onSaveCampaignContainerLore={handleSaveCampaignContainerLore}
           onToggleCampaignLoreReveal={handleToggleCampaignLoreReveal}
           onToggleCampaignEdgeReveal={handleToggleCampaignEdgeReveal}
+          onOpenMechanicsHelp={handleOpenMechanicsGuide}
           isMutatingLocked={isStreaming || isPhase4Running}
         />
       )}
@@ -964,6 +983,7 @@ export const App: React.FC = () => {
           onBranchFromTurn={handleBranchFromStoryTurn}
           onUpdateMajorEvent={handleUpdateCampaignMajorEvent}
           onDeleteMajorEvent={handleDeleteCampaignMajorEvent}
+          onOpenMechanicsHelp={handleOpenMechanicsGuide}
         />
       )}
 
@@ -1060,6 +1080,7 @@ export const App: React.FC = () => {
             onOverrideCharacterLocation={handleOverrideCharacterLocation}
             onCreateNpcParty={handleCreateNpcParty}
             onDisbandNpcParty={handleDisbandParty}
+            onOpenMechanicsHelp={handleOpenMechanicsGuide}
           />
         );
       })()}

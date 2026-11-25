@@ -19,10 +19,12 @@ import {
 import type {
   GmChatMessage,
   GmSourceRef,
+  MechanicsTopicId,
   WorldLoreNodeDraft,
 } from "../../types";
 import type { GmModelMeta } from "../../hooks/useGmTalk";
 import { GM_GREETING_MESSAGE, GM_NAME } from "../../utils/gmMentions";
+import { MechanicsHelpButton } from "../shared/MechanicsHelpButton";
 import { GmCodexProposalCard } from "./GmCodexProposalCard";
 import { renderFormattedProse } from "./chatHelpers";
 
@@ -63,6 +65,7 @@ export interface GmTalkDrawerProps {
   ) => void;
   onCancelCodexProposal?: (messageId: string, proposalId: string) => void;
   onOpenCodex?: () => void;
+  onOpenMechanicsHelp?: (topicId: MechanicsTopicId) => void;
   onDismissToolNotice?: () => void;
   onDismissError: () => void;
   onToggleExpanded: () => void;
@@ -101,6 +104,7 @@ export const GmTalkDrawer: React.FC<GmTalkDrawerProps> = ({
   onConfirmCodexProposal,
   onCancelCodexProposal,
   onOpenCodex,
+  onOpenMechanicsHelp,
   onDismissToolNotice,
   onDismissError,
   onToggleExpanded,
@@ -171,6 +175,12 @@ export const GmTalkDrawer: React.FC<GmTalkDrawerProps> = ({
               {modelMeta.toolsEnabled ? " · Tools" : ""}
             </span>
           )}
+
+          <MechanicsHelpButton
+            topicId="gm-neuromancer"
+            label="GM Talk (Neuromancer)"
+            onOpenHelp={onOpenMechanicsHelp}
+          />
 
           <button
             type="button"

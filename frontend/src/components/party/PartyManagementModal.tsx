@@ -18,9 +18,11 @@ import {
   type CharacterStateSnapshot,
   type CreateNpcPartyPayload,
   type LocationNode,
+  type MechanicsTopicId,
   type PartyActionSpec,
   type PartyRecord,
 } from "../../types";
+import { MechanicsHelpButton } from "../shared/MechanicsHelpButton";
 import {
   getCharacterParty,
   getNpcOnlyParties,
@@ -45,6 +47,7 @@ export interface PartyManagementModalProps {
   ) => void | Promise<void>;
   onCreateNpcParty: (payload: CreateNpcPartyPayload) => void | Promise<void>;
   onDisbandNpcParty: (partyId: string) => void | Promise<void>;
+  onOpenMechanicsHelp?: (topicId: MechanicsTopicId) => void;
 }
 
 export const PartyManagementModal: React.FC<PartyManagementModalProps> = ({
@@ -62,6 +65,7 @@ export const PartyManagementModal: React.FC<PartyManagementModalProps> = ({
   onOverrideCharacterLocation,
   onCreateNpcParty,
   onDisbandNpcParty,
+  onOpenMechanicsHelp,
 }) => {
   const [actionMessage, setActionMessage] = useState("");
   const [selectedInviteIds, setSelectedInviteIds] = useState<string[]>([]);
@@ -248,6 +252,11 @@ export const PartyManagementModal: React.FC<PartyManagementModalProps> = ({
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <Users size={18} color="var(--accent-cyan)" />
             <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Party Management</h2>
+            <MechanicsHelpButton
+              topicId="spatial-parties"
+              label="Parties & Strict Co-Location"
+              onOpenHelp={onOpenMechanicsHelp}
+            />
           </div>
           <button
             type="button"

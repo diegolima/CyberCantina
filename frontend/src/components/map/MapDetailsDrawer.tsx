@@ -28,6 +28,7 @@ import {
   LocationNode,
   LocationOverrideOptions,
   MagicContextRef,
+  MechanicsTopicId,
   WorldMediaItem,
 } from "../../types";
 import { LocationOverrideButton } from "../inspector/LocationOverrideButton";
@@ -176,6 +177,7 @@ export interface MapDetailsDrawerProps {
   onSetStartingLocation?: (locId: string) => void;
   onConvertToContainer?: (locId: string) => void;
   onMoveOutToParent?: (kind: "location" | "container", id: string) => void;
+  onOpenMechanicsHelp?: (topicId: MechanicsTopicId) => void;
 }
 
 const MapIconPicker: React.FC<{
@@ -1020,6 +1022,7 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
   onSetStartingLocation,
   onConvertToContainer,
   onMoveOutToParent,
+  onOpenMechanicsHelp,
 }) => {
   const [lightboxImage, setLightboxImage] = useState<{
     url: string;
@@ -1188,6 +1191,7 @@ export const MapDetailsDrawer: React.FC<MapDetailsDrawerProps> = ({
         onBackToBundle={onBackToBundle}
         onDeleteEdge={onDeleteEdge}
         canDeleteEdge={canDeleteEdge}
+        onOpenMechanicsHelp={onOpenMechanicsHelp}
       />
     );
   }

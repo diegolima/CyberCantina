@@ -7,6 +7,7 @@ import type {
   CharacterWhisper,
   DiceMode,
   LiveStreamState,
+  MechanicsTopicId,
   NarrativeMode,
   PartyActionSpec,
   Phase3TurnProgress,
@@ -80,6 +81,7 @@ export interface ChatStageProps {
   ) => Promise<string>;
   onCampaignBundleChange?: (bundle: CampaignStateBundle) => void;
   onOpenCodex?: () => void;
+  onOpenMechanicsHelp?: (topicId: MechanicsTopicId) => void;
 }
 
 export function renderFormattedProse(text: string): React.ReactNode {

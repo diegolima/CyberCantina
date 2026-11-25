@@ -324,3 +324,34 @@
 .ui-section-card--danger {
   border-color: var(--rose-border);
 }
+
+/* ==========================================================================
+   Contextual Mechanics Help Trigger (.ui-mechanics-help-btn)
+   ========================================================================== */
+.ui-mechanics-help-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.14s ease, background-color 0.14s ease, border-color 0.14s ease;
+}
+
+.ui-mechanics-help-btn:hover {
+  color: var(--cyan-fg);
+  background: var(--cyan-bg-subtle);
+  border-color: var(--cyan-border-subtle);
+}
+
+.ui-mechanics-help-btn:focus-visible {
+  outline: 1px solid var(--accent-cyan);
+  outline-offset: 1px;
+  color: var(--cyan-fg);
+}

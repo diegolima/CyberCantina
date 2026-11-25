@@ -16,6 +16,7 @@ import {
   LocationLoreNodeDraft,
   LocationNode,
   LocationOverrideOptions,
+  MechanicsTopicId,
   NeighborLocationView,
   WorldRecord,
 } from "../types";
@@ -94,6 +95,7 @@ interface LiveInspectorProps {
   ) => Promise<void> | void;
   onOpenWorldSheet?: () => void;
   onOpenCharacterInCodex?: (characterId: string) => void;
+  onOpenMechanicsHelp?: (topicId: MechanicsTopicId) => void;
   isMutatingLocked?: boolean;
 }
 
@@ -114,6 +116,7 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   onToggleCampaignEdgeReveal,
   onOpenWorldSheet,
   onOpenCharacterInCodex,
+  onOpenMechanicsHelp,
   isMutatingLocked = false,
 }) => {
   const activeLoc = bundle.active_location;
@@ -421,6 +424,14 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
                 onToggleEdgeReveal={onToggleCampaignEdgeReveal}
                 isMutatingLocked={isMutatingLocked}
                 visitedContainerIds={bundle.current_world_snapshot.visited_container_ids ?? []}
+                onOpenMechanicsHelp={
+                  onOpenMechanicsHelp
+                    ? (topicId) => {
+                        setShowFullMap(false);
+                        onOpenMechanicsHelp(topicId);
+                      }
+                    : undefined
+                }
               />
             </div>
           </div>
@@ -471,6 +482,7 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
         expandedRecalls={expandedRecalls}
         toggleRecall={toggleRecall}
         onOpenLoreIndex={() => setShowLoreIndex(true)}
+        onOpenMechanicsHelp={onOpenMechanicsHelp}
       />
 
       {showLoreIndex && (

@@ -446,13 +446,22 @@
   }
 
   .codex-pers-split,
-  .codex-psyche-grid {
+  .codex-psyche-grid,
+  .codex-mechanics-hood-grid {
     grid-template-columns: 1fr;
   }
 }
 
 /* Narrow Phone Polish (<= 620px) */
 @media (max-width: 620px) {
+  .codex-hub-shelf {
+    padding: 10px 11px;
+  }
+
+  .codex-pill-divider {
+    display: none;
+  }
+
   .codex-char-tabs {
     padding: 4px 5px;
   }

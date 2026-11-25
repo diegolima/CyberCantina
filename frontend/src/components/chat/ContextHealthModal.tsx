@@ -7,7 +7,13 @@ import {
   Settings,
   X,
 } from "lucide-react";
-import type { Phase4BudgetReport, TelemetryPhaseKey, TurnTelemetry } from "../../types";
+import type {
+  MechanicsTopicId,
+  Phase4BudgetReport,
+  TelemetryPhaseKey,
+  TurnTelemetry,
+} from "../../types";
+import { MechanicsHelpButton } from "../shared/MechanicsHelpButton";
 import {
   PHASE_DISPLAY_META,
   TELEMETRY_PHASE_ORDER,
@@ -25,6 +31,7 @@ interface ContextHealthModalProps {
   telemetry: TurnTelemetry | null;
   turnDepth?: number | null;
   onOpenSettings?: () => void;
+  onOpenMechanicsHelp?: (topicId: MechanicsTopicId) => void;
   initialExpandedPhases?: Partial<Record<TelemetryPhaseKey, boolean>>;
 }
 
@@ -82,6 +89,7 @@ export const ContextHealthModal: React.FC<ContextHealthModalProps> = ({
   telemetry,
   turnDepth,
   onOpenSettings,
+  onOpenMechanicsHelp,
   initialExpandedPhases,
 }) => {
   const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>(() => ({
@@ -136,6 +144,18 @@ export const ContextHealthModal: React.FC<ContextHealthModalProps> = ({
             >
               {statusLabel}
             </span>
+            <MechanicsHelpButton
+              topicId="memory-context-health"
+              label="Context Health & 4-Zone Economy"
+              onOpenHelp={
+                onOpenMechanicsHelp
+                  ? (topicId) => {
+                      onClose();
+                      onOpenMechanicsHelp(topicId);
+                    }
+                  : undefined
+              }
+            />
           </div>
           <button
             type="button"

@@ -22,6 +22,7 @@ import {
 import type {
   AppSettings,
   CampaignWorldSettings,
+  CodexReturnTarget,
   ItemEquipActionPayload,
   LocationContainer,
   LocationEdge,
@@ -29,6 +30,7 @@ import type {
   LocationLoreNodeDraft,
   LocationNode,
   LoreNode,
+  MechanicsTopicId,
   MemoryShard,
   PersonaRecord,
   PersonaTurnStateSnapshot,
@@ -52,6 +54,7 @@ import {
   validateContainersState,
 } from "../map/mapValidation";
 import { ClickToEditField } from "../shared/ClickToEditField";
+import { MechanicsHelpButton } from "../shared/MechanicsHelpButton";
 import { UnsupportedFieldsTab } from "../shared/UnsupportedFieldsTab";
 import {
   type CodexCampaignCharacterEntry,
@@ -264,6 +267,19 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
     setCodexFocusRequest(initialCodexFocus);
     setActiveTab("codex");
   }, [initialCodexFocus]);
+
+  const handleOpenInternalMechanicsHelp = (
+    topicId: MechanicsTopicId,
+    returnTarget: CodexReturnTarget
+  ) => {
+    setCodexFocusRequest({
+      kind: "mechanics",
+      topicId,
+      returnTarget,
+      nonce: ++focusNonceRef.current,
+    });
+    setActiveTab("codex");
+  };
 
   const characterNameMap = useMemo(
     () =>
@@ -1049,6 +1065,13 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 onReimagineMap={
                   isCampaignMode ? undefined : () => setShowReimagineModal(true)
                 }
+                onOpenMechanicsHelp={(topicId) =>
+                  handleOpenInternalMechanicsHelp(topicId, {
+                    kind: "tab",
+                    tab: "map",
+                    label: "Map",
+                  })
+                }
               />
             )}
           </div>
@@ -1075,6 +1098,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             characterNameMap={characterNameMap}
             activeBranchTurns={activeBranchTurns}
             externalFocusRequest={codexFocusRequest}
+            onReturnToWorldTab={(tab) => setActiveTab(tab)}
             onItemAction={onToggleItemEquip}
             onSaveMemories={onUpdateCampaignMemories}
             onRelocateCharacter={onOverrideCharacterLocation}
@@ -1231,10 +1255,23 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                   }
                 }}
               />
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>
-                  Unlock Lore &amp; Secrets (GM Mode)
-                </span>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                  <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>
+                    Unlock Lore &amp; Secrets (GM Mode)
+                  </span>
+                  <MechanicsHelpButton
+                    topicId="gm-mode"
+                    label="Unlock Lore & Secrets (GM Mode)"
+                    onOpenHelp={(topicId) =>
+                      handleOpenInternalMechanicsHelp(topicId, {
+                        kind: "tab",
+                        tab: "settings",
+                        label: "World Settings",
+                      })
+                    }
+                  />
+                </div>
                 {isCampaignMode ? (
                   <>
                     <span style={{ fontSize: "0.76rem", color: "var(--text-secondary)", lineHeight: 1.45 }}>

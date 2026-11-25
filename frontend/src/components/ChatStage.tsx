@@ -99,6 +99,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   onSummarizeTurnForBookmark,
   onCampaignBundleChange,
   onOpenCodex,
+  onOpenMechanicsHelp,
 }) => {
   const isBusy = isStreaming || isPhase4Running;
   const [inputText, setInputText] = useState("");
@@ -1833,6 +1834,14 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               void gmTalk.cancelCodexProposal(msgId, propId);
             }}
             onOpenCodex={onOpenCodex}
+            onOpenMechanicsHelp={
+              onOpenMechanicsHelp
+                ? (topicId) => {
+                    gmTalk.minimize();
+                    onOpenMechanicsHelp(topicId);
+                  }
+                : undefined
+            }
             onDismissToolNotice={gmTalk.dismissToolNotice}
             onDismissError={gmTalk.dismissError}
             onToggleExpanded={gmTalk.toggleExpanded}
@@ -1917,6 +1926,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         handleCancelEdit={handleCancelEdit}
         handleSend={handleSend}
         onOpenGmTalk={() => gmTalk.open()}
+        onOpenMechanicsHelp={onOpenMechanicsHelp}
         gmMode={{
           isActive: gmTalk.isModeActive,
           isStreaming: gmTalk.isStreaming,
@@ -1966,6 +1976,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         telemetry={modalTelemetryTurn?.telemetry ?? null}
         turnDepth={modalTelemetryTurn?.depth_index ?? null}
         onOpenSettings={onOpenSettings}
+        onOpenMechanicsHelp={onOpenMechanicsHelp}
       />
     </main>
   );

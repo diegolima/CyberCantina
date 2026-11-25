@@ -50,6 +50,8 @@ interface InspectorSectionProps {
   changed?: boolean;
   changedTitle?: string;
   defaultOpen?: boolean;
+  /** Optional sibling button/action rendered on the right edge of the header row (never nested inside toggle button). */
+  headerAction?: React.ReactNode;
   children: React.ReactNode;
 }
 
@@ -62,6 +64,7 @@ export const InspectorSection: React.FC<InspectorSectionProps> = ({
   changed,
   changedTitle = "Updated this turn",
   defaultOpen = false,
+  headerAction,
   children,
 }) => {
   const [open, setOpen] = usePersistentState<boolean>(
@@ -71,25 +74,36 @@ export const InspectorSection: React.FC<InspectorSectionProps> = ({
   const bodyId = useId();
   const toggle = useCallback(() => setOpen((o) => !o), [setOpen]);
 
+  const toggleButton = (
+    <button
+      type="button"
+      className="inspector-section-header"
+      aria-expanded={open}
+      aria-controls={bodyId}
+      onClick={toggle}
+    >
+      <span className="inspector-section-title">
+        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        {icon}
+        {title}
+        {changed && !open && <ChangeDot title={changedTitle} />}
+      </span>
+      {meta !== undefined && meta !== null && (
+        <span className="inspector-section-meta">{meta}</span>
+      )}
+    </button>
+  );
+
   return (
     <div className="inspector-card inspector-collapsible">
-      <button
-        type="button"
-        className="inspector-section-header"
-        aria-expanded={open}
-        aria-controls={bodyId}
-        onClick={toggle}
-      >
-        <span className="inspector-section-title">
-          {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          {icon}
-          {title}
-          {changed && !open && <ChangeDot title={changedTitle} />}
-        </span>
-        {meta !== undefined && meta !== null && (
-          <span className="inspector-section-meta">{meta}</span>
-        )}
-      </button>
+      {headerAction ? (
+        <div className="inspector-section-header-row">
+          {toggleButton}
+          <div className="inspector-section-header-action">{headerAction}</div>
+        </div>
+      ) : (
+        toggleButton
+      )}
       {open && (
         <div id={bodyId} className="inspector-section-body">
           {children}

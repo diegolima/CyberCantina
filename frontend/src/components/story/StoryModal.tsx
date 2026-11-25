@@ -17,7 +17,9 @@ import {
 import type {
   CampaignMajorEventUpdatePayload,
   CampaignStateBundle,
+  MechanicsTopicId,
 } from "../../types";
+import { MechanicsHelpButton } from "../shared/MechanicsHelpButton";
 import { TagChipsInput, normalizeTagList } from "../TagChipsInput";
 import { BranchGraphCanvas } from "./BranchGraphCanvas";
 import { countVisibleTimelines } from "./branchGraphLayout";
@@ -31,6 +33,28 @@ import {
 } from "./storyMajorEvents";
 
 export type StoryModalTab = "summary" | "major_events" | "timelines" | "bookmarks";
+
+const STORY_TAB_HELP: Record<
+  StoryModalTab,
+  { topicId: MechanicsTopicId; label: string }
+> = {
+  summary: {
+    topicId: "memory-3-tier",
+    label: "How the AI Remembers (3-Tier Memory)",
+  },
+  major_events: {
+    topicId: "timelines-major-events",
+    label: "Major Events & Copy-on-Write",
+  },
+  timelines: {
+    topicId: "timelines-branching",
+    label: "Branching, Swiping & Editing",
+  },
+  bookmarks: {
+    topicId: "timelines-graph-bookmarks",
+    label: "Branch Graph & Bookmarks",
+  },
+};
 
 export interface StoryModalProps {
   isOpen: boolean;
@@ -51,6 +75,7 @@ export interface StoryModalProps {
     payload: CampaignMajorEventUpdatePayload
   ) => Promise<void> | void;
   onDeleteMajorEvent?: (turnId: string) => Promise<void> | void;
+  onOpenMechanicsHelp?: (topicId: MechanicsTopicId) => void;
 }
 
 export const StoryModal: React.FC<StoryModalProps> = ({
@@ -67,6 +92,7 @@ export const StoryModal: React.FC<StoryModalProps> = ({
   onBranchFromTurn,
   onUpdateMajorEvent,
   onDeleteMajorEvent,
+  onOpenMechanicsHelp,
 }) => {
   const [activeTab, setActiveTab] = useState<StoryModalTab>(initialTab);
   const [bookmarkQuery, setBookmarkQuery] = useState("");
@@ -243,7 +269,14 @@ export const StoryModal: React.FC<StoryModalProps> = ({
           <div className="story-modal-title-group">
             <ScrollText size={18} color="var(--accent-amber)" />
             <div>
-              <h2 className="story-modal-title">Story</h2>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <h2 className="story-modal-title">Story</h2>
+                <MechanicsHelpButton
+                  topicId={STORY_TAB_HELP[activeTab].topicId}
+                  label={STORY_TAB_HELP[activeTab].label}
+                  onOpenHelp={onOpenMechanicsHelp}
+                />
+              </div>
               <div className="story-modal-subtitle">{bundle.campaign.name}</div>
             </div>
           </div>

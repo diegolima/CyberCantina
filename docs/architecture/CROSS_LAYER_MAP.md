@@ -858,6 +858,7 @@ erDiagram
 | `frontend/src/components/shared/AdminMessageBannerList.tsx` |
 | `frontend/src/components/shared/ClickToEditField.tsx` |
 | `frontend/src/components/shared/ImageLightboxModal.tsx` |
+| `frontend/src/components/shared/MechanicsHelpButton.tsx` |
 | `frontend/src/components/shared/UnsupportedFieldsTab.tsx` |
 | `frontend/src/components/shared/VideoUploadControls.tsx` |
 
@@ -895,6 +896,9 @@ erDiagram
 | `frontend/src/components/world/codexCharacter/RelationalBondChart.tsx` |
 | `frontend/src/components/world/codexCharacter/relationalHistory.ts` |
 | `frontend/src/components/world/codexHelpers.ts` |
+| `frontend/src/components/world/mechanics/CodexMechanicsDetail.tsx` |
+| `frontend/src/components/world/mechanics/mechanicsCatalog.ts` |
+| `frontend/src/components/world/mechanics/mechanicsHelpers.ts` |
 | `frontend/src/components/world/worldDraftMappers.ts` |
 
 #### `hooks`

@@ -79,6 +79,7 @@ flowchart TD
     b_5 --> b_20
     b_5 --> b_21
     b_6 --> b_7
+    b_6 --> b_12
     b_6 --> b_20
     b_6 --> b_21
     b_7 --> b_2
@@ -90,6 +91,7 @@ flowchart TD
     b_8 --> b_11
     b_8 --> b_17
     b_8 --> b_20
+    b_9 --> b_12
     b_9 --> b_20
     b_9 --> b_21
     b_11 --> b_1
@@ -99,6 +101,7 @@ flowchart TD
     b_12 --> b_20
     b_12 --> b_21
     b_13 --> b_2
+    b_13 --> b_12
     b_13 --> b_20
     b_14 --> b_1
     b_14 --> b_2
@@ -106,6 +109,7 @@ flowchart TD
     b_15 --> b_1
     b_15 --> b_2
     b_15 --> b_4
+    b_15 --> b_5
     b_15 --> b_7
     b_15 --> b_12
     b_15 --> b_20
@@ -131,16 +135,16 @@ flowchart TD
 | `components/auth` | 14 | `api`, `components (root)`, `components/models`, `components/providers`, `components/shared`, `types`, `utils` |
 | `components/character` | 12 | `api`, `components (root)`, `components/shared`, `types`, `utils` |
 | `components/chat` | 20 | `components (root)`, `components/inspector`, `components/shared`, `components/world`, `hooks`, `types`, `utils` |
-| `components/inspector` | 8 | `components/map`, `types`, `utils` |
+| `components/inspector` | 8 | `components/map`, `components/shared`, `types`, `utils` |
 | `components/map` | 17 | `components (root)`, `components/inspector`, `components/shared`, `hooks`, `types`, `utils` |
 | `components/models` | 12 | `components/providers`, `local`, `types` |
-| `components/party` | 1 | `types`, `utils` |
+| `components/party` | 1 | `components/shared`, `types`, `utils` |
 | `components/prompts` | 3 | *(leaf)* |
 | `components/providers` | 5 | `api`, `local`, `providers`, `types` |
-| `components/shared` | 5 | `types`, `utils` |
-| `components/story` | 5 | `components (root)`, `types` |
+| `components/shared` | 6 | `types`, `utils` |
+| `components/story` | 5 | `components (root)`, `components/shared`, `types` |
 | `components/wizard` | 2 | `api`, `components (root)`, `types` |
-| `components/world` | 14 | `api`, `components (root)`, `components/character`, `components/map`, `components/shared`, `types`, `utils` |
+| `components/world` | 17 | `api`, `components (root)`, `components/character`, `components/chat`, `components/map`, `components/shared`, `types`, `utils` |
 | `hooks` | 4 | `api`, `types`, `utils` |
 | `local` | 7 | `types` |
 | `main` | 1 | `App`, `styles.css` |
