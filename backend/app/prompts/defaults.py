@@ -891,7 +891,7 @@ PROMPTS_METADATA = [
         "title": "Neuromancer · GM Talk (OOC Assistant)",
         "description": (
             "System prompt for Neuromancer, the out-of-character Game Master assistant accessed via "
-            "Talk to GM or /gm to discuss lore, world state, party state, and past turns."
+            "GM Talk or /gm to discuss lore, world state, party state, and past turns."
         ),
         "available_variables": [
             {"name": "world_name", "description": "Name of the active campaign world"},

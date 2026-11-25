@@ -271,7 +271,12 @@ describe("Responsive campaign panels", () => {
     expect(html).toContain('aria-controls="live-inspector-aside"');
     expect(html).toContain("stage-attention-dot");
     expect(html).toContain("stage-header-badges");
-    expect(html).toContain("stage-location-badge");
+    expect(html).toContain("stage-context-subline");
+    expect(html).toContain("stage-context-subline--interactive");
+    expect(html).toContain("Afterlife Bar");
+    expect(html).toContain("1 here");
+    expect(html).not.toContain("Actor:");
+    expect(html).not.toContain("stage-location-badge");
     expect(html).toContain("stage-clock-cluster");
     expect(html).not.toContain("btn-close-campaign");
     expect(html).not.toContain("Close Campaign");
@@ -291,11 +296,13 @@ describe("Responsive campaign panels", () => {
         onToggleInspector={noop}
       />
     );
+    expect(openInspectorStageHtml).not.toContain("stage-context-subline");
+    expect(openInspectorStageHtml).not.toContain("Actor:");
     expect(openInspectorStageHtml).not.toContain("stage-location-badge");
     expect(openInspectorStageHtml).toContain("stage-clock-cluster");
   });
 
-  it("renders LiveInspector collapse controls and aria-hidden state cleanly", () => {
+  it("renders LiveInspector collapse controls, Exits (N), and aria-hidden state cleanly", () => {
     const { world, character, bundle } = makeFixtures();
     const noop = vi.fn();
 
@@ -313,6 +320,8 @@ describe("Responsive campaign panels", () => {
     expect(hiddenHtml).toContain('aria-hidden="true"');
     expect(hiddenHtml).toContain('aria-label="Collapse inspector"');
     expect(hiddenHtml).toContain("World Sheet");
+    expect(hiddenHtml).toContain("Exits (0)");
+    expect(hiddenHtml).not.toContain("composer-exits-count");
 
     const overlayHtml = renderToStaticMarkup(
       <LiveInspector

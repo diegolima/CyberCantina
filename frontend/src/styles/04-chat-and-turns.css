@@ -22,15 +22,65 @@
   gap: 10px;
 }
 
-.stage-location-badge {
+.stage-context-subline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
   min-width: 0;
+  margin-top: 2px;
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  line-height: 1.25;
 }
 
-.stage-location-badge-text {
-  max-width: 170px;
+.stage-context-subline--interactive {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-size: 0.76rem;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 0.15s ease;
+}
+
+.stage-context-subline--interactive:hover {
+  color: var(--text-primary);
+}
+
+.stage-context-subline--interactive:focus-visible {
+  outline: 1px solid var(--accent-cyan);
+  outline-offset: 2px;
+}
+
+.stage-context-subline-icon {
+  color: var(--accent-cyan);
+  flex-shrink: 0;
+}
+
+.stage-context-subline-location {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.stage-context-subline-sep {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.stage-context-subline-presence {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.stage-context-subline-presence.is-alone {
+  color: var(--accent-cyan);
+  font-weight: 600;
 }
 
 .stage-clock-cluster {
@@ -966,6 +1016,12 @@
   background: rgba(100, 116, 139, 0.25);
   border-color: var(--text-secondary);
   opacity: 1;
+}
+
+.field-input.composer-dice-override-input {
+  width: 54px;
+  padding: 3px 6px;
+  font-size: 0.74rem;
 }
 
 .field-input.dice-input-invalid {

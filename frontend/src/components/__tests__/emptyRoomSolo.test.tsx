@@ -275,9 +275,9 @@ describe("Phase 1 Empty / Solo Room UI Components", () => {
     expect(html).not.toContain("Objective Scene Observation");
   });
 
-  it("ChatStage shows 'Alone in Abandoned Annex' header without attributing scene to absent character", () => {
+  it("ChatStage shows 'Abandoned Annex · Alone' subline when inspector is closed and stays single-row when docked open without attributing scene to absent character", () => {
     const { absentChar, bundle } = makeSoloFixture();
-    const html = renderToStaticMarkup(
+    const collapsedHtml = renderToStaticMarkup(
       <ChatStage
         bundle={bundle}
         character={absentChar}
@@ -285,12 +285,30 @@ describe("Phase 1 Empty / Solo Room UI Components", () => {
         liveStream={null}
         onSendTurn={() => {}}
         onCheckoutTurn={() => {}}
+        isInspectorOpen={false}
       />
     );
 
-    expect(html).toContain("Alone in Abandoned Annex");
-    expect(html).toContain("No characters present here");
-    expect(html).not.toContain("Actor:");
+    expect(collapsedHtml).toContain("stage-context-subline");
+    expect(collapsedHtml).toContain("Abandoned Annex");
+    expect(collapsedHtml).toContain("Alone");
+    expect(collapsedHtml).toContain("is-alone");
+    expect(collapsedHtml).not.toContain("Actor:");
+
+    const dockedHtml = renderToStaticMarkup(
+      <ChatStage
+        bundle={bundle}
+        character={absentChar}
+        isStreaming={false}
+        liveStream={null}
+        onSendTurn={() => {}}
+        onCheckoutTurn={() => {}}
+        isInspectorOpen={true}
+      />
+    );
+
+    expect(dockedHtml).not.toContain("stage-context-subline");
+    expect(dockedHtml).not.toContain("Actor:");
   });
 
   it("ChatComposer and DirectorChoicesDrawer disable Choices and render solo guidance in empty rooms", () => {

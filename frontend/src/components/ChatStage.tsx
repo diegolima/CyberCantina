@@ -1597,6 +1597,11 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     ? childCountByParent[lastBranchTurn.id] ?? 0
     : 0;
 
+  const collapsedPresenceLabel =
+    presentCharacters.length === 0
+      ? "Alone"
+      : `${presentCharacters.length} here`;
+
   return (
     <main className="chat-stage">
       <header className="stage-header">
@@ -1627,41 +1632,64 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                 }}
               />
             </div>
-            <div className="stage-actor-line">
-              {presentCharacters.length === 0 ? (
-                <>
-                  <strong style={{ color: "var(--accent-cyan)" }}>
-                    Alone in {bundle.active_location.name}
-                  </strong>
-                  <span className="stage-actor-tagline">
-                    {" "}
-                    — No characters present here
+            {!isInspectorOpen &&
+              (onToggleInspector ? (
+                <button
+                  type="button"
+                  className="stage-context-subline stage-context-subline--interactive"
+                  onClick={onToggleInspector}
+                  aria-controls="live-inspector-aside"
+                  aria-label={`${bundle.active_location.name}, ${collapsedPresenceLabel}. Open World & Mind Inspector`}
+                  title={`${bundle.active_location.name} · ${collapsedPresenceLabel} — Open World & Mind Inspector`}
+                >
+                  <MapPin
+                    size={11}
+                    className="stage-context-subline-icon"
+                    aria-hidden="true"
+                  />
+                  <span className="stage-context-subline-location">
+                    {bundle.active_location.name}
                   </span>
-                </>
+                  <span className="stage-context-subline-sep" aria-hidden="true">
+                    ·
+                  </span>
+                  <span
+                    className={`stage-context-subline-presence${
+                      presentCharacters.length === 0 ? " is-alone" : ""
+                    }`}
+                  >
+                    {collapsedPresenceLabel}
+                  </span>
+                </button>
               ) : (
-                <>
-                  Actor: <strong style={{ color: "var(--accent-amber)" }}>{character.name}</strong>
-                  {character.tagline && (
-                    <span className="stage-actor-tagline"> — {character.tagline}</span>
-                  )}
-                </>
-              )}
-            </div>
+                <div
+                  className="stage-context-subline"
+                  title={`${bundle.active_location.name} · ${collapsedPresenceLabel}`}
+                >
+                  <MapPin
+                    size={11}
+                    className="stage-context-subline-icon"
+                    aria-hidden="true"
+                  />
+                  <span className="stage-context-subline-location">
+                    {bundle.active_location.name}
+                  </span>
+                  <span className="stage-context-subline-sep" aria-hidden="true">
+                    ·
+                  </span>
+                  <span
+                    className={`stage-context-subline-presence${
+                      presentCharacters.length === 0 ? " is-alone" : ""
+                    }`}
+                  >
+                    {collapsedPresenceLabel}
+                  </span>
+                </div>
+              ))}
           </div>
         </div>
         <div className="stage-header-actions">
           <div className="stage-header-badges">
-            {!isInspectorOpen && (
-              <span
-                className="badge stage-location-badge"
-                title={bundle.active_location.name}
-              >
-                <MapPin size={13} color="var(--accent-cyan)" />
-                <span className="stage-location-badge-text">
-                  {bundle.active_location.name}
-                </span>
-              </span>
-            )}
             <div
               className={`stage-clock-cluster${
                 clockAdvanceFlash ? " stage-clock-cluster--flash" : ""

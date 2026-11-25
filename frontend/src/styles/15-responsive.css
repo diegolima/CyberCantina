@@ -151,15 +151,6 @@
   white-space: nowrap;
 }
 
-.stage-actor-line {
-  font-size: 0.78rem;
-  color: var(--text-secondary);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .stage-header-actions {
   display: flex;
   align-items: center;
@@ -407,12 +398,17 @@
     height: 40px;
   }
 
-  /* Prevent iOS Safari auto-zoom on < 16px inputs inside the full-screen map */
+  /* Prevent iOS Safari auto-zoom on < 16px inputs inside the full-screen map & composer */
   .map-fullscreen-modal-panel input[type="text"],
   .map-fullscreen-modal-panel input[type="number"],
   .map-fullscreen-modal-panel textarea,
   .map-toolbar-search-row .ui-search-input--card,
   .map-inline-edge-input {
+    font-size: 16px;
+  }
+
+  .composer-textarea,
+  .field-input.composer-dice-override-input {
     font-size: 16px;
   }
 
@@ -497,8 +493,6 @@
     gap: 8px;
   }
 
-  .stage-location-badge,
-  .stage-actor-tagline,
   .stage-turn-word {
     display: none;
   }
@@ -524,16 +518,56 @@
   }
 
   .composer-bar {
-    padding: 10px 12px;
+    padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
+  }
+
+  .composer-input-wrapper {
+    min-height: 48px;
+  }
+
+  .composer-textarea {
+    padding: 8px 10px 24px 10px;
+    min-height: 48px;
   }
 
   .composer-footer {
+    position: relative;
+    flex-wrap: wrap;
+    padding: 5px 6px;
+    gap: 4px;
+  }
+
+  .composer-footer-left,
+  .composer-footer-right {
+    gap: 4px;
+  }
+
+  .composer-footer-left {
     flex-wrap: wrap;
   }
 
+  .composer-action-btn {
+    padding: 3px 6px;
+    gap: 4px;
+  }
+
+  .composer-exits-count,
+  .composer-footer .ui-mechanics-help-btn,
+  .inspector .ui-mechanics-help-btn {
+    display: none;
+  }
+
+  .composer-popover-anchor {
+    position: static;
+  }
+
   .composer-flyout-menu {
-    min-width: 220px;
-    max-width: calc(100vw - 24px);
+    bottom: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    min-width: 0;
+    max-width: none;
+    width: auto;
   }
 
   .gm-slideout-panel {

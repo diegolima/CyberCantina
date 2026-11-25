@@ -14,6 +14,7 @@ import {
   Radio,
   RefreshCw,
   Send,
+  Signpost,
   Sparkles,
   Square,
   X,
@@ -905,7 +906,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                   title="Minimize GM Talk and return to story composer (Esc)"
                 >
                   <Compass size={12} color="var(--accent-violet)" />
-                  <span>Talk to GM</span>
+                  <span>GM Talk</span>
                 </button>
 
                 <button
@@ -959,7 +960,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
           ) : (
             <div className="composer-footer">
               <div className="composer-footer-left">
-                {/* Talk to GM Button (immediately left of Narrator) */}
+                {/* GM Talk Button (immediately left of Narrator) */}
                 <button
                   type="button"
                   className="btn composer-action-btn gm-talk-trigger-btn"
@@ -979,7 +980,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                   }
                 >
                   <Compass size={12} color="var(--accent-violet)" />
-                  <span>Talk to GM</span>
+                  <span>GM Talk</span>
                   {gmMode?.isStreaming && (
                     <span
                       className="gm-talk-streaming-dot"
@@ -1088,8 +1089,14 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                   }
                   title="Immediate exits from this location"
                 >
-                  <Compass size={12} color="var(--accent-cyan)" />
-                  <span>Exits ({neighborLocations.length})</span>
+                  <Signpost size={12} color="var(--accent-cyan)" />
+                  <span>
+                    Exits
+                    <span className="composer-exits-count">
+                      {" "}
+                      ({neighborLocations.length})
+                    </span>
+                  </span>
                   <ChevronDown size={11} style={{ opacity: 0.7 }} />
                 </button>
 
@@ -1097,7 +1104,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                   neighborLocations.length > 0 && (
                     <div className="composer-flyout-menu exits-menu" role="menu">
                       <div className="composer-flyout-header">
-                        <Compass size={11} />
+                        <Signpost size={11} />
                         <span>Connected Paths (Click to Travel)</span>
                       </div>
                       {neighborLocations.map((nb) => (
@@ -1235,7 +1242,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                   placeholder="rnd"
                   value={diceOverride}
                   onChange={(e) => setDiceOverride(e.target.value)}
-                  className={`field-input ${
+                  className={`field-input composer-dice-override-input ${
                     diceOverride.trim() !== "" &&
                     (isNaN(parseInt(diceOverride, 10)) ||
                       parseInt(diceOverride, 10) < 1 ||
@@ -1243,11 +1250,6 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                       ? "dice-input-invalid"
                       : ""
                   }`}
-                  style={{
-                    width: 54,
-                    padding: "3px 6px",
-                    fontSize: "0.74rem",
-                  }}
                   title="Manual d20 roll (1-20), or blank for forced random"
                 />
               )}

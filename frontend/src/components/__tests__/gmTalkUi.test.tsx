@@ -140,16 +140,24 @@ function makeBaseComposerProps(): ChatComposerProps {
 }
 
 describe("GM Talk UI components", () => {
-  it("renders Talk to GM button immediately to the left of Narrator in Story Mode and switches actions in GM Mode", () => {
+  it("renders GM Talk button immediately to the left of Narrator in Story Mode and switches actions in GM Mode", () => {
     const storyHtml = renderToStaticMarkup(
       <ChatComposer {...makeBaseComposerProps()} />
     );
 
-    const talkIdx = storyHtml.indexOf("Talk to GM");
+    const talkIdx = storyHtml.indexOf("GM Talk");
     const narratorIdx = storyHtml.indexOf(">Narrator<");
     expect(talkIdx).toBeGreaterThan(-1);
     expect(narratorIdx).toBeGreaterThan(talkIdx);
+    expect(storyHtml).not.toContain("Talk to GM");
+    expect(storyHtml).toContain("composer-exits-count");
     expect(storyHtml).toContain("I check the lock.");
+
+    const forcedDiceHtml = renderToStaticMarkup(
+      <ChatComposer {...makeBaseComposerProps()} diceMode="forced" />
+    );
+    expect(forcedDiceHtml).toContain("composer-dice-override-input");
+    expect(forcedDiceHtml).not.toContain("font-size:0.74rem");
 
     const gmComposerHtml = renderToStaticMarkup(
       <ChatComposer
@@ -183,6 +191,8 @@ describe("GM Talk UI components", () => {
     );
 
     expect(gmComposerHtml).toContain("composer-bar--gm");
+    expect(gmComposerHtml).toContain("GM Talk");
+    expect(gmComposerHtml).not.toContain("Talk to GM");
     expect(gmComposerHtml).toContain("What happened in @Turn 1?");
     expect(gmComposerHtml).not.toContain("I check the lock.");
     expect(gmComposerHtml).toContain("Browse @");

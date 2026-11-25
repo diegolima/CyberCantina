@@ -268,6 +268,7 @@
   padding: 3px 8px;
   font-size: 0.72rem;
   font-weight: 500;
+  white-space: nowrap;
   border-radius: 5px;
   background: var(--surface-glass-1);
   border: 1px solid var(--border-subtle);
