@@ -134,7 +134,7 @@ flowchart TD
 | `components (root)` | 25 | `api`, `components/auth`, `components/character`, `components/chat`, `components/inspector`, `components/map`, `components/prompts`, `components/shared`, `components/wizard`, `components/world`, `hooks`, `providers`, `types`, `utils` |
 | `components/auth` | 14 | `api`, `components (root)`, `components/models`, `components/providers`, `components/shared`, `types`, `utils` |
 | `components/character` | 12 | `api`, `components (root)`, `components/shared`, `types`, `utils` |
-| `components/chat` | 21 | `components (root)`, `components/inspector`, `components/shared`, `components/world`, `hooks`, `types`, `utils` |
+| `components/chat` | 22 | `components (root)`, `components/inspector`, `components/shared`, `components/world`, `hooks`, `types`, `utils` |
 | `components/inspector` | 7 | `components/map`, `components/world`, `types`, `utils` |
 | `components/map` | 17 | `components (root)`, `components/inspector`, `components/shared`, `hooks`, `types`, `utils` |
 | `components/models` | 12 | `components/providers`, `local`, `types` |
@@ -145,9 +145,9 @@ flowchart TD
 | `components/story` | 5 | `components (root)`, `components/shared`, `types` |
 | `components/wizard` | 2 | `api`, `components (root)`, `types` |
 | `components/world` | 17 | `api`, `components (root)`, `components/character`, `components/chat`, `components/map`, `components/shared`, `types`, `utils` |
-| `hooks` | 4 | `api`, `types`, `utils` |
+| `hooks` | 5 | `api`, `types`, `utils` |
 | `local` | 7 | `types` |
 | `main` | 1 | `App`, `styles.css` |
 | `providers` | 1 | `api`, `local`, `types` |
 | `types` | 17 | *(leaf)* |
-| `utils` | 15 | `types` |
+| `utils` | 16 | `types` |

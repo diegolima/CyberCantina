@@ -241,6 +241,10 @@
   color: var(--accent-cyan);
 }
 
+.minimap-node-hit-target {
+  cursor: pointer;
+}
+
 /* Inspector: character rows */
 .char-row + .char-row {
   border-top: 1px solid var(--border-subtle);

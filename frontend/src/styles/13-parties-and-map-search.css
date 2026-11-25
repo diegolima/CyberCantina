@@ -138,6 +138,14 @@
   cursor: pointer;
 }
 
+.party-modal-card {
+  width: min(680px, 92vw);
+  max-width: 680px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+}
+
 .party-modal-error {
   padding: 8px 12px;
   border-radius: 6px;

@@ -245,7 +245,6 @@ export const PartyManagementModal: React.FC<PartyManagementModalProps> = ({
     >
       <div
         className="modal-panel party-modal-card"
-        style={{ maxWidth: 680, width: "92vw", maxHeight: "88vh", display: "flex", flexDirection: "column" }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">

@@ -27,6 +27,7 @@ import {
   clampGraphZoom,
   computeAncestorPath,
   computeBranchEdgeLabelPoint,
+  computeBranchPinchViewport,
   computeCenterNodeViewport,
   computeFitGraphViewport,
   findContainingEpisodeId,
@@ -164,6 +165,15 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
     origPanX: 0,
     origPanY: 0,
   });
+  const activePointersRef = useRef<Map<number, { clientX: number; clientY: number }>>(
+    new Map()
+  );
+  const pinchStartRef = useRef<{
+    startZoom: number;
+    startPan: { x: number; y: number };
+    startCenter: { x: number; y: number };
+    startDistance: number;
+  } | null>(null);
 
   // Reset per-episode overrides when the active timeline leaf changes so active-tip auto-expansion applies cleanly
   useEffect(() => {
@@ -485,28 +495,87 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
   };
 
   const handlePointerDown: React.PointerEventHandler<SVGSVGElement> = (e) => {
-    if (e.button !== 0) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
     const target = e.target as Element | null;
     if (target?.closest("[data-graph-interactive='true']")) {
       return;
     }
-    panDragRef.current = {
-      active: true,
-      moved: false,
-      startClientX: e.clientX,
-      startClientY: e.clientY,
-      origPanX: pan.x,
-      origPanY: pan.y,
-    };
-    setIsPanning(true);
+
+    activePointersRef.current.set(e.pointerId, {
+      clientX: e.clientX,
+      clientY: e.clientY,
+    });
+
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {
       // ignore synthetic pointer capture errors
     }
+
+    if (activePointersRef.current.size === 2) {
+      const pts = Array.from(activePointersRef.current.values());
+      const dx = pts[1].clientX - pts[0].clientX;
+      const dy = pts[1].clientY - pts[0].clientY;
+      pinchStartRef.current = {
+        startZoom: zoom,
+        startPan: { ...pan },
+        startCenter: {
+          x: (pts[0].clientX + pts[1].clientX) / 2,
+          y: (pts[0].clientY + pts[1].clientY) / 2,
+        },
+        startDistance: Math.hypot(dx, dy) || 1,
+      };
+      panDragRef.current.active = false;
+      setIsPanning(false);
+      return;
+    }
+
+    if (activePointersRef.current.size === 1) {
+      pinchStartRef.current = null;
+      panDragRef.current = {
+        active: true,
+        moved: false,
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        origPanX: pan.x,
+        origPanY: pan.y,
+      };
+      setIsPanning(true);
+    }
   };
 
   const handlePointerMove: React.PointerEventHandler<SVGSVGElement> = (e) => {
+    if (activePointersRef.current.has(e.pointerId)) {
+      activePointersRef.current.set(e.pointerId, {
+        clientX: e.clientX,
+        clientY: e.clientY,
+      });
+    }
+
+    if (activePointersRef.current.size >= 2 && pinchStartRef.current) {
+      const pts = Array.from(activePointersRef.current.values());
+      const dx = pts[1].clientX - pts[0].clientX;
+      const dy = pts[1].clientY - pts[0].clientY;
+      const currentDistance = Math.hypot(dx, dy);
+      const currentCenter = {
+        x: (pts[0].clientX + pts[1].clientX) / 2,
+        y: (pts[0].clientY + pts[1].clientY) / 2,
+      };
+      const rect = stageRef.current?.getBoundingClientRect() ?? { left: 0, top: 0 };
+      const next = computeBranchPinchViewport({
+        startZoom: pinchStartRef.current.startZoom,
+        startPan: pinchStartRef.current.startPan,
+        startCenter: pinchStartRef.current.startCenter,
+        startDistance: pinchStartRef.current.startDistance,
+        currentCenter,
+        currentDistance,
+        stageRect: { left: rect.left, top: rect.top },
+      });
+      setZoom(next.zoom);
+      setPan(next.pan);
+      return;
+    }
+
     if (!panDragRef.current.active) return;
     const dx = e.clientX - panDragRef.current.startClientX;
     const dy = e.clientY - panDragRef.current.startClientY;
@@ -520,13 +589,32 @@ export const BranchGraphCanvas: React.FC<BranchGraphCanvasProps> = ({
   };
 
   const handlePointerUp: React.PointerEventHandler<SVGSVGElement> = (e) => {
-    if (!panDragRef.current.active) return;
-    panDragRef.current.active = false;
-    setIsPanning(false);
+    activePointersRef.current.delete(e.pointerId);
     try {
       e.currentTarget.releasePointerCapture(e.pointerId);
     } catch {
       // ignore
+    }
+
+    if (activePointersRef.current.size === 1) {
+      pinchStartRef.current = null;
+      const remaining = Array.from(activePointersRef.current.values())[0];
+      panDragRef.current = {
+        active: true,
+        moved: true,
+        startClientX: remaining.clientX,
+        startClientY: remaining.clientY,
+        origPanX: pan.x,
+        origPanY: pan.y,
+      };
+      setIsPanning(true);
+      return;
+    }
+
+    if (activePointersRef.current.size === 0) {
+      pinchStartRef.current = null;
+      panDragRef.current.active = false;
+      setIsPanning(false);
     }
   };
 

@@ -21,6 +21,7 @@ import {
   UserProfile,
 } from "../types";
 import type { LeftPanelMode } from "../utils/campaignLayout";
+import { useDrawerSwipeDismiss } from "../hooks/useDrawerSwipeDismiss";
 import { RelaySidebarBadge } from "./RelaySidebarBadge";
 
 export interface AppSidebarProps {
@@ -96,6 +97,12 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   handleCloseCampaign,
   handleLogout,
 }) => {
+  const { swipeOffsetPx, touchHandlers } = useDrawerSwipeDismiss({
+    enabled: Boolean(bundle) && mode === "overlay",
+    side: "left",
+    onDismiss: onCloseOverlay,
+  });
+
   if (!bundle) {
     return null;
   }
@@ -270,6 +277,12 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       id={id}
       className={sidebarClassName}
       aria-hidden={mode === "hidden" ? true : undefined}
+      style={
+        swipeOffsetPx !== 0
+          ? { transform: `translateX(${swipeOffsetPx}px)`, transition: "none" }
+          : undefined
+      }
+      {...(mode === "overlay" ? touchHandlers : {})}
     >
       <div className="brand-header">
         <div

@@ -772,6 +772,7 @@ erDiagram
 | `frontend/src/components/chat/TurnBookmarkNoteRow.tsx` |
 | `frontend/src/components/chat/TurnCard.tsx` |
 | `frontend/src/components/chat/TurnProseModelPill.tsx` |
+| `frontend/src/components/chat/TurnSwipeSwitcher.tsx` |
 | `frontend/src/components/chat/arrivalHelpers.ts` |
 | `frontend/src/components/chat/arrivalMediaHelpers.ts` |
 | `frontend/src/components/chat/chatHelpers.tsx` |
@@ -910,6 +911,7 @@ erDiagram
 | File |
 | :--- |
 | `frontend/src/hooks/useCampaignTurnActions.ts` |
+| `frontend/src/hooks/useDrawerSwipeDismiss.ts` |
 | `frontend/src/hooks/useGmTalk.ts` |
 | `frontend/src/hooks/useMagicWand.ts` |
 | `frontend/src/hooks/useResponsiveCampaignLayout.ts` |
@@ -967,6 +969,7 @@ erDiagram
 | `frontend/src/utils/adminMessageState.ts` |
 | `frontend/src/utils/campaignLayout.ts` |
 | `frontend/src/utils/choiceCommand.ts` |
+| `frontend/src/utils/drawerSwipe.ts` |
 | `frontend/src/utils/entityImages.ts` |
 | `frontend/src/utils/gmMentions.ts` |
 | `frontend/src/utils/importExportLogic.ts` |

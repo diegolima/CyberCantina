@@ -313,12 +313,35 @@
     gap: 10px;
   }
 
+  .stage-context-subline--interactive {
+    padding: 4px 2px;
+    margin: -2px -2px 0;
+    min-height: 28px;
+  }
+
   .studio-shell .notes-flyout-popover {
     left: 12px;
     right: 12px;
     bottom: 12px;
     width: auto;
     max-height: 75dvh;
+  }
+
+  /* Full-Screen Campaign Modals on Mobile (Story, Context Health, Party) */
+  .story-modal-panel,
+  .context-health-modal,
+  .party-modal-card {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+    border: none;
+  }
+
+  .modal-footer--hide-mobile-readonly {
+    display: none;
   }
 
   /* Full-Screen Mobile Map Modal & Responsive Topology Chrome */
@@ -398,18 +421,30 @@
     height: 40px;
   }
 
-  /* Prevent iOS Safari auto-zoom on < 16px inputs inside the full-screen map & composer */
+  /* Prevent iOS Safari auto-zoom on < 16px inputs across map, composer, choices & codex */
   .map-fullscreen-modal-panel input[type="text"],
   .map-fullscreen-modal-panel input[type="number"],
   .map-fullscreen-modal-panel textarea,
   .map-toolbar-search-row .ui-search-input--card,
-  .map-inline-edge-input {
+  .map-inline-edge-input,
+  .composer-textarea,
+  .field-input.composer-dice-override-input,
+  .choices-option-input,
+  .choices-gate-select,
+  .field-input.choices-dc-input,
+  .turn-bookmark-note-input,
+  .ui-search-input,
+  .ui-search-bar-input,
+  .gm-codex-proposal-field input[type="text"],
+  .gm-codex-proposal-field select,
+  .gm-codex-proposal-field textarea {
     font-size: 16px;
   }
 
-  .composer-textarea,
-  .field-input.composer-dice-override-input {
-    font-size: 16px;
+  .slash-picker-list,
+  .mention-picker-list,
+  .gm-mention-list {
+    max-height: min(240px, 34dvh);
   }
 
   .map-inline-edge-stepper {
@@ -493,7 +528,8 @@
     gap: 8px;
   }
 
-  .stage-turn-word {
+  .stage-turn-word,
+  .stage-clock-date {
     display: none;
   }
 
@@ -509,12 +545,75 @@
   }
 
   .turn-feed {
-    padding: 14px 12px;
-    gap: 14px;
+    padding: 12px 10px;
+    gap: 12px;
+  }
+
+  .turn-feed-jump-btn {
+    right: 12px;
+    bottom: 10px;
+  }
+
+  .turn-card {
+    padding: 12px;
+    gap: 10px;
   }
 
   .user-bubble {
     max-width: 92%;
+  }
+
+  .user-prompt-row,
+  .user-message-container {
+    max-width: 96%;
+  }
+
+  .user-prompt-avatar {
+    width: 28px;
+    height: 28px;
+  }
+
+  .user-prompt-row > .user-bubble,
+  .user-prompt-row > .user-message-container {
+    max-width: calc(100% - 36px);
+  }
+
+  .cognition-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .cognition-header-detail {
+    display: none;
+  }
+
+  .turn-action-btn {
+    min-height: 32px;
+    padding: 4px 8px;
+  }
+
+  .turn-delete-btn {
+    min-width: 32px;
+    padding: 4px 8px;
+  }
+
+  .turn-delete-label {
+    display: none;
+  }
+
+  .turn-swipe-step-btn,
+  .turn-swipe-trigger-btn {
+    min-height: 32px;
+  }
+
+  .turn-swipe-anchor {
+    position: static;
+  }
+
+  .turn-swipe-popover {
+    left: 0;
+    right: 0;
+    width: auto;
+    max-width: none;
   }
 
   .composer-bar {
@@ -532,9 +631,9 @@
 
   .composer-footer {
     position: relative;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     padding: 5px 6px;
-    gap: 4px;
+    gap: 6px;
   }
 
   .composer-footer-left,
@@ -543,18 +642,51 @@
   }
 
   .composer-footer-left {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    min-width: 0;
   }
 
   .composer-action-btn {
-    padding: 3px 6px;
+    min-width: 34px;
+    min-height: 32px;
+    padding: 4px 7px;
     gap: 4px;
   }
 
-  .composer-exits-count,
-  .composer-footer .ui-mechanics-help-btn,
-  .inspector .ui-mechanics-help-btn {
+  .composer-action-label,
+  .composer-action-caret {
     display: none;
+  }
+
+  .composer-cancel-btn {
+    min-width: 34px;
+    min-height: 32px;
+    padding: 4px 8px;
+  }
+
+  .composer-send-btn {
+    min-height: 32px;
+    padding: 4px 10px;
+  }
+
+  .composer-exits-count,
+  .composer-footer .ui-mechanics-help-btn {
+    display: none;
+  }
+
+  .choices-option-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .choices-option-meta {
+    justify-content: space-between;
+  }
+
+  .choices-gate-select {
+    flex: 1;
+    min-width: 0;
   }
 
   .composer-popover-anchor {
@@ -579,8 +711,55 @@
     padding: 9px 12px;
   }
 
-  .gm-model-pill {
+  .gm-model-pill,
+  .gm-spoiler-pill-detail,
+  .gm-clear-btn-label,
+  .gm-talk-header-meta span {
     display: none;
+  }
+
+  .modal-header {
+    padding: 12px 14px;
+  }
+
+  .modal-tabs {
+    padding: 6px 10px;
+  }
+
+  .modal-body {
+    padding: 12px;
+  }
+
+  .codex-right-pane {
+    padding: 10px;
+  }
+
+  .codex-mobile-detail-bar {
+    top: -10px;
+    margin: -2px 0 6px;
+  }
+
+  .codex-section-card {
+    padding: 9px 10px;
+  }
+
+  .codex-mechanics-pager {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .codex-mechanics-pager-btn {
+    width: 100%;
+  }
+
+  .branch-graph-toolbar {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+
+  .branch-graph-detail-bar {
+    padding: 10px 12px;
+    gap: 10px;
   }
 
   .gm-mention-row-body {
@@ -631,6 +810,9 @@
   .drawer-backdrop,
   .turn-editing-banner-pill,
   .turn-model-popover,
+  .turn-swipe-popover,
+  .turn-feed-jump-btn,
+  .codex-mobile-topics-backdrop,
   .narrator-duration-picker,
   .choices-drawer-box,
   .composer-editing-banner,

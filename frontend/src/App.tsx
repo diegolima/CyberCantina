@@ -824,6 +824,7 @@ export const App: React.FC = () => {
           isInspectorOpen={layout.isInspectorOpen}
           onToggleInspector={layout.toggleInspector}
           hasInspectorAttention={Boolean(pendingLocationOverrideId)}
+          isMobileLayout={layout.tier === "mobile"}
           onUpdateTurnBookmark={handleUpdateTurnBookmark}
           onSummarizeTurnForBookmark={handleSummarizeTurnForBookmark}
           onCampaignBundleChange={setBundle}

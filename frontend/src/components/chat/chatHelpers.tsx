@@ -73,6 +73,7 @@ export interface ChatStageProps {
   isInspectorOpen?: boolean;
   onToggleInspector?: () => void;
   hasInspectorAttention?: boolean;
+  isMobileLayout?: boolean;
   onUpdateTurnBookmark?: (
     turnId: string,
     payload: TurnBookmarkUpdatePayload
@@ -84,6 +85,33 @@ export interface ChatStageProps {
   onCampaignBundleChange?: (bundle: CampaignStateBundle) => void;
   onOpenCodex?: () => void;
   onOpenMechanicsHelp?: (topicId: MechanicsTopicId) => void;
+}
+
+/**
+ * True when the turn feed is scrolled noticeably above the bottom edge so a
+ * floating "Jump to latest" pill should be surfaced.
+ */
+export function isTurnFeedScrolledAwayFromBottom(
+  metrics: { scrollHeight: number; scrollTop: number; clientHeight: number },
+  thresholdPx = 140
+): boolean {
+  const distanceFromBottom =
+    metrics.scrollHeight - (metrics.scrollTop + metrics.clientHeight);
+  return distanceFromBottom > thresholdPx;
+}
+
+/**
+ * Decide whether an `Enter` keydown inside a composer textarea should submit
+ * immediately or insert a newline. On touch/coarse-pointer devices lacking
+ * Shift+Enter, `Enter` inserts a newline and sending uses the Send / Ask GM button.
+ */
+export function shouldEnterSubmitComposer(
+  e: { key: string; shiftKey: boolean; ctrlKey?: boolean; metaKey?: boolean },
+  isCoarsePointer: boolean
+): boolean {
+  if (e.key !== "Enter") return false;
+  if (isCoarsePointer) return Boolean(e.ctrlKey || e.metaKey);
+  return !e.shiftKey;
 }
 
 export function renderFormattedProse(text: string): React.ReactNode {

@@ -449,11 +449,15 @@ describe("ContextHealthPill & ContextHealthModal SSR rendering", () => {
     // World clock display splitter & streaming colon blink
     expect(splitWorldClockDisplay("2094-11-14 23:15")).toEqual({
       prefix: "2094-11-14 23",
+      datePrefix: "2094-11-14 ",
+      hourDigits: "23",
       colon: ":",
       suffix: "15",
     });
     expect(splitWorldClockDisplay("2094-11-14T08:05:30")).toEqual({
       prefix: "2094-11-14T08",
+      datePrefix: "2094-11-14T",
+      hourDigits: "08",
       colon: ":",
       suffix: "05:30",
     });

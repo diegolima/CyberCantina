@@ -42,6 +42,15 @@ import {
   GM_NAME,
   type GmMentionTrigger,
 } from "../../utils/gmMentions";
+import { shouldEnterSubmitComposer } from "./chatHelpers";
+
+function isCoarsePointerDevice(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(pointer: coarse)").matches
+  );
+}
 import {
   formatDistanceCompact,
   formatExitTravelPhrase,
@@ -604,7 +613,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                         return;
                       }
 
-                      if (e.key === "Enter" && !e.shiftKey) {
+                      if (shouldEnterSubmitComposer(e, isCoarsePointerDevice())) {
                         e.preventDefault();
                         gmMode.onSend();
                       }
@@ -838,7 +847,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                         }
                         return;
                       }
-                      if (e.key === "Enter" && !e.shiftKey) {
+                      if (shouldEnterSubmitComposer(e, isCoarsePointerDevice())) {
                         e.preventDefault();
                         handleSend(e);
                       }
@@ -902,16 +911,18 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                   type="button"
                   className="btn composer-action-btn gm-talk-trigger-btn gm-talk-trigger-btn--active"
                   aria-pressed="true"
+                  aria-label="Minimize GM Talk"
                   onClick={gmMode.onToggleOpen}
                   title="Minimize GM Talk and return to story composer (Esc)"
                 >
                   <Compass size={12} color="var(--accent-violet)" />
-                  <span>GM Talk</span>
+                  <span className="composer-action-label">GM Talk</span>
                 </button>
 
                 <button
                   type="button"
                   className="btn composer-action-btn gm-browse-btn"
+                  aria-label="Browse mentions with @"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={gmMode.onInsertAtTrigger}
                   title="Browse Characters, Lore, Locations, Containers, or Turns [@]"
@@ -925,11 +936,12 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                 <button
                   type="button"
                   className="btn composer-action-btn gm-minimize-btn"
+                  aria-label="Minimize GM Talk"
                   onClick={gmMode.onMinimize}
                   title="Minimize GM Talk (Esc)"
                 >
                   <ChevronDown size={13} />
-                  <span>Minimize</span>
+                  <span className="composer-action-label">Minimize</span>
                 </button>
 
                 {gmMode.isStreaming ? (
@@ -965,6 +977,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                   type="button"
                   className="btn composer-action-btn gm-talk-trigger-btn"
                   aria-pressed="false"
+                  aria-label="GM Talk"
                   onClick={() => {
                     setActivePopover("none");
                     if (gmMode) {
@@ -980,7 +993,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                   }
                 >
                   <Compass size={12} color="var(--accent-violet)" />
-                  <span>GM Talk</span>
+                  <span className="composer-action-label">GM Talk</span>
                   {gmMode?.isStreaming && (
                     <span
                       className="gm-talk-streaming-dot"
@@ -996,6 +1009,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                   type="button"
                   aria-haspopup="menu"
                   aria-expanded={activePopover === "narrator"}
+                  aria-label="Narrator actions"
                   className={`btn composer-action-btn ${
                     activePopover === "narrator" ? "active" : ""
                   }`}
@@ -1007,8 +1021,12 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                   title="Narrator actions (Look Around, Pass Time, Complication, Custom Directive)"
                 >
                   <Eye size={12} color="var(--accent-cyan)" />
-                  <span>Narrator</span>
-                  <ChevronDown size={11} style={{ opacity: 0.7 }} />
+                  <span className="composer-action-label">Narrator</span>
+                  <ChevronDown
+                    size={11}
+                    className="composer-action-caret"
+                    style={{ opacity: 0.7 }}
+                  />
                 </button>
 
                 {activePopover === "narrator" && (
@@ -1078,6 +1096,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                   type="button"
                   aria-haspopup="menu"
                   aria-expanded={activePopover === "exits"}
+                  aria-label={`Exits (${neighborLocations.length})`}
                   className={`btn composer-action-btn ${
                     activePopover === "exits" ? "active" : ""
                   }`}
@@ -1090,14 +1109,18 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                   title="Immediate exits from this location"
                 >
                   <Signpost size={12} color="var(--accent-cyan)" />
-                  <span>
+                  <span className="composer-action-label">
                     Exits
                     <span className="composer-exits-count">
                       {" "}
                       ({neighborLocations.length})
                     </span>
                   </span>
-                  <ChevronDown size={11} style={{ opacity: 0.7 }} />
+                  <ChevronDown
+                    size={11}
+                    className="composer-action-caret"
+                    style={{ opacity: 0.7 }}
+                  />
                 </button>
 
                 {activePopover === "exits" &&
@@ -1157,6 +1180,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
               {/* Director Choices Button */}
               <button
                 type="button"
+                aria-label="Director Choices"
                 className={`btn composer-action-btn ${
                   activeTray === "choices" ? "active" : ""
                 }`}
@@ -1192,7 +1216,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                       : "var(--accent-blue)"
                   }
                 />
-                <span>Choices</span>
+                <span className="composer-action-label">Choices</span>
                 {totalStagedOptionsCount > 0 && (
                   <span className="composer-count-badge">
                     {totalStagedOptionsCount}
@@ -1259,11 +1283,12 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                 <button
                   type="button"
                   className="btn composer-cancel-btn"
+                  aria-label="Cancel editing"
                   onClick={handleCancelEdit}
                   title="Cancel editing and restore previous draft (Escape)"
                 >
                   <X size={13} />
-                  <span>Cancel</span>
+                  <span className="composer-action-label">Cancel</span>
                 </button>
               )}
 
@@ -1293,7 +1318,9 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                 {editingTurn ? (
                   <>
                     <RefreshCw size={13} className={isBusy ? "spinning" : ""} />
-                    <span>Save &amp; Swipe</span>
+                    <span>
+                      Save<span className="composer-action-label"> &amp; Swipe</span>
+                    </span>
                   </>
                 ) : (
                   <>

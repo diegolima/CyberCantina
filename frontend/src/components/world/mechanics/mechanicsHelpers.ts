@@ -80,6 +80,30 @@ export function extractMechanicsTopicIdFromKey(
     : null;
 }
 
+export const ORDERED_MECHANICS_ARTICLES: readonly MechanicsArticle[] =
+  MECHANICS_SUBCATEGORIES.flatMap((subcat) =>
+    MECHANICS_ARTICLES.filter((a) => a.subcategoryId === subcat.id)
+  );
+
+/**
+ * Returns the previous and next Game Mechanics guides in subcategory reading order
+ * for compact mobile reader pagination.
+ */
+export function getAdjacentMechanicsTopics(topicId: MechanicsTopicId): {
+  prev: MechanicsArticle | null;
+  next: MechanicsArticle | null;
+} {
+  const idx = ORDERED_MECHANICS_ARTICLES.findIndex((a) => a.id === topicId);
+  if (idx === -1) return { prev: null, next: null };
+  return {
+    prev: idx > 0 ? ORDERED_MECHANICS_ARTICLES[idx - 1] : null,
+    next:
+      idx < ORDERED_MECHANICS_ARTICLES.length - 1
+        ? ORDERED_MECHANICS_ARTICLES[idx + 1]
+        : null,
+  };
+}
+
 function matchArticleThreeTier(
   q: string,
   article: MechanicsArticle,

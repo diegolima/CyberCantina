@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   AlertTriangle,
   Bookmark,
@@ -38,6 +38,7 @@ import type { ActiveAgentModalTarget } from "../inspector/AgentChangesModal";
 import { StandaloneArrivalCard } from "./StandaloneArrivalCard";
 import { TurnBookmarkNoteRow } from "./TurnBookmarkNoteRow";
 import { TurnProseModelPill } from "./TurnProseModelPill";
+import { TurnSwipeSwitcher } from "./TurnSwipeSwitcher";
 import {
   getTierBadgeClass,
   renderFormattedProse,
@@ -85,6 +86,11 @@ export interface TurnCardProps {
   isModelPopoverOpen?: boolean;
   onToggleModelPopover?: (turnId: string) => void;
   onCloseModelPopover?: () => void;
+  childCountByTurnId?: Record<string, number>;
+  isSwipePopoverOpen?: boolean;
+  onToggleSwipePopover?: (turnId: string) => void;
+  onCloseSwipePopover?: () => void;
+  initialDeleteConfirm?: boolean;
   onOpenContextHealthForTurn?: (turn: TurnNodeRecord) => void;
 }
 
@@ -123,6 +129,11 @@ export const TurnCard: React.FC<TurnCardProps> = ({
   isModelPopoverOpen,
   onToggleModelPopover,
   onCloseModelPopover,
+  childCountByTurnId,
+  isSwipePopoverOpen,
+  onToggleSwipePopover,
+  onCloseSwipePopover,
+  initialDeleteConfirm = false,
   onOpenContextHealthForTurn,
 }) => {
   const [selectedCognitionCharIdByTurn, setSelectedCognitionCharIdByTurn] = useState<Record<string, string>>({});
@@ -130,11 +141,18 @@ export const TurnCard: React.FC<TurnCardProps> = ({
   const [brokenPersonaPortraitUrl, setBrokenPersonaPortraitUrl] = useState<string | null>(null);
   const [isTogglingBookmark, setIsTogglingBookmark] = useState(false);
   const [localModelPopoverOpen, setLocalModelPopoverOpen] = useState(false);
+  const [localSwipePopoverOpen, setLocalSwipePopoverOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<boolean>(Boolean(initialDeleteConfirm));
+
   const effectiveModelPopoverOpen = isModelPopoverOpen ?? localModelPopoverOpen;
+  const effectiveSwipePopoverOpen = isSwipePopoverOpen ?? localSwipePopoverOpen;
+  const hasAnyOpenPopover = effectiveModelPopoverOpen || effectiveSwipePopoverOpen;
+
   const handleToggleModelPopover = () => {
     if (onToggleModelPopover) {
       onToggleModelPopover(turn.id);
     } else {
+      setLocalSwipePopoverOpen(false);
       setLocalModelPopoverOpen((prev) => !prev);
     }
   };
@@ -145,6 +163,33 @@ export const TurnCard: React.FC<TurnCardProps> = ({
       setLocalModelPopoverOpen(false);
     }
   };
+  const handleToggleSwipePopover = () => {
+    if (onToggleSwipePopover) {
+      onToggleSwipePopover(turn.id);
+    } else {
+      setLocalModelPopoverOpen(false);
+      setLocalSwipePopoverOpen((prev) => !prev);
+    }
+  };
+  const handleCloseSwipePopover = () => {
+    if (onCloseSwipePopover) {
+      onCloseSwipePopover();
+    } else {
+      setLocalSwipePopoverOpen(false);
+    }
+  };
+
+  useEffect(() => {
+    setConfirmDelete(Boolean(initialDeleteConfirm));
+  }, [turn.id, isBusy, isDeletingTurn, hasDescendants, initialDeleteConfirm]);
+
+  useEffect(() => {
+    if (!confirmDelete) return;
+    const timer = window.setTimeout(() => {
+      setConfirmDelete(false);
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [confirmDelete]);
   const toggleRetained = (id: string) =>
     setShowRetainedIds((prev) => ({ ...prev, [id]: !prev[id] }));
   const personaPortraitUrl = bundle.campaign.persona_snapshot?.portrait_url || null;
@@ -346,7 +391,7 @@ export const TurnCard: React.FC<TurnCardProps> = ({
         className={`turn-card ${isNarratorTurn ? "narrator-turn-card" : ""} ${
           isEditingThisTurn ? "turn-card--editing" : ""
         } ${isHighlighted ? "turn-card--highlighted" : ""} ${
-          effectiveModelPopoverOpen ? "turn-card--popover-open" : ""
+          hasAnyOpenPopover ? "turn-card--popover-open" : ""
         }`}
       >
               {!isRoot && (
@@ -654,13 +699,39 @@ export const TurnCard: React.FC<TurnCardProps> = ({
                         ) : (
                           <Brain size={14} />
                         )}
-                        {isNarratorTurn
-                          ? "Objective Scene Observation (Detached & Indifferent)"
-                          : isSkipped
-                          ? `${activeCharName} Inner Cognition (Skipped by Model)`
-                          : charIds.length > 1
-                          ? `${activeCharName} Inner Cognition (${charIds.length} Characters Evaluated)`
-                          : `${activeCharName} Inner Cognition (Recall → Feel → Want → Plan)`}
+                        {isNarratorTurn ? (
+                          <>
+                            Objective Scene Observation
+                            <span className="cognition-header-detail">
+                              {" "}
+                              (Detached &amp; Indifferent)
+                            </span>
+                          </>
+                        ) : isSkipped ? (
+                          <>
+                            {activeCharName} Inner Cognition
+                            <span className="cognition-header-detail">
+                              {" "}
+                              (Skipped by Model)
+                            </span>
+                          </>
+                        ) : charIds.length > 1 ? (
+                          <>
+                            {activeCharName} Inner Cognition
+                            <span className="cognition-header-detail">
+                              {" "}
+                              ({charIds.length} Characters Evaluated)
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            {activeCharName} Inner Cognition
+                            <span className="cognition-header-detail">
+                              {" "}
+                              (Recall → Feel → Want → Plan)
+                            </span>
+                          </>
+                        )}
                       </span>
                       <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         {isSkipped ? (
@@ -1165,28 +1236,9 @@ export const TurnCard: React.FC<TurnCardProps> = ({
               <div className="prose-body">{renderFormattedProse(turn.raw_prose)}</div>
 
               {/* Turn Footer: Clock, Post-Turn Delta, Phase 4 Agent Mutation Pills, Swipe/Regenerate */}
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 8,
-                  borderTop: "1px solid var(--border-subtle)",
-                  paddingTop: 8,
-                  fontSize: "0.74rem",
-                  color: "var(--text-muted)",
-                }}
-              >
-                <div
-                  className="turn-card-footer-row"
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    flexWrap: "wrap",
-                    gap: 8,
-                  }}
-                >
-                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <div className="turn-card-footer">
+                <div className="turn-card-footer-row">
+                  <div className="turn-card-meta">
                     <span>Turn #{turn.depth_index}</span>
                     <span>• {turn.world_snapshot.world_timestamp}</span>
                     <TurnProseModelPill
@@ -1210,41 +1262,25 @@ export const TurnCard: React.FC<TurnCardProps> = ({
                     )}
                   </div>
 
-                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    {siblings.length > 1 && (
-                      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                        <GitBranch size={12} color="var(--accent-cyan)" />
-                        {siblings.map((sib, idx) => (
-                          <button
-                            key={sib.id}
-                            type="button"
-                            className="btn"
-                            style={{
-                              padding: "2px 7px",
-                              fontSize: "0.7rem",
-                              borderColor:
-                                sib.id === turn.id
-                                  ? "var(--accent-amber)"
-                                  : "var(--border-subtle)",
-                            }}
-                            title={`Swipe v${idx + 1}: ${sib.user_message}`}
-                            disabled={isBusy}
-                            onClick={() => {
-                              if (editingTurn) handleCancelEdit();
-                              onCheckoutTurn(sib.id);
-                            }}
-                          >
-                            v{idx + 1}
-                          </button>
-                        ))}
-                      </div>
-                    )}
+                  <div className="turn-card-actions">
+                    <TurnSwipeSwitcher
+                      turn={turn}
+                      siblings={siblings}
+                      childCountByTurnId={childCountByTurnId}
+                      isBusy={isBusy}
+                      isOpen={effectiveSwipePopoverOpen}
+                      onToggle={handleToggleSwipePopover}
+                      onClose={handleCloseSwipePopover}
+                      onSelectTurn={(sibId) => {
+                        if (editingTurn) handleCancelEdit();
+                        void onCheckoutTurn(sibId);
+                      }}
+                    />
 
                     {!isLastTurn && bundle.active_branch_turns.length > 1 && (
                       <button
                         type="button"
-                        className="btn"
-                        style={{ padding: "3px 8px", fontSize: "0.72rem" }}
+                        className="btn turn-action-btn"
                         disabled={isBusy || isDeletingTurn}
                         onClick={() => {
                           if (editingTurn) handleCancelEdit();
@@ -1257,15 +1293,14 @@ export const TurnCard: React.FC<TurnCardProps> = ({
                         title={`Branch from here — rewind to Turn #${turn.depth_index} without deleting the current timeline`}
                       >
                         <GitBranch size={12} />
-                        Branch
+                        <span>Branch</span>
                       </button>
                     )}
 
                     {isLastTurn && (
                       <button
                         type="button"
-                        className={`btn ${isEditingThisTurn ? "btn-amber" : ""}`}
-                        style={{ padding: "3px 8px", fontSize: "0.72rem" }}
+                        className={`btn turn-action-btn ${isEditingThisTurn ? "btn-amber" : ""}`}
                         disabled={isBusy || isDeletingTurn}
                         onClick={() => {
                           if (isEditingThisTurn) {
@@ -1281,40 +1316,63 @@ export const TurnCard: React.FC<TurnCardProps> = ({
                         }
                       >
                         <Edit3 size={12} />
-                        {isEditingThisTurn ? "Editing..." : "Edit"}
+                        <span>{isEditingThisTurn ? "Editing..." : "Edit"}</span>
                       </button>
                     )}
 
                     {!isRoot && (
                       <button
                         type="button"
-                        className="btn"
-                        style={{ padding: "3px 8px", fontSize: "0.72rem" }}
+                        className="btn turn-action-btn"
                         disabled={isBusy || isDeletingTurn}
                         onClick={() => handleSwipeRegenerate(turn)}
                         title="Swipe / Regenerate this turn from its parent state snapshot"
                       >
                         <RefreshCw size={12} />
-                        Swipe
+                        <span>Swipe</span>
                       </button>
                     )}
 
                     {isLastTurn && onDeleteLastTurn && (
-                      <button
-                        type="button"
-                        className="btn btn-danger"
-                        style={{ padding: "3px 8px", fontSize: "0.72rem" }}
-                        disabled={isBusy || isDeletingTurn || hasDescendants}
-                        onClick={handleDeleteLast}
-                        title={
-                          hasDescendants
-                            ? "Cannot delete a turn that has descendant branches"
-                            : "Delete last message and its unfollowed swipes"
-                        }
-                      >
-                        <Trash2 size={12} />
-                        Delete
-                      </button>
+                      <>
+                        <span className="turn-actions-divider" aria-hidden="true" />
+                        <button
+                          type="button"
+                          className={`btn btn-danger turn-action-btn turn-delete-btn ${
+                            confirmDelete ? "turn-delete-btn--confirm" : ""
+                          }`}
+                          disabled={isBusy || isDeletingTurn || hasDescendants}
+                          onClick={() => {
+                            if (!confirmDelete) {
+                              setConfirmDelete(true);
+                              return;
+                            }
+                            setConfirmDelete(false);
+                            handleDeleteLast();
+                          }}
+                          aria-label={
+                            hasDescendants
+                              ? "Cannot delete a turn that has descendant branches"
+                              : confirmDelete
+                              ? "Confirm delete last turn and unfollowed swipes"
+                              : "Delete last message and its unfollowed swipes"
+                          }
+                          title={
+                            hasDescendants
+                              ? "Cannot delete a turn that has descendant branches"
+                              : confirmDelete
+                              ? "Tap again to permanently delete last turn and unfollowed swipes"
+                              : "Delete last message and its unfollowed swipes"
+                          }
+                        >
+                          <Trash2 size={12} aria-hidden="true" />
+                          {confirmDelete ? (
+                            <span className="turn-delete-confirm-label">Confirm?</span>
+                          ) : (
+                            <span className="turn-delete-label">Delete</span>
+                          )}
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>

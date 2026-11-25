@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowDown,
   Clock,
   GitBranch,
   MapPin,
@@ -64,7 +65,10 @@ import {
   ActiveAgentModalTarget,
   AgentChangesModal,
 } from "./inspector/AgentChangesModal";
-import type { ChatStageProps } from "./chat/chatHelpers";
+import {
+  isTurnFeedScrolledAwayFromBottom,
+  type ChatStageProps,
+} from "./chat/chatHelpers";
 import { TurnCard } from "./chat/TurnCard";
 import { getLatestBranchTurnId } from "./chat/arrivalHelpers";
 import { LiveStreamingTurnCard } from "./chat/LiveStreamingTurnCard";
@@ -97,6 +101,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   isInspectorOpen = true,
   onToggleInspector,
   hasInspectorAttention = false,
+  isMobileLayout = false,
   onUpdateTurnBookmark,
   onSummarizeTurnForBookmark,
   onCampaignBundleChange,
@@ -128,9 +133,13 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const [customDirectiveText, setCustomDirectiveText] = useState("");
   const [activeAgentModal, setActiveAgentModal] = useState<ActiveAgentModalTarget | null>(null);
   const [isContextHealthOpen, setIsContextHealthOpen] = useState(false);
-  const [openModelPopoverTurnId, setOpenModelPopoverTurnId] = useState<string | null>(null);
+  const [openTurnPopover, setOpenTurnPopover] = useState<{
+    turnId: string;
+    kind: "model" | "swipe";
+  } | null>(null);
   const [inspectedTelemetryTurnId, setInspectedTelemetryTurnId] = useState<string | null>(null);
   const [highlightedTurnId, setHighlightedTurnId] = useState<string | null>(null);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const turnFeedRef = useRef<HTMLDivElement | null>(null);
   const gmDrawerRef = useRef<HTMLElement | null>(null);
 
@@ -1035,11 +1044,21 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     setActivePopover("none");
     setActiveTray("none");
     setStagedChoices({});
+    setOpenTurnPopover(null);
     magicWand.reset();
   }, [bundle.campaign.id, lastBranchTurn?.id]);
 
+  useEffect(() => {
+    setShowJumpToLatest(false);
+  }, [bundle.campaign.id]);
+
   const toggleCognition = (id: string) => {
-    setOpenCognitionIds((prev) => ({ ...prev, [id]: !prev[id] }));
+    const lastId = bundle.active_branch_turns[bundle.active_branch_turns.length - 1]?.id;
+    const defaultForTurn = !isMobileLayout && id === lastId;
+    setOpenCognitionIds((prev) => ({
+      ...prev,
+      [id]: !(prev[id] ?? defaultForTurn),
+    }));
   };
 
   const toggleMemories = (id: string) => {
@@ -1438,7 +1457,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   };
 
   const handleSwipeRegenerate = (turn: TurnNodeRecord) => {
-    setOpenModelPopoverTurnId(null);
+    setOpenTurnPopover(null);
     if (isBusy || isDeletingTurn || !turn.parent_turn_id) return;
     const narratorOpts = inferNarratorTurnOptions(turn);
     if (narratorOpts.isNarrator) {
@@ -1471,7 +1490,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   };
 
   const handleStartEdit = (turn: TurnNodeRecord) => {
-    setOpenModelPopoverTurnId(null);
+    setOpenTurnPopover(null);
     if (isBusy || isDeletingTurn || !turn.parent_turn_id) return;
 
     // Stash current composer draft if not already in edit mode
@@ -1571,7 +1590,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   };
 
   const handleBranchFromTurn = async (turn: TurnNodeRecord) => {
-    setOpenModelPopoverTurnId(null);
+    setOpenTurnPopover(null);
     if (isBusy || isDeletingTurn) return;
     if (editingTurn) handleCancelEdit();
     await onCheckoutTurn(turn.id);
@@ -1706,7 +1725,10 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                 />
                 {clockParts ? (
                   <span>
-                    {clockParts.prefix}
+                    {clockParts.datePrefix && (
+                      <span className="stage-clock-date">{clockParts.datePrefix}</span>
+                    )}
+                    {clockParts.hourDigits}
                     <span
                       className={`stage-clock-colon${
                         isBusy ? " stage-clock-colon--blinking" : ""
@@ -1775,13 +1797,29 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       </header>
 
       <div className="chat-stage-feed-region">
-        <div className="turn-feed" ref={turnFeedRef}>
+        <div
+          className="turn-feed"
+          ref={turnFeedRef}
+          onScroll={() => {
+            const el = turnFeedRef.current;
+            if (!el) return;
+            const away = isTurnFeedScrolledAwayFromBottom({
+              scrollHeight: el.scrollHeight,
+              scrollTop: el.scrollTop,
+              clientHeight: el.clientHeight,
+            });
+            setShowJumpToLatest((prev) => (prev === away ? prev : away));
+          }}
+        >
         {bundle.active_branch_turns.map((turn, turnIdx) => {
           const isRoot = turn.depth_index === 0;
           const isLastTurn =
             !isRoot && turnIdx === bundle.active_branch_turns.length - 1;
           const isEditingThisTurn = isLastTurn && editingTurn?.id === turn.id;
-          const cogOpen = openCognitionIds[turn.id] ?? (turn.depth_index === bundle.active_branch_turns.length - 1);
+          const defaultCogOpen =
+            !isMobileLayout &&
+            turn.depth_index === bundle.active_branch_turns.length - 1;
+          const cogOpen = openCognitionIds[turn.id] ?? defaultCogOpen;
           const memOpen = openMemoryIds[turn.id] ?? false;
           const siblings = siblingsByParent[turn.parent_turn_id ?? "ROOT"] || [];
           const hasDescendants = (childCountByParent[turn.id] ?? 0) > 0;
@@ -1812,7 +1850,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               onToggleCognition={toggleCognition}
               onToggleMemories={toggleMemories}
               onCheckoutTurn={(tid) => {
-                setOpenModelPopoverTurnId(null);
+                setOpenTurnPopover(null);
                 return onCheckoutTurn(tid);
               }}
               onBranchFromTurn={handleBranchFromTurn}
@@ -1823,13 +1861,35 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               onOpenAgentModal={setActiveAgentModal}
               onUpdateTurnBookmark={onUpdateTurnBookmark}
               onSummarizeTurnForBookmark={onSummarizeTurnForBookmark}
-              isModelPopoverOpen={openModelPopoverTurnId === turn.id}
-              onToggleModelPopover={(tid) =>
-                setOpenModelPopoverTurnId((prev) => (prev === tid ? null : tid))
+              childCountByTurnId={childCountByParent}
+              isModelPopoverOpen={
+                openTurnPopover?.turnId === turn.id && openTurnPopover.kind === "model"
               }
-              onCloseModelPopover={() => setOpenModelPopoverTurnId(null)}
+              onToggleModelPopover={(tid) =>
+                setOpenTurnPopover((prev) =>
+                  prev?.turnId === tid && prev.kind === "model"
+                    ? null
+                    : { turnId: tid, kind: "model" }
+                )
+              }
+              onCloseModelPopover={() =>
+                setOpenTurnPopover((prev) => (prev?.kind === "model" ? null : prev))
+              }
+              isSwipePopoverOpen={
+                openTurnPopover?.turnId === turn.id && openTurnPopover.kind === "swipe"
+              }
+              onToggleSwipePopover={(tid) =>
+                setOpenTurnPopover((prev) =>
+                  prev?.turnId === tid && prev.kind === "swipe"
+                    ? null
+                    : { turnId: tid, kind: "swipe" }
+                )
+              }
+              onCloseSwipePopover={() =>
+                setOpenTurnPopover((prev) => (prev?.kind === "swipe" ? null : prev))
+              }
               onOpenContextHealthForTurn={(t) => {
-                setOpenModelPopoverTurnId(null);
+                setOpenTurnPopover(null);
                 setInspectedTelemetryTurnId(t.id);
                 setIsContextHealthOpen(true);
               }}
@@ -1901,6 +1961,24 @@ export const ChatStage: React.FC<ChatStageProps> = ({
           </div>
         )}
         </div>
+
+        {showJumpToLatest && !gmTalk.isOpen && (
+          <button
+            type="button"
+            className="btn turn-feed-jump-btn"
+            aria-label="Jump to latest turn"
+            title="Jump to latest turn"
+            onClick={() => {
+              const el = turnFeedRef.current;
+              if (!el) return;
+              el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+              setShowJumpToLatest(false);
+            }}
+          >
+            <ArrowDown size={14} aria-hidden="true" />
+            <span>Latest</span>
+          </button>
+        )}
 
         {/* Out-of-Character GM Talk Slide-Out Drawer ("Neuromancer") */}
         {gmTalk.isOpen && (

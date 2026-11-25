@@ -1537,14 +1537,14 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
         label: "Swipe / Edit",
         rangeOrTag: "Sibling Variants",
         meaning:
-          "Swipe regenerates an alternate reply from the same parent state; Edit revises your latest prompt into a sibling turn.",
+          "Swipe regenerates an alternate reply from the same parent state; Edit revises your latest prompt into a sibling turn. Compare and switch siblings via the compact ‹ v#/N › stepper and preview popover (showing Active, Edited prompt tags, bookmarks, descendant counts, and 1-line previews).",
         accent: "violet",
       },
       {
         label: "Delete",
         rangeOrTag: "Leaf-Only Safe",
         meaning:
-          "Removes only a true leaf turn (and unfollowed unbookmarked sibling swipes); blocked on interior turns that have descendants.",
+          "Removes only a true leaf turn (and unfollowed unbookmarked sibling swipes) using an inline two-tap confirmation (Delete → Confirm?, rendered as a compact trash icon at rest on narrow phones); blocked on interior turns that have descendants.",
         accent: "amber",
       },
     ],
@@ -1600,6 +1600,7 @@ export const MECHANICS_ARTICLES: readonly MechanicsArticle[] = [
       },
     ],
     howItChanges: [
+      "Pan by dragging the canvas with a mouse or single finger, zoom smoothly with the mouse wheel or two-finger pinch gesture on touchscreens, and tap Fit All / Active Leaf to refocus.",
       "Click the Bookmark icon on any narrative turn after Turn #0; click the Magic Wand inside the note editor to ask your Clerk for an objective 1-sentence summary.",
       "Unfollowed same-prompt swipes stay tucked behind +N swipes pills unless bookmarked or toggled via Show swipes.",
     ],

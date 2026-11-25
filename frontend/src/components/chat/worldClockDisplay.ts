@@ -1,5 +1,7 @@
 export interface SplitWorldClock {
   prefix: string;
+  datePrefix: string;
+  hourDigits: string;
   colon: string;
   suffix: string;
 }
@@ -8,7 +10,8 @@ const CLOCK_TIME_RE = /(\d{1,2}):(\d{2})(?=:\d{2}|\s|$|[ap]\.?m\.?(?:\s|$))/gi;
 
 /**
  * Splits the first valid HH:MM separator in a world timestamp so the colon
- * can animate cleanly without disturbing custom calendars or fixed-width digits.
+ * can animate cleanly and compact phones can hide any preceding date prefix
+ * without disturbing custom calendars or fixed-width digits.
  */
 export function splitWorldClockDisplay(timestamp: string): SplitWorldClock | null {
   const trimmed = timestamp.trim();
@@ -26,9 +29,12 @@ export function splitWorldClockDisplay(timestamp: string): SplitWorldClock | nul
     if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
       continue;
     }
-    const colonIdx = idx + match[1].length;
+    const hourDigits = match[1];
+    const colonIdx = idx + hourDigits.length;
     return {
       prefix: trimmed.slice(0, colonIdx),
+      datePrefix: trimmed.slice(0, idx),
+      hourDigits,
       colon: ":",
       suffix: trimmed.slice(colonIdx + 1),
     };

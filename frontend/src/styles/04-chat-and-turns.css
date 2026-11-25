@@ -191,6 +191,28 @@
   gap: 18px;
 }
 
+.turn-feed-jump-btn {
+  position: absolute;
+  right: 16px;
+  bottom: 14px;
+  z-index: 12;
+  padding: 6px 12px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  border-radius: var(--radius-pill);
+  background: var(--surface-dark-deep);
+  border-color: var(--cyan-border);
+  color: var(--cyan-fg);
+  box-shadow: var(--shadow-popover);
+  backdrop-filter: blur(8px);
+  animation: fadeIn 0.14s ease-out;
+}
+
+.turn-feed-jump-btn:hover:not(:disabled) {
+  background: var(--cyan-bg);
+  border-color: var(--accent-cyan);
+}
+
 .turn-card {
   background: rgba(23, 30, 44, 0.88);
   border: 1px solid var(--border-subtle);
@@ -206,8 +228,248 @@
   z-index: var(--z-card-popover-host);
 }
 
+.turn-card-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+
 .turn-card-footer-row {
   position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.turn-card-meta {
+  display: flex;
+  gap: 8px 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.turn-card-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.turn-action-btn {
+  padding: 3px 8px;
+  font-size: 0.72rem;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.turn-actions-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.turn-delete-btn--confirm {
+  background: var(--rose-bg-hover);
+  border-color: var(--accent-rose);
+  color: #ffffff;
+  box-shadow: 0 0 10px rgba(244, 63, 94, 0.28);
+}
+
+/* Turn Swipe Stepper & Preview Popover */
+.turn-swipe-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.turn-swipe-switcher {
+  display: inline-flex;
+  align-items: stretch;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  overflow: hidden;
+}
+
+.turn-swipe-step-btn {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 3px 5px;
+  min-width: 24px;
+  color: var(--text-secondary);
+}
+
+.turn-swipe-step-btn:hover:not(:disabled) {
+  background: var(--surface-glass-3);
+  color: var(--text-primary);
+}
+
+.turn-swipe-trigger-btn {
+  border: none;
+  border-left: 1px solid var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);
+  border-radius: 0;
+  background: transparent;
+  padding: 3px 8px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--amber-fg);
+}
+
+.turn-swipe-trigger-btn:hover:not(:disabled),
+.turn-swipe-trigger-btn--open {
+  background: var(--amber-bg);
+}
+
+.turn-swipe-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  width: 310px;
+  max-width: calc(100vw - 32px);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  animation: fadeIn 0.14s ease-out;
+  text-align: left;
+  color: var(--text-primary);
+}
+
+.turn-swipe-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px 4px;
+  border-bottom: 1px solid var(--border-glass-subtle);
+}
+
+.turn-swipe-popover-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.turn-swipe-popover-close {
+  padding: 2px;
+  min-width: 22px;
+  min-height: 22px;
+  color: var(--text-muted);
+}
+
+.turn-swipe-popover-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.turn-swipe-option {
+  width: 100%;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 9px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background: var(--surface-glass-1);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.turn-swipe-option:hover:not(:disabled) {
+  background: var(--surface-glass-3);
+  border-color: var(--border-glass-strong);
+}
+
+.turn-swipe-option--active {
+  background: var(--amber-bg-subtle);
+  border-color: var(--amber-border);
+}
+
+.turn-swipe-option:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.turn-swipe-option-top {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.turn-swipe-version-badge {
+  font-family: var(--font-mono);
+  font-size: 0.69rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.turn-swipe-active-badge {
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--amber-bg);
+  border: 1px solid var(--amber-border);
+  color: var(--amber-fg);
+}
+
+.turn-swipe-edited-badge {
+  font-size: 0.62rem;
+  font-weight: 600;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--cyan-bg);
+  border: 1px solid var(--cyan-border);
+  color: var(--cyan-fg);
+}
+
+.turn-swipe-bookmark-icon {
+  color: var(--purple-fg);
+}
+
+.turn-swipe-branch-badge {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--violet-bg);
+  border: 1px solid var(--violet-border);
+  color: var(--violet-fg);
+}
+
+.turn-swipe-option-preview {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .user-bubble {
@@ -656,6 +918,25 @@
   padding: 6px 8px;
   border-radius: 6px;
   border: 1px solid var(--border-glass-subtle);
+}
+
+.choices-option-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.choices-option-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.choices-option-remove-btn {
+  flex-shrink: 0;
 }
 
 .choices-option-input {

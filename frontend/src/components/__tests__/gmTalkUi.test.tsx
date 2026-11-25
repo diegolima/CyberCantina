@@ -297,7 +297,10 @@ describe("GM Talk UI components", () => {
     );
     expect(unlockedClosingHtml).toContain("gm-slideout-panel--closing");
     expect(unlockedClosingHtml).toContain("gm-slideout-panel--expanded");
-    expect(unlockedClosingHtml).toContain("GM Mode · Secrets Unlocked");
+    expect(unlockedClosingHtml).toContain("GM Mode");
+    expect(unlockedClosingHtml).toContain(
+      '<span class="gm-spoiler-pill-detail"> · Secrets Unlocked</span>'
+    );
     expect(unlockedClosingHtml).toContain("@Turn 1");
     expect(unlockedClosingHtml).toContain("<em>signaled</em>");
     expect(unlockedClosingHtml).toContain("Sources used (1)");

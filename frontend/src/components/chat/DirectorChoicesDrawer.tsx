@@ -106,6 +106,7 @@ export const DirectorChoicesDrawer: React.FC<DirectorChoicesDrawerProps> = ({
                   type="button"
                   className="btn"
                   style={{ padding: "2px 6px", border: "none" }}
+                  aria-label="Close Director Choices"
                   onClick={() => setActiveTray("none")}
                 >
                   <X size={12} />
@@ -228,7 +229,7 @@ export const DirectorChoicesDrawer: React.FC<DirectorChoicesDrawerProps> = ({
                     handleSetDC(activeChoiceCharId, num);
                   }
                 }}
-                className="field-input"
+                className="field-input choices-dc-input"
                 style={{ width: 50, padding: "2px 6px", fontSize: "0.72rem" }}
                 title="Custom gate difficulty class (1-30)"
               />
@@ -265,99 +266,106 @@ export const DirectorChoicesDrawer: React.FC<DirectorChoicesDrawerProps> = ({
 
                   return (
                     <div key={opt.id} className="choices-option-row">
-                      <span
-                        style={{
-                          fontSize: "0.72rem",
-                          color: "var(--text-muted)",
-                          width: 14,
-                        }}
-                      >
-                        {idx + 1}.
-                      </span>
-                      <input
-                        type="text"
-                        className="choices-option-input"
-                        placeholder="Choice label (e.g. Open the blast door, Back away slowly...)"
-                        value={opt.label}
-                        maxLength={MAX_CHOICE_LABEL_LENGTH}
-                        onChange={(e) =>
-                          handleUpdateOption(activeChoiceCharId, opt.id, {
-                            label: e.target.value.slice(0, MAX_CHOICE_LABEL_LENGTH),
-                          })
-                        }
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            handleAddOption(activeChoiceCharId);
-                          }
-                        }}
-                      />
-                      <span
-                        className={`choices-char-count ${
-                          opt.label.length >= MAX_CHOICE_LABEL_LENGTH
-                            ? "choices-char-count--limit"
-                            : ""
-                        }`}
-                        title={`Character limit: ${opt.label.length}/${MAX_CHOICE_LABEL_LENGTH}`}
-                      >
-                        {opt.label.length}/{MAX_CHOICE_LABEL_LENGTH}
-                      </span>
-                      <select
-                        className="choices-gate-select"
-                        value={opt.gate || "any"}
-                        onChange={(e) =>
-                          handleUpdateOption(activeChoiceCharId, opt.id, {
-                            gate: e.target.value as ChoiceGate,
-                          })
-                        }
-                      >
-                        <option value="any">Always Available (No Gate)</option>
-                        <option value="critical_success">
-                          Req: Critical Success (d20=20 or DC+10)
-                        </option>
-                        <option value="success_plus">
-                          Req: Success or better (DC met)
-                        </option>
-                        <option value="failure_minus">
-                          Req: Failure or worse (&lt; DC)
-                        </option>
-                        <option value="critical_failure">
-                          Req: Critical Failure (d20=1 or DC-10)
-                        </option>
-                      </select>
-
-                      {isGated && oddsLabel && (
+                      <div className="choices-option-main">
                         <span
-                          className="choices-odds-badge"
                           style={{
-                            background: "rgba(59, 130, 246, 0.15)",
-                            border: "1px solid rgba(59, 130, 246, 0.4)",
-                            color: "#93c5fd",
+                            fontSize: "0.72rem",
+                            color: "var(--text-muted)",
+                            width: 14,
+                            flexShrink: 0,
                           }}
-                          title={`Estimated odds under current DC (${
-                            stagedChoices[activeChoiceCharId]
-                              ?.gate_difficulty_class ?? DEFAULT_GATE_DC
-                          }) and dice mode`}
                         >
-                          {oddsLabel} odds
+                          {idx + 1}.
                         </span>
-                      )}
+                        <input
+                          type="text"
+                          className="choices-option-input"
+                          placeholder="Choice label (e.g. Open the blast door, Back away slowly...)"
+                          value={opt.label}
+                          maxLength={MAX_CHOICE_LABEL_LENGTH}
+                          onChange={(e) =>
+                            handleUpdateOption(activeChoiceCharId, opt.id, {
+                              label: e.target.value.slice(0, MAX_CHOICE_LABEL_LENGTH),
+                            })
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              handleAddOption(activeChoiceCharId);
+                            }
+                          }}
+                        />
+                        <span
+                          className={`choices-char-count ${
+                            opt.label.length >= MAX_CHOICE_LABEL_LENGTH
+                              ? "choices-char-count--limit"
+                              : ""
+                          }`}
+                          title={`Character limit: ${opt.label.length}/${MAX_CHOICE_LABEL_LENGTH}`}
+                        >
+                          {opt.label.length}/{MAX_CHOICE_LABEL_LENGTH}
+                        </span>
+                      </div>
 
-                      <button
-                        type="button"
-                        className="btn"
-                        style={{
-                          padding: "3px 6px",
-                          border: "none",
-                          color: "var(--accent-rose)",
-                        }}
-                        onClick={() =>
-                          handleRemoveOption(activeChoiceCharId, opt.id)
-                        }
-                        title="Remove option"
-                      >
-                        <Trash2 size={12} />
-                      </button>
+                      <div className="choices-option-meta">
+                        <select
+                          className="choices-gate-select"
+                          value={opt.gate || "any"}
+                          onChange={(e) =>
+                            handleUpdateOption(activeChoiceCharId, opt.id, {
+                              gate: e.target.value as ChoiceGate,
+                            })
+                          }
+                        >
+                          <option value="any">Always Available (No Gate)</option>
+                          <option value="critical_success">
+                            Req: Critical Success (d20=20 or DC+10)
+                          </option>
+                          <option value="success_plus">
+                            Req: Success or better (DC met)
+                          </option>
+                          <option value="failure_minus">
+                            Req: Failure or worse (&lt; DC)
+                          </option>
+                          <option value="critical_failure">
+                            Req: Critical Failure (d20=1 or DC-10)
+                          </option>
+                        </select>
+
+                        {isGated && oddsLabel && (
+                          <span
+                            className="choices-odds-badge"
+                            style={{
+                              background: "rgba(59, 130, 246, 0.15)",
+                              border: "1px solid rgba(59, 130, 246, 0.4)",
+                              color: "#93c5fd",
+                            }}
+                            title={`Estimated odds under current DC (${
+                              stagedChoices[activeChoiceCharId]
+                                ?.gate_difficulty_class ?? DEFAULT_GATE_DC
+                            }) and dice mode`}
+                          >
+                            {oddsLabel} odds
+                          </span>
+                        )}
+
+                        <button
+                          type="button"
+                          className="btn choices-option-remove-btn"
+                          style={{
+                            padding: "3px 6px",
+                            border: "none",
+                            color: "var(--accent-rose)",
+                          }}
+                          onClick={() =>
+                            handleRemoveOption(activeChoiceCharId, opt.id)
+                          }
+                          aria-label="Remove option"
+                          title="Remove option"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
                     </div>
                   );
                 }

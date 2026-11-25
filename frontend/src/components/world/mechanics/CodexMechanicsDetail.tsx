@@ -2,6 +2,8 @@ import React, { useEffect, useState } from "react";
 import {
   ArrowUpRight,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ChevronUp,
   Compass,
   Cpu,
@@ -9,6 +11,7 @@ import {
 import type { MechanicsTopicId } from "../../../types";
 import type { MechanicsArticle } from "./mechanicsCatalog";
 import {
+  getAdjacentMechanicsTopics,
   getMechanicsArticle,
   getMechanicsSubcategoryMeta,
 } from "./mechanicsHelpers";
@@ -33,6 +36,9 @@ export const CodexMechanicsDetail: React.FC<CodexMechanicsDetailProps> = ({
   }, [article.id, initialUnderTheHoodOpen]);
 
   const subcategory = getMechanicsSubcategoryMeta(article.subcategoryId);
+  const { prev: prevArticle, next: nextArticle } = getAdjacentMechanicsTopics(
+    article.id
+  );
 
   return (
     <div className="codex-detail-stack">
@@ -168,6 +174,40 @@ export const CodexMechanicsDetail: React.FC<CodexMechanicsDetailProps> = ({
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* Previous / Next Guide Pager */}
+      {(prevArticle || nextArticle) && (
+        <div className="codex-mechanics-pager">
+          {prevArticle ? (
+            <button
+              type="button"
+              className="btn btn-sm codex-mechanics-pager-btn"
+              onClick={() => onSelectTopic(prevArticle.id)}
+            >
+              <ChevronLeft size={13} aria-hidden="true" />
+              <span className="codex-mechanics-pager-text">
+                <span className="codex-mechanics-pager-dir">Previous</span>
+                <strong>{prevArticle.shortTitle ?? prevArticle.title}</strong>
+              </span>
+            </button>
+          ) : (
+            <span />
+          )}
+          {nextArticle && (
+            <button
+              type="button"
+              className="btn btn-sm codex-mechanics-pager-btn codex-mechanics-pager-btn--next"
+              onClick={() => onSelectTopic(nextArticle.id)}
+            >
+              <span className="codex-mechanics-pager-text">
+                <span className="codex-mechanics-pager-dir">Next</span>
+                <strong>{nextArticle.shortTitle ?? nextArticle.title}</strong>
+              </span>
+              <ChevronRight size={13} aria-hidden="true" />
+            </button>
+          )}
         </div>
       )}
     </div>

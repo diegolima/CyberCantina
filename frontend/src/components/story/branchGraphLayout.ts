@@ -1267,3 +1267,47 @@ export function findContainingEpisodeId(
   const found = model.episodes.find((ep) => ep.turnIds.includes(targetTurnId));
   return found?.id ?? null;
 }
+
+export interface BranchPinchViewportInput {
+  startZoom: number;
+  startPan: { x: number; y: number };
+  startCenter: { x: number; y: number };
+  startDistance: number;
+  currentCenter: { x: number; y: number };
+  currentDistance: number;
+  stageRect: { left: number; top: number };
+}
+
+/**
+ * Compute updated zoom and pan during a two-finger pinch gesture on the Branch Graph,
+ * keeping the world point under the initial midpoint anchored under the current midpoint.
+ */
+export function computeBranchPinchViewport({
+  startZoom,
+  startPan,
+  startCenter,
+  startDistance,
+  currentCenter,
+  currentDistance,
+  stageRect,
+}: BranchPinchViewportInput): { zoom: number; pan: { x: number; y: number } } {
+  const safeStartZoom = clampGraphZoom(startZoom);
+  const ratio = startDistance > 0 && currentDistance > 0 ? currentDistance / startDistance : 1;
+  const nextZoom = clampGraphZoom(safeStartZoom * ratio);
+
+  const startPivotX = startCenter.x - stageRect.left;
+  const startPivotY = startCenter.y - stageRect.top;
+  const worldX = (startPivotX - startPan.x) / safeStartZoom;
+  const worldY = (startPivotY - startPan.y) / safeStartZoom;
+
+  const currPivotX = currentCenter.x - stageRect.left;
+  const currPivotY = currentCenter.y - stageRect.top;
+
+  return {
+    zoom: nextZoom,
+    pan: {
+      x: currPivotX - worldX * nextZoom,
+      y: currPivotY - worldY * nextZoom,
+    },
+  };
+}

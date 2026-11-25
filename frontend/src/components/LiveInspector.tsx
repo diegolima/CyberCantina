@@ -5,6 +5,7 @@ import {
   Users,
 } from "lucide-react";
 import type { RightPanelMode } from "../utils/campaignLayout";
+import { useDrawerSwipeDismiss } from "../hooks/useDrawerSwipeDismiss";
 import {
   CampaignStateBundle,
   CharacterRecord,
@@ -297,6 +298,12 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
     .filter(Boolean)
     .join(" ");
 
+  const { swipeOffsetPx, touchHandlers } = useDrawerSwipeDismiss({
+    enabled: mode === "overlay",
+    side: "right",
+    onDismiss: onClose,
+  });
+
   const personaSnapshot = bundle.campaign.persona_snapshot ?? null;
   const personaName = personaSnapshot?.name?.trim() || "You";
   const personaPortraitUrl = getEntityPrimaryImage("personas", personaSnapshot);
@@ -334,6 +341,12 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
       id={id}
       className={inspectorClassName}
       aria-hidden={mode === "hidden" ? true : undefined}
+      style={
+        swipeOffsetPx !== 0
+          ? { transform: `translateX(${swipeOffsetPx}px)`, transition: "none" }
+          : undefined
+      }
+      {...(mode === "overlay" ? touchHandlers : {})}
     >
       {/* 1. Where is here (Map) */}
       <InspectorLocationCard

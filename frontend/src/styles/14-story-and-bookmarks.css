@@ -123,6 +123,13 @@
   border: 1px solid var(--border-subtle);
   border-radius: 9px;
   padding: 3px;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.story-modal-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .story-modal-tab {
@@ -137,6 +144,8 @@
   font-size: 0.8rem;
   font-weight: 600;
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: background 0.15s ease, color 0.15s ease;
 }
 
@@ -283,6 +292,7 @@
   background: radial-gradient(circle at 20% 20%, rgba(30, 41, 59, 0.5), rgba(8, 12, 22, 0.92));
   cursor: grab;
   user-select: none;
+  touch-action: none;
 }
 
 .branch-graph-stage.is-panning {

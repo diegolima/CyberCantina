@@ -880,13 +880,7 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
                 : "Click on any field below to edit it. Active campaigns running in this world remain pinned to their original world snapshot automatically."}
             </div>
 
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr 1fr",
-                gap: 12,
-              }}
-            >
+            <div className="world-inspector-base-grid">
               <ClickToEditField
                 label="World Name"
                 value={name}
@@ -1411,7 +1405,13 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
           )}
         </div>
 
-        <div className="modal-footer">
+        <div
+          className={`modal-footer${
+            isCampaignMode && !isDirty && activeTab === "codex"
+              ? " modal-footer--hide-mobile-readonly"
+              : ""
+          }`}
+        >
           {mode === "wizard" ? (
             <>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>

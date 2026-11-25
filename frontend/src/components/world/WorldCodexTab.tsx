@@ -125,6 +125,7 @@ interface WorldCodexTabProps {
   initialSection?: CodexSectionId | null;
   initialGlobalQuery?: string;
   initialExpandedContainerIds?: readonly string[];
+  initialMobilePane?: "list" | "detail";
   onUpdateLoreNodes: (updater: (prev: LoreNode[]) => LoreNode[]) => void;
   onUpdatePendingTagDrafts: (
     updater: (prev: Record<string, string>) => Record<string, string>
@@ -190,6 +191,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   initialSection = null,
   initialGlobalQuery = "",
   initialExpandedContainerIds,
+  initialMobilePane,
   onUpdateLoreNodes,
   onUpdatePendingTagDrafts,
   onMarkDirty,
@@ -273,6 +275,10 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
         ? externalFocusRequest.returnTarget ?? null
         : null
     );
+  const [mobilePane, setMobilePane] = useState<"list" | "detail">(
+    () => initialMobilePane ?? (externalFocusRequest ? "detail" : "list")
+  );
+  const [mobileTopicsSheetOpen, setMobileTopicsSheetOpen] = useState(false);
   const internalReturnNonceRef = useRef(0);
   const [frozenOrderIds, setFrozenOrderIds] = useState<string[] | null>(null);
   const [reclassifiedNotice, setReclassifiedNotice] = useState<{
@@ -347,6 +353,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   // Handle external validation / right-pane focus jumps
   useEffect(() => {
     if (!externalFocusRequest) return;
+    setMobileTopicsSheetOpen(false);
     if (externalFocusRequest.kind === "character") {
       setGlobalQuery("");
       setCategoryQuery("");
@@ -356,6 +363,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
       setMechanicsReturnTarget(null);
       setActiveSection("major_characters");
       setSelectedEntryKey(`character:${externalFocusRequest.characterId}`);
+      setMobilePane("detail");
       setCharFocusTarget({
         characterId: externalFocusRequest.characterId,
         subtab: externalFocusRequest.initialSubtab ?? "bio",
@@ -373,6 +381,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
       setMechanicsReturnTarget(null);
       setActiveSection("major_characters");
       setSelectedEntryKey(`persona:${externalFocusRequest.personaId}`);
+      setMobilePane("detail");
       return;
     }
     if (externalFocusRequest.kind === "mechanics") {
@@ -390,6 +399,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
       setSelectedEntryKey(
         `mechanics:${targetArticle?.id ?? DEFAULT_MECHANICS_TOPIC_ID}`
       );
+      setMobilePane("detail");
       setMechanicsReturnTarget(externalFocusRequest.returnTarget ?? null);
       return;
     }
@@ -403,8 +413,22 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     setMechanicsReturnTarget(null);
     setActiveSection(secId);
     setSelectedEntryKey(target.id);
+    setMobilePane("detail");
     setTimeout(() => titleInputRef.current?.focus(), 40);
   }, [externalFocusRequest, loreNodes]);
+
+  useEffect(() => {
+    if (!mobileTopicsSheetOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setMobileTopicsSheetOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [mobileTopicsSheetOpen]);
 
   // Focus Global Quick Search when jumped via "Search all" with empty filter
   useEffect(() => {
@@ -707,6 +731,13 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     );
   }, [characterNameMap, campaignCharacters]);
 
+  const selectEntryForDetail = (key: string, beforeSelect?: () => void) => {
+    beforeSelect?.();
+    setSelectedEntryKey(key);
+    setMobilePane("detail");
+    setMobileTopicsSheetOpen(false);
+  };
+
   const handleOpenSection = (secId: CodexSectionId) => {
     const meta = getCodexSectionMeta(secId);
     if (meta.campaignOnly && !isCampaignMode) return;
@@ -717,6 +748,8 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     setArtifactUnlinkNotice(null);
     setCharFocusTarget(null);
     setMechanicsReturnTarget(null);
+    setMobileTopicsSheetOpen(false);
+    setMobilePane("list");
     setActiveSection(secId);
     if (secId === "mechanics") {
       setExpandedMechanicsSubcats((prev) =>
@@ -741,6 +774,8 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     setReclassifiedNotice(null);
     setArtifactUnlinkNotice(null);
     setCharFocusTarget(null);
+    setMobileTopicsSheetOpen(false);
+    setMobilePane("detail");
     setActiveSection("mechanics");
     setExpandedMechanicsSubcats((prev) => new Set([...prev, subcatId]));
     setSelectedEntryKey(
@@ -755,11 +790,13 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     const target = mechanicsReturnTarget;
     if (!target) return;
     setMechanicsReturnTarget(null);
+    setMobileTopicsSheetOpen(false);
     if (target.kind === "character") {
       setGlobalQuery("");
       setCategoryQuery("");
       setActiveSection("major_characters");
       setSelectedEntryKey(`character:${target.characterId}`);
+      setMobilePane("detail");
       setCharFocusTarget({
         characterId: target.characterId,
         subtab: target.subtab,
@@ -772,6 +809,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
       setCategoryQuery("");
       setActiveSection("major_characters");
       setSelectedEntryKey(`persona:${target.personaId}`);
+      setMobilePane("detail");
       return;
     }
     onReturnToWorldTab?.(target.tab);
@@ -786,6 +824,8 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     setArtifactUnlinkNotice(null);
     setCharFocusTarget(null);
     setMechanicsReturnTarget(null);
+    setMobileTopicsSheetOpen(false);
+    setMobilePane("list");
     setSelectedEntryKey(null);
   };
 
@@ -817,8 +857,10 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     setFrozenOrderIds(null);
     setReclassifiedNotice(null);
     setArtifactUnlinkNotice(null);
+    setMobileTopicsSheetOpen(false);
     setActiveSection(targetSection);
     setSelectedEntryKey(newId);
+    setMobilePane("detail");
     shouldFocusTitleRef.current = true;
   };
 
@@ -981,11 +1023,11 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
           tabIndex={0}
           className={`codex-list-row ${isSelected ? "active" : ""}`}
           style={{ paddingLeft: 8 + depthIndent * 14 }}
-          onClick={() => setSelectedEntryKey(node.key)}
+          onClick={() => selectEntryForDetail(node.key)}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
-              setSelectedEntryKey(node.key);
+              selectEntryForDetail(node.key);
             }
           }}
         >
@@ -1049,6 +1091,115 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
           node.children.map((child) => renderLocationTreeNode(child, depthIndent + 1))}
       </React.Fragment>
     );
+  };
+
+  const activeMechanicsArticle = useMemo(() => {
+    if (activeSection !== "mechanics") return undefined;
+    const selectedTopicId = extractMechanicsTopicIdFromKey(selectedEntryKey);
+    return (
+      (selectedTopicId ? getMechanicsArticle(selectedTopicId) : undefined) ??
+      (!categoryQuery.trim()
+        ? getMechanicsArticle(DEFAULT_MECHANICS_TOPIC_ID)
+        : undefined)
+    );
+  }, [activeSection, selectedEntryKey, categoryQuery]);
+
+  const renderMechanicsTreeContent = () => {
+    if (mechanicsTree.roots.length === 0) {
+      return (
+        <div className="ui-empty-state ui-empty-state--fill">
+          <span>No guides match &ldquo;{categoryQuery.trim()}&rdquo;.</span>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setCategoryQuery("")}
+          >
+            Clear filter
+          </button>
+        </div>
+      );
+    }
+    return mechanicsTree.roots.map((group) => {
+      const isExpanded = effectiveExpandedMechanicsSubcats.has(
+        group.subcategoryId
+      );
+      const toggleGroup = () => {
+        setExpandedMechanicsSubcats((prev) => {
+          const next = new Set(prev);
+          if (next.has(group.subcategoryId)) {
+            next.delete(group.subcategoryId);
+          } else {
+            next.add(group.subcategoryId);
+          }
+          return next;
+        });
+      };
+      return (
+        <React.Fragment key={group.key}>
+          <div
+            className="codex-list-row codex-mechanics-group-row"
+            style={{ paddingLeft: 8 }}
+            title={group.subcategory.description}
+            onClick={toggleGroup}
+          >
+            <button
+              type="button"
+              className="codex-tree-toggle"
+              aria-expanded={isExpanded}
+              aria-label={
+                isExpanded
+                  ? `Collapse ${group.subcategory.label}`
+                  : `Expand ${group.subcategory.label}`
+              }
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleGroup();
+              }}
+            >
+              {isExpanded ? (
+                <ChevronDown size={12} />
+              ) : (
+                <ChevronRight size={12} />
+              )}
+            </button>
+            <span className="codex-list-row-title">
+              {group.subcategory.label}
+            </span>
+            <span className="codex-mechanics-group-count">
+              {group.children.length}
+            </span>
+          </div>
+          {isExpanded &&
+            group.children.map((leaf) => {
+              const isSelected = selectedEntryKey === leaf.key;
+              return (
+                <div
+                  key={leaf.key}
+                  role="option"
+                  aria-selected={isSelected}
+                  tabIndex={0}
+                  className={`codex-list-row ${isSelected ? "active" : ""}`}
+                  style={{ paddingLeft: 24 }}
+                  onClick={() => selectEntryForDetail(leaf.key)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      selectEntryForDetail(leaf.key);
+                    }
+                  }}
+                >
+                  <Compass
+                    size={12}
+                    color="var(--accent-cyan)"
+                    style={{ flexShrink: 0 }}
+                  />
+                  <span className="codex-list-row-title">{leaf.title}</span>
+                </div>
+              );
+            })}
+        </React.Fragment>
+      );
+    });
   };
 
   // Resolve active right-pane content
@@ -1356,13 +1507,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     }
 
     if (activeSection === "mechanics") {
-      const selectedTopicId = extractMechanicsTopicIdFromKey(selectedEntryKey);
-      const selectedArticle =
-        (selectedTopicId ? getMechanicsArticle(selectedTopicId) : undefined) ??
-        (!categoryQuery.trim()
-          ? getMechanicsArticle(DEFAULT_MECHANICS_TOPIC_ID)
-          : undefined);
-      if (!selectedArticle) {
+      if (!activeMechanicsArticle) {
         return (
           <div className="ui-empty-state ui-empty-state--fill">
             {categoryQuery.trim()
@@ -1373,7 +1518,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
       }
       return (
         <CodexMechanicsDetail
-          article={selectedArticle}
+          article={activeMechanicsArticle}
           onSelectTopic={(id) => handleOpenMechanicsTopic(id)}
         />
       );
@@ -1592,7 +1737,13 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
         </>
       ) : (
         /* 2-Pane Master-Detail View */
-        <div className="codex-two-pane">
+        <div
+          className={`codex-two-pane ${
+            mobilePane === "detail"
+              ? "codex-two-pane--mobile-detail"
+              : "codex-two-pane--mobile-list"
+          }`}
+        >
           {/* Left Navigation Pane */}
           <div className="codex-left-pane">
             {/* Category Switcher Pills */}
@@ -1782,15 +1933,17 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
                           aria-selected={isSelected}
                           tabIndex={0}
                           className={`codex-list-row ${isSelected ? "active" : ""}`}
-                          onClick={() => {
-                            setCharFocusTarget(null);
-                            setSelectedEntryKey(hit.key);
-                          }}
+                          onClick={() =>
+                            selectEntryForDetail(hit.key, () =>
+                              setCharFocusTarget(null)
+                            )
+                          }
                           onKeyDown={(e) => {
                             if (e.key === "Enter" || e.key === " ") {
                               e.preventDefault();
-                              setCharFocusTarget(null);
-                              setSelectedEntryKey(hit.key);
+                              selectEntryForDetail(hit.key, () =>
+                                setCharFocusTarget(null)
+                              );
                             }
                           }}
                         >
@@ -1839,15 +1992,17 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
                               aria-selected={isSelected}
                               tabIndex={0}
                               className={`codex-list-row ${isSelected ? "active" : ""}`}
-                              onClick={() => {
-                                setCharFocusTarget(null);
-                                setSelectedEntryKey(hit.key);
-                              }}
+                              onClick={() =>
+                                selectEntryForDetail(hit.key, () =>
+                                  setCharFocusTarget(null)
+                                )
+                              }
                               onKeyDown={(e) => {
                                 if (e.key === "Enter" || e.key === " ") {
                                   e.preventDefault();
-                                  setCharFocusTarget(null);
-                                  setSelectedEntryKey(hit.key);
+                                  selectEntryForDetail(hit.key, () =>
+                                    setCharFocusTarget(null)
+                                  );
                                 }
                               }}
                             >
@@ -1903,15 +2058,17 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
                         aria-selected={isSelected}
                         tabIndex={0}
                         className={`codex-list-row ${isSelected ? "active" : ""}`}
-                        onClick={() => {
-                          setFrozenOrderIds(null);
-                          setSelectedEntryKey(lore.id);
-                        }}
+                        onClick={() =>
+                          selectEntryForDetail(lore.id, () =>
+                            setFrozenOrderIds(null)
+                          )
+                        }
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault();
-                            setFrozenOrderIds(null);
-                            setSelectedEntryKey(lore.id);
+                            selectEntryForDetail(lore.id, () =>
+                              setFrozenOrderIds(null)
+                            );
                           }
                         }}
                       >
@@ -1992,15 +2149,17 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
                         aria-selected={isSelected}
                         tabIndex={0}
                         className={`codex-list-row ${isSelected ? "active" : ""}`}
-                        onClick={() => {
-                          setCharFocusTarget(null);
-                          setSelectedEntryKey(item.key);
-                        }}
+                        onClick={() =>
+                          selectEntryForDetail(item.key, () =>
+                            setCharFocusTarget(null)
+                          )
+                        }
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault();
-                            setCharFocusTarget(null);
-                            setSelectedEntryKey(item.key);
+                            selectEntryForDetail(item.key, () =>
+                              setCharFocusTarget(null)
+                            );
                           }
                         }}
                       >
@@ -2038,104 +2197,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
                   })
                 )
               ) : activeSection === "mechanics" ? (
-                mechanicsTree.roots.length === 0 ? (
-                  <div className="ui-empty-state ui-empty-state--fill">
-                    <span>
-                      No guides match &ldquo;{categoryQuery.trim()}&rdquo;.
-                    </span>
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      onClick={() => setCategoryQuery("")}
-                    >
-                      Clear filter
-                    </button>
-                  </div>
-                ) : (
-                  mechanicsTree.roots.map((group) => {
-                    const isExpanded = effectiveExpandedMechanicsSubcats.has(
-                      group.subcategoryId
-                    );
-                    const toggleGroup = () => {
-                      setExpandedMechanicsSubcats((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(group.subcategoryId)) {
-                          next.delete(group.subcategoryId);
-                        } else {
-                          next.add(group.subcategoryId);
-                        }
-                        return next;
-                      });
-                    };
-                    return (
-                      <React.Fragment key={group.key}>
-                        <div
-                          className="codex-list-row codex-mechanics-group-row"
-                          style={{ paddingLeft: 8 }}
-                          title={group.subcategory.description}
-                          onClick={toggleGroup}
-                        >
-                          <button
-                            type="button"
-                            className="codex-tree-toggle"
-                            aria-expanded={isExpanded}
-                            aria-label={
-                              isExpanded
-                                ? `Collapse ${group.subcategory.label}`
-                                : `Expand ${group.subcategory.label}`
-                            }
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleGroup();
-                            }}
-                          >
-                            {isExpanded ? (
-                              <ChevronDown size={12} />
-                            ) : (
-                              <ChevronRight size={12} />
-                            )}
-                          </button>
-                          <span className="codex-list-row-title">
-                            {group.subcategory.label}
-                          </span>
-                          <span className="codex-mechanics-group-count">
-                            {group.children.length}
-                          </span>
-                        </div>
-                        {isExpanded &&
-                          group.children.map((leaf) => {
-                            const isSelected = selectedEntryKey === leaf.key;
-                            return (
-                              <div
-                                key={leaf.key}
-                                role="option"
-                                aria-selected={isSelected}
-                                tabIndex={0}
-                                className={`codex-list-row ${isSelected ? "active" : ""}`}
-                                style={{ paddingLeft: 24 }}
-                                onClick={() => setSelectedEntryKey(leaf.key)}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter" || e.key === " ") {
-                                    e.preventDefault();
-                                    setSelectedEntryKey(leaf.key);
-                                  }
-                                }}
-                              >
-                                <Compass
-                                  size={12}
-                                  color="var(--accent-cyan)"
-                                  style={{ flexShrink: 0 }}
-                                />
-                                <span className="codex-list-row-title">
-                                  {leaf.title}
-                                </span>
-                              </div>
-                            );
-                          })}
-                      </React.Fragment>
-                    );
-                  })
-                )
+                renderMechanicsTreeContent()
               ) : null}
             </div>
 
@@ -2148,7 +2210,123 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
           </div>
 
           {/* Right Detail Pane */}
-          <div className="codex-right-pane">{renderRightPane()}</div>
+          <div className="codex-right-pane">
+            <div className="codex-mobile-detail-bar">
+              <button
+                type="button"
+                className="btn btn-sm codex-mobile-back-btn"
+                onClick={() => {
+                  setMobileTopicsSheetOpen(false);
+                  setMobilePane("list");
+                }}
+              >
+                <ArrowLeft size={13} aria-hidden="true" />
+                <span>
+                  {isGlobalSearchMode
+                    ? "Results"
+                    : activeSection === "mechanics"
+                    ? "Topics"
+                    : activeSectionMeta?.label ?? "Entries"}
+                </span>
+              </button>
+
+              {activeSection === "mechanics" && (
+                <button
+                  type="button"
+                  className="btn btn-sm codex-mobile-topic-picker-btn"
+                  aria-expanded={mobileTopicsSheetOpen}
+                  aria-haspopup="dialog"
+                  onClick={() => setMobileTopicsSheetOpen(true)}
+                >
+                  <Compass
+                    size={13}
+                    color="var(--accent-cyan)"
+                    aria-hidden="true"
+                  />
+                  <span className="codex-mobile-topic-picker-label">
+                    {activeMechanicsArticle
+                      ? activeMechanicsArticle.shortTitle ??
+                        activeMechanicsArticle.title
+                      : "Browse Topics"}
+                  </span>
+                  <ChevronDown size={12} aria-hidden="true" />
+                </button>
+              )}
+            </div>
+
+            {renderRightPane()}
+          </div>
+        </div>
+      )}
+
+      {mobileTopicsSheetOpen && activeSection === "mechanics" && (
+        <div
+          className="codex-mobile-topics-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Game Mechanics Topics"
+          onClick={() => setMobileTopicsSheetOpen(false)}
+        >
+          <div
+            className="codex-mobile-topics-sheet"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="codex-mobile-topics-header">
+              <span className="codex-mobile-topics-title">
+                <Compass
+                  size={14}
+                  color="var(--accent-cyan)"
+                  aria-hidden="true"
+                />
+                <span>Game Mechanics Topics</span>
+              </span>
+              <button
+                type="button"
+                className="btn btn-sm"
+                aria-label="Close topics"
+                onClick={() => setMobileTopicsSheetOpen(false)}
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <div className="codex-mobile-topics-search">
+              <div className="ui-search-wrap" style={{ flex: 1 }}>
+                <Search size={12} className="ui-search-icon" />
+                <input
+                  type="text"
+                  className="ui-search-input ui-search-input--panel ui-search-input--cyan"
+                  placeholder="Filter Game Mechanics..."
+                  aria-label="Filter Game Mechanics topics"
+                  value={categoryQuery}
+                  onChange={(e) => setCategoryQuery(e.target.value)}
+                  onKeyDown={(e) =>
+                    handleSearchInputKeyDown(e, categoryQuery, () =>
+                      setCategoryQuery("")
+                    )
+                  }
+                />
+                {categoryQuery.length > 0 && (
+                  <button
+                    type="button"
+                    className="ui-search-clear"
+                    aria-label="Clear filter"
+                    onClick={() => setCategoryQuery("")}
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div
+              className="codex-list-scroll codex-mobile-topics-list"
+              role="listbox"
+              aria-label="Game Mechanics topic list"
+            >
+              {renderMechanicsTreeContent()}
+            </div>
+          </div>
         </div>
       )}
 

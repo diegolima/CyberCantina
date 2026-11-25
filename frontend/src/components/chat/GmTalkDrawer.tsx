@@ -160,9 +160,13 @@ export const GmTalkDrawer: React.FC<GmTalkDrawerProps> = ({
             }
           >
             {unlockLore ? <Shield size={11} /> : <Lock size={11} />}
-            <span>
-              {unlockLore ? "GM Mode · Secrets Unlocked" : "Spoiler-Safe"}
-            </span>
+            {unlockLore ? (
+              <span>
+                GM Mode<span className="gm-spoiler-pill-detail"> · Secrets Unlocked</span>
+              </span>
+            ) : (
+              <span>Spoiler-Safe</span>
+            )}
           </span>
 
           {modelMeta?.modelName && (
@@ -189,16 +193,17 @@ export const GmTalkDrawer: React.FC<GmTalkDrawerProps> = ({
             }`}
             disabled={isStreaming || isClearing || messages.length === 0}
             onClick={onClearChat}
+            aria-label={clearConfirm ? "Confirm Clear GM Chat" : "Clear GM Chat"}
             title="Clear GM chat messages on the active branch"
           >
             <Trash2 size={12} />
-            <span>
-              {isClearing
-                ? "Clearing…"
-                : clearConfirm
-                  ? "Confirm Clear?"
-                  : "Clear Chat"}
-            </span>
+            {isClearing ? (
+              <span>Clearing…</span>
+            ) : clearConfirm ? (
+              <span>Confirm Clear?</span>
+            ) : (
+              <span className="gm-clear-btn-label">Clear Chat</span>
+            )}
           </button>
 
           <button

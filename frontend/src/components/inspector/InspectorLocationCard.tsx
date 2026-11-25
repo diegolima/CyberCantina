@@ -505,6 +505,13 @@ export const InspectorLocationCard: React.FC<InspectorLocationCardProps> = ({
                   }}
                   onClick={() => setSelectedLocId(loc.id)}
                 >
+                  <circle
+                    cx={pt.x}
+                    cy={pt.y}
+                    r={22}
+                    fill="transparent"
+                    className="minimap-node-hit-target"
+                  />
                   {isSelected && (
                     <circle
                       cx={pt.x}
