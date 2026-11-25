@@ -903,45 +903,6 @@
   color: var(--text-primary);
 }
 
-.item-action-btn {
-  background: none;
-  border: none;
-  padding: 0;
-  margin: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  opacity: 0.75;
-  transition: opacity 0.15s ease, transform 0.15s ease;
-  color: inherit;
-}
-
-.item-action-btn:hover {
-  opacity: 1;
-  transform: scale(1.2);
-}
-
-.item-action-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-  transform: none;
-}
-
-.item-badge-clickable {
-  cursor: pointer;
-}
-
-.item-badge-clickable:hover {
-  border-color: var(--accent-amber);
-}
-
-.item-meta-icons {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-
 .item-flag-pill {
   display: inline-flex;
   align-items: center;

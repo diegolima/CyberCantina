@@ -22,12 +22,14 @@ import {
 import type {
   AppSettings,
   CampaignWorldSettings,
+  ItemEquipActionPayload,
   LocationContainer,
   LocationEdge,
   LocationLoreCategory,
   LocationLoreNodeDraft,
   LocationNode,
   LoreNode,
+  MemoryShard,
   PersonaRecord,
   PersonaTurnStateSnapshot,
   WorldGlobalRules,
@@ -112,6 +114,16 @@ interface WorldInspectorModalProps {
   visitedContainerIds?: string[];
   appSettings?: AppSettings | null;
   isAdmin?: boolean;
+  initialCodexFocus?: CodexFocusRequest | null;
+  onToggleItemEquip?: (payload: ItemEquipActionPayload) => Promise<void> | void;
+  onUpdateCampaignMemories?: (
+    characterId: string,
+    shards: MemoryShard[]
+  ) => Promise<void>;
+  onOverrideCharacterLocation?: (
+    characterId: string,
+    locationId: string
+  ) => Promise<void> | void;
 }
 
 export type WorldTab = "base" | "media" | "map" | "codex" | "settings" | "unsupported";
@@ -143,6 +155,10 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   visitedContainerIds = [],
   appSettings = null,
   isAdmin = false,
+  initialCodexFocus = null,
+  onToggleItemEquip,
+  onUpdateCampaignMemories,
+  onOverrideCharacterLocation,
 }) => {
   const isCampaignMode = mode === "campaign";
   const [activeTab, setActiveTab] = useState<WorldTab>(() =>
@@ -238,7 +254,21 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   const focusNonceRef = useRef(0);
   const [codexFocusRequest, setCodexFocusRequest] =
-    useState<CodexFocusRequest | null>(null);
+    useState<CodexFocusRequest | null>(() => initialCodexFocus ?? null);
+
+  useEffect(() => {
+    if (!initialCodexFocus) return;
+    setCodexFocusRequest(initialCodexFocus);
+    setActiveTab("codex");
+  }, [initialCodexFocus]);
+
+  const characterNameMap = useMemo(
+    () =>
+      Object.fromEntries(
+        campaignCharacters.map((c) => [c.record.id, c.record.name])
+      ),
+    [campaignCharacters]
+  );
   const [externalMapFocus, setExternalMapFocus] = useState<{
     kind: "location" | "container";
     id: string;
@@ -1035,10 +1065,15 @@ export const WorldInspectorModal: React.FC<WorldInspectorModalProps> = ({
             locations={effectiveLocations}
             visitedContainerIds={visitedContainerIds}
             activeLocationId={activeLocationId}
+            activeWorldName={name}
             activePersona={activePersona}
             activePersonaTurnState={activePersonaTurnState}
             campaignCharacters={campaignCharacters}
+            characterNameMap={characterNameMap}
             externalFocusRequest={codexFocusRequest}
+            onItemAction={onToggleItemEquip}
+            onSaveMemories={onUpdateCampaignMemories}
+            onRelocateCharacter={onOverrideCharacterLocation}
             onUpdateLoreNodes={(updater) => {
               setLoreNodes(updater);
               if (isCampaignMode) {

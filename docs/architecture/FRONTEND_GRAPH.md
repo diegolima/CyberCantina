@@ -78,9 +78,7 @@ flowchart TD
     b_5 --> b_16
     b_5 --> b_20
     b_5 --> b_21
-    b_6 --> b_2
     b_6 --> b_7
-    b_6 --> b_12
     b_6 --> b_20
     b_6 --> b_21
     b_7 --> b_2
@@ -107,6 +105,7 @@ flowchart TD
     b_14 --> b_20
     b_15 --> b_1
     b_15 --> b_2
+    b_15 --> b_4
     b_15 --> b_7
     b_15 --> b_12
     b_15 --> b_20
@@ -132,7 +131,7 @@ flowchart TD
 | `components/auth` | 14 | `api`, `components (root)`, `components/models`, `components/providers`, `components/shared`, `types`, `utils` |
 | `components/character` | 12 | `api`, `components (root)`, `components/shared`, `types`, `utils` |
 | `components/chat` | 20 | `components (root)`, `components/inspector`, `components/shared`, `components/world`, `hooks`, `types`, `utils` |
-| `components/inspector` | 13 | `components (root)`, `components/map`, `components/shared`, `types`, `utils` |
+| `components/inspector` | 8 | `components/map`, `types`, `utils` |
 | `components/map` | 17 | `components (root)`, `components/inspector`, `components/shared`, `hooks`, `types`, `utils` |
 | `components/models` | 12 | `components/providers`, `local`, `types` |
 | `components/party` | 1 | `types`, `utils` |
@@ -141,7 +140,7 @@ flowchart TD
 | `components/shared` | 5 | `types`, `utils` |
 | `components/story` | 5 | `components (root)`, `types` |
 | `components/wizard` | 2 | `api`, `components (root)`, `types` |
-| `components/world` | 8 | `api`, `components (root)`, `components/map`, `components/shared`, `types`, `utils` |
+| `components/world` | 12 | `api`, `components (root)`, `components/character`, `components/map`, `components/shared`, `types`, `utils` |
 | `hooks` | 4 | `api`, `types`, `utils` |
 | `local` | 7 | `types` |
 | `main` | 1 | `App`, `styles.css` |

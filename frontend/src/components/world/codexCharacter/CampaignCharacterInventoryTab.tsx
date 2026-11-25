@@ -30,7 +30,8 @@ export interface CampaignCharacterInventoryTabProps {
   isMutatingLocked: boolean;
   initialExpandedItemId: string | null;
   isActive: boolean;
-  onItemAction: (payload: ItemEquipActionPayload) => Promise<void> | void;
+  onItemAction?: (payload: ItemEquipActionPayload) => Promise<void> | void;
+  onJumpToLore?: (loreId: string) => void;
 }
 
 export const CampaignCharacterInventoryTab: React.FC<CampaignCharacterInventoryTabProps> = ({
@@ -43,6 +44,7 @@ export const CampaignCharacterInventoryTab: React.FC<CampaignCharacterInventoryT
   initialExpandedItemId,
   isActive,
   onItemAction,
+  onJumpToLore,
 }) => {
   const [newItemName, setNewItemName] = useState("");
   const [newItemTarget, setNewItemTarget] = useState<"inventory" | "equipped">("inventory");
@@ -57,6 +59,8 @@ export const CampaignCharacterInventoryTab: React.FC<CampaignCharacterInventoryT
   const [isSavingItemEdit, setIsSavingItemEdit] = useState(false);
   const [itemError, setItemError] = useState<string | null>(null);
   const [itemSaveSuccess, setItemSaveSuccess] = useState<string | null>(null);
+
+  const effectiveLocked = isMutatingLocked || !onItemAction;
 
   const allItems = useMemo(
     () => [...equippedList, ...inventoryList],
@@ -81,7 +85,6 @@ export const CampaignCharacterInventoryTab: React.FC<CampaignCharacterInventoryT
     setItemError(null);
   };
 
-
   useEffect(() => {
     if (!initialExpandedItemId) return;
     const match = allItems.find((it) => it.id === initialExpandedItemId);
@@ -94,7 +97,7 @@ export const CampaignCharacterInventoryTab: React.FC<CampaignCharacterInventoryT
   const handleAddItem = async (e: React.FormEvent) => {
     e.preventDefault();
     const clean = newItemName.trim();
-    if (!clean || isMutatingLocked) return;
+    if (!clean || effectiveLocked || !onItemAction) return;
     setIsSubmittingItem(true);
     setItemError(null);
     try {
@@ -122,6 +125,7 @@ export const CampaignCharacterInventoryTab: React.FC<CampaignCharacterInventoryT
   };
 
   const handleSaveItemUpdate = async (item: ItemInstance) => {
+    if (!onItemAction) return;
     const trimmedName = editItemName.trim();
     if (!trimmedName) {
       setItemError("Item name cannot be empty.");
@@ -166,7 +170,7 @@ export const CampaignCharacterInventoryTab: React.FC<CampaignCharacterInventoryT
   };
 
   const handleRemoveItem = async (item: ItemInstance) => {
-    if (isMutatingLocked) return;
+    if (effectiveLocked || !onItemAction) return;
     if (
       hasItemFlag(item, "permanent") &&
       !window.confirm(
@@ -252,19 +256,32 @@ export const CampaignCharacterInventoryTab: React.FC<CampaignCharacterInventoryT
                   <Lock size={10} /> Permanent
                 </span>
               )}
-              {isArt && (
-                <span
-                  className="item-flag-pill item-flag-artifact"
-                  title={
-                    linkedTitle
-                      ? `Linked to World Artifact: ${linkedTitle}`
-                      : "Linked to World Artifact Lore"
-                  }
-                >
-                  <Sparkles size={10} />{" "}
-                  {linkedTitle ? `Artifact · ${linkedTitle}` : "Artifact"}
-                </span>
-              )}
+              {isArt &&
+                (item.lore_id && linkedTitle && onJumpToLore ? (
+                  <button
+                    type="button"
+                    className="item-flag-pill item-flag-artifact codex-artifact-jump"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onJumpToLore(item.lore_id!);
+                    }}
+                    title={`Open artifact entry: ${linkedTitle}`}
+                  >
+                    <Sparkles size={10} /> Artifact: {linkedTitle} →
+                  </button>
+                ) : (
+                  <span
+                    className="item-flag-pill item-flag-artifact"
+                    title={
+                      linkedTitle
+                        ? `Linked to World Artifact: ${linkedTitle}`
+                        : "Linked to World Artifact Lore"
+                    }
+                  >
+                    <Sparkles size={10} />{" "}
+                    {linkedTitle ? `Artifact · ${linkedTitle}` : "Artifact"}
+                  </span>
+                ))}
               {hasNote && !isExpanded && (
                 <span
                   className="item-flag-pill item-flag-note"
@@ -303,64 +320,67 @@ export const CampaignCharacterInventoryTab: React.FC<CampaignCharacterInventoryT
               <Pencil size={11} />
               {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
             </button>
-            {bucket === "equipped" ? (
+            {onItemAction &&
+              (bucket === "equipped" ? (
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ padding: "3px 8px", fontSize: "0.72rem" }}
+                  disabled={effectiveLocked}
+                  title={
+                    effectiveLocked
+                      ? "Locked while turn/Clerk is running"
+                      : "Unequip (move to carried inventory)"
+                  }
+                  onClick={() =>
+                    onItemAction({
+                      character_id: character.id,
+                      item: item.name,
+                      item_id: item.id,
+                      action: "unequip",
+                    })
+                  }
+                >
+                  <CircleMinus size={12} /> Unequip
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ padding: "3px 8px", fontSize: "0.72rem" }}
+                  disabled={effectiveLocked}
+                  title={
+                    effectiveLocked
+                      ? "Locked while turn/Clerk is running"
+                      : "Equip (move to equipped gear)"
+                  }
+                  onClick={() =>
+                    onItemAction({
+                      character_id: character.id,
+                      item: item.name,
+                      item_id: item.id,
+                      action: "equip",
+                    })
+                  }
+                >
+                  <CirclePlus size={12} /> Equip
+                </button>
+              ))}
+            {onItemAction && (
               <button
                 type="button"
-                className="btn"
-                style={{ padding: "3px 8px", fontSize: "0.72rem" }}
-                disabled={isMutatingLocked}
+                className="item-remove-btn"
+                disabled={effectiveLocked}
                 title={
-                  isMutatingLocked
+                  effectiveLocked
                     ? "Locked while turn/Clerk is running"
-                    : "Unequip (move to carried inventory)"
+                    : "Remove (delete item)"
                 }
-                onClick={() =>
-                  onItemAction({
-                    character_id: character.id,
-                    item: item.name,
-                    item_id: item.id,
-                    action: "unequip",
-                  })
-                }
+                onClick={() => handleRemoveItem(item)}
               >
-                <CircleMinus size={12} /> Unequip
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="btn"
-                style={{ padding: "3px 8px", fontSize: "0.72rem" }}
-                disabled={isMutatingLocked}
-                title={
-                  isMutatingLocked
-                    ? "Locked while turn/Clerk is running"
-                    : "Equip (move to equipped gear)"
-                }
-                onClick={() =>
-                  onItemAction({
-                    character_id: character.id,
-                    item: item.name,
-                    item_id: item.id,
-                    action: "equip",
-                  })
-                }
-              >
-                <CirclePlus size={12} /> Equip
+                <Trash2 size={13} />
               </button>
             )}
-            <button
-              type="button"
-              className="item-remove-btn"
-              disabled={isMutatingLocked}
-              title={
-                isMutatingLocked
-                  ? "Locked while turn/Clerk is running"
-                  : "Remove (delete item)"
-              }
-              onClick={() => handleRemoveItem(item)}
-            >
-              <Trash2 size={13} />
-            </button>
           </div>
         </div>
 
@@ -383,7 +403,7 @@ export const CampaignCharacterInventoryTab: React.FC<CampaignCharacterInventoryT
                 className="field-input"
                 value={editItemName}
                 maxLength={120}
-                disabled={isSavingItemEdit || isMutatingLocked}
+                disabled={isSavingItemEdit || effectiveLocked}
                 onChange={(e) => setEditItemName(e.target.value)}
               />
             </div>
@@ -420,7 +440,7 @@ export const CampaignCharacterInventoryTab: React.FC<CampaignCharacterInventoryT
                 maxLength={300}
                 placeholder="e.g. Tarnished silver heirloom left by her mother; smells faintly of cedar..."
                 value={editItemNote}
-                disabled={isSavingItemEdit || isMutatingLocked}
+                disabled={isSavingItemEdit || effectiveLocked}
                 onChange={(e) => setEditItemNote(e.target.value)}
               />
             </div>
@@ -445,14 +465,14 @@ export const CampaignCharacterInventoryTab: React.FC<CampaignCharacterInventoryT
                   background: editIsPermanent
                     ? "rgba(56, 189, 248, 0.08)"
                     : "var(--bg-card)",
-                  cursor: isMutatingLocked ? "not-allowed" : "pointer",
+                  cursor: effectiveLocked ? "not-allowed" : "pointer",
                   fontSize: "0.75rem",
                 }}
               >
                 <input
                   type="checkbox"
                   checked={editIsPermanent}
-                  disabled={isSavingItemEdit || isMutatingLocked}
+                  disabled={isSavingItemEdit || effectiveLocked}
                   onChange={(e) => setEditIsPermanent(e.target.checked)}
                   style={{ marginTop: 2 }}
                 />
@@ -487,14 +507,14 @@ export const CampaignCharacterInventoryTab: React.FC<CampaignCharacterInventoryT
                   background: editIsArtifact
                     ? "rgba(168, 85, 247, 0.09)"
                     : "var(--bg-card)",
-                  cursor: isMutatingLocked ? "not-allowed" : "pointer",
+                  cursor: effectiveLocked ? "not-allowed" : "pointer",
                   fontSize: "0.75rem",
                 }}
               >
                 <input
                   type="checkbox"
                   checked={editIsArtifact}
-                  disabled={isSavingItemEdit || isMutatingLocked}
+                  disabled={isSavingItemEdit || effectiveLocked}
                   onChange={(e) => {
                     const checked = e.target.checked;
                     setEditIsArtifact(checked);
@@ -542,13 +562,13 @@ export const CampaignCharacterInventoryTab: React.FC<CampaignCharacterInventoryT
                   >
                     No <code>artifact</code> entries exist in{" "}
                     <strong>{activeWorldName || "this world"}</strong>&apos;s World Lore yet. Create a World Lore entry with category{" "}
-                    <strong>artifact</strong> in the World Sheet first.
+                    <strong>artifact</strong> in the Codex first.
                   </div>
                 ) : (
                   <select
                     className="field-select"
                     value={editLoreId}
-                    disabled={isSavingItemEdit || isMutatingLocked}
+                    disabled={isSavingItemEdit || effectiveLocked}
                     onChange={(e) => setEditLoreId(e.target.value)}
                   >
                     <option value="">— Select World Artifact Lore —</option>
@@ -580,22 +600,24 @@ export const CampaignCharacterInventoryTab: React.FC<CampaignCharacterInventoryT
                   setItemError(null);
                 }}
               >
-                Cancel
+                {onItemAction ? "Cancel" : "Close"}
               </button>
-              <button
-                type="button"
-                className="btn btn-amber"
-                style={{ padding: "4px 12px", fontSize: "0.74rem" }}
-                disabled={
-                  isSavingItemEdit ||
-                  isMutatingLocked ||
-                  (editIsArtifact && (!editLoreId || worldArtifactNodes.length === 0))
-                }
-                onClick={() => handleSaveItemUpdate(item)}
-              >
-                <Check size={12} />{" "}
-                {isSavingItemEdit ? "Saving..." : "Save Item Lore"}
-              </button>
+              {onItemAction && (
+                <button
+                  type="button"
+                  className="btn btn-amber"
+                  style={{ padding: "4px 12px", fontSize: "0.74rem" }}
+                  disabled={
+                    isSavingItemEdit ||
+                    effectiveLocked ||
+                    (editIsArtifact && (!editLoreId || worldArtifactNodes.length === 0))
+                  }
+                  onClick={() => handleSaveItemUpdate(item)}
+                >
+                  <Check size={12} />{" "}
+                  {isSavingItemEdit ? "Saving..." : "Save Item Lore"}
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -604,185 +626,188 @@ export const CampaignCharacterInventoryTab: React.FC<CampaignCharacterInventoryT
   };
 
   return (
+    <div
+      style={{
+        display: isActive ? "flex" : "none",
+        flexDirection: "column",
+        gap: 14,
+      }}
+    >
+      <div
+        style={{
+          fontSize: "0.76rem",
+          color: "var(--text-secondary)",
+          background: "var(--bg-card)",
+          padding: "8px 12px",
+          borderRadius: 6,
+          border: "1px solid var(--border-subtle)",
+        }}
+      >
+        <strong>Campaign Equipment &amp; Inventory.</strong> Click any item to attach a brief mini-lore note (injected only when relevant and absent from recent context) or set <strong>Permanent</strong> / <strong>World Artifact</strong> flags.
+      </div>
+
+      {itemError && (
+        <div
+          style={{
+            fontSize: "0.75rem",
+            color: "#fda4af",
+            background: "rgba(244, 63, 94, 0.12)",
+            border: "1px solid rgba(244, 63, 94, 0.35)",
+            borderRadius: 6,
+            padding: "6px 10px",
+          }}
+        >
+          {itemError}
+        </div>
+      )}
+
+      {itemSaveSuccess && (
+        <div
+          style={{
+            fontSize: "0.75rem",
+            color: "#6ee7b7",
+            background: "rgba(16, 185, 129, 0.12)",
+            border: "1px solid rgba(16, 185, 129, 0.35)",
+            borderRadius: 6,
+            padding: "6px 10px",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          <Check size={13} />
+          {itemSaveSuccess}
+        </div>
+      )}
+
+      {/* Quick Add Item Form */}
+      {onItemAction && (
+        <form
+          onSubmit={handleAddItem}
+          style={{
+            background: "var(--bg-card)",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: 8,
+            padding: "10px 12px",
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          <input
+            type="text"
+            className="field-input"
+            placeholder="Add item name (e.g. Tarnished Locket, Plasma cutter)..."
+            value={newItemName}
+            disabled={effectiveLocked}
+            onChange={(e) => setNewItemName(e.target.value)}
+            style={{ flex: 1, minWidth: 160 }}
+          />
+          <select
+            className="field-select"
+            value={newItemTarget}
+            disabled={effectiveLocked}
+            onChange={(e) =>
+              setNewItemTarget(e.target.value as "inventory" | "equipped")
+            }
+            style={{ width: "130px" }}
+          >
+            <option value="inventory">Carried</option>
+            <option value="equipped">Equipped</option>
+          </select>
+          <button
+            type="submit"
+            className="btn btn-amber"
+            disabled={!newItemName.trim() || isSubmittingItem || effectiveLocked}
+            style={{ whiteSpace: "nowrap" }}
+          >
+            <Plus size={13} /> Add Item
+          </button>
+        </form>
+      )}
+
+      {/* Equipped Gear Section */}
+      <div
+        style={{
+          background: "var(--bg-card)",
+          border: "1px solid var(--border-subtle)",
+          borderRadius: 8,
+          padding: 12,
+          display: "flex",
+          flexDirection: "column",
+          gap: 10,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <span className="sidebar-label">
+            Equipped Attire &amp; Gear ({equippedList.length})
+          </span>
+        </div>
+
+        {equippedList.length === 0 ? (
           <div
             style={{
-              display: isActive ? "flex" : "none",
-              flexDirection: "column",
-              gap: 14,
+              fontSize: "0.75rem",
+              color: "var(--text-muted)",
+              fontStyle: "italic",
             }}
           >
-            <div
-              style={{
-                fontSize: "0.76rem",
-                color: "var(--text-secondary)",
-                background: "var(--bg-card)",
-                padding: "8px 12px",
-                borderRadius: 6,
-                border: "1px solid var(--border-subtle)",
-              }}
-            >
-              <strong>Campaign Equipment &amp; Inventory.</strong> Click any item to attach a brief mini-lore note (injected only when relevant and absent from recent context) or set <strong>Permanent</strong> / <strong>World Artifact</strong> flags.
-            </div>
-
-            {itemError && (
-              <div
-                style={{
-                  fontSize: "0.75rem",
-                  color: "#fda4af",
-                  background: "rgba(244, 63, 94, 0.12)",
-                  border: "1px solid rgba(244, 63, 94, 0.35)",
-                  borderRadius: 6,
-                  padding: "6px 10px",
-                }}
-              >
-                {itemError}
-              </div>
-            )}
-
-            {itemSaveSuccess && (
-              <div
-                style={{
-                  fontSize: "0.75rem",
-                  color: "#6ee7b7",
-                  background: "rgba(16, 185, 129, 0.12)",
-                  border: "1px solid rgba(16, 185, 129, 0.35)",
-                  borderRadius: 6,
-                  padding: "6px 10px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                }}
-              >
-                <Check size={13} />
-                {itemSaveSuccess}
-              </div>
-            )}
-
-            {/* Quick Add Item Form */}
-            <form
-              onSubmit={handleAddItem}
-              style={{
-                background: "var(--bg-card)",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: 8,
-                padding: "10px 12px",
-                display: "flex",
-                gap: 8,
-                alignItems: "center",
-              }}
-            >
-              <input
-                type="text"
-                className="field-input"
-                placeholder="Add item name (e.g. Tarnished Locket, Plasma cutter)..."
-                value={newItemName}
-                disabled={isMutatingLocked}
-                onChange={(e) => setNewItemName(e.target.value)}
-                style={{ flex: 1 }}
-              />
-              <select
-                className="field-select"
-                value={newItemTarget}
-                disabled={isMutatingLocked}
-                onChange={(e) =>
-                  setNewItemTarget(e.target.value as "inventory" | "equipped")
-                }
-                style={{ width: "130px" }}
-              >
-                <option value="inventory">Carried</option>
-                <option value="equipped">Equipped</option>
-              </select>
-              <button
-                type="submit"
-                className="btn btn-amber"
-                disabled={!newItemName.trim() || isSubmittingItem || isMutatingLocked}
-                style={{ whiteSpace: "nowrap" }}
-              >
-                <Plus size={13} /> Add Item
-              </button>
-            </form>
-
-            {/* Equipped Gear Section */}
-            <div
-              style={{
-                background: "var(--bg-card)",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: 8,
-                padding: 12,
-                display: "flex",
-                flexDirection: "column",
-                gap: 10,
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                }}
-              >
-                <span className="sidebar-label">
-                  Equipped Attire &amp; Gear ({equippedList.length})
-                </span>
-              </div>
-
-              {equippedList.length === 0 ? (
-                <div
-                  style={{
-                    fontSize: "0.75rem",
-                    color: "var(--text-muted)",
-                    fontStyle: "italic",
-                  }}
-                >
-                  No items currently equipped.
-                </div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {equippedList.map((item) => renderItemCard(item, "equipped"))}
-                </div>
-              )}
-            </div>
-
-            {/* Carried Inventory Section */}
-            <div
-              style={{
-                background: "var(--bg-card)",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: 8,
-                padding: 12,
-                display: "flex",
-                flexDirection: "column",
-                gap: 10,
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                }}
-              >
-                <span className="sidebar-label">
-                  Carried Inventory &amp; Objects ({inventoryList.length})
-                </span>
-              </div>
-
-              {inventoryList.length === 0 ? (
-                <div
-                  style={{
-                    fontSize: "0.75rem",
-                    color: "var(--text-muted)",
-                    fontStyle: "italic",
-                  }}
-                >
-                  No items in carried inventory.
-                </div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {inventoryList.map((item) => renderItemCard(item, "inventory"))}
-                </div>
-              )}
-            </div>
+            No items currently equipped.
           </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {equippedList.map((item) => renderItemCard(item, "equipped"))}
+          </div>
+        )}
+      </div>
+
+      {/* Carried Inventory Section */}
+      <div
+        style={{
+          background: "var(--bg-card)",
+          border: "1px solid var(--border-subtle)",
+          borderRadius: 8,
+          padding: 12,
+          display: "flex",
+          flexDirection: "column",
+          gap: 10,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <span className="sidebar-label">
+            Carried Inventory &amp; Objects ({inventoryList.length})
+          </span>
+        </div>
+
+        {inventoryList.length === 0 ? (
+          <div
+            style={{
+              fontSize: "0.75rem",
+              color: "var(--text-muted)",
+              fontStyle: "italic",
+            }}
+          >
+            No items in carried inventory.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {inventoryList.map((item) => renderItemCard(item, "inventory"))}
+          </div>
+        )}
+      </div>
+    </div>
   );
 };

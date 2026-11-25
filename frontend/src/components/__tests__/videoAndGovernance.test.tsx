@@ -368,6 +368,7 @@ describe("Image-linked video logic helpers & UI components", () => {
           state: undefined,
           isPrimary: true,
         }}
+        initialSubtab="media"
         loreNodes={[]}
         onJumpToLore={vi.fn()}
       />

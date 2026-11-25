@@ -689,28 +689,52 @@ describe("World Codex Helpers & Components (v0.20.0)", () => {
     expect(unvisitedLocHtml).toContain("Ash Vault");
     expect(unvisitedLocHtml).not.toContain("/api/media/worlds/images/vault.webp");
 
-    const personaHtml = renderToStaticMarkup(
+    const personaGearHtml = renderToStaticMarkup(
       <CodexCharacterDetail
         kind="persona"
         persona={persona}
         personaTurnState={personaTurnState}
+        initialPersonaSubtab="gear"
         loreNodes={world.lore_nodes}
         onJumpToLore={() => {}}
       />
     );
-    expect(personaHtml).toContain("Storm Lantern");
-    expect(personaHtml).not.toContain("Brass Sextant");
-    expect(personaHtml).toContain("/api/media/personas/persona_1/portraits/default_123.webp");
-    expect(personaHtml).toContain("Charting reefs no ship returns from.");
-    expect(personaHtml).toContain("Build &amp; Height:");
-    expect(personaHtml).toContain("Photo Album (1)");
-    expect(personaHtml).toContain("Survey Rig");
+    expect(personaGearHtml).toContain("Storm Lantern");
+    expect(personaGearHtml).not.toContain("Brass Sextant");
+    expect(personaGearHtml).toContain("/api/media/personas/persona_1/portraits/default_123.webp");
+    expect(personaGearHtml).toContain("Charting reefs no ship returns from.");
+
+    const personaAppearanceHtml = renderToStaticMarkup(
+      <CodexCharacterDetail
+        kind="persona"
+        persona={persona}
+        personaTurnState={personaTurnState}
+        initialPersonaSubtab="appearance"
+        loreNodes={world.lore_nodes}
+        onJumpToLore={() => {}}
+      />
+    );
+    expect(personaAppearanceHtml).toContain("Build &amp; Height:");
+
+    const personaMediaHtml = renderToStaticMarkup(
+      <CodexCharacterDetail
+        kind="persona"
+        persona={persona}
+        personaTurnState={personaTurnState}
+        initialPersonaSubtab="media"
+        loreNodes={world.lore_nodes}
+        onJumpToLore={() => {}}
+      />
+    );
+    expect(personaMediaHtml).toContain("Photo Album (1)");
+    expect(personaMediaHtml).toContain("Survey Rig");
 
     const metricPersonaHtml = renderToStaticMarkup(
       <CodexCharacterDetail
         kind="persona"
         persona={{ ...persona, build_and_height: "180 cm" }}
         personaTurnState={personaTurnState}
+        initialPersonaSubtab="appearance"
         loreNodes={world.lore_nodes}
         onJumpToLore={() => {}}
       />
@@ -722,14 +746,16 @@ describe("World Codex Helpers & Components (v0.20.0)", () => {
       <CodexCharacterDetail
         kind="character"
         characterEntry={entries[1]}
+        initialSubtab="inventory"
         loreNodes={world.lore_nodes}
         onJumpToLore={() => {}}
       />
     );
     expect(charHtml).toContain("Aria Kell");
     expect(charHtml).toContain("Artifact: Aether Compass");
+    // Bio/Personality/Memories tabs are cleanly separated: Personality text is not injected when Inventory tab is active
     expect(charHtml).not.toContain("GM_SECRET_CORE_PERSONA_TOKEN");
-    expect(charHtml).not.toContain("GM_SECRET_SHARD_TOKEN");
+    expect(charHtml).toContain("GM_SECRET_SHARD_TOKEN");
 
     const editorHtml = renderToStaticMarkup(
       <CodexLoreEditor
@@ -982,5 +1008,213 @@ describe("World Codex Helpers & Components (v0.20.0)", () => {
       [aria, zara]
     );
     expect(afterRemoval.map((e) => e.record.id)).toEqual([aria.id]);
+  });
+
+  it("renders unified 8-tab CodexCharacterDetail, Knowledge of You provenance, and context-aware focus routing (v0.39.0)", () => {
+    const world = makeWorld();
+    const { persona, entries } = makeCharacterFixtures();
+    const aria = {
+      ...entries[1].record,
+      personality_traits: ["Observant", "Stoic"],
+      voice_anchors: [
+        {
+          context: "Watchtower Briefing",
+          snippet: "*Checks the barometer.* \"Keep your lantern shielded.\"",
+        },
+      ],
+    };
+    const ariaEntry: CodexCampaignCharacterEntry = {
+      record: aria,
+      isPresent: true,
+      isPrimary: true,
+      partyRole: "player_party",
+      partyName: "Harbor Watch",
+      state: {
+        turn_id: "turn_3",
+        character_id: aria.id,
+        current_location_id: world.locations[0].id,
+        mood_label: "Vigilant",
+        valence: 0.25,
+        arousal: 0.55,
+        active_want: "Hold the outer beacon",
+        active_plan: "Monitor fog horn signals",
+        relationship_notes: {},
+        equipped: aria.equipped,
+        inventory: [],
+        unlocked_persona_keys: ["age"],
+        persona_knowledge_provenance: {
+          age: { learned_from: "player", unlocked_at_turn_id: "turn_2" },
+        },
+        care_state: {
+          schema_version: 1,
+          is_provisional: false,
+          state_elapsed_minutes: 15,
+          valence: 0.25,
+          arousal: 0.55,
+          dominance: 0.3,
+          composure: 0.88,
+          mood_variance: [0.05, 0.05, 0.05],
+          active_emotion: "default",
+          short_mood_label: "Vigilant",
+          outward_demeanor: "Steady gaze over the pier",
+          appraisal: {
+            threat: 0.35,
+            coping: 0.4,
+            goal_congruence: 0.2,
+            ambiguity: 0.15,
+          },
+          active_worldview: {
+            benevolence: 0.1,
+            belonging: 0.3,
+            agency: 0.5,
+          },
+          relations: {
+            user: {
+              target_id: "user",
+              warmth: 0.4,
+              trust: 0.5,
+              respect: 0.6,
+              power: 0.0,
+              grievance: 0.0,
+              obligation: 0.0,
+              consolidated_warmth: 0.35,
+              consolidated_trust: 0.45,
+              episodic_note: "Shared lantern duty.",
+            },
+          },
+        },
+      },
+    };
+
+    const bioHtml = renderToStaticMarkup(
+      <CodexCharacterDetail
+        kind="character"
+        persona={persona}
+        characterEntry={ariaEntry}
+        loreNodes={world.lore_nodes}
+        onJumpToLore={() => {}}
+        initialSubtab="bio"
+      />
+    );
+    expect(bioHtml).toContain("party-pill--player");
+    expect(bioHtml).toContain("Harbor Watch");
+    expect(bioHtml).toContain("Maintains the outer beacons.");
+    expect(bioHtml).toContain("Creator Notes");
+    expect(bioHtml).toContain("Opening Scene");
+    expect(bioHtml).not.toContain("GM_SECRET_CREATOR_NOTE_TOKEN");
+
+    const appearanceHtml = renderToStaticMarkup(
+      <CodexCharacterDetail
+        kind="character"
+        characterEntry={ariaEntry}
+        loreNodes={world.lore_nodes}
+        onJumpToLore={() => {}}
+        initialSubtab="appearance"
+      />
+    );
+    expect(appearanceHtml).toContain("Height:");
+    expect(appearanceHtml).toContain("Resting Posture:");
+    expect(appearanceHtml).toContain("Visual Aesthetic:");
+    expect(appearanceHtml).toContain("Mannerisms &amp; Behavioral Tells");
+    expect(appearanceHtml).toContain("codex-bullet-list");
+    expect(appearanceHtml).toContain("taps pocket watch");
+
+    const persHtml = renderToStaticMarkup(
+      <CodexCharacterDetail
+        kind="character"
+        characterEntry={ariaEntry}
+        loreNodes={world.lore_nodes}
+        onJumpToLore={() => {}}
+        initialSubtab="personality"
+      />
+    );
+    expect(persHtml).toContain("Core Demeanor");
+    expect(persHtml).toContain("GM_SECRET_CORE_PERSONA_TOKEN");
+    expect(persHtml).toContain("Observant");
+    expect(persHtml).toContain("Moral Code &amp; Boundaries");
+    expect(persHtml).toContain("Quirks &amp; Flaws");
+    expect(persHtml).toContain("Baseline Psyche &amp; Emotional Defaults");
+    expect(persHtml).toContain("GM_SECRET_DRIVE_TOKEN");
+    expect(persHtml).toContain("GM_SECRET_FEAR_TOKEN");
+
+    const voiceHtml = renderToStaticMarkup(
+      <CodexCharacterDetail
+        kind="character"
+        characterEntry={ariaEntry}
+        loreNodes={world.lore_nodes}
+        onJumpToLore={() => {}}
+        initialSubtab="voice"
+      />
+    );
+    expect(voiceHtml).toContain("Communication Style");
+    expect(voiceHtml).toContain("terse");
+    expect(voiceHtml).toContain("Watchtower Briefing");
+
+    const currentHtml = renderToStaticMarkup(
+      <CodexCharacterDetail
+        kind="character"
+        persona={persona}
+        characterEntry={ariaEntry}
+        loreNodes={world.lore_nodes}
+        locations={world.locations}
+        characterNameMap={{ [aria.id]: aria.name }}
+        onRelocateCharacter={async () => {}}
+        onJumpToLore={() => {}}
+        initialSubtab="current"
+      />
+    );
+    expect(currentHtml).toContain("Hold the outer beacon");
+    expect(currentHtml).toContain("Relocate Character (Override)");
+    expect(currentHtml).toContain("Knowledge of You (1)");
+    expect(currentHtml).toContain("Age: 31");
+    expect(currentHtml).toContain("Direct");
+
+    // Right-pane focus request lands directly on Current (Live); default Codex browse lands on Bio
+    const focusedCodexHtml = renderToStaticMarkup(
+      <WorldCodexTab
+        worldId={world.id}
+        isActive={true}
+        isCampaignMode={true}
+        loreNodes={world.lore_nodes}
+        pendingWorldLoreTagDrafts={{}}
+        containers={world.containers ?? []}
+        locations={world.locations}
+        activePersona={persona}
+        campaignCharacters={[ariaEntry]}
+        externalFocusRequest={{
+          kind: "character",
+          characterId: aria.id,
+          initialSubtab: "current",
+          nonce: 1,
+        }}
+        onUpdateLoreNodes={() => {}}
+        onUpdatePendingTagDrafts={() => {}}
+        onMarkDirty={() => {}}
+        onOpenOnMap={() => {}}
+      />
+    );
+    expect(focusedCodexHtml).toContain("Aria Kell");
+    expect(focusedCodexHtml).toContain("Hold the outer beacon");
+    expect(focusedCodexHtml).toContain("Knowledge of You (1)");
+
+    const browseCodexHtml = renderToStaticMarkup(
+      <WorldCodexTab
+        worldId={world.id}
+        isActive={true}
+        isCampaignMode={true}
+        loreNodes={world.lore_nodes}
+        pendingWorldLoreTagDrafts={{}}
+        containers={world.containers ?? []}
+        locations={world.locations}
+        campaignCharacters={[ariaEntry]}
+        initialSection="major_characters"
+        onUpdateLoreNodes={() => {}}
+        onUpdatePendingTagDrafts={() => {}}
+        onMarkDirty={() => {}}
+        onOpenOnMap={() => {}}
+      />
+    );
+    expect(browseCodexHtml).toContain("Maintains the outer beacons.");
+    expect(browseCodexHtml).toContain("Creator Notes");
   });
 });

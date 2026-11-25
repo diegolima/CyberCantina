@@ -1,14 +1,16 @@
-import type {
-  AnyLoreCategory,
-  CampaignStateBundle,
-  CharacterRecord,
-  CharacterStateSnapshot,
-  LocationContainer,
-  LocationNode,
-  LoreNode,
-  PersonaRecord,
-  WorldLoreCategory,
+import {
+  USER_PARTY_MEMBER_ID,
+  type AnyLoreCategory,
+  type CampaignStateBundle,
+  type CharacterRecord,
+  type CharacterStateSnapshot,
+  type LocationContainer,
+  type LocationNode,
+  type LoreNode,
+  type PersonaRecord,
+  type WorldLoreCategory,
 } from "../../types";
+import { getActiveParties, getCharacterParty } from "../../utils/partyHelpers";
 import { containerHasVisitedDescendants } from "../map/mapValidation";
 import { CONTAINER_DEPTH_LABELS } from "../map/topologyProjection";
 
@@ -127,6 +129,8 @@ export interface CodexCampaignCharacterEntry {
   isPresent?: boolean;
   elsewhereLocationName?: string;
   isPrimary?: boolean;
+  partyRole?: "player_party" | "npc_leader" | "npc_party" | null;
+  partyName?: string | null;
 }
 
 export interface CodexSearchHit {
@@ -919,6 +923,7 @@ export function buildCampaignCharacterEntries(
     bundle.visible_locations.map((l) => [l.id, l.name])
   );
   const activeLocId = bundle.active_location.id;
+  const activeParties = getActiveParties(bundle);
 
   return orderedIds.flatMap((id) => {
     const record = bundle.character_records?.[id] ?? byId.get(id);
@@ -929,6 +934,14 @@ export function buildCampaignCharacterEntries(
     const isPresent = hasExplicitPresentIds
       ? presentIds.has(id)
       : state.current_location_id === activeLocId;
+    const cParty = getCharacterParty(activeParties, record.id);
+    const partyRole = cParty
+      ? cParty.member_ids.includes(USER_PARTY_MEMBER_ID)
+        ? "player_party"
+        : cParty.leader_id === record.id
+        ? "npc_leader"
+        : "npc_party"
+      : null;
     return [
       {
         record,
@@ -936,6 +949,8 @@ export function buildCampaignCharacterEntries(
         isPresent,
         elsewhereLocationName: locNames.get(state.current_location_id),
         isPrimary: record.id === primaryCharacter.id,
+        partyRole,
+        partyName: cParty?.name ?? null,
       },
     ];
   });

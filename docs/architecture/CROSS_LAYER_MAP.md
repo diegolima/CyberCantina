@@ -780,17 +780,12 @@ erDiagram
 | File |
 | :--- |
 | `frontend/src/components/inspector/AgentChangesModal.tsx` |
-| `frontend/src/components/inspector/CampaignCharacterModal.tsx` |
 | `frontend/src/components/inspector/CharacterRow.tsx` |
 | `frontend/src/components/inspector/InspectorInternalsSection.tsx` |
 | `frontend/src/components/inspector/InspectorLocationCard.tsx` |
 | `frontend/src/components/inspector/InspectorPrimitives.tsx` |
 | `frontend/src/components/inspector/LocationOverrideButton.tsx` |
 | `frontend/src/components/inspector/LoreIndexModal.tsx` |
-| `frontend/src/components/inspector/campaignCharacter/CampaignCharacterInventoryTab.tsx` |
-| `frontend/src/components/inspector/campaignCharacter/CampaignCharacterMediaTab.tsx` |
-| `frontend/src/components/inspector/campaignCharacter/CampaignCharacterMemoriesTab.tsx` |
-| `frontend/src/components/inspector/campaignCharacter/CampaignCharacterStateTab.tsx` |
 | `frontend/src/components/inspector/miniMapGeometry.ts` |
 
 #### `components/map`
@@ -893,6 +888,10 @@ erDiagram
 | `frontend/src/components/world/WorldCodexTab.tsx` |
 | `frontend/src/components/world/WorldInspectorModal.tsx` |
 | `frontend/src/components/world/WorldMediaTab.tsx` |
+| `frontend/src/components/world/codexCharacter/CampaignCharacterInventoryTab.tsx` |
+| `frontend/src/components/world/codexCharacter/CampaignCharacterMediaTab.tsx` |
+| `frontend/src/components/world/codexCharacter/CampaignCharacterMemoriesTab.tsx` |
+| `frontend/src/components/world/codexCharacter/CampaignCharacterStateTab.tsx` |
 | `frontend/src/components/world/codexHelpers.ts` |
 | `frontend/src/components/world/worldDraftMappers.ts` |
 

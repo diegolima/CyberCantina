@@ -19,17 +19,22 @@ import {
 } from "lucide-react";
 import { api } from "../../api";
 import type {
+  ItemEquipActionPayload,
   LocationContainer,
   LocationLoreNodeDraft,
   LocationNode,
   LoreNode,
+  MemoryShard,
   PersonaRecord,
   PersonaTurnStateSnapshot,
   WorldLoreCategory,
 } from "../../types";
 import { isEditableKeyboardTarget } from "../map/mapGeometry";
 import { ImageLightboxModal } from "../shared/ImageLightboxModal";
-import { CodexCharacterDetail } from "./CodexCharacterDetail";
+import {
+  CodexCharacterDetail,
+  type CodexCharacterSubtab,
+} from "./CodexCharacterDetail";
 import { CodexLocationDetail } from "./CodexLocationDetail";
 import { CodexLoreEditor } from "./CodexLoreEditor";
 import {
@@ -54,10 +59,14 @@ import {
   searchAllCodexEntries,
 } from "./codexHelpers";
 
-export interface CodexFocusRequest {
-  loreId: string;
-  nonce: number;
-}
+export type CodexFocusRequest =
+  | { kind?: "lore"; loreId: string; nonce: number }
+  | {
+      kind: "character";
+      characterId: string;
+      initialSubtab?: CodexCharacterSubtab;
+      nonce: number;
+    };
 
 interface WorldCodexTabProps {
   worldId: string;
@@ -73,9 +82,11 @@ interface WorldCodexTabProps {
   locations: LocationNode[];
   visitedContainerIds?: string[];
   activeLocationId?: string;
+  activeWorldName?: string;
   activePersona?: PersonaRecord | null;
   activePersonaTurnState?: PersonaTurnStateSnapshot | null;
   campaignCharacters?: CodexCampaignCharacterEntry[];
+  characterNameMap?: Record<string, string>;
   externalFocusRequest?: CodexFocusRequest | null;
   initialSection?: CodexSectionId | null;
   initialExpandedContainerIds?: readonly string[];
@@ -97,6 +108,9 @@ interface WorldCodexTabProps {
     loreId: string,
     revealed: boolean
   ) => Promise<void> | void;
+  onItemAction?: (payload: ItemEquipActionPayload) => Promise<void> | void;
+  onSaveMemories?: (characterId: string, shards: MemoryShard[]) => Promise<void>;
+  onRelocateCharacter?: (characterId: string, locationId: string) => Promise<void> | void;
 }
 
 const SECTION_ICON: Record<CodexSectionId, React.ReactNode> = {
@@ -122,9 +136,11 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   locations,
   visitedContainerIds = [],
   activeLocationId,
+  activeWorldName,
   activePersona,
   activePersonaTurnState,
   campaignCharacters = [],
+  characterNameMap,
   externalFocusRequest,
   initialSection = null,
   initialExpandedContainerIds,
@@ -135,14 +151,45 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   onSaveCampaignLocationLore,
   onSaveCampaignContainerLore,
   onToggleLoreReveal,
+  onItemAction,
+  onSaveMemories,
+  onRelocateCharacter,
 }) => {
   const canEditWorldLore = !isCampaignMode || (unlockLore && !isMutatingLocked);
-  const [activeSection, setActiveSection] = useState<CodexSectionId | null>(
-    initialSection
-  );
+  const [activeSection, setActiveSection] = useState<CodexSectionId | null>(() => {
+    if (externalFocusRequest?.kind === "character") {
+      return "major_characters";
+    }
+    if (externalFocusRequest && "loreId" in externalFocusRequest) {
+      const target = loreNodes.find((ln) => ln.id === externalFocusRequest.loreId);
+      if (target) return getCodexSectionForCategory(target.category);
+    }
+    return initialSection;
+  });
   const [globalQuery, setGlobalQuery] = useState("");
   const [categoryQuery, setCategoryQuery] = useState("");
-  const [selectedEntryKey, setSelectedEntryKey] = useState<string | null>(null);
+  const [selectedEntryKey, setSelectedEntryKey] = useState<string | null>(() => {
+    if (externalFocusRequest?.kind === "character") {
+      return `character:${externalFocusRequest.characterId}`;
+    }
+    if (externalFocusRequest && "loreId" in externalFocusRequest) {
+      return externalFocusRequest.loreId;
+    }
+    return null;
+  });
+  const [charFocusTarget, setCharFocusTarget] = useState<{
+    characterId: string;
+    subtab: CodexCharacterSubtab;
+    nonce: number;
+  } | null>(() =>
+    externalFocusRequest?.kind === "character"
+      ? {
+          characterId: externalFocusRequest.characterId,
+          subtab: externalFocusRequest.initialSubtab ?? "bio",
+          nonce: externalFocusRequest.nonce,
+        }
+      : null
+  );
   const [expandedContainerIds, setExpandedContainerIds] = useState<Set<string>>(
     () => new Set(initialExpandedContainerIds ?? [])
   );
@@ -216,15 +263,31 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
       ? activePersonaTurnState
       : fetchedPersonaState;
 
-  // Handle external validation focus jumps (e.g., from handleSave)
+  // Handle external validation / right-pane focus jumps
   useEffect(() => {
     if (!externalFocusRequest) return;
+    if (externalFocusRequest.kind === "character") {
+      setGlobalQuery("");
+      setCategoryQuery("");
+      setFrozenOrderIds(null);
+      setReclassifiedNotice(null);
+      setArtifactUnlinkNotice(null);
+      setActiveSection("major_characters");
+      setSelectedEntryKey(`character:${externalFocusRequest.characterId}`);
+      setCharFocusTarget({
+        characterId: externalFocusRequest.characterId,
+        subtab: externalFocusRequest.initialSubtab ?? "bio",
+        nonce: externalFocusRequest.nonce,
+      });
+      return;
+    }
     const target = loreNodes.find((ln) => ln.id === externalFocusRequest.loreId);
     if (!target) return;
     const secId = getCodexSectionForCategory(target.category);
     setGlobalQuery("");
     setCategoryQuery("");
     setFrozenOrderIds(null);
+    setCharFocusTarget(null);
     setActiveSection(secId);
     setSelectedEntryKey(target.id);
     setTimeout(() => titleInputRef.current?.focus(), 40);
@@ -460,6 +523,15 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     }
   }, [isTwoPaneMode, visibleRowKeys, selectedEntryKey]);
 
+  const resolvedCharacterNameMap = useMemo(() => {
+    if (characterNameMap && Object.keys(characterNameMap).length > 0) {
+      return characterNameMap;
+    }
+    return Object.fromEntries(
+      campaignCharacters.map((c) => [c.record.id, c.record.name])
+    );
+  }, [characterNameMap, campaignCharacters]);
+
   const handleOpenSection = (secId: CodexSectionId) => {
     const meta = getCodexSectionMeta(secId);
     if (meta.campaignOnly && !isCampaignMode) return;
@@ -468,6 +540,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     setFrozenOrderIds(null);
     setReclassifiedNotice(null);
     setArtifactUnlinkNotice(null);
+    setCharFocusTarget(null);
     setActiveSection(secId);
     setSelectedEntryKey(null);
   };
@@ -479,6 +552,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     setFrozenOrderIds(null);
     setReclassifiedNotice(null);
     setArtifactUnlinkNotice(null);
+    setCharFocusTarget(null);
     setSelectedEntryKey(null);
   };
 
@@ -622,6 +696,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     setGlobalQuery("");
     setCategoryQuery("");
     setFrozenOrderIds(null);
+    setCharFocusTarget(null);
     setActiveSection(getCodexSectionForCategory(target.category));
     setSelectedEntryKey(target.id);
   };
@@ -851,9 +926,18 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
         return (
           <CodexCharacterDetail
             kind="character"
+            persona={activePersona}
             characterEntry={hit.characterEntry}
             loreNodes={loreNodes}
             onJumpToLore={handleJumpToLoreId}
+            initialSubtab="bio"
+            locations={locations}
+            activeWorldName={activeWorldName}
+            characterNameMap={resolvedCharacterNameMap}
+            isMutatingLocked={isMutatingLocked}
+            onItemAction={onItemAction}
+            onSaveMemories={onSaveMemories}
+            onRelocateCharacter={onRelocateCharacter}
           />
         );
       }
@@ -971,9 +1055,9 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
     }
 
     if (activeSection === "major_characters") {
-      const selectedChar = majorCharacterItems.find(
-        (m) => m.key === selectedEntryKey
-      );
+      const selectedChar =
+        majorCharacterItems.find((m) => m.key === selectedEntryKey) ??
+        (selectedEntryKey === null ? majorCharacterItems[0] : undefined);
       if (!selectedChar) {
         return (
           <div className="ui-empty-state ui-empty-state--fill">
@@ -983,14 +1067,27 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
           </div>
         );
       }
+      const isFocusedChar =
+        selectedChar.kind === "character" &&
+        selectedChar.characterEntry &&
+        charFocusTarget?.characterId === selectedChar.characterEntry.record.id;
       return (
         <CodexCharacterDetail
           kind={selectedChar.kind}
-          persona={selectedChar.persona}
+          persona={selectedChar.kind === "persona" ? selectedChar.persona : activePersona}
           personaTurnState={effectivePersonaTurnState}
           characterEntry={selectedChar.characterEntry}
           loreNodes={loreNodes}
           onJumpToLore={handleJumpToLoreId}
+          initialSubtab={isFocusedChar ? charFocusTarget.subtab : "bio"}
+          focusNonce={isFocusedChar ? charFocusTarget.nonce : 0}
+          locations={locations}
+          activeWorldName={activeWorldName}
+          characterNameMap={resolvedCharacterNameMap}
+          isMutatingLocked={isMutatingLocked}
+          onItemAction={onItemAction}
+          onSaveMemories={onSaveMemories}
+          onRelocateCharacter={onRelocateCharacter}
         />
       );
     }
@@ -1293,10 +1390,14 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
                         aria-selected={isSelected}
                         tabIndex={0}
                         className={`codex-list-row ${isSelected ? "active" : ""}`}
-                        onClick={() => setSelectedEntryKey(hit.key)}
+                        onClick={() => {
+                          setCharFocusTarget(null);
+                          setSelectedEntryKey(hit.key);
+                        }}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault();
+                            setCharFocusTarget(null);
                             setSelectedEntryKey(hit.key);
                           }
                         }}
@@ -1446,10 +1547,14 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
                         aria-selected={isSelected}
                         tabIndex={0}
                         className={`codex-list-row ${isSelected ? "active" : ""}`}
-                        onClick={() => setSelectedEntryKey(item.key)}
+                        onClick={() => {
+                          setCharFocusTarget(null);
+                          setSelectedEntryKey(item.key);
+                        }}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault();
+                            setCharFocusTarget(null);
                             setSelectedEntryKey(item.key);
                           }
                         }}

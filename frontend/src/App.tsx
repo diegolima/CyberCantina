@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   setOnUnauthorizedHandler,
@@ -19,6 +19,7 @@ import {
   WorldInspectorModal,
   type WorldTab,
 } from "./components/world/WorldInspectorModal";
+import type { CodexFocusRequest } from "./components/world/WorldCodexTab";
 import { PartyManagementModal } from "./components/party/PartyManagementModal";
 import { StoryModal, type StoryModalTab } from "./components/story/StoryModal";
 import { ExportCampaignModal } from "./components/ExportCampaignModal";
@@ -88,6 +89,9 @@ export const App: React.FC = () => {
   );
   const [campaignWorldSheetTab, setCampaignWorldSheetTab] =
     useState<WorldTab | null>(null);
+  const [codexFocusRequest, setCodexFocusRequest] =
+    useState<CodexFocusRequest | null>(null);
+  const codexFocusNonceRef = useRef(0);
   const [storyModalTab, setStoryModalTab] = useState<StoryModalTab | null>(null);
   const [scrollTargetTurn, setScrollTargetTurn] = useState<{
     turnId: string;
@@ -714,6 +718,7 @@ export const App: React.FC = () => {
         isCodexOpen={campaignWorldSheetTab === "codex"}
         onOpenCodex={() => {
           layout.closeOverlays();
+          setCodexFocusRequest(null);
           setCampaignWorldSheetTab("codex");
         }}
         storyCount={
@@ -804,6 +809,7 @@ export const App: React.FC = () => {
           onCampaignBundleChange={setBundle}
           onOpenCodex={() => {
             layout.closeOverlays();
+            setCodexFocusRequest(null);
             setCampaignWorldSheetTab("codex");
           }}
         />
@@ -921,17 +927,26 @@ export const App: React.FC = () => {
           participants={campaignParticipants}
           pendingLocationOverrideId={pendingLocationOverrideId}
           onOverrideLocation={handleOverrideLocation}
-          onOverrideCharacterLocation={handleOverrideCharacterLocation}
-          onOpenWorldSheet={() => setCampaignWorldSheetTab("base")}
+          onOpenWorldSheet={() => {
+            setCodexFocusRequest(null);
+            setCampaignWorldSheetTab("base");
+          }}
+          onOpenCharacterInCodex={(characterId) => {
+            layout.closeOverlays();
+            setCodexFocusRequest({
+              kind: "character",
+              characterId,
+              initialSubtab: "current",
+              nonce: ++codexFocusNonceRef.current,
+            });
+            setCampaignWorldSheetTab("codex");
+          }}
           onSaveCampaignMap={handleSaveCampaignMap}
-          onToggleItemEquip={handleToggleItemEquip}
-          onUpdateCampaignMemories={handleUpdateCampaignMemories}
           onSaveCampaignLocationLore={handleSaveCampaignLocationLore}
           onSaveCampaignContainerLore={handleSaveCampaignContainerLore}
           onToggleCampaignLoreReveal={handleToggleCampaignLoreReveal}
           onToggleCampaignEdgeReveal={handleToggleCampaignEdgeReveal}
           isMutatingLocked={isStreaming || isPhase4Running}
-          worlds={worlds}
         />
       )}
 
@@ -973,6 +988,7 @@ export const App: React.FC = () => {
           }}
           mode="campaign"
           initialTab={campaignWorldSheetTab}
+          initialCodexFocus={codexFocusRequest}
           campaignId={bundle.campaign.id}
           activePersona={bundle.campaign.persona_snapshot ?? null}
           campaignCharacters={liftedCodexCharacters}
@@ -993,8 +1009,17 @@ export const App: React.FC = () => {
           onToggleCampaignLoreReveal={handleToggleCampaignLoreReveal}
           onToggleCampaignEdgeReveal={handleToggleCampaignEdgeReveal}
           onSaveCampaignMap={handleSaveCampaignMap}
-          onClose={() => setCampaignWorldSheetTab(null)}
-          onSaved={() => setCampaignWorldSheetTab(null)}
+          onToggleItemEquip={handleToggleItemEquip}
+          onUpdateCampaignMemories={handleUpdateCampaignMemories}
+          onOverrideCharacterLocation={handleOverrideCharacterLocation}
+          onClose={() => {
+            setCampaignWorldSheetTab(null);
+            setCodexFocusRequest(null);
+          }}
+          onSaved={() => {
+            setCampaignWorldSheetTab(null);
+            setCodexFocusRequest(null);
+          }}
         />
       )}
 

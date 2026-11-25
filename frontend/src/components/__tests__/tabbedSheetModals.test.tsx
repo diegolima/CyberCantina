@@ -3,7 +3,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type {
   CharacterRecord,
-  CharacterStateSnapshot,
   LocationNode,
   PersonaRecord,
   UserProfile,
@@ -13,7 +12,6 @@ import { PersonaEditorModal } from "../PersonaEditorModal";
 import { AdminModal } from "../auth/AdminModal";
 import { AuthScreen } from "../auth/AuthScreen";
 import { CharacterInspectorModal } from "../character/CharacterInspectorModal";
-import { CampaignCharacterModal } from "../inspector/CampaignCharacterModal";
 import { WorldInspectorModal } from "../world/WorldInspectorModal";
 
 const ADMIN_USER: UserProfile = {
@@ -87,20 +85,6 @@ const CHAR: CharacterRecord = {
   created_at: "2026-10-01T00:00:00Z",
 };
 
-const CHAR_STATE: CharacterStateSnapshot = {
-  turn_id: "turn_0",
-  character_id: "char_1",
-  current_location_id: "loc_1",
-  mood_label: "Alert",
-  valence: 0,
-  arousal: 0.4,
-  active_want: "Assess caller",
-  active_plan: "Stay behind glass",
-  relationship_notes: {},
-  equipped: [],
-  inventory: [],
-};
-
 const PERSONA: PersonaRecord = {
   id: "persona_1",
   owner_id: "u_admin",
@@ -146,7 +130,7 @@ describe("Stabilized Tabbed Sheet Modals", () => {
     }
   });
 
-  it("renders CharacterInspectorModal and CampaignCharacterModal with modal-panel--sheet and Character Sheet naming", () => {
+  it("renders CharacterInspectorModal with modal-panel--sheet and Character Sheet naming", () => {
     const outHtml = renderToStaticMarkup(
       React.createElement(CharacterInspectorModal, {
         character: CHAR,
@@ -157,22 +141,6 @@ describe("Stabilized Tabbed Sheet Modals", () => {
     );
     expect(outHtml).toContain("modal-panel modal-panel--sheet");
     expect(outHtml).toContain("Character Sheet");
-
-    const inHtml = renderToStaticMarkup(
-      React.createElement(CampaignCharacterModal, {
-        character: CHAR,
-        state: CHAR_STATE,
-        isPresent: true,
-        campaignId: "camp_1",
-        campaignWorld: WORLD,
-        onClose: vi.fn(),
-        onItemAction: vi.fn(),
-        onSaveMemories: vi.fn(async () => {}),
-      })
-    );
-    expect(inHtml).toContain("modal-panel modal-panel--sheet");
-    expect(inHtml).toContain("Character Sheet");
-    expect(inHtml).not.toContain("Character Dossier");
   });
 
   it("renders PersonaEditorModal as Persona Sheet with modal-panel--sheet and modal-sheet-form across create, edit, and read-only default modes", () => {

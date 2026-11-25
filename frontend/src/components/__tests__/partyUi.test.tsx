@@ -278,7 +278,7 @@ describe("Parties UI components (SSR markup)", () => {
     expect(withParty).toContain('aria-label="Override movement options"');
   });
 
-  it("renders CharacterRow party pills for In Party, NPC Party, and NPC Party Leader", () => {
+  it("renders compact CharacterRow cards with party pills, presence, composure, and Codex link", () => {
     const playerHtml = renderToStaticMarkup(
       <CharacterRow
         character={KIRA}
@@ -289,6 +289,11 @@ describe("Parties UI components (SSR markup)", () => {
       />
     );
     expect(playerHtml).toContain("In Party");
+    expect(playerHtml).toContain("Present");
+    expect(playerHtml).toContain("Composure");
+    expect(playerHtml).toContain(`aria-label="Open ${KIRA.name} in Codex"`);
+    expect(playerHtml).not.toContain("char-row-body");
+    expect(playerHtml).not.toContain("More · Character Sheet");
 
     const leaderHtml = renderToStaticMarkup(
       <CharacterRow
@@ -301,6 +306,9 @@ describe("Parties UI components (SSR markup)", () => {
       />
     );
     expect(leaderHtml).toContain("NPC Party · Leader");
+    expect(leaderHtml).toContain("Elsewhere");
+    expect(leaderHtml).toContain(LOC_CATWALK.name);
+    expect(leaderHtml).toContain(`aria-label="Open ${NYX.name} in Codex"`);
   });
 
   it("renders scoped CharacterMentionPicker titles and ChatComposer blocking warning", () => {

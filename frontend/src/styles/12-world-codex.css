@@ -645,3 +645,168 @@
 .codex-list-row.selected .codex-lore-indicator {
   opacity: 1;
 }
+
+/* Unified Codex Character Dossier (v0.39.0) */
+.codex-char-header {
+  padding-bottom: 10px;
+}
+
+.codex-char-header-tags {
+  margin-top: 5px;
+}
+
+.codex-char-tabs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+
+.codex-char-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.codex-char-tab:hover {
+  color: var(--text-primary);
+  background: var(--surface-glass-2);
+}
+
+.codex-char-tab.active {
+  background: var(--cyan-bg);
+  border-color: var(--cyan-border);
+  color: var(--cyan-fg);
+}
+
+.codex-char-tab--live {
+  border-color: var(--amber-border-subtle);
+}
+
+.codex-char-tab--live.active {
+  background: var(--amber-bg);
+  border-color: var(--amber-border);
+  color: var(--amber-fg);
+}
+
+.codex-char-tab-badge {
+  font-size: 0.64rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.codex-char-tab-badge--live {
+  background: var(--amber-bg);
+  border-color: var(--amber-border);
+  color: var(--accent-amber);
+}
+
+.codex-char-tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.codex-bio-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.codex-bio-drawer {
+  background: var(--bg-panel);
+  border: 1px solid var(--amber-border-subtle);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.codex-bullet-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.78rem;
+  line-height: 1.48;
+  color: var(--text-secondary);
+}
+
+.codex-pers-split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.codex-psyche-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.codex-voice-anchor-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.codex-knowledge-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.codex-knowledge-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.69rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--emerald-bg-subtle);
+  color: var(--emerald-fg);
+  border-color: var(--emerald-border);
+}
+
+.codex-media-stack {
+  flex-direction: column;
+  gap: 12px;
+}
+
+.codex-portrait-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 10px;
+}
+
+.codex-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 8px;
+}

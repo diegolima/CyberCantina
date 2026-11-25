@@ -11,13 +11,11 @@ import {
   CharacterRecord,
   CharacterStateSnapshot,
   CompassDirection,
-  ItemEquipActionPayload,
   LocationContainer,
   LocationEdge,
   LocationLoreNodeDraft,
   LocationNode,
   LocationOverrideOptions,
-  MemoryShard,
   NeighborLocationView,
   WorldRecord,
 } from "../types";
@@ -29,7 +27,6 @@ import {
 import { USER_PARTY_MEMBER_ID } from "../types";
 import { usePersistentState } from "./inspector/InspectorPrimitives";
 import { CharacterRow } from "./inspector/CharacterRow";
-import { CampaignCharacterModal } from "./inspector/CampaignCharacterModal";
 import { InspectorLocationCard } from "./inspector/InspectorLocationCard";
 import {
   MINI_MAP_CENTER,
@@ -74,20 +71,11 @@ interface LiveInspectorProps {
     locationId: string,
     options?: LocationOverrideOptions
   ) => Promise<void> | void;
-  onOverrideCharacterLocation?: (
-    characterId: string,
-    locationId: string
-  ) => Promise<void> | void;
   onSaveCampaignMap?: (payload: {
     containers: LocationContainer[];
     locations: LocationNode[];
     edges: LocationEdge[];
   }) => Promise<void> | void;
-  onToggleItemEquip?: (payload: ItemEquipActionPayload) => Promise<void> | void;
-  onUpdateCampaignMemories?: (
-    characterId: string,
-    memoryShards: MemoryShard[]
-  ) => Promise<void>;
   onSaveCampaignLocationLore?: (
     locationId: string,
     loreNodes: LocationLoreNodeDraft[]
@@ -105,8 +93,8 @@ interface LiveInspectorProps {
     revealed: boolean
   ) => Promise<void> | void;
   onOpenWorldSheet?: () => void;
+  onOpenCharacterInCodex?: (characterId: string) => void;
   isMutatingLocked?: boolean;
-  worlds?: WorldRecord[];
 }
 
 export const LiveInspector: React.FC<LiveInspectorProps> = ({
@@ -119,17 +107,14 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   participants,
   pendingLocationOverrideId,
   onOverrideLocation,
-  onOverrideCharacterLocation,
   onSaveCampaignMap,
-  onToggleItemEquip,
-  onUpdateCampaignMemories,
   onSaveCampaignLocationLore,
   onSaveCampaignContainerLore,
   onToggleCampaignLoreReveal,
   onToggleCampaignEdgeReveal,
   onOpenWorldSheet,
+  onOpenCharacterInCodex,
   isMutatingLocked = false,
-  worlds = [],
 }) => {
   const activeLoc = bundle.active_location;
   const [selectedLocId, setSelectedLocId] = useState<string>(activeLoc.id);
@@ -139,9 +124,6 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
   const [showLoreIndex, setShowLoreIndex] = useState(false);
   const [expandedRecalls, setExpandedRecalls] = useState<Set<string>>(new Set());
   const [showAllFlags, setShowAllFlags] = useState(false);
-  const [sheetCharacterId, setSheetCharacterId] = useState<string | null>(null);
-  const [sheetInitialTab, setSheetInitialTab] = useState<"current" | "inventory">("current");
-  const [sheetInitialItemId, setSheetInitialItemId] = useState<string | null>(null);
 
   // Latest vs previous turn on the active branch, used for "changed this turn" indicators
   const turns = bundle.active_branch_turns;
@@ -179,19 +161,6 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
     // Stable partition keeps the primary character on top among present ones
     return [...rows.filter((r) => r.isPresent), ...rows.filter((r) => !r.isPresent)];
   }, [participants, character, bundle, prevTurn]);
-
-  const characterNameMap = useMemo(() => {
-    const map: Record<string, string> = {};
-    for (const r of characterRows) {
-      map[r.record.id] = r.record.name;
-    }
-    return map;
-  }, [characterRows]);
-
-  const sheetRow = useMemo(
-    () => characterRows.find((r) => r.record.id === sheetCharacterId),
-    [characterRows, sheetCharacterId]
-  );
 
   const indexedCharacters = useMemo(
     () => characterRows.map((r) => r.record),
@@ -461,7 +430,7 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
           : fullMapModal;
       })()}
 
-      {/* 3. Characters (collapsed "Name · Mood" rows, expandable to meters & gear) */}
+      {/* 3. Characters (compact portrait cards opening the unified Codex dossier) */}
       {characterRows.length > 0 && (
         <div className="inspector-card inspector-collapsible">
           {characterRows.map((row) => {
@@ -481,70 +450,14 @@ export const LiveInspector: React.FC<LiveInspectorProps> = ({
                 isPresent={row.isPresent}
                 elsewhereLocationName={row.elsewhereLocationName}
                 moodChanged={row.moodChanged}
-                isMutatingLocked={isMutatingLocked}
                 partyRole={partyRole}
                 partyName={cParty?.name ?? null}
-                personaSnapshot={bundle.campaign.persona_snapshot}
-                characterNameMap={characterNameMap}
-                onToggleItemEquip={onToggleItemEquip}
-                onOpenSheet={(cid) => {
-                  setSheetInitialTab("current");
-                  setSheetInitialItemId(null);
-                  setSheetCharacterId(cid);
-                }}
-                onInspectItem={(cid, itemId) => {
-                  setSheetInitialTab("inventory");
-                  setSheetInitialItemId(itemId);
-                  setSheetCharacterId(cid);
-                }}
+                onOpenInCodex={onOpenCharacterInCodex}
               />
             );
           })}
         </div>
       )}
-
-      {/* Full Campaign Character Sheet / Dossier Modal */}
-      {sheetRow && (() => {
-        const sheetParty = getCharacterParty(activeParties, sheetRow.record.id);
-        const sheetPartyRole = sheetParty
-          ? sheetParty.member_ids.includes(USER_PARTY_MEMBER_ID)
-            ? "player_party"
-            : sheetParty.leader_id === sheetRow.record.id
-            ? "npc_leader"
-            : "npc_party"
-          : null;
-        return (
-          <CampaignCharacterModal
-            character={sheetRow.record}
-            state={sheetRow.state}
-            isPresent={sheetRow.isPresent}
-            elsewhereLocationName={sheetRow.elsewhereLocationName}
-            partyRole={sheetPartyRole}
-            partyName={sheetParty?.name ?? null}
-            locations={bundle.visible_locations}
-            onRelocateCharacter={onOverrideCharacterLocation}
-            campaignId={bundle.campaign.id}
-            campaignWorld={world}
-            worlds={worlds}
-            initialTab={sheetInitialTab}
-            initialExpandedItemId={sheetInitialItemId}
-            isMutatingLocked={isMutatingLocked}
-            characterNameMap={Object.fromEntries(
-              characterRows.map((r) => [r.record.id, r.record.name])
-            )}
-            onClose={() => {
-              setSheetCharacterId(null);
-              setSheetInitialItemId(null);
-            }}
-            onItemAction={onToggleItemEquip || (() => {})}
-            onSaveMemories={async (cid, shards) => {
-              if (onUpdateCampaignMemories) {
-                await onUpdateCampaignMemories(cid, shards);
-              }
-            }}
-          />
-        );
-      })()}
 
       <InspectorInternalsSection
         bundle={bundle}

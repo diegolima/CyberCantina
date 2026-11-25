@@ -444,10 +444,25 @@
     min-height: 32px;
     padding: 5px 11px;
   }
+
+  .codex-pers-split,
+  .codex-psyche-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Narrow Phone Polish (<= 620px) */
 @media (max-width: 620px) {
+  .codex-char-tabs {
+    gap: 3px;
+    padding: 4px;
+  }
+
+  .codex-char-tab {
+    padding: 4px 7px;
+    font-size: 0.7rem;
+  }
+
   .map-toolbar-btn-label {
     display: none;
   }
