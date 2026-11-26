@@ -245,11 +245,6 @@
   user-select: none;
   -webkit-user-select: none;
   touch-action: manipulation;
-  cursor: zoom-in;
-}
-
-.minimap-container-pill {
-  cursor: zoom-in;
 }
 
 .minimap-container-pill rect {
