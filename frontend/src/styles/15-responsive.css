@@ -711,6 +711,16 @@
     padding: 9px 12px;
   }
 
+  .gm-md-table th,
+  .gm-md-table td {
+    padding: 4px 6px;
+    font-size: 0.74rem;
+  }
+
+  .gm-markdown pre {
+    padding: 7px 8px;
+  }
+
   .gm-model-pill,
   .gm-spoiler-pill-detail,
   .gm-clear-btn-label,

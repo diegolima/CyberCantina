@@ -22,7 +22,10 @@
     "@mlc-ai/web-llm": "^0.2.88",
     "lucide-react": "^1.73.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-breaks": "^4.0.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.1",

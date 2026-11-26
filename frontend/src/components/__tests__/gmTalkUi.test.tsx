@@ -11,6 +11,7 @@ import { ChatComposer, type ChatComposerProps } from "../chat/ChatComposer";
 import { GmCodexProposalCard } from "../chat/GmCodexProposalCard";
 import { GmMentionPopover } from "../chat/GmMentionPopover";
 import { GmTalkDrawer } from "../chat/GmTalkDrawer";
+import { renderFormattedProse } from "../chat/chatHelpers";
 
 const YULIA: CharacterRecord = {
   id: "char_yulia",
@@ -652,5 +653,83 @@ describe("GM Talk UI components", () => {
     expect(sourcesHtml).toContain("Open Mood &amp; Composure (PAD · Layer 2) in Game Mechanics");
     expect(sourcesHtml).toContain('<span class="gm-source-chip">mechanic: Stale Topic</span>');
     expect(sourcesHtml).toContain('<span class="gm-source-chip">lore: Helios Blackout</span>');
+  });
+
+  it("renders rich Markdown in persisted and streaming GM replies while keeping user OOC bubbles and Story Turn prose untouched", () => {
+    const gmMarkdownHtml = renderToStaticMarkup(
+      <GmTalkDrawer
+        campaignTitle="Kowloon Run"
+        worldName="New Kowloon"
+        unlockLore={false}
+        isClosing={false}
+        isExpanded={false}
+        isCampaignStreaming={false}
+        messages={[
+          {
+            id: "gm_u1",
+            campaign_id: "camp_1",
+            anchor_turn_id: "turn_1",
+            role: "user",
+            content: "Check **raw asterisks** and `backticks`.",
+            mentions: [],
+            sources: [],
+            created_at: "2026-11-26T00:00:00Z",
+          },
+          {
+            id: "gm_a1",
+            campaign_id: "camp_1",
+            anchor_turn_id: "turn_1",
+            role: "assistant",
+            content: [
+              "### Summary",
+              "- **Item:** `unlock_lore`",
+              "",
+              "| Key | Value |",
+              "| --- | --- |",
+              "| State | Ready |",
+            ].join("\n"),
+            mentions: [],
+            sources: [],
+            created_at: "2026-11-26T00:00:01Z",
+          },
+        ]}
+        isLoading={false}
+        isStreaming={true}
+        streamingText={"**Live:** streaming `token`"}
+        streamingSources={[]}
+        error={null}
+        clearConfirm={false}
+        isClearing={false}
+        copiedId={null}
+        expandedSources={{}}
+        modelMeta={null}
+        onInsertAtTrigger={vi.fn()}
+        onClearChat={vi.fn()}
+        onCopyMessage={vi.fn()}
+        onToggleSources={vi.fn()}
+        onDismissError={vi.fn()}
+        onToggleExpanded={vi.fn()}
+        onMinimize={vi.fn()}
+      />
+    );
+
+    // User bubble keeps literal Markdown characters without .gm-markdown
+    expect(gmMarkdownHtml).toContain(
+      '<div class="gm-message-body">Check **raw asterisks** and `backticks`.</div>'
+    );
+    // Persisted GM reply renders full Markdown inside .gm-markdown
+    expect(gmMarkdownHtml).toContain('<div class="gm-markdown">');
+    expect(gmMarkdownHtml).toContain("<h3>Summary</h3>");
+    expect(gmMarkdownHtml).toContain("<li><strong>Item:</strong> <code>unlock_lore</code></li>");
+    expect(gmMarkdownHtml).toContain("<td>Ready</td>");
+    // Live streaming reply renders Markdown cleanly
+    expect(gmMarkdownHtml).toContain("<strong>Live:</strong> streaming <code>token</code>");
+
+    // Story Turn prose renderer remains strictly *italics*-only
+    const storyProseHtml = renderToStaticMarkup(
+      <div>{renderFormattedProse('*She nods.* "Check **this**."')}</div>
+    );
+    expect(storyProseHtml).toContain("<em>She nods.</em>");
+    expect(storyProseHtml).not.toContain("<strong>");
   });
 });

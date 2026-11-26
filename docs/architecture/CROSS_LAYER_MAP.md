@@ -769,6 +769,7 @@ erDiagram
 | `frontend/src/components/chat/ContextHealthPill.tsx` |
 | `frontend/src/components/chat/DirectorChoicesDrawer.tsx` |
 | `frontend/src/components/chat/GmCodexProposalCard.tsx` |
+| `frontend/src/components/chat/GmMarkdown.tsx` |
 | `frontend/src/components/chat/GmMentionPopover.tsx` |
 | `frontend/src/components/chat/GmTalkDrawer.tsx` |
 | `frontend/src/components/chat/LiveStreamingTurnCard.tsx` |
@@ -977,6 +978,7 @@ erDiagram
 | `frontend/src/utils/choiceCommand.ts` |
 | `frontend/src/utils/drawerSwipe.ts` |
 | `frontend/src/utils/entityImages.ts` |
+| `frontend/src/utils/gmMarkdown.ts` |
 | `frontend/src/utils/gmMentions.ts` |
 | `frontend/src/utils/importExportLogic.ts` |
 | `frontend/src/utils/mentions.ts` |

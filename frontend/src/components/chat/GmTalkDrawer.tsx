@@ -27,7 +27,7 @@ import { GM_GREETING_MESSAGE, GM_NAME } from "../../utils/gmMentions";
 import { MechanicsHelpButton } from "../shared/MechanicsHelpButton";
 import { getMechanicsArticle } from "../world/mechanics/mechanicsHelpers";
 import { GmCodexProposalCard } from "./GmCodexProposalCard";
-import { renderFormattedProse } from "./chatHelpers";
+import { GmMarkdown } from "./GmMarkdown";
 
 export interface GmTalkDrawerProps {
   drawerRef?: React.RefObject<HTMLElement>;
@@ -369,7 +369,7 @@ export const GmTalkDrawer: React.FC<GmTalkDrawerProps> = ({
                   )}
 
                   <div className="gm-message-body">
-                    {isUser ? msg.content : renderFormattedProse(msg.content)}
+                    {isUser ? msg.content : <GmMarkdown content={msg.content} />}
                   </div>
 
                   {!isUser && msg.sources && msg.sources.length > 0 && (
@@ -430,7 +430,7 @@ export const GmTalkDrawer: React.FC<GmTalkDrawerProps> = ({
                 </div>
                 <div className="gm-message-body">
                   {streamingText ? (
-                    renderFormattedProse(streamingText)
+                    <GmMarkdown content={streamingText} />
                   ) : toolStatus ? (
                     <div className="gm-tool-status-pill" role="status" aria-live="polite">
                       <Loader2 size={12} className="spinning" />
