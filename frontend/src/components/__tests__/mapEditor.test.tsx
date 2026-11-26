@@ -1674,12 +1674,40 @@ describe("Interactive Map Editor & Mini-Map", () => {
       "git-branch"
     );
 
-    // Modal target guard blocks Delete key inside aria-modal dialogs
+    // Modal target guard blocks Delete key inside stacked/nested aria-modal dialogs,
+    // while allowing shortcuts inside an outer sheet (e.g. WorldInspectorModal) that wraps hostContainer.
+    const hostEl = {};
+    const outerModal = {
+      contains: (node: unknown) => node === hostEl,
+    };
+    const nestedModal = {
+      contains: () => false,
+    };
     expect(
       isEditableKeyboardTarget({
         tagName: "BUTTON",
         closest: (sel: string) => (sel.includes("[aria-modal='true']") ? {} : null),
       })
+    ).toBe(true);
+    expect(
+      isEditableKeyboardTarget(
+        {
+          tagName: "BUTTON",
+          closest: (sel: string) =>
+            sel.includes("[aria-modal='true']") ? outerModal : null,
+        },
+        hostEl
+      )
+    ).toBe(false);
+    expect(
+      isEditableKeyboardTarget(
+        {
+          tagName: "BUTTON",
+          closest: (sel: string) =>
+            sel.includes("[aria-modal='true']") ? nestedModal : null,
+        },
+        hostEl
+      )
     ).toBe(true);
 
     // Drawer trigger + Browse All modal SSR checks

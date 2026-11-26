@@ -393,7 +393,10 @@ export function computeDistanceBadgeWidth(labelText: string): number {
  * Determine whether a keyboard event originates from (or while focused in) an
  * editable control so global canvas shortcuts like `Delete` never intercept typing.
  */
-export function isEditableKeyboardTarget(target: unknown): boolean {
+export function isEditableKeyboardTarget(
+  target: unknown,
+  hostContainer?: unknown
+): boolean {
   if (!target || typeof target !== "object") return false;
   const el = target as {
     tagName?: string;
@@ -408,11 +411,31 @@ export function isEditableKeyboardTarget(target: unknown): boolean {
     return true;
   }
   if (typeof el.closest === "function") {
-    return Boolean(
+    if (
       el.closest(
-        "input, textarea, select, [contenteditable='true'], .tag-chips-container, [aria-modal='true']"
+        "input, textarea, select, [contenteditable='true'], .tag-chips-container"
       )
-    );
+    ) {
+      return true;
+    }
+    const modal = el.closest("[aria-modal='true']") as {
+      contains?: (other: unknown) => boolean;
+    } | null;
+    if (modal) {
+      // Allow shortcuts when the closest aria-modal ancestor is an outer sheet
+      // enclosing the interactive host itself (e.g. WorldInspectorModal wrapping
+      // SpatialTopologyView or WorldCodexTab), while still blocking inside
+      // nested or stacked modal dialogs.
+      if (
+        hostContainer &&
+        modal !== hostContainer &&
+        typeof modal.contains === "function" &&
+        modal.contains(hostContainer)
+      ) {
+        return false;
+      }
+      return true;
+    }
   }
   return false;
 }

@@ -75,6 +75,7 @@ export function useModalDialog({
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (openDialogStack[openDialogStack.length - 1] !== dialogId) return;
+      if (e.defaultPrevented) return;
 
       if (e.key === "Escape") {
         if (!disableEscapeRef.current && onCloseRef.current) {
@@ -116,9 +117,11 @@ export function useModalDialog({
       }
     };
 
-    document.addEventListener("keydown", handleKeyDown, true);
+    // Listen in bubble phase so inner React controls (e.g. inline edit inputs,
+    // search boxes, pickers) can handle and stopPropagation() on Escape first.
+    document.addEventListener("keydown", handleKeyDown, false);
     return () => {
-      document.removeEventListener("keydown", handleKeyDown, true);
+      document.removeEventListener("keydown", handleKeyDown, false);
       const idx = openDialogStack.lastIndexOf(dialogId);
       if (idx !== -1) {
         openDialogStack.splice(idx, 1);

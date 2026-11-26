@@ -989,7 +989,7 @@ export const WorldCodexTab: React.FC<WorldCodexTabProps> = ({
   };
 
   const handleListKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (isEditableKeyboardTarget(e.target)) return;
+    if (isEditableKeyboardTarget(e.target, e.currentTarget)) return;
     if (visibleRowKeys.length === 0) return;
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
 

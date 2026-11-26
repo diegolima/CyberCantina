@@ -493,6 +493,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
     value: string;
   } | null>(null);
 
+  const topologyRootRef = useRef<HTMLDivElement | null>(null);
   const canvasWrapRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const viewportGroupRef = useRef<SVGGElement | null>(null);
@@ -1381,9 +1382,10 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         !e.repeat &&
         isPreviewingAutoLayout &&
         !hasBlockingOverlayOpen &&
-        !isEditableKeyboardTarget(e.target) &&
+        !isEditableKeyboardTarget(e.target, topologyRootRef.current) &&
         !isEditableKeyboardTarget(
-          typeof document !== "undefined" ? document.activeElement : null
+          typeof document !== "undefined" ? document.activeElement : null,
+          topologyRootRef.current
         )
       ) {
         e.preventDefault();
@@ -1394,9 +1396,10 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
         return;
       }
       if (
-        isEditableKeyboardTarget(e.target) ||
+        isEditableKeyboardTarget(e.target, topologyRootRef.current) ||
         isEditableKeyboardTarget(
-          typeof document !== "undefined" ? document.activeElement : null
+          typeof document !== "undefined" ? document.activeElement : null,
+          topologyRootRef.current
         )
       ) {
         return;
@@ -1627,6 +1630,7 @@ export const SpatialTopologyView: React.FC<SpatialTopologyViewProps> = ({
 
   return (
     <div
+      ref={topologyRootRef}
       style={{
         display: "flex",
         flexDirection: "column",
